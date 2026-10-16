@@ -10,6 +10,7 @@ import {
   blocksOfDay,
   bucketMinutes,
   compareDay,
+  dayChoice,
   cwdOf,
   discussionOf,
   discussionsOfDay,
@@ -441,6 +442,18 @@ describe('model : journée', () => {
     expect(compareDay(rows, '2026-10-07', 'tokens').value).toBe(200)
     // Un jour sans rien : pas de rang ; sa fenêtre (4 septembre au 3 octobre) prend le 7 septembre.
     expect(compareDay(rows, '2026-10-03', 'cost')).toEqual({ value: 0, previous: 0, average: 38, rank: null, activeDays: 3 })
+  })
+
+  test('le jour choisi de l’onglet Journée : bornes et jours actifs voisins', async () => {
+    const dates = ['2026-09-20', '2026-10-02', '2026-10-06', '2026-10-07']
+    // Rien de choisi : le jour du relevé, et le jour actif d'avant.
+    expect(dayChoice(null, '2026-10-07', '2026-09-20', dates)).toEqual({ day: '2026-10-07', first: '2026-09-20', latest: '2026-10-07', prevActive: '2026-10-06', nextActive: null })
+    expect(dayChoice('2026-10-04', '2026-10-07', '2026-09-20', dates)).toMatchObject({ day: '2026-10-04', prevActive: '2026-10-02', nextActive: '2026-10-06' })
+    // Ramené entre le premier jour connu et le relevé.
+    expect(dayChoice('2026-10-09', '2026-10-07', '2026-09-20', dates).day).toBe('2026-10-07')
+    expect(dayChoice('2026-01-01', '2026-10-07', '2026-09-20', dates)).toMatchObject({ day: '2026-09-20', prevActive: null })
+    // Aucun jour connu : le jour du relevé, seul.
+    expect(dayChoice('2026-10-01', '2026-10-07', null, [])).toEqual({ day: '2026-10-07', first: '2026-10-07', latest: '2026-10-07', prevActive: null, nextActive: null })
   })
 
   test('blocs de 5 h du jour et leur rythme par heure active', async () => {

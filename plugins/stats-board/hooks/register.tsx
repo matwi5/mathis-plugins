@@ -109,6 +109,7 @@ const EMPTY_UI: Ui = {
   model: null,
   sessionSort: 'cost',
   expanded: { models: false, projects: false, sessions: false, days: false },
+  day: null,
 }
 const EMPTY_META: Meta = { loading: null, error: null, startedAt: null }
 const EMPTY_DISCUSSION: Discussion = { id: null, live: null, detail: null, turns: [], loading: false, error: null }
@@ -172,7 +173,8 @@ const answer = async ($: any, e: { args: string }) => {
   }
   const tab = TAB_WORDS[word]
   if (tab) {
-    await update($, ui, (x) => ({ ...x, tab }))
+    // `/ccstats day` montre la journée du relevé, même après un jour choisi dans l'onglet.
+    await update($, ui, (x) => ({ ...x, tab, ...(tab === 'day' ? { day: null } : {}) }))
     text = `Panneau Stats ouvert (onglet ${TAB_LABEL[tab]}).`
     // L'onglet Discussion sans détail encore : ccusage sur cette seule discussion.
     if (tab === 'discussion' && !(await read($, discussion)).detail) $.clock.after(0, () => void refreshDiscussion($))

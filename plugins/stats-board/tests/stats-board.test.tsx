@@ -495,6 +495,61 @@ describe('stats-board', () => {
     })
   }
 
+  for (const surface of SURFACES) {
+    test(`onglet Journée : choisir un jour passé, puis revenir à aujourd’hui (${surface})`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      world(on)
+      await start($, clock, surface)
+      const pane = await mountPane($, surface, 100)
+      await pane.press({ key: 'tab-day' })
+      let all = await drawn(pane)
+      expect(all).toContain(`aujourd’hui,${NB}mer.${NB}7${NB}oct.`)
+      expect(all).toContain(`◂${NB}veille`)
+      // Aujourd'hui est le dernier jour : ni lendemain, ni retour.
+      expect(all).not.toContain('lendemain')
+      expect(all).not.toContain(`↺${NB}aujourd’hui`)
+      // La veille : 12,50 $ ici et 1,50 $ sur le Serveur, sans la note d'un relevé ancien.
+      await pane.press({ key: 'day-prev' })
+      all = await drawn(pane)
+      expect(all).toMatch(new RegExp(`Coût du mar\\.${NB}6${NB}oct\\.`, 'i'))
+      expect(all).toContain(`14,00${NB}$`)
+      expect(all).toContain('Par poste')
+      expect(all).toContain(`lendemain${NB}▸`)
+      expect(all).toContain(`↺${NB}aujourd’hui`)
+      expect(all).not.toContain('Relevé du')
+      // Le jour actif d'avant le 6 est le 2 (brouillon du desktop, 0,50 $), pas le 5.
+      expect(all).toContain(`◂◂${NB}2${NB}oct.`)
+      await pane.press({ key: 'day-prev-active' })
+      all = await drawn(pane)
+      expect(all).toMatch(new RegExp(`Coût du ven\\.${NB}2${NB}oct\\.`, 'i'))
+      expect(all).toContain(`0,50${NB}$`)
+      expect(all).toContain(`6${NB}oct.${NB}▸▸`)
+      await pane.press({ key: 'day-latest' })
+      expect(await drawn(pane)).toMatch(/Coût d’aujourd’hui/i)
+    })
+  }
+
+  test('onglet Journée : un jour vide garde le choix du jour', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    world(on)
+    await start($, clock, 'terminal')
+    const pane = await mountPane($, 'terminal', 100)
+    await pane.press({ key: 'tab-day' })
+    await pane.press({ key: 'machine-Serveur' })
+    expect(await drawn(pane)).toContain('Aucune consommation aujourd’hui pour ces filtres.')
+    await pane.press({ key: 'day-prev' })
+    const all = await drawn(pane)
+    expect(all).toContain(`COÛT DU MAR.${NB}6${NB}OCT.`)
+    expect(all).toContain(`1,50${NB}$`)
+    // Un jour passé sans rien : un seul point après la date abrégée.
+    await pane.press({ key: 'day-prev' })
+    expect(await drawn(pane)).toContain(`Aucune consommation le${NB}lun.${NB}5${NB}oct. pour ces filtres.`)
+    // /ccstats day revient à la journée du relevé.
+    await $.command.run({ command: 'ccstats', args: 'day' } as any)
+    await clock.settle()
+    expect(await drawn(pane)).toContain('Aucune consommation aujourd’hui pour ces filtres.')
+  })
+
   test('onglet Journée d’un relevé de la veille : son jour, et ↻ pour aujourd’hui', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const snapshot = {

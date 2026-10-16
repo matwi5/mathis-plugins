@@ -138,6 +138,8 @@ export type Ui = {
   model: string | null
   sessionSort: SessionSort
   expanded: Expanded
+  /** Jour choisi dans l'onglet Journée (AAAA-MM-JJ) ; null pour celui du relevé. */
+  day: string | null
 }
 
 export type Meta = {

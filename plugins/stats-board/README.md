@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.6.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.7.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -81,7 +81,8 @@ De haut en bas :
      - Au « ↻ Discussion » (ou à la première ouverture par `/ccstats discussion`), le détail de ccusage sur cette seule discussion : tokens par type, frise du coût ou des tokens par tranche de 5 min à 2 j, empilée par modèle avec le cumul, modèles, appels les plus chers, sous-agents de workflow qu'elle a lancés.
      - ccusage ne donne que le total : le coût de chaque appel est **estimé**, en répartissant ce total selon les tokens de l'appel et le barème relatif d'Anthropic (entrée 1, cache écrit 1,25, cache lu 0,1, sortie 5), au prix moyen de son modèle sur tout le relevé.
      - Les tokens affichés sont ceux du détail (ou de la session dans le relevé), plus ceux des tours finis depuis, d'après le moteur.
-   - **Journée** : le récap du jour du relevé, comme le bandeau (aujourd'hui, ou le jour d'un relevé plus ancien, signalé avec « ↻ Actualiser »). Les filtres de poste, de projet et de modèle s'y appliquent ; la période, non.
+   - **Journée** : le récap d'une journée. Par défaut le jour du relevé, comme le bandeau (aujourd'hui, ou le jour d'un relevé plus ancien, signalé avec « ↻ Actualiser »). Les filtres de poste, de projet et de modèle s'y appliquent ; la période, non.
+     - En tête, le choix du jour : « ◂ veille » et « lendemain ▸ », le jour actif d'avant ou d'après quand ce n'est pas la veille ou le lendemain (« ◂◂ 8 oct. », « 12 oct. ▸▸ », sous les filtres), et « ↺ aujourd'hui » pour revenir au jour du relevé. Rien avant le premier jour connu ni après le relevé. `/ccstats day` revient au jour du relevé.
      - La carte du coût du jour : son écart avec la veille et la courbe des 30 jours qui finissent ce jour-là.
      - Des tuiles : tokens, part lue en cache, la veille, la moyenne par jour actif sur 30 jours et l'écart, le rang du jour parmi les jours actifs des 30 derniers, les discussions et leurs sous-agents, le modèle principal, et les messages de ce poste quand le cache de /stats compte déjà ce jour-là (il a en général un jour de retard).
      - Les projets du jour (part, jauge, discussions, part des autres postes), la part de chaque poste quand plusieurs ont travaillé ce jour-là (jusqu'à leur dernière publication), les discussions du jour, les modèles du jour, puis les blocs de 5 h du jour (ce poste) avec leur rythme. Projets et discussions s'arrêtent à 8, le reste additionné sur une ligne.
@@ -150,7 +151,7 @@ Le bandeau s'empile avec ceux des autres mods (git-board, flow-board, asana-boar
 | `/stats-board:ccstats` | Ouvre le panneau. Connue dès le premier message. |
 | `/ccstats` | La même commande, déclarée au démarrage du mod. Masquée du menu, utilisable tapée en entier. |
 | `/ccstats discussion` | Ouvre l'onglet Discussion et, s'il n'y en a pas encore, lance le détail de ccusage sur la discussion ouverte. |
-| `/ccstats day` | Ouvre l'onglet Journée (aussi `journée`, `jour`, `today`, `aujourd'hui`, `récap`). |
+| `/ccstats day` | Ouvre l'onglet Journée sur le jour du relevé (aussi `journée`, `jour`, `today`, `aujourd'hui`, `récap`). |
 | `/ccstats overview`, `trend`, `models`, `projects`, `sessions`, `rhythm` | Ouvre le panneau sur cet onglet (les noms français marchent aussi : `aperçu`, `évolution`, `modèles`, `projets`, `rythme`). |
 | `/ccstats refresh` | Ouvre le panneau et relance un relevé. |
 | `/ccstats hide` | Masque le bandeau ; la ligne d'état prend le relais. |

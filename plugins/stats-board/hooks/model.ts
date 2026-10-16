@@ -835,6 +835,23 @@ export function compareDay(rows: readonly UsageRow[], day: string, metric: Metri
   }
 }
 
+/**
+ * Le jour montré par l'onglet Journée : le jour choisi, ramené entre le premier jour connu et
+ * celui du relevé (rien n'existe après lui), ou celui du relevé. Avec les jours actifs voisins
+ * (`dates`, sous les filtres), null quand il n'y en a pas.
+ */
+export function dayChoice(chosen: string | null, latest: string, first: string | null, dates: readonly string[]): { day: string; first: string; latest: string; prevActive: string | null; nextActive: string | null } {
+  const start = first !== null && first < latest ? first : latest
+  const day = chosen === null || chosen > latest ? latest : chosen < start ? start : chosen
+  let prevActive: string | null = null
+  let nextActive: string | null = null
+  for (const d of dates) {
+    if (d < day && d >= start && (prevActive === null || d > prevActive)) prevActive = d
+    if (d > day && d <= latest && (nextActive === null || d < nextActive)) nextActive = d
+  }
+  return { day, first: start, latest, prevActive, nextActive }
+}
+
 /** Les blocs de 5 h commencés ou terminés ce jour-là. */
 export const blocksOfDay = (blocks: readonly BlockRow[], day: string, tzOffset: number): BlockRow[] =>
   blocks.filter((b) => dayOf(b.start, tzOffset) === day || dayOf(b.lastAt, tzOffset) === day)

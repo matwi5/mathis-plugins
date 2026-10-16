@@ -24,6 +24,7 @@ import {
   blocksOfDay,
   bucketMinutes,
   compareDay,
+  dayChoice,
   discussionsOfDay,
   entryTokens,
   estimateCosts,
@@ -965,31 +966,66 @@ const shareRow = (k: Kit, o: { key: string; mark: unknown; name: unknown; value:
 }
 
 /**
- * Le récap d'une journée : celle du relevé, comme le bandeau (aujourd'hui, ou le jour d'un relevé
- * plus ancien). Les filtres de poste, de projet et de modèle s'appliquent ; la période, non.
+ * Le choix du jour : la veille et le lendemain, le jour actif d'avant et d'après (sous les
+ * filtres), et le retour au jour du relevé. Rien avant le premier jour connu ni après le relevé.
+ */
+const dayNav = (k: Kit, choice: ReturnType<typeof dayChoice>, today: string, act: Actions): unknown => {
+  const { Box, Button } = k
+  const { day, first, latest, prevActive, nextActive } = choice
+  // Le jour du relevé s'enregistre comme null : un relevé plus récent le fait suivre.
+  const go = (to: string) => act.setUi({ day: to === latest ? null : to })
+  const dateOf = (d: string) => fmtDate(d, d.slice(0, 4) !== today.slice(0, 4))
+  return (
+    <Box key="day-nav" marginTop={1}>
+      {line(
+        k,
+        [
+          // « veille » toujours en premier : des clics répétés ne tombent jamais sur un autre bouton.
+          day > first && <Button key="day-prev" plain={true} label={`◂${NB}veille`} onPress={() => go(addDays(day, -1))} />,
+          chip(k, day === today ? `aujourd’hui,${NB}${fmtDay(day)}` : fmtDay(day), MONEY),
+          day < latest && <Button key="day-next" plain={true} label={`lendemain${NB}▸`} onPress={() => go(addDays(day, 1))} />,
+          // Le jour actif d'avant ou d'après, quand ce n'est pas déjà la veille ou le lendemain.
+          prevActive && prevActive !== addDays(day, -1) && <Button key="day-prev-active" plain={true} dimColor={true} label={`◂◂${NB}${dateOf(prevActive)}`} onPress={() => go(prevActive)} />,
+          nextActive && nextActive !== addDays(day, 1) && <Button key="day-next-active" plain={true} dimColor={true} label={`${dateOf(nextActive)}${NB}▸▸`} onPress={() => go(nextActive)} />,
+          day < latest && <Button key="day-latest" plain={true} dimColor={true} label={`↺${NB}${latest === today ? 'aujourd’hui' : fmtDay(latest)}`} onPress={() => act.setUi({ day: null })} />,
+        ],
+        true,
+      )}
+    </Box>
+  )
+}
+
+/**
+ * Le récap d'une journée : par défaut celle du relevé, comme le bandeau (aujourd'hui, ou le jour
+ * d'un relevé plus ancien) ; un jour passé se choisit en tête de l'onglet. Les filtres de poste,
+ * de projet et de modèle s'appliquent ; la période, non.
  */
 const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
   const { Box } = k
   const s = ctx.s
   const tz = s.tzOffset
   const metric = ctx.metric
-  const day = dayOf(s.fetchedAt, tz)
-  const isToday = day === ctx.today
-  const dayText = isToday ? 'aujourd’hui' : `le${NB}${fmtDay(day)}`
   // Tous les jours, sous les filtres de poste, de projet et de modèle : le jour et ses 30 jours de comparaison.
   const scope: Filter = { ...ctx.f, from: null }
   const all = selectRows(s.rows, scope, s.projects)
+  const fetchedDay = dayOf(s.fetchedAt, tz)
+  const choice = dayChoice(ctx.ui.day ?? null, fetchedDay, firstDate(s.rows), activeDates(all))
+  const day = choice.day
+  const isToday = day === ctx.today
+  const dayText = isToday ? 'aujourd’hui' : `le${NB}${fmtDay(day)}`
   const rows = all.filter((r) => r.date === day)
   const isFiltered = ctx.f.machine !== 'all' || ctx.f.project !== null || ctx.f.model !== null
   const notes = [
-    !isToday && say(k, `Relevé du ${fmtDay(day)} : ↻${NB}Actualiser pour la journée en cours.`, { color: C.amber }),
+    dayNav(k, choice, ctx.today, act),
+    // Un relevé d'un jour passé : seulement quand on regarde ce jour-là sans l'avoir choisi.
+    fetchedDay !== ctx.today && day === fetchedDay && say(k, `Relevé du ${fmtDay(fetchedDay)} : ↻${NB}Actualiser pour la journée en cours.`, { color: C.amber }),
     ctx.ui.period !== 'all' && say(k, 'La période ne s’applique pas à cet onglet, qui montre une journée ; les filtres de poste, de projet et de modèle, si.', { dim: true, italic: true }),
   ].filter(isShown)
   if (rows.length === 0) {
     return (
       <Box key="day" flexDirection="column">
         {notes}
-        {card(k, 'day-empty', cap(isToday ? 'aujourd’hui' : fmtDay(day)), MONEY, null, [say(k, `Aucune consommation ${dayText}${isFiltered ? ' pour ces filtres' : ''}.`)])}
+        {card(k, 'day-empty', cap(isToday ? 'aujourd’hui' : fmtDay(day)), MONEY, null, [say(k, `Aucune consommation ${dayText}${isFiltered ? ' pour ces filtres' : ''}`.replace(/\.?$/, '.'))])}
       </Box>
     )
   }

@@ -4,6 +4,16 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.7.0 — 2026-10-17
+
+### Ajouté
+- **Journées passées dans l'onglet Journée.** En tête de l'onglet : « ◂ veille », « lendemain ▸ », le jour actif d'avant ou d'après sous les filtres (« ◂◂ 8 oct. », « 12 oct. ▸▸ ») et « ↺ aujourd'hui ». Tout l'onglet suit le jour choisi : coût et courbe des 30 jours qui finissent ce jour-là, veille, moyenne et rang, projets, postes, discussions, modèles, blocs de 5 h, messages. Le choix reste entre le premier jour connu et le jour du relevé ; `/ccstats day` revient au jour du relevé. La note « Relevé du … » ne s'affiche plus que sur le jour du relevé.
+
+### Corrigé
+- « Aucune consommation le sam. 10 oct.. » : un seul point après une date abrégée.
+
+---
+
 ## 0.6.2 — 2026-10-16
 
 ### Documentation
