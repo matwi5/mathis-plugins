@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.7.2 — 2026-10-16
+
+### Documentation
+- Commandes de développement en chemins relatifs au dépôt (`plugins/<plugin>`), quel que soit l'emplacement du clone.
+
+---
+
 ## 0.7.1 — 2026-10-16
 
 ### Modifié

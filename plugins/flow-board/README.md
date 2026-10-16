@@ -7,7 +7,7 @@ Tableau de bord en direct du workflow [mattpocock-skills](https://github.com/mat
 - **Il garde les parcours par projet.** Plusieurs discussions peuvent travailler sur le même projet sans se marcher dessus.
 - **Il suit les conventions de livraison du plugin `project`** : `/project:sync`, `/project:version`, `/project:push`, `/project:pr`.
 
-Version actuelle : **0.48.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.48.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -38,7 +38,7 @@ claude plugin marketplace update mathis-plugins
 claude plugin install flow-board@mathis-plugins
 ```
 
-Pour une nouvelle version : modifier la source dans le clone de travail (`~/.claude/mathis-plugins/plugins/flow-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
+Pour une nouvelle version : modifier la source dans le clone de travail (`plugins/flow-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
 
 ```bash
 claude plugin marketplace update mathis-plugins
@@ -431,8 +431,8 @@ Le moteur (`model.ts`) ne fait que des transitions pures : chacune prend le parc
 ## Développement
 
 ```bash
-claude plugin validate ~/.claude/mathis-plugins/plugins/flow-board
-claude plugin test ~/.claude/mathis-plugins/plugins/flow-board
+claude plugin validate plugins/flow-board
+claude plugin test plugins/flow-board
 ```
 
 - Les tests montent le panneau et le bandeau sur les surfaces `terminal`, `desktop`, `vscode` et `mobile`. Ils simulent le stockage, git et une seconde discussion.

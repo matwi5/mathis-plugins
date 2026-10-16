@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.6.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.6.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -34,7 +34,7 @@ claude plugin marketplace update mathis-plugins
 claude plugin install stats-board@mathis-plugins
 ```
 
-Pour une nouvelle version : modifier la source dans le clone de travail (`~/.claude/mathis-plugins/plugins/stats-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
+Pour une nouvelle version : modifier la source dans le clone de travail (`plugins/stats-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
 
 ```bash
 claude plugin marketplace update mathis-plugins
@@ -262,20 +262,20 @@ La table d'éléments de `$.ui.resolve(e)` contient tous les éléments sur tout
 ## Développement
 
 ```bash
-claude plugin validate ~/.claude/mathis-plugins/plugins/stats-board
+claude plugin validate plugins/stats-board
 ```
 
 ```bash
-claude plugin test ~/.claude/mathis-plugins/plugins/stats-board
+claude plugin test plugins/stats-board
 ```
 
 ```bash
-node --test ~/.claude/mathis-plugins/plugins/stats-board/skills/recap/recap.test.mjs
+node --test plugins/stats-board/skills/recap/recap.test.mjs
 ```
 
 - Lancer les commandes depuis un chemin court (`~`) : depuis un dossier au chemin trop long, Windows refuse le dossier courant.
 - Les tests simulent ccusage, Node, le disque et le store (`world`). Ils montent le panneau sur `terminal` et `desktop`, et chaque onglet sur les quatre surfaces à 40, 80 et 140 colonnes.
-- Vérification de types : `tsc -p ~/.claude/mathis-plugins/plugins/stats-board` avec TypeScript 5.4 ou plus récent. Sans `tsc` installé, l'API `typescript.js` livrée avec VS Code fait l'affaire.
+- Vérification de types : `tsc -p plugins/stats-board` avec TypeScript 5.4 ou plus récent. Sans `tsc` installé, l'API `typescript.js` livrée avec VS Code fait l'affaire.
 - Pour regarder le rendu sans session : un test temporaire peut monter le panneau avec de vraies sorties de ccusage et afficher `pane.drawn()` par `console.log`. Les arbres (Box, Text, Button, Svg, Raster) se convertissent facilement en HTML.
 - Les versions précédentes sont dans l'historique git du dépôt ; celles d'avant le passage à git restent dans `~/.claude/mods-archives/stats-board-<version>` sur le PC Windows.
 

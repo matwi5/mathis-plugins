@@ -7,7 +7,7 @@ Panneau Git et bandeau au-dessus du prompt, dans Claude Code. Il montre la branc
 - **Il suit le dépôt tout seul.** Une relecture suit chaque outil d'écriture de Claude, et un coup d'œil léger repère toutes les 10 s les changements faits ailleurs. Après un push, il suit la CI jusqu'à la fin de ses checks.
 - **Il propose le push.** À la fin d'un tour, des commits à pousser sur un arbre propre : `/project:push` apparaît grisé dans le prompt, Tab pour le prendre.
 
-Version actuelle : **0.4.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.4.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -34,7 +34,7 @@ claude plugin marketplace update mathis-plugins
 claude plugin install git-board@mathis-plugins
 ```
 
-Pour une nouvelle version : modifier la source dans le clone de travail (`~/.claude/mathis-plugins/plugins/git-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
+Pour une nouvelle version : modifier la source dans le clone de travail (`plugins/git-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
 
 ```bash
 claude plugin marketplace update mathis-plugins
@@ -189,8 +189,8 @@ La table d'éléments de `$.ui.resolve(e)` contient tous les éléments sur tout
 
 ```bash
 cd ~
-claude plugin validate ~/.claude/mathis-plugins/plugins/git-board
-claude plugin test ~/.claude/mathis-plugins/plugins/git-board
+claude plugin validate plugins/git-board
+claude plugin test plugins/git-board
 ```
 
 - Lancer les commandes depuis un chemin court (`~`) : depuis un dossier au chemin trop long, Windows refuse le dossier courant.

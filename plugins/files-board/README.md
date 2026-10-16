@@ -6,7 +6,7 @@ Navigateur de fichiers pour Claude Code CLI, à la manière de celui de l'app de
 - **Souris et clavier.** Clic, double clic, clic droit, clic du milieu, glisser ; le clavier atteint le navigateur après un clic dedans, Échap le rend au prompt.
 - **Il suit les fichiers.** Les onglets et l'arborescence se relisent après chaque outil d'écriture de Claude, et toutes les 4 s tant que le panneau est ouvert. Un fichier que Claude vient de modifier porte `◆`, ses dossiers `◇`, jusqu'à votre message suivant.
 
-Version actuelle : **0.3.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.3.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -208,17 +208,17 @@ files-board/
 ## Développement
 
 ```bash
-claude plugin validate ~/.claude/mathis-plugins/plugins/files-board
+claude plugin validate plugins/files-board
 ```
 
 ```bash
-claude plugin test ~/.claude/mathis-plugins/plugins/files-board
+claude plugin test plugins/files-board
 ```
 
 - Lancer les commandes depuis un chemin court (`~`) : depuis un dossier au chemin trop long, Windows refuse le dossier courant.
 - Les tests simulent le disque, le prompt et le presse-papiers (`world`). Le moteur de test rend `/w` en `C:\w` sous Windows : la simulation ramène les chemins à `/w`.
 - Le temps de la région avance avec sa minuterie (`ui.advance` dans les tests), pas avec l'horloge réelle.
-- Vérification de types : `tsc -p ~/.claude/mathis-plugins/plugins/files-board` avec TypeScript 5.4 ou plus récent (le `tsconfig.json` autorise les imports `./model.ts`). Sans `tsc` installé, l'API `typescript.js` livrée avec VS Code fait l'affaire.
+- Vérification de types : `tsc -p plugins/files-board` avec TypeScript 5.4 ou plus récent (le `tsconfig.json` autorise les imports `./model.ts`). Sans `tsc` installé, l'API `typescript.js` livrée avec VS Code fait l'affaire.
 
 ---
 

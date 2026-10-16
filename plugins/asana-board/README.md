@@ -6,7 +6,7 @@ Les tâches Asana du projet dans Claude Code, en **panneau** et en **bandeau** a
 - **Il permet d'agir.** Créer, cocher, changer le statut, assigner, commenter, modifier, abandonner ou supprimer une tâche, sans quitter Claude Code.
 - **Il suit Claude.** Quand Claude écrit dans Asana pendant la discussion, le panneau se relit, et la ligne de l'appel dit l'écriture avec le nom des tâches (« Asana · coche « Corriger le bandeau » ») au lieu des GID et du JSON.
 
-Version actuelle : **0.7.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.7.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -35,7 +35,7 @@ claude plugin marketplace update mathis-plugins
 claude plugin install asana-board@mathis-plugins
 ```
 
-Pour une nouvelle version : modifier la source dans le clone de travail (`~/.claude/mathis-plugins/plugins/asana-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
+Pour une nouvelle version : modifier la source dans le clone de travail (`plugins/asana-board`), monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée du mod de `.claude-plugin/marketplace.json` à la racine du dépôt, commiter et pousser, puis :
 
 ```bash
 claude plugin marketplace update mathis-plugins
@@ -193,8 +193,8 @@ asana-board/
 ## Développement
 
 ```bash
-claude plugin validate ~/.claude/mathis-plugins/plugins/asana-board
-claude plugin test ~/.claude/mathis-plugins/plugins/asana-board
+claude plugin validate plugins/asana-board
+claude plugin test plugins/asana-board
 ```
 
 - Les tests montent le panneau sur `terminal`, `desktop`, `vscode` et `mobile`, le bandeau sur `terminal` et `desktop`, sous un autre bandeau, et la ligne des écritures de Claude (`ToolUse`) sur `terminal` et `desktop`. Ils simulent Asana, le `CLAUDE.md`, l'horloge et le moteur.

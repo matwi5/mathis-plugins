@@ -2,7 +2,7 @@
 
 Petits mods de confort pour Claude Code, réunis dans un seul module (`hooks/register.tsx`).
 
-Version actuelle : **0.16.5**. Avant le passage dans `mathis-plugins`, ce mod n'avait ni README ni CHANGELOG : l'historique commence avec le dépôt. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.16.6**. Avant le passage dans `mathis-plugins`, ce mod n'avait ni README ni CHANGELOG : l'historique commence avec le dépôt. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ## Ce qu'il fait
 
@@ -32,8 +32,8 @@ claude plugin install mods-mathis@mathis-plugins
 ## Développement
 
 ```bash
-claude plugin validate ~/.claude/mathis-plugins/plugins/mods-mathis
-claude plugin test ~/.claude/mathis-plugins/plugins/mods-mathis
+claude plugin validate plugins/mods-mathis
+claude plugin test plugins/mods-mathis
 ```
 
 Pour une nouvelle version, monter `version` dans `.claude-plugin/plugin.json` et dans l'entrée `mods-mathis` de `.claude-plugin/marketplace.json` à la racine du dépôt.

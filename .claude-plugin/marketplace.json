@@ -30,13 +30,13 @@
       "name": "mods-mathis",
       "source": "./plugins/mods-mathis",
       "description": "Mes mods Claude Code : boutons Fichiers (navigateur files-board) et Diff au terminal, bouton Ultracode, chrono de réponse, vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /mods-mathis:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
-      "version": "0.16.5"
+      "version": "0.16.6"
     },
     {
       "name": "flow-board",
       "source": "./plugins/flow-board",
       "description": "Tableau de bord du workflow mattpocock-skills : un parcours adapté au skill de départ (phases, étapes, tickets, sous-agents, tests, livrables) en panneau et en bandeau ; /flow (onglet Commandes : toutes les commandes).",
-      "version": "0.48.0"
+      "version": "0.48.1"
     },
     {
       "name": "mattpocock-skills",
@@ -50,25 +50,25 @@
       "name": "asana-board",
       "source": "./plugins/asana-board",
       "description": "Tâches Asana du projet en panneau (/asana, ou /asana-board:asana dès le premier message) et en bandeau au-dessus du prompt : les tâches non terminées de la section, rangées par statut, à créer, modifier, cocher, commenter ou supprimer.",
-      "version": "0.7.1"
+      "version": "0.7.2"
     },
     {
       "name": "git-board",
       "source": "./plugins/git-board",
       "description": "Panneau Git (/git) et bandeau au-dessus du prompt : branche, écarts avec le distant, modifications, branches (bascule, création), historique et pull request ; commit, pull, push et PR via les commandes du plugin project. /git-board:git dès le premier message.",
-      "version": "0.4.1"
+      "version": "0.4.2"
     },
     {
       "name": "files-board",
       "source": "./plugins/files-board",
       "description": "Navigateur de fichiers dans Claude Code CLI (/files), comme celui de l'app desktop : arborescence, recherche de fichiers, onglets d'aperçu, éditeur avec enregistrement automatique, menus contextuels (joindre comme contexte, copier, ouvrir dans, afficher dans l'Explorateur) et options d'affichage. /files-board:files dès le premier message.",
-      "version": "0.3.1"
+      "version": "0.3.2"
     },
     {
       "name": "stats-board",
       "source": "./plugins/stats-board",
       "description": "Panneau de statistiques Claude Code (/ccstats) et bandeau au-dessus du prompt : discussion ouverte (coût, contexte, rythme horaire), récap de la journée, coût équivalent API (ccusage), tokens, modèles, projets, sessions, blocs de 5 h, calendrier d'activité et rythme, pour tous les postes (Portable, Mac, Serveur) partagés par le dépôt claude-usage. /stats-board:ccstats dès le premier message ; /stats-board:recap fait le récap de la discussion et de la journée dans le chat.",
-      "version": "0.6.1"
+      "version": "0.6.2"
     }
   ]
 }
