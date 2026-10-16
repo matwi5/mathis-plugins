@@ -954,6 +954,40 @@ describe('git-board', () => {
     })
   }
 
+  test('CI sans PR : une exécution annulée puis relancée sur le même commit ne compte pas comme un échec', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const fake = fakeRepo({ pr: 'none' })
+    const seen = engine(on, fake)
+    await start($, clock)
+    // `concurrency: cancel-in-progress` : deux exécutions du même workflow, la première annulée.
+    fake.ci.runs = [
+      { status: 'completed', conclusion: 'success', name: 'Checks', url: 'https://github.com/b' },
+      { status: 'completed', conclusion: 'cancelled', name: 'Checks', url: 'https://github.com/a' },
+    ]
+    await push($, clock, fake)
+    const pane = await mountPane($, 'terminal')
+    expect(await pane.find({ type: 'Text', text: /✓\sCI\sréussie/ })).toBeDefined()
+    expect(seen.toasts.some((t) => /✓ CI réussie sur feat\/export \(1\scheck/.test(t))).toBe(true)
+    expect(seen.toasts.some((t) => /échouée/.test(t))).toBe(false)
+  })
+
+  test('CI avec PR : un check annulé et remplacé ne compte pas ; seul, il reste un échec', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const fake = fakeRepo()
+    const seen = engine(on, fake)
+    await start($, clock)
+    fake.ci.prHead = PUSHED
+    fake.ci.rollup = [
+      { status: 'COMPLETED', conclusion: 'CANCELLED', name: 'test', workflowName: 'Checks' },
+      { status: 'COMPLETED', conclusion: 'SUCCESS', name: 'test', workflowName: 'Checks' },
+      { status: 'COMPLETED', conclusion: 'CANCELLED', name: 'deploy', workflowName: 'Release' },
+    ]
+    await push($, clock, fake)
+    const pane = await mountPane($, 'terminal')
+    expect(await pane.find({ type: 'Text', text: /✗\sCI\séchouée\s:\sdeploy/ })).toBeDefined()
+    expect(seen.toasts.some((t) => /✗ CI échouée sur feat\/export : deploy/.test(t))).toBe(true)
+  })
+
   test('CI : plafond de 20 min, puis le suivi s’arrête', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const fake = fakeRepo({ pr: 'none' })

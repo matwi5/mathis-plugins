@@ -1,6 +1,6 @@
 {
   "name": "git-board",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Panneau Git (/git) et bandeau au-dessus du prompt : branche, écarts avec le distant, modifications, branches (bascule, création), historique et pull request ; commit, pull, push et PR via les commandes du plugin project. /git-board:git dès le premier message.",
   "author": {
     "name": "Mathis"

@@ -172,10 +172,16 @@ export function githubUrl(url: string) {
 }
 
 // Les vérifications GitHub : CheckRun (status, conclusion) et StatusContext (state).
-// Le nom du premier check en échec est gardé pour le suivi de la CI.
+// Le nom du premier check en échec est gardé pour le suivi de la CI. Un check annulé dont un
+// homonyme (même workflow, même nom) n'est pas annulé a été remplacé, par exemple par
+// `concurrency: cancel-in-progress` : il ne compte pas.
 export function checksOf(list: any[]): PrChecks {
   const out: PrChecks = { passed: 0, failed: 0, pending: 0, firstFailed: null }
+  const keyOf = (c: any) => `${c.workflowName ?? ''}\u0000${c.name || c.context || ''}`
+  const isCancelled = (c: any) => String(c.conclusion || c.state || '').toUpperCase() === 'CANCELLED'
+  const live = new Set(list.filter((c) => !isCancelled(c)).map(keyOf))
   for (const c of list) {
+    if (isCancelled(c) && live.has(keyOf(c))) continue
     const verdict = String(c.conclusion || c.state || '').toUpperCase()
     if (c.status && String(c.status).toUpperCase() !== 'COMPLETED') out.pending += 1
     else if (['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(verdict)) out.passed += 1

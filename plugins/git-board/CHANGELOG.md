@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.4.3 — 2026-10-17
+
+### Corrigé
+- **Fausse « CI échouée »** : une exécution annulée puis remplacée sur le même commit (`concurrency: cancel-in-progress`, deux déclenchements rapprochés) comptait comme un échec, alors que l'exécution qui l'a remplacée avait réussi. Un check annulé ne compte plus quand un homonyme (même workflow, même nom) ne l'est pas, avec ou sans PR ; un check annulé seul reste un échec.
+
+---
+
 ## 0.4.2 — 2026-10-16
 
 ### Documentation

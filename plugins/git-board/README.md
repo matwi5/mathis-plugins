@@ -7,7 +7,7 @@ Panneau Git et bandeau au-dessus du prompt, dans Claude Code. Il montre la branc
 - **Il suit le dépôt tout seul.** Une relecture suit chaque outil d'écriture de Claude, et un coup d'œil léger repère toutes les 10 s les changements faits ailleurs. Après un push, il suit la CI jusqu'à la fin de ses checks.
 - **Il propose le push.** À la fin d'un tour, des commits à pousser sur un arbre propre : `/project:push` apparaît grisé dans le prompt, Tab pour le prendre.
 
-Version actuelle : **0.4.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.4.3**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -151,7 +151,7 @@ Les âges affichés se redessinent toutes les 5 s pendant une activité, toutes 
 
 - **Quand.** Après un `git push` lancé par Claude (outil Bash), et après un `/project:push` lancé du panneau, une fois le dépôt relu : seulement sur un distant GitHub, et si le commit est bien arrivé sur l'amont (plus rien à pousser).
 - **Comment.** Toutes les 25 s, sur le commit poussé (HEAD en entier) : avec une PR ouverte, `gh pr view` (ses checks se mettent aussi à jour dans le panneau ; tant que la PR montre encore l'ancienne tête, c'est « en attente ») ; sans PR, `gh run list --commit <sha> --json status,conclusion,name,url` (exécutions GitHub Actions).
-- **Affichage.** « ◌ CI en attente » tant que rien n'est lancé, « ◌ CI 1/3 » en cours (finis/total), « ✓ CI réussie », « ✗ CI échouée : <premier check en échec> ». Sur la route, l'étape Checks dit « attente » au lieu de « aucun ». Sans suivi, une PR sans checks et une PR dont les checks ne sont pas encore lancés s'affichent pareil (« aucun » sur la route) : seul le suivi les distingue.
+- **Affichage.** « ◌ CI en attente » tant que rien n'est lancé, « ◌ CI 1/3 » en cours (finis/total), « ✓ CI réussie », « ✗ CI échouée : <premier check en échec> ». Un check annulé dont un homonyme (même workflow, même nom) ne l'est pas a été remplacé, par exemple par `concurrency: cancel-in-progress` : il ne compte pas ; seul, il reste un échec. Sur la route, l'étape Checks dit « attente » au lieu de « aucun ». Sans suivi, une PR sans checks et une PR dont les checks ne sont pas encore lancés s'affichent pareil (« aucun » sur la route) : seul le suivi les distingue.
 - **Fin.** Un toast et la zone d'activité à la fin (réussie, ou échouée avec le nom du check). Au bout de 20 min, le suivi s'arrête sur « CI encore en cours (suivi arrêté) ». Toujours aucun check au bout de 3 min : « aucun check », sans toast.
 - **Arrêt.** Au changement de branche ou de dossier. `gh` absent, non connecté ou illisible : le suivi s'arrête sans rien afficher, le panneau reste comme avant.
 
