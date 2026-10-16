@@ -1,0 +1,43 @@
+{
+  "env": {
+    "FORCE_AUTOUPDATE_PLUGINS": "true"
+  },
+  "model": "opus",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    },
+    "claude-haiku-5-5": {
+      "effortLevel": "xhigh"
+    },
+    "claude-sonnet-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/plugins/marketplaces/mathis-plugins/config/statusline.sh"
+  },
+  "tui": "fullscreen",
+  "enabledPlugins": {
+    "setup@mathis-plugins": true,
+    "agents@mathis-plugins": true,
+    "project@mathis-plugins": true,
+    "mattpocock-skills@mathis-plugins": true,
+    "flow-board@mathis-plugins": true,
+    "asana-board@mathis-plugins": true,
+    "git-board@mathis-plugins": true,
+    "files-board@mathis-plugins": true,
+    "stats-board@mathis-plugins": true,
+    "mods-mathis@mathis-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "mathis-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "matwi5/mathis-plugins"
+      },
+      "autoUpdate": true
+    }
+  }
+}

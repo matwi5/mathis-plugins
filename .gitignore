@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Systèmes
+.DS_Store
+Thumbs.db
+
+# Outils
+node_modules/
+
+# Sauvegardes et secrets
+*.bak-sync-*
+.env*
+
+# Propre à un poste : jamais versionné
+.claude/settings.local.json
+*.jsonl
+.machine
+claude-usage/
+plugins/*/.claude-plugin/types/

@@ -1,0 +1,10 @@
+{
+  "name": "mods-mathis",
+  "version": "0.16.5",
+  "description": "Mes mods Claude Code : boutons Fichiers (navigateur files-board) et Diff au terminal, bouton Ultracode, chrono de réponse, vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /mods-mathis:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
+  "author": {
+    "name": "Mathis"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
