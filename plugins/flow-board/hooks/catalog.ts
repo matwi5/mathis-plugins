@@ -671,7 +671,7 @@ export const SKILLS: Record<string, SkillDef> = {
       step(
         'apply',
         'Modifications en cours',
-        'set by the dashboard when the user sends improvements to a linked session; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done or dropped), then complete',
+        'set by the dashboard once the linked session you launch for the improvements the user sent has started; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then complete unless some went back to todo',
       ),
     ],
     items: { label: 'Pistes', hint: 'the improvement candidates (label = "category: fix")', linkedStep: 'apply' },

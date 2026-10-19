@@ -14,7 +14,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Board, Relay, Run, SyncState, Tab } from '../types'
+import type { Board, FlowPhase, Relay, Run, SyncState, Tab } from '../types'
 import {
   CODE_SKILLS,
   GROUP_REVIEWER,
@@ -64,6 +64,8 @@ import {
   linkGroupSession,
   linkSession,
   linkedSessionsOf,
+  noteUnlaunched,
+  retryLinked,
   startLinkedGroups,
   type GroupView,
   linkedInFlight,
@@ -394,6 +396,11 @@ const sessionRoot = async ($: any): Promise<string> => {
 
 /** Id de cette discussion ; une valeur tirée au hasard là où le moteur n'en donne pas (tests). */
 let sessionCache: string | null = null
+/**
+ * Dernier message de la personne (ms) : le tour qui le traite peut lancer une session liée demandée
+ * avant lui. Les tours d'une notification ou d'une autre session ne comptent pas : ils n'ont pas vu la demande.
+ */
+let submitAt: number | null = null
 const sessionId = async ($: any): Promise<string> => {
   if (sessionCache !== null) return sessionCache
   try {
@@ -824,7 +831,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     lines.push(`- Items: ${def.items.hint}. Send the full list {"items": [{"id": "...", "label": "...", "status": "todo|doing|done|dropped"}]} whenever it changes.`)
     if (def.items.linkedStep) {
       lines.push(
-        `- Once the items are presented, the user picks the ones to apply in the dashboard and may send them to a linked session ("${def.steps.find(s => s.id === def.items!.linkedStep)?.label ?? def.items.linkedStep}" step). Do not send {"complete": true} before the user has decided; while items are with the linked session, the dashboard refuses it.`,
+        `- Once the items are presented, the user picks the ones to apply in the dashboard and may send them to a linked session: the request lands in the prompt and you launch the session; the items go "doing" and the "${def.steps.find(s => s.id === def.items!.linkedStep)?.label ?? def.items.linkedStep}" step opens only once the session is launched. Do not send {"complete": true} before the user has decided; while items are with the linked session, launched or not, the dashboard refuses it.`,
       )
     }
   }
@@ -1298,10 +1305,51 @@ const launchBugLinked = async ($: any) => {
   await quietly(() => $.ui.toast(isFilled ? 'Bug en session liée : décris-le après « Bug : », puis Entrée' : 'Demande à taper : lance un diagnostic de bug dans une session liée'))
 }
 
+/** Comment rendre chaque élément confié à la note de fin de sa session. */
+const ITEM_VERDICTS = "done si elle est faite et vérifiée ; todo si elle n'a pas été faite (elle revient à mon choix, sans être écartée) ; dropped seulement si je décide de l'abandonner"
+
 /**
- * Confie les éléments choisis de la phase (les pistes d'une rétro) à une session liée : ils passent
- * « en cours », l'étape « Modifications en cours » s'ouvre, et la demande va dans le prompt pour
- * Claude. Le parcours reste ici : la session ne le reprend pas, Claude la suit et rend les statuts.
+ * La demande à Claude pour lancer une session liée sur des éléments de la phase (les pistes d'une
+ * rétro). Les éléments ne portent qu'un libellé : c'est la discussion d'ici, qui connaît la session
+ * étudiée, qui rédige le brief.
+ */
+const itemsRequest = async ($: any, run: Run, phase: FlowPhase, ids: readonly string[]): Promise<string> => {
+  const def = SKILLS[phase.skill]!
+  const label = def.items!.label.toLowerCase()
+  const list = phase.items
+    .filter(i => ids.includes(i.id))
+    .map((i, n) => `${n + 1}) [${i.id}] ${i.label}`)
+    .join(' ; ')
+  // Sans git, pas de worktree possible : la session travaille dans ce dossier.
+  const isRepo = await measureRepo($)
+  return (
+    `Traite ces ${label} de la phase ${def.label} du parcours « ${run.title} » dans une session liée : ${list}. ` +
+    `Avant de la lancer : repère les ${label} qui ont besoin d'une information ou d'une décision de ma part (un accès, un choix entre options) et règle-les d'abord avec moi ici, sinon la session y butera. ` +
+    `Puis lance la session, avec un titre qui commence par « ${linkedPrefix(run)}${def.items!.label} · ». ` +
+    launchHow({ many: false, isRepo, ownFolder: true, title: `${linkedPrefix(run)}${def.items!.label} · <sujet>`, worktree: label.replace(/[^a-z0-9]+/g, '-') }) +
+    `Si tu ne peux pas la lancer (outil absent, refus, erreur), dis-le-moi avec la raison et n'envoie rien sur ces ${label} à l'outil flow : le tableau de bord les garde à lancer, avec « Redemander » et « Annuler ». ` +
+    `Rédige toi-même le background : le projet, la session étudiée par la rétro, les décisions déjà prises et les contraintes (ressource unique comme une appli ouverte, écritures autorisées, gestes qui me sont réservés). ` +
+    `Rédige le prompt avec une section par piste : le problème constaté (une phrase), la correction attendue, les fichiers touchés et un critère de fin vérifiable. ` +
+    `Consignes du prompt : travailler en séquence, en regroupant les pistes qui touchent les mêmes fichiers, sans sous-agents qui écrivent (des sous-agents en parallèle seulement pour des recherches en lecture seule et indépendantes) ; suivre le CLAUDE.md du projet et lancer à la fin les contrôles qu'il déclare ; ne pas utiliser l'outil flow de flow-board ni reprendre ce parcours, qui reste dans la discussion principale ; finir par un compte rendu avec une ligne par piste (faite, ou pas faite et pourquoi), les fichiers modifiés${isRepo ? ', sa branche' : ''}, les contrôles lancés et leur résultat, et ce qui m'attend. ` +
+    `Ici : garder le parcours (pas de resume ni de nouveau parcours) et suivre la session sans l'attendre activement. ` +
+    `${atEnd('la session')}, vérifier son travail (diff, commits, contrôles${isRepo ? ', fusion de sa branche' : ''}), puis envoyer à l'outil flow la liste complète des items avec le statut de chacun : ${ITEM_VERDICTS}, puis {"complete": true} si aucune n'est revenue à todo.`
+  )
+}
+
+/** Met une demande dans le prompt ; le toast dit si elle y est ou s'il faut la taper. */
+const fillRequest = async ($: any, text: string, filled: string, typed: string) => {
+  let isFilled = false
+  await quietly(async () => {
+    isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
+  })
+  await quietly(() => $.ui.toast(isFilled ? filled : typed))
+}
+
+/**
+ * Confie les éléments choisis de la phase (les pistes d'une rétro) à une session liée : la demande
+ * va dans le prompt pour Claude, qui lance la session. Les éléments passent « en cours » et l'étape
+ * « Modifications en cours » s'ouvre au lancement seulement. Le parcours reste ici : la session ne le
+ * reprend pas, Claude la suit et rend les statuts.
  */
 const launchItemsLinked = async ($: any) => {
   const run = activeRun(await read($, boardAtom))
@@ -1315,57 +1363,57 @@ const launchItemsLinked = async ($: any) => {
   if (!(await commit($, b => startLinkedItems(b, ids, now)))) return
   await update($, uiAtom, ui => ({ ...ui, itemSelection: [] }))
   const label = def.items.label.toLowerCase()
-  const list = phase.items
-    .filter(i => ids.includes(i.id))
-    .map((i, n) => `${n + 1}) [${i.id}] ${i.label}`)
-    .join(' ; ')
-  // Sans git, pas de worktree possible : la session travaille dans ce dossier.
-  let isRepo = false
-  await quietly(async () => {
-    isRepo = (await $.session.repo()) !== null
-  })
-  // Les items ne portent qu'un libellé : c'est la discussion d'ici, qui connaît la session étudiée, qui rédige le brief.
-  const text =
-    `Traite ces ${label} de la phase ${def.label} du parcours « ${run.title} » dans une session liée : ${list}. ` +
-    `Avant de la lancer : repère les ${label} qui ont besoin d'une information ou d'une décision de ma part (un accès, un choix entre options) et règle-les d'abord avec moi ici, sinon la session y butera. ` +
-    `Puis lance la session, avec un titre qui commence par « ${linkedPrefix(run)}${def.items.label} · ». ` +
-    launchHow({ many: false, isRepo, ownFolder: true, title: `${linkedPrefix(run)}${def.items.label} · <sujet>`, worktree: label.replace(/[^a-z0-9]+/g, '-') }) +
-    `Rédige toi-même le background : le projet, la session étudiée par la rétro, les décisions déjà prises et les contraintes (ressource unique comme une appli ouverte, écritures autorisées, gestes qui me sont réservés). ` +
-    `Rédige le prompt avec une section par piste : le problème constaté (une phrase), la correction attendue, les fichiers touchés et un critère de fin vérifiable. ` +
-    `Consignes du prompt : travailler en séquence, en regroupant les pistes qui touchent les mêmes fichiers, sans sous-agents qui écrivent (des sous-agents en parallèle seulement pour des recherches en lecture seule et indépendantes) ; suivre le CLAUDE.md du projet et lancer à la fin les contrôles qu'il déclare ; ne pas utiliser l'outil flow de flow-board ni reprendre ce parcours, qui reste dans la discussion principale ; finir par un compte rendu avec une ligne par piste (faite, ou pas faite et pourquoi), les fichiers modifiés${isRepo ? ', sa branche' : ''}, les contrôles lancés et leur résultat, et ce qui m'attend. ` +
-    `Ici : garder le parcours (pas de resume ni de nouveau parcours) et suivre la session sans l'attendre activement. ` +
-    `${atEnd('la session')}, vérifier son travail (diff, commits, contrôles${isRepo ? ', fusion de sa branche' : ''}), puis envoyer à l'outil flow la liste complète des items avec le statut de chacun (done ou dropped), puis {"complete": true}.`
-  let isFilled = false
-  await quietly(async () => {
-    isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
-  })
-  await quietly(() =>
-    $.ui.toast(isFilled ? `Session liée pour ${ids.length} ${label} : la demande est dans le prompt, Entrée pour la lancer` : `Demande à taper : traite les ${label} choisies dans une session liée`),
-  )
+  // Un envoi encore sans session reprend aussi les éléments d'avant : la demande les liste tous.
+  const sent = activeRun(await read($, boardAtom))
+  const sentPhase = sent ? currentPhase(sent) : phase
+  const all = linkedInFlight(sentPhase).map(i => i.id)
+  const text = await itemsRequest($, run, sentPhase, all)
+  await fillRequest($, text, `Session liée pour ${all.length} ${label} : la demande est dans le prompt, Entrée pour l'envoyer à Claude`, `Demande à taper : traite les ${label} choisies dans une session liée`)
+}
+
+/** « Redemander » : aucune session n'a pris les éléments ; la même demande revient dans le prompt. */
+const relaunchLinked = async ($: any) => {
+  const run = activeRun(await read($, boardAtom))
+  const phase = run ? currentPhase(run) : null
+  const def = phase ? SKILLS[phase.skill] : undefined
+  if (!run || !phase || !def?.items) return
+  const ids = linkedInFlight(phase).map(i => i.id)
+  const now = await $.clock.now()
+  if (!(await commit($, b => retryLinked(b, now)))) return
+  const label = def.items.label.toLowerCase()
+  // Une session a pu partir sans que son id soit relevé : la vérifier avant d'en lancer une seconde.
+  const check =
+    `D'abord, vérifie qu'aucune session n'a déjà été lancée pour ces ${label} : dans cette discussion (un appel de lancement), puis par ListAgents ou claude agents (un titre qui commence par « ${linkedPrefix(run)}${def.items.label} · »). ` +
+    `Si tu en trouves une, ne lance rien : dis-le-moi, avec son id, et suis-la comme ci-dessous. Sinon : `
+  const text = check + (await itemsRequest($, run, phase, ids))
+  await fillRequest($, text, `Session liée redemandée pour ${ids.length} ${label} : Entrée pour l'envoyer à Claude`, `Demande à taper : traite les ${label} confiées dans une session liée`)
 }
 
 /**
- * « Reprendre les pistes » : une session liée qui s'est arrêtée sans note de fin laisse ses éléments
- * en cours ; la demande va dans le prompt pour que Claude vérifie son état et les rende.
+ * « Reprendre les pistes » : les éléments confiés sont restés en cours ou à lancer (session arrêtée
+ * sans note de fin, ou jamais lancée). La demande va dans le prompt pour que Claude retrouve la
+ * session, ou constate qu'il n'y en a pas, et rende les éléments sans en abandonner aucun à tort.
  */
 const recoverLinked = async ($: any) => {
   const run = activeRun(await read($, boardAtom))
   const phase = run ? currentPhase(run) : null
   const linked = phase?.linked
   if (!run || !phase || !linked) return
-  const label = (SKILLS[phase.skill]?.items?.label ?? 'éléments').toLowerCase()
+  const def = SKILLS[phase.skill]
+  const label = (def?.items?.label ?? 'éléments').toLowerCase()
   const list = linkedInFlight(phase)
     .map((i, n) => `${n + 1}) [${i.id}] ${i.label}`)
     .join(' ; ')
-  const session = linked.session !== undefined ? ` (${linked.session})` : ''
+  // Lire une session : l'outil de l'app Desktop, le CLI ou son transcript, qui marche partout.
+  const howToRead = "avec tes outils de session de l'app Desktop si tu les as, sinon claude agents puis claude logs <id> dans le CLI, ou son fichier .jsonl sous ~/.claude/projects/"
   const text =
-    `Vérifie l'état de la session liée${session} qui traite les ${label} du parcours « ${run.title} » : ${list} (lancée par le CLI : claude agents, puis claude logs <id>). ` +
-    `Contrôle son travail (diff, commits, contrôles), puis rends chaque piste à l'outil flow avec la liste complète des items (done si elle est faite et vérifiée, dropped sinon, avec la raison dans ta réponse), puis {"complete": true} si toutes sont rendues.`
-  let isFilled = false
-  await quietly(async () => {
-    isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
-  })
-  await quietly(() => $.ui.toast(isFilled ? `Reprise des ${label} : la demande est dans le prompt, Entrée pour l'envoyer` : `Demande à taper : vérifie la session liée et rends les ${label}`))
+    linked.session !== undefined
+      ? `Vérifie l'état de la session liée (${linked.session}) qui traite les ${label} du parcours « ${run.title} » : ${list}. Lis-la ${howToRead}. ` +
+        `Si elle travaille encore, dis-le-moi et n'envoie rien. Sinon, contrôle son travail (diff, commits, contrôles), puis envoie à l'outil flow la liste complète des items avec le statut de chacun : ${ITEM_VERDICTS} ; enfin {"complete": true} seulement si aucune n'est revenue à todo.`
+      : `Aucune session n'a été relevée pour les ${label} du parcours « ${run.title} » : ${list}. Cherche d'abord si une session a été lancée pour elles : un titre qui commence par « ${linkedPrefix(run)}${def?.items?.label ?? ''} · », ${howToRead}, et cette discussion (un appel de lancement, une erreur). ` +
+        `Si tu n'en trouves aucune, le lancement n'a pas eu lieu : n'envoie aucun statut à l'outil flow et ne clos pas la phase ; dis-moi ce qui l'a empêché si tu le vois, je choisis dans le tableau de bord entre « Redemander » et « Annuler » (les ${label} reviennent à mon choix). ` +
+        `Si tu en trouves une : contrôle son travail (diff, commits, contrôles), envoie à l'outil flow la liste complète des items, les ${label} faites et vérifiées en done et les autres en todo, sans en clore la phase, et dis-moi celles qui restent : je les rends à mon choix par « Annuler ».`
+  await fillRequest($, text, `Reprise des ${label} : la demande est dans le prompt, Entrée pour l'envoyer`, `Demande à taper : vérifie la session liée et rends les ${label}`)
 }
 
 /**
@@ -1485,6 +1533,7 @@ const actionsFor = ($: any): Actions => ({
   clearItemPicks: () => update($, uiAtom, ui => ({ ...ui, itemSelection: [] })),
   launchItemsLinked: () => launchItemsLinked($),
   recoverLinked: () => recoverLinked($),
+  relaunchLinked: () => relaunchLinked($),
   cancelLinked: async () => {
     const now = await $.clock.now()
     await commit($, board => cancelLinked(board, now))
@@ -1886,8 +1935,8 @@ export const register: Register = on => {
         const now = await $.clock.now()
         const asked = e as { title?: unknown; name?: unknown }
         const title = `${String(asked.title ?? '')} ${String(asked.name ?? '')}`
-        await commit($, board => linkGroupSession(board, title, session, now))
-        await commit($, board => linkSession(board, session, now))
+        // Une session prise par un groupe n'est pas celle des éléments confiés.
+        if (!(await commit($, board => linkGroupSession(board, title, session, now)))) await commit($, board => linkSession(board, session, now, title))
       }
       return ran
     }
@@ -1942,8 +1991,7 @@ export const register: Register = on => {
           await commit($, board => applyCommand(board, String(e.command ?? ''), isOk, out, now))
           // Le CLI lance ses sessions liées par `claude --bg` : leur id va au groupe que leur titre nomme.
           for (const launched of backgroundLaunches(String(e.command ?? ''), out)) {
-            await commit($, board => linkGroupSession(board, launched.title, launched.id, now))
-            await commit($, board => linkSession(board, launched.id, now))
+            if (!(await commit($, board => linkGroupSession(board, launched.title, launched.id, now)))) await commit($, board => linkSession(board, launched.id, now, launched.title))
           }
         }
       } else if (e.tool.endsWith('__update_tasks') && isOk) {
@@ -1976,6 +2024,8 @@ export const register: Register = on => {
   // Fin d'un tour de la boucle principale : la main revient à la personne. La réponse dit
   // s'il reste des questions (grilling) ou si une revue vient de rendre.
   on('turn.complete', async ($, e, next) => {
+    // Lu à l'entrée : un message en file peut ouvrir le tour suivant pendant ce traitement.
+    const askedAt = submitAt
     const result = await next(e)
     // La fin du tour d'un sous-agent : sa réponse est rendue, il a fini.
     if (e.agentId !== undefined) {
@@ -1984,6 +2034,11 @@ export const register: Register = on => {
       return result
     }
     await reconcileAgents($)
+    // Un message de la personne envoyé après la demande d'une session liée, et le tour fini sans la lancer : le panneau le dit.
+    if (askedAt !== null) {
+      const ended = await $.clock.now()
+      await commit($, board => noteUnlaunched(board, askedAt, ended))
+    }
     if (isRecheckAfterTurn) {
       isRecheckAfterTurn = false
       scheduleCheck($, false)
@@ -2018,6 +2073,7 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin.kind
+    if (kind === 'composer' || kind === 'bridge' || kind === 'sdk') submitAt = await $.clock.now()
     if ((kind === 'composer' || kind === 'bridge' || kind === 'sdk') && !e.text.trimStart().startsWith('/')) {
       const now = await $.clock.now()
       await commit($, board => applyUserAnswer(board, now))

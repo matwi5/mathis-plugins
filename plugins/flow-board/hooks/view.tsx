@@ -141,8 +141,10 @@ export type Actions = {
   launchItemsLinked: () => unknown
   /** Annule un envoi à une session liée qui n'a pas été lancée. */
   cancelLinked: () => unknown
-  /** Demande à Claude de vérifier la session liée et de rendre ses éléments (session arrêtée sans note). */
+  /** Demande à Claude de vérifier la session liée et de rendre ses éléments (session arrêtée sans note, ou jamais lancée). */
   recoverLinked: () => unknown
+  /** Remet dans le prompt la demande de lancement des éléments qu'aucune session n'a pris. */
+  relaunchLinked: () => unknown
   /** Demande (ou retire) la confirmation de suppression d'un parcours archivé. */
   askDrop: (id: string) => unknown
   /** /ask-matt dans le prompt, prérempli avec l'endroit du parcours où l'on est. */
@@ -488,33 +490,47 @@ const stepsList = (k: Kit, steps: readonly FlowStep[], def: SkillDef, color: str
 /** Les éléments d'une phase qui peut les confier à une session liée (les pistes d'une rétro). */
 type Linkable = { phase: FlowPhase; view: View; act: Actions }
 
-/** Où en est l'envoi à la session liée : à lancer (avec « Annuler »), au travail, ou terminé. */
+/**
+ * Où en est l'envoi à la session liée : à lancer, ou pas lancée après un tour de Claude (avec
+ * « Redemander » et « Annuler » dans les deux cas), au travail, ou terminée.
+ */
 const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
   const { Box, Button } = k
   const linked = l.phase.linked
   if (!linked) return null
   const inFlight = linkedInFlight(l.phase).length
   const total = linked.items.length
+  const isWaiting = inFlight > 0 && linked.session === undefined
   const parts =
     inFlight === 0
       ? [T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }), T(k, `${label}${NB}:${NB}${total}/${total}`, { dim: true })]
-      : linked.session === undefined
-        ? [T(k, `↗${NB}Session${NB}liée${NB}à${NB}lancer`, { color: C.amber, bold: true }), T(k, 'la demande est dans le prompt : Entrée pour la lancer', { dim: true, wrap: 'wrap' })]
-        : [
+      : linked.session !== undefined
+        ? [
             T(k, `↗${NB}Session${NB}liée${NB}au${NB}travail`, { color: C.blue, bold: true }),
             // Les éléments ne bougent qu'à la note de fin : un compteur à 0 ferait croire la session bloquée.
             T(k, `${plural(inFlight, label.replace(/s$/, ''), label)}${NB}en${NB}cours`, { dim: true }),
             T(k, dur(l.view.now - linked.at), { dim: true }),
           ]
+        : linked.missedAt !== undefined
+          ? [
+              T(k, `⚠${NB}Aucun${NB}lancement${NB}relevé`, { color: C.amber, bold: true }),
+              T(k, `${plural(inFlight, label.replace(/s$/, ''), label)} en attente : Claude a rendu la main sans lancer de session. S'il te pose une question, réponds-lui ; sinon redemande, ou annule pour les remettre au choix.`, { dim: true, wrap: 'wrap' }),
+            ]
+          : [T(k, `↗${NB}Session${NB}liée${NB}à${NB}lancer`, { color: C.amber, bold: true }), T(k, `${plural(inFlight, label.replace(/s$/, ''), label)} en attente : envoie la demande à Claude, qui lance la session (plus dans le prompt : « Redemander »)`, { dim: true, wrap: 'wrap' })]
   return (
     <Box key="linked" flexDirection="row" flexWrap="wrap" alignItems="center">
       <Box flexShrink={1}>{line(k, parts, true)}</Box>
-      {inFlight > 0 && linked.session === undefined && (
+      {isWaiting && (
+        <Box marginLeft={1} flexShrink={0}>
+          <Button key="linked-retry" plain={true} dimColor={linked.missedAt === undefined} label={`↻${NB}Redemander`} onPress={() => l.act.relaunchLinked()} />
+        </Box>
+      )}
+      {isWaiting && (
         <Box marginLeft={1} flexShrink={0}>
           <Button key="linked-cancel" plain={true} dimColor={true} label="Annuler" onPress={() => l.act.cancelLinked()} />
         </Box>
       )}
-      {/* Sans id relevé, la session a pu partir quand même (lancée autrement que prévu) : la reprise reste possible. */}
+      {/* Sans id relevé, la session a pu partir quand même (lancée autrement que prévu) : la reprise la cherche. */}
       {inFlight > 0 && (
         <Box marginLeft={1} flexShrink={0}>
           <Button key="linked-recover" plain={true} dimColor={true} label={`↻${NB}Reprendre${NB}les${NB}${label}`} onPress={() => l.act.recoverLinked()} />
@@ -534,6 +550,8 @@ const itemsBlock = (k: Kit, items: readonly FlowItem[], def: SkillDef, color: st
   const isAll = view.ui.showAllItems === true
   const shown = isAll ? items : items.slice(0, ITEMS_SHOWN)
   const pickable = linkable ? pickableItems(linkable.phase).map(i => i.id) : []
+  // Confiés à une session pas encore lancée : ni à choisir, ni en cours.
+  const waiting = linkable && linkable.phase.linked?.session === undefined ? linkedInFlight(linkable.phase).map(i => i.id) : []
   const selection = linkable ? (linkable.view.ui.itemSelection ?? []).filter(id => pickable.includes(id)) : []
   const isAllPicked = pickable.length > 0 && selection.length === pickable.length
   const label = (def.items?.label ?? 'Éléments').toLowerCase()
@@ -557,6 +575,8 @@ const itemsBlock = (k: Kit, items: readonly FlowItem[], def: SkillDef, color: st
         const isPicked = selection.includes(item.id)
         const cell = pickable.includes(item.id) ? (
           <Button key={`item-pick-${item.id}`} plain={true} dimColor={!isPicked} label={isPicked ? '●' : '○'} onPress={() => linkable!.act.pickItem(item.id)} />
+        ) : waiting.includes(item.id) ? (
+          T(k, '↗', { color: C.amber })
         ) : (
           T(k, look.glyph, { color: item.status === 'doing' ? color : look.color, bold: item.status === 'doing' })
         )

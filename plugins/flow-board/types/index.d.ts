@@ -116,10 +116,15 @@ export type FlowItem = { id: string; label: string; status: ItemStatus }
 export type LinkedWork = {
   /** Ids des éléments confiés, dans l'ordre de la liste. */
   items: string[]
-  /** Envoi de la demande (ms). */
+  /** Envoi de la demande (ms), ou sa dernière relance. */
   at: number
   /** Id de la session liée (`local_…`), relevé quand Claude la lance. */
   session?: string
+  /**
+   * Un tour de la discussion, commencé après l'envoi, s'est fini sans lancer de session (ms) : les
+   * éléments attendent encore. Effacé par le lancement ou par une relance de la demande.
+   */
+  missedAt?: number
 }
 
 /** Chiffres d'une phase relevés automatiquement. */

@@ -4,6 +4,27 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.51.0 — 2026-10-19
+
+Constaté le 19/10/2026 dans une rétro de 18 pistes : 17 pistes envoyées « à une session liée » depuis le tableau de bord ont été enregistrées comme confiées (journal « 17 pistes confiés à une session liée », étape « Modifications en cours » ouverte, pistes « en cours ») alors qu'aucune session n'a été lancée. Le tableau de bord enregistrait l'envoi au clic, avant même que Claude reçoive la demande, et n'avait aucun moyen de voir qu'aucune session ne la prenait. Le message de « ↻ Reprendre les pistes » supposait ensuite une session lancée par le CLI (« claude agents, puis claude logs ») et demandait de rendre chaque piste faite ou écartée, puis de clore : appliqué à une session jamais lancée, il aurait clos la rétro en abandonnant les 17 pistes.
+
+### Modifié
+- **Pistes en cours au lancement seulement** : le clic sur « ↗ Traiter N pistes · session liée » met la demande dans le prompt et note « Session liée demandée pour N pistes » ; les pistes passent « en cours » et l'étape « Modifications en cours » s'ouvre quand la session est lancée (id relevé dans la réponse de `start_session` ou la sortie de `claude --bg`). D'ici là, elles portent ↗ dans la liste. Des pistes ajoutées à un envoi encore sans session le rejoignent, et la demande les liste toutes.
+- **Pas de nouvel envoi pendant qu'une session a des pistes** : il aurait lancé une seconde session que le tableau de bord ne pouvait pas suivre, et ses pistes seraient restées « en cours » sans personne. Tant qu'elle travaille, chaque réponse de l'outil rappelle à Claude de garder ses pistes « doing » dans une liste renvoyée en route.
+- **Message de reprise neutre et sans abandon** : « ↻ Reprendre les pistes » vaut pour l'app Desktop comme pour le CLI (outils de session de l'app, `claude agents` et `claude logs`, ou le transcript). Sans id de session relevé, Claude cherche d'abord la session ; s'il n'y en a aucune, il ne rend aucune piste et ne clôt pas la rétro.
+- **Pistes pas faites rendues au choix** : à la note de fin, une piste que la session n'a pas faite revient « à faire » et à ton choix au lieu d'être écartée ; « écartée » est réservé aux pistes auxquelles tu renonces. Rendre des pistes au choix et clore dans le même appel est refusé. La demande de lancement, l'étape de la rétro et le refus de clôture le disent aussi.
+- **Lancement impossible** : la demande de lancement dit à Claude de signaler un lancement impossible (outil absent, refus, erreur) au lieu de rendre les pistes ; le refus de clôture d'un envoi jamais lancé lui dit de ne les marquer ni faites ni écartées.
+
+### Ajouté
+- **« ⚠ Aucun lancement relevé »** : quand le tour qui suit ton message se finit sans session lancée, la carte le dit, avec « ↻ Redemander » et « Annuler » (les pistes reviennent au choix). Un tour ouvert par une notification ou une autre session ne compte pas. Le lancement, même plus tard, efface la marque.
+- **« ↻ Redemander »**, grisé dès l'envoi et mis en avant après un tour sans lancement : la demande revient dans le prompt, précédée d'une consigne de vérifier d'abord qu'aucune session n'est partie sans que son id soit relevé.
+
+### Corrigé
+- Une session lancée pour un groupe ou un bug (« … › Groupe A · », « … › Bug · », même avec « › » et « · » déformés par la page de code du CLI Windows) pendant qu'un envoi de pistes attend n'est plus prise pour la session des pistes.
+- « Annuler » sur un envoi fait avant cette version (étape déjà ouverte, pistes déjà « en cours ») remet toujours les pistes au choix et l'étape d'avant.
+
+---
+
 ## 0.50.0 — 2026-10-19
 
 Constaté le 19/10/2026 : une spec écrite par `/to-spec` a été relue, avant d'être montrée, par un sous-agent Opus en effort xhigh. La règle « un texte soumis à l'accord passe la revue » avait hérité du sous-agent des revues de code, alors que l'advisor, qui voit toute la discussion, est le contrôle voulu pour une spec.

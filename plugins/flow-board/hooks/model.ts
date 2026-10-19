@@ -1416,6 +1416,8 @@ const reportHere = (
     }
   }
 
+  // Les éléments qu'une session liée lancée rend « à faire » dans cet appel : ils reviennent au choix.
+  let backToChoice = 0
   if (Array.isArray(input.items)) {
     const before = target.items
     target.items = parseItems(input.items)
@@ -1423,6 +1425,19 @@ const reportHere = (
       const was = before.find(x => x.id === item.id)
       if (was && was.status !== item.status && (item.status === 'done' || item.status === 'dropped')) {
         log(run, now, item.status === 'done' ? '✓' : '✗', `${item.label}`, item.status === 'done' ? 'ok' : 'info')
+      }
+    }
+    // Une fois la session lancée, un élément confié rendu « à faire » quitte l'envoi : il revient au
+    // choix de la personne. Avant le lancement, « à faire » est son état normal : il reste confié.
+    const linked = target === phase ? phase.linked : undefined
+    if (linked?.session !== undefined) {
+      const back = linked.items.filter(id => phase.items.find(i => i.id === id)?.status === 'todo')
+      backToChoice = back.length
+      if (back.length > 0) {
+        const left = linked.items.filter(id => !back.includes(id))
+        phase.linked = left.length > 0 ? { ...linked, items: left } : undefined
+        const names = back.map(id => phase.items.find(i => i.id === id)!.label)
+        log(run, now, '↩', `À choisir de nouveau, pas fait par la session liée : ${names.join(' ; ')}`, 'info')
       }
     }
   }
@@ -1615,7 +1630,8 @@ const reportHere = (
   const isPushGate = input.complete === true && !detour && phase.skill === 'project:version' && !isPushed(phase)
   // Des pistes confiées à une session liée et pas encore rendues : la phase attend sa note de fin.
   const inFlight = !detour ? linkedInFlight(phase) : []
-  const isLinkedGate = input.complete === true && inFlight.length > 0
+  // Rendus au choix dans le même appel : la personne les rechoisit avant toute clôture.
+  const isLinkedGate = input.complete === true && (inFlight.length > 0 || backToChoice > 0)
   if (input.complete === true && !isReportGate && !isTicketGate && !isPushGate && !isLinkedGate) {
     if (detour) {
       finishDetour(detour, now)
@@ -1645,9 +1661,19 @@ const reportHere = (
       : isPushGate
         ? ' · version done; the phase stays open until /project:push, which the user runs: tell them to run it'
         : isLinkedGate
-          ? ` · not finished: ${inFlight.length} item(s) still being applied by the linked session (${inFlight.slice(0, 4).map(i => i.label).join('; ')}${inFlight.length > 4 ? '…' : ''}). Wait for its final note, check its work, send the full items list with each status (done or dropped), then complete`
+          ? inFlight.length === 0
+            ? ` · not finished: ${backToChoice} item(s) just went back to the user's choice (todo). Do not complete: tell the user, who sends them again or decides to give them up`
+            : phase.linked?.session === undefined
+            ? ` · not finished: ${inFlight.length} item(s) sent to a linked session that was never launched (${inFlight.slice(0, 4).map(i => i.label).join('; ')}${inFlight.length > 4 ? '…' : ''}). Do not mark them done or dropped: launch the session, or tell the user, who resends the request or cancels the send from the dashboard (« Redemander », « Annuler »)`
+            : ` · not finished: ${inFlight.length} item(s) still being applied by the linked session (${inFlight.slice(0, 4).map(i => i.label).join('; ')}${inFlight.length > 4 ? '…' : ''}). Wait for its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: it goes back to the user's choice; dropped only when the user gives it up), then complete unless some went back to todo`
           : ''
-  return { board: b, fx, text: `${summaryOf(run)}${fixText}${removeText}${groupText}${returnText}${reviewedText}${gateText}` }
+  // Une session lancée a des éléments : Claude ne les voit pas passer « doing », il le lit ici.
+  const withSession = !isLinkedGate && phase.linked?.session !== undefined ? inFlight : []
+  const linkedText =
+    withSession.length > 0
+      ? ` · with the linked session until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
+      : ''
+  return { board: b, fx, text: `${summaryOf(run)}${fixText}${removeText}${groupText}${returnText}${reviewedText}${gateText}${linkedText}` }
 }
 
 // ─── Éléments confiés à une session liée ──────────────────────────────────
@@ -1658,15 +1684,39 @@ export const linkedInFlight = (phase: FlowPhase): FlowItem[] => {
   return phase.items.filter(i => ids.includes(i.id) && i.status !== 'done' && i.status !== 'dropped')
 }
 
-/** Les éléments que le panneau peut encore confier : ni faits, ni écartés, ni déjà confiés. */
+/**
+ * Les éléments que le panneau peut encore confier : ni faits, ni écartés, ni déjà confiés. Aucun
+ * tant qu'une session lancée a des éléments : une nouvelle demande lancerait une seconde session
+ * que le tableau de bord ne saurait pas suivre.
+ */
 export const pickableItems = (phase: FlowPhase): FlowItem[] => {
   const sent = linkedInFlight(phase).map(i => i.id)
+  if (sent.length > 0 && phase.linked?.session !== undefined) return []
   return phase.items.filter(i => i.status !== 'done' && i.status !== 'dropped' && !sent.includes(i.id))
 }
 
 /**
- * Le panneau confie des éléments de la phase en cours à une session liée : ils passent « en
- * cours » et l'étape de la phase prévue pour cela s'ouvre. Le parcours reste dans cette discussion.
+ * Les éléments passent « en cours » et l'étape de la phase prévue pour une session liée s'ouvre :
+ * au lancement de la session, pas à l'envoi de la demande.
+ */
+const openLinkedWork = (phase: FlowPhase, ids: readonly string[], now: number) => {
+  const stepId = SKILLS[phase.skill]?.items?.linkedStep
+  if (!stepId) return
+  // Un parcours ouvert avant que l'étape existe la reçoit à la fin de ses étapes.
+  if (!phase.steps.some(s => s.id === stepId)) phase.steps = [...phase.steps, { id: stepId, status: 'pending' }]
+  setStep(phase, stepId, now, true)
+  if (phase.status === 'done') {
+    phase.status = 'active'
+    phase.finishedAt = undefined
+  }
+  phase.items = phase.items.map(i => (ids.includes(i.id) && i.status === 'todo' ? { ...i, status: 'doing' as const } : i))
+}
+
+/**
+ * Le panneau confie des éléments de la phase en cours à une session liée : la demande part dans le
+ * prompt, et les éléments attendent que Claude lance la session (`linkSession`) pour passer « en
+ * cours ». Ajoutés à un envoi encore sans session, ils le rejoignent : la demande les reprend tous.
+ * Le parcours reste dans cette discussion.
  */
 export const startLinkedItems = (board: Board, ids: readonly string[], now: number): Outcome => {
   const run0 = activeRun(board)
@@ -1679,21 +1729,11 @@ export const startLinkedItems = (board: Board, ids: readonly string[], now: numb
   const b = clone(board)
   const run = activeRun(b)!
   const phase = currentPhase(run)
-  // Un parcours ouvert avant que l'étape existe la reçoit à la fin de ses étapes.
-  if (!phase.steps.some(s => s.id === stepId)) phase.steps = [...phase.steps, { id: stepId, status: 'pending' }]
-  setStep(phase, stepId, now, true)
-  if (phase.status === 'done') {
-    phase.status = 'active'
-    phase.finishedAt = undefined
-  }
   const still = linkedInFlight(phase).map(i => i.id)
   const order = phase.items.map(i => i.id).filter(id => still.includes(id) || picked.includes(id))
-  // Un nouvel envoi garde la session déjà relevée seulement si des éléments sont encore chez elle.
-  const session = still.length > 0 ? phase.linked?.session : undefined
-  phase.linked = { items: order, at: now, ...(session !== undefined ? { session } : {}) }
-  phase.items = phase.items.map(i => (picked.includes(i.id) ? { ...i, status: 'doing' as const } : i))
+  phase.linked = { items: order, at: now }
   const label = SKILLS[phase.skill]?.items?.label.toLowerCase() ?? 'éléments'
-  log(run, now, '↗', `${picked.length} ${label} confié${picked.length > 1 ? 's' : ''} à une session liée`, 'info')
+  log(run, now, '↗', `Session liée demandée pour ${picked.length} ${label} : la demande est dans le prompt`, 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -1711,8 +1751,57 @@ export const linkedSessionsOf = (run: Run): { count: number; ids: string[] } => 
   return { count: links.length, ids }
 }
 
-/** La session liée est lancée : son id, relevé dans la réponse de start_session, est gardé. */
-export const linkSession = (board: Board, session: string, now: number): Outcome => {
+/**
+ * La session liée est lancée : son id, relevé dans la réponse de start_session ou dans la sortie
+ * de `claude --bg`, est gardé, et les éléments passent « en cours ». Une session dont le titre
+ * nomme un groupe ou un bug (« … › Groupe A · », « … › Bug · ») n'est pas celle des éléments.
+ */
+export const linkSession = (board: Board, session: string, now: number, title = ''): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || run0.status !== 'active') return null
+  const phase0 = currentPhase(run0)
+  if (!phase0.linked || phase0.linked.session !== undefined || linkedInFlight(phase0).length === 0) return null
+  // Après le dernier « › » ; une page de code peut déformer « › » en « â€º » et « · » en « Â· ».
+  const own = title.split(/›|â€º/).at(-1)!
+  if (/^\s*(?:groupe\s+\S+|bug)\s*(?:Â)?·/i.test(own)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const phase = currentPhase(run)
+  const { missedAt: _, ...linked } = phase.linked!
+  phase.linked = { ...linked, session }
+  const ids = linkedInFlight(phase).map(i => i.id)
+  openLinkedWork(phase, ids, now)
+  const label = SKILLS[phase.skill]?.items?.label.toLowerCase() ?? 'éléments'
+  log(run, now, '↗', `Session liée lancée : ${ids.length} ${label} en cours`, 'info')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * Un tour de la discussion commencé après l'envoi (`turnAt`) s'est fini sans lancer de session :
+ * Claude a pu poser une question d'abord, ou ne pas la lancer du tout. Le panneau le montre au lieu
+ * de laisser croire la demande en route ; le lancement, même plus tard, efface la marque.
+ */
+export const noteUnlaunched = (board: Board, turnAt: number, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || run0.status !== 'active') return null
+  const phase0 = currentPhase(run0)
+  const linked0 = phase0.linked
+  if (!linked0 || linked0.session !== undefined || linked0.missedAt !== undefined || turnAt < linked0.at) return null
+  const count = linkedInFlight(phase0).length
+  if (count === 0) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const phase = currentPhase(run)
+  phase.linked = { ...phase.linked!, missedAt: now }
+  const label = SKILLS[phase.skill]?.items?.label.toLowerCase() ?? 'éléments'
+  log(run, now, '!', `Aucune session liée lancée pour ${count} ${label} : Claude a rendu la main sans la lancer`, 'warn')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/** La personne redemande le lancement d'une session pour les éléments restés sans session. */
+export const retryLinked = (board: Board, now: number): Outcome => {
   const run0 = activeRun(board)
   if (!run0 || run0.status !== 'active') return null
   const phase0 = currentPhase(run0)
@@ -1720,15 +1809,16 @@ export const linkSession = (board: Board, session: string, now: number): Outcome
   const b = clone(board)
   const run = activeRun(b)!
   const phase = currentPhase(run)
-  phase.linked = { ...phase.linked!, session }
-  log(run, now, '↗', 'Session liée lancée', 'info')
+  const { missedAt: _, ...linked } = phase.linked!
+  phase.linked = { ...linked, at: now }
+  log(run, now, '↗', 'Session liée redemandée : la demande est dans le prompt', 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
 
 /**
- * Annule un envoi resté sans session (la demande n'est pas partie) : les éléments confiés
- * redeviennent à faire et la phase revient à l'étape d'avant.
+ * Annule un envoi resté sans session : les éléments confiés redeviennent à faire, au choix de la
+ * personne. Un envoi d'avant la 0.51.0 avait déjà ouvert l'étape prévue : la phase revient à celle d'avant.
  */
 export const cancelLinked = (board: Board, now: number): Outcome => {
   const run0 = activeRun(board)
@@ -1743,7 +1833,7 @@ export const cancelLinked = (board: Board, now: number): Outcome => {
   phase.linked = undefined
   const stepId = SKILLS[phase.skill]?.items?.linkedStep
   const at = phase.steps.findIndex(s => s.id === stepId)
-  if (at > 0) setStep(phase, phase.steps[at - 1]!.id, now)
+  if (at > 0 && phase.steps[at]!.status === 'active') setStep(phase, phase.steps[at - 1]!.id, now)
   log(run, now, '↺', 'Envoi à la session liée annulé', 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
