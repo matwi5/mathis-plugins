@@ -4,6 +4,16 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.49.0 — 2026-10-19
+
+Constaté le 19/10/2026 dans une session liée : la règle des revues (toute revue dans un sous-agent Opus, effort xhigh) et le brief (« sans sous-agents qui écrivent », puis `/code-review --fix` lancée par la session) se contredisaient, et aucun texte ne disait comment s'applique `--fix` quand la revue est confiée à un sous-agent. La session a fait relire le groupe en lecture seule, puis a écrit elle-même les correctifs : avec son modèle et son effort, et sans que le relecteur les relise.
+
+### Modifié
+- **Revue du groupe dans un sous-agent relecteur qui écrit ses correctifs** : `/code-review --fix` tourne dans un sous-agent (general-purpose, Opus, effort xhigh) qui lance la revue et applique lui-même ses correctifs ; Claude relit ensuite le diff de ces correctifs, relance les contrôles et les commite. Même consigne partout : brief des sessions liées (point 4, et le point 3 nomme ce relecteur comme seule exception à « sans sous-agents qui écrivent »), demande de revue d'un groupe rendu sans revue, étapes d'`/implement` et note ajoutée à `/code-review` dans la discussion principale (qui dit aussi de passer ses consignes au sous-agent : il ne les reçoit pas). L'interdiction venait d'une suggestion d'une session de rétro, pour un travail en séquence ; un relecteur seul, lancé une fois les tickets commités, ne la contredit pas (lecture de Claude, la raison n'était pas écrite).
+- **Revue de sécurité en effort xhigh** : le sous-agent relecteur reçoit `effort xhigh` en plus du modèle Opus (brief, bouton, avis), comme le veut la règle des revues : sans effort, il prenait celui du poste.
+
+---
+
 ## 0.48.1 — 2026-10-16
 
 ### Documentation

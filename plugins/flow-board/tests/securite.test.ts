@@ -37,7 +37,7 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   const coaching = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
   // Claude sait dès l'implémentation qu'il donnera son avis, puis lancera lui-même le sous-agent relecteur, jamais /security-review.
   expect(coaching).toContain('"advised": true|false')
-  expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus), read-only, limited to git diff <group base>..HEAD')
+  expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort xhigh), read-only, limited to git diff <group base>..HEAD')
   expect(coaching).toContain('never /security-review')
   expect(coaching).not.toContain('Never run /security-review yourself')
   await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)

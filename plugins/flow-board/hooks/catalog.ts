@@ -152,9 +152,16 @@ const TICKET_STEPS = [
   step('commit', 'Commit et suivi', "commit on the current branch, then the ticket in the tracker: done, with a comment citing the commit hash"),
 ]
 
+/**
+ * Qui fait la revue d'un groupe (lu par Claude) : comme toute revue, un sous-agent Opus en effort
+ * xhigh, qui écrit aussi les correctifs de `--fix` ; la discussion les relit et les commite.
+ */
+export const GROUP_REVIEWER =
+  'a reviewer subagent (Agent tool, general-purpose, model opus, effort xhigh) that launches /code-review --fix itself and applies its fixes itself'
+
 /** La consigne de la revue d'un groupe ; le point fixe ne se précise que sans git. */
 const groupReviewHint = (fixedPoint: string): string =>
-  `/code-review --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a linked session, by the session itself), giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review). It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read its fixes, rerun the checks and commit them`
+  `/code-review --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a linked session, by the session itself), run in ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review). It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
 
 /** Ce qui suit, par groupe, une fois ses tickets commités : revue du groupe, revue de sécurité, rendu. */
 const GROUP_STEPS = [
@@ -529,7 +536,7 @@ export const SKILLS: Record<string, SkillDef> = {
     label: 'Revue du groupe',
     gender: 'f',
     flowLabel: 'Revue du groupe',
-    verb: 'Le groupe relu par /code-review --fix de Claude Code, une fois ses tickets commités : les bugs entre ses tickets, y compris avec les groupes déjà livrés ; un conflit entre la spec et une consigne n’est pas tranché, il remonte',
+    verb: 'Le groupe relu par /code-review --fix de Claude Code, une fois ses tickets commités, dans un sous-agent relecteur qui applique lui-même ses correctifs : les bugs entre ses tickets, y compris avec les groupes déjà livrés ; un conflit entre la spec et une consigne n’est pas tranché, il remonte',
     glyph: '◆',
     color: C.coral,
     // Pas une phase : un événement de l'Implémentation, qui marque les groupes finis comme relus.

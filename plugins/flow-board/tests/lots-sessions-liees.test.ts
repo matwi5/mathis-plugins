@@ -724,10 +724,11 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) du parcours « Boutique » par sa session liée/)
   expect(text).toContain('« Boutique › Groupe E · » ou « Groupe E · »')
   expect(text).toMatch(/git merge --ff-only /)
-  expect(text).toContain('la revue /code-review --fix (outil « code-review », arguments « --fix ») sur les seuls commits du groupe')
+  expect(text).toContain('2) lancer elle-même la revue en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review --fix (outil Skill « code-review », arguments « --fix ») sur les seuls commits du groupe')
+  expect(text).toContain('3) au retour du relecteur, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow, à ne pas resignaler, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
-  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus\), en lecture seule, avec pour seul périmètre les commits du groupe/)
+  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort xhigh\), en lecture seule, avec pour seul périmètre les commits du groupe/)
   expect(text).toContain('{"reviewed": ["E"]}')
   expect(text).not.toMatch(/copie/)
   // "reviewed" : le groupe fini est relu ; un groupe inconnu ou pas fini est refusé.
