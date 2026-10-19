@@ -277,7 +277,7 @@ export const SKILLS: Record<string, SkillDef> = {
       step('config', 'Config du tracker', 'check the tracker config'),
       step('explore', 'Explorer le dépôt', 'explore the repo with the glossary vocabulary'),
       step('seams', 'Seams validés', 'sketch the seams and get them confirmed'),
-      step('write', 'Rédiger la spec', 'write the spec from the template'),
+      step('write', 'Rédiger la spec', 'write the spec from the template; before showing or publishing it, consult the advisor (advisor tool), not a reviewer subagent; without that tool, reread it yourself in this discussion'),
       step('publish', 'Publier', 'publish it to the tracker (ready-for-agent)'),
     ],
     flow: [phase('to-spec'), phase('to-tickets'), IMPL, REPORT, phase('project:version', true), phase('project:pr', true)],

@@ -4,6 +4,15 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.50.0 — 2026-10-19
+
+Constaté le 19/10/2026 : une spec écrite par `/to-spec` a été relue, avant d'être montrée, par un sous-agent Opus en effort xhigh. La règle « un texte soumis à l'accord passe la revue » avait hérité du sous-agent des revues de code, alors que l'advisor, qui voit toute la discussion, est le contrôle voulu pour une spec.
+
+### Modifié
+- **Spec relue par l'advisor** : l'étape « Rédiger la spec » de `/to-spec` demande de consulter l'advisor avant de montrer ou de publier la spec, pas un sous-agent de revue ; sans outil `advisor`, Claude la relit lui-même dans la discussion.
+
+---
+
 ## 0.49.0 — 2026-10-19
 
 Constaté le 19/10/2026 dans une session liée : la règle des revues (toute revue dans un sous-agent Opus, effort xhigh) et le brief (« sans sous-agents qui écrivent », puis `/code-review --fix` lancée par la session) se contredisaient, et aucun texte ne disait comment s'applique `--fix` quand la revue est confiée à un sous-agent. La session a fait relire le groupe en lecture seule, puis a écrit elle-même les correctifs : avec son modèle et son effort, et sans que le relecteur les relise.
