@@ -4,6 +4,22 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.53.0 — 2026-10-20
+
+Décidé le 20/10/2026 : les sessions liées d'un groupe prenaient l'effort de la discussion principale (high), alors que leurs tickets sont cadrés par une spec et que leurs revues tournent dans des sous-agents à l'effort explicite depuis la 0.52.0. L'outil `start_session` de l'app Desktop accepte un `effort` (sans jamais en donner un plus haut que celui de la discussion), et `claude --bg` accepte `--effort`.
+
+### Modifié
+- **Effort des sessions de groupe** : la demande de lancement dit à Claude de choisir l'effort de chaque session, medium par défaut, high si le groupe a un ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), s'il reste des choix de conception ou s'il touche plusieurs modules, de le passer à `start_session` (`effort`) ou à `claude --bg` (`--effort`) et de te le dire en une ligne. Les sessions de diagnostic de bug et de pistes de rétro gardent l'effort de la discussion.
+
+## 0.52.0 — 2026-10-20
+
+Décidé le 20/10/2026, après une recherche sur les forums et les comparaisons publiées : aucune ne montre qu'un effort `xhigh` relise mieux qu'un effort `high`, et la revue d'un groupe repasse déjà sur ce que chaque ticket a pu laisser. Par ailleurs, `/code-review` de Claude Code partait sans niveau : sans argument, il reprend le dernier niveau tapé, et le nombre de constats variait d'une revue à l'autre.
+
+### Modifié
+- **Revue d'un groupe en effort `high`** : son sous-agent relecteur passe d'Opus `xhigh` à Opus `high`, dans la discussion comme dans le brief des sessions liées.
+- **Niveau de `/code-review` toujours passé** : `/code-review high --fix` pour la revue d'un groupe (bouton « ◆ Revue du groupe », brief des sessions liées, consignes) et `/code-review xhigh` pour la passe « bogues » d'un ticket qui touche une zone sensible. Ce niveau fixe le nombre de constats, pas l'effort de raisonnement.
+- La revue de sécurité reste confiée à un sous-agent Opus `xhigh`.
+
 ## 0.51.0 — 2026-10-19
 
 Constaté le 19/10/2026 dans une rétro de 18 pistes : 17 pistes envoyées « à une session liée » depuis le tableau de bord ont été enregistrées comme confiées (journal « 17 pistes confiés à une session liée », étape « Modifications en cours » ouverte, pistes « en cours ») alors qu'aucune session n'a été lancée. Le tableau de bord enregistrait l'envoi au clic, avant même que Claude reçoive la demande, et n'avait aucun moyen de voir qu'aucune session ne la prenait. Le message de « ↻ Reprendre les pistes » supposait ensuite une session lancée par le CLI (« claude agents, puis claude logs ») et demandait de rendre chaque piste faite ou écartée, puis de clore : appliqué à une session jamais lancée, il aurait clos la rétro en abandonnant les 17 pistes.

@@ -39,7 +39,8 @@ Chaque tâche déléguée part au modèle le moins cher qui la fait bien. Les mo
 | `agents:explorer` | Cartographier le code, en lecture seule ; plusieurs en parallèle, un par domaine | Haiku | high |
 | `agents:researcher` | Chercher la documentation et répondre avec les sources | Sonnet | high |
 | `agents:worker` | Faire une modification délimitée et la vérifier | Opus | medium |
-| Revues de code et de sécurité | Dans un sous-agent dédié, petits diffs compris | Opus | xhigh |
+| Revues de code | Dans un sous-agent dédié, petits diffs compris ; passe « bogues » d'une zone sensible en xhigh | Opus | high |
+| Revues de sécurité | Dans un sous-agent dédié, en lecture seule, limité au diff | Opus | xhigh |
 
 Hors de l'explorateur, aucun sous-agent ne part sur Haiku. Une délégation doit valoir son coût : reconstituer le contexte et relire le rapport.
 

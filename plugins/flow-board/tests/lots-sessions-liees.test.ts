@@ -284,7 +284,10 @@ test('sans git : les lots partent en sessions liées, pas par /implement-spec ; 
   expect(text).toMatch(/^Confie chacun de ces groupes à sa session liée, en parallèle, pour le parcours « Boutique » : Groupe C \(Statut de commande\) : 1\) c1 — Statut de commande ∥ Groupe E \(Enquêtes\) : 1\) e1 — Enquête transporteur\./)
   expect(text).toMatch(/Puis lance une session par groupe, avec un titre qui commence par « Boutique › Groupe <id> · »/)
   expect(text).toMatch(/start_session une fois par groupe, avec initiation user_asked/)
-  expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n "Boutique › Groupe <id> · <thème>"/)
+  expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n "Boutique › Groupe <id> · <thème>" --effort <effort>/)
+  // Plusieurs groupes : l'effort se choisit groupe par groupe.
+  expect(text).toContain("Effort de chaque session (<effort>, choisi groupe par groupe) : medium par défaut ; high si son groupe a un ticket qui touche une zone sensible")
+  expect(text).toContain("Dis-moi en une ligne l'effort choisi pour chaque groupe et pourquoi.")
   expect(text).toMatch(/use_worktree false \(ce dossier n’a pas de git\)/)
   expect(text).toMatch(/, ce que font les autres sessions en même temps/)
   expect(text).toMatch(/suivre les sessions sans les attendre activement/)
@@ -390,7 +393,7 @@ test('dans le CLI : la session lancée par claude --bg va au groupe que son titr
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
   // Dans un dépôt git, la session du CLI a son worktree, et rend sa branche.
-  expect(filled.at(-1)).toContain('claude --bg -n "Boutique › Groupe <id> · <thème>" -w groupe-<id> (un worktree à elle) "<prompt>"')
+  expect(filled.at(-1)).toContain('claude --bg -n "Boutique › Groupe <id> · <thème>" --effort <effort> -w groupe-<id> (un worktree à elle) "<prompt>"')
   expect(filled.at(-1)).toMatch(/les fichiers modifiés, sa branche, les contrôles lancés/)
   expect(await ui.find({ key: 'group-linked-cancel-E' })).toBeDefined()
   await ui.unmount()
@@ -420,7 +423,7 @@ test('le titre d’une session liée commence par le titre du parcours, raccourc
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
   expect(filled.at(-1)).toContain('avec un titre qui commence par « Tickets lots, espace privé… › Groupe <id> · »')
-  expect(filled.at(-1)).toContain('claude --bg -n "Tickets lots, espace privé… › Groupe <id> · <thème>" -w groupe-<id>')
+  expect(filled.at(-1)).toContain('claude --bg -n "Tickets lots, espace privé… › Groupe <id> · <thème>" --effort <effort> -w groupe-<id>')
   // Dans un dépôt git, le relecteur de sécurité a pour seul périmètre le diff de la branche.
   expect(filled.at(-1)).toContain("avec pour seul périmètre git diff <base>..HEAD (<base> : le commit d'où part sa branche)")
   expect(filled.at(-1)).not.toMatch(/la base de sa branche/)
@@ -724,7 +727,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) du parcours « Boutique » par sa session liée/)
   expect(text).toContain('« Boutique › Groupe E · » ou « Groupe E · »')
   expect(text).toMatch(/git merge --ff-only /)
-  expect(text).toContain('2) lancer elle-même la revue en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review --fix (outil Skill « code-review », arguments « --fix ») sur les seuls commits du groupe')
+  expect(text).toContain('2) lancer elle-même la revue en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix ») sur les seuls commits du groupe')
   expect(text).toContain('3) au retour du relecteur, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow, à ne pas resignaler, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
@@ -757,7 +760,7 @@ test('sans git, la revue d’un groupe rendu porte sur les copies que sa session
   await ui.unmount()
   const text = filled.at(-1)!
   expect(text).toContain('1) travailler sur le code actuel ; ')
-  expect(text).toContain("arguments « --fix ») sur les seuls changements du groupe, lus sur le code actuel (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe")
+  expect(text).toContain("arguments « high --fix ») sur les seuls changements du groupe, lus sur le code actuel (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe")
   expect(text).toContain('sa session a pris ces copies dans son dossier temporaire)')
   expect(text).toMatch(/avec pour seul périmètre les changements du groupe \(point fixe : pour chaque fichier, la plus ancienne copie/)
   expect(text).not.toMatch(/commits du groupe|git merge/)
