@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.7.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.7.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -223,7 +223,7 @@ Un relevé prend une quinzaine de secondes. Le premier rapport installe ccusage 
 - **Rapprochement des projets** : un projet d'un autre poste prend la clé du projet de ce poste qui a le même nom de dossier (sans la casse). Sinon, il garde la sienne, avec son dossier. Un worktree de Claude est rapproché sous le nom de son dépôt. Une session lancée par SSH depuis le desktop, que le poste qui l'a lancée garde sous `ssh-<id>`, est écartée de ce poste quand celui où elle a tourné la publie : elle ne compte qu'une fois. Deux projets différents du même nom sont donc additionnés. Les brouillons du desktop gardent leur clé et se regroupent seuls.
 - **Historique de ce poste** : avant de publier, le mod réunit tout ce qu'il connaît de ce poste. Il prend le relevé gardé, y compris celui d'avant la 0.3.0 et les lignes encore marquées « Ce poste », et le fichier que ce poste a déjà publié. Ni une mise à jour, ni un premier nommage, ni un nouveau clone ne perdent donc les jours que Claude Code a effacés. Un poste resté inactif plus longtemps que ses journaux garde aussi son historique au lieu de publier un fichier vide.
 - **Commit raté** (par exemple sans identité git) : le relevé suivant voit le fichier non commité et réessaie. Un `pull --rebase` qui échoue est annulé (`rebase --abort`).
-- **Plusieurs sessions sur un même poste** : elles font parfois leur relevé en même temps, et git refuse alors la seconde (`index.lock`). Celle-ci réessaie deux fois, à 2 puis 4 s. Si le verrou tient encore, elle laisse la publication à l'autre, sans avertissement. Un verrou qui date de plus de 10 min (git arrêté en route) est signalé avec son chemin.
+- **Plusieurs sessions sur un même poste** : elles font parfois leur relevé en même temps, et git refuse alors la seconde : verrou de l'index (`index.lock`), ou `cannot lock ref` quand son `pull` trouve `origin/main` déjà avancé par l'autre. Celle-ci réessaie deux fois, à 2 puis 4 s. Si ça bloque encore, elle laisse la publication à l'autre, sans avertissement. Seul un verrou d'index qui date de plus de 10 min (git arrêté en route) est signalé, avec son chemin.
 - **Renommer un poste** : changer la ligne de `.machine`, et renommer aussi son fichier publié (`machines/<ancien>.json` en `machines/<nouveau>.json`, avec le champ `machine`, puis commit et push dans le dépôt de partage), sinon ses usages compteraient deux fois.
 - **Postes sans sessions** : un poste qui n'a publié aucune session (le Serveur) affiche « n'a publié que des totaux par jour » sous son filtre.
 - **Stockage** : si le relevé de tous les postes dépasse ce que `$.store` accepte, seul ce poste y est gardé. Les autres reviennent au relevé suivant.

@@ -472,8 +472,9 @@ async function share($: any, dir: string | null, name: string | null, own: Param
   }
   if (!name) warnings.push(`Ce poste n’a pas de nom : ses usages ne sont pas publiés (/setup:install, ou une ligne dans ${USAGE_DIR}/${MACHINE_FILE}).`)
   // Plusieurs sessions de Claude Code font leur relevé en même temps sur ce poste : git refuse
-  // alors la seconde (`index.lock`). On réessaie un peu plus tard ; si le verrou tient encore,
-  // l'autre session publie les mêmes données, sauf s'il traîne depuis longtemps (git planté).
+  // alors la seconde (`index.lock`), ou son `pull` trouve `origin/main` déjà avancé par l'autre
+  // (`cannot lock ref`). On réessaie un peu plus tard ; si ça bloque encore, l'autre session
+  // publie les mêmes données, sauf si le verrou d'index traîne depuis longtemps (git planté).
   for (let attempt = 1; ; attempt++) {
     try {
       if (name) await publish($, repo, name, own)
@@ -483,13 +484,14 @@ async function share($: any, dir: string | null, name: string | null, own: Param
       }
       break
     } catch (err) {
-      const isLocked = /\.lock\b|another git process/i.test(messageOf(err))
+      const isRefRace = /cannot lock ref/i.test(messageOf(err))
+      const isLocked = isRefRace || /\.lock\b|another git process/i.test(messageOf(err))
       if (isLocked && attempt < 3) {
         await $.clock.sleep(2_000 * attempt)
         continue
       }
       if (!isLocked) warnings.push(`Partage entre postes : ${messageOf(err)}`)
-      else if (await isStaleLock($, repo)) warnings.push(`Partage entre postes : un verrou git traîne depuis plus de 10 min (${USAGE_DIR}/.git/index.lock, git a dû s’arrêter en route) ; le supprimer débloque la publication.`)
+      else if (!isRefRace && (await isStaleLock($, repo))) warnings.push(`Partage entre postes : un verrou git traîne depuis plus de 10 min (${USAGE_DIR}/.git/index.lock, git a dû s’arrêter en route) ; le supprimer débloque la publication.`)
       break
     }
   }

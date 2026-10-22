@@ -138,7 +138,7 @@ const STATS_CACHE = {
  * `isFresh` : une discussion toute neuve, que ccusage ne connaît pas encore (il répond `null`).
  * `noShare` : pas de dépôt `claude-usage` ; `machine` : le nom de ce poste (null : pas de `.machine`).
  */
-type WorldOptions = { failOnline?: boolean; store?: Record<string, unknown>; cwd?: string; isFresh?: boolean; noShare?: boolean; machine?: string | null; lockedAdds?: number }
+type WorldOptions = { failOnline?: boolean; store?: Record<string, unknown>; cwd?: string; isFresh?: boolean; noShare?: boolean; machine?: string | null; lockedAdds?: number; racedPulls?: number; staleLock?: boolean }
 
 /** Ce que le moteur ferait seul : ccusage, Node, le disque, l'écran. */
 function world(on: any, options: WorldOptions = {}) {
@@ -147,6 +147,8 @@ function world(on: any, options: WorldOptions = {}) {
   const machine = options.machine === undefined ? 'Portable' : options.machine
   // `git add` refusé tant qu'une autre session tient le verrou de l'index.
   let lockedAdds = options.lockedAdds ?? 0
+  // `pull --rebase` refusé tant qu'une autre session avance `origin/main` en même temps.
+  let racedPulls = options.racedPulls ?? 0
   const toasts: string[] = []
   const statuses: (string | undefined)[] = []
   const opened: string[] = []
@@ -181,6 +183,10 @@ function world(on: any, options: WorldOptions = {}) {
       if (argv.includes('add') && lockedAdds > 0) {
         lockedAdds -= 1
         return { value: { exitCode: 128, stdout: '', stderr: "fatal: Unable to create 'C:/Users/moi/.claude/claude-usage/.git/index.lock': File exists.\n", isStdoutTruncated: false, isStderrTruncated: false } }
+      }
+      if (argv.includes('pull') && racedPulls > 0) {
+        racedPulls -= 1
+        return { value: { exitCode: 1, stdout: '', stderr: "error: cannot lock ref 'refs/remotes/origin/main': is at 3812363 but expected ccef9f5\n", isStdoutTruncated: false, isStderrTruncated: false } }
       }
       if (argv.includes('rev-list')) return ok('1\n')
       return ok('')
@@ -218,6 +224,7 @@ function world(on: any, options: WorldOptions = {}) {
   on('fs.exists', ($: any, e: any) => ({ value: !options.noShare && String(e.path).replace(/\\/g, '/').endsWith('/claude-usage/.git') }))
   on('fs.list', ($: any, e: any) => {
     const file = (name: string) => ({ name, kind: 'file', size: 200, mtimeMs: 0, isLink: false })
+    if (options.staleLock && String(e.path).replace(/\\/g, '/').endsWith('/claude-usage/.git')) return { value: [file('index.lock')] }
     if (String(e.path).replace(/\\/g, '/').endsWith('/claude-usage/machines')) return { value: [file('Mac.json'), file('Portable.json'), file('Serveur.json')] }
     return { value: [file('a.jsonl')] }
   })
@@ -756,6 +763,33 @@ describe('stats-board', () => {
     // Trois essais par relevé, puis on laisse la publication à l'autre session.
     expect(seen.git().slice(0, 6).filter((c) => c.startsWith('add'))).toHaveLength(3)
     expect(seen.git().slice(0, 6)).not.toContain('commit -q -m usage: Portable -- machines/Portable.json')
+    const all = await drawn(await mountPane($, 'terminal'))
+    expect(all).not.toContain('Partage entre postes')
+    expect(all).toContain(`68,60${NB}$`)
+  })
+
+  test('une autre session avance origin/main pendant le pull : on réessaie, sans avertissement', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = world(on, { racedPulls: 1 })
+    await start($, clock, 'terminal')
+    // Le réessai part à 2 s, avant le relevé automatique de 3 s qui republierait de toute façon.
+    await clock.advance(2_500)
+    // Le premier `pull` refusé (`cannot lock ref`) et son rebase annulé, le second passe, puis le push.
+    expect(seen.git().slice(0, 8)).toEqual(['status --porcelain -- machines/Portable.json', 'add -- machines/Portable.json', 'commit -q -m usage: Portable -- machines/Portable.json', 'pull --rebase -q', 'rebase --abort', 'status --porcelain -- machines/Portable.json', 'add -- machines/Portable.json', 'commit -q -m usage: Portable -- machines/Portable.json'])
+    expect(seen.git().slice(8, 11)).toEqual(['pull --rebase -q', 'rev-list --count @{u}..HEAD', 'push -q'])
+    expect(await drawn(await mountPane($, 'terminal'))).not.toContain('Partage entre postes')
+  })
+
+  test('origin/main toujours verrouillé : ni l’erreur ni le message du verrou abandonné (une autre session publie)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    // Même avec un vieux `index.lock` dans le dépôt : ce n'est pas lui qui bloque ici.
+    const seen = world(on, { racedPulls: 5, staleLock: true })
+    await start($, clock, 'terminal')
+    await clock.advance(10_000)
+    // Trois essais par relevé (status, add, commit, pull, rebase --abort), puis on laisse la publication à l'autre session.
+    const first = seen.git().slice(0, 15)
+    expect(first.filter((c) => c === 'pull --rebase -q')).toHaveLength(3)
+    expect(first).not.toContain('push -q')
     const all = await drawn(await mountPane($, 'terminal'))
     expect(all).not.toContain('Partage entre postes')
     expect(all).toContain(`68,60${NB}$`)

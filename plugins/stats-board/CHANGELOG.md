@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.7.1 — 2026-10-22
+
+### Corrigé
+- **Deux sessions dont les `pull` se croisent** sur un poste : la seconde n'affiche plus « Partage entre postes : git pull : error: cannot lock ref 'refs/remotes/origin/main' … ». Comme pour le verrou de l'index, elle réessaie à 2 puis 4 s, puis laisse faire l'autre, sans avertissement ni message de verrou abandonné.
+
+---
+
 ## 0.7.0 — 2026-10-17
 
 ### Ajouté
