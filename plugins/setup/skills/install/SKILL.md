@@ -29,7 +29,7 @@ En lecture seule, une commande à la fois :
 Pose les questions par boutons (`AskUserQuestion`), en un ou deux appels, avec « (Recommandé) » sur l'option conseillée. Une relance part des plugins déjà installés et propose aussi d'en retirer.
 
 1. **Socle** (choix multiple) : `agents`, `project`, « Parcours de tickets » (`mattpocock-skills` + `flow-board`).
-2. **Panneaux et bandeaux** (choix multiple) : `git-board`, `files-board`, `stats-board`, `mods-mathis`. Grise dans la description ceux dont la version de Claude Code ou un outil manque.
+2. **Panneaux et bandeaux** (choix multiple) : `git-board`, `files-board`, `stats-board`, `session-tools`. Grise dans la description ceux dont la version de Claude Code ou un outil manque.
 3. **Suivi Asana** : `asana-board` oui ou non ; sans connecteur, dis ce qu'il faudra faire (`claude mcp add --transport http asana https://mcp.asana.com/v2/mcp`, puis `/mcp`).
 4. **Règles** : les générales et celles des plugins choisis (Recommandé), celles des plugins seulement, ou aucune ; et où les écrire : `~/.claude/CLAUDE.md` (tous les projets, Recommandé) ou le `CLAUDE.md` du projet courant.
 
@@ -81,4 +81,4 @@ Pour le partage des usages : `git clone <url> ~/.claude/claude-usage`, puis le n
 - `claude plugin list` : chaque plugin choisi est installé et activé, le doublon éventuel est coupé.
 - Relis les fichiers écrits.
 
-Termine par : ce qui est installé et réglé, ce qui reste à faire par l'utilisateur (redémarrer Claude Code pour charger les mods, autoriser les imports d'un `CLAUDE.md` de projet, brancher le connecteur Asana, pousser le `.gitignore` du dépôt d'usages), et les commandes pour commencer (`/flow`, `/asana`, `/git`, `/files`, `/ccstats`, `/mods-mathis:start`, `/project:new`).
+Termine par : ce qui est installé et réglé, ce qui reste à faire par l'utilisateur (redémarrer Claude Code pour charger les mods, autoriser les imports d'un `CLAUDE.md` de projet, brancher le connecteur Asana, pousser le `.gitignore` du dépôt d'usages), et les commandes pour commencer (`/flow`, `/asana`, `/git`, `/files`, `/ccstats`, `/session-tools:start`, `/project:new`).

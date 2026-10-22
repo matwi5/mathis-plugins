@@ -6,9 +6,11 @@ export type GenerationSpeed = { tokens: number; ms: number } | null;
 
 declare module "claude-code" {
   interface PluginState {
-    "mods-mathis": {
+    "session-tools": {
       lastRequestAt: LastRequestAt;
       ultracode: boolean;
+      // Vrai pendant qu'Opus réécrit le brouillon (bouton « Réécrire »).
+      rewriting: boolean;
       responseTimer: ResponseTimer;
       generationSpeed: GenerationSpeed;
     };

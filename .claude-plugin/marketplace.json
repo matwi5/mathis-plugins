@@ -12,7 +12,7 @@
       "name": "setup",
       "source": "./plugins/setup",
       "description": "Installer for this marketplace: /setup:install asks which plugins to install, checks dependencies and prerequisites, installs them, configures Asana, usage sharing and the status line, and writes their rules into the global or project CLAUDE.md after approval.",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     {
       "name": "project",
@@ -27,10 +27,10 @@
       "version": "1.0.1"
     },
     {
-      "name": "mods-mathis",
-      "source": "./plugins/mods-mathis",
-      "description": "Mes mods Claude Code : boutons Fichiers (navigateur files-board) et Diff au terminal, bouton Ultracode, chrono de réponse, vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /mods-mathis:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
-      "version": "0.16.6"
+      "name": "session-tools",
+      "source": "./plugins/session-tools",
+      "description": "Outils autour du champ de saisie : boutons Fichiers (navigateur files-board) et Diff au terminal, boutons Réécrire (le brouillon réécrit en prompt par Opus, sans envoi) et Ultracode, chrono de réponse, vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /session-tools:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
+      "version": "0.18.0"
     },
     {
       "name": "flow-board",
@@ -62,7 +62,7 @@
       "name": "files-board",
       "source": "./plugins/files-board",
       "description": "Navigateur de fichiers dans Claude Code CLI (/files), comme celui de l'app desktop : arborescence, recherche de fichiers, onglets d'aperçu, éditeur avec enregistrement automatique, menus contextuels (joindre comme contexte, copier, ouvrir dans, afficher dans l'Explorateur) et options d'affichage. /files-board:files dès le premier message.",
-      "version": "0.3.2"
+      "version": "0.3.3"
     },
     {
       "name": "stats-board",

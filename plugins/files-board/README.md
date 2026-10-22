@@ -6,7 +6,7 @@ Navigateur de fichiers pour Claude Code CLI, à la manière de celui de l'app de
 - **Souris et clavier.** Clic, double clic, clic droit, clic du milieu, glisser ; le clavier atteint le navigateur après un clic dedans, Échap le rend au prompt.
 - **Il suit les fichiers.** Les onglets et l'arborescence se relisent après chaque outil d'écriture de Claude, et toutes les 4 s tant que le panneau est ouvert. Un fichier que Claude vient de modifier porte `◆`, ses dossiers `◇`, jusqu'à votre message suivant.
 
-Version actuelle : **0.3.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.3.3**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -51,7 +51,7 @@ Une mise à jour s'applique aux discussions démarrées après elle, ou après `
 - `/files-board:files` (ou `/files`) ouvre le panneau sur le dossier de la session.
 - `/files <dossier>` parcourt un autre dossier ; `/files <fichier>` ouvre ce fichier et le montre dans l'arborescence.
 - `/files close` ferme le panneau ; `/files toggle` l'ouvre ou le ferme.
-- Le bouton « Fichiers » du pied du prompt (mod `mods-mathis`) fait la même bascule, sans ligne dans la conversation.
+- Le bouton « Fichiers » du pied du prompt (mod `session-tools`) fait la même bascule, sans ligne dans la conversation.
 - Cliquer dans le panneau lui donne le clavier ; Échap le rend au prompt.
 
 ---

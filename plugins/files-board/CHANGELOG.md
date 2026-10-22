@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.3.3 — 2026-10-22
+
+### Documentation
+- Le bouton « Fichiers » vient du mod `session-tools` (anciennement `mods-mathis`).
+
+---
+
 ## 0.3.2 — 2026-10-16
 
 ### Documentation

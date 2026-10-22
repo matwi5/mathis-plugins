@@ -1,39 +1,49 @@
-// Mods de Mathis, dans un seul module : le moteur suit `$` seulement dans le
+// Outils de session (session-tools), dans un seul module : le moteur suit `$` seulement dans le
 // fichier où il est passé, et n'accepte qu'un hook par événement sans filtre.
 //
 // - Pied du prompt : la durée de la dernière réponse (chrono lancé à l'envoi d'un message,
 //   arrêté quand l'agent a fini), la vitesse du modèle en tokens/s depuis ce message, le temps
 //   restant avant que le cache de prompt expire, l'heure, et des boutons : Fichiers (navigateur
-//   files-board) et Diff au terminal, Ultracode (on/off) partout. Sur desktop, le pied est trop
-//   étroit : les valeurs passent dans un bandeau au-dessus du prompt.
-// - `/mods-mathis:start` : un premier message qui démarre les mods sans solliciter le modèle.
+//   files-board) et Diff au terminal, Réécrire et Ultracode (on/off) partout. Sur desktop, le pied
+//   est trop étroit : les valeurs passent dans un bandeau au-dessus du prompt.
+// - Réécrire : le brouillon du champ de saisie, réécrit en prompt par Opus (effort low) avec la
+//   consigne de `rewrite-system.ts`, remplace le brouillon sans être envoyé.
+// - `/session-tools:start` : un premier message qui démarre les mods sans solliciter le modèle.
 //
 // Le panneau Asana (/asana) est passé dans son propre plugin, asana-board.
 
 import type { EngineInterface, PromptOrigin, Register } from "claude-code";
 import type { GenerationSpeed, ResponseTimer } from "../types";
+import { REWRITE_SYSTEM } from "./rewrite-system";
 
 // Gardés par l'hôte : survivent au rechargement à chaud du module.
-const lastRequest = { plugin: "mods-mathis", key: "lastRequestAt" } as const;
-const ultracode = { plugin: "mods-mathis", key: "ultracode" } as const;
-const responseTimer = { plugin: "mods-mathis", key: "responseTimer" } as const;
-const generationSpeed = { plugin: "mods-mathis", key: "generationSpeed" } as const;
+const lastRequest = { plugin: "session-tools", key: "lastRequestAt" } as const;
+const ultracode = { plugin: "session-tools", key: "ultracode" } as const;
+const rewriting = { plugin: "session-tools", key: "rewriting" } as const;
+const responseTimer = { plugin: "session-tools", key: "responseTimer" } as const;
+const generationSpeed = { plugin: "session-tools", key: "generationSpeed" } as const;
 
 // Le message en route vers son tour : `at` est son heure d'envoi, null s'il ne vient pas de
 // l'utilisateur (le tour qu'il démarre ne touche alors pas au chrono).
 let pending: { at: number | null } | null = null;
 
+// Une réécriture en cours : posé avant tout `await`, un double clic ne lance qu'un appel. Une
+// variable du module repart à false au rechargement, où l'appel en cours est perdu.
+let isRewriteBusy = false;
+
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
     const result = await next(e);
+    // Un rechargement pendant une réécriture laisserait le libellé « Réécriture… » pour de bon.
+    await $.state.set(rewriting, false);
     // Redessine le pied chaque seconde (compte à rebours, heure), tant que le module est chargé.
     $.clock.every(1000, () => $.ui.invalidate("ui.render"));
     return result;
   });
 
-  // `/mods-mathis:start` (commands/start.md) : un premier message qui démarre la session, donc
+  // `/session-tools:start` (commands/start.md) : un premier message qui démarre la session, donc
   // tous les mods et leurs bandeaux, sans passer par le modèle ni ouvrir de panneau.
-  on("command.run", { command: "mods-mathis:start" }, async () => ({ text: "Mods démarrés." }));
+  on("command.run", { command: "session-tools:start" }, async () => ({ text: "Mods démarrés." }));
 
   // Ultracode se règle par `/effort` : le mod en déduit l'état, que la commande vienne du
   // bouton ou de la saisie. Le sélecteur d'effort de l'app lui échappe.
@@ -104,6 +114,7 @@ export const register: Register = (on) => {
 
   on("ui.render", { component: "SessionMode" }, async ($, e, next) => {
     const { value: isUltracode = false } = await $.state.get(ultracode);
+    const { value: isRewriting = false } = await $.state.get(rewriting);
     const isTerminal = e.surface === "terminal";
     // L'app desktop coupe son pied, bouton compris, vers 25 caractères : il n'y garde que les
     // modes et le bouton ; les valeurs sont dans le bandeau (AbovePrompt).
@@ -133,10 +144,19 @@ export const register: Register = (on) => {
           .catch((error) => $.ui.toast(`Ultracode : ${String(error)}`));
       },
     });
+    const rewriteButton = Button({
+      key: "rewrite",
+      label: isRewriting ? "Réécriture…" : "Réécrire",
+      plain: true,
+      dimColor: true,
+      onPress: () => {
+        rewriteDraft($).catch((error) => $.ui.toast(`Réécrire : ${String(error)}`));
+      },
+    });
     const texts = drawItems(Text, items);
     if (!isTerminal) {
       // L'app desktop place elle-même ses boutons natifs devant le texte, quel que soit l'ordre.
-      return Box({ flexDirection: "row", flexShrink: 0, children: [ultracodeButton, ...texts] });
+      return Box({ flexDirection: "row", flexShrink: 0, children: [rewriteButton, ultracodeButton, ...texts] });
     }
     // Terminal seulement (l'app desktop a les siens) : « Fichiers » ouvre ou ferme le navigateur
     // de files-board, « Diff » le panneau de diff (`/diff` est une bascule en plein écran).
@@ -156,6 +176,8 @@ export const register: Register = (on) => {
       sep(),
       commandButton("diff", "Diff", "diff"),
       sep(),
+      rewriteButton,
+      sep(),
       ultracodeButton,
     ];
     // Terminal : le pied calé à droite, les boutons en dernier, après l'heure.
@@ -173,7 +195,7 @@ export const register: Register = (on) => {
     const { Box, Text } = $.ui.resolve(e);
     const width = e.props.bodyColumns;
     const own = Box({
-      key: "mods-mathis",
+      key: "session-tools",
       flexDirection: "row",
       flexShrink: 0,
       width,
@@ -216,6 +238,57 @@ async function noteSpeed($: EngineInterface, tokens: number, firstAt: number) {
   const { value: speed = null } = await $.state.get(generationSpeed);
   await $.state.set(generationSpeed, { tokens: (speed?.tokens ?? 0) + tokens, ms: (speed?.ms ?? 0) + ms });
   $.ui.invalidate("ui.render");
+}
+
+// ─── Réécrire le brouillon ──────────────────────────────────────────────────
+
+// Opus en effort low : en tête d'un banc d'essai sur 7 brouillons réels (qualité, puis temps,
+// puis coût), devant Opus medium (même qualité, deux fois plus lent), Sonnet et Haiku.
+// Un prompt réécrit dépasse souvent les 1024 tokens de réponse par défaut.
+const REWRITE_REQUEST = { model: "opus", effort: "low", maxTokens: 4000, timeoutMs: 120_000 } as const;
+
+async function rewriteDraft($: EngineInterface) {
+  if (isRewriteBusy) return;
+  isRewriteBusy = true;
+  try {
+    const draft = (await $.prompt.read()).text;
+    if (!draft.trim()) {
+      await $.ui.toast("Réécrire : le champ de saisie est vide.");
+      return;
+    }
+    await $.state.set(rewriting, true);
+    $.ui.invalidate("ui.render");
+    await rewrite($, draft);
+  } finally {
+    isRewriteBusy = false;
+    await $.state.set(rewriting, false);
+    $.ui.invalidate("ui.render");
+  }
+}
+
+async function rewrite($: EngineInterface, draft: string) {
+  const reply = await $.model.complete({
+    ...REWRITE_REQUEST,
+    // Marquée pour le cache : des clics rapprochés relisent la consigne au lieu de la repayer.
+    system: [{ text: REWRITE_SYSTEM, cache: true }],
+    prompt: `<brouillon>\n${draft}\n</brouillon>`,
+  });
+  if (!reply.isAnswered) {
+    await $.ui.toast(`Réécrire : pas de réponse (${reply.reason}).`);
+    return;
+  }
+  const text = reply.text.trim();
+  if (!text) {
+    await $.ui.toast("Réécrire : réponse vide, le brouillon est laissé tel quel.");
+    return;
+  }
+  // Ce qui a été tapé pendant la réécriture n'est pas écrasé (relu juste avant d'écrire).
+  if ((await $.prompt.read()).text !== draft) {
+    await $.ui.toast("Réécrire : le brouillon a changé pendant la réécriture, il est laissé tel quel.");
+    return;
+  }
+  const filled = await $.prompt.fill({ text, mode: "replace" });
+  if (!filled.isFilled) await $.ui.toast(`Réécrire : le champ de saisie a refusé le texte (${filled.refusal ?? "refus d'un autre plugin"}).`);
 }
 
 // ─── Pied du prompt ─────────────────────────────────────────────────────────

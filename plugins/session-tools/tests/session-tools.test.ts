@@ -14,15 +14,15 @@ const mountValues = ($: any, surface: "terminal" | "desktop") =>
   $.ui.mount(
     surface === "desktop"
       ? {
-          plugin: "mods-mathis",
+          plugin: "session-tools",
           surface,
           component: "AbovePrompt",
           props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
         }
-      : { plugin: "mods-mathis", surface, component: "SessionMode", props: { modes: [] } },
+      : { plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } },
   );
 
-describe("mods-mathis", () => {
+describe("session-tools", () => {
   for (const surface of ["terminal", "desktop"] as const) {
     test(`cache et heure dans le pied du prompt (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const clock = mock.clock(on, { now: 1_000_000 });
@@ -59,7 +59,7 @@ describe("mods-mathis", () => {
       expect(await ui.find({ type: "Text", text: "expiré" })).toBeDefined();
       if (surface === "desktop") {
         // Le pied desktop, trop étroit, ne garde que le bouton : les valeurs sont dans le bandeau.
-        const footer = await $.ui.mount({ plugin: "mods-mathis", surface, component: "SessionMode", props: { modes: [] } } as any);
+        const footer = await $.ui.mount({ plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } } as any);
         expect(await footer.find({ type: "Text", text: /^Cache/ })).toBeUndefined();
         expect(await footer.find({ key: "ultracode" })).toBeDefined();
       }
@@ -80,7 +80,7 @@ describe("mods-mathis", () => {
       });
       await $.session.start({ surface, isInteractive: true, cwd: "/work" } as any);
 
-      const ui = await $.ui.mount({ plugin: "mods-mathis", surface, component: "SessionMode", props: { modes: [] } } as any);
+      const ui = await $.ui.mount({ plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } } as any);
       expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/off$/);
 
       await ui.press({ key: "ultracode" });
@@ -122,7 +122,7 @@ describe("mods-mathis", () => {
         return {};
       });
       await $.session.start({ surface, isInteractive: true, cwd: "/work" } as any);
-      const ui = await $.ui.mount({ plugin: "mods-mathis", surface, component: "SessionMode", props: { modes: [] } } as any);
+      const ui = await $.ui.mount({ plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } } as any);
       if (surface === "desktop") {
         expect(await ui.find({ key: "files" })).toBeUndefined();
         expect(await ui.find({ key: "diff" })).toBeUndefined();
@@ -137,6 +137,142 @@ describe("mods-mathis", () => {
       expect(toasts).toEqual([]);
     });
   }
+
+  // Sous le plugin : le champ de saisie (`drafts` : ce que chaque lecture y trouve, la dernière
+  // se répète), le modèle et les notifications.
+  const rewriteSetup = (on: any, drafts: string[], reply = "  Prompt réécrit.\n", during = async () => {}) => {
+    const calls = { requests: [] as any[], fills: [] as any[], toasts: [] as string[] };
+    let reads = 0;
+    on("prompt.read", () => ({ value: { text: drafts[Math.min(reads++, drafts.length - 1)], cursor: 0 } }));
+    on("prompt.fill", ($: any, e: any) => {
+      calls.fills.push({ text: e.text, mode: e.mode });
+      return { isFilled: true };
+    });
+    on("ui.toast", ($: any, e: any) => {
+      calls.toasts.push(e.text);
+      return { value: undefined };
+    });
+    const usage = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    on("model.complete", async ($: any, e: any) => {
+      calls.requests.push(e);
+      await during();
+      return { value: { isAnswered: true, text: reply, usage } };
+    });
+    return calls;
+  };
+
+  for (const surface of ["terminal", "desktop"] as const) {
+    test(`Réécrire : le brouillon réécrit par Opus low remplace le champ, sans envoi (${surface})`, async ($, on) => {
+      mock.clock(on, { now: 1_000_000 });
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      engineDraws(on);
+      const calls = rewriteSetup(on, ["fais un logo plus moderne"]);
+      let submitted = false;
+      on("prompt.submit", () => {
+        submitted = true;
+        return { text: "" };
+      });
+      await $.session.start({ surface, isInteractive: true, cwd: "/work" } as any);
+      const ui = await $.ui.mount({ plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } } as any);
+      expect((await ui.find({ key: "rewrite" }))?.text).toBe("Réécrire");
+
+      await ui.press({ key: "rewrite" });
+      expect(calls.requests).toHaveLength(1);
+      const [request] = calls.requests;
+      expect(request.model).toBe("opus");
+      expect(request.effort).toBe("low");
+      expect(request.maxTokens).toBe(4000);
+      expect(request.system).toMatch(/^# Réécrire un brouillon de prompt/);
+      expect(request.prompt).toBe("<brouillon>\nfais un logo plus moderne\n</brouillon>");
+      expect(calls.fills).toEqual([{ text: "Prompt réécrit.", mode: "replace" }]);
+      expect(calls.toasts).toEqual([]);
+      expect(submitted).toBe(false);
+      expect((await ui.find({ key: "rewrite" }))?.text).toBe("Réécrire");
+    });
+  }
+
+  test("Réécrire : le bouton dit « Réécriture… » pendant l'appel au modèle", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    // Le modèle répond quand le test le décide : le bouton est relu pendant l'attente.
+    let answer = () => {};
+    const replied = new Promise<void>((resolve) => (answer = resolve));
+    const calls = rewriteSetup(on, ["brouillon"], "ok", () => replied);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    // L'attente ne vient pas du moteur : l'appui rend la main sans attendre la réponse.
+    const until = async (done: () => boolean) => {
+      for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+    await ui.press({ key: "rewrite" });
+    await until(() => calls.requests.length > 0);
+    expect((await ui.find({ key: "rewrite" }))?.text).toBe("Réécriture…");
+    answer();
+    await until(() => calls.fills.length > 0);
+    expect(calls.fills).toEqual([{ text: "ok", mode: "replace" }]);
+    expect((await ui.find({ key: "rewrite" }))?.text).toBe("Réécrire");
+  });
+
+  test("Réécrire : un double clic ne lance qu'un appel au modèle", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    let answer = () => {};
+    const replied = new Promise<void>((resolve) => (answer = resolve));
+    const calls = rewriteSetup(on, ["brouillon"], "ok", () => replied);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    const until = async (done: () => boolean) => {
+      for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+    await Promise.all([ui.press({ key: "rewrite" }), ui.press({ key: "rewrite" })]);
+    await until(() => calls.requests.length > 0);
+    await ui.press({ key: "rewrite" });
+    answer();
+    await until(() => calls.fills.length > 0);
+    expect(calls.requests).toHaveLength(1);
+    expect(calls.fills).toEqual([{ text: "ok", mode: "replace" }]);
+    expect(calls.toasts).toEqual([]);
+  });
+
+  test("Réécrire : une réponse vide laisse le brouillon", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["brouillon"], " \n ");
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    expect(calls.fills).toEqual([]);
+    expect(calls.toasts).toEqual(["Réécrire : réponse vide, le brouillon est laissé tel quel."]);
+  });
+
+  test("Réécrire : un brouillon modifié pendant la réécriture n'est pas écrasé", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["brouillon", "brouillon complété entre-temps"]);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    expect(calls.requests).toHaveLength(1);
+    expect(calls.fills).toEqual([]);
+    expect(calls.toasts).toEqual(["Réécrire : le brouillon a changé pendant la réécriture, il est laissé tel quel."]);
+  });
+
+  test("Réécrire : un champ vide ne lance pas le modèle", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["   "]);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    expect(calls.requests).toEqual([]);
+    expect(calls.fills).toEqual([]);
+    expect(calls.toasts).toEqual(["Réécrire : le champ de saisie est vide."]);
+  });
 
   for (const surface of ["terminal", "desktop"] as const) {
     test(`chrono de réponse : de l'envoi du message à la fin du tour (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
@@ -274,16 +410,16 @@ describe("mods-mathis", () => {
     const ui = await mountValues($, "desktop");
     const root = await ui.find({ type: "Box" });
     const [mine, other] = (root?.children ?? []) as any[];
-    expect(mine.props.key).toBe("mods-mathis");
+    expect(mine.props.key).toBe("session-tools");
     expect(mine.props.justifyContent).toBeUndefined();
     expect(JSON.stringify(other)).toContain("Stats");
   });
 
-  test("/mods-mathis:start répond seul, sans le modèle ni panneau", async ($, on) => {
+  test("/session-tools:start répond seul, sans le modèle ni panneau", async ($, on) => {
     let reachedBelow = false;
     const opened: string[] = [];
     // Sous le plugin : ce qui tiendrait lieu de la commande (le modèle) si le mod ne répondait pas.
-    on("command.run", { command: "mods-mathis:start" }, async () => {
+    on("command.run", { command: "session-tools:start" }, async () => {
       reachedBelow = true;
       return { text: "modèle" };
     });
@@ -291,7 +427,7 @@ describe("mods-mathis", () => {
       opened.push(e.id);
       return { value: {} } as any;
     });
-    const out = await $.command.run({ command: "mods-mathis:start", args: "" });
+    const out = await $.command.run({ command: "session-tools:start", args: "" });
     expect(String(out.text)).toBe("Mods démarrés.");
     expect(reachedBelow).toBe(false);
     expect(opened).toEqual([]);

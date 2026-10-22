@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.1.1 — 2026-10-22
+
+### Documentation
+- Le plugin `mods-mathis` s'appelle désormais `session-tools` : catalogue, choix des panneaux et commande `/session-tools:start`.
+
+---
+
 ## 0.1.0 — 2026-10-16
 
 ### Ajouté

@@ -14,7 +14,7 @@ Lu par `/setup:install`. Une ligne par plugin : ce qu'il apporte, ce qu'il exige
 | `git-board` | Panneau Git (`/git`) : branche, écarts, modifications, historique, PR, CI | `project` (conseillé : ses boutons lancent `/project:*`) | Claude Code 2.1.286+ ; `git` ; `gh` facultatif | — | — |
 | `files-board` | Navigateur de fichiers dans le terminal (`/files`) | — | Claude Code 2.1.289+ ; terminal (pas l'app de bureau) | `tui: fullscreen` conseillé | — |
 | `stats-board` | Statistiques d'usage et de coût (`/ccstats`, `/stats-board:recap`) | — | Claude Code 2.1.286+ ; Node.js (`npx ccusage`) | Partage entre postes, facultatif : dépôt git privé de l'utilisateur et nom du poste | — |
-| `mods-mathis` | Pied du prompt (chrono, tokens/s, cache, heure) et boutons Ultracode, Fichiers, Diff | `files-board` (conseillé : bouton Fichiers) | Claude Code 2.1.286+ | — | — |
+| `session-tools` | Pied du prompt (chrono, tokens/s, cache, heure) et boutons Réécrire, Ultracode, Fichiers, Diff | `files-board` (conseillé : bouton Fichiers) | Claude Code 2.1.286+ | — | — |
 
 Les règles générales (`general.md`) valent sans plugin : principes de travail, secrets, contrôles, style. Elles se proposent toujours.
 

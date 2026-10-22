@@ -29,7 +29,7 @@
     "git-board@mathis-plugins": true,
     "files-board@mathis-plugins": true,
     "stats-board@mathis-plugins": true,
-    "mods-mathis@mathis-plugins": true
+    "session-tools@mathis-plugins": true
   },
   "extraKnownMarketplaces": {
     "mathis-plugins": {

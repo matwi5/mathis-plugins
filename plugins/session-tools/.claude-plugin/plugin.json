@@ -1,0 +1,10 @@
+{
+  "name": "session-tools",
+  "version": "0.18.0",
+  "description": "Outils autour du champ de saisie : boutons Fichiers (navigateur files-board) et Diff au terminal, boutons Réécrire (le brouillon réécrit en prompt par Opus, sans envoi) et Ultracode, chrono de réponse, vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /session-tools:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
+  "author": {
+    "name": "Mathis"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
