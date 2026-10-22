@@ -4,6 +4,23 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.54.0 — 2026-10-22
+
+Constaté le 22/10/2026 dans la rétro d'un parcours à quatre sessions liées : la discussion principale a changé de nom et de référence trois fois (redémarrages, renommages), le compte rendu d'un groupe n'est jamais arrivé et le premier envoi d'un autre a échoué ; les briefs recopiaient les règles du projet et l'effort des revues, et une copie s'est périmée (`xhigh` imposé alors que la règle venait de passer à `high`) ; la liste des choix déclarés, recopiée à la main dans sept ou huit consignes de revue par session, n'a pas empêché une passe `--fix` d'appliquer un correctif exclu, et un relecteur a rendu son rapport sans attendre le second axe ; deux sessions ont rendu la main en attendant une commande de tests sans délai maximal qui ne finissait pas ; `claude logs` rendait une sortie illisible.
+
+### Ajouté
+- **Compte rendu déposé au relais** : une session liée envoie son compte rendu final par SendMessage et le dépose aussi par l'outil (`{"report": "…"}`), dans le relais du parcours (`~/.claude/flow-board/relais/<id du parcours>.json`). Dans la discussion principale, chaque réponse de l'outil cite les comptes rendus déposés par les sessions des groupes pas encore rendus, : en entier la première fois et à chaque reprise (`resume`, ou discussion redémarrée), puis en une ligne qui renvoie au relais. Une session redémarrée sous un autre id ne masque pas le compte rendu de la précédente.
+- **Fichier des choix déclarés** : la discussion principale tient `~/.claude/flow-board/choix/<id du parcours>.md` d'après le parcours et le relais (ses choix et ceux des sessions liées), réécrit à chaque changement. Les briefs, la revue d'un groupe rendu, les consignes d'`/implement`, d'`/implement-spec` et des revues citent son chemin au lieu de recopier la liste.
+- **Consigne des relecteurs**, donnée telle quelle à chaque relecteur : attendre tous les axes d'une revue (Standards et Spec) avant de rendre son rapport, sans en relancer un ; ne pas relancer les tests ni les contrôles ; ne rien signaler ni appliquer de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe ; ne pas resignaler ni défaire les choix du fichier.
+- **Renommer la discussion avant la première session liée** : la demande de lancement de la première session liée d'un parcours fait d'abord demander à la personne de renommer la discussion de son nom définitif ; la consigne d'`/implement` le rappelle au début de l'implémentation quand le parcours a plusieurs groupes.
+
+### Modifié
+- **Background par renvoi** : la consigne « Rédige toi-même le background » (groupes et pistes de rétro) ne fait plus recopier les règles (écritures permises, gestes réservés, dépôt public, modèle et effort des revues) : le background cite le document du projet pour les sessions déléguées, son `CLAUDE.md` et les règles communes par leur chemin, et ne garde que ce qui varie (tickets, autres sessions, décisions par renvoi, fichier des choix).
+- **Commandes longues** : les règles de travail des sessions de groupe demandent un délai maximal pour chaque commande longue et interdisent de rendre la main en attendant un processus d'arrière-plan qui n'en a pas (le surveiller par Monitor ou l'arrêter).
+- **Suivi sans `claude logs`** : la discussion principale suit une session liée par l'état git de son worktree, le tracker et `ListAgents` ; « ↻ Reprendre les pistes » et la rétro globale lisent le transcript `.jsonl` au besoin, plus `claude logs`.
+- **Choix sensible jamais déclaré** : la description de `decided`, la réponse donnée aux sessions liées et une consigne ajoutée aux skills de cadrage (`grilling`, `grill-with-docs`, `grill-me`, `to-questionnaire`, `to-spec`, `to-tickets`, `domain-modeling`) font d'un choix qui touche une zone sensible une question à la personne ; une entrée de décision recopie la question et la réponse acceptées au lieu de les résumer.
+- **Rétro et autres dépôts** : la consigne de `/retro`, la rétro globale et la demande de session liée des pistes gardent hors des items les pistes qui touchent un autre dépôt (plugins, config commune) et les rendent en une liste de corrections prête à confier à un agent de ce dépôt ; seules les pistes du dépôt courant vont à une session liée.
+
 ## 0.53.0 — 2026-10-20
 
 Décidé le 20/10/2026 : les sessions liées d'un groupe prenaient l'effort de la discussion principale (high), alors que leurs tickets sont cadrés par une spec et que leurs revues tournent dans des sous-agents à l'effort explicite depuis la 0.52.0. L'outil `start_session` de l'app Desktop accepte un `effort` (sans jamais en donner un plus haut que celui de la discussion), et `claude --bg` accepte `--effort`.

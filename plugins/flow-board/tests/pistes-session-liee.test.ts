@@ -278,7 +278,8 @@ test('le panneau : choisir les pistes, tout sélectionner, confier à une sessio
   const check = filled.at(-1)!
   expect(check).toMatch(/^Vérifie l'état de la session liée \(local_abc123\) qui traite les pistes du parcours « Rétro du groupe A » : 1\) \[p1\]/)
   // Ni le CLI supposé, ni l'abandon des pistes pas faites.
-  expect(check).toContain("avec tes outils de session de l'app Desktop si tu les as, sinon claude agents puis claude logs <id> dans le CLI")
+  expect(check).toContain("avec tes outils de session de l'app Desktop si tu les as, sinon par ListAgents (est-elle encore là), l'état git de son worktree")
+  expect(check).not.toMatch(/sinon claude logs|claude logs <id>/)
   expect(check).toMatch(/todo si elle n'a pas été faite/)
   expect(check).toMatch(/\{"complete": true\} seulement si aucune n'est revenue à todo/)
 

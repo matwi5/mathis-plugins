@@ -17,6 +17,7 @@ import {
   newRun,
   relayForGroup,
   countTickets,
+  decidedFileText,
   openBlockers,
   startLinkedGroups,
   suggestionsFor,
@@ -729,7 +730,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(text).toMatch(/git merge --ff-only /)
   expect(text).toContain('2) lancer elle-même la revue en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix ») sur les seuls commits du groupe')
   expect(text).toContain('3) au retour du relecteur, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
-  expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow, à ne pas resignaler, et en lui demandant de se concentrer sur les interactions entre les tickets/)
+  expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas resignaler ni défaire et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
   expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort xhigh\), en lecture seule, avec pour seul périmètre les commits du groupe/)
   expect(text).toContain('{"reviewed": ["E"]}')
@@ -838,4 +839,117 @@ test('le relais d’une session d’avant l’envoi du groupe ne compte pas ; le
   const ended = applyRelay(now, 'r', 'apres', { kind: 'end' }, 8_000)!
   expect(relayForGroup(ended, group)?.endedAt).toBe(8_000)
   expect(applyRelay(ended, 'r', 'apres', { kind: 'end' }, 9_000)).toBeNull()
+})
+
+// ─── Rétro du 22/10/2026 : compte rendu perdu, choix recopiés, brief qui recopie des règles ──────
+
+test('le compte rendu final d’une session liée passe aussi par le relais : la discussion principale le reçoit tant que le groupe n’est pas rendu', () => {
+  const sent = startLinkedGroups(boardWith(VENTES), ['A', 'C'], 5_000)!.board
+  const run = activeRun(sent)!
+  // La session liée le dépose par l'outil : il part au relais, pas sur le parcours.
+  const delegated = applyReport(sent, { delegate: run.id, group: 'C' }, 5_100)
+  expect(delegated.text).toContain('also leave it here, {"report": "<the whole report>"}')
+  const told = applyReport(delegated.board, { report: 'c1 fait (commit 1a2b3c4), contrôles verts' }, 5_200)
+  expect(told.board).toBe(delegated.board)
+  expect(told.text).toMatch(/^Relayed to the main discussion's dashboard: the final report\./)
+  let relay = applyRelay(undefined, run.id, 'fc', { kind: 'start', group: 'C' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fc', { kind: 'report', text: 'c1 fait (commit 1a2b3c4), contrôles verts' }, 60_000)!
+  expect(relay.sessions['fc']!.report).toEqual({ text: 'c1 fait (commit 1a2b3c4), contrôles verts', at: 60_000 })
+  expect(relay.sessions['fc']!.last).toMatchObject({ kind: 'report', text: 'compte rendu final déposé' })
+  // Le même compte rendu renvoyé ne change rien.
+  expect(applyRelay(relay, run.id, 'fc', { kind: 'report', text: 'c1 fait (commit 1a2b3c4), contrôles verts' }, 61_000)).toBeNull()
+  // Ici, toute réponse de l'outil le cite, même si le SendMessage ne l'a jamais apporté.
+  const any = applyReport(sent, { note: 'point' }, 62_000, { relay })
+  expect(any.text).toContain('Final report(s) left in the relay by linked sessions whose group is not returned yet')
+  expect(any.text).toContain('Group C (1970-01-01 00:01 UTC): c1 fait (commit 1a2b3c4), contrôles verts')
+  expect(any.text).not.toContain('Group A (')
+  // Déjà cité en entier : une ligne qui renvoie au relais, sans recopier le texte.
+  const seen = new Set([`${run.id}:C:60000`])
+  const again = applyReport(sent, { note: 'point' }, 62_500, { relay, seenReports: seen })
+  expect(again.text).toContain('Not returned yet, final report already given above: group C (1970-01-01 00:01 UTC)')
+  expect(again.text).not.toContain('contrôles verts')
+  // Une session redémarrée sous un autre id ne masque pas le compte rendu de la précédente.
+  const restarted = applyRelay(relay, run.id, 'fc2', { kind: 'start', group: 'C' }, 61_500)!
+  expect(applyReport(sent, { note: 'point' }, 62_600, { relay: restarted }).text).toContain('Group C (1970-01-01 00:01 UTC): c1 fait')
+  // Le relais d'un autre parcours ne compte pas.
+  expect(applyReport(sent, { note: 'point' }, 62_000, { relay: { ...relay, run: 'autre' } }).text).not.toContain('Final report')
+  // Le groupe rendu, le compte rendu n'est plus cité.
+  const back = applyReport(sent, { set: [{ id: 'c1', status: 'done' }], returned: ['C'] }, 63_000, { relay })
+  expect(back.text).not.toContain('Final report')
+  expect(applyReport(back.board, { note: 'suite' }, 64_000, { relay }).text).not.toContain('Final report')
+})
+
+test('le fichier des choix déjà déclarés reprend ceux du parcours et ceux que les sessions liées ont relayés', () => {
+  const sent = startLinkedGroups(boardWith(VENTES), ['A'], 5_000)!.board
+  const here = applyReport(sent, { decided: [{ what: 'Export en CSV', why: 'demandé par la compta' }] }, 5_100).board
+  const run = activeRun(here)!
+  expect(decidedFileText(run, null)).toBe(
+    [
+      '# Choix déjà déclarés · Lot',
+      '',
+      "Tenu par flow-board d'après le champ « decided » de l'outil flow (discussion principale et sessions liées), réécrit à chaque changement : ne pas le modifier à la main. Ces choix ont été faits sans le porteur et attendent sa relecture : une revue ne les resignale pas et une passe --fix ne les défait pas.",
+      '',
+      '- Export en CSV — demandé par la compta (1970-01-01 00:00 UTC)',
+      '',
+    ].join('\n'),
+  )
+  let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fa', { kind: 'decided', items: [{ what: 'Cache en mémoire' }] }, 120_000)!
+  expect(decidedFileText(run, relay)).toContain('- Cache en mémoire (groupe A, 1970-01-01 00:02 UTC)')
+  expect(decidedFileText({ ...run, decided: undefined }, null)).toContain("Aucun choix déclaré pour l'instant.")
+})
+
+test('le brief des sessions de groupe : renommer d’abord la discussion, background par renvoi, compte rendu déposé, délais et suivi sans claude logs', async ($, on) => {
+  mock.clock(on, { now: 74_000_000 })
+  const { filled } = world(on, { repo: true })
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES } as any)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await ui.press({ key: 'launch-linked-E' })
+  const first = filled.at(-1)!
+  expect(first).toContain("C'est la première session liée de ce parcours : si ce n'est pas déjà fait (la consigne d'/implement l'a peut-être demandé), demande-moi d'abord de renommer cette discussion de son nom définitif")
+  // Le background renvoie aux règles au lieu de les recopier, et cite le fichier des choix.
+  expect(first).toContain('sans y reprendre le texte des règles')
+  expect(first).toContain("dans le document du projet pour les sessions déléguées s'il en a un")
+  expect(first).toContain('config/rules/agents.md')
+  expect(first).not.toMatch(/Rédige toi-même le background : le projet, les contraintes \(ressource à ne pas partager, écritures autorisées/)
+  // La consigne des relecteurs et le compte rendu déposé au relais.
+  expect(first).toContain("si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu'une fois tous les axes revenus")
+  expect(first).toContain("ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe")
+  // Hors d'atteinte (pas de ~/.claude ici), le fichier n'est pas cité : la liste se donne.
+  expect(first).toContain("les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste")
+  expect(first).toContain('le déposer aussi par l\'outil flow, {"report": "<le compte rendu entier>"}')
+  expect(first).toContain("Un compte rendu qui n'arrive pas par SendMessage est dans le relais")
+  // Une commande longue a un délai maximal ; la session ne rend pas la main sur un processus sans délai.
+  expect(first).toContain("une commande longue (tests, build) se lance avec un délai maximal")
+  expect(first).toContain("ne jamais rendre la main en attendant un processus d'arrière-plan qui n'a pas de délai : le surveiller (outil Monitor) ou l'arrêter")
+  // Le suivi passe par le worktree, le tracker et ListAgents.
+  expect(first).toContain("l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status), le tracker (statuts des tickets) et ListAgents")
+  expect(first).toContain('jamais claude logs')
+  // Un groupe déjà confié : la discussion a déjà son nom, pas de nouvelle demande.
+  await ui.press({ key: 'launch-linked-A' })
+  await ui.unmount()
+  expect(filled.at(-1)).toContain('Confie ce groupe à une session liée')
+  expect(filled.at(-1)).not.toContain('première session liée')
+})
+
+test('les consignes ajoutées aux skills : choix sensible en question au cadrage, fichier des choix pour les revues, pistes d’un autre dépôt à part', async ($, on) => {
+  mock.clock(on, { now: 74_000_000 })
+  world(on, { repo: true })
+  await start($)
+  const spec = await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
+  expect(spec.text).toContain('is never a declared choice ({"decided": …}): ask the user while framing')
+  expect(spec.text).toContain('copies the question asked and the accepted answer word for word')
+  const tickets = await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  expect(tickets.text).toContain('is never a declared choice')
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES } as any)
+  const impl = await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  expect(impl.text).toContain('- Declared choices: ')
+  expect(impl.text).toContain('when the review has several axes (Standards and Spec), report only once all of them are back')
+  expect(impl.text).toContain('ask the user once to rename this discussion to its final name')
+  expect(impl.text).not.toContain('is never a declared choice')
+  const retro = await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
+  expect(retro.text).toContain('Improvements that touch another repository')
+  expect(retro.text).toContain('Only the improvements of this repository go to the items')
 })

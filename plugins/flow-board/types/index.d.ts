@@ -394,8 +394,13 @@ export type RelayEntry = {
   securedAt?: number
   /** Les choix faits sans la personne que la session a signalés (`decided`), dans l'ordre. */
   decided?: { what: string; why?: string; at: number }[]
-  /** Le dernier signal reçu : un ticket, un commit, des tests, une note, une revue. */
-  last?: { kind: 'ticket' | 'commit' | 'test' | 'note' | 'review' | 'decided'; text: string; at: number; ticket?: string }
+  /**
+   * Le compte rendu final de la session (`report`), en filet de son envoi par SendMessage : la
+   * discussion principale, renommée ou redémarrée, peut ne jamais recevoir le message.
+   */
+  report?: { text: string; at: number }
+  /** Le dernier signal reçu : un ticket, un commit, des tests, une note, une revue, le compte rendu. */
+  last?: { kind: 'ticket' | 'commit' | 'test' | 'note' | 'review' | 'decided' | 'report'; text: string; at: number; ticket?: string }
   startedAt: number
   at: number
   /** La session s'est terminée (fin de discussion, pas un /clear). */

@@ -138,7 +138,8 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(text).toContain("dans l'app Desktop, notify_when_idle est inopérant")
   // Les décisions se relaient par renvoi au fichier de décisions, écrites avant d'être relayées ;
   // un geste humain remplacé se confirme par le porteur dans la session liée.
-  expect(text).toContain("les décisions déjà prises par renvoi, sans les réécrire dans le brief")
+  expect(text).toContain("les décisions déjà prises par renvoi, sans les réécrire")
+  expect(text).toContain("sans y reprendre le texte des règles")
   expect(text).toContain("s'y écrit AVANT d'être relayée, avec ma phrase exacte entre guillemets")
   expect(text).toContain("se confirme par moi directement dans la session liée")
   expect(text).toContain("relire d'abord le fichier de décisions du projet et les commentaires « mise à jour du porteur » du ticket")
@@ -161,11 +162,11 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(text).toContain('4) une fois tous les tickets commités, lancer elle-même la revue du groupe en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review high --fix (la revue de Claude Code, outil Skill « code-review », arguments « high --fix »)')
   expect(text).not.toMatch(/sur sa branche face à sa base/)
   // La passe « bogues » d'un ticket sensible part avec sa revue, sur son périmètre, sans resignaler les choix déclarés.
-  expect(text).toContain("si le ticket touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), lancer dans le même message la passe « bogues » /code-review xhigh (outil Skill « code-review », arguments « xhigh »), sur le même périmètre (point fixe : la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels), en lui donnant la liste des choix déjà déclarés dans {\"decided\": …} de l'outil flow, à ne pas resignaler")
+  expect(text).toContain("si le ticket touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), lancer dans le même message la passe « bogues » /code-review xhigh (outil Skill « code-review », arguments « xhigh »), sur le même périmètre (point fixe : la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels), en lui donnant la liste des choix déjà déclarés dans {\"decided\": …} de l'outil flow (ceux que tu connais, ceux de la session compris), à ne pas resignaler ni défaire")
   // La revue du groupe et la sécurité partent des plus anciennes copies des tickets du groupe.
   expect(text).toContain("arguments « high --fix »), sur les changements du groupe (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe (un fichier touché seulement par un ticket suivant n'a pas de copie du premier), comparée au fichier actuel, les fichiers nouveaux en entier ; lui donner la liste des copies et des fichiers), en lui donnant")
   // La revue du groupe reçoit les choix déclarés et regarde les interactions entre tickets.
-  expect(text).toMatch(/arguments « high --fix »\), sur les changements du groupe \(.*\), en lui donnant la liste des choix déjà déclarés .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
+  expect(text).toMatch(/arguments « high --fix »\), sur les changements du groupe \(.*\), en lui donnant la liste des choix déjà déclarés .* et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur, jamais /security-review (qui relit aussi les autres groupes).
   expect(text).toMatch(/5\) puis juger si une revue de sécurité vaut la peine \(les changements du groupe touchent : authentication/)
   expect(text).toMatch(/la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort xhigh\), en lecture seule, avec pour seul périmètre les changements du groupe \(point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe .*\) et pour critères ceux de \/security-review/)

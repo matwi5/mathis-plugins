@@ -114,8 +114,19 @@ export const SECURITY_CRITERIA =
 /** Les zones où un ticket passe aussi par la passe « bogues » (lu par Claude). */
 export const SENSITIVE_AREAS = 'privacy, data deletion, encryption, concurrency'
 
-/** Les choix déjà déclarés, que les revues ne doivent pas resignaler (lu par Claude). */
-export const DECIDED_HINT = 'the list of the choices already declared in "decided" of the flow tool, not to be reported again'
+/**
+ * Les choix déjà déclarés, que les revues ne doivent pas resignaler (lu par Claude) : un fichier
+ * tenu par flow-board, cité par son chemin, plutôt qu'une liste recopiée dans chaque consigne.
+ */
+export const DECIDED_HINT = 'the path of the file of the choices already declared in this run (under "Declared choices" below), not to be reported again nor undone, and the reviewer brief given there'
+
+/**
+ * Ce que tout relecteur reçoit tel quel (lu par Claude) : un relecteur avait rendu son rapport
+ * avant le second axe, d'où une revue Spec lancée deux fois, et une passe `--fix` avait appliqué
+ * un correctif laissé à un autre groupe.
+ */
+export const REVIEWER_BRIEF =
+  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not report again nor undo the declared choices'
 
 /** La consigne de la revue d'un ticket, pour un point fixe donné. */
 const ticketReviewHint = (fixedPoint: string): string =>
@@ -668,14 +679,14 @@ export const SKILLS: Record<string, SkillDef> = {
       step('style', 'Guide de style', 'load writing-for-agents'),
       step('read', 'Lire la session', 'read the session logs'),
       step('find', 'Pistes (7 axes)', 'look for improvements in the seven categories'),
-      step('present', 'Par sévérité', 'present them by severity, then wait: the user picks the improvements in the dashboard and sends them to a linked session, or tells you which ones to apply'),
+      step('present', 'Par sévérité', 'present them by severity, those that touch another repository apart, as a correction list ready to hand to an agent of that repository; then wait: the user picks the improvements of this repository in the dashboard and sends them to a linked session, or tells you which ones to apply'),
       step(
         'apply',
         'Modifications en cours',
         'set by the dashboard once the linked session you launch for the improvements the user sent has started; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then complete unless some went back to todo',
       ),
     ],
-    items: { label: 'Pistes', hint: 'the improvement candidates (label = "category: fix")', linkedStep: 'apply' },
+    items: { label: 'Pistes', hint: 'the improvement candidates of this repository only (label = "category: fix"); those that touch another repository stay out of the items', linkedStep: 'apply' },
     uses: { 'writing-for-agents': 'style' },
     flow: [phase('retro')],
   },
