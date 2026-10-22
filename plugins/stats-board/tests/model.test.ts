@@ -35,6 +35,7 @@ import {
   monthPlan,
   nameOfPath,
   ownHistory,
+  parseLabels,
   parsePublished,
   projectKey,
   projectLabels,
@@ -47,6 +48,7 @@ import {
   streaksOf,
   sum,
   unpricedOf,
+  withLabels,
 } from '../hooks/model.ts'
 import type { BlockRow, SessionRow, Ui, UsageRow } from '../types'
 
@@ -301,6 +303,28 @@ describe('model : projets mal lus et worktrees', () => {
       ['-Users-m-qwen-image-local', 3],
     ])
     expect(projectLabels(stats.map((p) => p.key), m.projects, '-Users-m').get('-Users-m-qwen-image-local')).toBe('qwen-image-local')
+  })
+
+  test('noms d’affichage de names.json : affichés, jamais publiés ni utilisés pour rapprocher les postes', async () => {
+    expect(parseLabels({ 'Qwen-Image-Local': ' Chambre noire ', vide: ' ', nombre: 3 })).toEqual({ 'qwen-image-local': 'Chambre noire' })
+    expect(parseLabels(['x'])).toBeNull()
+    expect(parseLabels('x')).toBeNull()
+    const projects = {
+      '-Users-m-qwen-image-local': { name: 'qwen-image-local', path: '/Users/m/qwen-image-local' },
+      '-Users-m-autre': { name: 'autre', path: '/Users/m/autre', label: 'Ancien nom' },
+    }
+    const labelled = withLabels(projects, { 'qwen-image-local': 'Chambre noire' })
+    // Le dossier personnel se nomme par son dernier segment, comme dans le récap, pas par « ~ ».
+    expect(withLabels({ '-Users-m': { name: '~', path: '/Users/m' } }, { m: 'Accueil' })['-Users-m']!.label).toBe('Accueil')
+    expect(labelled['-Users-m-qwen-image-local']).toEqual({ name: 'qwen-image-local', path: '/Users/m/qwen-image-local', label: 'Chambre noire' })
+    // Un nom retiré de names.json disparaît au relevé suivant.
+    expect(labelled['-Users-m-autre']).toEqual({ name: 'autre', path: '/Users/m/autre' })
+    const keys = ['-Users-m-qwen-image-local', '-Users-m-qwen-image-local--claude-worktrees-dev']
+    const names = projectLabels(keys.map((k) => groupOf(k, labelled)), labelled, '-Users-m')
+    expect(names.get('-Users-m-qwen-image-local')).toBe('Chambre noire')
+    // Le fichier publié garde le nom de dossier, qui rapproche le projet du même dossier sur un autre poste.
+    const pub = publishedOf({ machine: 'Mac', tzOffset: 0, rows: [row('2026-10-12', '-Users-m-qwen-image-local', 'm', 1)], sessions: [], projects: labelled })
+    expect(pub.projects['-Users-m-qwen-image-local']).toEqual({ name: 'qwen-image-local', path: '/Users/m/qwen-image-local' })
   })
 })
 

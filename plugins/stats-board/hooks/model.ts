@@ -269,7 +269,7 @@ export const machineFile = (machine: string): string => `${machine.replace(/[^A-
 export function publishedOf(o: { machine: string; tzOffset: number; rows: readonly UsageRow[]; sessions: readonly SessionRow[]; projects: Record<string, ProjectInfo> }): Omit<Published, 'updatedAt'> {
   const keys = new Set([...o.rows.map((r) => r.project), ...o.sessions.map((s) => s.project)])
   const projects: Record<string, ProjectInfo> = {}
-  for (const k of [...keys].sort()) if (o.projects[k]) projects[k] = o.projects[k]!
+  for (const k of [...keys].sort()) if (o.projects[k]) projects[k] = { name: o.projects[k]!.name, path: o.projects[k]!.path }
   return { schema: PUBLISH_SCHEMA, machine: o.machine, tzOffset: o.tzOffset, rows: [...o.rows], sessions: [...o.sessions], projects }
 }
 
@@ -413,12 +413,45 @@ export const isDraft = (key: string, info?: ProjectInfo): boolean => /Claude-scr
 /** Le projet affiché d'une clé : les brouillons du desktop sont réunis en un seul, un worktree rejoint son dépôt. */
 export const groupOf = (key: string, projects: Record<string, ProjectInfo>): string => (key.startsWith('@') ? key : isDraft(key, projects[key]) ? DRAFTS : baseKey(key))
 
+/** Longueur maximale d'un nom d'affichage de `names.json`. */
+const LABEL_MAX = 60
+
+/**
+ * Les noms d'affichage de `names.json` (dépôt partagé) : `{ "<nom de dossier>": "<nom affiché>" }`. Le nom de
+ * dossier se compare sans la casse, comme au rapprochement des postes ; une entrée vide ou qui n'est pas du texte
+ * est ignorée. `null` si le fichier n'est pas un objet.
+ */
+export function parseLabels(json: unknown): Record<string, string> | null {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return null
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(json as Record<string, unknown>)) {
+    const folder = k.trim().toLowerCase()
+    const label = typeof v === 'string' ? v.trim().slice(0, LABEL_MAX) : ''
+    if (folder && label) out[folder] = label
+  }
+  return out
+}
+
+/**
+ * Les projets avec leur nom d'affichage : celui de `names.json` pour le dernier segment de leur dossier (pas « ~ »
+ * pour le dossier personnel, comme le récap), à défaut leur nom, s'il y en a un.
+ */
+export function withLabels(projects: Record<string, ProjectInfo>, labels: Record<string, string>): Record<string, ProjectInfo> {
+  const out: Record<string, ProjectInfo> = {}
+  for (const [k, info] of Object.entries(projects)) {
+    const folder = (info.path ? segments(info.path).pop() : null) ?? info.name
+    const label = folder ? labels[folder.toLowerCase()] : undefined
+    out[k] = label ? { ...info, label } : { name: info.name, path: info.path }
+  }
+  return out
+}
+
 /** Le nom d'un projet affiché ; à défaut de dossier connu, la clé sans le préfixe du dossier personnel. */
 export function projectLabel(key: string, projects: Record<string, ProjectInfo>, homeKey: string | null): string {
   if (key === DRAFTS) return 'Brouillons du desktop'
   if (key === UNKNOWN) return 'Sans projet'
   const info = projects[key]
-  if (info?.name) return info.name
+  if (info?.name) return info.label || info.name
   if (homeKey && key === homeKey) return '~'
   // Sans dossier connu : sans le lecteur ni le dossier personnel ; un worktree de Claude par son nom ;
   // « -- » est un séparateur suivi d'un point (`\.claude`).

@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.8.0 — 2026-10-22
+
+### Ajouté
+- **Nom d'affichage d'un projet.** `names.json`, à la racine du dépôt de partage, donne un autre nom à un projet sans déplacer son dossier : `{ "<nom de dossier>": "<nom affiché>" }`. Le panneau (onglets Projets, Sessions, Journée…) et `/stats-board:recap` l'affichent pour tout l'historique du projet, sur tous les postes et pour ses worktrees (« <nom> · dev » dans le récap). Le rapprochement des postes et les fichiers publiés gardent le nom du dossier. Un `names.json` illisible devient un avertissement de l'en-tête.
+
+---
+
 ## 0.7.1 — 2026-10-22
 
 ### Corrigé

@@ -1,7 +1,7 @@
 // Tests du rendu du récap : `node --test plugins/stats-board/skills/recap/recap.test.mjs`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { render as rawRender, modelName, heatOf, sessionInfo } from './recap.mjs'
+import { render as rawRender, modelName, heatOf, sessionInfo, labelsOf, labelOf } from './recap.mjs'
 
 // Les espaces insécables fines des nombres deviennent des espaces, pour des motifs lisibles.
 const render = (data) => rawRender(data).replace(/\u202f/g, ' ')
@@ -81,4 +81,17 @@ test('noms de modèles, rythme et rattachement des sous-agents', () => {
   assert.equal(heatOf(6.9), 'calme')
   assert.equal(heatOf(32), 'en feu')
   assert.equal(sessionInfo({ projectPath: 'C--w-app\\abc\\subagents' }).parent, 'abc')
+})
+
+test('noms d’affichage de names.json : par nom de dossier, sans la casse, worktree après le projet', () => {
+  const labels = labelsOf({ 'Qwen-Image-Local': ' Chambre noire ', vide: '  ', nombre: 3 })
+  assert.deepEqual(labels, { 'qwen-image-local': 'Chambre noire' })
+  assert.deepEqual(labelsOf(['x']), {})
+  assert.deepEqual(labelsOf(null), {})
+  assert.equal(labelOf('/Users/m/qwen-image-local', labels), 'Chambre noire')
+  assert.equal(labelOf('C:\\dev\\qwen-image-local', labels), 'Chambre noire')
+  assert.equal(labelOf('/Users/m/qwen-image-local/.claude/worktrees/dev', labels), 'Chambre noire · dev')
+  assert.equal(labelOf('C:\\dev\\qwen-image-local\\.claude\\worktrees\\dev\\tools', labels), 'Chambre noire · dev')
+  assert.equal(labelOf('/Users/m/autre', labels), null)
+  assert.equal(labelOf('/Users/m/autre/.claude/worktrees/dev', labels), null)
 })

@@ -67,8 +67,11 @@ export type Activity = {
   since: string | null
 }
 
-/** Le nom lisible d'un projet et son dossier, lus dans les transcriptions de Claude Code. */
-export type ProjectInfo = { name: string; path: string | null }
+/**
+ * Le nom lisible d'un projet et son dossier, lus dans les transcriptions de Claude Code ; `label`, son nom
+ * d'affichage choisi dans `names.json` du dépôt partagé (jamais publié : `name` sert au rapprochement des postes).
+ */
+export type ProjectInfo = { name: string; path: string | null; label?: string }
 
 export type Snapshot = {
   /** Format du relevé : un relevé gardé d'un autre format est écarté et refait. */

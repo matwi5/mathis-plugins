@@ -36,6 +36,7 @@ import {
   nameOfPath,
   ownHistory,
   parseJson,
+  parseLabels,
   parsePublished,
   projectKey,
   publishedOf,
@@ -45,6 +46,7 @@ import {
   sum,
   unique,
   unpricedOf,
+  withLabels,
 } from './model.ts'
 import { drawBand, drawPane, kitOf, type Actions, type Caps, type View } from './view.tsx'
 
@@ -94,6 +96,8 @@ const OPEN_MS = 5 * 60_000
 const USAGE_DIR = 'claude-usage'
 /** Le nom de ce poste, une ligne, propre au poste (ignoré par git dans le dépôt partagé). */
 const MACHINE_FILE = '.machine'
+/** Les noms d'affichage des projets, communs aux postes, à la racine du dépôt partagé. */
+const LABELS_FILE = 'names.json'
 /** git sans invite : un push sans identifiants échoue au lieu d'attendre. */
 const GIT_ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' }
 /** Plafond du relevé gardé dans `$.store` (4 Mio en tout pour le plugin). */
@@ -406,7 +410,7 @@ async function load($: any, isAsked: boolean) {
     sessions: merged.sessions.slice(-1500),
     blocks: blockRows.slice(-400),
     activity,
-    projects: merged.projects,
+    projects: withLabels(merged.projects, await readLabels($, dir, warnings)),
     unpriced: unpricedOf(daily.json, sessions.json),
     isOffline: daily.isOffline || sessions.isOffline,
     machine,
@@ -442,6 +446,22 @@ async function machineName($: any, dir: string | null): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/** Les noms d'affichage de `names.json` dans le dépôt partagé ; absent, aucun ; illisible, un avertissement. */
+async function readLabels($: any, dir: string | null, warnings: string[]): Promise<Record<string, string>> {
+  if (!dir) return {}
+  const file = `${dir}/${USAGE_DIR}/${LABELS_FILE}`
+  if (!(await Promise.resolve($.fs.exists(file)).catch(() => false))) return {}
+  try {
+    // Un fichier écrit par PowerShell commence par un BOM, que JSON.parse refuse.
+    const labels = parseLabels(JSON.parse(String(await $.fs.read(file)).replace(/^\uFEFF/, '')))
+    if (labels) return labels
+    warnings.push(`Noms des projets ignorés : ${USAGE_DIR}/${LABELS_FILE} n’est pas un objet { "dossier": "nom" }.`)
+  } catch (err) {
+    warnings.push(`Noms des projets illisibles (${USAGE_DIR}/${LABELS_FILE}) : ${messageOf(err)}`)
+  }
+  return {}
 }
 
 /** Le fichier que ce poste a déjà publié, s'il existe : son historique survit à un nouveau clone ou à une mise à jour. */

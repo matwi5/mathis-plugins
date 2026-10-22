@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.7.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.8.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -176,8 +176,8 @@ Pas de `/stats` : c'est le nom de la commande intégrée de Claude Code.
 - Sans identifiant de discussion, il prend la transcription la plus récente du dossier courant et le signale (« Discussion devinée »).
 - Le coût de la discussion est celui de ccusage : il peut différer un peu du 💬 du bandeau, qui est celui du moteur (`/cost`).
 - Le coût d'une discussion active aujourd'hui est son total, jours précédents compris.
-- Les noms de projet sont ceux du fichier publié par ce poste, ou le dernier segment d'un `cwd` des transcriptions, à condition que ce chemin redonne la clé du projet.
-- Les formats (`fmtCost`, `fmtTokens`…) et les seuils de rythme (`RATE_LEVELS`) sont recopiés de `model.ts` : les garder alignés à la main.
+- Les noms de projet sont ceux du fichier publié par ce poste, ou le dernier segment d'un `cwd` des transcriptions, à condition que ce chemin redonne la clé du projet. Un projet nommé dans `names.json` (voir « Partage entre postes ») prend ce nom ; un worktree de Claude de ce projet s'affiche « <nom> · <worktree> » ; sans nom dans `names.json`, un worktree garde son nom seul. Un `names.json` illisible est ignoré sans avertissement (le panneau, lui, le signale).
+- Les formats (`fmtCost`, `fmtTokens`…), les seuils de rythme (`RATE_LEVELS`) et la lecture de `names.json` (`parseLabels`, `LABEL_MAX`) sont recopiés de `model.ts` : les garder alignés à la main.
 
 ---
 
@@ -190,6 +190,7 @@ Pas de `/stats` : c'est le nom de la commande intégrée de Claude Code.
 | Les autres postes | `~/.claude/claude-usage/machines/*.json` (dépôt partagé) | Leurs lignes et sessions ; Serveur : totaux par jour sur PolePredict |
 | Blocs de 5 h (rythme, projection) | `npx ccusage@latest claude blocks --breakdown --json` | Ce poste, tous projets |
 | Messages, appels d'outils, heures | `~/.claude/stats-cache.json` (cache de `/stats`, un jour de retard) | Ce poste, tous projets |
+| Nom d'affichage d'un projet | `~/.claude/claude-usage/names.json` (dépôt partagé), écrit à la main | Tous les postes ; jamais publié |
 | Nom et dossier des projets | Le premier `"cwd"` des transcriptions (`~/.claude/projects/<clé>/*.jsonl`) qui redonne la clé du projet, à défaut le premier tout court, lu par Node | Gardé une fois trouvé ; relu s'il ne redonne pas la clé |
 
 Chaque rapport passe `--json --order asc --timezone <fuseau de la machine>`. Le fuseau est lu par Node (`Intl`), qui donne aussi le jour local du mod.
@@ -224,6 +225,7 @@ Un relevé prend une quinzaine de secondes. Le premier rapport installe ccusage 
 - **Historique de ce poste** : avant de publier, le mod réunit tout ce qu'il connaît de ce poste. Il prend le relevé gardé, y compris celui d'avant la 0.3.0 et les lignes encore marquées « Ce poste », et le fichier que ce poste a déjà publié. Ni une mise à jour, ni un premier nommage, ni un nouveau clone ne perdent donc les jours que Claude Code a effacés. Un poste resté inactif plus longtemps que ses journaux garde aussi son historique au lieu de publier un fichier vide.
 - **Commit raté** (par exemple sans identité git) : le relevé suivant voit le fichier non commité et réessaie. Un `pull --rebase` qui échoue est annulé (`rebase --abort`).
 - **Plusieurs sessions sur un même poste** : elles font parfois leur relevé en même temps, et git refuse alors la seconde : verrou de l'index (`index.lock`), ou `cannot lock ref` quand son `pull` trouve `origin/main` déjà avancé par l'autre. Celle-ci réessaie deux fois, à 2 puis 4 s. Si ça bloque encore, elle laisse la publication à l'autre, sans avertissement. Seul un verrou d'index qui date de plus de 10 min (git arrêté en route) est signalé, avec son chemin.
+- **Nom d'affichage d'un projet** : `names.json`, à la racine du dépôt de partage, donne un autre nom à un projet sans déplacer son dossier, par exemple `{ "qwen-image-local": "Chambre noire" }`. La clé est le nom du dossier (sans la casse, le dernier segment de son chemin, aussi pour le dossier personnel), le même sur tous les postes ; la valeur, le nom affiché (60 caractères au plus). Le panneau et `/stats-board:recap` l'affichent partout, worktrees compris. Le rapprochement des postes et les fichiers publiés gardent le nom du dossier : retirer une ligne rend l'ancien nom au relevé suivant. Ce fichier s'écrit à la main, puis commit et push dans le dépôt de partage : une modification non commitée bloque la publication du poste (le `pull --rebase` refuse), avec un avertissement, jusqu'au commit. Un fichier illisible devient un avertissement de l'en-tête ; un BOM en tête (PowerShell) est accepté.
 - **Renommer un poste** : changer la ligne de `.machine`, et renommer aussi son fichier publié (`machines/<ancien>.json` en `machines/<nouveau>.json`, avec le champ `machine`, puis commit et push dans le dépôt de partage), sinon ses usages compteraient deux fois.
 - **Postes sans sessions** : un poste qui n'a publié aucune session (le Serveur) affiche « n'a publié que des totaux par jour » sous son filtre.
 - **Stockage** : si le relevé de tous les postes dépasse ce que `$.store` accepte, seul ce poste y est gardé. Les autres reviennent au relevé suivant.

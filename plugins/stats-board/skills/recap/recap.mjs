@@ -2,9 +2,11 @@
 // Récap d'usage de la discussion et de la journée, pour le skill /stats-board:recap.
 // - Lancé par Claude : `node recap.mjs [<id de la discussion>]`. Écrit le récap en Markdown sur stdout.
 // - Les chiffres viennent de ccusage (`npx ccusage@latest claude daily|session|blocks --json`),
-//   comme le panneau ; les autres postes, de `~/.claude/claude-usage/machines/*.json`.
-// - Script autonome, sans dépendance : les formats français et les niveaux de rythme reprennent
-//   ceux de `hooks/model.ts` (fmtCost, fmtTokens, RATE_LEVELS), à garder alignés à la main.
+//   comme le panneau ; les autres postes, de `~/.claude/claude-usage/machines/*.json`, et les noms
+//   d'affichage des projets, de `~/.claude/claude-usage/names.json`.
+// - Script autonome, sans dépendance : les formats français, les niveaux de rythme et la lecture des noms
+//   d'affichage reprennent ceux de `hooks/model.ts` (fmtCost, fmtTokens, RATE_LEVELS, parseLabels et LABEL_MAX),
+//   à garder alignés à la main.
 
 import { execFile } from 'node:child_process'
 import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
@@ -227,7 +229,8 @@ async function ccusage(args) {
 
 const readJson = (path) => {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    // Un fichier écrit par PowerShell commence par un BOM, que JSON.parse refuse.
+    return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''))
   } catch {
     return null
   }
@@ -247,13 +250,41 @@ function guessSession(projectsDir, cwd) {
 
 const projectKey = (path) => path.replace(/[^a-zA-Z0-9]/g, '-')
 const lastSegment = (path) => path.split(/[\\/]/).filter(Boolean).pop() ?? null
+/** Un worktree de Claude dans un chemin ; capture son nom (premier segment après `.claude/worktrees/`). */
+const WORKTREE_IN_PATH = /[\\/]\.claude[\\/]worktrees[\\/]([^\\/]+).*$/
+/** Longueur maximale d'un nom d'affichage de `names.json` (`LABEL_MAX` de `hooks/model.ts`). */
+const LABEL_MAX = 60
 
 /**
- * Le nom d'un projet : le dernier segment d'un `"cwd"` de ses transcriptions dont le chemin redonne
- * la clé. Une discussion peut commencer ailleurs (un brouillon du desktop) : son premier `cwd` seul
- * ne suffit pas.
+ * Les noms d'affichage de `names.json` : nom de dossier (sans la casse) → nom affiché, comme `parseLabels`
+ * de `hooks/model.ts`.
  */
-function projectName(projectsDir, key) {
+export function labelsOf(json) {
+  const out = {}
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return out
+  for (const [k, v] of Object.entries(json)) {
+    const label = typeof v === 'string' ? v.trim().slice(0, LABEL_MAX) : ''
+    if (k.trim() && label) out[k.trim().toLowerCase()] = label
+  }
+  return out
+}
+
+/**
+ * Le nom de `names.json` du dossier `path`, ou `null` s'il n'en a pas ; un worktree de Claude d'un projet
+ * renommé garde son nom après celui du projet (« Chambre noire · dev »).
+ */
+export function labelOf(path, labels) {
+  const worktree = path.match(WORKTREE_IN_PATH)?.[1]
+  const label = labels[(lastSegment(path.replace(WORKTREE_IN_PATH, '')) ?? '').toLowerCase()]
+  if (!label) return null
+  return worktree ? `${label} · ${worktree}` : label
+}
+
+/**
+ * Le dossier d'un projet : un `"cwd"` de ses transcriptions dont le chemin redonne la clé. Une discussion peut
+ * commencer ailleurs (un brouillon du desktop) : son premier `cwd` seul ne suffit pas.
+ */
+function projectPath(projectsDir, key) {
   try {
     const dir = join(projectsDir, key)
     for (const f of readdirSync(dir).filter((x) => x.endsWith('.jsonl')).slice(0, 10)) {
@@ -263,7 +294,7 @@ function projectName(projectsDir, key) {
       closeSync(fd)
       for (const m of buf.toString('utf8', 0, n).matchAll(/"cwd":"((?:[^"\\]|\\.)*)"/g)) {
         const cwd = JSON.parse(`"${m[1]}"`)
-        if (projectKey(cwd) === key) return lastSegment(cwd)
+        if (projectKey(cwd) === key) return cwd
       }
     }
   } catch {
@@ -302,6 +333,7 @@ async function main() {
   } catch {
     // Poste sans nom : pas de partage.
   }
+  const labels = labelsOf(readJson(join(usageDir, 'names.json')))
   const projectNames = {}
   const others = []
   try {
@@ -309,7 +341,7 @@ async function main() {
       const file = readJson(join(usageDir, 'machines', f))
       if (!file) continue
       // Un nom publié n'est repris que si son dossier redonne la clé.
-      for (const [key, p] of Object.entries(file.projects ?? {})) if (p?.name && p.path && file.machine === machine && projectKey(p.path) === key) projectNames[key] = p.name
+      for (const [key, p] of Object.entries(file.projects ?? {})) if (p?.name && p.path && file.machine === machine && projectKey(p.path) === key) projectNames[key] = labelOf(p.path, labels) ?? p.name
       if (file.machine === machine) continue
       const rows = (file.rows ?? []).filter((r) => r.date === today)
       others.push({ machine: String(file.machine), updatedAt: num(file.updatedAt), cost: sum(rows, (r) => num(r.cost)), tokens: sum(rows, (r) => num(r.input) + num(r.output) + num(r.cacheWrite) + num(r.cacheRead)) })
@@ -319,7 +351,11 @@ async function main() {
   }
   const keys = new Set(Object.keys(daily.json?.projects ?? {}))
   for (const s of sessions.json?.sessions ?? []) keys.add(String(s.projectPath ?? '').split(/[\\/]/)[0])
-  for (const key of keys) if (key && !projectNames[key]) projectNames[key] = projectName(projectsDir, key) ?? key
+  for (const key of keys) {
+    if (!key || projectNames[key]) continue
+    const path = projectPath(projectsDir, key)
+    projectNames[key] = (path && (labelOf(path, labels) ?? lastSegment(path))) ?? key
+  }
 
   process.stdout.write(`${render({
     now,
