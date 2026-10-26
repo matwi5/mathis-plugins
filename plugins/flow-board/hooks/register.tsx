@@ -906,10 +906,10 @@ const COMMIT_BEFORE_REVIEW_FR =
 /**
  * La consigne que tout relecteur reçoit telle quelle : un relecteur avait rendu son rapport avant
  * le second axe (revue Spec lancée deux fois), et une passe `--fix` avait appliqué un correctif
- * laissé à un autre groupe.
+ * laissé à un autre groupe. Le tri des constats suit celui de `REVIEWER_BRIEF`.
  */
 const REVIEWER_BRIEF_FR =
-  "la consigne des relecteurs, à leur donner telle quelle : si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu'une fois tous les axes revenus, sans relancer un axe déjà lancé ; ne relancer ni les tests ni les contrôles (la session les a lancés) ; classer à part les constats sur du code antérieur au lot (des lignes qu'il n'a pas changées) : ne pas les corriger, ils me sont proposés comme un groupe « durcissement » en fin de lot ; ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe ou exclut ; ne pas resignaler ni défaire les choix de ce fichier ; ne jamais écrire dans l'arbre de travail, même un instant (un test qui prouve un défaut reste à la session) : les seules écritures sont les correctifs d'une revue de groupe"
+  "la consigne des relecteurs, à leur donner telle quelle : si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu'une fois tous les axes revenus, sans relancer un axe déjà lancé ; ne relancer ni les tests ni les contrôles (la session les a lancés) ; classer à part les constats sur du code antérieur au lot (des lignes qu'il n'a pas changées) : ne pas les corriger, ils me sont proposés comme un groupe « durcissement » en fin de lot ; étiqueter chaque constat Important, Mineur ou Antérieur (le code antérieur au lot, juste avant) : seuls les Importants sont corrigés, les Mineurs (style, nommage, nettoyage qui ne change aucun comportement) sont listés sans être corrigés, pour qu'un constat mineur ne coûte ni commit ni nouveau tour de revue ; pour un défaut, nommer sa classe (le motif, pas seulement la ligne) pour que toutes ses occurrences soient corrigées ; ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe ou exclut ; ne pas resignaler ni défaire les choix de ce fichier ; ne jamais écrire dans l'arbre de travail, même un instant (un test qui prouve un défaut reste à la session) : les seules écritures sont les correctifs d'une revue de groupe"
 
 /**
  * Le canal des consignes d'une revue dans une session liée : `/code-review` tourne en exécution

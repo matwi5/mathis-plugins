@@ -4,6 +4,15 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.57.0 — 2026-10-26
+
+D'après l'article « How the Claude Code team does code review » (26/10/2026) : pour un auteur agent, une remarque mineure coûte un commit et un nouveau tour de revue, là où un humain l'écarte en une seconde.
+
+### Modifié
+- **Constats de revue triés** : la consigne des relecteurs (`REVIEWER_BRIEF`, et sa version française donnée aux sessions liées) leur fait étiqueter chaque constat « Important », « Nit » (mineur) ou « Pre-existing » (code antérieur au lot, déjà classé à part). Seuls les importants sont corrigés ; les remarques mineures (style, nommage, nettoyage sans effet sur le comportement) sont listées sans être corrigées. Pour un défaut, le relecteur nomme sa classe, pour que toutes ses occurrences soient corrigées et non la seule ligne relevée.
+
+---
+
 ## 0.56.0 — 2026-10-26
 
 Constaté le 26/10/2026 dans la rétro d'un parcours à 22 tickets et 7 sessions liées : `/code-review` tourne en exécution dérivée et ne reçoit que ses arguments, si bien qu'une revue `--fix` a modifié une route que le brief réservait au porteur, qu'une autre a relu un seul commit (un hash seul lui avait été donné), que des relecteurs ont relancé des tests et que l'un a modifié l'arbre de travail pour tenter une preuve rouge.

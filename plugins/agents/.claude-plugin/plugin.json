@@ -1,7 +1,7 @@
 {
   "name": "agents",
   "description": "Sous-agents de Mathis : explorer (cartographie en lecture seule, Haiku), researcher (recherche documentaire sourcée, Sonnet), worker (implémentation délimitée et vérifiée, Opus). Appelés agents:explorer, agents:researcher, agents:worker.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": { "name": "Mathis" },
   "license": "MIT",
   "keywords": ["agents", "subagents", "explorer", "researcher", "worker"]

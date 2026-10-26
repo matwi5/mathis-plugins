@@ -131,10 +131,11 @@ export const DECIDED_HINT = 'the path of the file of the choices already declare
 /**
  * Ce que tout relecteur reçoit tel quel (lu par Claude) : un relecteur avait rendu son rapport
  * avant le second axe, d'où une revue Spec lancée deux fois, et une passe `--fix` avait appliqué
- * un correctif laissé à un autre groupe.
+ * un correctif laissé à un autre groupe. Le tri des constats (Important, Nit, Pre-existing) suit la revue
+ * de l'équipe Claude Code : pour un auteur agent, une remarque mineure coûte un commit et un tour de revue.
  */
 export const REVIEWER_BRIEF =
-  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not report again nor undo the declared choices; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes of a group review'
+  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot; tag every finding Important, Nit or Pre-existing (the code older than the lot just above): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are listed and not fixed, so that a nit costs neither a commit nor another review cycle; for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not report again nor undo the declared choices; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes of a group review'
 
 /**
  * Le canal des consignes d'une revue (lu par Claude) : `/code-review` tourne en exécution dérivée

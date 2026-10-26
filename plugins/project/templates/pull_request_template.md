@@ -54,6 +54,16 @@
 - [ ] <commande de test> : <résultat>
 - [ ] <vérification manuelle> : <scénario>
 
+## Risque
+
+<!-- Le niveau dépend du changement, pas de son auteur. Un risque faible se justifie aussi. -->
+<Faible, moyen ou élevé, et pourquoi : ce qui peut casser, pour qui, et ce qui le détecterait (tests, CI, journaux).>
+
+## Comment revenir en arrière
+
+<!-- Le geste qui annule ce changement une fois fusionné, et ce qu'il ne défait pas. -->
+<Revert du commit de fusion, option à désactiver, migration à défaire, données à restaurer.>
+
 ## Tickets
 
 <!-- `Closes #n` seulement pour une issue confirmée résolue ; sinon `Related to #n`. -->

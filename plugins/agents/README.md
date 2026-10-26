@@ -8,6 +8,8 @@ Les trois sous-agents que le `CLAUDE.md` global fait utiliser à Claude. Un agen
 | `agents:researcher` | Chercher la documentation (web, docs officielles, fichiers de référence) et répondre avec les sources | Sonnet | high | Read, Grep, Glob, WebFetch, WebSearch |
 | `agents:worker` | Exécuter une modification délimitée puis la vérifier par les tests ou contrôles du projet | Opus | medium | tous (hérités) |
 
+`agents:explorer` n'appelle pas l'advisor : un explorateur Haiku l'avait appelé alors que `tools:` ne le listait pas, et l'avis du modèle Fable avait coûté 15 fois son propre travail. Son en-tête le retire (`disallowedTools: advisor`, sans effet documenté sur un outil serveur, à confirmer) et sa consigne le lui interdit.
+
 Installation (marketplace `mathis-plugins`, voir le README à la racine du dépôt) :
 
 ```bash

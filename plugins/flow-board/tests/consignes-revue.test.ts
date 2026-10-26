@@ -55,6 +55,10 @@ test('dans la discussion, chaque revue reçoit ses consignes par un fichier, sur
   expect(implement).toContain('without --fix: the reviewer applies itself only the findings it keeps')
   // Un relecteur n'écrit jamais dans l'arbre : la preuve rouge reste à la session.
   expect(implement).toContain('never write in the working tree, not even for a moment')
+  // Les constats triés : seuls les importants sont corrigés, une remarque mineure ne coûte pas un tour de revue.
+  expect(implement).toContain('tag every finding Important, Nit or Pre-existing')
+  expect(implement).toContain('the Nits (style, naming, a cleanup that changes no behaviour) are listed and not fixed')
+  expect(implement).toContain('for a defect, name its class')
   expect(implement).toContain('config/rules/agents.md')
 })
 
@@ -71,6 +75,9 @@ test('dans une session liée, les consignes de revue passent par un fichier et l
   expect(text).toContain('/code-review <niveau> <base>..HEAD consignes : <chemin>')
   expect(text).toContain('jamais un hash seul')
   expect(text).toContain("ne jamais écrire dans l'arbre de travail, même un instant")
+  expect(text).toContain('étiqueter chaque constat Important, Mineur ou Antérieur')
+  expect(text).toContain('les Mineurs (style, nommage, nettoyage qui ne change aucun comportement) sont listés sans être corrigés')
+  expect(text).toContain('pour un défaut, nommer sa classe')
   expect(text).toContain("sans --fix : le relecteur applique lui-même les seuls constats qu'il retient")
   // Les arguments donnés au skill portent la cible et le chemin des consignes.
   expect(text).toContain('arguments « high --fix <base>..HEAD consignes : <chemin> »')
