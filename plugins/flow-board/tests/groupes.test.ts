@@ -129,13 +129,13 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(ce dossier n’a pas de git\)\./)
   expect(text).toMatch(/Dans le CLI \(pas de start_session\) : appelle d'abord ListAgents pour lire le nom de cette discussion et sa référence entre crochets/)
   expect(text).toContain('claude --bg -n "Lot SC › Groupe <id> · <thème>" --effort <effort> (sans -w : ce dossier n’a pas de git) "<prompt>"')
-  expect(text).toMatch(/d'envoyer son compte rendu final par SendMessage à ce nom/)
+  expect(text).toMatch(/de finir par un message à cette discussion \(il la réveille, même inactive\)/)
   // Le nom peut changer (renommage) : la session retrouve la discussion par sa référence, lue dans ListAgents.
-  expect(text).toMatch(/Si ce nom n'est plus joignable \(discussion renommée\), la session appelle ListAgents, trouve la ligne qui porte cette référence et envoie à « <nom du moment> \[<ref>\] »/)
-  expect(text).toMatch(/si aucune ligne ne la porte, la session le dit en tête de son message final/)
-  expect(text).toMatch(/Dans le CLI seulement, puis SendMessage à la session \(par son titre\) avec notify_when_idle true et sans message, en filet seulement/)
-  // Dans l'app Desktop, notify_when_idle est inopérant (rétro du 16/10/2026) : il n'y est pas demandé.
-  expect(text).toContain("dans l'app Desktop, notify_when_idle est inopérant")
+  expect(text).toMatch(/Pour lui écrire, la session appelle ListAgents, trouve la ligne qui porte cette référence et envoie par SendMessage à « <nom du moment> \[<ref>\] »/)
+  expect(text).toMatch(/si aucune ligne ne la porte, la session le dit en tête de sa réponse finale/)
+  // Plus de filet notify_when_idle (rétro du 26/10/2026 : cinq réveils pour un groupe, dont quatre pour rien).
+  expect(text).not.toContain('notify_when_idle')
+  expect(text).toContain('le message final de la session réveille cette discussion ; pour un groupe, le relais rattrape un message perdu')
   // Les décisions se relaient par renvoi au fichier de décisions, écrites avant d'être relayées ;
   // un geste humain remplacé se confirme par le porteur dans la session liée.
   expect(text).toContain("les décisions déjà prises par renvoi, sans les réécrire")
@@ -147,42 +147,42 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(text).toContain("n'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) »")
   // Au redémarrage, le parcours passe en pause : le reprendre ici par son id.
   expect(text).toMatch(/le reprendre ici avant toute autre écriture, par l'appel flow \{"resume": "[^"]+"\}/)
-  expect(text).toMatch(/À la note de fin de la session \(dans le CLI : son compte rendu reçu par SendMessage\)/)
-  const delegate = text.match(/\{"delegate": "([^"]+)", "group": "B", "main": "<nom> \[<ref>\] de cette discussion"\}/)
+  expect(text).toMatch(/À la note de fin de la session \(dans le CLI : son message reçu par SendMessage\)/)
+  const delegate = text.match(/\{"delegate": "([^"]+)", "group": "B", "main": "\[<ref>\]"\}/)
   expect(delegate).not.toBeNull()
   // Les étapes d'/implement en clair (réservé à l'utilisateur, la session ne peut pas le lancer), puis les revues du groupe.
   // Sans git, pas de commit d'avant le ticket : la copie de ses fichiers, prise avant d'y toucher, est le point fixe.
-  expect(text).toContain("2) puis faire les tickets du groupe, un par un et dans l'ordre, chacun ainsi : relire d'abord")
+  expect(text).toContain("puis faire les tickets du groupe, un par un et dans l'ordre, chacun ainsi : relire d'abord")
   expect(text).toContain("le passer « en cours » dans le tracker en le commençant (le relais y reconnaît la passe « bogues » d'un ticket en cours) ;")
   expect(text).toContain("jamais « blocked » au tableau de bord ; puis, ce dossier n'ayant pas de git, avant de toucher à son premier fichier, copier les fichiers qu'il va modifier dans son dossier temporaire")
   expect(text).toContain('un sous-dossier par ticket qui garde le chemin dans le projet (<dossier temporaire>/<id du ticket>/<chemin dans le projet>)')
-  expect(text).toContain("au lieu de relire les fichiers entiers ; un fichier que le ticket crée n'a pas de copie : il est nouveau et se lit en entier ; ensuite /mattpocock-skills:tdd par l'outil Skill, les contrôles du projet, /mattpocock-skills:code-review par l'outil Skill sur les seuls changements du ticket (point fixe : la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels), même pour un petit diff")
+  expect(text).toContain("au lieu de relire les fichiers entiers ; un fichier que le ticket crée n'a pas de copie : il est nouveau et se lit en entier ; ensuite /mattpocock-skills:tdd par l'outil Skill (sauter /mattpocock-skills:tdd pour un ticket sans comportement testable : une ressource visuelle, un document), les contrôles du projet, /mattpocock-skills:code-review par l'outil Skill sur les seuls changements du ticket (point fixe : la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels), même pour un petit diff")
   expect(text).not.toContain("le commit d'avant")
   expect(text).toContain("ne pas lancer /mattpocock-skills:implement par l'outil Skill : il est réservé à l'utilisateur")
-  expect(text).toContain('4) une fois tous les tickets commités, lancer elle-même la revue du groupe en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review high --fix (la revue de Claude Code, outil Skill « code-review », arguments « high --fix »)')
+  expect(text).toContain('4) une fois tous les tickets commités et relus, leurs correctifs commités (un groupe d\'un seul ticket ni sensible ni avec logique n\'a pas de revue du groupe : la revue de son ticket est la seule, et la sécurité se juge une fois ce ticket commité), lancer elle-même la revue du groupe en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high ; règle des revues, config/rules/agents.md quand elle est installée), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review high --fix (la revue de Claude Code, outil Skill « code-review », arguments « high --fix consignes : <chemin> »)')
   expect(text).not.toMatch(/sur sa branche face à sa base/)
   // La passe « bogues » d'un ticket sensible part avec sa revue, sur son périmètre, sans resignaler les choix déclarés.
-  expect(text).toContain("si le ticket touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), lancer dans le même message la passe « bogues » /code-review xhigh (outil Skill « code-review », arguments « xhigh »), sur le même périmètre (point fixe : la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels), en lui donnant la liste des choix déjà déclarés dans {\"decided\": …} de l'outil flow (ceux que tu connais, ceux de la session compris), à ne pas resignaler ni défaire")
+  expect(text).toContain("si le ticket touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), lancer dans le même message la passe « bogues » /code-review xhigh (outil Skill « code-review », arguments « xhigh consignes : <chemin> »), sur le même périmètre (point fixe : la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels), en lui donnant la liste des choix déjà déclarés dans {\"decided\": …} de l'outil flow (ceux que tu connais, ceux de la session compris), à ne pas resignaler ni défaire")
   // La revue du groupe et la sécurité partent des plus anciennes copies des tickets du groupe.
-  expect(text).toContain("arguments « high --fix »), sur les changements du groupe (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe (un fichier touché seulement par un ticket suivant n'a pas de copie du premier), comparée au fichier actuel, les fichiers nouveaux en entier ; lui donner la liste des copies et des fichiers), en lui donnant")
+  expect(text).toContain("arguments « high --fix consignes : <chemin> »), sur les changements du groupe (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe (un fichier touché seulement par un ticket suivant n'a pas de copie du premier), comparée au fichier actuel, les fichiers nouveaux en entier ; lui donner la liste des copies et des fichiers), en lui donnant")
   // La revue du groupe reçoit les choix déclarés et regarde les interactions entre tickets.
-  expect(text).toMatch(/arguments « high --fix »\), sur les changements du groupe \(.*\), en lui donnant la liste des choix déjà déclarés .* et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
+  expect(text).toMatch(/arguments « high --fix consignes : <chemin> »\), sur les changements du groupe \(.*\), en lui donnant la liste des choix déjà déclarés .* et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur, jamais /security-review (qui relit aussi les autres groupes).
-  expect(text).toMatch(/5\) puis juger si une revue de sécurité vaut la peine \(les changements du groupe touchent : authentication/)
+  expect(text).toMatch(/5\) dans le même message que le relecteur du point 4 \(elle est en lecture seule et n'attend pas ses correctifs\), juger si une revue de sécurité vaut la peine \(les changements du groupe touchent : authentication/)
   expect(text).toMatch(/la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort xhigh\), en lecture seule, avec pour seul périmètre les changements du groupe \(point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe .*\) et pour critères ceux de \/security-review/)
   expect(text).toMatch(/ne pas lancer \/security-review, qui relit la branche face à la branche par défaut/)
   // La revue du groupe ne tranche pas un conflit entre la spec et une consigne : elle le remonte.
   expect(text).toMatch(/elle ne tranche pas un conflit entre la spec et une consigne \(CLAUDE\.md, une demande de ma part\) : elle ne corrige pas ce point et me le remonte/)
   expect(text).toMatch(/ne pas corriger ce qu'il trouve : les failles vont dans le compte rendu/)
-  expect(text).toMatch(/la revue du groupe \(constats, corrigés\), la revue de sécurité \(lancée ou non, pourquoi, failles trouvées\)/)
-  expect(text).toMatch(/dans son compte rendu, que la revue du groupe a tourné \(sinon, la lui demander par SendMessage avant tout\)/)
+  expect(text).toMatch(/la revue du groupe \(constats, corrigés, et à part les constats sur du code antérieur au lot\), la revue de sécurité \(lancée ou non, pourquoi, failles trouvées\)/)
+  expect(text).toMatch(/dans son compte rendu, que la revue du groupe a tourné \(sinon, la lui demander par SendMessage avant tout ; un groupe d'un seul ticket ni sensible ni avec logique n'en a pas : la revue de son ticket suffit\)/)
   expect(text).toMatch(/\{"security": \{"group": "<id du groupe>", "advised": true\|false, "why": "<raison>"\}\}/)
   expect(text).toMatch(/sans sous-agents qui écrivent/)
   // Seule exception : le relecteur de la revue du groupe, Opus high, qui écrit lui-même les correctifs de --fix.
   expect(text).toContain('des sous-agents en parallèle seulement pour des recherches en lecture seule ; seule exception, le relecteur de la revue du groupe, au point 4)')
   expect(text).toContain('à son retour, relire le diff de ses correctifs, relancer les contrôles et les commiter ;')
   // Les règles de travail tirées des sessions liées précédentes.
-  expect(text).toMatch(/écrire le script par l'outil Write, puis le lancer par une commande simple ;/)
+  expect(text).toMatch(/écrire un script par l'outil Write, puis le lancer par une commande simple ;/)
   expect(text).toMatch(/son dossier temporaire se désigne par son chemin absolu, écrit en clair dans les commandes et les appels Write : le lire une fois au début \(printenv CLAUDE_JOB_DIR, seule dans sa commande/)
   expect(text).not.toMatch(/heredoc/)
   expect(text).toMatch(/ne jamais attendre par `sleep`/)
@@ -205,7 +205,7 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   // Claude lance la session : son titre la relie au groupe B.
   await $.tool.call({ tool: START, title: 'Groupe B · App revue', initiation: 'user_asked', prompt: 'x' } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /session.liée.au.travail/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /en.cours.·.session.liée/ })).toBeDefined()
   expect(await ui.find({ key: 'group-linked-cancel-B' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /B en session liée : son avancement .* Claude vérifie le travail à sa note de fin/ })).toBeDefined()
   await ui.unmount()
@@ -215,7 +215,7 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(JSON.stringify(answer)).not.toMatch(/returned: no group/)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ type: 'Text', text: /App revue : 1.ticket fait/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /session.liée.au.travail/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /en.cours.·.session.liée/ })).toBeUndefined()
   await ui.unmount()
   // Un groupe qui n'était pas confié : Claude le sait.
   expect(JSON.stringify(await $.tool.call({ tool: TOOL, returned: ['A'] } as any))).toMatch(/returned: no group in a linked session among A/)
@@ -239,8 +239,12 @@ test('« 🐞 Bug · session liée » : seulement en code ou revue ; le diagnost
   const text = filled.at(-1)!
   expect(text).toMatch(/^Lance un diagnostic de bug dans une session liée, pour le parcours « Lot SC » \(phase Implémentation\), avec un titre qui commence par « Lot SC › Bug · »\./)
   // Elle reprend le parcours : elle reste dans ce dossier, qui a le fichier du parcours, sans worktree.
-  expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true et use_worktree false \(elle reprend le parcours, qui vit dans ce dossier\)/)
-  expect(text).toContain('claude --bg -n "Lot SC › Bug · <sujet>" (sans -w : elle reste dans ce dossier, où vit le parcours) "<prompt>"')
+  expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(elle reprend le parcours, qui vit dans ce dossier\)/)
+  expect(text).toContain('claude --bg -n "Lot SC › Bug · <sujet>" --effort <effort> (sans -w : elle reste dans ce dossier, où vit le parcours) "<prompt>"')
+  // L'effort : high à la première tentative, xhigh à la deuxième, pas de troisième session.
+  expect(text).toContain("Effort de la session (<effort>) : high pour une première tentative ; xhigh pour une deuxième, quand une session de bug de ce parcours a déjà essayé de corriger ce même bug et qu'il est toujours là")
+  expect(text).toContain('Pas de troisième session après un second échec : on replanifie ensemble ici.')
+  expect(text).toContain("si le bug est toujours là, me le dire et me proposer la deuxième tentative (règle d'effort ci-dessus) ; sinon, reprendre le parcours ici")
   expect(text).toMatch(/\{"resume": "[^"]+"\}/)
   expect(text).toContain('2) puis lancer /mattpocock-skills:diagnosing-bugs avec la description du bug')
   expect(text).toContain('4) à la fin, envoyer {"complete": true} pour clore le détour.')

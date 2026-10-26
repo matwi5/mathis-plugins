@@ -1,10 +1,23 @@
 {
   "name": "session-tools",
-  "version": "0.18.0",
-  "description": "Outils autour du champ de saisie : boutons Fichiers (navigateur files-board) et Diff au terminal, boutons Réécrire (le brouillon réécrit en prompt par Opus, sans envoi) et Ultracode, chrono de réponse, vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /session-tools:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
+  "version": "0.20.0",
+  "description": "Outils autour du champ de saisie : boutons Fichiers (navigateur files-board) et Diff au terminal, boutons Réécrire (le brouillon réécrit en prompt par Opus, Sonnet ou Haiku au choix, sans envoi), Effort auto (le niveau d'effort choisi pour le brouillon) et Ultracode, chrono de réponse, vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /session-tools:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
   "author": {
     "name": "Mathis"
   },
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "model": {
+      "type": "string",
+      "title": "Modèle des boutons Réécrire et Effort auto",
+      "description": "Modèle qui réécrit le brouillon et choisit son effort, toujours en effort low : opus (le meilleur en réécriture, le plus cher), sonnet ou haiku (le moins cher, invente le plus).",
+      "default": "opus",
+      "options": [
+        "opus",
+        "sonnet",
+        "haiku"
+      ]
+    }
+  }
 }

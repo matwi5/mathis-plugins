@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.8.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.9.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -59,7 +59,7 @@ Une mise à jour s'applique aux discussions démarrées après elle, ou après `
 
 Le panneau ne s'ouvre jamais seul : seulement par une commande ou par « ▸ /ccstats » dans le bandeau.
 
-- `/stats-board:recap` (ou une demande comme « combien m'a coûté cette discussion », « récap de la journée ») fait le **récap dans le chat** : voir [Le skill recap](#le-skill-recap).
+- `/stats-board:recap` (ou une demande comme « combien m'a coûté cette discussion », « récap de la journée », « récap du parcours ») fait le **récap dans le chat** : voir [Le skill recap](#le-skill-recap).
 
 ---
 
@@ -179,6 +179,18 @@ Pas de `/stats` : c'est le nom de la commande intégrée de Claude Code.
 - Les noms de projet sont ceux du fichier publié par ce poste, ou le dernier segment d'un `cwd` des transcriptions, à condition que ce chemin redonne la clé du projet. Un projet nommé dans `names.json` (voir « Partage entre postes ») prend ce nom ; un worktree de Claude de ce projet s'affiche « <nom> · <worktree> » ; sans nom dans `names.json`, un worktree garde son nom seul. Un `names.json` illisible est ignoré sans avertissement (le panneau, lui, le signale).
 - Les formats (`fmtCost`, `fmtTokens`…), les seuils de rythme (`RATE_LEVELS`) et la lecture de `names.json` (`parseLabels`, `LABEL_MAX`) sont recopiés de `model.ts` : les garder alignés à la main.
 
+#### Récap d'un parcours
+
+Sur « récap du parcours », « combien a coûté le parcours », le skill totalise un parcours entier (discussion principale, sessions liées, sous-agents compris) sans chercher les identifiants à la main :
+
+| Option | Sessions retenues |
+|---|---|
+| `--parcours "<préfixe>"` | Celles dont le titre commence par le préfixe. Le titre est la dernière ligne `custom-title` de la transcription (après un renommage, c'est le nouveau), sinon la dernière `ai-title`, le titre automatique d'une session jamais renommée. Les sessions liées de flow-board portent « <titre du parcours, coupé au-delà de 28 signes>… › Groupe X · … » (`linkedPrefix` de flow-board) : une telle session est retenue aussi quand son début coupé commence le préfixe, si bien que le titre complet de la discussion principale suffit. Guillemets, `«`, `»`, `$`, `\` et accents graves sont ignorés de part et d'autre, comme flow-board les retire. |
+| `--worktrees <dossier du projet>` | Celles des worktrees `groupe-*` du projet (dossiers `~/.claude/projects/<projet>--claude-worktrees-groupe-*`), plus la discussion principale si son identifiant est passé ; sinon le récap le signale. Lancé depuis un worktree, le dossier remonte au projet. |
+| `--since AAAA-MM-JJ`, `--until AAAA-MM-JJ` | La période : 60 jours jusqu'à aujourd'hui par défaut. Les worktrees `groupe-*` resservent d'un parcours à l'autre : avec `--worktrees`, donner les dates de début et de fin du parcours. |
+
+Les deux premières options se combinent (réunion des sessions). Un argument inconnu (préfixe sans guillemets, `--since=…`) arrête le script. Le récap donne le coût total, les tokens, le coût par modèle, puis une ligne par session : titre, projet, heures de début et de fin, durée (de la première à la dernière activité, pauses comprises), coût. Il ne lit que `ccusage claude session --since <début> [--until <fin>]` : ni journée, ni bloc de 5 h, ni autres postes. ccusage 20 compte les sous-agents (dossier `subagents/` d'une transcription) dans la session qui les a lancés. Les titres se lisent par blocs depuis la fin de chaque transcription.
+
 ---
 
 ## Données et relevés
@@ -241,8 +253,8 @@ stats-board/
 ├── .claude-plugin/types/        types du moteur (Claude Code 2.1.289), pour tsconfig.json
 ├── commands/ccstats.md          /stats-board:ccstats, connue avant le démarrage du mod
 ├── skills/recap/
-│   ├── SKILL.md                 /stats-board:recap : le récap de la discussion et de la journée dans le chat
-│   ├── recap.mjs                script Node autonome : rapports ccusage, autres postes, rendu en Markdown
+│   ├── SKILL.md                 /stats-board:recap : le récap de la discussion et de la journée, ou d'un parcours, dans le chat
+│   ├── recap.mjs                script Node autonome : rapports ccusage, autres postes, rendu en Markdown, récap d'un parcours
 │   └── recap.test.mjs           tests du rendu (`node --test`)
 ├── hooks/
 │   ├── hooks.json               déclare le module register.tsx

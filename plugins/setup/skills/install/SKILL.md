@@ -1,8 +1,8 @@
 ---
 name: install
-description: Installe et initialise les plugins de la marketplace mathis-plugins choisis par l'utilisateur - choix par groupes, dépendances et prérequis, installation, réglages (Asana, partage des usages, barre d'état) et bloc de règles dans le CLAUDE.md global ou du projet, montré avant écriture. Relançable pour ajouter ou retirer des plugins.
+description: Installe et initialise les plugins de la marketplace mathis-plugins choisis par l'utilisateur - choix par groupes, dépendances et prérequis, installation, réglages (Asana, partage des usages, modèle de session-tools, barre d'état) et bloc de règles dans le CLAUDE.md global ou du projet, montré avant écriture. Relançable pour ajouter ou retirer des plugins.
 disable-model-invocation: true
-allowed-tools: Bash(claude --version) Bash(claude plugin list *) Bash(claude plugin list) Bash(claude plugin marketplace list) Bash(git --version) Bash(gh --version) Bash(gh auth status) Bash(node --version) Bash(python3 --version) Bash(python --version) Read(/${CLAUDE_PLUGIN_ROOT}/**) Read(~/.claude/**)
+allowed-tools: Bash(claude --version) Bash(claude plugin list *) Bash(claude plugin list) Bash(claude plugin configure * --json) Bash(claude plugin marketplace list) Bash(git --version) Bash(gh --version) Bash(gh auth status) Bash(node --version) Bash(python3 --version) Bash(python --version) Read(/${CLAUDE_PLUGIN_ROOT}/**) Read(~/.claude/**)
 ---
 
 # Installer les plugins mathis-plugins
@@ -42,13 +42,14 @@ Seulement pour les plugins retenus :
 - **asana-board** : lis le titulaire et ses espaces de travail (`get_me`), puis les projets de l'espace (`get_projects`). Demande lequel sert de projet de suivi (une section par projet) et si le compte est au plan gratuit. Sans projet adapté, dis-le : l'utilisateur le crée lui-même dans Asana, puis relance. En mode automatique, propose d'ajouter les outils Asana du mod (`get_me`, `get_tasks`, `get_task`, `update_tasks`, `create_tasks`, `add_comment`, `delete_task`, avec le préfixe du connecteur) à `permissions.allow` de `~/.claude/settings.json`.
 - **stats-board** : demande si l'utilisateur veut partager ses usages entre plusieurs postes. Si oui : l'URL de son dépôt git privé (il le crée lui-même) et le nom de ce poste.
 - **files-board** : propose `"tui": "fullscreen"` dans `~/.claude/settings.json`.
+- **session-tools** : demande le modèle des boutons Réécrire et Effort auto, une option par modèle (`opus` (Recommandé), `sonnet`, `haiku`), chacune décrite par ses estimations du catalogue (qualité ou fiabilité, temps, coût). Dans une relance, montre d'abord le réglage actuel (`claude plugin configure session-tools@mathis-plugins --json`) : un `schema` vide veut dire une version d'avant l'option, à mettre à jour.
 - **Barre d'état** : propose-la (catalogue), sauf si `statusLine` est déjà réglé : montre alors l'actuel et demande s'il faut le remplacer.
 
 ## 4. Plan
 
 Montre en une fois, puis demande l'accord par boutons (« Tout faire », « Choisir », « Rien ») :
 
-- les commandes : `claude plugin install <plugin>@mathis-plugins` pour chaque plugin, `claude plugin disable <id>` pour un doublon de `mattpocock-skills`, `git clone …` pour le partage des usages ;
+- les commandes : `claude plugin install <plugin>@mathis-plugins` pour chaque plugin, `claude plugin disable <id>` pour un doublon de `mattpocock-skills`, pour `session-tools`, `claude plugin update session-tools@mathis-plugins` si la version installée n'a pas l'option, puis `printf '{"model": "<choix>"}' | claude plugin configure session-tools@mathis-plugins --values-stdin` après son installation (rien si le choix ne change pas), `git clone …` pour le partage des usages ;
 - chaque fichier touché et son diff : le bloc du `CLAUDE.md`, les clés de `~/.claude/settings.json`, `.machine` et `.gitignore` du dépôt d'usages.
 
 Le bloc du `CLAUDE.md`, entre ses marqueurs, remplace l'ancien s'il existe, sinon s'ajoute à la fin :
@@ -79,6 +80,7 @@ Pour le partage des usages : `git clone <url> ~/.claude/claude-usage`, puis le n
 ## 6. Vérifier et conclure
 
 - `claude plugin list` : chaque plugin choisi est installé et activé, le doublon éventuel est coupé.
+- `claude plugin configure session-tools@mathis-plugins --json` : l'option `model` a la valeur choisie.
 - Relis les fichiers écrits.
 
 Termine par : ce qui est installé et réglé, ce qui reste à faire par l'utilisateur (redémarrer Claude Code pour charger les mods, autoriser les imports d'un `CLAUDE.md` de projet, brancher le connecteur Asana, pousser le `.gitignore` du dépôt d'usages), et les commandes pour commencer (`/flow`, `/asana`, `/git`, `/files`, `/ccstats`, `/session-tools:start`, `/project:new`).

@@ -2,7 +2,7 @@
 
 L'installateur de la marketplace `mathis-plugins`. `/setup:install` demande quels plugins installer, vérifie leurs dépendances et prérequis, les installe, règle ce qui doit l'être, et écrit leurs règles dans un `CLAUDE.md`. Rien ne s'écrit avant l'accord sur le plan complet.
 
-Version actuelle : **0.1.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.2.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ## Démarrer
 

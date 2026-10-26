@@ -22,13 +22,18 @@ import {
   NO_GIT_GROUP_FIXED_POINT,
   NO_GIT_TICKET_FIXED_POINT,
   PLUGIN,
+  INSTRUCTIONS_IN_PROMPT,
   REVIEWER_BRIEF,
+  REVIEW_RULE,
   SECURITY_CRITERIA,
   SENSITIVE_AREAS,
+  SENSITIVE_NO_FIX,
+  SINGLE_TICKET_GROUP,
   SKILLS,
   TICKET_FIXED_POINT,
   commandLineOf,
   hintOf,
+  reviewInstructions,
   skillIdOf,
   slashOf,
 } from './catalog.ts'
@@ -41,6 +46,9 @@ import {
   applyAsana,
   applyRelay,
   asanaChanges,
+  askCloseLinkedGroup,
+  reloadText,
+  restoreDelegate,
   applyCommand,
   applyCreatedTasks,
   markDecisionsSeen,
@@ -104,6 +112,7 @@ import {
   reportedChanges,
   reportedDecisions,
   type RelayEvent,
+  commandArgsOf,
 } from './model.ts'
 import type { LiveAgent } from './model.ts'
 import { drawBand, drawPane, drawWelcomeBand, kitOf, type Actions, type View } from './view.tsx'
@@ -165,9 +174,10 @@ const TOOL_DESCRIPTION =
   'these. Not for the routine steps a skill prescribes, nor for proposals you ask the user about. After each code review, ' +
   'report its findings in "review". The order and content of the reviews of a ticket and of a group are those of the steps the ' +
   'skill text lists (ticket: Standards and Spec axes, plus the bug pass /code-review in the same message for a sensitive area; group: ' +
-  '/code-review high --fix, in a reviewer subagent that applies its fixes, then the security review). After the review of a finished group, judge whether a security review is worth it ' +
+  '/code-review high --fix, without --fix for a group with a sensitive ticket, in a reviewer subagent that applies its fixes, with the security review in the same message). With the review of a finished group, judge whether a security review is worth it ' +
   'and send it in "security"; when it is, launch it yourself, in this discussion as in a linked session: a read-only reviewer subagent ' +
   'limited to the group\'s diff (never /security-review), then send its findings; the user decides on their fixes. ' +
+  'A plugin reload (/reload-plugins) never requires sending tickets, groups or steps again: the dashboard keeps its state, and its first answer after a reload says what it found. ' +
   'A group the user delegated to a linked session from the dashboard stays in this workflow here: when that session ends, ' +
   'check its work, then send its tickets\' statuses in "set" together with {"returned": ["<group id>"]}. ' +
   'Only when the user asks for it (a new workflow for some tickets, even while another one is active here), or to repair your own mistake: ' +
@@ -211,6 +221,8 @@ const TOOL_SCHEMA = {
             description:
               "Repo paths the ticket touches, from its acceptance criteria (pages, tables, shared files such as a model or a measures file); they add to its group's files. Name files rather than a whole folder, unless the ticket creates files in it",
           },
+          sensitive: { type: 'boolean', description: `Its line "Zone sensible": true when it touches a sensitive area (${SENSITIVE_AREAS})` },
+          logic: { type: 'boolean', description: 'Its line "Logique": false for a visual asset or a document, which has no logic to review' },
         },
         required: ['id', 'name'],
       },
@@ -227,7 +239,7 @@ const TOOL_SCHEMA = {
     security: {
       type: 'object',
       description:
-        'Security review of a finished group (or of the whole run when it has no groups). After its review: {"group", "advised", "why"}, your judgment. After the reviewer subagent you launched: {"group", "findings", "fixed"}',
+        'Security review of a finished group (or of the whole run when it has no groups). In the same message as the review of a finished group (without groups: once the review of the run is done): {"group", "advised", "why"}, your judgment. After the reviewer subagent you launched: {"group", "findings", "fixed"}',
       properties: {
         group: { type: 'string', description: 'Group id (A, B...); omitted = the last finished group, or the whole run when it has no groups' },
         advised: { type: 'boolean', description: 'true when the changes touch authentication, permissions or access rules, user input reaching a query, a path or HTML, secrets or tokens, network or file access, uploads or dependencies' },
@@ -335,7 +347,7 @@ const TOOL_SCHEMA = {
     },
     main: {
       type: 'string',
-      description: 'With "delegate": the main discussion as the brief names it, "<name> [ref]"; each answer then says how to reach it',
+      description: 'With "delegate": the main discussion as the brief names it, its "[ref]" (or "<name> [ref]"); each answer then says how to reach it',
     },
     resume: {
       type: 'string',
@@ -374,6 +386,12 @@ let pendingSkills: { skill: string; agentId?: string; args?: string }[] = []
 let lastCommand: { id: string; args: string; at: number } | null = null
 let saveTimer: { cancel: () => void } | null = null
 let ticks = 0
+/** Le mod vient d'être rechargé (le board était déjà là au démarrage) : la réponse suivante de l'outil le dit. */
+let isReloadToAnnounce = false
+/** La session précédente a fini par un /clear : le board reste en mémoire sans que le mod ait été rechargé. */
+let isAfterClear = false
+/** La délégation écrite pour cette session (JSON), pour ne pas réécrire `$.store` à chaque appel ; aucune au départ. */
+let keptDelegate = 'null'
 
 const normRoot = (root: string): string => root.replace(/\\/g, '/').replace(/\/+$/, '')
 const storeKey = (root: string): string => `board:${normRoot(root).toLowerCase()}`
@@ -521,22 +539,27 @@ const loadStored = async ($: any, root: string): Promise<unknown> => {
 }
 
 /**
- * Le titre d'un parcours absent du board d'ici, lu dans celui du dépôt principal : une session
+ * Un parcours absent du board d'ici (racine `here`), lu dans celui du dépôt principal : une session
  * lancée dans un worktree a sa propre racine, donc son propre fichier. Lecture seule (pas de
  * versement de l'ancien stockage) ; rien quand la session n'est pas dans un worktree.
  */
-const mainRepoTitle = async ($: any, runId: string): Promise<string | undefined> => {
+const mainRepoRun = async ($: any, runId: string, here: string): Promise<Run | undefined> => {
   if (runId === '') return undefined
-  const board = await read($, boardAtom)
-  if (!board || board.runs.some(r => r.id === runId)) return undefined
   let root = ''
   await quietly(async () => {
     root = String((await $.session.repo())?.root ?? '')
   })
-  if (root === '' || normRoot(root).toLowerCase() === normRoot(board.root).toLowerCase()) return undefined
+  if (root === '' || normRoot(root).toLowerCase() === normRoot(here).toLowerCase()) return undefined
   const shared = await readShared($, root)
   const stored = shared.ok ? shared.value : await legacyGet($, root)
-  return isBoard(stored) ? stored.runs.find(r => r.id === runId)?.title : undefined
+  return isBoard(stored) ? stored.runs.find(r => r.id === runId) : undefined
+}
+
+/** Le titre d'un parcours absent du board d'ici, lu dans celui du dépôt principal (`mainRepoRun`). */
+const mainRepoTitle = async ($: any, runId: string): Promise<string | undefined> => {
+  const board = await read($, boardAtom)
+  if (!board || board.runs.some(r => r.id === runId)) return undefined
+  return (await mainRepoRun($, runId, board.root))?.title
 }
 
 /** Écrit dans le fichier commun, sinon dans `$.store`. */
@@ -693,12 +716,35 @@ const ensureBoard = async ($: any): Promise<Board | null> => {
   if (current && (root === '' || normRoot(current.root) === normRoot(root))) return current
   const stored = await loadStored($, root)
   const session = await sessionId($)
-  const board =
+  const loaded =
     isBoard(stored) && normRoot(stored.root) === normRoot(root)
       ? detachOnLoad(stored, await $.clock.now(), session)
       : { ...emptyBoard(root, root ? projectName(root) : 'projet'), session, deleted: [] }
+  // Une session liée retrouve sa délégation, propre à elle et jamais dans le stockage partagé.
+  let kept: unknown
+  await quietly(async () => {
+    kept = await $.store.get(delegateKey(session))
+  })
+  // Dans un worktree, le parcours délégué vit dans le board du dépôt principal : fini là-bas, la délégation ne revient pas.
+  const keptRun = kept !== null && typeof kept === 'object' ? (kept as { run?: unknown }).run : undefined
+  if (typeof keptRun === 'string' && !loaded.runs.some(r => r.id === keptRun) && (await mainRepoRun($, keptRun, loaded.root))?.status === 'done') kept = null
+  const board = restoreDelegate(loaded, kept, await $.clock.now())
+  keptDelegate = JSON.stringify(board.delegate ?? null)
   await update($, boardAtom, () => board)
   return board
+}
+
+const delegateKey = (session: string): string => `delegate:${session}`
+
+/** Garde la délégation de cette session (ou son absence) pour la retrouver après un rechargement du mod. */
+const keepDelegate = async ($: any) => {
+  const board: Board | null = await read($, boardAtom)
+  const value = JSON.stringify(board?.delegate ?? null)
+  if (!board || value === keptDelegate) return
+  await quietly(async () => {
+    await $.store.set(delegateKey(await sessionId($)), board.delegate ?? null)
+    keptDelegate = value
+  })
 }
 
 const readStored = async ($: any, root: string): Promise<Board | null> => {
@@ -826,13 +872,22 @@ const measureRepo = async ($: any): Promise<boolean> => {
 
 // ─── Note ajoutée au texte des skills ─────────────────────────────────────
 
+/** Les zones sensibles, dites en français dans les briefs. */
+const SENSITIVE_AREAS_FR = 'confidentialité, suppression de données, chiffrement, concurrence'
+
+/** La règle des revues, citée par les consignes des relecteurs des sessions liées. */
+const REVIEW_RULE_FR = 'règle des revues, config/rules/agents.md quand elle est installée'
+
+/** Un relecteur lancé par l'outil Agent reçoit le chemin de son fichier de consignes dans son prompt. */
+const INSTRUCTIONS_IN_PROMPT_FR = `ses consignes dans un fichier dont le chemin va dans son prompt (${REVIEW_RULE_FR})`
+
 /**
  * La revue de sécurité d'un groupe dans sa session liée : un sous-agent relecteur au périmètre
  * explicite, pas `/security-review`, qui calcule son diff contre la branche par défaut et relit
  * aussi les autres groupes (il ignore la base qu'on lui donne). Les failles vont au compte rendu.
  */
 const linkedSecurityReview = (scope: string): string =>
-  `la confier à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), en lecture seule, avec pour seul périmètre ${scope} et pour critères ceux de /security-review (${SECURITY_CRITERIA}) ; ne pas lancer /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes ; ne pas corriger ce qu'il trouve : les failles vont dans le compte rendu`
+  `la confier à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), en lecture seule, avec pour seul périmètre ${scope} et pour critères ceux de /security-review (${SECURITY_CRITERIA}), ${INSTRUCTIONS_IN_PROMPT_FR} ; ne pas lancer /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes ; ne pas corriger ce qu'il trouve : les failles vont dans le compte rendu`
 
 /**
  * Les choix déjà déclarés du parcours, à donner à une revue pour qu'elle ne les resignale pas : le
@@ -844,13 +899,34 @@ const decidedList = (path: string | null): string =>
     ? `le chemin du fichier des choix déjà déclarés du parcours, ${path} (tenu par l'outil flow, à relire au moment de la revue), et en plus les choix que la session a déclarés et qui n'y figurent pas encore (ils n'y arrivent qu'une fois lus par la discussion principale), à ne pas resignaler ni défaire`
     : 'la liste des choix déjà déclarés dans {"decided": …} de l\'outil flow (ceux que tu connais, ceux de la session compris), à ne pas resignaler ni défaire'
 
+/** Commit avant la revue, en français pour le brief des sessions liées (même règle que COMMIT_BEFORE_REVIEW). */
+const COMMIT_BEFORE_REVIEW_FR =
+  "un ticket dit hors zone sensible (\"sensitive\": false) se commite dès ses contrôles passés, avant sa revue, pour que le ticket suivant démarre pendant qu'elle tourne : sa cible est alors <commit d'avant le ticket>..<commit du ticket>, jamais ..HEAD (HEAD et l'arbre portent déjà le ticket suivant) ; ses correctifs arrivent dans un commit à part, ses constats partent dans \"review\" sans \"step\", et le ticket ne passe « fait » dans le tracker qu'une fois sa revue revenue et ses correctifs commités ; un ticket qui touche une zone sensible, ou ne l'a pas dit, garde sa revue avant son commit"
+
 /**
  * La consigne que tout relecteur reçoit telle quelle : un relecteur avait rendu son rapport avant
  * le second axe (revue Spec lancée deux fois), et une passe `--fix` avait appliqué un correctif
  * laissé à un autre groupe.
  */
 const REVIEWER_BRIEF_FR =
-  "la consigne des relecteurs, à leur donner telle quelle : si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu'une fois tous les axes revenus, sans relancer un axe déjà lancé ; ne relancer ni les tests ni les contrôles (la session les a lancés) ; ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe ou exclut ; ne pas resignaler ni défaire les choix de ce fichier"
+  "la consigne des relecteurs, à leur donner telle quelle : si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu'une fois tous les axes revenus, sans relancer un axe déjà lancé ; ne relancer ni les tests ni les contrôles (la session les a lancés) ; classer à part les constats sur du code antérieur au lot (des lignes qu'il n'a pas changées) : ne pas les corriger, ils me sont proposés comme un groupe « durcissement » en fin de lot ; ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe ou exclut ; ne pas resignaler ni défaire les choix de ce fichier ; ne jamais écrire dans l'arbre de travail, même un instant (un test qui prouve un défaut reste à la session) : les seules écritures sont les correctifs d'une revue de groupe"
+
+/**
+ * Le canal des consignes d'une revue dans une session liée : `/code-review` tourne en exécution
+ * dérivée et ne reçoit que ses arguments (forme essayée avec Claude Code 2.1.310, voir
+ * `reviewInstructions`), et un hash seul lui avait fait relire un commit au lieu du groupe.
+ */
+const reviewInstructionsFr = (isRepo: boolean): string =>
+  `écrire ses consignes dans un fichier de son dossier temporaire (le périmètre, le chemin du fichier des choix, les points qui me sont réservés, ce qu'elle ne doit pas faire, et la consigne des relecteurs) et en passer le chemin après la cible, ${isRepo ? "/code-review <niveau> <base>..HEAD consignes : <chemin> (la cible est toujours une plage <base>..HEAD ou une branche, jamais un hash seul ; avant le commit du ticket, le périmètre nomme aussi les changements non commités)" : '/code-review <niveau> consignes : <chemin> (le fichier liste les copies et les fichiers à comparer)'}, et à un sous-agent relecteur dans son prompt (${REVIEW_RULE_FR})`
+
+/** Le seuil d'un seul relecteur pour les deux axes (`SMALL_DIFF`). */
+const SMALL_DIFF_FR = 'moins de 100 lignes comptées par git diff --numstat, sans fichiers générés ni binaires, et hors zone sensible : les deux axes dans un seul sous-agent relecteur ; sinon deux en parallèle'
+
+/** Un groupe d'un seul ticket sans logique ni zone sensible (`SINGLE_TICKET_GROUP`). */
+const SINGLE_TICKET_GROUP_FR = "un groupe d'un seul ticket ni sensible ni avec logique n'a pas de revue du groupe : la revue de son ticket est la seule, et la sécurité se juge une fois ce ticket commité"
+
+/** Une revue de groupe en zone sensible n'applique rien seule : son relecteur trie les constats. */
+const SENSITIVE_NO_FIX_FR = `si un ticket du groupe touche une zone sensible (${SENSITIVE_AREAS_FR}), sans --fix : le relecteur applique lui-même les seuls constats qu'il retient`
 
 /** Ce qu'une passe `/code-review --fix` fait d'un conflit entre la spec et une consigne. */
 const NO_ARBITRATION = "elle ne tranche pas un conflit entre la spec et une consigne (CLAUDE.md, une demande de ma part) : elle ne corrige pas ce point et me le remonte"
@@ -862,22 +938,22 @@ const NO_ARBITRATION = "elle ne tranche pas un conflit entre la spec et une cons
  * tourne seul, une fois les tickets commités, et la session relit ses correctifs avant de les commiter.
  */
 const LINKED_GROUP_REVIEWER =
-  "un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs"
+  `un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high ; ${REVIEW_RULE_FR}), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs`
 
 /** Le même sous-agent relecteur, dit à Claude dans la discussion principale. */
 const securityReviewer = (scope: string): string =>
-  `launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort xhigh), read-only, limited to ${scope}, with these criteria; never /security-review, which diffs against the default branch and rereads the other groups too. The subagent fixes nothing: tell the user its findings plainly, they decide on their fixes (fix one only once they agree; create a tracker task for each real finding left unfixed)`
+  `launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort xhigh), read-only, limited to ${scope}, with these criteria, ${INSTRUCTIONS_IN_PROMPT}; never /security-review, which diffs against the default branch and rereads the other groups too. The subagent fixes nothing: tell the user its findings plainly, they decide on their fixes (fix one only once they agree; create a tracker task for each real finding left unfixed)`
 
 /** La revue de sécurité après la revue d'un groupe : Claude juge, puis la lance lui-même. */
 const securityAdvice = (isRepo: boolean): string =>
-  `- Security review: once the review of a finished group (/code-review high --fix) is done and its fixes are in, judge whether a security review is worth it (its changes touch ${SECURITY_CRITERIA}). Tell the user in one line, with the reason, and send {"security": {"group": "<id>", "advised": true|false, "why": "<short reason, in the user's language>"}}. If it is worth it, ${securityReviewer(isRepo ? "git diff <group base>..HEAD (<group base>: the commit before the group's first ticket)" : `the group's diff (${NO_GIT_GROUP_FIXED_POINT}; new files read whole)`)}. Then send {"security": {"group": "<id>", "findings": <real findings>, "fixed": <fixed>}}.`
+  `- Security review: in the same message as the review of a finished group (/code-review high --fix, or high for a sensitive group), since it is read-only and does not wait for the fixes, judge whether a security review is worth it (its changes touch ${SECURITY_CRITERIA}). Tell the user in one line, with the reason, and send {"security": {"group": "<id>", "advised": true|false, "why": "<short reason, in the user's language>"}}. If it is worth it, ${securityReviewer(isRepo ? "git diff <group base>..HEAD (<group base>: the commit before the group's first ticket)" : `the group's diff (${NO_GIT_GROUP_FIXED_POINT}; new files read whole)`)}. Once the group review's fixes are committed, have it (or a new reviewer) read the diff of those fixes only, with the same criteria. Then send {"security": {"group": "<id>", "findings": <real findings>, "fixed": <fixed>}}.`
 
 /** Le même avis pour un parcours sans groupes (relecture de branche, chasse au bug, TDD) : il porte sur tout le lot. */
 const LOT_SECURITY_ADVICE = `- Security review: once this review is done and its fixes are in, judge whether a security review is worth it on these changes (they touch ${SECURITY_CRITERIA}). Tell the user in one line, with the reason, and send {"security": {"advised": true|false, "why": "<short reason, in the user's language>"}}, without "group": it covers the whole run. If it is worth it, ${securityReviewer('the changes this review covered')}. Then send {"security": {"findings": <real findings>, "fixed": <fixed>}}.`
 
 /** La revue d'un groupe, lancée par la personne depuis la ligne du groupe : ce qu'elle doit savoir. */
 const groupReviewNote = (isRepo: boolean): string =>
-  `- This is the review of a finished group${isRepo ? '' : ` (${NO_GIT_GROUP_FIXED_POINT}: give it these copies and files)`}: run it in ${GROUP_REVIEWER}, not in this discussion, and give that subagent these instructions (it does not receive them). Focus it on the interactions between the group's tickets (each one had its own review), and give it the path of the file of declared choices and the reviewer brief (both under "Declared choices" below). It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): leave that point unfixed and raise it to the user. Then read the diff of its fixes, rerun the checks and commit them.`
+  `- This is the review of a finished group${isRepo ? '' : ` (${NO_GIT_GROUP_FIXED_POINT}: give it these copies and files)`}: run it in ${GROUP_REVIEWER}, not in this discussion, and give that subagent these instructions (it does not receive them). Focus it on the interactions between the group's tickets (each one had its own review), and give it the path of the file of declared choices and the reviewer brief (both under "Declared choices" below). ${SENSITIVE_NO_FIX[0]!.toUpperCase()}${SENSITIVE_NO_FIX.slice(1)}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): leave that point unfixed and raise it to the user. Then read the diff of its fixes, rerun the checks and commit them.`
 
 /** La passe « bogues » d'un ticket en cours (zone sensible) : pas la revue du groupe. */
 const bugPassNote = (isRepo: boolean): string =>
@@ -915,15 +991,18 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   if (id === 'to-tickets') {
     lines.push('- When the tickets are published, send them all with their blocking edges in "blockedBy" (an empty list for a ticket nothing blocks).')
     lines.push('- Also check in the tracker whether a ticket depends on tasks outside this lot. Add the code tickets among them to the lot; send the others (decisions to make, work of someone else) as {"externals": [{"id": "<GID>", "name": "...", "kind": "decision|task", "status": "todo|done"}]} and keep their ids in the blocked tickets\' blockedBy. When one is done or decided, send it again with "status": "done".')
-    lines.push('- Give each ticket the repo paths it touches, read from its acceptance criteria: {"tickets": [{"id": "...", "files": ["<pages, tables, shared files such as a model or a measures file>"]}]}. Name files, not a whole folder, unless the ticket creates files in it: a folder blocks every group that names a file inside it.')
+    lines.push('- Give each ticket the repo paths it touches, read from its acceptance criteria: {"tickets": [{"id": "...", "files": ["<pages, tables, shared files such as a model or a measures file>"]}]}. Name files, not a whole folder, unless the ticket creates files in it: a folder blocks every group that names a file inside it. README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files": almost every ticket cites them, their additions merge without trouble, and the dashboard ignores them anyway.')
+    lines.push('- Each ticket says, on lines of its own, « Zone sensible : oui/non (pourquoi) » and « Logique : oui/non » (no logic: a visual asset, a document), and you send both: {"tickets": [{"id": "...", "sensitive": true|false, "logic": true|false}]}.')
+    lines.push('- A write to CLAUDE.md never goes into the done criteria of a group ticket: a linked session cannot make it. It is a gesture of the main discussion, done when the group is back.')
     lines.push('- Last, group the tickets for execution: {"groups": [{"id": "A", "name": "<short theme>", "tickets": ["<ids in execution order>"], "why": "<the shared context>", "files": ["<other repo paths it touches>"], "resources": ["<what it cannot share>"], "continuesHere": true}]}. Same group = same files or modules, or a chain of dependencies: one discussion does them in a row with /implement. A different context = another group; a group of one ticket is fine when its context is its own, and a ticket that blocks nothing in its theme but could start now (an export, a query, a data check) is often better in a group of its own or with other data work. Groups that share no file, no resource and do not depend on each other can later run at the same time, one linked session per group (or /implement-spec, one subagent per group, in a git repository only). "resources": what a group cannot share with another group working at the same time, with the same name in every group: an application driven on screen and checked by screenshots (e.g. "PowerBI Desktop"), a single database, device or account; check the project\'s CLAUDE.md for such constraints. Set "continuesHere" on at most one group, the one that benefits from the context of this discussion. Every ticket in exactly one group.')
   }
   if (id === 'implement') {
     lines.push('- For each ticket, the steps above restart from "read". With "review", send the findings of the two axes: {"step": "review", "review": {"standards": <findings>, "spec": <findings>, "fixed": <fixed>}}.')
-    lines.push('- In this discussion, /code-review (Claude Code) runs only as the bug pass of a ticket that touches a sensitive area. The review of a group, /code-review high --fix, is launched by the user from the dashboard once the group\'s tickets are committed: do not launch it yourself.')
+    lines.push('- In this discussion, /code-review (Claude Code) runs only as the bug pass of a ticket that touches a sensitive area. The review of a group, /code-review high --fix (high without --fix for a group with a sensitive ticket), is launched by the user from the dashboard once the group\'s tickets are committed: do not launch it yourself.')
   }
   if (def.groupSteps) {
-    lines.push(`- Then, for each group once all its tickets are committed, in this order: ${def.groupSteps.map(s => `${s.label} (${hintOf(s, isRepo)})`).join('; ')}.`)
+    lines.push(`- Then, for each group once all its tickets are committed and reviewed (their review fixes committed), in this order: ${def.groupSteps.map(s => `${s.label} (${hintOf(s, isRepo)})`).join('; ')}.`)
+    lines.push(`- ${SINGLE_TICKET_GROUP}.`)
   }
   if (id === 'implement') lines.push(securityAdvice(isRepo))
   // Sans git, la méthode des copies : le point fixe de chaque revue.
@@ -977,7 +1056,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   }
   if (FRAMING_SKILLS.has(id)) {
     lines.push(
-      `- A choice that touches a sensitive area (${SENSITIVE_AREAS}) is never a declared choice ({"decided": …}): ask the user while framing, with options, and wait for the answer. A decision entry (DECISIONS.md, an ADR) copies the question asked and the accepted answer word for word, the user's sentence in quotes, instead of summarising them.`,
+      `- A choice that touches a sensitive area (${SENSITIVE_AREAS}) is never a declared choice ({"decided": …}): ask the user while framing, with options, and wait for the answer. Before a privacy question, have a read-only subagent check the real exposure (who can read the data, from where, with what access); without that check, the question says the exposure is "à confirmer". A decision entry (DECISIONS.md, an ADR) copies the question asked and the accepted answer word for word, the user's sentence in quotes, instead of summarising them.`,
     )
   }
   if (id === 'implement' && (run.groups ?? []).length > 1 && !(run.groups ?? []).some(g => g.linked !== undefined || g.delegated !== undefined)) {
@@ -993,12 +1072,12 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   if (REVIEW_NOTES.has(id)) {
     lines.push(
       decidedAt
-        ? `- Declared choices: the file ${decidedAt}, kept by the flow tool from every "decided" of this run (main discussion and linked sessions). Give its path to every reviewer instead of pasting the list, with this reviewer brief, word for word: ${REVIEWER_BRIEF}.`
-        : `- Declared choices: their file is out of reach; give every reviewer the list of the choices sent in "decided" of the flow tool, with this reviewer brief, word for word: ${REVIEWER_BRIEF}.`,
+        ? `- Declared choices: the file ${decidedAt}, kept by the flow tool from every "decided" of this run (main discussion and linked sessions). Give its path to every reviewer instead of pasting the list, with this reviewer brief, word for word: ${REVIEWER_BRIEF}. To that end, ${reviewInstructions(isRepo)}.`
+        : `- Declared choices: their file is out of reach; give every reviewer the list of the choices sent in "decided" of the flow tool, with this reviewer brief, word for word: ${REVIEWER_BRIEF}. To that end, ${reviewInstructions(isRepo)}.`,
     )
   }
   if (id === 'implement' || id === 'implement-spec') {
-    lines.push('- When every ticket of the lot is done: {"complete": true}. A finished group is not the end: while tickets of the lot remain open, the next step is the next group, which the user launches from the dashboard (▶ Lancer). Do not suggest /flow-board:compte-rendu or the delivery before every ticket is done. Add {"note": "<one short line>"} for a decision worth keeping.')
+    lines.push('- When every ticket of the lot is done: {"complete": true}. If reviews kept apart findings on code older than the lot, propose them to the user as a « durcissement » group (one ticket per finding), without creating it before they agree. A finished group is not the end: while tickets of the lot remain open, the next step is the next group, which the user launches from the dashboard (▶ Lancer). Do not suggest /flow-board:compte-rendu or the delivery before every ticket is done. Add {"note": "<one short line>"} for a decision worth keeping.')
   } else if (id !== 'compte-rendu' && def.role !== 'event') {
     lines.push(`- When the work of ${id} is finished: {"complete": true}. Add {"note": "<one short line>"} for a decision worth keeping.`)
   }
@@ -1041,9 +1120,9 @@ const fillCommand = async ($: any, command: string) => {
 }
 
 /** La suite du parcours : la commande va dans le prompt, Entrée la lance (rien ne part sans toi). */
-const launch = async ($: any, skill: string) => {
+const launch = async ($: any, skill: string, given?: string) => {
   if (skill === 'retro' && (await launchRetro($))) return
-  const args = SKILLS[skill]?.args
+  const args = given ?? commandArgsOf(activeRun(await read($, boardAtom)), skill)
   const command = `${await commandFor($, skill)}${args ? ` ${args}` : ''}`
   let isFilled = false
   await quietly(async () => {
@@ -1068,7 +1147,7 @@ const suggestNext = async ($: any, answer: unknown, ask: string | null) => {
   const skill = nextCommandSkill(run, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false })
   // La rétro d'un parcours à sessions liées part avec sa consigne (bouton), pas en commande seule.
   if (skill === null || (skill === 'retro' && linkedSessionsOf(run).count > 0)) return
-  const args = SKILLS[skill]?.args
+  const args = commandArgsOf(run, skill)
   const text = `/${await commandFor($, skill)}${args ? ` ${args}` : ''}`
   let isShown = false
   await quietly(async () => {
@@ -1188,9 +1267,8 @@ const linkedPrefix = (run: Run): string => {
 /**
  * Comment lancer une session liée, dans l'app Desktop comme dans le CLI. Claude choisit selon ses
  * outils, pas selon la surface : une session du CLI ouverte dans VS Code n'a pas `start_session`
- * non plus. Dans le CLI, la fille rend compte par SendMessage, qui réveille la discussion
- * principale même inactive ; l'avis d'inactivité n'est qu'un filet, car il arrive au premier
- * arrêt de la fille, qui peut être une demande d'accord.
+ * non plus. La fille finit par un SendMessage, qui réveille la discussion principale même
+ * inactive ; plus de filet d'inactivité (0.56.0) : son avis arrivait au premier arrêt de la fille.
  * `ownFolder` faux : la session reste dans ce dossier (elle reprend le parcours, qui vit dans son fichier).
  * `effort` : la règle qui choisit l'effort de la session ; sans elle, la session prend celui de
  * cette discussion (start_session ne lui en donne jamais un plus haut).
@@ -1216,9 +1294,12 @@ const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; titl
     `le background va en tête du prompt, et le tout s'écrit dans un fichier temporaire passé par "$(cat <fichier>)". ` +
     `Ajoute --permission-mode avec le mode de cette discussion si tu le connais : avec un mode différent, ses messages attendraient mon accord. ` +
     `claude --bg affiche « backgrounded · <id> · <titre> », que le tableau de bord relève ; s'il répond « Workspace not trusted », demande-moi de lancer claude une fois dans ce dossier. ` +
-    `Le prompt donne le nom de cette discussion et sa référence (« <nom> [<ref>] », à passer aussi dans "main" de l'appel delegate) et demande à ${each} d'envoyer son compte rendu final par SendMessage à ce nom : ce message la réveille, même inactive. ` +
-    `Si ce nom n'est plus joignable (discussion renommée), ${each} appelle ListAgents, trouve la ligne qui porte cette référence et envoie à « <nom du moment> [<ref>] » tel que la liste l'affiche ; si aucune ligne ne la porte, ${each} le dit en tête de son message final. ` +
-    `Dans le CLI seulement, puis SendMessage à ${each} (par son titre) avec notify_when_idle true et sans message, en filet seulement : l'avis arrive à son premier arrêt, qui peut être une demande d'accord et non la fin ; dans l'app Desktop, notify_when_idle est inopérant : wake_when_done et le compte rendu par SendMessage suffisent, ne l'y envoie pas. `
+    (o.ownFolder && o.isRepo
+      ? "Si le projet déclare une installation de worktree (son CLAUDE.md ou son document pour les sessions déléguées : une commande à lancer dans un worktree neuf), écris-la en clair en tête du background : c'est la première commande de la session, avant toute lecture, car les documents du projet peuvent manquer tant qu'elle n'a pas tourné ; sinon, écris qu'aucune installation n'est déclarée. "
+      : '') +
+    `Le prompt désigne cette discussion par sa seule référence entre crochets ([<ref>]), à passer aussi dans "main" de l'appel delegate : son nom peut changer, sa référence non. Pour lui écrire, ${each} appelle ListAgents, trouve la ligne qui porte cette référence et envoie par SendMessage à « <nom du moment> [<ref>] » tel que la liste l'affiche ; si aucune ligne ne la porte, ${each} le dit en tête de sa réponse finale. ` +
+    `Le prompt demande à ${each} de finir par un message à cette discussion (il la réveille, même inactive) : son compte rendu, ou la ligne qui y renvoie quand il le fait déposer au relais. ` +
+    `Pas de filet d'inactivité (un avis au premier arrêt de la session, souvent sans rien à faire) : le message final de ${each} réveille cette discussion ; pour un groupe, le relais rattrape un message perdu. `
   )
 }
 
@@ -1227,7 +1308,7 @@ const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; titl
  * confiées à des sous-agents à l'effort explicite ; high pour un groupe délicat.
  */
 const GROUP_EFFORT = (many: boolean): string =>
-  `Effort de ${many ? 'chaque session (<effort>, choisi groupe par groupe)' : 'la session (<effort>)'} : medium par défaut ; high si ${many ? 'son' : 'le'} groupe a un ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), s'il reste des choix de conception à faire ou s'il touche plusieurs modules à la fois. Dis-moi en une ligne l'effort choisi${many ? ' pour chaque groupe' : ''} et pourquoi.`
+  `Effort de ${many ? 'chaque session (<effort>, choisi groupe par groupe)' : 'la session (<effort>)'} : medium par défaut ; high si ${many ? 'son' : 'le'} groupe a un ticket qui touche une zone sensible (${SENSITIVE_AREAS_FR}), s'il reste des choix de conception à faire ou s'il touche plusieurs modules à la fois. Dis-moi en une ligne l'effort choisi${many ? ' pour chaque groupe' : ''} et pourquoi.`
 
 /**
  * Ce que le background d'une session liée garde : ce qui varie d'une session à l'autre. Les règles
@@ -1251,7 +1332,10 @@ const FOLLOW = (isRepo: boolean): string =>
   `pour savoir où en est une session, lire ${isRepo ? "l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status)" : 'les fichiers modifiés dans ce dossier'}, le tracker (statuts des tickets) et ListAgents (la session est-elle encore là), jamais claude logs, dont la sortie de terminal est illisible`
 
 /** Ce qui sert de note de fin à la discussion principale, selon que la session a été lancée par l'app ou par le CLI. */
-const atEnd = (whose: string): string => `À la note de fin de ${whose} (dans le CLI : son compte rendu reçu par SendMessage)`
+const atEnd = (whose: string): string => `À la note de fin de ${whose} (dans le CLI : son message reçu par SendMessage)`
+
+/** Une faille corrigée après le retour d'un groupe : sans nouvel envoi, le tableau de bord gardait « 0 corrigé ». */
+const FIXED_LATER = "une faille corrigée après coup (avec mon accord) se renvoie aussi, avec \"fixed\" mis à jour, sinon le tableau de bord garde « 0 corrigé »"
 
 /**
  * Sans git, le point fixe des revues d'une session liée : la copie des fichiers prise avant chaque
@@ -1278,7 +1362,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], isF
   const ticketReview = `/${await commandFor($, 'code-review')}`
   const ticketPoint = isRepo ? "point fixe : le commit d'avant le ticket" : LINKED_NO_GIT_TICKET_POINT
   const many = views.length > 1
-  const delegate = `{"delegate": "${run.id}", "group": "${many ? '<id du groupe>' : views[0]!.group.id}", "main": "<nom> [<ref>] de cette discussion"}`
+  const delegate = `{"delegate": "${run.id}", "group": "${many ? '<id du groupe>' : views[0]!.group.id}", "main": "[<ref>]"}`
   const decided = decidedList(decidedAt)
   const groups = views.map(v => `Groupe ${v.group.id} (${v.group.name}) : ${ticketList(run, v.open.map(t => t.id))}`).join(' ∥ ')
   const prefix = linkedPrefix(run)
@@ -1292,17 +1376,17 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], isF
     launchHow({ many, isRepo, ownFolder: true, title: `${prefix}Groupe <id> · <thème>`, worktree: 'groupe-<id>', effort: GROUP_EFFORT(many) }) +
     `${BACKGROUND(many)}${decidedAt ? `le fichier des choix déjà déclarés du parcours se cite par son chemin, ${decidedAt}` : 'les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste : leur fichier est hors d\'atteinte'}. ` +
     `Le prompt de ${many ? 'chaque session' : 'la session'} : 1) d'abord, appeler une seule fois l'outil flow de flow-board avec ${delegate} : le parcours reste ici, et l'avancement de la session (statuts Asana des tickets, commits, tests) est relayé tout seul au tableau de bord d'ici ; ` +
-    `2) puis faire les tickets du groupe, un par un et dans l'ordre, chacun ainsi : relire d'abord le fichier de décisions du projet et les commentaires « mise à jour du porteur » du ticket (ils priment sur ce prompt) ; le passer « en cours » dans le tracker en le commençant (le relais y reconnaît la passe « bogues » d'un ticket en cours) ; un geste de ma part que le groupe prévoit lui-même (un ok, une vérification à l'écran, une réponse sur un ticket du groupe) n'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) », jamais « blocked » au tableau de bord ; ${isRepo ? '' : `${LINKED_NO_GIT_COPY} ; ensuite `}${tdd} par l'outil Skill, les contrôles du projet, ${ticketReview} par l'outil Skill sur les seuls changements du ticket (${ticketPoint}), même pour un petit diff ; si le ticket touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), lancer dans le même message la passe « bogues » /${slashOf('final-review')} xhigh (outil Skill « ${slashOf('final-review')} », arguments « xhigh »), sur le même périmètre (${ticketPoint}), en lui donnant ${decided} ; à chaque revue, donner aux relecteurs ${REVIEWER_BRIEF_FR} ; puis le commit et le suivi du ticket ; ne pas lancer ${implement} par l'outil Skill : il est réservé à l'utilisateur, et ces étapes sont les siennes ; ` +
+    `2) avant le premier ticket, me poser en une fois les questions sensibles du groupe (un choix qui touche ${SENSITIVE_AREAS_FR}, que les tickets laissent ouvert) et attendre mes réponses ; puis faire les tickets du groupe, un par un et dans l'ordre, chacun ainsi : relire d'abord le fichier de décisions du projet et les commentaires « mise à jour du porteur » du ticket (ils priment sur ce prompt) ; le passer « en cours » dans le tracker en le commençant (le relais y reconnaît la passe « bogues » d'un ticket en cours) ; un geste de ma part que le groupe prévoit lui-même (un ok, une vérification à l'écran, une réponse sur un ticket du groupe) n'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) », jamais « blocked » au tableau de bord ; ${isRepo ? '' : `${LINKED_NO_GIT_COPY} ; ensuite `}${tdd} par l'outil Skill (sauter ${tdd} pour un ticket sans comportement testable : une ressource visuelle, un document), les contrôles du projet, ${ticketReview} par l'outil Skill sur les seuls changements du ticket (${ticketPoint}), même pour un petit diff (${SMALL_DIFF_FR}) ; si le ticket touche une zone sensible (${SENSITIVE_AREAS_FR}), lancer dans le même message la passe « bogues » /${slashOf('final-review')} xhigh (outil Skill « ${slashOf('final-review')} », arguments « xhigh ${isRepo ? '<base>..HEAD ' : ''}consignes : <chemin> »), sur le même périmètre (${ticketPoint}), en lui donnant ${decided} ; à chaque revue, ${reviewInstructionsFr(isRepo)}, et y mettre ${REVIEWER_BRIEF_FR} ; puis le commit et le suivi du ticket${isRepo ? ` (${COMMIT_BEFORE_REVIEW_FR})` : ''} ; ne pas lancer ${implement} par l'outil Skill : il est réservé à l'utilisateur, et ces étapes sont les siennes ; ` +
     `3) suivre le CLAUDE.md du projet (contrôles, commit, suivi des tickets), sans sous-agents qui écrivent (des sous-agents en parallèle seulement pour des recherches en lecture seule ; seule exception, le relecteur de la revue du groupe, au point 4) ; ` +
-    `et ces règles de travail : écrire le script par l'outil Write, puis le lancer par une commande simple ; son dossier temporaire se désigne par son chemin absolu, écrit en clair dans les commandes et les appels Write : le lire une fois au début (printenv CLAUDE_JOB_DIR, seule dans sa commande ; à défaut, le dossier temporaire que donnent ses instructions) ; ne jamais attendre par \`sleep\` : la fin d'un sous-agent ou d'une commande en arrière-plan est notifiée ; ${LONG_COMMANDS} ; si je change d'avis en cours de route sur un ticket, ajouter au ticket un commentaire daté « mise à jour du porteur » qui le dit, sans modifier son contenu ; citer un nombre de tests d'après la ligne de résumé de la sortie des tests, jamais de mémoire ; ` +
-    `4) une fois tous les tickets commités, lancer elle-même la revue du groupe en la confiant à ${LINKED_GROUP_REVIEWER} ; la revue est /${commandLineOf('final-review')} (la revue de Claude Code, outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} »)${isRepo ? ", sur sa branche face à sa base (si la revue ne voit aucun changement, lui donner le nom de la branche)" : `, sur les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`}, en lui donnant ${decided} et ${REVIEWER_BRIEF_FR}, et en lui demandant de se concentrer sur les interactions entre les tickets (chacun a déjà eu sa revue) ; ${NO_ARBITRATION} ; à son retour, relire le diff de ses correctifs, relancer les contrôles et les commiter ; ` +
-    `5) puis juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_CRITERIA}) ; si oui, ${linkedSecurityReview(isRepo ? 'git diff <base>..HEAD (<base> : le commit d\'où part sa branche)' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; ` +
-    `6) finir par un compte rendu : une ligne par ticket (fait, ou pas fait et pourquoi), les fichiers modifiés${isRepo ? ', sa branche' : ''}, les contrôles lancés et leur résultat, la revue du groupe (constats, corrigés), la revue de sécurité (lancée ou non, pourquoi, failles trouvées), et ce qui m'attend ; l'envoyer par SendMessage à cette discussion et le déposer aussi par l'outil flow, {"report": "<le compte rendu entier>"} : il s'écrit dans le relais du parcours, un fichier fixe que cette discussion relit si le message se perd (discussion renommée ou redémarrée). ` +
+    `et ces règles de travail : une modification unique passe par l'outil Edit ; au-delà de quelques remplacements liés, écrire un script par l'outil Write, puis le lancer par une commande simple ; son dossier temporaire se désigne par son chemin absolu, écrit en clair dans les commandes et les appels Write : le lire une fois au début (printenv CLAUDE_JOB_DIR, seule dans sa commande ; à défaut, le dossier temporaire que donnent ses instructions) ; ne jamais attendre par \`sleep\` : la fin d'un sous-agent ou d'une commande en arrière-plan est notifiée, et un sous-agent s'attend par cette notification, sans surveillance armée (pas de Monitor pour un sous-agent) ; un relecteur sans nouvelles depuis 10 à 15 minutes se relance par SendMessage, et s'il ne répond toujours pas, son axe se relance seul (seule exception à « sans relancer un axe déjà lancé » de la consigne des relecteurs) ; ${LONG_COMMANDS} ; un visuel à valider par moi (absent de la session) : produire une planche (les variantes côte à côte, dans un fichier), l'intégrer de façon réversible, déclarer le choix fait dans {"decided"} et me laisser la validation au retour du groupe ; si je change d'avis en cours de route sur un ticket, ajouter au ticket un commentaire daté « mise à jour du porteur » qui le dit, sans modifier son contenu ; citer un nombre de tests d'après la ligne de résumé de la sortie des tests, jamais de mémoire ; ` +
+    `4) une fois tous les tickets commités et relus, leurs correctifs commités (${SINGLE_TICKET_GROUP_FR}), lancer elle-même la revue du groupe en la confiant à ${LINKED_GROUP_REVIEWER} ; la revue est /${commandLineOf('final-review')} (la revue de Claude Code, outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} ${isRepo ? '<base>..HEAD ' : ''}consignes : <chemin> »)${isRepo ? ", avec pour cible <base>..HEAD (<base> : le commit d'où part sa branche)" : `, sur les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`}, en lui donnant ${decided} et ${REVIEWER_BRIEF_FR}, par le fichier de consignes du point 2, et en lui demandant de se concentrer sur les interactions entre les tickets (chacun a déjà eu sa revue) ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; à son retour, relire le diff de ses correctifs, relancer les contrôles et les commiter ; ` +
+    `5) dans le même message que le relecteur du point 4 (elle est en lecture seule et n'attend pas ses correctifs), juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_CRITERIA}) ; si oui, ${linkedSecurityReview(isRepo ? 'git diff <base>..HEAD (<base> : le commit d\'où part sa branche)' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; une fois les correctifs de la revue du groupe commités, lui faire relire (ou à un nouveau relecteur) le seul diff de ces correctifs ; ` +
+    `6) finir par un compte rendu : une ligne par ticket (fait, ou pas fait et pourquoi), les fichiers modifiés${isRepo ? ', sa branche' : ''}, les contrôles lancés et leur résultat, la revue du groupe (constats, corrigés, et à part les constats sur du code antérieur au lot), la revue de sécurité (lancée ou non, pourquoi, failles trouvées), et ce qui m'attend ; le déposer en entier par l'outil flow, {"report": "<le compte rendu entier>"} : il s'écrit dans le relais du parcours, un fichier fixe que cette discussion relit ; puis envoyer à cette discussion par SendMessage une seule ligne qui renvoie au relais (ce message la réveille), et finir la session sur cette même ligne. ` +
     `Ici : garder le parcours (pas de nouveau parcours) et suivre ${many ? 'les sessions sans les ' : "la session sans l'"}attendre activement : ${FOLLOW(isRepo)}. ` +
-    `Un compte rendu qui n'arrive pas par SendMessage est dans le relais : chaque réponse de l'outil flow ici cite ceux qu'ont déposés les sessions des groupes pas encore rendus, à la reprise comme ensuite. ` +
+    `Le compte rendu complet d'une session est dans le relais, son message n'en porte qu'une ligne : chaque réponse de l'outil flow ici cite ceux qu'ont déposés les sessions des groupes pas encore rendus, à la reprise comme ensuite. ` +
     `Si l'app ou cette discussion redémarre, le parcours passe en pause et ne reçoit plus rien : à la reprise de cette discussion, le reprendre ici avant toute autre écriture, par l'appel flow {"resume": "${run.id}"} (comme « ↻ Reprendre ici »), puis rendre les statuts des tickets faits pendant la pause d'après Asana ; dans ${many ? 'chaque session liée' : 'la session liée'}, si l'outil flow répond que le parcours est en pause, continuer les tickets (tracker, commits) et le dire dans le compte rendu. ` +
-    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail et, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout)${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set", avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
-    `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction.`
+    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail et, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; un groupe d'un seul ticket ni sensible ni avec logique n'en a pas : la revue de son ticket suffit)${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set", avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
+    `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction ; ${FIXED_LATER}.`
   )
 }
 
@@ -1344,15 +1428,15 @@ const reviewLinkedGroup = async ($: any, groupId: string) => {
   const session = group.delegated.session ? ` (id ${group.delegated.session})` : ''
   const text =
     `Fais faire la revue du groupe ${group.id} (${group.name}) du parcours « ${run.title} » par sa session liée : le groupe est revenu sans revue, et ici sa branche est déjà fusionnée. ` +
-    `Sa session a un titre qui commence par « ${linkedPrefix(run)}Groupe ${group.id} · » ou « Groupe ${group.id} · »${session} : retrouve-la par ListAgents. ` +
-    `Envoie-lui par SendMessage (dans le CLI seulement, avec notify_when_idle true ; dans l'app Desktop, il est inopérant) : ` +
+    `Sa session a un titre qui commence par ${linkedTitles(run, group.id)}${session} : retrouve-la par ListAgents. ` +
+    `Envoie-lui par SendMessage : ` +
     (isRepo ? `1) remettre sa branche au niveau de ${main} par une avance rapide (git merge --ff-only ${main}), pour que les correctifs portent sur le code actuel ; ` : '1) travailler sur le code actuel ; ') +
-    `2) lancer elle-même la revue en la confiant à ${LINKED_GROUP_REVIEWER} ; la revue est /${commandLineOf('final-review')} (outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel (une revue sans cible n'y verrait aucun changement : lui donner les commits)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et ${REVIEWER_BRIEF_FR}, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${NO_ARBITRATION} ; ` +
+    `2) lancer elle-même la revue en la confiant à ${LINKED_GROUP_REVIEWER} ; la revue est /${commandLineOf('final-review')} (outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} ${isRepo ? '<plage> ' : ''}consignes : <chemin> ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel, avec pour cible leur plage <commit d'avant le premier du groupe>..<dernier commit du groupe> (une revue sans cible n'y verrait aucun changement, et un hash seul ne relirait qu'un commit)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et ${REVIEWER_BRIEF_FR}, par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; ` +
     `3) au retour du relecteur, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ; ` +
     `4) juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_CRITERIA}) et, si oui, ${linkedSecurityReview(isRepo ? 'les commits du groupe' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; ` +
     `5) envoyer son compte rendu par SendMessage : constats et corrigés, commits, contrôles, avis et failles de sécurité. ` +
     `Si la session n'existe plus ou si l'outil Skill refuse la revue, dis-le-moi : je la lancerai moi-même. ` +
-    `Au compte rendu : vérifier son travail${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow {"reviewed": ["${group.id}"]} et {"security": {"group": "${group.id}", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction.`
+    `Au compte rendu : vérifier son travail${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow {"reviewed": ["${group.id}"]} et {"security": {"group": "${group.id}", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction ; ${FIXED_LATER}.`
   let isFilled = false
   await quietly(async () => {
     isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
@@ -1383,7 +1467,7 @@ const securityReview = async ($: any, id: string) => {
   const what = group ? `du groupe ${group.id} (${group.name})` : 'de ce parcours'
   const send = group ? `{"security": {"group": "${group.id}", "findings": <failles réelles>, "fixed": <corrigées>}}` : '{"security": {"findings": <failles réelles>, "fixed": <corrigées>}}'
   const text =
-    `Lance la revue de sécurité ${what} : confie-la à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), en lecture seule, avec pour seul périmètre ${scope} et pour critères ${SECURITY_CRITERIA} ; ` +
+    `Lance la revue de sécurité ${what} : confie-la à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), en lecture seule, avec pour seul périmètre ${scope} et pour critères ${SECURITY_CRITERIA}, ${INSTRUCTIONS_IN_PROMPT_FR} ; ` +
     `pas /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes. Le sous-agent ne corrige rien : dis-moi les failles trouvées, je décide de leur correction. Puis envoie à l'outil flow ${send}.`
   let isFilled = false
   await quietly(async () => {
@@ -1394,6 +1478,45 @@ const securityReview = async ($: any, id: string) => {
 
 /** « ↗ Session liée » sur un groupe prêt : une session liée le fait, le parcours reste ici. */
 const launchGroupLinked = ($: any, groupId: string) => delegateGroups($, [groupId])
+
+/**
+ * « ✕ Fermer la session et le worktree » sur un groupe rendu : des sessions de groupe restaient
+ * ouvertes après leur fusion. Le mod n'a pas d'API pour arrêter une session : la demande va dans
+ * le prompt. Rien n'est forcé : le worktree ne part que propre et fusionné, la branche reste.
+ */
+const closeLinkedGroup = async ($: any, groupId: string) => {
+  const run = activeRun(await read($, boardAtom))
+  const group = run?.groups?.find(g => g.id === groupId)
+  if (!run || !group?.delegated) return
+  const now = await $.clock.now()
+  if (!(await commit($, b => askCloseLinkedGroup(b, groupId, now)))) return
+  const isRepo = await measureRepo($)
+  const session = group.delegated.session
+  const who = session
+    ? `id ${session}`
+    : `retrouve son id par claude agents, titre qui commence par ${linkedTitles(run, group.id)}`
+  // Une session de l'app a un id local_… : aucun outil connu ne l'arrête, la personne la ferme.
+  const stop = session?.startsWith('local_')
+    ? "c'est une session de l'app Desktop : demande-moi de la fermer dans l'app (à confirmer : aucun outil connu ne l'arrête), et attends que je te confirme qu'elle est fermée avant toute autre commande"
+    : `claude stop ${session ?? '<id>'} (sa conversation est gardée ; jamais claude rm, qui l'efface) ; si claude agents ne connaît pas cet id, c'est une session de l'app : demande-moi de la fermer dans l'app, et attends que je te confirme qu'elle est fermée avant toute autre commande`
+  const text = isRepo
+    ? `Ferme la session liée et le worktree du groupe ${group.id} (${group.name}) du parcours « ${run.title} », rendu ici. Vérifie d'abord, n'arrête et ne retire qu'ensuite, par des commandes séparées lancées dans ce dossier : ` +
+      `1) le worktree du groupe s'appelle normalement groupe-${group.id} (branche worktree-groupe-${group.id}) : trouve sa ligne par git worktree list, et vérifie par git log <branche> --oneline -5 que ses commits sont ceux du groupe ; au moindre doute (nom différent, branche sans commit du groupe, un autre parcours), arrête-toi et demande-moi ; ` +
+      `2) git branch --merged doit lister sa branche, et git -C <worktree> status --porcelain --ignored doit être vide ; s'il montre des fichiers ignorés (un .env, des sorties), liste-les-moi et attends mon accord ; si la branche n'est pas fusionnée ou si l'arbre n'est pas propre, n'arrête rien, ne retire rien, et dis-moi ce qui manque ; ` +
+      `3) seulement si tout tient : arrêter la session (${who}) : ${stop} ; une fois la session arrêtée, relancer git -C <worktree> status --porcelain --ignored : s'il montre autre chose qu'au point 2, ne retire rien et dis-le-moi ; sinon git worktree remove <worktree>, sans rien forcer ; la branche reste : ne la supprime pas ; ` +
+      `4) dis-moi ce qui a été fermé et ce qui reste.`
+    : `Ferme la session liée du groupe ${group.id} (${group.name}) du parcours « ${run.title} », rendu ici ; ce dossier n'a pas de git, donc pas de worktree. ` +
+      `Vérifie d'abord que ses tickets sont faits et son travail rendu (son compte rendu), puis arrête la session (${who}) : ${stop}. Dis-moi ce qui a été fermé.`
+  await fillRequest(
+    $,
+    text,
+    `Fermeture de ${group.id} : la demande est dans le prompt, Entrée pour la lancer`,
+    `Demande à taper : ferme la session et le worktree de ${group.id}, en vérifiant d'abord, sans rien forcer, seulement propre et fusionné, la branche gardée`,
+  )
+}
+
+/** Le début du titre de la session liée d'un groupe, tel que la demande de lancement le fixe (ou sans préfixe, avant la 0.37.0). */
+const linkedTitles = (run: Run, groupId: string): string => `« ${linkedPrefix(run)}Groupe ${groupId} · » ou « Groupe ${groupId} · »`
 
 /** Annule l'envoi d'un groupe à une session liée qui n'a pas été lancée. */
 const cancelGroupLinked = async ($: any, groupId: string) => {
@@ -1417,6 +1540,13 @@ const launchParallelLinked = async ($: any, at = 0) => {
 }
 
 /**
+ * L'effort d'une session de diagnostic de bug : high, un bug difficile demandant du raisonnement
+ * sans choix de conception ; xhigh pour une deuxième tentative sur le même bug ; pas de troisième.
+ */
+const BUG_EFFORT =
+  "Effort de la session (<effort>) : high pour une première tentative ; xhigh pour une deuxième, quand une session de bug de ce parcours a déjà essayé de corriger ce même bug et qu'il est toujours là : son brief donne alors ce que la première a trouvé et essayé. Pas de troisième session après un second échec : on replanifie ensemble ici. Dis-moi en une ligne l'effort choisi et pourquoi."
+
+/**
  * Fait diagnostiquer un bug par une session liée, en détour de la phase de code ou de revue en
  * cours : la demande va dans le prompt, et la personne décrit le bug à la fin, après « Bug : ».
  */
@@ -1429,12 +1559,12 @@ const launchBugLinked = async ($: any) => {
   const text =
     `Lance un diagnostic de bug dans une session liée, pour le parcours « ${run.title} » (phase ${phase}), avec un titre qui commence par « ${prefix}Bug · ». ` +
     // Elle reprend le parcours (`resume`) : il faut qu'elle lise le même fichier, donc ce dossier, pas un worktree.
-    launchHow({ many: false, isRepo: false, ownFolder: false, title: `${prefix}Bug · <sujet>`, worktree: '' }) +
+    launchHow({ many: false, isRepo: false, ownFolder: false, title: `${prefix}Bug · <sujet>`, worktree: '', effort: BUG_EFFORT }) +
     `Brief de la session : 1) d'abord, appeler l'outil flow de flow-board avec ${resume}, pour reprendre le parcours dans la session ; ` +
     `2) puis lancer /${await commandFor($, 'diagnosing-bugs')} avec la description du bug ci-dessous : le diagnostic s'affiche en détour de la phase en cours ; ` +
     `3) corriger en suivant le CLAUDE.md du projet (contrôles, revue et commit) et proposer en tâche ce qui reste ouvert ; ` +
     `4) à la fin, envoyer {"complete": true} pour clore le détour. ` +
-    `Ici, ne rien enregistrer sur ce parcours tant que la session travaille ; ${atEnd('la session').replace(/^À/, 'à')}, vérifier son travail, puis reprendre le parcours ici avec ${resume}. ` +
+    `Ici, ne rien enregistrer sur ce parcours tant que la session travaille ; ${atEnd('la session').replace(/^À/, 'à')}, vérifier son travail ; si le bug est toujours là, me le dire et me proposer la deuxième tentative (règle d'effort ci-dessus) ; sinon, reprendre le parcours ici avec ${resume}. ` +
     `Bug : `
   let isFilled = false
   await quietly(async () => {
@@ -1615,7 +1745,7 @@ const launchParallel = async ($: any, at = 0) => {
 
 const actionsFor = ($: any): Actions => ({
   setTab: (tab: Tab) => update($, uiAtom, ui => ({ ...ui, tab })),
-  launch: (skill: string) => launch($, skill),
+  launch: (skill: string, args?: string) => launch($, skill, args),
   prepare: (skill: string, args?: string) => prepare($, skill, args),
   fillCommand: (command: string) => fillCommand($, command),
   finish: async () => {
@@ -1657,6 +1787,7 @@ const actionsFor = ($: any): Actions => ({
   launchGroupLinked: (id: string) => launchGroupLinked($, id),
   cancelGroupLinked: (id: string) => cancelGroupLinked($, id),
   reviewLinkedGroup: (id: string) => reviewLinkedGroup($, id),
+  closeLinkedGroup: (id: string) => closeLinkedGroup($, id),
   securityReview: (id: string) => securityReview($, id),
   launchBugLinked: () => launchBugLinked($),
   pickItem: (id: string) =>
@@ -1951,6 +2082,9 @@ export const register: Register = on => {
     } catch {
       // Liste indisponible : les boutons retombent sur `mattpocock-skills:<skill>`.
     }
+    // Un board déjà là au démarrage, hors d'un /clear : le mod a été rechargé (/reload-plugins), son état est intact.
+    isReloadToAnnounce = !isAfterClear && (await read($, boardAtom)) !== null
+    isAfterClear = false
     await ensureBoard($)
     // /implement-spec a besoin d'un dépôt git (worktrees, branche d'intégration) : le panneau ne le propose pas ailleurs.
     await quietly(async () => {
@@ -1971,6 +2105,9 @@ export const register: Register = on => {
     if (!(await ensureBoard($))) return { result: 'Dashboard unavailable.' }
     let text = 'Dashboard unavailable.'
     const input = e as unknown as Readonly<Record<string, unknown>>
+    // Après un rechargement, l'état retrouvé se dit tel qu'il était, avant ce que l'appel change.
+    const found = isReloadToAnnounce ? reloadText((await read($, boardAtom)) ?? emptyBoard('', '')) : ''
+    isReloadToAnnounce = false
     // Avant une reprise, l'état d'ici rattrape ce que l'autre discussion a enregistré.
     if (typeof input.resume === 'string' && input.resume.trim() !== '') await pull($)
     const delegateTitle = typeof input.delegate === 'string' ? await mainRepoTitle($, input.delegate.trim()) : undefined
@@ -2010,6 +2147,8 @@ export const register: Register = on => {
         if (typeof input.note === 'string' && input.note.trim() !== '') await relaySignal($, { kind: 'note', text: input.note.trim() })
       }
     }
+    await keepDelegate($)
+    if (found !== '') text = `${found} ${text}`
     return { result: text }
   })
 
@@ -2231,6 +2370,7 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     saveTimer?.cancel()
+    isAfterClear = e.reason === 'clear'
     // Une vraie fin (pas un /clear) laisse le parcours en pause pour la prochaine discussion.
     if (e.reason !== 'clear') {
       await quietly(() => relaySignal($, { kind: 'end' }))

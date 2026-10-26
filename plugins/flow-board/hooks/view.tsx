@@ -7,7 +7,7 @@
 // marges. Aucune prop n'est passée à `undefined` : les arbres restent valides partout.
 
 import type { SyncState, AgentRow, Artifact, ArtifactKind, Board, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, Ticket, TicketGroup, TicketStatus, Tone, UiState } from '../types'
-import { ANYTIME_GROUPS, C, CODE_SKILLS, COMMAND_GROUPS, FLOW_COMMANDS, LAUNCHERS, SKILLS, commandLineOf, slashOf, type AnytimeTool, type SkillDef } from './catalog.ts'
+import { ANYTIME_GROUPS, C, CODE_SKILLS, COMMAND_GROUPS, FLOW_COMMANDS, LAUNCHERS, SKILLS, commandLineOf, slashOf, type AnytimeTool, type SkillDef, type StepDef } from './catalog.ts'
 import {
   relayForGroup,
   withRelay,
@@ -31,6 +31,9 @@ import {
   type GroupView,
   hasSpecAndTickets,
   isPickable,
+  isGroupReviewed,
+  isTicketReviewEnough,
+  groupDone,
   isWaitingTicket,
   openBlockers,
   runProgress,
@@ -41,6 +44,8 @@ import {
   tddCycles,
   unseenDecisions,
   isDelegable,
+  commandArgsOf,
+  groupReviewArgs,
 } from './model.ts'
 import {
   barSvg,
@@ -96,7 +101,7 @@ export type View = {
 export type Actions = {
   setTab: (tab: Tab) => unknown
   /** Lance la commande du skill (la suite du parcours). */
-  launch: (skill: string) => unknown
+  launch: (skill: string, args?: string) => unknown
   /** Met la commande du skill dans le prompt (lanceur : la personne ajoute le sujet). */
   prepare: (skill: string, args?: string) => unknown
   /** Met une commande de Claude Code (`compact`) dans le prompt, sans passer par le catalogue. */
@@ -128,6 +133,8 @@ export type Actions = {
   cancelGroupLinked: (id: string) => unknown
   /** Fait faire par sa session liée la revue d'un groupe rendu sans revue. */
   reviewLinkedGroup: (id: string) => unknown
+  /** Demande à Claude de fermer la session liée et le worktree d'un groupe rendu. */
+  closeLinkedGroup: (id: string) => unknown
   /** Demande à Claude la revue de sécurité d'un groupe (ou du lot, `lot`) par un sous-agent relecteur. */
   securityReview: (id: string) => unknown
   /** Demande à Claude un diagnostic de bug dans une session liée, en détour de la phase en cours. */
@@ -734,9 +741,11 @@ const whereLabel = (g: GroupView, session: string | undefined): string =>
 const linkLabel = (k: Kit, link: NonNullable<TicketGroup['linked']>, relay: GroupRelay | null, open: number, now: number): unknown =>
   link.session === undefined
     ? T(k, `↗${NB}session liée à lancer`, { color: C.blue, bold: true })
-    : relay?.endedAt !== undefined && open > 0
-      ? T(k, `↗${NB}session terminée il y a ${dur(now - relay.endedAt)}`, { color: C.amber, bold: true })
-      : T(k, `↗${NB}session liée au travail`, { color: C.blue, bold: true })
+    : relay?.endedAt !== undefined
+      ? open > 0
+        ? T(k, `↗${NB}session terminée il y a ${dur(now - relay.endedAt)}`, { color: C.amber, bold: true })
+        : T(k, `↗${NB}session terminée · à rendre`, { color: C.blue, bold: true })
+      : T(k, `↗${NB}en cours · session liée`, { color: C.blue, bold: true })
 
 /** En-tête d'un groupe : où le faire, où il en est, avec qui il peut avancer, ce qu'il attend. */
 const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, act: Actions): unknown => {
@@ -876,13 +885,26 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
           {!g.isFallback &&
             (g.group.reviewedAt !== undefined ? (
               T(k, `✓${NB}revu`, { color: C.green, bold: true })
+            ) : isTicketReviewEnough(run, g.group) ? (
+              // Un seul ticket, ni sensible ni avec logique : la revue du ticket suffit.
+              T(k, `✓${NB}revu par son ticket`, { color: C.green, bold: true })
             ) : g.group.delegated !== undefined ? (
               // Fait par une session liée : ici la branche est fusionnée, la revue se fait là-bas.
               <Button key={`review-linked-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · session liée`} onPress={() => act.reviewLinkedGroup(g.group.id)} />
             ) : (
-              <Button key={`review-group-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · /${commandLineOf('final-review')}`} onPress={() => act.launch('final-review')} />
+              <Button key={`review-group-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · /${slashOf('final-review')} ${groupReviewArgs(run, g.group)}`} onPress={() => act.launch('final-review', groupReviewArgs(run, g.group))} />
             ))}
         </Box>
+        {/* Pas avant sa revue : elle se fait dans la session et son worktree. */}
+        {!g.isFallback && g.group.delegated !== undefined && isGroupReviewed(run, g.group) && (
+          <Box key={`close-row-${g.group.id}`} flexDirection="row" flexWrap="wrap">
+            {g.group.delegated.closeAskedAt === undefined ? (
+              <Button key={`close-linked-${g.group.id}`} plain={true} dimColor={true} label={`✕${NB}Fermer la session et le worktree`} onPress={() => act.closeLinkedGroup(g.group.id)} />
+            ) : (
+              T(k, `✕${NB}fermeture demandée (session et worktree)`, { dim: true })
+            )}
+          </Box>
+        )}
         {!g.isFallback && securityRow(k, g.group.security, g.group.id, act)}
         {/* « tout voir » déplie aussi les groupes finis : leurs tickets restent consultables. */}
         {view.ui.showAllTickets && g.tickets.map(ticket => ticketRow(k, run, ticket, view, act))}
@@ -1293,7 +1315,8 @@ const doingBlock = (k: Kit, run: Run, view: View, color: string): unknown => {
  */
 const orderBlock = (k: Kit, def: SkillDef): unknown => {
   const { Box } = k
-  const chain = (steps: readonly { label: string }[]) => steps.map(s => s.label).join(`${NB}›${NB}`)
+  const chain = (steps: readonly Pick<StepDef, 'label' | 'isWithPrevious'>[]) =>
+    steps.map((s, i) => (i === 0 ? s.label : `${NB}${s.isWithPrevious ? '∥' : '›'}${NB}${s.label}`)).join('')
   return (
     <Box key="order" flexDirection="column" marginTop={1}>
       {T(k, `Par ticket : ${chain(def.steps)}`, { dim: true, wrap: 'wrap' })}
@@ -1462,7 +1485,7 @@ const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
     if (sug.primary !== null) {
       const skill = sug.primary
       const d = SKILLS[skill]!
-      buttons.push(<Button key={`go-${skill}`} variant="primary" label={`▶ ${d.label} · /${commandLineOf(skill)}`} onPress={() => act.launch(skill)} />)
+      buttons.push(<Button key={`go-${skill}`} variant="primary" label={`▶ ${d.label} · /${[slashOf(skill), commandArgsOf(run, skill)].filter(Boolean).join(' ')}`} onPress={() => act.launch(skill)} />)
     }
     for (const skill of sug.others) {
       const d = SKILLS[skill]!
@@ -1954,8 +1977,12 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
 const relayPills = (k: Kit, run: Run, view: View): unknown[] =>
   (run.groups ?? [])
     .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g) : null }))
-    .filter((x): x is { g: TicketGroup; relay: GroupRelay } => x.relay !== null)
-    .map(({ g, relay }) => T(k, `↗${g.id}${NB}${relay.done}/${relay.total}`, { color: relay.endedAt !== undefined && relay.done < relay.total ? C.amber : C.blue, bold: true }))
+    // En cours dès que l'id de sa session est relevé, avant le premier signal relayé.
+    .filter(x => x.relay !== null || x.g.linked?.session !== undefined)
+    .map(({ g, relay }) => {
+      const { done, total } = relay ?? groupDone(run, g)
+      return T(k, `↗${g.id}${NB}${done}/${total}`, { color: relay?.endedAt !== undefined && done < total ? C.amber : C.blue, bold: true })
+    })
 
 export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
   const stored = activeRun(view.board)

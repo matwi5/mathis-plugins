@@ -73,6 +73,8 @@ export type TicketGroup = {
 export type GroupLink = {
   at: number
   session?: string
+  /** Groupe rendu : quand la personne a demandé de fermer sa session et son worktree (« ✕ Fermer… »). */
+  closeAskedAt?: number
 }
 
 /**
@@ -186,6 +188,10 @@ export type Ticket = {
   why?: string
   /** Fichiers ou dossiers que le ticket touche : ils s'ajoutent à ceux de son groupe. */
   files?: string[]
+  /** Le ticket touche une zone sensible (`SENSITIVE_AREAS` de catalog.ts), dit au découpage. */
+  sensitive?: boolean
+  /** Le ticket a de la logique à relire : faux pour une ressource visuelle ou un document, dit au découpage. */
+  logic?: boolean
   /**
    * Id de la discussion qui a passé le ticket « en cours » ; effacé quand il en sort. Plusieurs
    * tickets peuvent être en cours à la fois (sous-agents de /implement-spec, autre discussion).

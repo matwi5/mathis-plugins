@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Récap d'usage de la discussion et de la journée, pour le skill /stats-board:recap.
+// Récap d'usage de la discussion et de la journée, ou d'un parcours, pour le skill /stats-board:recap.
 // - Lancé par Claude : `node recap.mjs [<id de la discussion>]`. Écrit le récap en Markdown sur stdout.
+// - Récap d'un parcours : `node recap.mjs --parcours "<préfixe de titre>" | --worktrees <dossier du projet>
+//   [<id de la discussion principale>] [--since AAAA-MM-JJ] [--until AAAA-MM-JJ]` (60 jours par défaut).
 // - Les chiffres viennent de ccusage (`npx ccusage@latest claude daily|session|blocks --json`),
 //   comme le panneau ; les autres postes, de `~/.claude/claude-usage/machines/*.json`, et les noms
 //   d'affichage des projets, de `~/.claude/claude-usage/names.json`.
@@ -11,7 +13,7 @@
 import { execFile } from 'node:child_process'
 import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const NB = ' '
@@ -201,6 +203,98 @@ export function render(data) {
   return out.join('\n')
 }
 
+// ─── Récap d'un parcours ────────────────────────────────────────────────────
+
+const TITLE_LINE = /"type":"(custom|ai)-title","(?:customTitle|aiTitle)":"((?:[^"\\]|\\.)*)"/g
+
+/** Les derniers titres d'un texte : `custom-title` (donné ou renommé) et `ai-title` (titre automatique). */
+function titlesIn(text) {
+  const last = { custom: null, ai: null }
+  for (const m of String(text).matchAll(TITLE_LINE)) last[m[1]] = m[2]
+  const decode = (s) => (s === null ? null : JSON.parse(`"${s}"`))
+  return { custom: decode(last.custom), ai: decode(last.ai) }
+}
+
+/**
+ * Le titre d'une session : la dernière ligne `custom-title` de sa transcription (un renommage en ajoute une),
+ * sinon la dernière `ai-title`, le titre automatique qu'affiche Claude Code à une session jamais renommée.
+ */
+export function titleOf(text) {
+  const t = titlesIn(text)
+  return t.custom ?? t.ai
+}
+
+const dayClock = (ms, tz) => new Intl.DateTimeFormat('fr-FR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(ms))
+
+/** Le marqueur des dossiers de projet des worktrees de groupe : `<clé du projet>--claude-worktrees-groupe-<id>`. */
+const GROUP_WORKTREES = '--claude-worktrees-groupe-'
+
+/** Un titre sans les signes que flow-board retire du titre d'une session liée (`linkedPrefix` de `hooks/register.tsx`). */
+const bareTitle = (s) => String(s ?? '').replace(/["`$\\«»]/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * Le titre `title` relève-t-il du parcours `prefix` ? Il commence par le préfixe, ou c'est celui d'une session
+ * liée de flow-board, « <titre du parcours coupé à 28 signes>… › Groupe X · … », dont le début coupé
+ * commence le préfixe.
+ */
+function titleMatches(title, prefix) {
+  const t = bareTitle(title)
+  const p = bareTitle(prefix)
+  if (!p) return false
+  if (t.startsWith(p)) return true
+  const head = t.match(/^(.+?)… › /)?.[1]
+  return !!head && p.startsWith(head)
+}
+
+/** Une session du parcours : par son titre, ou par son dossier (worktree `groupe-*`, discussion principale). */
+const inParcours = (r, title, { prefix, worktreesKey, sessionId }) =>
+  titleMatches(title, prefix) ||
+  (!!worktreesKey && (r.project.startsWith(`${worktreesKey}${GROUP_WORKTREES}`) || r.id === sessionId))
+
+/**
+ * Le récap d'un parcours en Markdown, sous-agents compris : les sessions dont le titre commence par `prefix`,
+ * et celles des worktrees `groupe-*` du projet `worktreesKey` avec la discussion principale `sessionId`.
+ * La durée d'une session va de sa première à sa dernière activité.
+ * data : { tz, since, until (AAAA-MM-JJ, facultatif), prefix, worktreesKey, sessionId, sessions, titles, projectNames }
+ */
+export function renderParcours(data) {
+  const { tz } = data
+  const names = data.projectNames ?? {}
+  const titles = data.titles ?? {}
+  const prefix = String(data.prefix ?? '').trim()
+  const wt = !!data.worktreesKey
+  const rows = (data.sessions ?? []).map(sessionInfo)
+  const picked = rows.filter((r) => !r.parent && inParcours(r, titles[r.id], { prefix, worktreesKey: data.worktreesKey, sessionId: data.sessionId }))
+  const ids = new Set(picked.map((r) => r.id))
+  // ccusage 20 compte déjà les sous-agents dans leur session ; une ligne `<projet>/<session>/subagents`
+  // (versions plus anciennes) s'ajoute à sa session.
+  const subs = rows.filter((r) => r.parent && ids.has(r.parent))
+  const all = [...picked, ...subs]
+  const cost = sum(all, (r) => r.cost)
+  const what = [prefix && `« ${prefix} »`, wt && `worktrees groupe-* de ${names[data.worktreesKey] ?? data.worktreesKey}`].filter(Boolean).join(' et ')
+  const frDate = (d) => String(d).split('-').reverse().join('/')
+  const period = data.until ? `du ${frDate(data.since)} au ${frDate(data.until)}` : `depuis le ${frDate(data.since)}`
+  const out = [`## Récap du parcours${prefix ? ' ' : ' · '}${what}`, '']
+  if (!picked.length) {
+    out.push(`Aucune session retrouvée ${period}.`)
+    return out.join('\n')
+  }
+  out.push(`Coût équivalent API d'après ccusage, sous-agents compris, sessions retrouvées ${period}.`, '')
+  if (wt && !prefix && !data.sessionId) out.push('- ⚠ Discussion principale non comptée : son identifiant manque.')
+  out.push(`- **${fmtCost(cost)}** · ${picked.length} session${picked.length > 1 ? 's' : ''} · ${fmtTokens(sum(all, (r) => r.tokens))} tokens`)
+  out.push(`- Modèles : ${modelLine(byModel(all.flatMap((r) => r.models)), cost)}`)
+  out.push('', '| Session | Projet | Heures | Durée | Coût |', '|---|---|---|---|---:|')
+  const cell = (s) => String(s).replace(/\|/g, '\\|')
+  for (const r of picked.sort((a, b) => a.first - b.first)) {
+    // La session et ses sous-agents : heures et coût d'ensemble, comme pour la discussion du récap du jour.
+    const own = [r, ...subs.filter((s) => s.parent === r.id)]
+    const first = Math.min(...own.map((s) => s.first))
+    const last = Math.max(...own.map((s) => s.last))
+    out.push(`| ${cell(titles[r.id] ?? '(sans titre)')} | ${cell(names[r.project] ?? r.project)} | ${dayClock(first, tz)} → ${dayClock(last, tz)} | ${fmtDuration(last - first)} | ${fmtCost(sum(own, (s) => s.cost))} |`)
+  }
+  return out.join('\n')
+}
+
 // ─── Entrées-sorties ────────────────────────────────────────────────────────
 
 function npx(args) {
@@ -303,12 +397,137 @@ function projectPath(projectsDir, key) {
   return null
 }
 
+/**
+ * Le dernier titre d'une transcription (comme `titleOf`), lue par blocs depuis la fin : un renommage ajoute
+ * une ligne `custom-title`, et les plus longues transcriptions font plusieurs dizaines de Mo.
+ */
+function readTitle(file) {
+  const CHUNK = 1 << 20
+  const OVERLAP = 1 << 14
+  let fd
+  let ai = null
+  try {
+    fd = openSync(file, 'r')
+    const size = statSync(file).size
+    const buf = Buffer.alloc(CHUNK + OVERLAP)
+    for (let end = size; end > 0; end -= CHUNK) {
+      // Chaque bloc déborde sur le suivant, pour ne pas couper une ligne de titre en deux.
+      const start = Math.max(0, end - CHUNK)
+      const n = readSync(fd, buf, 0, Math.min(end + OVERLAP, size) - start, start)
+      const t = titlesIn(buf.toString('utf8', 0, n))
+      if (t.custom !== null) return t.custom
+      // Le titre automatique ne sert que sans `custom-title` dans toute la transcription.
+      ai ??= t.ai
+    }
+  } catch {
+    // Transcription effacée ou illisible : pas de titre.
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+  return ai
+}
+
+/** Les noms des projets publiés par ce poste dans claude-usage, et les autres postes du jour. */
+function readMachines(usageDir, machine, labels, today) {
+  const projectNames = {}
+  const others = []
+  try {
+    for (const f of readdirSync(join(usageDir, 'machines')).filter((x) => x.endsWith('.json'))) {
+      const file = readJson(join(usageDir, 'machines', f))
+      if (!file) continue
+      // Un nom publié n'est repris que si son dossier redonne la clé.
+      for (const [key, p] of Object.entries(file.projects ?? {})) if (p?.name && p.path && file.machine === machine && projectKey(p.path) === key) projectNames[key] = labelOf(p.path, labels) ?? p.name
+      if (file.machine === machine) continue
+      const rows = (file.rows ?? []).filter((r) => r.date === today)
+      others.push({ machine: String(file.machine), updatedAt: num(file.updatedAt), cost: sum(rows, (r) => num(r.cost)), tokens: sum(rows, (r) => num(r.input) + num(r.output) + num(r.cacheWrite) + num(r.cacheRead)) })
+    }
+  } catch {
+    // Pas de clone claude-usage : ce poste seul.
+  }
+  return { projectNames, others }
+}
+
+/** Complète `projectNames` pour les clés sans nom publié, d'après les transcriptions. */
+function nameMissing(projectNames, keys, projectsDir, labels) {
+  for (const key of keys) {
+    if (!key || projectNames[key]) continue
+    const path = projectPath(projectsDir, key)
+    projectNames[key] = (path && (labelOf(path, labels) ?? lastSegment(path))) ?? key
+  }
+}
+
+const readMachineName = (usageDir) => {
+  try {
+    return readFileSync(join(usageDir, '.machine'), 'utf8').trim() || null
+  } catch {
+    // Poste sans nom : pas de partage.
+    return null
+  }
+}
+
+/** Les options du récap d'un parcours, ou `null` sans `--parcours` ni `--worktrees` (récap de la discussion). */
+function parcoursArgs(argv) {
+  const out = { prefix: null, worktrees: null, since: null, until: null, sessionId: null }
+  const unknown = []
+  let isParcours = false
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--parcours' || a === '--worktrees' || a === '--since' || a === '--until') {
+      const v = (argv[++i] ?? '').trim()
+      if (!v) throw new Error(`${a} attend une valeur`)
+      if (a === '--parcours') out.prefix = v
+      else if (a === '--worktrees') out.worktrees = v
+      else if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error(`${a} attend une date AAAA-MM-JJ`)
+      else out[a.slice(2)] = v
+      if (a === '--parcours' || a === '--worktrees') isParcours = true
+    } else if (/^[0-9a-f-]{36}$/i.test(a.trim())) out.sessionId = a.trim()
+    else if (a.trim()) unknown.push(a)
+  }
+  if (!isParcours) return null
+  // Un préfixe sans guillemets ou une option mal écrite (`--since=…`) changerait le parcours sans rien dire.
+  if (unknown.length) throw new Error(`argument inconnu : ${unknown[0]} (préfixe entre guillemets, dates en « --since AAAA-MM-JJ »)`)
+  return out
+}
+
+async function mainParcours(opts, { home, projectsDir, tz, now }) {
+  // Un parcours dure souvent plusieurs semaines : 60 jours par défaut.
+  const since = opts.since ?? localDay(new Date(now - 60 * 86_400_000), tz)
+  const until = opts.until ? ['--until', opts.until.replace(/-/g, '')] : []
+  const report = await ccusage(['claude', 'session', '--since', since.replace(/-/g, ''), ...until, '--json', '--timezone', tz])
+  const sessions = report.json?.sessions ?? report.json?.session ?? []
+  // La clé du projet, même lancé depuis un de ses worktrees.
+  const worktreesKey = opts.worktrees ? projectKey(resolve(opts.worktrees).replace(WORKTREE_IN_PATH, '')) : null
+
+  const titles = {}
+  const match = { prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId }
+  // Seuls les projets du parcours sont nommés : chaque nom manquant coûte des lectures de transcriptions.
+  const keys = new Set(worktreesKey ? [worktreesKey] : [])
+  for (const s of sessions) {
+    const info = sessionInfo(s)
+    if (info.parent) continue
+    // Sans préfixe, seuls les titres des sessions des worktrees et de la discussion principale servent.
+    if (!opts.prefix && !inParcours(info, null, match)) continue
+    const title = readTitle(join(projectsDir, info.project, `${info.id}.jsonl`))
+    if (title !== null) titles[info.id] = title
+    if (inParcours(info, title, match)) keys.add(info.project)
+  }
+  const usageDir = join(home, '.claude', 'claude-usage')
+  const labels = labelsOf(readJson(join(usageDir, 'names.json')))
+  const { projectNames } = readMachines(usageDir, readMachineName(usageDir), labels, localDay(new Date(now), tz))
+  nameMissing(projectNames, keys, projectsDir, labels)
+
+  process.stdout.write(`${renderParcours({ tz, since, until: opts.until, prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId, sessions, titles, projectNames })}\n`)
+}
+
 async function main() {
-  const arg = (process.argv[2] ?? '').trim()
   const home = homedir()
   const projectsDir = join(process.env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'projects')
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
   const now = Date.now()
+  const parcours = parcoursArgs(process.argv.slice(2))
+  if (parcours) return mainParcours(parcours, { home, projectsDir, tz, now })
+
+  const arg = (process.argv[2] ?? '').trim()
   const today = localDay(new Date(now), tz)
   // Une discussion commencée il y a quelques jours reste trouvée : les sessions sont prises sur 7 jours.
   const since = localDay(new Date(now - 7 * 86_400_000), tz).replace(/-/g, '')
@@ -327,35 +546,12 @@ async function main() {
 
   // Les noms des projets, et les autres postes publiés dans claude-usage.
   const usageDir = join(home, '.claude', 'claude-usage')
-  let machine = null
-  try {
-    machine = readFileSync(join(usageDir, '.machine'), 'utf8').trim() || null
-  } catch {
-    // Poste sans nom : pas de partage.
-  }
+  const machine = readMachineName(usageDir)
   const labels = labelsOf(readJson(join(usageDir, 'names.json')))
-  const projectNames = {}
-  const others = []
-  try {
-    for (const f of readdirSync(join(usageDir, 'machines')).filter((x) => x.endsWith('.json'))) {
-      const file = readJson(join(usageDir, 'machines', f))
-      if (!file) continue
-      // Un nom publié n'est repris que si son dossier redonne la clé.
-      for (const [key, p] of Object.entries(file.projects ?? {})) if (p?.name && p.path && file.machine === machine && projectKey(p.path) === key) projectNames[key] = labelOf(p.path, labels) ?? p.name
-      if (file.machine === machine) continue
-      const rows = (file.rows ?? []).filter((r) => r.date === today)
-      others.push({ machine: String(file.machine), updatedAt: num(file.updatedAt), cost: sum(rows, (r) => num(r.cost)), tokens: sum(rows, (r) => num(r.input) + num(r.output) + num(r.cacheWrite) + num(r.cacheRead)) })
-    }
-  } catch {
-    // Pas de clone claude-usage : ce poste seul.
-  }
+  const { projectNames, others } = readMachines(usageDir, machine, labels, today)
   const keys = new Set(Object.keys(daily.json?.projects ?? {}))
   for (const s of sessions.json?.sessions ?? []) keys.add(String(s.projectPath ?? '').split(/[\\/]/)[0])
-  for (const key of keys) {
-    if (!key || projectNames[key]) continue
-    const path = projectPath(projectsDir, key)
-    projectNames[key] = (path && (labelOf(path, labels) ?? lastSegment(path))) ?? key
-  }
+  nameMissing(projectNames, keys, projectsDir, labels)
 
   process.stdout.write(`${render({
     now,

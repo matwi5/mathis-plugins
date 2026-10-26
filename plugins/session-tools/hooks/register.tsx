@@ -4,22 +4,26 @@
 // - Pied du prompt : la durée de la dernière réponse (chrono lancé à l'envoi d'un message,
 //   arrêté quand l'agent a fini), la vitesse du modèle en tokens/s depuis ce message, le temps
 //   restant avant que le cache de prompt expire, l'heure, et des boutons : Fichiers (navigateur
-//   files-board) et Diff au terminal, Réécrire et Ultracode (on/off) partout. Sur desktop, le pied
-//   est trop étroit : les valeurs passent dans un bandeau au-dessus du prompt.
-// - Réécrire : le brouillon du champ de saisie, réécrit en prompt par Opus (effort low) avec la
-//   consigne de `rewrite-system.ts`, remplace le brouillon sans être envoyé.
+//   files-board) et Diff au terminal, Réécrire, Effort auto et Ultracode (on/off) partout. Sur
+//   desktop, le pied est trop étroit : les valeurs passent dans un bandeau au-dessus du prompt.
+// - Réécrire : le brouillon du champ de saisie, réécrit en prompt (option `model`, Opus par défaut,
+//   effort low) avec la consigne de `rewrite-system.ts`, remplace le brouillon sans être envoyé.
+// - Effort auto : le même modèle choisit le niveau d'effort du brouillon avec la consigne de
+//   `effort-system.ts`, puis le mod le règle par `/effort` avant l'envoi.
 // - `/session-tools:start` : un premier message qui démarre les mods sans solliciter le modèle.
 //
 // Le panneau Asana (/asana) est passé dans son propre plugin, asana-board.
 
 import type { EngineInterface, PromptOrigin, Register } from "claude-code";
 import type { GenerationSpeed, ResponseTimer } from "../types";
+import { EFFORT_SYSTEM } from "./effort-system";
 import { REWRITE_SYSTEM } from "./rewrite-system";
 
 // Gardés par l'hôte : survivent au rechargement à chaud du module.
 const lastRequest = { plugin: "session-tools", key: "lastRequestAt" } as const;
 const ultracode = { plugin: "session-tools", key: "ultracode" } as const;
 const rewriting = { plugin: "session-tools", key: "rewriting" } as const;
+const choosingEffort = { plugin: "session-tools", key: "choosingEffort" } as const;
 const responseTimer = { plugin: "session-tools", key: "responseTimer" } as const;
 const generationSpeed = { plugin: "session-tools", key: "generationSpeed" } as const;
 
@@ -27,15 +31,22 @@ const generationSpeed = { plugin: "session-tools", key: "generationSpeed" } as c
 // l'utilisateur (le tour qu'il démarre ne touche alors pas au chrono).
 let pending: { at: number | null } | null = null;
 
-// Une réécriture en cours : posé avant tout `await`, un double clic ne lance qu'un appel. Une
-// variable du module repart à false au rechargement, où l'appel en cours est perdu.
-let isRewriteBusy = false;
+// Les boutons dont l'appel au modèle est en cours : marqués avant tout `await`, un double clic ne
+// lance qu'un appel. Une variable du module repart à vide au rechargement, où l'appel est perdu.
+const busyButtons = new Set<string>();
 
-export const register: Register = (on) => {
+// Le modèle des boutons Réécrire et Effort auto, toujours en effort low : l'option `model` du
+// manifeste (opus par défaut), relue à chaque chargement du module.
+const BUTTON_MODELS = ["opus", "sonnet", "haiku"];
+let buttonModel = "opus";
+
+export const register: Register = (on, options) => {
+  buttonModel = BUTTON_MODELS.includes(String(options.model)) ? String(options.model) : "opus";
   on("session.start", async ($, e, next) => {
     const result = await next(e);
-    // Un rechargement pendant une réécriture laisserait le libellé « Réécriture… » pour de bon.
+    // Un rechargement pendant un appel au modèle laisserait « Réécriture… » ou « Effort… » pour de bon.
     await $.state.set(rewriting, false);
+    await $.state.set(choosingEffort, false);
     // Redessine le pied chaque seconde (compte à rebours, heure), tant que le module est chargé.
     $.clock.every(1000, () => $.ui.invalidate("ui.render"));
     return result;
@@ -115,6 +126,7 @@ export const register: Register = (on) => {
   on("ui.render", { component: "SessionMode" }, async ($, e, next) => {
     const { value: isUltracode = false } = await $.state.get(ultracode);
     const { value: isRewriting = false } = await $.state.get(rewriting);
+    const { value: isChoosingEffort = false } = await $.state.get(choosingEffort);
     const isTerminal = e.surface === "terminal";
     // L'app desktop coupe son pied, bouton compris, vers 25 caractères : il n'y garde que les
     // modes et le bouton ; les valeurs sont dans le bandeau (AbovePrompt).
@@ -150,13 +162,28 @@ export const register: Register = (on) => {
       plain: true,
       dimColor: true,
       onPress: () => {
-        rewriteDraft($).catch((error) => $.ui.toast(`Réécrire : ${String(error)}`));
+        const setBusy = (isBusy: boolean) => $.state.set(rewriting, isBusy);
+        onDraft($, "Réécrire", setBusy, (draft) => rewrite($, draft)).catch((error) =>
+          $.ui.toast(`Réécrire : ${String(error)}`),
+        );
+      },
+    });
+    const effortButton = Button({
+      key: "effort",
+      label: isChoosingEffort ? "Effort…" : "Effort auto",
+      plain: true,
+      dimColor: true,
+      onPress: () => {
+        const setBusy = (isBusy: boolean) => $.state.set(choosingEffort, isBusy);
+        onDraft($, "Effort auto", setBusy, (draft) => chooseEffort($, draft)).catch((error) =>
+          $.ui.toast(`Effort auto : ${String(error)}`),
+        );
       },
     });
     const texts = drawItems(Text, items);
     if (!isTerminal) {
       // L'app desktop place elle-même ses boutons natifs devant le texte, quel que soit l'ordre.
-      return Box({ flexDirection: "row", flexShrink: 0, children: [rewriteButton, ultracodeButton, ...texts] });
+      return Box({ flexDirection: "row", flexShrink: 0, children: [rewriteButton, effortButton, ultracodeButton, ...texts] });
     }
     // Terminal seulement (l'app desktop a les siens) : « Fichiers » ouvre ou ferme le navigateur
     // de files-board, « Diff » le panneau de diff (`/diff` est une bascule en plein écran).
@@ -177,6 +204,8 @@ export const register: Register = (on) => {
       commandButton("diff", "Diff", "diff"),
       sep(),
       rewriteButton,
+      sep(),
+      effortButton,
       sep(),
       ultracodeButton,
     ];
@@ -242,26 +271,33 @@ async function noteSpeed($: EngineInterface, tokens: number, firstAt: number) {
 
 // ─── Réécrire le brouillon ──────────────────────────────────────────────────
 
-// Opus en effort low : en tête d'un banc d'essai sur 7 brouillons réels (qualité, puis temps,
-// puis coût), devant Opus medium (même qualité, deux fois plus lent), Sonnet et Haiku.
+// Effort low : sur 7 brouillons réels (qualité, puis temps, puis coût), Opus low devant Opus
+// medium (même qualité, deux fois plus lent), Sonnet et Haiku ; le modèle est l'option `model`.
 // Un prompt réécrit dépasse souvent les 1024 tokens de réponse par défaut.
-const REWRITE_REQUEST = { model: "opus", effort: "low", maxTokens: 4000, timeoutMs: 120_000 } as const;
+const REWRITE_REQUEST = { effort: "low", maxTokens: 4000, timeoutMs: 120_000 } as const;
 
-async function rewriteDraft($: EngineInterface) {
-  if (isRewriteBusy) return;
-  isRewriteBusy = true;
+// Lit le brouillon et le passe à `work`, le bouton `name` marqué occupé (`setBusy`, qui écrit son
+// état : le moteur veut chaque référence d'état écrite en clair) le temps de l'appel.
+async function onDraft(
+  $: EngineInterface,
+  name: string,
+  setBusy: (isBusy: boolean) => Promise<unknown>,
+  work: (draft: string) => Promise<void>,
+) {
+  if (busyButtons.has(name)) return;
+  busyButtons.add(name);
   try {
     const draft = (await $.prompt.read()).text;
     if (!draft.trim()) {
-      await $.ui.toast("Réécrire : le champ de saisie est vide.");
+      await $.ui.toast(`${name} : le champ de saisie est vide.`);
       return;
     }
-    await $.state.set(rewriting, true);
+    await setBusy(true);
     $.ui.invalidate("ui.render");
-    await rewrite($, draft);
+    await work(draft);
   } finally {
-    isRewriteBusy = false;
-    await $.state.set(rewriting, false);
+    busyButtons.delete(name);
+    await setBusy(false);
     $.ui.invalidate("ui.render");
   }
 }
@@ -269,6 +305,7 @@ async function rewriteDraft($: EngineInterface) {
 async function rewrite($: EngineInterface, draft: string) {
   const reply = await $.model.complete({
     ...REWRITE_REQUEST,
+    model: buttonModel,
     // Marquée pour le cache : des clics rapprochés relisent la consigne au lieu de la repayer.
     system: [{ text: REWRITE_SYSTEM, cache: true }],
     prompt: `<brouillon>\n${draft}\n</brouillon>`,
@@ -289,6 +326,52 @@ async function rewrite($: EngineInterface, draft: string) {
   }
   const filled = await $.prompt.fill({ text, mode: "replace" });
   if (!filled.isFilled) await $.ui.toast(`Réécrire : le champ de saisie a refusé le texte (${filled.refusal ?? "refus d'un autre plugin"}).`);
+}
+
+// ─── Effort auto ────────────────────────────────────────────────────────────
+
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+// Le même modèle que Réécrire ; la réponse est une ligne de JSON.
+const EFFORT_REQUEST = { effort: "low", maxTokens: 1000, timeoutMs: 60_000 } as const;
+
+async function chooseEffort($: EngineInterface, draft: string) {
+  const reply = await $.model.complete({
+    ...EFFORT_REQUEST,
+    model: buttonModel,
+    system: [{ text: EFFORT_SYSTEM, cache: true }],
+    prompt: `<brouillon>\n${draft}\n</brouillon>`,
+  });
+  if (!reply.isAnswered) {
+    await $.ui.toast(`Effort auto : pas de réponse (${reply.reason}).`);
+    return;
+  }
+  const choice = effortChoice(reply.text);
+  if (!choice) {
+    await $.ui.toast("Effort auto : réponse illisible, l'effort est laissé tel quel.");
+    return;
+  }
+  // Brouillon envoyé ou changé pendant l'appel : le niveau ne vaudrait plus pour lui.
+  if ((await $.prompt.read()).text !== draft) {
+    await $.ui.toast("Effort auto : le brouillon a changé pendant le choix, l'effort est laissé tel quel.");
+    return;
+  }
+  // Comme le bouton Ultracode : la commande tapée, dont l'état d'Ultracode se déduit. Claude Code
+  // garde ce niveau comme défaut des nouvelles sessions (sauf max), et peut demander de confirmer
+  // un changement en cours de discussion : la notification dit « demandé », pas « réglé ».
+  const result = await $.command.run({ command: "effort", args: choice.effort });
+  await noteUltracode($, choice.effort, result.text);
+  await $.ui.toast(`Effort demandé : ${choice.effort}${choice.reason ? ` (${choice.reason})` : ""}`);
+}
+
+// `{"effort": "high", "raison": "…"}`, au besoin entouré d'autre texte ; undefined sans niveau valide.
+function effortChoice(text: string) {
+  try {
+    const { effort, raison } = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+    if (EFFORT_LEVELS.includes(effort)) return { effort: effort as string, reason: typeof raison === "string" ? raison.trim() : "" };
+  } catch {
+    // réponse sans JSON valide
+  }
+  return undefined;
 }
 
 // ─── Pied du prompt ─────────────────────────────────────────────────────────

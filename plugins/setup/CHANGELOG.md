@@ -4,6 +4,20 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.2.0 — 2026-10-24
+
+### Ajouté
+- **Modèle de `session-tools`** : `/setup:install` demande le modèle des boutons Réécrire et Effort auto (Opus, Sonnet ou Haiku, en effort low), chaque option décrite par ses estimations mesurées (qualité ou fiabilité, temps, coût, dans le catalogue), puis le règle par `claude plugin configure` et le vérifie.
+
+---
+
+## 0.1.2 — 2026-10-22
+
+### Documentation
+- Catalogue : `session-tools` a aussi un bouton Effort auto.
+
+---
+
 ## 0.1.1 — 2026-10-22
 
 ### Documentation

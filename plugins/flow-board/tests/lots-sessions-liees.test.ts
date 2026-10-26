@@ -217,7 +217,7 @@ test('une session déléguée garde l’adresse de la discussion principale et l
   const loaded = detachOnLoad({ ...main, session: 'main' }, 3_000, 'linked')
   // Sans adresse : la réponse renvoie au nom et à la référence du brief, sans rien inventer.
   const bare = applyReport(loaded, { delegate: runId, group: 'P' }, 3_100)
-  expect(bare.text).toMatch(/Reach the main discussion by the name and \[ref\] your brief gives/)
+  expect(bare.text).toMatch(/Reach the main discussion by the \[ref\] your brief gives/)
   // Avec l'adresse « <nom> [ref] » : gardée, et rappelée à la déclaration comme aux relais.
   const out = applyReport(loaded, { delegate: runId, group: 'P', main: 'Lot SC [05e2f6]' }, 3_100)
   expect(out.board.delegate).toEqual({ run: runId, at: 3_100, group: 'P', main: 'Lot SC [05e2f6]' })
@@ -431,7 +431,7 @@ test('le titre d’une session liée commence par le titre du parcours, raccourc
   // Avec git, le point fixe des revues reste le commit : pas de copies.
   expect(filled.at(-1)).toContain("sur les seuls changements du ticket (point fixe : le commit d'avant le ticket), même pour un petit diff")
   expect(filled.at(-1)).toContain("sur le même périmètre (point fixe : le commit d'avant le ticket)")
-  expect(filled.at(-1)).toContain('sur sa branche face à sa base')
+  expect(filled.at(-1)).toContain("avec pour cible <base>..HEAD (<base> : le commit d'où part sa branche)")
   expect(filled.at(-1)).not.toMatch(/copie/)
 })
 
@@ -728,7 +728,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) du parcours « Boutique » par sa session liée/)
   expect(text).toContain('« Boutique › Groupe E · » ou « Groupe E · »')
   expect(text).toMatch(/git merge --ff-only /)
-  expect(text).toContain('2) lancer elle-même la revue en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix ») sur les seuls commits du groupe')
+  expect(text).toContain('2) lancer elle-même la revue en la confiant à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high ; règle des revues, config/rules/agents.md quand elle est installée), le seul sous-agent qui écrit : il lance lui-même la revue et applique lui-même ses correctifs ; la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix <plage> consignes : <chemin> ») sur les seuls commits du groupe')
   expect(text).toContain('3) au retour du relecteur, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas resignaler ni défaire et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
@@ -761,7 +761,7 @@ test('sans git, la revue d’un groupe rendu porte sur les copies que sa session
   await ui.unmount()
   const text = filled.at(-1)!
   expect(text).toContain('1) travailler sur le code actuel ; ')
-  expect(text).toContain("arguments « high --fix ») sur les seuls changements du groupe, lus sur le code actuel (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe")
+  expect(text).toContain("arguments « high --fix consignes : <chemin> ») sur les seuls changements du groupe, lus sur le code actuel (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe")
   expect(text).toContain('sa session a pris ces copies dans son dossier temporaire)')
   expect(text).toMatch(/avec pour seul périmètre les changements du groupe \(point fixe : pour chaque fichier, la plus ancienne copie/)
   expect(text).not.toMatch(/commits du groupe|git merge/)
@@ -848,7 +848,7 @@ test('le compte rendu final d’une session liée passe aussi par le relais : la
   const run = activeRun(sent)!
   // La session liée le dépose par l'outil : il part au relais, pas sur le parcours.
   const delegated = applyReport(sent, { delegate: run.id, group: 'C' }, 5_100)
-  expect(delegated.text).toContain('also leave it here, {"report": "<the whole report>"}')
+  expect(delegated.text).toContain('leave your whole report here, {"report": "<the whole report>"}')
   const told = applyReport(delegated.board, { report: 'c1 fait (commit 1a2b3c4), contrôles verts' }, 5_200)
   expect(told.board).toBe(delegated.board)
   expect(told.text).toMatch(/^Relayed to the main discussion's dashboard: the final report\./)
@@ -919,8 +919,8 @@ test('le brief des sessions de groupe : renommer d’abord la discussion, backgr
   expect(first).toContain("ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe")
   // Hors d'atteinte (pas de ~/.claude ici), le fichier n'est pas cité : la liste se donne.
   expect(first).toContain("les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste")
-  expect(first).toContain('le déposer aussi par l\'outil flow, {"report": "<le compte rendu entier>"}')
-  expect(first).toContain("Un compte rendu qui n'arrive pas par SendMessage est dans le relais")
+  expect(first).toContain('le déposer en entier par l\'outil flow, {"report": "<le compte rendu entier>"}')
+  expect(first).toContain("Le compte rendu complet d'une session est dans le relais, son message n'en porte qu'une ligne")
   // Une commande longue a un délai maximal ; la session ne rend pas la main sur un processus sans délai.
   expect(first).toContain("une commande longue (tests, build) se lance avec un délai maximal")
   expect(first).toContain("ne jamais rendre la main en attendant un processus d'arrière-plan qui n'a pas de délai : le surveiller (outil Monitor) ou l'arrêter")

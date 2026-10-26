@@ -14,7 +14,7 @@ Lu par `/setup:install`. Une ligne par plugin : ce qu'il apporte, ce qu'il exige
 | `git-board` | Panneau Git (`/git`) : branche, écarts, modifications, historique, PR, CI | `project` (conseillé : ses boutons lancent `/project:*`) | Claude Code 2.1.286+ ; `git` ; `gh` facultatif | — | — |
 | `files-board` | Navigateur de fichiers dans le terminal (`/files`) | — | Claude Code 2.1.289+ ; terminal (pas l'app de bureau) | `tui: fullscreen` conseillé | — |
 | `stats-board` | Statistiques d'usage et de coût (`/ccstats`, `/stats-board:recap`) | — | Claude Code 2.1.286+ ; Node.js (`npx ccusage`) | Partage entre postes, facultatif : dépôt git privé de l'utilisateur et nom du poste | — |
-| `session-tools` | Pied du prompt (chrono, tokens/s, cache, heure) et boutons Réécrire, Ultracode, Fichiers, Diff | `files-board` (conseillé : bouton Fichiers) | Claude Code 2.1.286+ | — | — |
+| `session-tools` | Pied du prompt (chrono, tokens/s, cache, heure) et boutons Réécrire, Effort auto, Ultracode, Fichiers, Diff | `files-board` (conseillé : bouton Fichiers) | Claude Code 2.1.286+ | Modèle des boutons Réécrire et Effort auto (voir plus bas) | — |
 
 Les règles générales (`general.md`) valent sans plugin : principes de travail, secrets, contrôles, style. Elles se proposent toujours.
 
@@ -44,6 +44,18 @@ Outils du connecteur, à reconnaître par leur suffixe (le préfixe dépend du c
 - Clone : `git clone <url> ~/.claude/claude-usage` (avec `CLAUDE_CONFIG_DIR`, dans ce dossier à la place de `~/.claude`).
 - Nom du poste : une ligne dans `~/.claude/claude-usage/.machine` ; `.machine` doit figurer dans le `.gitignore` de ce dépôt.
 - L'accès sans invite se règle par `gh auth setup-git`.
+
+## Modèle de session-tools (Réécrire et Effort auto)
+
+Option `model` du plugin : `opus` (par défaut), `sonnet` ou `haiku`, toujours en effort low, la même pour les deux boutons. Estimations mesurées le 22 et le 24/10/2026 sur 7 brouillons réels, au tarif public, sans cache (un clic isolé) ; la qualité de Réécrire est notée à l'aveugle par des juges Opus.
+
+| Modèle | Réécrire : qualité | Réécrire : temps médian (9 fois sur 10), coût | Effort auto : lisibilité, constance, accord avec Opus | Effort auto : temps médian, coût |
+|---|---|---|---|---|
+| `opus` (Recommandé) | 8,1/10 ; 7 inventions, aucune demande perdue | 6,7 s (11 s), 0,11 $ | 21 réponses lisibles sur 21 ; même niveau aux 3 essais pour 6 brouillons sur 7 ; référence | 2,1 s, 0,03 $ |
+| `sonnet` | 7,2/10 ; 20 inventions, aucune perdue | 5,6 s (9 s), 0,05 $ | 21 sur 21 ; 7 sur 7 ; 18 sur 21 (plus bas qu'Opus sur une alerte de sécurité) | 1,8 s, 0,02 $ |
+| `haiku` | 5,1/10 ; 41 inventions, 9 demandes perdues | 5,7 s (9 s), 0,003 $ | 18 sur 21 (répond parfois au brouillon au lieu de choisir) ; 4 sur 7 ; 16 sur 18 | 3,5 s, 0,001 $ |
+
+« Inventions » : faits ou exigences ajoutés que le brouillon ne contient pas, relevés et cités par les juges ; des juges Opus peuvent avantager les textes d'Opus. Pour Effort auto, il n'y a pas de bonne réponse connue : Opus sert de référence, et la constance compte les brouillons qui reçoivent le même niveau aux 3 essais. Les coûts sont ceux du tarif public : sur un abonnement, c'est du quota consommé. Réglage, la version 0.20.0 ou plus installée : `printf '{"model": "<choix>"}' | claude plugin configure session-tools@mathis-plugins --values-stdin` ; lecture : `claude plugin configure session-tools@mathis-plugins --json`. L'utilisateur peut le changer ensuite dans `/config`.
 
 ## Barre d'état (facultative)
 

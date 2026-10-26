@@ -217,7 +217,7 @@ export const nextLaunchFor = (run: Run): NextLaunch | null => {
     .sort((a, b) => a.wave - b.wave)[0]
   if (ready) return { kind: 'group', group: ready.group.id, isDelegable: isDelegable(ready) }
   if (plan.delegated.length > 0) return { kind: 'linked', groups: plan.delegated }
-  const unreviewed = (run.groups ?? []).filter(g => g.reviewedAt === undefined && g.linked === undefined && isAllDone(run, g.tickets))
+  const unreviewed = (run.groups ?? []).filter(g => g.linked === undefined && awaitsReview(run, g))
   if (unreviewed.length > 0 && run.tickets.every(t => t.status === 'done')) return { kind: 'review', groups: unreviewed.map(g => g.id) }
   return null
 }
@@ -352,7 +352,7 @@ const idsIn = (text: string, pattern: RegExp): string[] => pattern.exec(text)?.[
 const returnedWithoutTrace = (run: Run): Map<string, number> => {
   const found = new Map<string, number>()
   const candidates = (run.groups ?? []).filter(
-    g => g.delegated === undefined && g.linked === undefined && g.reviewedAt === undefined && isAllDone(run, g.tickets),
+    g => g.delegated === undefined && g.linked === undefined && awaitsReview(run, g),
   )
   if (candidates.length === 0) return found
   for (const entry of run.log) {
@@ -392,11 +392,56 @@ const upgradePhases = (run: Run): Run => {
 const isAllDone = (run: Run, ids: readonly string[]): boolean =>
   ids.length > 0 && ids.every(id => run.tickets.find(t => sameTicket(t.id, id))?.status === 'done')
 
+/**
+ * Un groupe d'un seul ticket dit ni sensible ni avec logique (une icône, un document) : la revue de
+ * son ticket est sa seule revue. Elle avait été suivie d'une revue du groupe sur le même diff.
+ */
+export const isTicketReviewEnough = (run: Run, group: TicketGroup): boolean => {
+  if (group.tickets.length !== 1) return false
+  const ticket = run.tickets.find(t => sameTicket(t.id, group.tickets[0]!))
+  return ticket?.sensitive === false && ticket.logic === false
+}
+
+/** Un groupe relu : par /code-review, ou par la revue de son seul ticket. */
+export const isGroupReviewed = (run: Run, g: TicketGroup): boolean => g.reviewedAt !== undefined || isTicketReviewEnough(run, g)
+
+/** Un groupe fini attend encore sa revue. */
+const awaitsReview = (run: Run, g: TicketGroup): boolean => !isGroupReviewed(run, g) && isAllDone(run, g.tickets)
+
+/** Un ticket sensible, ou qui ne l'a pas dit : dans le doute, il compte comme sensible (Mathis, 26/10/2026). */
+const isSensitiveTicket = (ticket: Ticket | undefined): boolean => ticket?.sensitive !== false
+
+/** Un groupe dont un ticket touche une zone sensible, ou ne l'a pas dit : sa revue tourne sans --fix. */
+export const isSensitiveGroup = (run: Run, group: TicketGroup): boolean =>
+  group.tickets.some(id => isSensitiveTicket(run.tickets.find(t => sameTicket(t.id, id))))
+
+/** Les arguments de la revue d'un groupe, sans --fix quand elle est sensible : le relecteur applique ce qu'il retient. */
+const reviewArgs = (isSensitive: boolean): string => {
+  const args = SKILLS['final-review']?.args ?? ''
+  return isSensitive ? args.replace(/\s*--fix\b/, '') : args
+}
+
+export const groupReviewArgs = (run: Run, group: TicketGroup): string => reviewArgs(isSensitiveGroup(run, group))
+
+/**
+ * Les arguments d'une commande lancée du tableau de bord : ceux du skill, sauf la revue, sans --fix
+ * quand un groupe qui l'attend est sensible, ou, dans un lot sans groupes, un de ses tickets.
+ */
+export const commandArgsOf = (run: Run | null, skill: string): string => {
+  if (skill !== 'final-review' || run === null) return SKILLS[skill]?.args ?? ''
+  const groups = run.groups ?? []
+  const isSensitive =
+    groups.length === 0
+      ? run.tickets.some(isSensitiveTicket)
+      : groups.some(g => g.linked === undefined && awaitsReview(run, g) && isSensitiveGroup(run, g))
+  return reviewArgs(isSensitive)
+}
+
 /** Un groupe fini n'a pas encore eu sa revue ; sans groupes, le lot entier fini et pas relu. */
 export const needsReview = (run: Run): boolean => {
   const groups = run.groups ?? []
   // Un groupe encore confié n'est pas fini ici, même ses tickets relayés faits.
-  if (groups.length > 0) return groups.some(g => g.reviewedAt === undefined && g.linked === undefined && isAllDone(run, g.tickets))
+  if (groups.length > 0) return groups.some(g => g.linked === undefined && awaitsReview(run, g))
   return run.reviewedAt === undefined && isAllDone(run, run.tickets.map(t => t.id))
 }
 
@@ -420,7 +465,7 @@ export const isBugPass = (run: Run, session?: string): boolean => {
  */
 const markReviewed = (run: Run, now: number): string[] => {
   const queue = run.queue ?? []
-  const due = (run.groups ?? []).filter(g => g.reviewedAt === undefined && isAllDone(run, g.tickets))
+  const due = (run.groups ?? []).filter(g => awaitsReview(run, g))
   const fromQueue = due.filter(g => g.tickets.some(id => queue.includes(id)))
   const targets = fromQueue.length > 0 ? fromQueue : due
   for (const g of targets) g.reviewedAt = now
@@ -460,7 +505,7 @@ const markSecured = (run: Run, now: number): string[] => {
     const fromQueue = list.filter(g => g.tickets.some(id => queue.includes(id)))
     return fromQueue.length > 0 ? fromQueue : list
   }
-  const reviewed = due.filter(g => g.reviewedAt !== undefined)
+  const reviewed = due.filter(g => isGroupReviewed(run, g))
   const targets = pick(reviewed.length > 0 ? reviewed : due)
   for (const g of targets) g.security = { ...g.security, ranAt: now }
   return targets.map(g => `${g.id} (${g.name})`)
@@ -948,7 +993,7 @@ const parseItems = (value: unknown): FlowItem[] =>
     .filter(item => item.label !== '')
     .slice(0, LIMITS.items)
 
-type IncomingTicket = { id: string; name: string; status?: TicketStatus; blockedBy?: string[]; why?: string; files?: string[] }
+type IncomingTicket = { id: string; name: string; status?: TicketStatus; blockedBy?: string[]; why?: string; files?: string[]; sensitive?: boolean; logic?: boolean }
 
 /** Une liste de chemins reçue de Claude : chaînes non vides, sans doublon, bornée. */
 const parsePaths = (value: unknown, max: number): string[] | undefined =>
@@ -965,6 +1010,8 @@ const parseTickets = (value: unknown): IncomingTicket[] =>
         blockedBy: Array.isArray(one.blockedBy) ? one.blockedBy.map(str).filter(id => id !== '') : undefined,
         why: clip(str(one.why), TEXT_MAX) || undefined,
         files: parsePaths(one.files, LIMITS.ticketFiles),
+        sensitive: typeof one.sensitive === 'boolean' ? one.sensitive : undefined,
+        logic: typeof one.logic === 'boolean' ? one.logic : undefined,
       }
     })
     .filter(t => t.id !== '' && t.name !== '')
@@ -1005,6 +1052,8 @@ const mergeTickets = (current: readonly Ticket[], incoming: IncomingTicket[], no
       ...(t.blockedBy ? { blockedBy: t.blockedBy } : {}),
       ...(t.why ? { why: t.why } : {}),
       ...(t.files ? { files: t.files } : {}),
+      ...(t.sensitive !== undefined ? { sensitive: t.sensitive } : {}),
+      ...(t.logic !== undefined ? { logic: t.logic } : {}),
     }
     return t.status && t.status !== named.status ? withStatus(named, t.status, now, by) : keepWhy(named)
   }
@@ -1352,6 +1401,45 @@ export const relayedReportsText = (run: Run, relay: Relay | null | undefined, se
   return parts.join('')
 }
 
+/** Au-delà, une délégation gardée ne revient plus au chargement (une session de groupe tient rarement plus d'un jour). */
+const DELEGATE_KEEP_MS = 3 * 24 * 60 * 60 * 1000
+
+/** Les tickets faits d'un groupe, parmi ceux du lot (même comparaison d'ids que le reste du modèle). */
+export const groupDone = (run: Run, group: TicketGroup): { done: number; total: number } => {
+  const tickets = group.tickets.map(id => ticketOf(run, id)).filter((t): t is Ticket => t !== undefined)
+  return { done: tickets.filter(t => t.status === 'done').length, total: tickets.length }
+}
+
+/**
+ * La délégation gardée pour cette session (`$.store`, clé `delegate:<session>`), remise sur un board
+ * chargé du stockage : sans elle, un rechargement du mod dans une session liée la perdait, et ses
+ * skills pouvaient ouvrir un parcours. Une forme inconnue est ignorée.
+ */
+export const restoreDelegate = (board: Board, kept: unknown, now?: number): Board => {
+  if (board.delegate || kept === null || typeof kept !== 'object') return board
+  const d = kept as Record<string, unknown>
+  if (typeof d.run !== 'string' || d.run === '' || typeof d.at !== 'number') return board
+  // Une délégation ancienne ou sur un parcours fini ne revient pas : sinon la session ne la quitterait jamais.
+  if ((now !== undefined && now - d.at > DELEGATE_KEEP_MS) || board.runs.some(r => r.id === d.run && r.status === 'done')) return board
+  const text = (key: string) => (typeof d[key] === 'string' && d[key] !== '' ? { [key]: d[key] as string } : {})
+  return { ...board, activeId: null, delegate: { run: d.run, at: d.at, ...text('title'), ...text('group'), ...text('main') } }
+}
+
+/**
+ * La première réponse de l'outil après un rechargement du mod : l'état retrouvé. Le 22/10, la
+ * discussion avait tout renvoyé par précaution alors que rien n'était perdu. Vide sans parcours actif.
+ */
+export const reloadText = (board: Board): string => {
+  if (board.delegate) {
+    const group = board.delegate.group ? `, group ${board.delegate.group}` : ''
+    return `State found after a plugin reload: delegate mode kept for the workflow "${delegatedTitle(board)}"${group}; nothing to send again.`
+  }
+  const run = activeRun(board)
+  if (!run) return ''
+  const phase = currentPhase(run)
+  return `State found after a plugin reload: ${run.tickets.length} tickets, ${(run.groups ?? []).length} groups, phase ${SKILLS[phase.skill]?.label ?? phase.skill}; nothing to send again.`
+}
+
 /** Le titre du parcours pour lequel la discussion travaille : dans ce board, sinon celui relevé à la déclaration. */
 export const delegatedTitle = (board: Board): string =>
   board.runs.find(r => r.id === board.delegate?.run)?.title ?? board.delegate?.title ?? board.delegate?.run ?? ''
@@ -1364,10 +1452,10 @@ export const delegatedTitle = (board: Board): string =>
 const reachText = (board: Board): string => {
   const main = board.delegate?.main
   const how =
-    'send to its bare name; if no agent of that name is reachable (it was renamed), call ListAgents, find the row whose [ref] is the one your brief gives, and send to that row\'s "<name> [ref]" exactly as listed; if no row has it, say so in the first line of your final message.'
+    'call ListAgents, find the row whose [ref] is the one your brief gives, and send to that row\'s "<name> [ref]" exactly as listed (its name can change, its [ref] does not); if no row has it, say so in the first line of your final message.'
   return main
-    ? `Reach the main discussion, "${main}" (name, then its [ref]) when your brief was written: ${how}`
-    : `Reach the main discussion by the name and [ref] your brief gives: ${how}`
+    ? `Reach the main discussion, "${main}" in your brief, by its [ref]: ${how}`
+    : `Reach the main discussion by the [ref] your brief gives: ${how}`
 }
 
 const delegateText = (board: Board): string => {
@@ -1377,7 +1465,7 @@ const delegateText = (board: Board): string => {
     'Your progress is relayed to the main discussion\'s dashboard on its own: ticket statuses from your Asana updates (« Statut : » line, completion), your commits and your test runs. ' +
     'Only if a ticket\'s status changes without an Asana update, send it here with {"set": [{"id": "<ticket id>", "status": "doing|done|blocked", "why": "<if blocked>"}]}. ' +
     'Each choice you make that the user neither asked for nor approved goes here at once, in {"decided": [{"what": "<the choice>", "why": "<why>"}]}: the main dashboard shows it for review right away; a choice that touches a sensitive area (privacy, data deletion, encryption, concurrency) is never declared: ask the user. ' +
-    'End with your report, one line per ticket (done, or not done and why): send it to the main discussion with SendMessage, and also leave it here, {"report": "<the whole report>"}: it is kept in the run\'s relay file, which the main discussion rereads if your message gets lost (renamed or restarted discussion); it checks your work and records the statuses. Nothing else is accepted. ' +
+    'End with your report, one line per ticket (done, or not done and why): leave your whole report here, {"report": "<the whole report>"}: it is kept in the run\'s relay file, which the main discussion reads; then send the main discussion one line that points to it with SendMessage (that message wakes it up), and end on that same line. The main discussion checks your work and records the statuses. Nothing else is accepted. ' +
     reachText(board)
   )
 }
@@ -1620,7 +1708,10 @@ const reportHere = (
     if (refused.length > 0) reviewedText = ` · reviewed: no finished group among ${refused.join(', ')}`
   }
   // Après `reviewed` : une revue que le compte rendu de la session confirme, envoyée avec `returned`, vaut.
-  const unreviewed = returned.filter(id => run.groups!.find(g => g.id === id)?.reviewedAt === undefined)
+  const unreviewed = returned.filter(id => {
+    const g = run.groups!.find(x => x.id === id)
+    return g !== undefined && !isGroupReviewed(run, g)
+  })
   if (unreviewed.length > 0) {
     const ids = unreviewed.map(id => `"${id}"`).join(', ')
     returnText += ` · returned without a /code-review relayed by its linked session: ${unreviewed.join(', ')}. If its final report says the group review ran there, send {"reviewed": [${ids}]}: the review button then goes away. Otherwise the group still needs its review, in its linked session (its branch is merged here): tell the user, the dashboard's « Revue du groupe · session liée » button asks for it`
@@ -1946,6 +2037,18 @@ export const linkGroupSession = (board: Board, title: string, session: string, n
   const run = activeRun(b)!
   run.groups = run.groups!.map(g => (g.id === target.id ? { ...g, linked: { ...g.linked!, session } } : g))
   log(run, now, '↗', `Session liée lancée pour le groupe ${target.id}`, 'info')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/** Un groupe rendu par sa session liée : la fermeture de sa session et de son worktree est demandée. */
+export const askCloseLinkedGroup = (board: Board, id: string, now: number): Outcome => {
+  const was = activeRun(board)?.groups?.find(g => g.id === id)
+  if (!was?.delegated || was.delegated.closeAskedAt !== undefined) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  run.groups = run.groups!.map(g => (g.id === id ? { ...g, delegated: { ...g.delegated!, closeAskedAt: now } } : g))
+  log(run, now, '✕', `Fermeture de la session et du worktree du groupe ${id} demandée`, 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -3272,7 +3375,7 @@ export const reportFacts = (run: Run): string[] => {
     const state = (g: TicketGroup) => {
       const done = g.tickets.filter(id => ticketOf(run, id)?.status === 'done').length
       const sec = securityText(g.security)
-      return `${g.id} (${g.name}): ${done}/${g.tickets.length} done${g.reviewedAt !== undefined ? ', reviewed by /code-review' : ''}${sec ? `, ${sec}` : ''}`
+      return `${g.id} (${g.name}): ${done}/${g.tickets.length} done${g.reviewedAt !== undefined ? ', reviewed by /code-review' : isTicketReviewEnough(run, g) ? ', reviewed by its single ticket review (no logic, not sensitive)' : ''}${sec ? `, ${sec}` : ''}`
     }
     lines.push(`- Groups, each usually run in its own discussion: ${groups.map(state).join('; ')}. Report every group, not only the one of this discussion: write « Fait » group by group.`)
   }
@@ -3495,12 +3598,21 @@ const tailOf = (path: string): string => path.replace(/\\/g, '/').replace(/\/+$/
 
 type Zone = { key: string; raw: string }
 
+/**
+ * Les documents que presque tous les tickets citent (README, fichier de décisions, carte du code) :
+ * ils bloquaient tout groupe en parallèle, alors que leurs ajouts se fusionnent sans peine.
+ */
+const COMMON_DOCS = new Set(['readme.md', 'decisions.md', 'carte-du-code.md', 'codemap.md'])
+
+/** Un chemin comparable (`zoneOf`, en minuscules) qui désigne un document commun, où qu'il soit. */
+const isCommonDoc = (key: string): boolean => COMMON_DOCS.has(tailOf(key))
+
 /** Les fichiers d'un groupe : les siens et ceux de ses tickets encore ouverts, sans doublon. */
 const zonesOf = (v: { group: TicketGroup; open: readonly Ticket[] }): Zone[] => {
   const out: Zone[] = []
   for (const raw of [...(v.group.files ?? []), ...v.open.flatMap(t => t.files ?? [])]) {
     const key = zoneOf(raw)
-    if (key !== '' && !out.some(z => z.key === key)) out.push({ key, raw })
+    if (key !== '' && !isCommonDoc(key) && !out.some(z => z.key === key)) out.push({ key, raw })
   }
   return out
 }

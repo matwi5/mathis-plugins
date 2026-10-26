@@ -4,6 +4,48 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.56.0 — 2026-10-26
+
+Constaté le 26/10/2026 dans la rétro d'un parcours à 22 tickets et 7 sessions liées : `/code-review` tourne en exécution dérivée et ne reçoit que ses arguments, si bien qu'une revue `--fix` a modifié une route que le brief réservait au porteur, qu'une autre a relu un seul commit (un hash seul lui avait été donné), que des relecteurs ont relancé des tests et que l'un a modifié l'arbre de travail pour tenter une preuve rouge.
+
+### Ajouté
+- **Zone sensible et logique de chaque ticket** : la consigne de `/to-tickets` fait écrire à chaque ticket « Zone sensible : oui/non (pourquoi) » et « Logique : oui/non », envoyés à l'outil (`sensitive`, `logic`) et gardés avec le ticket ; un seul ticket sur quinze le disait, et l'avis « zone sensible » avait été suivi par un groupe et ignoré par un autre.
+- **Étape « Conséquences sensibles »** au cadrage (`/to-spec`, grilling) : ce qu'un changement ou un retrait laisse derrière lui en zone sensible (fichiers en clair, journaux qui dépendent d'un mode, données gardées), chaque point devenant une question.
+- **Fermer la session et le worktree d'un groupe rendu** : un bouton « ✕ Fermer la session et le worktree » sur la ligne d'un groupe rendu met dans le prompt une demande à Claude : `claude stop <id>` (une session de l'app se ferme à la main), puis `git worktree remove` sans rien forcer, seulement si l'arbre est propre et la branche fusionnée ; la branche reste. Des sessions de groupe restaient ouvertes après leur fusion. Le mod n'a pas d'API pour arrêter une session.
+
+### Modifié
+- **Commit avant la revue d'un ticket hors zone sensible** (choix de Mathis, « Non sensible seulement ») : la consigne du commit le fait passer dès les contrôles, avant la revue, pour que le ticket suivant démarre pendant qu'elle tourne ; ses correctifs arrivent dans un commit à part. Un ticket sensible garde sa revue avant son commit. Sans git, rien ne change.
+- **Bouton « ◆ Revue du groupe » sans `--fix` pour un groupe sensible** (choix de Mathis, « Sans --fix si sensible ») : il mettait toujours `/code-review high --fix`. Il met `/code-review high` quand un ticket du groupe est sensible ou ne l'a pas dit (dans le doute, sensible), comme la carte « Ensuite » et la suggestion du prompt. Le commit avant la revue ne vaut que pour un ticket dit non sensible.
+- **Rechargement du mod** : la première réponse de l'outil après un rechargement dit l'état retrouvé (tickets, groupes, phase, ou la délégation) et qu'il n'y a rien à renvoyer ; la description de l'outil le dit aussi. La pause au redémarrage ne change pas.
+- **Groupe confié en cours** : « ↗ en cours · session liée » dès que l'id de sa session est relevé, et compté au bandeau avant le premier signal relayé.
+- **Plus de filet `notify_when_idle`** : il avait réveillé la discussion principale cinq fois pendant un groupe, dont quatre pour rien ; le message final de la session suffit, le relais rattrape un message perdu.
+- **Exposition vérifiée avant une question de confidentialité** : la consigne des skills de cadrage fait vérifier l'exposition réelle par un sous-agent en lecture seule ; sans cette vérification, la question la dit « à confirmer ».
+- **`CLAUDE.md` hors des tickets de groupe** : la consigne de `/to-tickets` garde une écriture de `CLAUDE.md` hors du « Fini quand » d'un ticket de groupe (un ticket était resté 19 heures en attente) ; c'est un geste de la discussion principale.
+- **Documents communs hors du parallélisme** : `README.md`, `DECISIONS.md` et la carte du code (`carte-du-code.md`, `CODEMAP.md`) n'empêchent plus deux groupes de tourner ensemble, et `/to-tickets` les laisse hors de `files`.
+- **Groupe d'un seul ticket sans logique** : un groupe d'un seul ticket ni sensible ni avec logique n'attend plus de revue du groupe (« ✓ revu par son ticket ») ; un groupe d'une icône avait eu quatre revues Opus en cascade.
+- **Seuil de taille** : les « moins de 100 lignes » qui font relire les deux axes par un seul relecteur se comptent par `git diff --numstat`, sans les fichiers générés ni les binaires (346 lignes de SVG généré avaient compté).
+- **Sécurité avec la revue du groupe** : la revue de sécurité, en lecture seule, part dans le même message que la revue du groupe, puis relit seulement le diff des correctifs ; la carte affiche « Revue du groupe ∥ Revue de sécurité ».
+- **Constats sur du code antérieur au lot** : la consigne des relecteurs les fait classer à part, sans les corriger ; ils sont proposés en fin de lot comme un groupe « durcissement » (6 tickets sur 22 en venaient, traités au fil de l'eau).
+- **Brief des sessions liées** : installation du worktree déclarée par le projet en première commande, avant toute lecture ; discussion principale désignée par sa seule référence `[ref]`, résolue par `ListAgents` (aussi dans `main` de `delegate`, et dans la réponse de l'outil à la session) ; compte rendu complet au relais seulement, une ligne de renvoi par SendMessage et en réponse finale (il était écrit trois fois) ; questions sensibles avant le premier ticket ; relecteur sans nouvelles depuis 10 à 15 minutes relancé ; sous-agent attendu par sa notification, sans Monitor ; `/tdd` sauté pour un ticket sans comportement testable ; Edit pour une modification unique ; visuel à valider : planche, intégration réversible, choix déclaré, validation au retour.
+- **Sécurité corrigée après coup** : au retour d'un groupe, la discussion principale renvoie `security` avec les failles corrigées après coup ; le tableau de bord affichait « 0 corrigé » pour deux constats corrigés ensuite.
+- **Consignes de revue par un fichier** : chaque revue reçoit ses consignes (périmètre, chemin du fichier des choix, points réservés au porteur, interdits, consigne des relecteurs) dans un fichier du dossier temporaire, dont le chemin suit la cible : `/code-review <niveau> <base>..HEAD consignes : <chemin>` ; un relecteur lancé par l'outil Agent le reçoit dans son prompt. Forme essayée avec Claude Code 2.1.310 (niveaux `low` et `high`, avec et sans `--fix`) : le fichier est lu d'abord et ne devient pas la cible. Consignes d'`/implement`, des revues, brief des sessions liées, revue d'un groupe rendu, revues de sécurité.
+- **Cible en plage** : la revue d'un groupe vise `<base>..HEAD` (le repli « lui donner le nom de la branche » disparaît) ; celle d'un groupe rendu, la plage de ses commits, jamais un hash seul.
+- **Zone sensible sans `--fix`** : quand un ticket du groupe touche une zone sensible, la revue du groupe tourne sans `--fix` et son relecteur n'applique que les constats qu'il retient.
+- **Consigne des relecteurs** : un relecteur n'écrit jamais dans l'arbre de travail, même un instant ; la preuve rouge reste à la session ; seules les revues de groupe écrivent leurs correctifs.
+- **Renvois à la règle des revues** : le tableau des revues du README renvoie à la section « Revues dans un sous-agent Opus » de `config/rules/agents.md` au lieu de redire modèle et effort.
+
+### Corrigé
+- **Délégation gardée** : dans une session liée, `delegate` est gardé par session (trois jours au plus, jamais sur un parcours fini) et revient quand le mod recharge le tableau de bord ; il se perdait.
+
+---
+
+## 0.55.0 — 2026-10-26
+
+### Modifié
+- **Effort de la session de diagnostic de bug** : « 🐞 Bug · session liée » ne laisse plus la session prendre l'effort de la discussion. La demande dit à Claude de la lancer en high pour une première tentative, en xhigh pour une deuxième quand une session de bug du parcours a déjà essayé de corriger ce même bug et qu'il est toujours là (son brief donne alors ce que la première a trouvé et essayé), de le passer à `start_session` (`effort`) ou à `claude --bg` (`--effort`) et de te le dire en une ligne. Pas de troisième session après un second échec : on replanifie ensemble. À la note de fin, si le bug est toujours là, Claude te le dit et propose la deuxième tentative au lieu de reprendre le parcours.
+
+---
+
 ## 0.54.0 — 2026-10-22
 
 Constaté le 22/10/2026 dans la rétro d'un parcours à quatre sessions liées : la discussion principale a changé de nom et de référence trois fois (redémarrages, renommages), le compte rendu d'un groupe n'est jamais arrivé et le premier envoi d'un autre a échoué ; les briefs recopiaient les règles du projet et l'effort des revues, et une copie s'est périmée (`xhigh` imposé alors que la règle venait de passer à `high`) ; la liste des choix déclarés, recopiée à la main dans sept ou huit consignes de revue par session, n'a pas empêché une passe `--fix` d'appliquer un correctif exclu, et un relecteur a rendu son rapport sans attendre le second axe ; deux sessions ont rendu la main en attendant une commande de tests sans délai maximal qui ne finissait pas ; `claude logs` rendait une sortie illisible.

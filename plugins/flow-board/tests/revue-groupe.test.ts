@@ -54,7 +54,8 @@ test('un groupe fini propose sa revue (/code-review), puis passe « revu » ; la
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'review-group-A' })
   await ui.unmount()
-  expect(filled.at(-1)).toBe('/code-review high --fix')
+  // Ses tickets n'ont pas dit s'ils sont sensibles : dans le doute, la revue part sans --fix.
+  expect(filled.at(-1)).toBe('/code-review high')
 
   // /code-review lancé dans la discussion : le groupe A est relu, plus de revue proposée.
   await $.skill.prompt({ skill: 'code-review', text: 'r' })
@@ -172,10 +173,10 @@ test('avec git, les revues partent du commit d’avant le ticket ou de la base d
   expect(implement).toContain("review (/mattpocock-skills:code-review on this ticket's changes only (Skill tool; fixed point: the commit before the ticket)")
   expect(implement).toContain('on the same scope (fixed point: the commit before the ticket)')
   expect(implement).toContain("Revue du groupe (/code-review high --fix of Claude Code on the group's changes (launched by the user")
-  expect(implement).toContain('by the session itself), run in a reviewer subagent (Agent tool, general-purpose, model opus, effort high) that launches /code-review high --fix itself and applies its fixes itself, giving it')
+  expect(implement).toContain('by the session itself), run in a reviewer subagent (Agent tool, general-purpose, model opus, effort high; review rule, config/rules/agents.md when installed) that launches /code-review high --fix itself, the path of its instructions file after the target, and applies its fixes itself, giving it')
   expect(bug).toContain('This is the bug pass of the ticket in progress (sensitive area), not the review of a group: same scope as its /mattpocock-skills:code-review (fixed point: the commit before the ticket)')
   // La revue du groupe tourne dans un sous-agent relecteur Opus high, qui écrit lui-même ses correctifs.
-  expect(group).toContain('This is the review of a finished group: run it in a reviewer subagent (Agent tool, general-purpose, model opus, effort high) that launches /code-review high --fix itself and applies its fixes itself, not in this discussion, and give that subagent these instructions')
+  expect(group).toContain('This is the review of a finished group: run it in a reviewer subagent (Agent tool, general-purpose, model opus, effort high; review rule, config/rules/agents.md when installed) that launches /code-review high --fix itself, the path of its instructions file after the target, and applies its fixes itself, not in this discussion, and give that subagent these instructions')
   expect(group).toContain('Then read the diff of its fixes, rerun the checks and commit them.')
   expect(group).toContain('git diff <group base>..HEAD')
   for (const text of [implement, bug, group]) expect(text).not.toMatch(/Without git|copy/)
@@ -192,7 +193,7 @@ test('sans git, chaque revue compare la copie prise avant le ticket (ou le group
   expect(implement).toContain("Revue du groupe (/code-review high --fix of Claude Code on the group's changes (fixed point: for each file, the oldest copy among the group's tickets, diffed against the current file (\"Without git\" below)) (launched by the user")
   expect(bug).toContain('same scope as its /mattpocock-skills:code-review (fixed point: the copy of its files taken before the ticket')
   expect(bug).toContain('- Without git:')
-  expect(group).toContain("This is the review of a finished group (fixed point: for each file, the oldest copy among the group's tickets, diffed against the current file (\"Without git\" below): give it these copies and files): run it in a reviewer subagent (Agent tool, general-purpose, model opus, effort high) that launches /code-review high --fix itself and applies its fixes itself, not in this discussion")
+  expect(group).toContain("This is the review of a finished group (fixed point: for each file, the oldest copy among the group's tickets, diffed against the current file (\"Without git\" below): give it these copies and files): run it in a reviewer subagent (Agent tool, general-purpose, model opus, effort high; review rule, config/rules/agents.md when installed) that launches /code-review high --fix itself, the path of its instructions file after the target, and applies its fixes itself, not in this discussion")
   expect(group).toContain('- Without git:')
   for (const text of [implement, bug, group]) {
     expect(text).not.toContain('the commit before the ticket')

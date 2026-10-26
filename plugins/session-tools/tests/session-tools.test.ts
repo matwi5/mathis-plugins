@@ -274,6 +274,111 @@ describe("session-tools", () => {
     expect(calls.toasts).toEqual(["Réécrire : le champ de saisie est vide."]);
   });
 
+  // Sous le plugin : la commande /effort intégrée, qui ne renvoie aucun texte en interactif.
+  const effortRuns = (on: any) => {
+    const runs: string[] = [];
+    on("command.run", { command: "effort" }, ($: any, e: any) => {
+      runs.push(e.args);
+      return {};
+    });
+    return runs;
+  };
+
+  for (const surface of ["terminal", "desktop"] as const) {
+    test(`Effort auto : Opus low choisit le niveau du brouillon, réglé par /effort (${surface})`, async ($, on) => {
+      mock.clock(on, { now: 1_000_000 });
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      engineDraws(on);
+      const calls = rewriteSetup(on, ["corrige le bug de reconnexion en prod"], 'Voici : {"effort": "high", "raison": "Bug en production, cas limites."}');
+      const runs = effortRuns(on);
+      await $.session.start({ surface, isInteractive: true, cwd: "/work" } as any);
+      const ui = await $.ui.mount({ plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } } as any);
+      expect((await ui.find({ key: "effort" }))?.text).toBe("Effort auto");
+
+      await ui.press({ key: "effort" });
+      const [request] = calls.requests;
+      expect(request.model).toBe("opus");
+      expect(request.effort).toBe("low");
+      expect(request.system).toMatch(/^# Choisir le niveau d'effort d'un brouillon/);
+      expect(request.prompt).toBe("<brouillon>\ncorrige le bug de reconnexion en prod\n</brouillon>");
+      expect(runs).toEqual(["high"]);
+      expect(calls.toasts).toEqual(["Effort demandé : high (Bug en production, cas limites.)"]);
+      // Le brouillon reste tel quel, et Ultracode n'en est pas touché.
+      expect(calls.fills).toEqual([]);
+      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/off$/);
+      expect((await ui.find({ key: "effort" }))?.text).toBe("Effort auto");
+    });
+  }
+
+  test("l'option model choisit le modèle des deux boutons, toujours en effort low", { options: { model: "haiku" } }, async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["brouillon"], '{"effort": "medium", "raison": "Simple."}');
+    effortRuns(on);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    await ui.press({ key: "effort" });
+    expect(calls.requests.map((r: any) => [r.model, r.effort])).toEqual([
+      ["haiku", "low"],
+      ["haiku", "low"],
+    ]);
+  });
+
+  test("Effort auto : une réponse illisible laisse l'effort tel quel", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["brouillon"], '{"effort": "énorme", "raison": "?"}');
+    const runs = effortRuns(on);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "effort" });
+    expect(runs).toEqual([]);
+    expect(calls.toasts).toEqual(["Effort auto : réponse illisible, l'effort est laissé tel quel."]);
+  });
+
+  test("Effort auto : un brouillon envoyé ou changé pendant le choix garde l'effort", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["brouillon", ""], '{"effort": "xhigh", "raison": "Long."}');
+    const runs = effortRuns(on);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "effort" });
+    expect(runs).toEqual([]);
+    expect(calls.toasts).toEqual(["Effort auto : le brouillon a changé pendant le choix, l'effort est laissé tel quel."]);
+  });
+
+  test("Effort auto : un niveau sans raison est quand même réglé", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["brouillon"], '{"effort": "low"}');
+    const runs = effortRuns(on);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "effort" });
+    expect(runs).toEqual(["low"]);
+    expect(calls.toasts).toEqual(["Effort demandé : low"]);
+  });
+
+  test("Effort auto : un champ vide ne lance pas le modèle", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, [""]);
+    const runs = effortRuns(on);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "effort" });
+    expect(calls.requests).toEqual([]);
+    expect(runs).toEqual([]);
+    expect(calls.toasts).toEqual(["Effort auto : le champ de saisie est vide."]);
+  });
+
   for (const surface of ["terminal", "desktop"] as const) {
     test(`chrono de réponse : de l'envoi du message à la fin du tour (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const clock = mock.clock(on, { now: 1_000_000 });

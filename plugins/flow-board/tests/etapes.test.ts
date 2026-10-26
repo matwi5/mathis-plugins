@@ -107,7 +107,7 @@ test('pendant /implement, le ticket en cours se lit dans son groupe, avec sa pla
     // Pas d'étape en cours (plusieurs tickets peuvent avancer en même temps), mais l'ordre fixe.
     expect(await ui.find({ type: 'Text', text: /^Boucle TDD$|^Contrôles$/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^Par ticket : Lire spec et ticket.›.Boucle TDD.›.Contrôles.›.Revue du ticket.›.Commit et suivi$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^Par groupe, ses tickets faits : Revue du groupe.›.Revue de sécurité.›.Rendu du groupe$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Par groupe, ses tickets faits : Revue du groupe.∥.Revue de sécurité.›.Rendu du groupe$/ })).toBeDefined()
     await ui.unmount()
   }
 })

@@ -11,6 +11,8 @@ declare module "claude-code" {
       ultracode: boolean;
       // Vrai pendant qu'Opus réécrit le brouillon (bouton « Réécrire »).
       rewriting: boolean;
+      // Vrai pendant qu'Opus choisit le niveau d'effort du brouillon (bouton « Effort auto »).
+      choosingEffort: boolean;
       responseTimer: ResponseTimer;
       generationSpeed: GenerationSpeed;
     };

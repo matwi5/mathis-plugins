@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.9.0 — 2026-10-26
+
+### Ajouté
+- **Récap d'un parcours.** `/stats-board:recap` totalise un parcours entier (discussion principale, sessions liées, sous-agents compris) sans chercher les identifiants à la main : `--parcours "<titre ou début du titre>"` retient les sessions dont le dernier titre (donné ou renommé, sinon automatique) commence ainsi, sessions liées de flow-board au titre raccourci (« … › Groupe X ») comprises ; `--worktrees <dossier du projet>` celles des worktrees `groupe-*` du projet (plus la discussion principale si son identifiant est passé). Sessions prises sur 60 jours, ou entre `--since` et `--until` (AAAA-MM-JJ). Le récap donne le coût total, les tokens, le coût par modèle et, pour chaque session, ses heures, sa durée et son coût.
+
+---
+
 ## 0.8.0 — 2026-10-22
 
 ### Ajouté
