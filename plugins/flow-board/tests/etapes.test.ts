@@ -93,7 +93,9 @@ test('pendant /implement, le ticket en cours se lit dans son groupe, avec sa pla
     groups: [{ id: 'A', name: 'Worker', tickets: ['A1', 'A2'] }],
   } as any)
   let ui = await $.ui.mount({ plugin: 'flow-board', surface: 'desktop', ...PANE })
-  await ui.press({ key: 'launch-group-A' })
+  await ui.press({ key: 'pick-A1' })
+  await ui.press({ key: 'pick-A2' })
+  await ui.press({ key: 'launch-picks' })
   await ui.unmount()
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'y' })
   await $.tool.call({ tool: 'mcp__flow-board__flow', set: [{ id: 'A1', status: 'doing' }] } as any)

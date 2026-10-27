@@ -8,7 +8,7 @@
 //   transcript (catch-up.ts) rendra ce qui manque.
 // - Sur le disque, jamais de rapport ni de texte de message : la description, le prompt (Q8), des chiffres.
 
-import type { AgentLane, AgentMark, AgentSegment, AgentStatus, AgentType, CarrySpan, LinkedLaunch, RegistryAgent, RegistryPart, Run, SessionRegistry } from '../types'
+import type { AdvisorCall, AdvisorFigures, AdvisorLane, AgentLane, AgentMark, AgentSegment, AgentStatus, AgentType, CarrySpan, LinkedLaunch, RegistryAgent, RegistryPart, Run, SessionRegistry } from '../types'
 import { maskSecrets } from './timeline.ts'
 
 /** Longueur gardée d'un prompt (S11) : environ 300 sous-agents tiennent sous la limite de 4 Mio d'une écriture. */
@@ -33,7 +33,7 @@ export const emptyRegistry = (session: string, root: string, now: number): Sessi
 // Un fichier se relit entrée par entrée : un en-tête abîmé le rend illisible (S8), une entrée de
 // sous-agent, un segment ou un repère abîmé est seulement ignoré, sans casser l'onglet.
 
-const SEGMENT_KINDS: readonly string[] = ['think', 'write', 'tool', 'waitAgent', 'waitPerson', 'waitBg']
+const SEGMENT_KINDS: readonly string[] = ['think', 'write', 'tool', 'waitAgent', 'waitPerson', 'waitBg', 'waitAdvisor']
 const FAMILIES: readonly string[] = ['read', 'edit', 'run', 'web', 'agent', 'other']
 const MARK_KINDS: readonly string[] = ['fail', 'stop', 'relay', 'back', 'compact', 'msg', 'commit', 'test']
 const AGENT_TYPES: readonly string[] = ['explore', 'research', 'implement', 'review', 'security', 'merge', 'plan', 'transcripts', 'other']
@@ -109,6 +109,43 @@ export const cleanAgent = (x: unknown): RegistryAgent | null => {
   return agent
 }
 
+/** Au plus tant d'appels gardés sur la ligne advisor : les plus récents. */
+export const ADVISOR_CALLS_MAX = 2_000
+
+/** Un instant plausible, en ms : après 2020, avant 2200 (un nombre hors de là est abîmé). */
+const isTime = (x: unknown): x is number => isNum(x) && x >= 1_577_836_800_000 && x < 7_258_118_400_000
+
+/** Un compte de tokens plausible : entier, positif, sous le milliard. */
+const isCount = (x: unknown): x is number => isNum(x) && x >= 0 && x < 1e9
+
+/**
+ * Les chiffres d'un appel lus sur le disque, bornés : un id, des heures plausibles, la fin après le
+ * début ; un modèle et des tokens seulement s'ils se lisent en entier.
+ */
+export const cleanAdvisorFigures = (x: unknown): AdvisorFigures | null => {
+  if (!isObject(x) || !isText(x.id) || x.id === '' || !isTime(x.s) || (x.e !== undefined && (!isTime(x.e) || x.e < x.s))) return null
+  const call: AdvisorFigures = { id: x.id.slice(0, 200), s: x.s }
+  if (isTime(x.e)) call.e = x.e
+  if (isText(x.model) && x.model !== '') call.model = x.model.slice(0, 100)
+  const t = x.tokens
+  if (isObject(t) && isCount(t.input) && isCount(t.output) && isCount(t.cacheRead) && isCount(t.cacheWrite)) call.tokens = { input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite }
+  return call
+}
+
+/** Un appel lu sur le disque : ses chiffres bornés, et un appelant. */
+const cleanAdvisorCall = (x: unknown): AdvisorCall | null => {
+  const figures = cleanAdvisorFigures(x)
+  if (!figures || !isObject(x) || !isText(x.by) || x.by === '') return null
+  return { ...figures, by: x.by.slice(0, 200), ...(x.isRead === true ? { isRead: true } : {}) }
+}
+
+/** Une liste d'appels lue sur le disque, ADVISOR_CALLS_MAX au plus (les plus récents), chacun borné. */
+export const cleanAdvisorList = <T>(x: unknown, clean: (item: unknown) => T | null): T[] =>
+  Array.isArray(x) ? x.slice(-ADVISOR_CALLS_MAX).map(clean).filter((c): c is T => c !== null) : []
+
+/** La ligne advisor lue appel par appel. */
+const cleanAdvisor = (x: Loose): AdvisorLane => ({ calls: cleanAdvisorList(x.calls, cleanAdvisorCall) })
+
 const cleanLaunch = (x: unknown): LinkedLaunch | null => {
   if (!isObject(x) || !isText(x.id) || x.id === '' || !isNum(x.at) || (x.via !== 'bg' && x.via !== 'desktop')) return null
   const launch: LinkedLaunch = { id: x.id, at: x.at, via: x.via }
@@ -128,6 +165,7 @@ export const cleanRegistry = (value: unknown): SessionRegistry | null => {
   }
   copyTexts(value, reg as Loose, ['title', 'transcript', 'run', 'group'])
   if (isObject(value.main)) reg.main = cleanLane(value.main)
+  if (isObject(value.advisor)) reg.advisor = cleanAdvisor(value.advisor)
   if (isNum(value.parts) && value.parts > 1) reg.parts = Math.min(PARTS_MAX, Math.floor(value.parts))
   const linked = cleanList(value.linked, cleanLaunch)
   if (linked && linked.length > 0) reg.linked = linked
@@ -503,15 +541,17 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
     carried.length !== (local.carried ?? []).length ||
     Object.entries(spans).some(([id, s]) => !sameSpans(local.carriedAt?.[id], s)) ||
     (Number.isFinite(notedAt) && notedAt !== local.carriedNotedAt)
-  // La piste de l'orchestrateur se fusionne aussi (S12).
+  // La piste de l'orchestrateur se fusionne aussi (S12), et la ligne advisor.
   const main = mergeLane(local.main, stored.main)
-  if (!isChanged && !isHeaderChanged && !isLinkedChanged && !isCarriedChanged && main === local.main) return local
+  const advisor = mergeAdvisor(local.advisor, stored.advisor)
+  if (!isChanged && !isHeaderChanged && !isLinkedChanged && !isCarriedChanged && main === local.main && advisor === local.advisor) return local
   const merged: SessionRegistry = {
     ...local,
     agents: [...byKey.values()].sort((a, b) => a.startedAt - b.startedAt),
     updatedAt: Math.max(local.updatedAt, stored.updatedAt),
   }
   if (main !== undefined) merged.main = main
+  if (advisor !== undefined) merged.advisor = advisor
   if (launches.length > 0) merged.linked = launches.sort((a, b) => a.at - b.at)
   if (carried.length > 0) merged.carried = carried
   if (Object.keys(spans).length > 0) merged.carriedAt = spans
@@ -568,6 +608,51 @@ const mergeLane = (mine: AgentLane | undefined, theirs: AgentLane | undefined): 
   }
   if (!isChanged) return mine
   return { ...mine, segments: [...segs.values()].sort((a, b) => a.s - b.s), marks: [...marks.values()].sort((a, b) => a.at - b.at) }
+}
+
+/**
+ * Un appel connu complété par un autre relevé du même appel : la fin quand elle manquait, le
+ * modèle et les tokens quand ils manquaient, la marque « relu ». null quand l'autre n'apporte rien.
+ */
+const fillCall = (own: AdvisorCall, other: AdvisorCall): AdvisorCall | null => {
+  const next: AdvisorCall = { ...own }
+  if (own.e === undefined && other.e !== undefined) next.e = Math.max(own.s, other.e)
+  if (own.model === undefined && other.model !== undefined) next.model = other.model
+  if (own.tokens === undefined && other.tokens !== undefined) next.tokens = other.tokens
+  if (own.isRead !== true && other.isRead === true) next.isRead = true
+  return next.e !== own.e || next.model !== own.model || next.tokens !== own.tokens || next.isRead !== own.isRead ? next : null
+}
+
+/**
+ * Des appels ajoutés à la ligne advisor : un appel déjà connu (même id) est complété, un nouveau
+ * s'ajoute ; ADVISOR_CALLS_MAX au plus, les plus récents. `lane` tel quel quand rien ne change.
+ */
+const withCalls = (lane: AdvisorLane | undefined, calls: readonly AdvisorCall[]): AdvisorLane | undefined => {
+  if (calls.length === 0) return lane
+  const byId = new Map((lane?.calls ?? []).map(c => [c.id, c]))
+  let isChanged = false
+  for (const c of calls) {
+    const own = byId.get(c.id)
+    const next = own === undefined ? c : fillCall(own, c)
+    if (next === null) continue
+    byId.set(c.id, next)
+    isChanged = true
+  }
+  return isChanged ? { calls: [...byId.values()].sort((a, b) => a.s - b.s).slice(-ADVISOR_CALLS_MAX) } : lane
+}
+
+/** La ligne advisor de deux processus de la même session : union des appels par id, chacun complété par l'autre. */
+const mergeAdvisor = (mine: AdvisorLane | undefined, theirs: AdvisorLane | undefined): AdvisorLane | undefined =>
+  theirs ? withCalls(mine, theirs.calls) : mine
+
+/**
+ * Les appels à l'advisor qu'un transcript donne pour l'appelant `by` : chacun complète l'appel vu
+ * en direct (même id), ou s'ajoute quand le direct ne l'a pas vu (discussion passée, autre
+ * processus). Les tokens de l'advisor ne vont jamais sur la piste de l'appelant. null quand rien ne change.
+ */
+export const catchUpAdvisor = (reg: SessionRegistry, by: string, found: readonly AdvisorFigures[] | undefined, now: number): SessionRegistry | null => {
+  const advisor = withCalls(reg.advisor, (found ?? []).map(c => ({ ...c, by, isRead: true })))
+  return advisor === reg.advisor || advisor === undefined ? null : { ...reg, advisor, updatedAt: now }
 }
 
 // ─── Morceaux du registre (R1) ────────────────────────────────────────────
@@ -794,6 +879,44 @@ export const closeOpen = (reg: SessionRegistry, lane: string, end: number, keep:
   const segs = laneOf(reg, lane)?.segments ?? []
   if (!segs.some(s => s.e === undefined && !keep(s))) return null
   return withLane(reg, lane, { segments: segs.map(s => (s.e === undefined && !keep(s) ? { ...s, e: Math.max(end, s.s) } : s)) }, end)
+}
+
+/** Un outil que l'API a lancé elle-même dans une requête (`serverToolUses` d'une étape). */
+export type ServerToolUse = { id: string; name: string; startedAt: number; endedAt?: number }
+
+/**
+ * La réflexion ou la rédaction qui couvrait un appel à l'advisor s'y coupe : l'agent attendait
+ * l'advisor ; l'attente « consulte l'advisor » prend sa place.
+ */
+const cutForAdvisor = (segs: readonly AgentSegment[], call: AdvisorCall & { e: number }): AgentSegment[] => {
+  const out: AgentSegment[] = []
+  for (const seg of segs) {
+    if ((seg.k === 'think' || seg.k === 'write') && seg.e !== undefined && seg.s < call.e && seg.e > call.s) {
+      if (call.s > seg.s) out.push({ ...seg, e: call.s })
+      if (seg.e > call.e) out.push({ ...seg, s: call.e })
+    } else out.push(seg)
+  }
+  out.push({ k: 'waitAdvisor', s: call.s, e: call.e, t: 'advisor' })
+  return out.sort((a, b) => a.s - b.s)
+}
+
+/**
+ * Les appels à l'advisor d'une étape du modèle de la piste `lane`, appris à sa fin : chacun sur la
+ * ligne advisor (sa fin, ou celle de l'étape quand elle manque), et sur la piste de l'appelant une
+ * attente « consulte l'advisor » dans le même intervalle. Un appel déjà noté ne compte qu'une
+ * fois ; null quand rien ne change.
+ */
+export const addAdvisorCalls = (reg: SessionRegistry, lane: string, uses: readonly ServerToolUse[], stepEnd: number): SessionRegistry | null => {
+  const known = new Set((reg.advisor?.calls ?? []).map(c => c.id))
+  const calls = uses
+    .filter(u => u.name === 'advisor' && isText(u.id) && !known.has(u.id) && isNum(u.startedAt))
+    .map(u => ({ id: u.id, s: u.startedAt, e: Math.max(u.startedAt, isNum(u.endedAt) ? u.endedAt : stepEnd), by: lane }))
+  if (calls.length === 0) return null
+  const advisor: AdvisorLane = { ...(reg.advisor ?? {}), calls: [...(reg.advisor?.calls ?? []), ...calls].sort((a, b) => a.s - b.s).slice(-ADVISOR_CALLS_MAX) }
+  const next: SessionRegistry = { ...reg, advisor, updatedAt: stepEnd }
+  const l = laneOf(next, lane)
+  if (!l) return next
+  return withLane(next, lane, { segments: calls.reduce<AgentSegment[]>((segs, c) => cutForAdvisor(segs, c), [...(l.segments ?? [])]) }, stepEnd)
 }
 
 /** Pose un repère sur la piste. */

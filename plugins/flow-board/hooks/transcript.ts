@@ -7,16 +7,47 @@
 //   finit ; les blocs d'une même réponse partagent `message.id` et répètent son `usage` ; `effort` ;
 // - `user` : les résultats d'outils (`tool_result`, `tool_use_id`, `is_error`) ;
 // - `.meta.json` d'un sous-agent : `agentType`, `description`, `toolUseId`, `finished`.
+// - un appel à l'advisor (relevé le 27/10/2026) : un bloc `server_tool_use` nommé `advisor` (`id`),
+//   puis un bloc `advisor_tool_result` (`tool_use_id` ; son contenu, chiffré, n'est jamais lu) ;
+//   chaque ligne de la réponse répète `usage.iterations`, où l'appel a son entrée `advisor_message`
+//   (`model`, tokens) : ses tokens ne sont pas dans le `usage` de premier niveau.
 // Les blocs n'ont que l'heure de leur fin : la réflexion va du départ de la requête à la fin de son
 // bloc, estimée (`est`), comme le dit la spec.
 
-import type { AgentLane, AgentSegment, AgentTokens, RegistryAgent, SessionRegistry } from '../types'
+import type { AdvisorFigures, AgentLane, AgentSegment, AgentTokens, RegistryAgent, SessionRegistry } from '../types'
 import { CMD_UNSAFE } from './erase.ts'
-import { agentTypeOf, linesOf } from './registry.ts'
+import { agentTypeOf, catchUpAdvisor, linesOf } from './registry.ts'
 import { shortArg, toolFamily } from './timeline.ts'
 
-/** Ce qu'un transcript dit d'une piste : ses segments et chiffres, son début et sa fin. */
-export type TranscriptLane = AgentLane & { startedAt?: number; endedAt?: number; toolCount: number }
+/** Ce qu'un transcript dit d'une piste : ses segments et chiffres, son début et sa fin, ses appels à l'advisor. */
+export type TranscriptLane = AgentLane & { startedAt?: number; endedAt?: number; toolCount: number; advisor?: AdvisorFigures[] }
+
+/** Les tokens d'une entrée `advisor_message` ; absents quand aucun compteur ne se lit. */
+const advisorTokens = (it: Record<string, unknown>): AgentTokens | undefined => {
+  const keys = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const
+  if (!keys.some(k => typeof it[k] === 'number' && Number.isFinite(it[k]))) return undefined
+  const n = (k: (typeof keys)[number]) => (typeof it[k] === 'number' && Number.isFinite(it[k]) ? (it[k] as number) : 0)
+  return { input: n('input_tokens'), output: n('output_tokens'), cacheRead: n('cache_read_input_tokens'), cacheWrite: n('cache_creation_input_tokens') }
+}
+
+/**
+ * Les appels à l'advisor d'une réponse : ses blocs `server_tool_use` nommés `advisor`, dans l'ordre,
+ * appariés aux entrées `advisor_message` de son `usage.iterations` ; une entrée sans bloc garde un id
+ * tiré de la réponse.
+ */
+const advisorCallsOf = (messageId: string, ids: readonly { id: string; at: number }[], entries: readonly Record<string, unknown>[], ended: ReadonlyMap<string, number>, at: number): AdvisorFigures[] =>
+  Array.from({ length: Math.max(ids.length, entries.length) }, (_, i) => {
+    const block = ids[i]
+    const it = entries[i]
+    const s = block?.at ?? at
+    const call: AdvisorFigures = { id: block?.id ?? `${messageId}#advisor${i}`, s }
+    // Sans son résultat (réponse coupée), l'appel finit avec la réponse : jamais de barre ouverte.
+    call.e = Math.max(s, (block ? ended.get(block.id) : undefined) ?? at)
+    if (it && typeof it.model === 'string' && it.model !== '') call.model = it.model
+    const tokens = it ? advisorTokens(it) : undefined
+    if (tokens) call.tokens = tokens
+    return call
+  })
 
 /** Le `.meta.json` d'un sous-agent. */
 export type TranscriptMeta = { agentType?: string; description?: string; toolUseId?: string; isFinished?: boolean; parentAgentId?: string }
@@ -79,6 +110,11 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
   let prevEnd: number | undefined
   let hasTokens = false
   let toolCount = 0
+  // Les appels à l'advisor, par réponse : leurs blocs, leurs entrées d'usage (relevées une fois), la fin de chacun.
+  const advisorIds = new Map<string, { id: string; at: number }[]>()
+  const advisorEntries = new Map<string, Record<string, unknown>[]>()
+  const advisorEnded = new Map<string, number>()
+  const messageAt = new Map<string, number>()
   for (const line of linesIn(text)) {
     if (isMain && line.isSidechain === true) continue
     const at = timeOf(line)
@@ -105,6 +141,18 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
         tokens.output += n('output_tokens')
         tokens.cacheRead += n('cache_read_input_tokens')
         tokens.cacheWrite += n('cache_creation_input_tokens')
+      }
+      if (id !== undefined) {
+        messageAt.set(id, Math.max(messageAt.get(id) ?? at, at))
+        const iterations = message.usage?.iterations
+        if (!advisorEntries.has(id) && Array.isArray(iterations)) {
+          const entries = iterations.filter((it): it is Record<string, unknown> => it !== null && typeof it === 'object' && (it as Record<string, unknown>).type === 'advisor_message')
+          if (entries.length > 0) advisorEntries.set(id, entries)
+        }
+        for (const b of blocks) {
+          if (b.type === 'server_tool_use' && b.name === 'advisor' && typeof b.id === 'string') advisorIds.set(id, [...(advisorIds.get(id) ?? []), { id: b.id, at }])
+          else if (b.type === 'advisor_tool_result' && typeof b.tool_use_id === 'string') advisorEnded.set(b.tool_use_id, at)
+        }
       }
       const from = prevEnd ?? at
       for (const b of blocks) {
@@ -143,6 +191,8 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
   if (lines.added > 0 || lines.removed > 0) lane.lines = lines
   if (startedAt !== undefined) lane.startedAt = startedAt
   if (endedAt !== undefined) lane.endedAt = endedAt
+  const advisor = [...new Set([...advisorIds.keys(), ...advisorEntries.keys()])].flatMap(id => advisorCallsOf(id, advisorIds.get(id) ?? [], advisorEntries.get(id) ?? [], advisorEnded, messageAt.get(id) ?? 0))
+  if (advisor.length > 0) lane.advisor = advisor.sort((a, b) => a.s - b.s)
   return lane
 }
 
@@ -224,7 +274,10 @@ export const catchUp = (reg: SessionRegistry, found: readonly TranscriptAgent[],
       isChanged = true
     }
   }
-  return isChanged ? { ...reg, agents: agents.sort((a, b) => a.startedAt - b.startedAt), updatedAt: now } : null
+  let next: SessionRegistry = isChanged ? { ...reg, agents: agents.sort((a, b) => a.startedAt - b.startedAt), updatedAt: now } : reg
+  // Les appels à l'advisor de chaque sous-agent : sur la ligne advisor, jamais sur sa piste.
+  for (const { agentId, lane } of found) next = catchUpAdvisor(next, agentId, lane.advisor, now) ?? next
+  return next === reg ? null : next
 }
 
 /** Le dossier des transcripts des sous-agents d'une session, d'après le chemin de son transcript. */

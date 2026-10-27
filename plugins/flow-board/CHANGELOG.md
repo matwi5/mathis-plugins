@@ -4,6 +4,31 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.60.0 — 2026-10-27
+
+Le parcours « Frise, groupes et titres » : la frise des agents se zoome et montre l'advisor, ses pauses se compressent dès une minute, sa légende s'explique ; un groupe ne se lance plus qu'en session liée, un lot d'un seul groupe n'en a pas, une vague veut dire « en parallèle » ; un parcours prend un titre réfléchi, que sa discussion prend aussi.
+
+### Ajouté
+- **Zoom et navigation dans la frise** : boutons `−` / `＋` (diviser ou doubler la fenêtre), `◀` / `▶` (décaler d'une demi-fenêtre), « dernière heure » et « tout », avec les raccourcis `o`, `i`, `h`, `l` et `t` (volet en focus). Le zoom porte sur l'axe affiché, pauses déjà compressées, d'une minute à tout ; une fenêtre qui finit à « maintenant » suit le direct, décalée dans le passé elle se fige. Une règle graduée (hh:mm) court au-dessus des pistes et s'interrompt aux pauses. La fenêtre repart de « tout » à l'ouverture de l'onglet ou du volet, et au changement de session liée ou d'historique.
+- **Ligne advisor** : une seule ligne par discussion, sous l'orchestrateur, en or, avec le glyphe ✦ et le nom « advisor · relecteur », barres cerclées (`▭` au terminal). Chaque appel y paraît à la fin de l'étape qui l'a fait ; sur la ligne de l'appelant, une attente or en pointillés « consulte l'advisor ». Le modèle, les tokens et le coût arrivent au rattrapage par le transcript (`usage.iterations` de type `advisor_message`, jamais le contenu chiffré de la réponse) ; le coût est compté une fois, sur sa ligne, et à part dans les totaux ; la carte d'un appelant dit « advisor : N appels, ≈ x $ » sans l'ajouter à son total ; sans prix connu, « coût inconnu » avec les tokens. La ligne existe aussi dans l'historique et la frise d'une session liée ; « Supprimer » un parcours ou « Oublier » une discussion efface aussi ses appels advisor et leur coût, même après un rattrapage.
+- **Légende détaillée**, repliée par défaut (« ▸ légende détaillée ») : chaque glyphe d'outil avec ses outils, chaque type d'agent, chaque repère et l'advisor.
+- **« ▶ Tout implémenter ici · /implement »** pour un lot sans groupe qui a des tickets ouverts, hors du découpage : `/implement` sur tous ses tickets ouverts, dans l'ordre du lot.
+- **Discussion de naissance d'un parcours** (`bornIn`), posée à sa création et jamais effacée, et le premier lancement d'une session liée (`linkedAt`). Le titre qu'une discussion doit encore prendre est gardé pour elle seule (`$.store`, clé `discussion-title:<session>`), hors du board partagé.
+
+### Modifié
+- **Compression des pauses dès une minute** (au lieu de 5) : tout intervalle où aucune ligne affichée ne travaille. Attendre ta réponse ou ton prochain message est une pause ; un sous-agent compte par ses segments, plus par toute sa période (sauf tout juste lancé, sans segment). Un bord de frise sans activité devient une pause compressée.
+- **Attente et pause se distinguent** : les attentes restent des barres hachurées nommées (« attend un sous-agent », « attend ta réponse », « attend une tâche de fond »), et « consulte l'advisor » en pointillés or ; la pause compressée devient une coupure du rail, `┊ 2 h ┊`, légendée « pause : personne ne travaillait ». Une attente de ta réponse compressée garde ses hachures ambre.
+- **Un groupe ne se lance qu'en session liée** : « ▶ Lancer X ici », « ▶ Lancer le prêt », le lancement de groupes par `/implement-spec` et le champ `continuesHere` (avec son « ↩ cette discussion ») disparaissent ; « ↗ Session liée » devient le bouton principal d'un groupe prêt, et la carte « Ensuite » ne propose que la session liée du prochain groupe ou les sessions liées du lot. Les tickets choisis à la main gardent `/implement` et `/implement-spec`.
+- **Pas de groupe seul** : un plan qui, une fois ses tickets rangés, ne compte qu'un groupe (un groupe plus des tickets restés hors de lui compris) est ignoré avant d'être enregistré, et la réponse le dit à Claude (la cause d'abord quand des ids inconnus font tomber le compte) ; un plan en place n'est jamais remplacé par cette règle, et un ticket ajouté dans le même appel rejoint quand même le groupe en cours. La consigne de `/to-tickets` dit de ne pas envoyer de groupes dans ce cas.
+- **Une vague veut dire « en parallèle »** : les titres « Vague N » ne s'affichent que si au moins un niveau d'attente a deux groupes qui peuvent avancer ensemble (sans fichier ni ressource en commun, hors attente circulaire et groupe « Autres ») ; sinon les groupes se suivent, chacun avec son « attend A ».
+- **Titre réfléchi** : un parcours ne prend plus son titre dans les arguments de la commande ; la consigne du premier appel demande à Claude un titre court qui résume tout le chantier, jamais ton message lui-même.
+- **Renommage automatique de la discussion** : à son premier titre, la discussion où le parcours est né prend le même nom, sauf si un autre parcours y est déjà né, si c'est une session liée ou si une session liée a déjà été demandée par le parcours. Claude la renomme tout de suite par l'outil de l'app quand il l'a ; sinon le mod renvoie le titre au moteur (`sessionTitle`) au prochain message ou à la reprise, une fois, et seulement si elle ne le porte pas déjà (essai du 27/10/2026 au terminal et dans l'app desktop pour le prochain message ; la reprise reste à confirmer sur un vrai moteur). `/flow rename` et `fix.title` suivent aux mêmes conditions (« Annuler » une demande avant le lancement la libère).
+
+### Retiré
+- Les consignes qui demandaient de renommer la discussion à la main (début d'`/implement`, première session liée).
+
+---
+
 ## 0.59.1 — 2026-10-27
 
 ### Corrigé

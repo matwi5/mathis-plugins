@@ -60,7 +60,8 @@ test('un skill lancé après la mise de côté ouvre un nouveau parcours au lieu
   const out = applySkill(aside, 'mattpocock-skills:implement', { now: 3_000, isMain: true, args: 'Autre lot' })!
   const run = activeRun(out.board)!
   expect(out.board.runs).toHaveLength(2)
-  expect(run.title).toBe('Autre lot')
+  // Le titre ne vient plus des arguments (0.60.0) : le nom du flux, en attendant celui de Claude.
+  expect(run.title).toBe('Implémentation')
   expect(run.tickets).toHaveLength(0)
   const old = out.board.runs.find(r => r.id !== run.id)!
   expect(old.status).toBe('paused')

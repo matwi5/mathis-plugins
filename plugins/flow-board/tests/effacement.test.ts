@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { agentTraces, applyTraces, applyTracesToRebuilt, cleanTrace, CLOSED_MS, eraseWith, forgetCount, forgetText, isClosedSession, removeArgv } from '../hooks/erase.ts'
 import { emptyRegistry, noteLaunch, startCall } from '../hooks/registry.ts'
+import { catchUp } from '../hooks/transcript.ts'
 import type { SessionRegistry } from '../types'
 
 const at = (reg: SessionRegistry, key: string, name: string, startedAt: number, run?: string) => startCall(reg, { key, name, isBackground: true, ...(run ? { run } : {}) }, startedAt)!
@@ -99,5 +100,44 @@ test('S22 : un sous-agent effacé avec son parcours a sa trace à lui, que le ra
   const reg = { ...back, agents: [{ key: 'call-1', agentId: 'a1', name: 'Revenu', isBackground: true, status: 'done' as const, startedAt: 1_000, source: 'transcript' as const }, { key: 'call-2', name: 'Autre', isBackground: true, status: 'done' as const, startedAt: 1_000, source: 'live' as const }] }
   expect(applyTraces(reg, traces)!.agents.map(a => a.key)).toEqual(['call-2'])
   const rebuilt = { v: 1 as const, session: 'orch', agents: [{ agentId: 'a1', lane: { toolCount: 0, startedAt: 1_000 }, meta: {} }] }
+  expect(applyTracesToRebuilt(rebuilt, traces)!.agents).toEqual([])
+})
+
+test('S5 : une trace efface aussi la ligne advisor : appels d’avant la trace, et ceux des sous-agents effacés', () => {
+  // L'orchestrateur (avant et après la trace), un sous-agent du parcours effacé, un hors parcours, un appelant inconnu.
+  let reg = at(at(emptyRegistry('s1', '/p', 0), 'k1', 'Du parcours', 1_000, 'r1'), 'k2', 'Hors parcours', 2_000)
+  reg = { ...reg, agents: reg.agents.map(a => ({ ...a, agentId: a.key === 'k1' ? 'a1' : 'a2' })) }
+  const call = (id: string, s: number, by: string) => ({ id, s, e: s + 100, by })
+  reg = { ...reg, advisor: { calls: [call('m-avant', 1_100, 'main'), call('a1', 1_200, 'a1'), call('a2', 2_200, 'a2'), call('x', 1_300, 'inconnu'), call('m-apres', 6_000, 'main')] } }
+  // La trace d'un parcours : les appels de ses sous-agents partent, les autres restent.
+  expect(applyTraces(reg, [{ id: 'run:r1', at: 9_000 }])!.advisor!.calls.map(c => c.id)).toEqual(['m-avant', 'a2', 'x', 'm-apres'])
+  // La trace de la session : tout ce qui précède part, l'appel d'après reste.
+  const later = applyTraces(reg, [{ id: 's1', at: 5_000 }])!
+  expect(later.advisor!.calls.map(c => c.id)).toEqual(['m-apres'])
+  // Plus aucun appel : plus de ligne advisor ; relue, rien ne change.
+  expect(applyTraces(later, [{ id: 's1', at: 9_000 }])!.advisor).toBeUndefined()
+  expect(applyTraces(later, [{ id: 's1', at: 5_000 }])).toBeNull()
+  // Le fichier à part : les appels de la piste de la session d'avant la trace partent.
+  const rebuilt = { v: 1 as const, session: 's1', agents: [], main: { segments: [], advisor: [{ id: 'r-avant', s: 1_000, e: 1_100 }, { id: 'r-apres', s: 7_000, e: 7_100 }] } }
+  expect(applyTracesToRebuilt(rebuilt, [{ id: 's1', at: 5_000 }])!.main!.advisor!.map(c => c.id)).toEqual(['r-apres'])
+})
+
+test('S22 : un appel à l’advisor d’un sous-agent effacé ne revient ni sans son entrée, ni par un rattrapage', () => {
+  // Un appel dont l'appelant n'a pas d'entrée au registre : sa trace `agent:` l'efface quand même.
+  let reg = at(emptyRegistry('s1', '/p', 0), 'k1', 'Du parcours', 1_000, 'r1')
+  reg = { ...reg, agents: reg.agents.map(a => ({ ...a, agentId: 'a1' })), advisor: { calls: [{ id: 'orphelin', s: 1_200, e: 1_300, by: 'a9' }, { id: 'garde', s: 1_400, e: 1_500, by: 'a8' }] } }
+  const traces = [{ id: 'run:r1', at: 9_000 }, ...agentTraces({ key: 'k1', agentId: 'a1' }, 9_000), { id: 'agent:a9', at: 9_000 }]
+  const erased = applyTraces(reg, traces)!
+  expect(erased.agents).toEqual([])
+  expect(erased.advisor!.calls.map(c => c.id)).toEqual(['garde'])
+  // Le rattrapage relit le transcript du sous-agent effacé, avec son appel : les traces le retirent encore.
+  const found = [{ agentId: 'a1', lane: { toolCount: 0, startedAt: 1_000, endedAt: 2_000, advisor: [{ id: 'a1-appel', s: 1_100, e: 1_150 }] }, meta: { toolUseId: 'k1', isFinished: true }, run: 'r1' }]
+  const caught = catchUp(erased, found, 10_000)!
+  expect(caught.advisor!.calls.map(c => c.id)).toContain('a1-appel')
+  const again = applyTraces(caught, traces)!
+  expect(again.agents).toEqual([])
+  expect(again.advisor!.calls.map(c => c.id)).toEqual(['garde'])
+  // Le fichier à part : un sous-agent couvert part avec ses appels.
+  const rebuilt = { v: 1 as const, session: 's1', agents: [{ agentId: 'a1', lane: { toolCount: 0, startedAt: 1_000, advisor: [{ id: 'a1-appel', s: 1_100 }] }, meta: { toolUseId: 'k1' }, run: 'r1' }] }
   expect(applyTracesToRebuilt(rebuilt, traces)!.agents).toEqual([])
 })

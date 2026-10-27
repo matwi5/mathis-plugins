@@ -17,30 +17,44 @@ const boardWith = (input: Record<string, unknown>): Board => {
   return applyReport(board, input, 2_000).board
 }
 
+/** Un second groupe, pas fini : un plan d'un seul groupe serait ignoré. */
+const withOther = (input: { tickets: object[]; groups: object[] }) => ({
+  tickets: [...input.tickets, { id: 'z1', name: 'Autre' }],
+  groups: [...input.groups, { id: 'Z', name: 'Autre', tickets: ['z1'] }],
+})
+
 // Un groupe d'un seul ticket sans logique (une icône) avait eu quatre revues Opus en cascade, la
 // revue du groupe relisant le même diff que celle du ticket.
 test('un groupe d’un seul ticket ni sensible ni avec logique n’attend pas de revue du groupe ; avec de la logique, si', () => {
-  const icon = boardWith({
-    tickets: [{ id: 'i1', name: 'Icône', status: 'done', sensitive: false, logic: false }],
-    groups: [{ id: 'I', name: 'Icône', tickets: ['i1'] }],
-  })
+  const icon = boardWith(
+    withOther({
+      tickets: [{ id: 'i1', name: 'Icône', status: 'done', sensitive: false, logic: false }],
+      groups: [{ id: 'I', name: 'Icône', tickets: ['i1'] }],
+    }),
+  )
   expect(needsReview(activeRun(icon)!)).toBe(false)
-  const code = boardWith({
-    tickets: [{ id: 'c1', name: 'Route', status: 'done', sensitive: false, logic: true }],
-    groups: [{ id: 'C', name: 'Route', tickets: ['c1'] }],
-  })
+  const code = boardWith(
+    withOther({
+      tickets: [{ id: 'c1', name: 'Route', status: 'done', sensitive: false, logic: true }],
+      groups: [{ id: 'C', name: 'Route', tickets: ['c1'] }],
+    }),
+  )
   expect(needsReview(activeRun(code)!)).toBe(true)
   // Sans avis sur le ticket, la revue du groupe reste due.
-  const silent = boardWith({
-    tickets: [{ id: 's1', name: 'Sans avis', status: 'done' }],
-    groups: [{ id: 'S', name: 'Sans avis', tickets: ['s1'] }],
-  })
+  const silent = boardWith(
+    withOther({
+      tickets: [{ id: 's1', name: 'Sans avis', status: 'done' }],
+      groups: [{ id: 'S', name: 'Sans avis', tickets: ['s1'] }],
+    }),
+  )
   expect(needsReview(activeRun(silent)!)).toBe(true)
   // Sensible, même sans logique : la revue du groupe reste due.
-  const sensitive = boardWith({
-    tickets: [{ id: 'p1', name: 'Purge', status: 'done', sensitive: true, logic: false }],
-    groups: [{ id: 'P', name: 'Purge', tickets: ['p1'] }],
-  })
+  const sensitive = boardWith(
+    withOther({
+      tickets: [{ id: 'p1', name: 'Purge', status: 'done', sensitive: true, logic: false }],
+      groups: [{ id: 'P', name: 'Purge', tickets: ['p1'] }],
+    }),
+  )
   expect(needsReview(activeRun(sensitive)!)).toBe(true)
 })
 

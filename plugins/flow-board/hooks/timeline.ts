@@ -1,15 +1,24 @@
 // Frise des agents : des segments datés du registre aux parts à dessiner. Fonctions pures.
 //
-// - L'axe est en temps réel, sauf les pauses de plus de PAUSE_MS sans aucun segment actif : elles
-//   prennent une largeur fixe et portent leur durée (« ⫽ 2 h »).
-// - « dernière heure » ouvre l'axe une heure avant maintenant ; « tout » montre tout.
+// - L'axe est en temps réel, sauf les pauses de plus de PAUSE_MS où personne ne travaille (aucun
+//   segment de WORKING_KINDS, sur aucune piste) : elles prennent une largeur fixe et coupent le
+//   rail en portant leur durée (« ┊ 2 h ┊ »). Attendre la réponse de la personne ou son prochain message est une pause.
+// - La fenêtre de vue (zoom, déplacement, « dernière heure », « tout ») découpe une partie de l'axe
+//   entier ; voir « Zoom et navigation » en bas.
 // - Le résumé compte le gain par rapport à une exécution en série sur l'union des périodes
 //   d'activité des sous-agents, pour que les heures creuses ne comptent pas.
 
-import type { AgentLane, AgentMark, RegistryAgent, SegmentKind, ToolFamily } from '../types'
+import type { AgentLane, AgentMark, AgentsWindow, RegistryAgent, SegmentKind, ToolFamily } from '../types'
 
-/** Une pause plus longue, sans aucun segment actif, est compressée (seuil à régler à l'essai). */
-export const PAUSE_MS = 5 * 60_000
+/**
+ * Les sortes de segments qui travaillent : réfléchir, rédiger, lancer un outil, attendre un
+ * sous-agent ou une tâche de fond, consulter l'advisor. Elles seules empêchent une pause de se
+ * compresser ; attendre la réponse de la personne n'en est pas.
+ */
+export const WORKING_KINDS: ReadonlySet<SegmentKind> = new Set<SegmentKind>(['think', 'write', 'tool', 'waitAgent', 'waitBg', 'waitAdvisor'])
+
+/** Une pause plus longue, où personne ne travaille, est compressée. */
+export const PAUSE_MS = 60_000
 export const HOUR_MS = 3_600_000
 /** La largeur d'une pause compressée, en part de l'axe ; toutes ensemble n'en prennent pas plus de PAUSES_MAX. */
 const PAUSE_SHARE = 0.04
@@ -17,15 +26,22 @@ const PAUSES_MAX = 0.24
 /** L'argument court d'un outil : de quoi le reconnaître, sans recopier son contenu. */
 const ARG_MAX = 80
 
-/** La famille d'un outil, d'après son nom : son glyphe se pose sur le segment. */
-export const toolFamily = (name: string): ToolFamily => {
-  if (/^(Read|Grep|Glob|LS|NotebookRead|ToolSearch|ListMcpResourcesTool|ReadMcpResourceTool)$/.test(name)) return 'read'
-  if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(name)) return 'edit'
-  if (/^(Bash|PowerShell|BashOutput|KillShell|Monitor|TaskStop)$/.test(name)) return 'run'
-  if (/^(WebFetch|WebSearch)$/.test(name)) return 'web'
-  if (/^(Agent|Task|SubagentHandback|SendMessage|Workflow)$/.test(name)) return 'agent'
-  return 'other'
+/**
+ * Les outils de chaque famille : la frise en tire la famille d'un outil, la légende détaillée la
+ * liste telle quelle. Tout autre outil est de la famille « autre ».
+ */
+export const TOOL_FAMILIES: Readonly<Record<Exclude<ToolFamily, 'other'>, readonly string[]>> = {
+  read: ['Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'ToolSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool'],
+  edit: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+  run: ['Bash', 'PowerShell', 'BashOutput', 'KillShell', 'Monitor', 'TaskStop'],
+  web: ['WebFetch', 'WebSearch'],
+  agent: ['Agent', 'Task', 'SubagentHandback', 'SendMessage', 'Workflow'],
 }
+
+const FAMILY_BY_TOOL = new Map(Object.entries(TOOL_FAMILIES).flatMap(([family, tools]) => tools.map(tool => [tool, family as ToolFamily] as const)))
+
+/** La famille d'un outil, d'après son nom : son glyphe se pose sur le segment. */
+export const toolFamily = (name: string): ToolFamily => FAMILY_BY_TOOL.get(name) ?? 'other'
 
 const clipArg = (text: string): string => {
   const one = text.replace(/\s+/g, ' ').trim()
@@ -123,8 +139,9 @@ export type Axis = { start: number; end: number; pieces: AxisPiece[] }
 
 /**
  * L'axe de la frise, de `start` à `end` (x de 0 à 1) : les tronçons d'activité en temps réel, les
- * écarts de plus de PAUSE_MS entre eux réduits à une largeur fixe. Les bords vides de moins de
- * PAUSE_MS restent à l'échelle ; au-delà, l'axe commence au premier tronçon et finit au dernier.
+ * écarts de plus de PAUSE_MS entre eux réduits à une largeur fixe. Les bords sans activité de
+ * moins de PAUSE_MS restent à l'échelle ; au-delà, ils deviennent eux aussi des pauses compressées,
+ * pour qu'une attente de la personne en tête ou en queue reste visible.
  */
 export const buildAxis = (active: readonly Interval[], start: number, end: number): Axis => {
   const s0 = start
@@ -141,24 +158,28 @@ export const buildAxis = (active: readonly Interval[], start: number, end: numbe
   const last = stretches[stretches.length - 1]!
   if (first.s - s0 <= PAUSE_MS) first.s = s0
   if (e0 - last.e <= PAUSE_MS) last.e = e0
-  const pauses = stretches.length - 1
+  const head = first.s > s0
+  const tail = last.e < e0
+  const pauses = stretches.length - 1 + Number(head) + Number(tail)
   const pauseShare = pauses === 0 ? 0 : Math.min(PAUSE_SHARE, PAUSES_MAX / pauses)
   const realShare = 1 - pauseShare * pauses
   const real = Math.max(1, total(stretches))
   const pieces: AxisPiece[] = []
   let x = 0
+  const pause = (s: number, e: number) => {
+    pieces.push({ s, e, x0: x, x1: x + pauseShare, pause: e - s })
+    x += pauseShare
+  }
+  if (head) pause(s0, first.s)
   stretches.forEach((st, i) => {
-    if (i > 0) {
-      const prev = stretches[i - 1]!
-      pieces.push({ s: prev.e, e: st.s, x0: x, x1: x + pauseShare, pause: st.s - prev.e })
-      x += pauseShare
-    }
+    if (i > 0) pause(stretches[i - 1]!.e, st.s)
     const w = ((st.e - st.s) / real) * realShare
     pieces.push({ s: st.s, e: st.e, x0: x, x1: x + w })
     x += w
   })
+  if (tail) pause(last.e, e0)
   pieces[pieces.length - 1]!.x1 = 1
-  return { start: first.s, end: last.e, pieces }
+  return { start: s0, end: e0, pieces }
 }
 
 /** La position (0 à 1) d'un instant sur l'axe ; dans une pause, il glisse d'un bord à l'autre. */
@@ -208,10 +229,18 @@ const periodOf = (a: RegistryAgent, now: number): Interval => {
   return { s: a.startedAt, e: a.finishedAt ?? a.startedAt }
 }
 
-/** Les périodes d'activité de la frise : chaque segment, et chaque sous-agent de son départ à sa fin. */
+/** Les moments où une piste travaille : ses segments de WORKING_KINDS. */
+const workOf = (lane: AgentLane, now: number): Interval[] =>
+  (lane.segments ?? []).filter(s => WORKING_KINDS.has(s.k)).map(s => ({ s: s.s, e: s.e ?? now }))
+
+/**
+ * Les moments où quelqu'un travaille, sur toutes les pistes affichées et chez tous les
+ * sous-agents : leurs segments qui travaillent, pas leurs périodes entières. Seule garde : un
+ * sous-agent en cours qui n'a encore aucun segment travaille depuis son départ.
+ */
 export const activityOf = (lanes: readonly AgentLane[], agents: readonly RegistryAgent[], now: number): Interval[] => [
-  ...lanes.flatMap(l => (l.segments ?? []).map(s => ({ s: s.s, e: s.e ?? now }))),
-  ...agents.map(a => periodOf(a, now)),
+  ...lanes.flatMap(l => workOf(l, now)),
+  ...agents.flatMap(a => (a.status === 'running' && (a.segments ?? []).length === 0 ? [{ s: a.startedAt, e: now }] : workOf(a, now))),
 ]
 
 export type Summary = {
@@ -298,4 +327,124 @@ export const laneTree = (agents: readonly RegistryAgent[], openWorkflows: Readon
   }
   walk('', 0)
   return rows
+}
+
+// ─── Zoom et navigation ─────────────────────────────────────────────────────
+//
+// La fenêtre de vue se garde en temps réel : figée, ses deux bornes ; quand elle suit le direct,
+// sa durée, posée chaque fois au bout de l'axe. Zoom et déplacement se calculent sur l'axe
+// affiché (pauses déjà compressées) : la fenêtre y passe par `xOf`, l'opération s'y fait, et le
+// résultat revient en temps réel par `timeOf`.
+
+/** Le zoom le plus fort : une minute de temps réel. */
+export const ZOOM_MIN_MS = 60_000
+
+/** L'instant d'une position (0 à 1) sur l'axe : l'inverse de `xOf` ; une pause se répartit linéairement sur sa largeur. */
+export const timeOf = (axis: Axis, x: number): number => {
+  if (x <= 0) return axis.start
+  if (x >= 1) return axis.end
+  const p = axis.pieces.find(piece => x <= piece.x1) ?? axis.pieces[axis.pieces.length - 1]!
+  return p.s + ((x - p.x0) / Math.max(1e-12, p.x1 - p.x0)) * (p.e - p.s)
+}
+
+/** Les bornes d'une fenêtre sur l'axe entier, de 0 à 1 ; sans fenêtre (« tout »), tout l'axe. */
+export const windowBounds = (axis: Axis, win: AgentsWindow | null | undefined): { a: number; b: number } => {
+  if (!win) return { a: 0, b: 1 }
+  if (win.isLive) return { a: xOf(axis, axis.end - (win.end - win.start)), b: 1 }
+  const a = xOf(axis, win.start)
+  const b = xOf(axis, win.end)
+  return b > a ? { a, b } : { a: 0, b: 1 }
+}
+
+/** La partie `a`–`b` de l'axe, ramenée de 0 à 1 ; une pause coupée garde sa durée entière. */
+export const sliceAxis = (axis: Axis, { a, b }: { a: number; b: number }): Axis => {
+  if (a <= 0 && b >= 1) return axis
+  const span = Math.max(1e-12, b - a)
+  const pieces = axis.pieces
+    .filter(p => p.x1 > a && p.x0 < b)
+    .map(p => {
+      const x0 = Math.max(p.x0, a)
+      const x1 = Math.min(p.x1, b)
+      const at = (x: number) => p.s + ((x - p.x0) / Math.max(1e-12, p.x1 - p.x0)) * (p.e - p.s)
+      return { ...p, s: at(x0), e: at(x1), x0: (x0 - a) / span, x1: (x1 - a) / span }
+    })
+  if (pieces.length === 0) return axis
+  pieces[0]!.x0 = 0
+  pieces[pieces.length - 1]!.x1 = 1
+  return { start: timeOf(axis, a), end: timeOf(axis, b), pieces }
+}
+
+/**
+ * Le zoom ou le déplacement d'une fenêtre, sur l'axe affiché. `in` divise sa largeur par deux et
+ * `out` la double, autour de son centre ; une fenêtre qui suit le direct garde sa fin au bout de
+ * l'axe. `left` et `right` la décalent d'une demi-largeur, bornée aux extrémités : vers le passé
+ * elle se fige, revenue au bout elle suit à nouveau le direct. null : tout l'axe. Au plus fort, une
+ * minute de temps réel ; un axe plus court ne se zoome pas.
+ */
+export const zoomWindow = (axis: Axis, win: AgentsWindow | null | undefined, op: 'in' | 'out' | 'left' | 'right'): AgentsWindow | null => {
+  const { a, b } = windowBounds(axis, win)
+  const w = b - a
+  const wasLive = !win || win.isLive
+  let [na, nb] = [a, b]
+  if (op === 'in' || op === 'out') {
+    const nw = Math.min(1, op === 'in' ? w / 2 : w * 2)
+    const c = (a + b) / 2
+    ;[na, nb] = wasLive ? [1 - nw, 1] : [c - nw / 2, c + nw / 2]
+  } else {
+    const shift = (op === 'left' ? -w : w) / 2
+    ;[na, nb] = [a + shift, b + shift]
+  }
+  // Ramenée dans l'axe, sans changer sa largeur.
+  if (na < 0) [na, nb] = [0, nb - na]
+  if (nb > 1) [na, nb] = [Math.max(0, na - (nb - 1)), 1]
+  if (na <= 1e-9 && nb >= 1 - 1e-9) return null
+  const isLive = nb >= 1 - 1e-9 && op !== 'left'
+  let start = timeOf(axis, na)
+  let end = isLive ? axis.end : timeOf(axis, nb)
+  if (end - start < ZOOM_MIN_MS) {
+    if (axis.end - axis.start <= ZOOM_MIN_MS) return win ?? null
+    const c = isLive ? axis.end - ZOOM_MIN_MS / 2 : (start + end) / 2
+    start = Math.max(axis.start, Math.min(axis.end - ZOOM_MIN_MS, c - ZOOM_MIN_MS / 2))
+    end = start + ZOOM_MIN_MS
+  }
+  return { start, end, isLive }
+}
+
+/** Les pas de la règle graduée, du plus fin au plus large. */
+const RULER_STEPS = [1, 5, 15, 30, 60, 180, 360].map(m => m * 60_000)
+
+/** Une graduation : son instant, sa position, son heure (hh:mm, à l'heure locale). */
+export type RulerTick = { at: number; x: number; label: string }
+
+const hhmm = (t: number): string => {
+  const d = new Date(t)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/** Les graduations d'un pas sur les tronçons de temps réel de l'axe, alignées sur l'heure locale. */
+const ticksAt = (axis: Axis, step: number): RulerTick[] =>
+  axis.pieces
+    .filter(p => p.pause === undefined)
+    .flatMap(p => {
+      const offset = new Date(p.s).getTimezoneOffset() * 60_000
+      const out: RulerTick[] = []
+      for (let t = Math.ceil((p.s - offset) / step) * step + offset; t <= p.e; t += step) out.push({ at: t, x: xOf(axis, t), label: hhmm(t) })
+      return out
+    })
+    .filter((t, i, all) => i === 0 || t.at !== all[i - 1]!.at)
+
+/**
+ * La règle graduée : le plus petit pas de RULER_STEPS qui ne donne pas plus de `max` graduations,
+ * sinon le plus large ; aucune graduation dans une pause compressée.
+ */
+export const rulerTicks = (axis: Axis, max: number): { step: number; ticks: RulerTick[] } => {
+  const real = axis.pieces.filter(p => p.pause === undefined).reduce((n, p) => n + (p.e - p.s), 0)
+  for (const step of RULER_STEPS) {
+    // Un pas qui en donnerait bien trop n'est même pas posé.
+    if (real / step > max + axis.pieces.length) continue
+    const ticks = ticksAt(axis, step)
+    if (ticks.length <= max) return { step, ticks }
+  }
+  const step = RULER_STEPS[RULER_STEPS.length - 1]!
+  return { step, ticks: ticksAt(axis, step) }
 }

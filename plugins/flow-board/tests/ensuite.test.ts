@@ -96,33 +96,19 @@ test('le panneau : « Ensuite » propose le groupe suivant, sans /code-review ni
   await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }] } as any)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    // A, fait ici, garde sa revue sur sa ligne ; la carte propose B (ou C), par session liée ou ici.
+    // A, fait ici, garde sa revue sur sa ligne ; la carte propose B (ou C), par session liée seulement.
     expect(await ui.find({ key: 'review-group-A' })).toBeDefined()
     expect(await ui.find({ key: 'go-final-review' })).toBeUndefined()
     expect(await ui.find({ key: 'go-implement' })).toBeUndefined()
     expect(await ui.find({ key: 'go-retro' })).toBeDefined()
     expect((await ui.find({ key: 'next-linked-B' }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.Groupe B · session liée$/), variant: 'primary' })
-    expect((await ui.find({ key: 'next-group-B' }))?.props).toMatchObject({ label: expect.stringMatching(/^▶.Lancer B ici$/) })
+    expect(await ui.find({ key: 'next-group-B' })).toBeUndefined()
     await ui.unmount()
   }
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await ui.press({ key: 'next-group-B' })
+  await ui.press({ key: 'next-linked-B' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^\/mattpocock-skills:implement /)
-})
-
-test('un groupe gardé pour cette discussion se lance d’abord ici ; la session liée vient en second', async ($, on) => {
-  mock.clock(on, { now: 99_500_000 })
-  mock.store(on)
-  on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
-  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
-  on('prompt.fill', () => ({ isFilled: true }))
-  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, ...SHARED, groups: SHARED.groups.map(g => (g.id === 'A' ? { ...g, continuesHere: true } : g)) } as any)
-  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect((await ui.find({ key: 'next-group-A' }))?.props).toMatchObject({ variant: 'primary' })
-  expect((await ui.find({ key: 'next-linked-A' }))?.props.variant).toBeUndefined()
-  await ui.unmount()
+  expect(filled.at(-1)).toMatch(/^Confie ce groupe à une session liée/)
 })
 
 test('des revues qui manquent, tickets faits : pas de skill pour suite (ni /implement ni compte rendu)', () => {

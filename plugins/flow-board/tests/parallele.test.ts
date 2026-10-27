@@ -59,7 +59,7 @@ test('une dépendance levée ne compte plus : B et C deviennent parallélisables
   expect(after.parallelBatch).toEqual(['B', 'C'])
 })
 
-test('le panneau : ⇉ seulement pour le lot, et la raison quand un groupe est en cours', async ($, on) => {
+test('le panneau : ⇉ seulement pour le lot, en sessions liées', async ($, on) => {
   mock.clock(on, { now: 120_000_000 })
   mock.store(on)
   on('session.repo', () => ({ value: { root: 'C:/proj', remote: null, internal: false, name: null } }))
@@ -86,20 +86,18 @@ test('le panneau : ⇉ seulement pour le lot, et la raison quand un groupe est e
   } as any)
 
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(String((await ui.find({ key: 'launch-parallel' }))?.props.label)).toMatch(/^⇉.A ∥ C en parallèle · \/implement-spec$/)
-  await ui.press({ key: 'launch-parallel' })
+  expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
+  expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ C en parallèle · sessions liées$/)
+  await ui.press({ key: 'launch-parallel-linked' })
   await ui.unmount()
   const text = filled.at(-1)!
-  expect(text).toMatch(/A \(Worker\) : 1\) a1 — Un ∥ C \(App\) : 1\) c1 — Trois/)
+  expect(text).toMatch(/Groupe A \(Worker\) : 1\) a1 — Un ∥ Groupe C \(App\) : 1\) c1 — Trois/)
   expect(text).not.toMatch(/Résumé/)
-  // La file ne contient que le lot.
-  const note = (await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'y' })).text
-  expect(note).toMatch(/Ticket queue chosen by the user, in order: 1\) Un \[a1\]; 2\) Trois \[c1\]\./)
 
   // A et C commencés : plus de ⇉, B attend qu'ils soient finis.
   await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'doing' }, { id: 'c1', status: 'doing' }] } as any)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await after.find({ key: 'launch-parallel' })).toBeUndefined()
+  expect(await after.find({ key: 'launch-parallel-linked' })).toBeUndefined()
   await after.unmount()
 })
 
@@ -125,7 +123,7 @@ test('lot retenu par un groupe en cours : le panneau le dit', async ($, on) => {
   } as any)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
+    expect(await ui.find({ key: 'launch-parallel-linked' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^⇉.B ∥ C en parallèle une fois A fini$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /« Session liée » : Claude lance une session qui fait le groupe/ })).toBeDefined()
     await ui.unmount()
@@ -138,9 +136,9 @@ test('la consigne de /to-tickets décrit les deux sortes de groupes', async ($, 
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text
-  expect(note).toMatch(/one discussion does them in a row with \/implement/)
+  expect(note).toMatch(/its linked session does them in a row with \/implement/)
   expect(note).toMatch(/a group of one ticket is fine when its context is its own/)
-  expect(note).toMatch(/one linked session per group \(or \/implement-spec, one subagent per group, in a git repository only\)/)
+  expect(note).toMatch(/can later run at the same time, one linked session per group\./)
   // Ressources exclusives et fichiers par ticket.
   expect(note).toMatch(/"resources": what a group cannot share with another group working at the same time/)
   expect(note).toMatch(/"PowerBI Desktop"/)

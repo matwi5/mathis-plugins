@@ -12,6 +12,7 @@
 
 import type { AgentLane, RegistryAgent, SessionRegistry } from '../types'
 import type { Rebuilt } from './history.ts'
+import { MAIN } from './registry.ts'
 
 /**
  * Une trace d'effacement : l'id d'une session, `run:<parcours>`, celui d'un sous-agent effacé avec
@@ -70,6 +71,14 @@ export const applyTraces = (reg: SessionRegistry, traces: readonly Trace[]): Ses
   const c = coverFor(reg.session, traces, reg.run)
   const agents = reg.agents.filter(a => !isAgentCovered(a, c))
   const main = laneAfter(reg.main, c.session)
+  // La ligne advisor : les appels de l'orchestrateur d'après la trace de la session, ceux des
+  // sous-agents gardés ; un appelant inconnu du registre (sans entrée, ou dans un autre morceau),
+  // d'après la trace de la session et sans trace `agent:` à son id (S22).
+  const kept = new Set(agents.flatMap(a => (a.agentId !== undefined ? [a.agentId] : [])))
+  const known = new Set(reg.agents.flatMap(a => (a.agentId !== undefined ? [a.agentId] : [])))
+  const calls = (reg.advisor?.calls ?? []).filter(call =>
+    call.by === MAIN || !known.has(call.by) ? call.s >= c.session && !c.agents.has(`agent:${call.by}`) : kept.has(call.by),
+  )
   const linked = (reg.linked ?? []).filter(l => l.at >= c.session && !c.agents.has(`launch:${l.id}`))
   // Un parcours effacé quitte la liste des parcours portés (S28).
   const carried = (reg.carried ?? []).filter(id => c.run(id) === -Infinity)
@@ -80,10 +89,13 @@ export const applyTraces = (reg: SessionRegistry, traces: readonly Trace[]): Ses
     carried.length === (reg.carried ?? []).length &&
     Object.keys(spans).length === Object.keys(reg.carriedAt ?? {}).length &&
     (main?.segments ?? []).length === (reg.main?.segments ?? []).length &&
-    (main?.marks ?? []).length === (reg.main?.marks ?? []).length
+    (main?.marks ?? []).length === (reg.main?.marks ?? []).length &&
+    calls.length === (reg.advisor?.calls ?? []).length
   if (isSame) return null
   const next: SessionRegistry = { ...reg, agents }
   if (main) next.main = main
+  if (calls.length > 0) next.advisor = { calls }
+  else delete next.advisor
   if (linked.length > 0) next.linked = linked
   else delete next.linked
   if (carried.length > 0) next.carried = carried
@@ -104,7 +116,9 @@ export const applyTracesToRebuilt = (rebuilt: Rebuilt, traces: readonly Trace[])
   // Un sous-agent sans date ne se situe pas : une trace de la session le couvre quand même.
   const agents = rebuilt.agents.filter(a => !isAgentCovered({ startedAt: a.lane.startedAt ?? (c.session > -Infinity ? -Infinity : Infinity), run: a.run, agentId: a.agentId, ...(a.meta.toolUseId !== undefined ? { key: a.meta.toolUseId } : {}) }, c))
   const rows = rebuilt.rows?.filter(r => !isAgentCovered(r, c))
-  const main = laneAfter(rebuilt.main, c.session)
+  const after = laneAfter(rebuilt.main, c.session)
+  // Les appels à l'advisor de la piste de la session, d'après sa trace.
+  const main: Rebuilt['main'] = after && rebuilt.main?.advisor ? { ...after, advisor: rebuilt.main.advisor.filter(call => call.s >= c.session) } : after
   // Un parcours effacé ne reste pas dans la liste des parcours repris.
   const runs = rebuilt.runs?.filter(r => c.run(r) === -Infinity)
   const isSame =
@@ -112,6 +126,7 @@ export const applyTracesToRebuilt = (rebuilt: Rebuilt, traces: readonly Trace[])
     (rows?.length ?? 0) === (rebuilt.rows?.length ?? 0) &&
     (main?.segments ?? []).length === (rebuilt.main?.segments ?? []).length &&
     (main?.marks ?? []).length === (rebuilt.main?.marks ?? []).length &&
+    (main?.advisor ?? []).length === (rebuilt.main?.advisor ?? []).length &&
     (runs?.length ?? 0) === (rebuilt.runs?.length ?? 0)
   if (isSame) return null
   const next: Rebuilt = { ...rebuilt, agents }

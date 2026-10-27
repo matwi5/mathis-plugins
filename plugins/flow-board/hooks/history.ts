@@ -7,9 +7,9 @@
 //   `<session>.rebuilt.json` (S13) ; les lignes de l'ancien champ d'un parcours dont la session est
 //   introuvable vont dans celui du parcours, `run-<parcours>.rebuilt.json` (S18).
 
-import type { AgentLane, AgentSegment, Board, RegistryAgent, Run, SessionRegistry } from '../types'
+import type { AdvisorFigures, AgentLane, AgentSegment, Board, RegistryAgent, Run, SessionRegistry } from '../types'
 import { isSameProject } from './linked.ts'
-import { cleanAgent, cleanLane, emptyRegistry, mergeRegistry } from './registry.ts'
+import { MAIN, catchUpAdvisor, cleanAdvisorFigures, cleanAdvisorList, cleanAgent, cleanLane, emptyRegistry, mergeRegistry } from './registry.ts'
 import { catchUp, type TranscriptAgent } from './transcript.ts'
 
 /** Le fichier à part d'une session (ou d'un parcours) : ce que le rattrapage et la reprise ont reconstruit. */
@@ -21,8 +21,8 @@ export type Rebuilt = {
   agents: TranscriptAgent[]
   /** Les lignes de l'ancien champ des sous-agents d'un parcours (S1), en entrées du registre. */
   rows?: RegistryAgent[]
-  /** La piste de la session relue dans son transcript, sur les périodes des parcours repris. */
-  main?: AgentLane
+  /** La piste de la session relue dans son transcript, sur les périodes des parcours repris, et ses appels à l'advisor. */
+  main?: AgentLane & { advisor?: AdvisorFigures[] }
   /** Les parcours repris dans ce fichier. */
   runs?: string[]
 }
@@ -48,6 +48,7 @@ export const cleanRebuilt = (raw: unknown, session: string): Rebuilt | null => {
         toolCount: typeof lane.toolCount === 'number' ? lane.toolCount : 0,
         ...(typeof lane.startedAt === 'number' ? { startedAt: lane.startedAt } : {}),
         ...(typeof lane.endedAt === 'number' ? { endedAt: lane.endedAt } : {}),
+        ...(Array.isArray(lane.advisor) ? { advisor: cleanAdvisorList(lane.advisor, cleanAdvisorFigures) } : {}),
       },
       meta: { ...text('agentType'), ...text('description'), ...text('toolUseId'), ...text('parentAgentId'), ...(typeof meta.isFinished === 'boolean' ? { isFinished: meta.isFinished } : {}) },
       ...(typeof x.run === 'string' ? { run: x.run } : {}),
@@ -55,7 +56,7 @@ export const cleanRebuilt = (raw: unknown, session: string): Rebuilt | null => {
   }
   const out: Rebuilt = { v: 1, session, agents }
   if (Array.isArray(raw.rows)) out.rows = raw.rows.map(cleanAgent).filter((r): r is RegistryAgent => r !== null)
-  if (isObj(raw.main)) out.main = cleanLane(raw.main)
+  if (isObj(raw.main)) out.main = { ...cleanLane(raw.main), ...(Array.isArray(raw.main.advisor) ? { advisor: cleanAdvisorList(raw.main.advisor, cleanAdvisorFigures) } : {}) }
   if (Array.isArray(raw.runs)) out.runs = raw.runs.filter((r): r is string => typeof r === 'string')
   return out
 }
@@ -73,18 +74,25 @@ export const applyRebuilt = (reg: SessionRegistry, rebuilt: Rebuilt | null, now:
     const live = next.main?.segments ?? []
     const since = live.length > 0 ? Math.min(...live.map(x => x.s)) : Infinity
     const before = rebuilt.main!.segments!.filter(x => (x.e ?? x.s) <= since)
-    next = { ...next, main: { ...rebuilt.main, ...next.main, segments: [...before, ...live].sort((a, b) => a.s - b.s) } }
+    const { advisor: _calls, ...lane } = rebuilt.main!
+    next = { ...next, main: { ...lane, ...next.main, segments: [...before, ...live].sort((a, b) => a.s - b.s) } }
   }
-  return next
+  // Les appels à l'advisor de la session elle-même : sur sa ligne advisor.
+  return catchUpAdvisor(next, MAIN, rebuilt.main?.advisor, now) ?? next
 }
 
 /** La période d'un parcours, une marge comprise après sa dernière activité. */
 export const runWindow = (run: Run): { s: number; e: number } => ({ s: run.startedAt - BEFORE_MS, e: (run.finishedAt ?? run.updatedAt) + AFTER_MS })
 
-/** Les segments d'une piste qui touchent la période. */
-export const clipLane = (lane: AgentLane | undefined, w: { s: number; e: number }): AgentLane => {
-  const inside = (x: AgentSegment) => (x.e ?? x.s) >= w.s && x.s <= w.e
-  return { ...lane, segments: (lane?.segments ?? []).filter(inside), marks: (lane?.marks ?? []).filter(m => m.at >= w.s && m.at <= w.e) }
+/** Les segments d'une piste (et ses appels à l'advisor) qui touchent la période. */
+export const clipLane = <L extends AgentLane & { advisor?: AdvisorFigures[] }>(lane: L | undefined, w: { s: number; e: number }): L => {
+  const inside = (x: { s: number; e?: number }) => (x.e ?? x.s) >= w.s && x.s <= w.e
+  return {
+    ...lane,
+    segments: (lane?.segments ?? []).filter(inside),
+    marks: (lane?.marks ?? []).filter(m => m.at >= w.s && m.at <= w.e),
+    ...(lane?.advisor ? { advisor: lane.advisor.filter(inside) } : {}),
+  } as L
 }
 
 /**
@@ -187,13 +195,29 @@ export const unionRebuilt = (before: Rebuilt | null, next: Rebuilt): Rebuilt => 
   if (rows.size > 0) out.rows = [...rows.values()]
   const segs = new Map<string, AgentSegment>()
   for (const x of [...(before.main?.segments ?? []), ...(next.main?.segments ?? [])]) if (!segs.has(`${x.k}|${x.s}`)) segs.set(`${x.k}|${x.s}`, x)
-  if (segs.size > 0) out.main = { segments: [...segs.values()].sort((a, b) => a.s - b.s) }
+  // Les appels à l'advisor de la piste de la session : union par id, le plus récent relevé gagne.
+  const calls = new Map<string, AdvisorFigures>()
+  for (const c of [...(before.main?.advisor ?? []), ...(next.main?.advisor ?? [])]) calls.set(c.id, c)
+  if (segs.size > 0 || calls.size > 0) {
+    out.main = {
+      ...(segs.size > 0 ? { segments: [...segs.values()].sort((a, b) => a.s - b.s) } : {}),
+      ...(calls.size > 0 ? { advisor: [...calls.values()].sort((a, b) => a.s - b.s) } : {}),
+    }
+  }
   return out
 }
 
-/** Ce que la reprise d'un parcours apporte au fichier à part d'une session : ses sous-agents, sa piste, le parcours. */
-export const withRun = (before: Rebuilt | null, session: string, run: Run, agents: readonly TranscriptAgent[], main: AgentLane | null): Rebuilt =>
-  unionRebuilt(before, { v: 1, session, agents: [...agents], runs: [run.id], ...((main?.segments ?? []).length > 0 ? { main: { segments: main!.segments! } } : {}) })
+/** Ce que la reprise d'un parcours apporte au fichier à part d'une session : ses sous-agents, sa piste et ses appels à l'advisor, le parcours. */
+export const withRun = (before: Rebuilt | null, session: string, run: Run, agents: readonly TranscriptAgent[], main: (AgentLane & { advisor?: AdvisorFigures[] }) | null): Rebuilt =>
+  unionRebuilt(before, {
+    v: 1,
+    session,
+    agents: [...agents],
+    runs: [run.id],
+    ...((main?.segments ?? []).length > 0 || (main?.advisor ?? []).length > 0
+      ? { main: { ...((main?.segments ?? []).length > 0 ? { segments: main!.segments! } : {}), ...((main?.advisor ?? []).length > 0 ? { advisor: main!.advisor! } : {}) } }
+      : {}),
+  })
 
 export type HistoryEntry = { key: string; kind: 'now' | 'run' | 'session'; title: string; at?: number; isArchived?: boolean; agents?: number }
 
@@ -229,8 +253,11 @@ export const runRegistry = (run: Run, regs: readonly SessionRegistry[], runFile:
   for (const reg of regs) {
     const own = reg.agents.filter(a => a.run === run.id)
     const main = clipLane(reg.main, w)
-    if (own.length === 0 && (main.segments ?? []).length === 0) continue
-    out = mergeRegistry(out, { ...out, agents: own, main })
+    // Les appels à l'advisor du parcours : ceux de ses sous-agents, et ceux de la discussion dans sa période.
+    const ids = new Set(own.flatMap(a => (a.agentId !== undefined ? [a.agentId] : [])))
+    const calls = (reg.advisor?.calls ?? []).filter(c => (c.by === MAIN ? (c.e ?? c.s) >= w.s && c.s <= w.e : ids.has(c.by)))
+    if (own.length === 0 && (main.segments ?? []).length === 0 && calls.length === 0) continue
+    out = mergeRegistry(out, { ...out, agents: own, main, ...(calls.length > 0 ? { advisor: { calls } } : {}) })
   }
   out = applyRebuilt(out, runFile, now)
   return run.status === 'active' ? out : settledRun(out, run.finishedAt ?? run.updatedAt)

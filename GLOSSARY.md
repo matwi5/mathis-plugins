@@ -44,3 +44,25 @@ _Avoid_: session fille, session déléguée
 **Sous-agent** :
 Un agent lancé à l'intérieur d'une discussion (orchestrateur ou session liée), qui travaille pour elle et lui rend un rapport.
 _Avoid_: agent, worker
+
+**Advisor** :
+Un modèle relecteur, plus fort, qu'une discussion ou un sous-agent consulte en lui passant toute son histoire ; il conseille sans agir.
+_Avoid_: conseiller, reviewer
+
+**Attente** :
+Un moment où un agent ne travaille pas lui-même parce qu'il attend quelqu'un d'autre : un sous-agent, une tâche de fond, l'advisor, ou la réponse de l'utilisateur.
+_Avoid_: blocage
+
+**Pause** :
+Un moment où personne ne travaille : ni l'orchestrateur, ni ses sous-agents, ni ses sessions liées ; seuls attendent l'utilisateur, sa réponse ou son prochain message.
+_Avoid_: inactivité, trou
+
+## Lots de tickets
+
+**Groupe** :
+Des tickets qui partagent un contexte (mêmes fichiers, ou une chaîne de dépendances), confiés ensemble à une session liée. Un lot qui n'en aurait qu'un n'a pas de groupe.
+_Avoid_: lot, paquet
+
+**Vague** :
+Un ensemble de groupes qui peuvent tourner en même temps, chacun dans sa session liée.
+_Avoid_: niveau, étape

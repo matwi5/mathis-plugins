@@ -29,6 +29,8 @@ export const C = {
   /** Mauve : les pistes des sessions liées, plus loin du violet de l'orchestrateur que le lilas. */
   mauve: '#C9A3F0',
   sand: '#C9A66B',
+  /** Or : l'advisor, sa ligne et l'attente « consulte l'advisor », plus clair que l'ambre de « attend ta réponse ». */
+  gold: '#E8C547',
   slate: '#7F8EA3',
   gray: '#8B8B93',
   /** Texte foncé posé sur un aplat de couleur. */

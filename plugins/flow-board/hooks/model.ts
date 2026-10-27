@@ -59,6 +59,11 @@ export type Effects = {
   openPane: boolean
   /** Note à ajouter au texte du skill pour Claude : celle d'une phase, d'un détour, ou rien. */
   note: 'none' | 'phase' | 'detour'
+  /**
+   * Le titre que cette discussion doit prendre (série 1, Q14) : le mod le garde pour elle seule,
+   * hors du board partagé (série 5, Q2), et le renvoie au moteur au prochain message ou à la reprise.
+   */
+  discussionTitle?: string
 }
 
 export type Outcome = { board: Board; fx: Effects } | null
@@ -978,7 +983,8 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
   // son titre et ne reprennent pas un autre parcours en pause qui aurait la même phase : une rétro
   // lancée dans la discussion « Onglet Agents » avait repris le parcours « Durée des requêtes ».
   const parent = followed ?? (id === 'retro' ? run : null)
-  const title = parent ? clip(`${def.flowLabel} · ${parent.title}`, 70) : clip(str(ctx.args), 70) || undefined
+  // Jamais les arguments de la commande (souvent un long prompt) : Claude envoie un titre réfléchi.
+  const title = parent ? clip(`${def.flowLabel} · ${parent.title}`, 70) : undefined
   const paused = parent
     ? undefined
     : b.runs
@@ -1010,6 +1016,7 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
   if (run) shelve(run, now)
   const created = newRun(id, now, title)
   created.owner = b.session
+  created.bornIn = b.session
   b.runs.unshift(created)
   b.activeId = created.id
   log(created, now, def.glyph, `Parcours lancé par /${id}`, 'accent')
@@ -1283,6 +1290,7 @@ export const openRun = (board: Board, ask: { entry?: string; title?: string }, n
   const title = clip(str(ask.title), 70)
   const run = newRun(entry, now, title || undefined)
   run.owner = b.session
+  run.bornIn = b.session
   b.runs.unshift(run)
   b.activeId = run.id
   log(run, now, '✚', `Parcours ouvert par Claude${previous ? ` (« ${previous.title} » ${previous.status === 'done' ? 'terminé' : 'en pause'})` : ''}`, 'accent')
@@ -1290,7 +1298,8 @@ export const openRun = (board: Board, ask: { entry?: string; title?: string }, n
   fx.openPane = true
   prune(b)
   const left = previous ? ` "${previous.title}" was ${previous.status === 'done' ? 'closed (nothing required left)' : 'paused'}, untouched; the user resumes it from the History tab.` : ''
-  return { board: b, fx, text: `New workflow "${run.title}" (${SKILLS[entry]!.flowLabel}) opened in this discussion; the rest of this call went to it.${left}${fallback}${title ? '' : ' Send {"fix": {"title": "..."}} to name it.'}` }
+  const named = title ? nameDiscussion(b, run, fx) : ' Send {"fix": {"title": "..."}} to name it.'
+  return { board: b, fx, text: `New workflow "${run.title}" (${SKILLS[entry]!.flowLabel}) opened in this discussion; the rest of this call went to it.${left}${fallback}${named}` }
 }
 
 /**
@@ -1299,14 +1308,16 @@ export const openRun = (board: Board, ask: { entry?: string; title?: string }, n
  * Revenir en arrière remet à faire les phases d'après ; avancer saute ou clôt celles d'avant,
  * sauf le compte rendu, qui reste réservé à la personne et passe « sauté ».
  */
-const fixRun = (run: Run, fix: Record<string, unknown>, now: number, fx: Effects): string => {
+const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: number, fx: Effects): string => {
   const done: string[] = []
   const notes: string[] = []
   const title = clip(str(fix.title), 70)
+  let named = ''
   if (title && title !== run.title) {
     run.title = title
     run.isTitled = true
     done.push(`titre « ${title} »`)
+    named = nameDiscussion(board, run, fx)
   }
   const wantedPhase = str(fix.phase)
   let phase = currentPhase(run)
@@ -1368,7 +1379,7 @@ const fixRun = (run: Run, fix: Record<string, unknown>, now: number, fx: Effects
   }
   run.status = 'active'
   run.finishedAt = undefined
-  return [done.length > 0 ? ` · fixed: ${done.length} change(s)` : '', notes.length > 0 ? ` · not fixed: ${notes.join('; ')}` : ''].join('')
+  return [done.length > 0 ? ` · fixed: ${done.length} change(s)` : '', named, notes.length > 0 ? ` · not fixed: ${notes.join('; ')}` : ''].join('')
 }
 
 /**
@@ -1406,7 +1417,7 @@ const reportOnce = (
     const { open: _, resume: __, ...rest } = input
     const out = reportHere(opened.board, rest, now, opts)
     const ignored = str(input.resume) !== '' ? ' "resume" was ignored: "open" starts a new workflow.' : ''
-    return { board: out.board, fx: { ...out.fx, openPane: true, toasts: [...opened.fx.toasts, ...out.fx.toasts] }, text: `${opened.text}${ignored} ${out.text}` }
+    return { board: out.board, fx: { ...out.fx, openPane: true, toasts: [...opened.fx.toasts, ...out.fx.toasts], ...(opened.fx.discussionTitle !== undefined && out.fx.discussionTitle === undefined ? { discussionTitle: opened.fx.discussionTitle } : {}) }, text: `${opened.text}${ignored} ${out.text}` }
   }
   const resumeId = str(input.resume)
   if (resumeId === '' || resumeId === board.activeId) return reportHere(board, input, now, opts)
@@ -1592,8 +1603,10 @@ const reportHere = (
     // plutôt que de le laisser deviner un autre lot (il était allé chercher d'autres tickets).
     if (tickets.length === 0 || resumable(b).length > 0) return { board, fx, text: noActiveText(b) }
     // Un lot de tickets sans skill chargé : suivi comme une implémentation (l'usage de ticket-board).
-    run = newRun('implement', now, str(input.title) || undefined)
+    // Son titre vient plus bas, comme un premier titre : la discussion le prend aussi.
+    run = newRun('implement', now)
     run.owner = b.session
+    run.bornIn = b.session
     b.runs.unshift(run)
     b.activeId = run.id
     log(run, now, '⚙', 'Lot de tickets suivi', 'accent')
@@ -1603,7 +1616,7 @@ const reportHere = (
 
   // Une correction d'abord : la phase qu'elle choisit reçoit le reste de l'appel.
   const fix = input.fix !== null && typeof input.fix === 'object' ? (input.fix as Record<string, unknown>) : null
-  const fixText = fix ? fixRun(run, fix, now, fx) : ''
+  const fixText = fix ? fixRun(b, run, fix, now, fx) : ''
 
   const phase = currentPhase(run)
   const detour = activeDetour(phase)
@@ -1612,9 +1625,11 @@ const reportHere = (
 
   // Le premier titre seulement : un titre posé ne se change que par `fix` (ou /flow rename).
   const title = str(input.title)
+  let namedText = ''
   if (title && !run.isTitled) {
     run.title = clip(title, 70)
     run.isTitled = true
+    namedText = nameDiscussion(b, run, fx)
   }
 
   const stepId = str(input.step)
@@ -1674,6 +1689,10 @@ const reportHere = (
     removeText = ` · removed ${gone.length + goneFound.length} ticket(s)${missed.length > 0 ? `; not on the dashboard: ${missed.join(', ')}` : ''}`
   }
 
+  // Les tickets nouveaux de cet appel, et le lot d'avant : ils rejoignent un groupe en cours une fois
+  // le sort des groupes reçus connu (un plan ignoré compte comme pas de plan).
+  let addedIds: string[] = []
+  let ticketsBeforeAdd = run.tickets
   if (tickets.length > 0) {
     // Une tâche trouvée en route que Claude envoie dans le lot : elle quitte « Trouvé en route »
     // et garde son statut connu, sauf s'il en envoie un.
@@ -1687,7 +1706,8 @@ const reportHere = (
     const known = new Set(previous.map(t => t.id))
     run.tickets = mergeTickets(run.tickets, incoming, now, b.session)
     const added = run.tickets.length - before
-    if (added > 0 && !Array.isArray(input.groups)) placeInRunningGroup(run, run.tickets.filter(t => !known.has(t.id)).map(t => t.id), previous, now)
+    addedIds = run.tickets.filter(t => !known.has(t.id)).map(t => t.id)
+    ticketsBeforeAdd = previous
     if (added > 0) log(run, now, '▦', before === 0 ? `${added} tickets suivis` : `+${added} ticket${added > 1 ? 's' : ''}`, 'accent')
     if (joining.length > 0) {
       run.found = run.found!.filter(f => !joining.includes(f))
@@ -1718,8 +1738,21 @@ const reportHere = (
   }
 
   let groupText = ''
-  if (Array.isArray(input.groups)) {
-    const parsed = parseGroups(run, input.groups, b.session)
+  const parsed = Array.isArray(input.groups) ? parseGroups(run, input.groups) : null
+  // Un seul groupe n'apporte rien (série 1, Q11) : le plan est ignoré avant d'être enregistré, et
+  // celui en place, lancé ou non, reste tel quel (série 2, Q5). Les tickets restés hors du groupe
+  // ne font pas un deuxième groupe.
+  const isPlanKept = parsed !== null && parsed.groups.length >= 2
+  if (parsed && !isPlanKept) {
+    const rest = (run.groups ?? []).length > 0 ? 'the plan already in place stays' : 'the lot is done in this discussion with /implement'
+    // Des ids inconnus ont fait tomber le compte : la cause d'abord, pour que Claude renvoie le plan.
+    groupText =
+      parsed.unknown.length > 0
+        ? ` · groups: plan ignored, ${parsed.groups.length} group(s) left once the unknown ticket ids are removed (${parsed.unknown.join(', ')}); send those tickets first, then the groups again`
+        : parsed.groups.length === 1
+          ? ` · groups: one group only, so no groups: ${rest}`
+          : ` · groups: an empty plan is ignored: ${rest}`
+  } else if (parsed) {
     // Ce que les revues ont marqué sur un groupe, et sa session liée, survivent à un plan renvoyé.
     const before = new Map((run.groups ?? []).map(g => [g.id, g]))
     run.groups = parsed.groups.map(g => {
@@ -1732,7 +1765,7 @@ const reportHere = (
         ...(was?.delegated !== undefined ? { delegated: was.delegated } : {}),
       }
     })
-    if (parsed.groups.length > 0) log(run, now, '▦', `Plan : ${parsed.groups.map(g => `${g.id} (${g.tickets.length})`).join(', ')}`, 'accent')
+    log(run, now, '▦', `Plan : ${parsed.groups.map(g => `${g.id} (${g.tickets.length})`).join(', ')}`, 'accent')
     if (parsed.unknown.length > 0) {
       log(run, now, '!', `Groupes : tickets inconnus ignorés (${parsed.unknown.slice(0, 3).join(', ')})`, 'warn')
       groupText = ` · groups: unknown ticket ids ignored (${parsed.unknown.join(', ')}); send those tickets first`
@@ -1742,6 +1775,7 @@ const reportHere = (
       groupText += ` · groups: ${wide.slice(0, 3).join('; ')}${wide.length > 3 ? '…' : ''}. A folder blocks every group that names a file inside it: list the files the group really touches instead, unless it creates files in that folder`
     }
   }
+  if (addedIds.length > 0 && !isPlanKept) placeInRunningGroup(run, addedIds, ticketsBeforeAdd, now)
 
   const changes = parseChanges(input.set)
   if (changes.length > 0) setTickets(run, changes, now, b.session)
@@ -1889,7 +1923,7 @@ const reportHere = (
   const gateText = isReportGate
     ? ' · the report is validated by the user from the dashboard (✓ Valider le rapport), not by you: wait for it'
     : isTicketGate
-      ? ` · not finished: ${stillOpen.length} ticket(s) of the lot still open (${stillOpen.slice(0, 4).map(t => t.name).join('; ')}${stillOpen.length > 4 ? '…' : ''}). A finished group is not the end of the phase: tell the user to launch the next group from the dashboard (▶ Lancer), not /flow-board:compte-rendu nor the delivery`
+      ? ` · not finished: ${stillOpen.length} ticket(s) of the lot still open (${stillOpen.slice(0, 4).map(t => t.name).join('; ')}${stillOpen.length > 4 ? '…' : ''}). A finished group is not the end of the phase: tell the user to launch the next group from the dashboard, in its linked session (↗ Session liée), not /flow-board:compte-rendu nor the delivery`
       : isPushGate
         ? ' · version done; the phase stays open until /project:push, which the user runs: tell them to run it'
         : isLinkedGate
@@ -1905,7 +1939,7 @@ const reportHere = (
     withSession.length > 0
       ? ` · with the linked session until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
       : ''
-  return { board: b, fx, text: `${summaryOf(run)}${fixText}${removeText}${groupText}${returnText}${reviewedText}${gateText}${linkedText}${withdrawnText}` }
+  return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${groupText}${returnText}${reviewedText}${gateText}${linkedText}${withdrawnText}` }
 }
 
 // ─── Éléments confiés à une session liée ──────────────────────────────────
@@ -2001,6 +2035,7 @@ export const linkSession = (board: Board, session: string, now: number, title = 
   const phase = currentPhase(run)
   const { missedAt: _, ...linked } = phase.linked!
   phase.linked = { ...linked, session }
+  run.linkedAt ??= now
   const ids = linkedInFlight(phase).map(i => i.id)
   openLinkedWork(phase, ids, now)
   const label = SKILLS[phase.skill]?.items?.label.toLowerCase() ?? 'éléments'
@@ -2122,6 +2157,7 @@ export const linkGroupSession = (board: Board, title: string, session: string, n
   const b = clone(board)
   const run = activeRun(b)!
   run.groups = run.groups!.map(g => (g.id === target.id ? { ...g, linked: { ...g.linked!, session } } : g))
+  run.linkedAt ??= now
   log(run, now, '↗', `Session liée lancée pour le groupe ${target.id}`, 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
@@ -3667,8 +3703,39 @@ export const archiveRun = (board: Board, id: string, now: number): Outcome => {
 }
 
 /**
+ * Une session liée a été demandée ou lancée par ce parcours (groupe ou éléments d'une phase) : son
+ * brief nomme la discussion, dès la demande mise dans le prompt. Une demande en cours se lit sur le
+ * groupe ou la phase (« Annuler » la retire) ; une session lancée, sur `linkedAt`, gardé même quand
+ * ses éléments reviennent ensuite à faire ; les groupes confiés avant ce champ comptent aussi.
+ */
+const hasLaunchedLinked = (run: Run): boolean =>
+  run.linkedAt !== undefined || (run.groups ?? []).some(g => g.linked !== undefined || g.delegated !== undefined) || run.phases.some(p => p.linked !== undefined)
+
+/**
+ * La discussion prend le titre du parcours (série 1, Q14 et Q15) : le parcours y est né, aucun
+ * autre n'y est né (actif, en pause, fini ou archivé ; un parcours supprimé a quitté le board), et
+ * ce n'est pas une session liée ; et, au premier titre comme plus tard (`fix.title`, `/flow rename`),
+ * aucune session liée n'a été demandée par ce parcours : son brief nomme la discussion (série 2, Q6 ;
+ * user story 75). Le titre attend alors le moteur (`fx.discussionTitle`) ; rend la ligne qui le dit
+ * à Claude.
+ */
+const nameDiscussion = (board: Board, run: Run, fx: Effects): string => {
+  const session = board.session
+  const isHere =
+    session !== undefined &&
+    board.delegate === undefined &&
+    run.bornIn === session &&
+    !board.runs.some(r => r.id !== run.id && r.bornIn === session) &&
+    !hasLaunchedLinked(run)
+  if (!isHere) return ' · this discussion keeps its name'
+  fx.discussionTitle = run.title
+  return ` · name this discussion "${run.title}": if you have a tool that renames it (in the app: set_session_title), call it now with this title; otherwise the dashboard renames it at the user's next message`
+}
+
+/**
  * Renomme un parcours, titre automatique ou posé compris (`/flow rename <titre>`). Le titre reste
- * ensuite posé : un titre envoyé plus tard par l'outil ne l'écrase pas.
+ * ensuite posé : un titre envoyé plus tard par l'outil ne l'écrase pas. La discussion suit, aux
+ * conditions de `nameDiscussion`.
  */
 export const renameRun = (board: Board, id: string, title: string, now: number): Outcome => {
   const text = str(title)
@@ -3678,9 +3745,11 @@ export const renameRun = (board: Board, id: string, title: string, now: number):
   const run = b.runs.find(r => r.id === id)!
   run.title = clip(text, 70)
   run.isTitled = true
+  const fx = { ...noFx(), toasts: [`✎ Renommé : ${run.title}`] }
+  nameDiscussion(b, run, fx)
   run.updatedAt = now
   log(run, now, '✎', `Parcours renommé : ${run.title}`, 'info')
-  return { board: b, fx: { ...noFx(), toasts: [`✎ Renommé : ${run.title}`] } }
+  return { board: b, fx }
 }
 
 /** Sort un parcours des archives : il revient dans l'historique, tel qu'il était. */
@@ -3903,10 +3972,10 @@ const resourceKey = (name: string): string => name.trim().replace(/\s+/g, ' ').t
 
 /**
  * Le plan envoyé par Claude : chaque ticket connu dans un seul groupe (le premier qui le cite),
- * les ids inconnus mis de côté pour le lui dire, un seul groupe « dans cette discussion », dont
- * on retient la discussion qui l'envoie (`session`).
+ * les ids inconnus mis de côté pour le lui dire. Un `continuesHere` reçu est ignoré : un groupe
+ * ne se fait qu'en session liée.
  */
-const parseGroups = (run: Run, value: unknown, session?: string): { groups: TicketGroup[]; unknown: string[] } => {
+const parseGroups = (run: Run, value: unknown): { groups: TicketGroup[]; unknown: string[] } => {
   const groups: TicketGroup[] = []
   const unknown: string[] = []
   const seen = new Set<string>()
@@ -3932,7 +4001,6 @@ const parseGroups = (run: Run, value: unknown, session?: string): { groups: Tick
       .filter((r, i, all) => r !== '' && all.findIndex(o => resourceKey(o) === resourceKey(r)) === i)
       .slice(0, LIMITS.groupResources)
     const why = str(one.why)
-    const isHere = one.continuesHere === true && !groups.some(g => g.continuesHere)
     groups.push({
       id,
       name: clip(str(one.name) || id, 60),
@@ -3940,8 +4008,6 @@ const parseGroups = (run: Run, value: unknown, session?: string): { groups: Tick
       ...(why ? { why: clip(why, 160) } : {}),
       ...(files.length > 0 ? { files } : {}),
       ...(resources.length > 0 ? { resources } : {}),
-      ...(isHere ? { continuesHere: true } : {}),
-      ...(isHere && session ? { continuesIn: session } : {}),
     })
     if (groups.length >= LIMITS.groups) break
   }
@@ -3980,13 +4046,16 @@ export type GroupView = {
    * ceux du lot (quand il n'en est pas), ceux confiés à une session liée et ceux en cours ici.
    */
   conflicts: GroupConflict[]
-  /** Dans un groupe qui attend : ses tickets déjà prêts (aucun bloqueur ouvert), qui peuvent partir seuls. */
-  readyNow: Ticket[]
 }
 
 export type GroupPlan = {
   groups: GroupView[]
   waves: number
+  /**
+   * Une vague veut dire « en parallèle » (glossaire) : au moins un niveau d'attente a deux groupes
+   * qui peuvent avancer ensemble, sans fichier ni ressource en commun. Sinon, pas de titre « Vague N ».
+   */
+  hasParallelWave: boolean
   /** Le lot à lancer ensemble (deux groupes au moins), vide sinon. */
   parallelBatch: string[]
   /** Le lot possible, mis en attente parce qu'un groupe du parcours est en cours. */
@@ -4075,12 +4144,8 @@ export const groupPlan = (run: Run): GroupPlan | null => {
       parallelWith: [],
       isDelegated: group.linked !== undefined,
       conflicts: [],
-      readyNow: [],
     }
   })
-  for (const v of views) {
-    if (v.state === 'waiting' && !v.isFallback && !v.isDelegated) v.readyNow = v.open.filter(t => t.status === 'todo' && openBlockers(run, t).length === 0)
-  }
 
   // Vagues : un groupe passe dès que ceux qu'il attend sont passés. Une attente circulaire ne
   // bloque pas le calcul : ses groupes forment ensemble la vague suivante, marqués « à revoir ».
@@ -4098,8 +4163,8 @@ export const groupPlan = (run: Run): GroupPlan | null => {
     wave += 1
   }
 
-  // Deux sortes de groupes : un groupe se fait en séquence (/implement), ses tickets partageant
-  // leur contexte ; des groupes indépendants partent ensemble (sessions liées, ou /implement-spec).
+  // Chaque groupe se fait dans sa session liée, ses tickets en séquence, partageant leur contexte ;
+  // des groupes indépendants partent ensemble, une session liée chacun.
   // Le lot réunit, dans l'ordre, les groupes prêts (aucun bloqueur encore ouvert) et pas encore
   // commencés, chacun retenu s'il n'a ni fichier ni ressource en commun avec un groupe déjà retenu
   // ou confié à une session liée : un fichier ou une ressource en commun vaut dépendance.
@@ -4136,9 +4201,14 @@ export const groupPlan = (run: Run): GroupPlan | null => {
       otherBatches.push(alt)
     }
   }
+  // Un groupe circulaire attend les autres de son niveau : il n'avance avec aucun.
+  const hasParallelWave = Array.from({ length: wave }, (_, w) => views.filter(v => v.wave === w && !v.isFallback && !v.isCyclic)).some(level =>
+    level.some((v, i) => level.slice(i + 1).some(o => sharedOf(v, o) === null)),
+  )
   return {
     groups: views,
     waves: wave,
+    hasParallelWave,
     parallelBatch: busy.length === 0 ? lot : [],
     heldBatch: busy.length > 0 ? lot : [],
     busy,

@@ -298,28 +298,31 @@ export const miniRoadSvg = (nodes: readonly { color: string; state: NodeState; i
 }
 
 /** Une part de piste à dessiner (voir timeline.ts) : x de 0 à 1. */
-export type LaneDrawPart = { x0: number; x1: number; kind: 'think' | 'write' | 'tool' | 'waitAgent' | 'waitPerson' | 'waitBg'; glyph?: string; isLive?: boolean; isError?: boolean }
+export type LaneDrawPart = { x0: number; x1: number; kind: 'think' | 'write' | 'tool' | 'waitAgent' | 'waitPerson' | 'waitBg' | 'waitAdvisor'; glyph?: string; isLive?: boolean; isError?: boolean }
 
 /** Un repère d'une piste : son glyphe au-dessus, ou un point de relais sur le rail. */
 export type LaneDrawMark = { x: number; glyph: string; color: string; isRelay?: boolean; isStart?: boolean }
 
-const WAIT_TINT: Record<'waitAgent' | 'waitPerson' | 'waitBg', string> = { waitAgent: '#8B8B93', waitPerson: '#D9A520', waitBg: '#4A9EE8' }
+const WAIT_TINT: Record<'waitAgent' | 'waitPerson' | 'waitBg' | 'waitAdvisor', string> = { waitAgent: '#8B8B93', waitPerson: '#D9A520', waitBg: '#4A9EE8', waitAdvisor: '#E8C547' }
 
 /**
  * Une piste de la frise : une barre fine et arrondie par segment sur un rail pâle (variante A de
  * la planche de la frise validée par Mathis, dans le dépôt privé). Réflexion pâle, rédaction pleine, outil
  * mi-teinte avec le glyphe de sa famille quand la place le permet, attentes hachurées en trois
- * teintes ; repères au-dessus, points de relais sur le rail, « ⫽ » sur les pauses compressées.
+ * teintes ; repères au-dessus, points de relais sur le rail. Une pause compressée coupe le rail :
+ * pas de barre, deux traits verticaux à ses bords, et sa durée quand elle tient entre eux. La ligne
+ * advisor (`isOutlined`) a des barres cerclées : un contour, sans remplissage.
  * Les parts de moins d'un pixel se fondent dans la précédente de même sorte : un SVG reste petit
  * (131 072 caractères au plus), quel que soit le nombre de segments.
  */
 export const laneSvg = (
   parts: readonly LaneDrawPart[],
   marks: readonly LaneDrawMark[],
-  pauses: readonly { x0: number; x1: number }[],
+  pauses: readonly { x0: number; x1: number; label?: string }[],
   width: number,
   color: string,
   id: string,
+  isOutlined = false,
 ): Drawn => {
   const w = Math.max(80, Math.round(width))
   const h = 22
@@ -328,7 +331,12 @@ export const laneSvg = (
   const safe = id.replace(/[^a-zA-Z0-9_-]/g, '')
   const usedWaits = new Set(parts.filter(p => p.kind.startsWith('wait')).map(p => p.kind as keyof typeof WAIT_TINT))
   const defs = [...usedWaits]
-    .map(k => `<pattern id="${safe}-${k}" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" fill="${WAIT_TINT[k]}" fill-opacity="0.18"/><line x1="0" y1="0" x2="0" y2="4" stroke="${WAIT_TINT[k]}" stroke-width="1.6"/></pattern>`)
+    // L'advisor en pointillés or pâle : ses hachures se confondaient avec l'ambre de « attend ta réponse ».
+    .map(k =>
+      k === 'waitAdvisor'
+        ? `<pattern id="${safe}-${k}" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="${WAIT_TINT[k]}" fill-opacity="0.12"/><circle cx="2" cy="2" r="1" fill="${WAIT_TINT[k]}"/></pattern>`
+        : `<pattern id="${safe}-${k}" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" fill="${WAIT_TINT[k]}" fill-opacity="0.18"/><line x1="0" y1="0" x2="0" y2="4" stroke="${WAIT_TINT[k]}" stroke-width="1.6"/></pattern>`,
+    )
     .join('')
   const merged: LaneDrawPart[] = []
   for (const p of parts) {
@@ -344,10 +352,25 @@ export const laneSvg = (
     const op = p.kind === 'think' ? 0.38 : p.kind === 'tool' ? 0.75 : 1
     const anim = p.isLive ? '<animate attributeName="opacity" values="1;0.5;1" dur="1.6s" repeatCount="indefinite"/>' : ''
     const glyph = p.glyph && pw >= 12 ? `<text x="${r1(x + pw / 2)}" y="${y + bh - 1.5}" text-anchor="middle" ${FONT} font-size="8" fill="#17171C">${esc(p.glyph)}</text>` : ''
+    if (isOutlined && !p.kind.startsWith('wait')) return `<rect x="${r1(x + 0.6)}" y="${y + 0.6}" width="${r1(Math.max(0.6, pw - 1.2))}" height="${bh - 1.2}" rx="2" fill="none" stroke="${color}" stroke-width="1.2">${anim}</rect>`
     return `<rect x="${r1(x)}" y="${y}" width="${r1(pw)}" height="${bh}" rx="2" fill="${fill}" fill-opacity="${op}">${anim}</rect>${glyph}`
   })
-  const rail = `<rect x="0" y="${y + bh / 2 - 0.5}" width="${w}" height="1" fill="${MUTED}" fill-opacity="0.25"/>`
-  const cuts = pauses.map(p => `<text x="${r1(((p.x0 + p.x1) / 2) * w)}" y="${y + bh - 1}" text-anchor="middle" ${FONT} font-size="10" fill="${MUTED}">⫽</text>`)
+  // Le rail, interrompu à chaque pause.
+  const gaps = [...pauses].sort((a, b) => a.x0 - b.x0)
+  const railParts: string[] = []
+  let from = 0
+  for (const g of [...gaps, { x0: 1, x1: 1 }]) {
+    if (g.x0 > from) railParts.push(`<rect x="${r1(from * w)}" y="${y + bh / 2 - 0.5}" width="${r1((g.x0 - from) * w)}" height="1" fill="${MUTED}" fill-opacity="0.25"/>`)
+    from = Math.max(from, g.x1)
+  }
+  const rail = railParts.join('')
+  const cuts = gaps.map(p => {
+    const a = r1(p.x0 * w)
+    const b = r1(p.x1 * w)
+    const tick = (x: number) => `<line x1="${x}" y1="${y - 1}" x2="${x}" y2="${y + bh + 1}" stroke="${MUTED}" stroke-width="1" stroke-dasharray="2 1.5"/>`
+    const label = p.label !== undefined && p.label.length * 5 + 4 <= b - a ? `<text x="${r1((a + b) / 2)}" y="${y + bh - 1.5}" text-anchor="middle" ${FONT} font-size="8" fill="${MUTED}">${esc(p.label)}</text>` : ''
+    return `${tick(a)}${tick(b)}${label}`
+  })
   const seen = new Set<string>()
   const placed = marks.filter(m => {
     const key = `${Math.round(m.x * w)}|${m.glyph}|${m.isRelay === true}|${m.isStart === true}`
@@ -362,4 +385,34 @@ export const laneSvg = (
     .filter(m => !m.isRelay)
     .map(m => `<text x="${r1(Math.min(w - 4, Math.max(4, m.x * w)))}" y="8" text-anchor="middle" ${FONT} font-size="9" font-weight="700" fill="${m.color}">${esc(m.glyph)}</text>`)
   return { source: svg(w, h, `${defs ? `<defs>${defs}</defs>` : ''}${rail}${rects.join('')}${cuts.join('')}${dots.join('')}${glyphs.join('')}`), width: w, height: h }
+}
+
+/**
+ * La règle graduée au-dessus des pistes : un trait et l'heure (hh:mm) par graduation, une
+ * étiquette sautée quand elle chevaucherait la précédente ; aux pauses compressées, la règle est
+ * coupée par les mêmes deux traits que les pistes.
+ */
+export const rulerSvg = (ticks: readonly { x: number; label: string }[], pauses: readonly { x0: number; x1: number }[], width: number): Drawn => {
+  const w = Math.max(80, Math.round(width))
+  const h = 16
+  const gaps = [...pauses].sort((a, b) => a.x0 - b.x0)
+  const line: string[] = []
+  let from = 0
+  for (const g of [...gaps, { x0: 1, x1: 1 }]) {
+    if (g.x0 > from) line.push(`<rect x="${r1(from * w)}" y="${h - 1}" width="${r1((g.x0 - from) * w)}" height="1" fill="${MUTED}" fill-opacity="0.4"/>`)
+    from = Math.max(from, g.x1)
+  }
+  const cuts = gaps.flatMap(p => [p.x0, p.x1].map(x => `<line x1="${r1(x * w)}" y1="${h - 6}" x2="${r1(x * w)}" y2="${h}" stroke="${MUTED}" stroke-width="1" stroke-dasharray="2 1.5"/>`))
+  const marks: string[] = []
+  let free = -Infinity
+  for (const t of ticks) {
+    const x = r1(Math.min(w - 0.5, Math.max(0.5, t.x * w)))
+    marks.push(`<line x1="${x}" y1="${h - 4}" x2="${x}" y2="${h}" stroke="${MUTED}" stroke-width="1"/>`)
+    const textW = t.label.length * 5.4
+    const tx = Math.min(w - textW / 2, Math.max(textW / 2, x))
+    if (tx - textW / 2 < free) continue
+    marks.push(`<text x="${r1(tx)}" y="${h - 6}" text-anchor="middle" ${FONT} font-size="9" fill="${MUTED}">${esc(t.label)}</text>`)
+    free = tx + textW / 2 + 6
+  }
+  return { source: svg(w, h, `${line.join('')}${cuts.join('')}${marks.join('')}`), width: w, height: h }
 }

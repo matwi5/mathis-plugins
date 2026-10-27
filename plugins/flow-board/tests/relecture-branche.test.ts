@@ -61,7 +61,11 @@ test('pendant un parcours, /code-review reste la revue du groupe : pas de Relect
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
-  await $.tool.call({ tool: TOOL, tickets: [{ id: 'A1', name: 'Un', blockedBy: [] }], groups: [{ id: 'A', name: 'Tout', tickets: ['A1'] }] } as any)
+  await $.tool.call({
+    tool: TOOL,
+    tickets: [{ id: 'A1', name: 'Un', blockedBy: [] }, { id: 'B1', name: 'Deux', blockedBy: [] }],
+    groups: [{ id: 'A', name: 'Tout', tickets: ['A1'] }, { id: 'B', name: 'Reste', tickets: ['B1'] }],
+  } as any)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'y' })
   await $.tool.call({ tool: TOOL, set: [{ id: 'A1', status: 'done' }] } as any)
   const note = await $.skill.prompt({ skill: 'code-review', text: 'r' })

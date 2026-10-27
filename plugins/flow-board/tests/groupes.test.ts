@@ -43,7 +43,7 @@ const LOT = [
   { id: D, name: 'Recalcul résumés', blockedBy: [F] },
 ]
 const GROUPS = [
-  { id: 'A', name: 'Worker SC/VSC', tickets: [L, R, F], why: 'mêmes règles du worker', files: ['worker/sc'], continuesHere: true },
+  { id: 'A', name: 'Worker SC/VSC', tickets: [L, R, F], why: 'mêmes règles du worker', files: ['worker/sc'] },
   { id: 'B', name: 'App revue', tickets: [N], files: ['app/review'] },
   { id: 'C', name: 'Alignement', tickets: [S, D, M], files: ['app/sc', 'CLAUDE.md'] },
 ]
@@ -62,22 +62,22 @@ test('les groupes se rangent par vague : A ∥ B d’abord, C ensuite', { timeou
   for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: /Worker SC\/VSC/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /cette discussion/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /nouvelle discussion/ })).toBeDefined()
+    // Un groupe se fait en session liée : plus de « cette discussion » ni de « nouvelle discussion ».
+    expect(await ui.find({ type: 'Text', text: /cette discussion|nouvelle discussion/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /mêmes règles du worker · 1.fichier$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^Vague 2/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /∥.B/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /attend A, B/ })).toBeDefined()
-    // Deux groupes prêts ; C attend.
-    expect(await ui.find({ key: 'launch-group-A' })).toBeDefined()
-    expect(await ui.find({ key: 'launch-group-B' })).toBeDefined()
-    expect(await ui.find({ key: 'launch-group-C' })).toBeUndefined()
-    expect(await ui.find({ key: 'launch-parallel' })).toBeDefined()
+    // Deux groupes prêts, chacun sa session liée ; C attend.
+    expect(await ui.find({ key: 'launch-linked-A' })).toBeDefined()
+    expect(await ui.find({ key: 'launch-linked-B' })).toBeDefined()
+    expect(await ui.find({ key: 'launch-linked-C' })).toBeUndefined()
+    expect(await ui.find({ key: 'launch-parallel-linked' })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('▶ Lancer A met /implement et ses tickets dans l’ordre ; ⇉ lance le seul lot A ∥ B par /implement-spec, sans spec', { timeoutMs: 15000 }, async ($, on) => {
+test('⇉ confie le seul lot A ∥ B à des sessions liées, sans /implement-spec', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 61_000_000 })
   mock.store(on)
   const filled = engine(on)
@@ -85,23 +85,13 @@ test('▶ Lancer A met /implement et ses tickets dans l’ordre ; ⇉ lance le s
   await start($)
 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await ui.press({ key: 'launch-group-A' })
-  expect(filled.at(-1)).toBe(
-    `/mattpocock-skills:implement Groupe A (Worker SC/VSC), tickets un par un et dans cet ordre : 1) ${L} — LIGHTS ON/OFF ; 2) ${R} — Règle SC/VSC ; 3) ${F} — Fermetures VSC`,
-  )
-  await ui.press({ key: 'launch-parallel' })
+  expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
+  await ui.press({ key: 'launch-parallel-linked' })
   const text = filled.at(-1)!
-  expect(text).toMatch(/^\/mattpocock-skills:implement-spec Groupes en parallèle, un sous-agent implémenteur par groupe, à la place d'un par ticket \(étape 4 du skill\)/)
-  expect(text).toMatch(/un commit par ticket ; le merger fusionne sa branche dans la branche d'intégration quand le groupe est fini/)
-  expect(text).toMatch(/A \(Worker SC\/VSC\) : 1\) .* ∥ B \(App revue\) : 1\) /)
+  expect(text).toMatch(/^Confie chacun de ces groupes à sa session liée, en parallèle, pour le parcours « Lot SC » : Groupe A \(Worker SC\/VSC\) : 1\) .* ∥ Groupe B \(App revue\) : 1\) /)
   // C attend A et B : il n'est pas du lot, il viendra par un lancement suivant.
   expect(text).not.toMatch(/Alignement/)
-  expect(text).toMatch(/Pas de spec : les tickets et leurs dépendances/)
   await ui.unmount()
-
-  // La note d'/implement-spec reprend la file du lot.
-  const note = await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'y' })
-  expect(note.text).toMatch(/Ticket queue chosen by the user, in order: 1\) LIGHTS ON\/OFF/)
 })
 
 test('« ↗ Session liée » confie un groupe à une session liée : le parcours reste ici, Claude rend ses statuts', { timeoutMs: 15000 }, async ($, on) => {
@@ -112,9 +102,9 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   await start($)
 
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  // Tout groupe prêt a sa session liée, celui qui continue ici compris ; C attend.
+  // Tout groupe prêt a sa session liée ; C attend.
   expect(await ui.find({ key: 'launch-linked-A' })).toBeDefined()
-  expect(await ui.find({ key: 'launch-group-B' })).toBeDefined()
+  expect(await ui.find({ key: 'launch-linked-B' })).toBeDefined()
   expect(await ui.find({ key: 'launch-linked-C' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /« Session liée » : Claude lance une session qui fait le groupe, et le parcours reste ici/ })).toBeDefined()
   await ui.press({ key: 'launch-linked-B' })
@@ -209,11 +199,11 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   // La seule reprise demandée est celle de cette discussion après un redémarrage, jamais par la session liée.
   expect(text.match(/"resume"/g)?.length).toBe(1)
   // B attend sa session : plus de lancement, un « Annuler » tant qu'elle n'est pas partie.
-  expect(await ui.find({ key: 'launch-group-B' })).toBeUndefined()
+  expect(await ui.find({ key: 'launch-linked-B' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /session.liée.à.lancer/ })).toBeDefined()
   expect(await ui.find({ key: 'group-linked-cancel-B' })).toBeDefined()
   await ui.press({ key: 'group-linked-cancel-B' })
-  expect(await ui.find({ key: 'launch-group-B' })).toBeDefined()
+  expect(await ui.find({ key: 'launch-linked-B' })).toBeDefined()
   await ui.press({ key: 'launch-linked-B' })
   await ui.unmount()
 
@@ -294,10 +284,10 @@ test('un fichier commun empêche le parallèle, même sans dépendance', async (
   } as any)
 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
+  expect(await ui.find({ key: 'launch-parallel-linked' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /∥/ })).toBeUndefined()
-  // Chacun reste lançable seul.
-  expect(await ui.find({ key: 'launch-group-B' })).toBeDefined()
+  // Chacun reste lançable seul, en session liée.
+  expect(await ui.find({ key: 'launch-linked-B' })).toBeDefined()
   // Sans spec ni groupes ∥, la sélection ne propose pas /implement-spec.
   await ui.press({ key: `pick-${N}` })
   expect(await ui.find({ key: 'launch-picks-parallel' })).toBeUndefined()
@@ -331,8 +321,8 @@ test('les groupes se recalculent quand les tickets avancent', async ($, on) => {
   // A fait : replié ; C n'attend plus que B ; une seule vague restante.
   expect(await ui.find({ type: 'Text', text: /Worker SC\/VSC : 3.tickets faits/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /attend B$/ })).toBeDefined()
-  expect(await ui.find({ key: 'launch-group-A' })).toBeUndefined()
-  expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
+  expect(await ui.find({ key: 'launch-linked-A' })).toBeUndefined()
+  expect(await ui.find({ key: 'launch-parallel-linked' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -358,7 +348,7 @@ test('une attente circulaire ne bloque pas le calcul ; un ticket sans groupe va 
 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Text', text: /ordre à revoir/ })).toBeDefined()
-  expect(await ui.find({ key: 'launch-group-X' })).toBeUndefined()
+  expect(await ui.find({ key: 'launch-linked-X' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /^Autres$/ })).toBeDefined()
   expect(await ui.find({ key: 'pick-Z1' })).toBeDefined()
   await ui.unmount()
@@ -375,7 +365,7 @@ test('une nouvelle liste de groupes remplace l’ancienne ; des tickets envoyés
   expect(await ui.find({ type: 'Text', text: /Alignement/ })).toBeDefined()
   await ui.unmount()
 
-  await $.tool.call({ tool: TOOL, groups: [{ id: 'T', name: 'Tout', tickets: LOT.map(t => t.id) }] } as any)
+  await $.tool.call({ tool: TOOL, groups: [{ id: 'T', name: 'Tout', tickets: LOT.slice(0, 4).map(t => t.id) }, { id: 'U', name: 'Reste', tickets: LOT.slice(4).map(t => t.id) }] } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ type: 'Text', text: /Alignement/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /Tout/ })).toBeDefined()
@@ -388,5 +378,5 @@ test('la consigne de /to-tickets demande les groupes', async ($, on) => {
   engine(on)
   const note = await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   expect(note.text).toMatch(/"groups": \[\{"id": "A"/)
-  expect(note.text).toMatch(/continuesHere/)
+  expect(note.text).not.toMatch(/continuesHere/)
 })

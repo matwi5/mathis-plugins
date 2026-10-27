@@ -17,7 +17,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { AgentLane, AgentMark, AgentSegment, AgentType, Board, FlowPhase, Relay, Run, SessionRegistry, SyncState, Tab } from '../types'
+import type { AgentLane, AgentMark, AgentsWindow, AgentSegment, AgentType, Board, FlowPhase, Relay, Run, SessionRegistry, SyncState, Tab } from '../types'
 import {
   CODE_SKILLS,
   NO_GIT_COPIES,
@@ -148,7 +148,9 @@ import {
   openSegment,
   addLines,
   addUsage,
+  addAdvisorCalls,
   linesOf,
+  type ServerToolUse,
   type StepUsage,
 } from './registry.ts'
 import type { LinkedLaunch } from '../types'
@@ -229,7 +231,7 @@ const TOOL_DESCRIPTION =
 const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    title: { type: 'string', description: "What the work is about, 3 to 6 words, in the user's language; only the first one sent is kept (fix.title changes it)" },
+    title: { type: 'string', description: "A short title you choose that sums up the whole work, 3 to 6 words, in the user's language; never their message itself; only the first one sent is kept (fix.title changes it). The discussion where the workflow was born takes it too, unless another workflow was born there: the answer says which" },
     step: { type: 'string', description: 'Id of the step of the current skill that starts now' },
     items: {
       type: 'array',
@@ -348,7 +350,7 @@ const TOOL_SCHEMA = {
     groups: {
       type: 'array',
       description:
-        'Execution plan: the tickets grouped by shared context. Same group = tickets that touch the same files or modules, or chain through their dependencies: one discussion does them in a row with /implement and reuses the loaded context. Different context = another group, done later in a new discussion, or at the same time as other independent groups (one linked session per group, or /implement-spec in a git repository). A group of one ticket is fine when its context is its own. Full list: it replaces the previous one; every ticket in exactly one group',
+        'Execution plan: the tickets grouped by shared context. Each group is done in a linked session, never in this discussion. Same group = tickets that touch the same files or modules, or chain through their dependencies: its linked session does them in a row with /implement and reuses the loaded context. Different context = another group, done later in its own linked session, or at the same time as other independent groups (one linked session per group). A group of one ticket is fine when its context is its own. Full list: it replaces the previous one; every ticket in exactly one group. Never a single group: a plan of one group (or one group plus tickets outside it) is ignored, so send no groups and do the lot here with /implement',
       items: {
         type: 'object',
         properties: {
@@ -367,7 +369,6 @@ const TOOL_SCHEMA = {
             description:
               'Things the group cannot share with another group working at the same time, same name in every group: an application driven on screen (e.g. "PowerBI Desktop"), a single database, device or account. Groups that share one never run in parallel',
           },
-          continuesHere: { type: 'boolean', description: 'true on at most one group: the one that benefits from the context of this discussion' },
         },
         required: ['id', 'name', 'tickets'],
       },
@@ -412,7 +413,7 @@ const TOOL_SCHEMA = {
       description:
         "Start a new workflow in this discussion, without a skill, even if another one is active here (that one is paused as it is). Only at the user's request. Everything else in this call goes to the new workflow",
       properties: {
-        title: { type: 'string', description: "What the work is about, 3 to 6 words, in the user's language" },
+        title: { type: 'string', description: "A short title you choose that sums up the whole work, 3 to 6 words, in the user's language; never their message itself" },
         entry: { type: 'string', description: 'Starting skill that shapes its phases (implement, to-tickets, grill-with-docs, diagnosing-bugs...); default implement' },
       },
       required: ['title'],
@@ -422,7 +423,7 @@ const TOOL_SCHEMA = {
       description:
         "Correct the active workflow, at the user's request or after a mistake: a title already set, the current phase (going back resets the phases after it), the step (back too). Tickets and groups are corrected with \"tickets\", \"set\", \"remove\" and \"groups\"",
       properties: {
-        title: { type: 'string', description: 'New title, replacing the current one' },
+        title: { type: 'string', description: 'New title, replacing the current one; the discussion follows when the workflow was born here and no linked session was launched yet' },
         phase: { type: 'string', description: 'Skill id of a phase of this workflow to make current (e.g. to-tickets, implement)' },
         step: { type: 'string', description: 'Id of a step of the current (or fixed) phase to make current; the steps after it become pending' },
       },
@@ -1292,6 +1293,32 @@ const noteTranscript = async ($: any, e: any) => {
   if (needsRebuild && transcript !== undefined) await quietly(() => catchUpOwn($, true))
 }
 
+/** La clé du titre qu'une discussion doit encore prendre : à elle seule, hors du board partagé (série 5, Q2). */
+export const discussionTitleKey = (session: string): string => `discussion-title:${session}`
+
+/**
+ * Le titre que la discussion doit prendre (parcours né ici, série 1 Q14) part une fois au moteur,
+ * dans `sessionTitle` du prochain message ou de la reprise ; rien quand elle le porte déjà (Claude
+ * l'a renommée par l'outil de l'app), ni dans une session liée. Le titre en attente s'efface dans
+ * tous les cas. Sans le board : `classic.SessionStart` d'une reprise peut passer avant
+ * `session.start`, qui le charge (l'ordre des deux reste à confirmer), et une session liée n'a
+ * jamais de titre en attente (`nameDiscussion` le refuse).
+ */
+const withDiscussionTitle = async ($: any, e: any, result: any) => {
+  let title: string | null = null
+  await quietly(async () => {
+    const session = await sessionId($)
+    if (session === '') return
+    const key = discussionTitleKey(session)
+    const pending = await $.store.get(key)
+    if (pending === undefined) return
+    await $.store.delete(key)
+    const current = typeof e?.session_title === 'string' ? e.session_title.trim() : ''
+    if (typeof pending === 'string' && pending !== '' && pending !== current) title = pending
+  })
+  return title !== null ? { ...result, sessionTitle: title } : result
+}
+
 // ─── Historique de l'onglet Agents ────────────────────────────────────────
 //
 // Le sélecteur liste le dossier du registre et lit les en-têtes (relus quand leur date change),
@@ -1810,6 +1837,10 @@ export const quietly = async (effect: () => unknown) => {
 
 const afterChange = async ($: any, fx: Effects, board: Board) => {
   scheduleSave($)
+  if (fx.discussionTitle !== undefined && board.session) {
+    const title = fx.discussionTitle
+    await quietly(() => $.store.set(discussionTitleKey(board.session!), title))
+  }
   for (const text of fx.toasts.slice(0, 2)) await quietly(() => $.ui.toast(text))
   if (fx.openPane) await quietly(() => openUnasked($))
   await quietly(() => syncStatus($, board))
@@ -2002,7 +2033,9 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     '---',
     `Dashboard (flow-board): report progress with the \`${TOOL}\` tool. It is silent bookkeeping: no need to mention it to the user; batch it with your other tool calls when you can.`,
   ]
-  if (!run.isTitled) lines.push(`- First call: {"title": "<what this work is about, 3 to 6 words, in the user's language>"}.`)
+  if (!run.isTitled) {
+    lines.push(`- First call: {"title": "<a short title you choose that sums up the whole work, 3 to 6 words, in the user's language; never their message itself>"}. If you have a tool that renames this discussion (in the app: set_session_title), call it right away with the same title, unless the answer says this discussion keeps its name.`)
+  }
   if (def.steps.length > 0) {
     lines.push(`- Steps of ${id}, in order; send {"step": "<id>"} as each one starts: ${def.steps.map(s => `${s.id} (${hintOf(s, isRepo)})`).join('; ')}.`)
   }
@@ -2026,7 +2059,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     lines.push(`- ${GROUP_SIZE}.`)
     lines.push(`- ${SENSITIVE_ORDER}.`)
     lines.push(`- ${OUTSIDE_WRITE}.`)
-    lines.push('- Last, group the tickets for execution: {"groups": [{"id": "A", "name": "<short theme>", "tickets": ["<ids in execution order>"], "why": "<the shared context>", "files": ["<other repo paths it touches>"], "resources": ["<what it cannot share>"], "continuesHere": true}]}. Same group = same files or modules, or a chain of dependencies: one discussion does them in a row with /implement. A different context = another group; a group of one ticket is fine when its context is its own, and a ticket that blocks nothing in its theme but could start now (an export, a query, a data check) is often better in a group of its own or with other data work. Groups that share no file, no resource and do not depend on each other can later run at the same time, one linked session per group (or /implement-spec, one subagent per group, in a git repository only). "resources": what a group cannot share with another group working at the same time, with the same name in every group: an application driven on screen and checked by screenshots (e.g. "PowerBI Desktop"), a single database, device or account; check the project\'s CLAUDE.md for such constraints. Set "continuesHere" on at most one group, the one that benefits from the context of this discussion. Every ticket in exactly one group.')
+    lines.push('- Last, group the tickets for execution: {"groups": [{"id": "A", "name": "<short theme>", "tickets": ["<ids in execution order>"], "why": "<the shared context>", "files": ["<other repo paths it touches>"], "resources": ["<what it cannot share>"]}]}. Each group runs in a linked session, never in this discussion. Same group = same files or modules, or a chain of dependencies: its linked session does them in a row with /implement. A different context = another group; a group of one ticket is fine when its context is its own, and a ticket that blocks nothing in its theme but could start now (an export, a query, a data check) is often better in a group of its own or with other data work. Groups that share no file, no resource and do not depend on each other can later run at the same time, one linked session per group. "resources": what a group cannot share with another group working at the same time, with the same name in every group: an application driven on screen and checked by screenshots (e.g. "PowerBI Desktop"), a single database, device or account; check the project\'s CLAUDE.md for such constraints. Every ticket in exactly one group. Send no groups when there would be only one (one group, or one group plus tickets left outside it): a single group brings nothing, the dashboard ignores such a plan, and the lot is done in this discussion with /implement.')
   }
   if (id === 'implement') {
     lines.push('- For each ticket, the steps above restart from "read". With "review", send the findings of the two axes: {"step": "review", "review": {"standards": <findings>, "spec": <findings>, "fixed": <fixed>}}.')
@@ -2097,11 +2130,6 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
       `- A choice that touches a sensitive area (${SENSITIVE_AREAS}) is never a declared choice ({"decided": …}): ask the user while framing, with options, and wait for the answer. Before a privacy question, have a read-only subagent check the real exposure (who can read the data, from where, with what access); without that check, the question says the exposure is "à confirmer". A decision entry (DECISIONS.md, an ADR) copies the question asked and the accepted answer word for word, the user's sentence in quotes, instead of summarising them.`,
     )
   }
-  if (id === 'implement' && (run.groups ?? []).length > 1 && !(run.groups ?? []).some(g => g.linked !== undefined || g.delegated !== undefined)) {
-    lines.push(
-      '- At the start of implementation, if groups of this run may go to linked sessions, ask the user once to rename this discussion to its final name (CLI: /rename <name>; app: rename the discussion), before the first linked session, and wait until it is done: the name given in the linked sessions\' briefs must not change afterwards, or their reports get lost.',
-    )
-  }
   if (id === 'retro') {
     lines.push(
       '- Improvements that touch another repository (shared plugins, common config, another project) are not applied from this discussion: keep them out of the items and give them in your message as a correction list ready to hand to an agent working in that repository, one point per improvement: the finding, then the expected correction, with the plugin or files it touches. Only the improvements of this repository go to the items, hence to a linked session.',
@@ -2115,7 +2143,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     )
   }
   if (id === 'implement' || id === 'implement-spec') {
-    lines.push('- When every ticket of the lot is done: {"complete": true}. If reviews kept apart findings on code older than the lot, propose them to the user as a « durcissement » group (one ticket per finding), without creating it before they agree. A finished group is not the end: while tickets of the lot remain open, the next step is the next group, which the user launches from the dashboard (▶ Lancer). Do not suggest /flow-board:compte-rendu or the delivery before every ticket is done. Add {"note": "<one short line>"} for a decision worth keeping.')
+    lines.push('- When every ticket of the lot is done: {"complete": true}. If reviews kept apart findings on code older than the lot, propose them to the user as a « durcissement » group (one ticket per finding), without creating it before they agree. A finished group is not the end: while tickets of the lot remain open, the next step is the next group, which the user launches from the dashboard, in its linked session (↗ Session liée). Do not suggest /flow-board:compte-rendu or the delivery before every ticket is done. Add {"note": "<one short line>"} for a decision worth keeping.')
   } else if (id !== 'compte-rendu' && def.role !== 'event') {
     lines.push(`- When the work of ${id} is finished: {"complete": true}. Add {"note": "<one short line>"} for a decision worth keeping.`)
   }
@@ -2256,12 +2284,25 @@ const launchPicks = async ($: any, isParallel: boolean) => {
       return
     }
   }
+  await launchQueue($, run, selection, isParallel)
+}
+
+/** Enregistre la file, vide la sélection et met /implement (ou /implement-spec) dans le prompt, tickets dans l'ordre. */
+const launchQueue = async ($: any, run: Run, ids: readonly string[], isParallel = false) => {
   const now = await $.clock.now()
-  await commit($, b => setQueue(b, selection, now))
-  const list = ticketList(run, selection)
+  await commit($, b => setQueue(b, ids, now))
+  const list = ticketList(run, ids)
   const args = isParallel ? `Tickets à traiter : ${list}${noSpecClause(run)}` : `Tickets à traiter, un par un et dans cet ordre : ${list}`
   await update($, uiAtom, ui => ({ ...ui, selection: [] }))
   await prepare($, isParallel ? 'implement-spec' : 'implement', args)
+}
+
+/** « ▶ Tout implémenter ici » : un lot sans groupe se fait dans cette discussion, tickets ouverts dans l'ordre du lot. */
+const launchAll = async ($: any) => {
+  const run = activeRun(await read($, boardAtom))
+  const ids = (run?.tickets ?? []).filter(t => t.status !== 'done').map(t => t.id)
+  if (!run || ids.length === 0) return
+  await launchQueue($, run, ids)
 }
 
 /** /implement-spec attend une spec : sans elle, le graphe des tickets lui suffit, et on le lui dit. */
@@ -2270,30 +2311,6 @@ const noSpecClause = (run: Run): string =>
 
 const ticketList = (run: Run, ids: readonly string[]): string =>
   ids.map((id, i) => `${i + 1}) ${id} — ${run.tickets.find(t => t.id === id)?.name ?? id}`).join(' ; ')
-
-/** Lance un groupe prêt : ses tickets ouverts, dans l'ordre, avec /implement. */
-const launchGroup = async ($: any, groupId: string) => {
-  const run = activeRun(await read($, boardAtom))
-  const view = run ? groupPlan(run)?.groups.find(g => g.group.id === groupId) : undefined
-  if (!run || !view || view.open.length === 0) return
-  const ids = view.open.map(t => t.id)
-  const now = await $.clock.now()
-  await commit($, b => setQueue(b, ids, now))
-  await update($, uiAtom, ui => ({ ...ui, selection: [] }))
-  await prepare($, 'implement', `Groupe ${view.group.id} (${view.group.name}), tickets un par un et dans cet ordre : ${ticketList(run, ids)}`)
-}
-
-/** Lance seuls les tickets déjà prêts d'un groupe qui attend : /implement, dans l'ordre du groupe. */
-const launchReady = async ($: any, groupId: string) => {
-  const run = activeRun(await read($, boardAtom))
-  const view = run ? groupPlan(run)?.groups.find(g => g.group.id === groupId) : undefined
-  if (!run || !view || view.readyNow.length === 0) return
-  const ids = view.readyNow.map(t => t.id)
-  const now = await $.clock.now()
-  await commit($, b => setQueue(b, ids, now))
-  await update($, uiAtom, ui => ({ ...ui, selection: [] }))
-  await prepare($, 'implement', `Groupe ${view.group.id} (${view.group.name}), tickets déjà prêts, un par un et dans cet ordre : ${ticketList(run, ids)}`)
-}
 
 /** Longueur au-delà de laquelle le titre du parcours est coupé dans le titre d'une session liée. */
 const PREFIX_MAX = 28
@@ -2426,7 +2443,7 @@ const LINKED_NO_GIT_GROUP_POINT =
  * reste ici (un seul écrivain) : chaque session se déclare (`delegate`), fait ses tickets avec
  * /implement selon le CLAUDE.md du projet, puis rend compte ; Claude rend les statuts ici.
  */
-const delegationText = async ($: any, run: Run, views: readonly GroupView[], isFirst = false, decidedAt: string | null = null): Promise<string> => {
+const delegationText = async ($: any, run: Run, views: readonly GroupView[], decidedAt: string | null = null): Promise<string> => {
   noteSecurityMethod($)
   // Sans git, pas de worktree possible : les sessions travaillent dans ce dossier.
   const isRepo = await measureRepo($)
@@ -2441,9 +2458,6 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], isF
   const prefix = linkedPrefix(run)
   return (
     `${many ? 'Confie chacun de ces groupes à sa session liée, en parallèle,' : 'Confie ce groupe à une session liée,'} pour le parcours « ${run.title} » : ${groups}. ` +
-    (isFirst
-      ? "C'est la première session liée de ce parcours : si ce n'est pas déjà fait (la consigne d'/implement l'a peut-être demandé), demande-moi d'abord de renommer cette discussion de son nom définitif (dans le CLI : /rename <nom> ; dans l'app : renommer la discussion) et attends que ce soit fait ; ce nom, donné dans les briefs, ne doit plus bouger ensuite, sinon les comptes rendus se perdent. "
-      : '') +
     `Avant de lancer : repère ce dont ${many ? 'les sessions auront' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé) et règle-le d'abord avec moi ici, sinon ${many ? 'elles y buteront' : 'elle y butera'}. ` +
     `Puis lance ${many ? 'une session par groupe' : 'la session'}, avec un titre qui commence par « ${prefix}Groupe <id> · » : le début dit de quelle discussion ${many ? 'elles viennent' : 'elle vient'}, et « Groupe <id> » relie la session à son groupe au tableau de bord. ` +
     launchHow({ many, isRepo, ownFolder: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktree(run, '<id>'), effort: GROUP_EFFORT(many) }) +
@@ -2468,15 +2482,13 @@ const delegateGroups = async ($: any, ids: readonly string[]) => {
   const run = activeRun(await read($, boardAtom))
   const plan = run ? groupPlan(run) : null
   if (!run || !plan) return
-  // Avant l'envoi : la première session liée du parcours fait d'abord renommer la discussion.
-  const isFirst = !(run.groups ?? []).some(g => g.linked !== undefined || g.delegated !== undefined)
   const now = await $.clock.now()
   if (!(await commit($, b => startLinkedGroups(b, ids, now)))) return
   const views = plan.groups.filter(g => ids.includes(g.group.id) && g.open.length > 0)
   await update($, uiAtom, ui => ({ ...ui, selection: [] }))
   // Le brief cite le fichier des choix : il existe avant que la session le lise, sinon le brief n'en cite pas le chemin.
   const decidedAt = await writeDecidedFile($, await read($, boardAtom))
-  const text = await delegationText($, run, views, isFirst, decidedAt)
+  const text = await delegationText($, run, views, decidedAt)
   const names = views.map(v => v.group.id).join(', ')
   let isFilled = false
   await quietly(async () => {
@@ -2784,43 +2796,10 @@ const askNext = async ($: any) => {
   await prepare($, 'ask-matt', `Je suis dans le ${where} : quelle est la suite ?`)
 }
 
-/**
- * Lance un lot avec /implement-spec : les groupes prêts, pas encore commencés et sans fichier ni
- * ressource en commun, un sous-agent par groupe qui garde le contexte de ses tickets. Les autres
- * groupes viendront par un lancement suivant. Seulement dans un dépôt git : le skill fait une
- * branche d'intégration et un worktree par implémenteur.
- */
-const launchParallel = async ($: any, at = 0) => {
-  const run = activeRun(await read($, boardAtom))
-  const plan = run ? groupPlan(run) : null
-  const lot = run ? lotAt(run, at) : []
-  if (!run || !plan || lot.length < 2) return
-  let isRepo = false
-  await quietly(async () => {
-    isRepo = (await $.session.repo()) !== null
-  })
-  if (!isRepo) {
-    await quietly(() => $.ui.toast('Pas de dépôt git ici : /implement-spec a besoin de worktrees. Lance le lot en sessions liées.'))
-    return
-  }
-  const batch = plan.groups.filter(g => lot.includes(g.group.id))
-  const parts = batch.map(g => `${g.group.id} (${g.group.name}) : ${ticketList(run, g.open.map(t => t.id))}`)
-  const ids = batch.flatMap(g => g.open.map(t => t.id))
-  const now = await $.clock.now()
-  await commit($, b => setQueue(b, ids, now))
-  await update($, uiAtom, ui => ({ ...ui, selection: [] }))
-  // Le skill prévoit un implémenteur par ticket ; ici, les tickets d'un groupe partagent leurs fichiers.
-  const args =
-    `Groupes en parallèle, un sous-agent implémenteur par groupe, à la place d'un par ticket (étape 4 du skill) : les tickets d'un groupe partagent leurs fichiers. ` +
-    `Chaque implémenteur travaille dans son worktree, sur sa branche, et traite les tickets de son groupe dans l'ordre, un commit par ticket ; ` +
-    `le merger fusionne sa branche dans la branche d'intégration quand le groupe est fini. Le reste du skill s'applique (branche d'intégration, revue finale, nettoyage des worktrees). ` +
-    `Groupes : ${parts.join(' ∥ ')}${noSpecClause(run)}`
-  await prepare($, 'implement-spec', args)
-}
-
 const actionsFor = ($: any): Actions => ({
   setTab: async (tab: Tab) => {
-    await update($, uiAtom, ui => ({ ...ui, tab }))
+    // La fenêtre de la frise repart de « tout » à chaque ouverture de l'onglet Agents.
+    await update($, uiAtom, ui => ({ ...ui, tab, ...(tab === 'agents' && ui.tab !== 'agents' ? { agentsWindow: undefined } : {}) }))
     // L'onglet Agents s'ouvre : le rattrapage de la session affichée, l'historique et, la première
     // fois, la reprise des parcours existants (Q14), sans attendre.
     if (tab === 'agents') {
@@ -2831,11 +2810,11 @@ const actionsFor = ($: any): Actions => ({
   },
   toggleAgentsHistory: () => update($, uiAtom, ui => ({ ...ui, isAgentsHistoryOpen: ui.isAgentsHistoryOpen !== true })),
   chooseAgentsHistory: async (key: string) => {
-    await update($, uiAtom, ui => ({ ...ui, agentsHistory: key === 'now' ? undefined : key, isAgentsHistoryOpen: false, agentsSession: undefined, agentCard: undefined, isPromptOpen: false, confirmForget: undefined }))
+    await update($, uiAtom, ui => ({ ...ui, agentsHistory: key === 'now' ? undefined : key, isAgentsHistoryOpen: false, agentsSession: undefined, agentCard: undefined, isPromptOpen: false, confirmForget: undefined, agentsWindow: undefined }))
     await quietly(() => refreshHistory($))
   },
   openAgentsOf: async (runId: string) => {
-    await update($, uiAtom, ui => ({ ...ui, tab: 'agents' as const, agentsHistory: `run:${runId}`, isAgentsHistoryOpen: false, agentsSession: undefined, agentCard: undefined, isPromptOpen: false }))
+    await update($, uiAtom, ui => ({ ...ui, tab: 'agents' as const, agentsHistory: `run:${runId}`, isAgentsHistoryOpen: false, agentsSession: undefined, agentCard: undefined, isPromptOpen: false, agentsWindow: undefined }))
     await quietly(() => refreshHistory($))
     void quietly(() => rebuildPastRuns($))
   },
@@ -2883,8 +2862,7 @@ const actionsFor = ($: any): Actions => ({
   },
   clearPicks: () => update($, uiAtom, ui => ({ ...ui, selection: [] })),
   launchPicks: (isParallel: boolean) => launchPicks($, isParallel),
-  launchGroup: (id: string) => launchGroup($, id),
-  launchReady: (id: string) => launchReady($, id),
+  launchAll: () => launchAll($),
   launchGroupLinked: (id: string) => launchGroupLinked($, id),
   cancelGroupLinked: (id: string) => cancelGroupLinked($, id),
   reviewLinkedGroup: (id: string) => reviewLinkedGroup($, id),
@@ -2912,7 +2890,6 @@ const actionsFor = ($: any): Actions => ({
   },
   askDrop: (id: string) => update($, uiAtom, ui => ({ ...ui, confirmDrop: ui.confirmDrop === id ? undefined : id })),
   askNext: () => askNext($),
-  launchParallel: (at?: number) => launchParallel($, at),
   launchParallelLinked: (at?: number) => launchParallelLinked($, at),
   toggleLog: () => update($, uiAtom, ui => ({ ...ui, showAllLog: !ui.showAllLog })),
   toggleItems: () => update($, uiAtom, ui => ({ ...ui, showAllItems: !ui.showAllItems })),
@@ -2943,13 +2920,14 @@ const actionsFor = ($: any): Actions => ({
     await syncStatus($, await read($, boardAtom))
     await quietly(() => $.ui.toast('Bandeau masqué : /flow show pour le réafficher'))
   },
-  toggleAgentsRange: () => update($, uiAtom, ui => ({ ...ui, agentsRange: ui.agentsRange === 'hour' ? ('all' as const) : ('hour' as const) })),
+  setAgentsWindow: (win: AgentsWindow | null) => update($, uiAtom, ui => ({ ...ui, agentsWindow: win ?? undefined })),
   selectAgentsSession: async (key: string | null) => {
-    await update($, uiAtom, ui => ({ ...ui, agentsSession: key ?? undefined, agentCard: undefined, isPromptOpen: false }))
+    await update($, uiAtom, ui => ({ ...ui, agentsSession: key ?? undefined, agentCard: undefined, isPromptOpen: false, agentsWindow: undefined }))
     void quietly(() => catchUpShown($))
   },
   toggleAgentCard: (key: string) => update($, uiAtom, ui => ({ ...ui, agentCard: ui.agentCard === key ? undefined : key, isPromptOpen: false })),
   togglePrompt: () => update($, uiAtom, ui => ({ ...ui, isPromptOpen: ui.isPromptOpen !== true })),
+  toggleLegend: () => update($, uiAtom, ui => ({ ...ui, isLegendOpen: ui.isLegendOpen !== true })),
   toggleWorkflow: (id: string) =>
     update($, uiAtom, ui => {
       const open = ui.openWorkflows ?? []
@@ -2957,7 +2935,7 @@ const actionsFor = ($: any): Actions => ({
     }),
   openAgentTranscript: (agentId: string) => quietly(() => $.ui.view({ agentId })),
   openPane: async () => {
-    await update($, uiAtom, ui => ({ ...ui, isPaneDismissed: false }))
+    await update($, uiAtom, ui => ({ ...ui, isPaneDismissed: false, agentsWindow: undefined }))
     await quietly(() => $.ui.open({ id: PANE, title: PANE_TITLE }))
   },
 })
@@ -3592,10 +3570,15 @@ export const register: Register = on => {
       // de la réponse, son modèle et l'effort demandé s'ajoutent à la piste.
       const endedAt = await $.clock.now()
       const effort = e.effort === undefined ? undefined : String(e.effort)
+      // Les appels à l'advisor ne se voient qu'ici, dans le résultat de l'étape (`serverToolUses`) :
+      // posés après coup, avec leurs vraies heures.
+      const served = (result?.serverToolUses ?? []) as readonly ServerToolUse[]
       await quietly(() =>
         commitRegistry($, reg => {
           const closed = closeSegment(reg, lane, isModelSegment, endedAt) ?? reg
-          return addUsage(closed, lane, (result?.usage ?? null) as StepUsage | null, effort, endedAt) ?? (closed === reg ? null : closed)
+          const used = addUsage(closed, lane, (result?.usage ?? null) as StepUsage | null, effort, endedAt) ?? closed
+          const advised = addAdvisorCalls(used, lane, served, endedAt) ?? used
+          return advised === reg ? null : advised
         }),
       )
     }
@@ -3622,11 +3605,11 @@ export const register: Register = on => {
   })
   on('classic.UserPromptSubmit', async ($, e, next) => {
     await noteTranscript($, e)
-    return next(e)
+    return withDiscussionTitle($, e, await next(e))
   })
   on('classic.SessionStart', async ($, e, next) => {
     await noteTranscript($, e)
-    return next(e)
+    return withDiscussionTitle($, e, await next(e))
   })
 
   // Le tour d'un sous-agent (`agentId`) ne rend pas la main à Claude : seul le fil principal compte.

@@ -14,6 +14,7 @@ import type { LinkedSession } from './linked.ts'
 import { EMPTY_UI } from './model.ts'
 import { agentCalls, claudeHome, otherRegistries, refreshLinked } from './register.tsx'
 import { commitRegistry, lockRegistryDir, registryKey, registryPath } from './registry-file.ts'
+import { MAIN, catchUpAdvisor } from './registry.ts'
 import { SUBAGENT_FILE, type TranscriptAgent, catchUp, drainWithin, isTranscriptPath, laneFromTranscript, metaFromText, readArgv, subagentsDirOf } from './transcript.ts'
 
 /** Les atomes lus ou mis à jour ici : le moteur veut leur déclaration dans le fichier qui les lit. */
@@ -148,6 +149,9 @@ export async function transcriptAgents($: any, transcript: string): Promise<Tran
   return (await scanTranscriptAgents($, transcript)).agents
 }
 
+/** Les appels à l'advisor de l'orchestrateur déjà cherchés dans le transcript de la session, par ce processus. */
+const advisorSought = new Set<string>()
+
 /**
  * Le rattrapage de cette session : ses sous-agents d'après leurs transcripts ; reconstruit
  * (`isRebuild`, fichier illisible), aussi la piste de la session d'après son propre transcript.
@@ -157,7 +161,12 @@ export async function catchUpOwn($: any, isRebuild = false) {
   const transcript = reg?.transcript
   if (!transcript) return
   const found = await transcriptAgents($, transcript)
-  const mainText = isRebuild ? await readTranscript($, transcript) : null
+  // Le transcript de la session se relit pour une reconstruction, ou quand un appel à l'advisor de
+  // l'orchestrateur n'y a pas encore été relu (le direct ne donne ni modèle ni tokens) ; un appel
+  // que le transcript ne donne pas (étape coupée) n'en relance pas la lecture à chaque passage.
+  const unread = (reg?.advisor?.calls ?? []).filter(c => c.by === MAIN && c.isRead !== true && !advisorSought.has(c.id)).map(c => c.id)
+  const mainText = isRebuild || unread.length > 0 ? await readTranscript($, transcript) : null
+  for (const id of unread) advisorSought.add(id)
   const main = mainText !== null ? laneFromTranscript(mainText, true) : null
   const now = await $.clock.now()
   // Les appels encore en vol ici ne se closent pas d'après leur transcript.
@@ -173,7 +182,8 @@ export async function catchUpOwn($: any, isRebuild = false) {
     next = attachCarried(next, runsCarriedBy(runs, next)) ?? next
     // Une session effacée en partie ne reprend pas les totaux de tout son transcript.
     const isCovered = traces.some(t => t.id === r.session)
-    if (main && (main.segments ?? []).length > 0) {
+    if (main) next = catchUpAdvisor(next, MAIN, main.advisor, now) ?? next
+    if (isRebuild && main && (main.segments ?? []).length > 0) {
       // La piste vécue ici depuis le démarrage reste ; le transcript rend ce qui la précède, et ses
       // chiffres font foi.
       const live = next.main?.segments ?? []
@@ -256,9 +266,14 @@ async function writeRebuilt($: any, id: string, rebuilt: Rebuilt): Promise<boole
   }
 }
 
-/** Un fichier à part qui ne tient rien : ni sous-agent, ni ligne recopiée, ni parcours repris, ni piste. */
+/** Un fichier à part qui ne tient rien : ni sous-agent, ni ligne recopiée, ni parcours repris, ni piste, ni appel à l'advisor. */
 const isEmptyRebuilt = (r: Rebuilt): boolean =>
-  r.agents.length === 0 && (r.rows ?? []).length === 0 && (r.runs ?? []).length === 0 && (r.main?.segments ?? []).length === 0 && (r.main?.marks ?? []).length === 0
+  r.agents.length === 0 &&
+  (r.rows ?? []).length === 0 &&
+  (r.runs ?? []).length === 0 &&
+  (r.main?.segments ?? []).length === 0 &&
+  (r.main?.marks ?? []).length === 0 &&
+  (r.main?.advisor ?? []).length === 0
 
 /** Une écriture des fichiers à part à la fois dans ce processus (S20). */
 let rebuiltQueue: Promise<unknown> = Promise.resolve()

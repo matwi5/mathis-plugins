@@ -69,8 +69,14 @@ export const pack = (grid: readonly (readonly Cell[])[]): RasterCells => {
 /** Le glyphe d'une famille d'outils au terminal : une case de large (🌐 en prend deux, d'où ◍). */
 export const FAMILY_CELL: Record<ToolFamily, string> = { read: '⌕', edit: '✎', run: '❯', web: '◍', agent: '⇢', other: '•' }
 
-/** La couleur des hachures d'attente : grise pour un sous-agent, ambre pour la personne, bleue pour une tâche de fond. */
-export const WAIT_COLOR: Record<'waitAgent' | 'waitPerson' | 'waitBg', string> = { waitAgent: C.gray, waitPerson: C.amber, waitBg: C.blue }
+/** La couleur des hachures d'attente : grise pour un sous-agent, ambre pour la personne, bleue pour une tâche de fond, or pour l'advisor. */
+export const WAIT_COLOR: Record<'waitAgent' | 'waitPerson' | 'waitBg' | 'waitAdvisor', string> = { waitAgent: C.gray, waitPerson: C.amber, waitBg: C.blue, waitAdvisor: C.gold }
+
+/** Le glyphe d'une attente : hachure, sauf l'advisor en pointillés, que l'or et l'ambre ne confondent pas. */
+export const WAIT_GLYPH: Record<'waitAgent' | 'waitPerson' | 'waitBg' | 'waitAdvisor', string> = { waitAgent: '╱', waitPerson: '╱', waitBg: '╱', waitAdvisor: '┄' }
+
+/** Le glyphe d'une barre cerclée (ligne advisor) au terminal. */
+export const OUTLINED_CELL = '▭'
 
 /** Le glyphe et la couleur d'un repère. */
 export const markLook = (m: AgentMark, color: string): { glyph: string; color: string } =>
@@ -103,30 +109,49 @@ const KIND_CELL: Record<'think' | 'write' | 'tool', { glyph: string; alpha: numb
 }
 
 /**
- * Les cases d'une piste sur `columns` colonnes : chaque case prend la part qui couvre son milieu ;
- * une pause compressée devient « ⫽ ». Le glyphe de l'outil se pose sur la première case d'un appel
- * seulement quand la piste a la place (`withGlyphs`). Les repères passent par-dessus.
+ * Les cases d'une piste sur `columns` colonnes : chaque case prend la part qui couvre son milieu.
+ * Une pause compressée coupe le rail : « ┊ » à ses bords, sa durée entre eux quand elle tient, sinon
+ * du vide ; une attente qui la traverse se dessine entre les deux traits, et sur une pause de deux
+ * cases ou moins, à la place du second trait (ou des deux), pour rester visible. Le glyphe de l'outil se
+ * pose sur la première case d'un appel seulement quand la piste a la place (`withGlyphs`). La ligne
+ * advisor (`isOutlined`) pose OUTLINED_CELL à la place des blocs pleins. Les repères passent par-dessus.
  */
 export const laneCells = (
   parts: readonly LanePart[],
   marks: readonly (AgentMark & { x: number })[],
-  pauses: readonly { x0: number; x1: number }[],
+  pauses: readonly { x0: number; x1: number; label?: string }[],
   columns: number,
   color: string,
   withGlyphs: boolean,
+  isOutlined = false,
 ): LaneCell[] => {
   const cells: LaneCell[] = Array.from({ length: columns }, () => ({ glyph: '·', color: C.gray, alpha: 0.45, bg: '' }))
   const at = (x: number) => Math.min(columns - 1, Math.max(0, Math.floor(x * columns)))
-  for (const p of pauses) for (let c = at(p.x0); c <= at(Math.max(p.x0, p.x1 - 1e-9)); c++) cells[c] = { glyph: '⫽', color: C.gray, alpha: 0.7, bg: '' }
+  const edges = pauses.map(p => [at(p.x0), at(Math.max(p.x0, p.x1 - 1e-9))] as const)
+  pauses.forEach((p, i) => {
+    const [c0, c1] = edges[i]!
+    const label = [...(p.label ?? '')]
+    const inner = c1 - c0 - 1
+    const pad = label.length <= inner ? Math.floor((inner - label.length) / 2) : inner
+    for (let c = c0 + 1; c < c1; c++) cells[c] = { glyph: label[c - c0 - 1 - pad] ?? ' ', color: C.gray, alpha: 0.7, bg: '' }
+  })
+  const drawn = new Set<number>()
   for (const part of parts) {
     const c0 = at(part.x0)
     const c1 = Math.max(c0, at(Math.max(part.x0, part.x1 - 1e-9)))
     for (let c = c0; c <= c1; c++) {
       const mid = (c + 0.5) / columns
       if (c !== c0 && (mid < part.x0 || mid > part.x1)) continue
-      cells[c] = cellOf(part.kind, color)
+      cells[c] = isOutlined && !part.kind.startsWith('wait') ? { glyph: OUTLINED_CELL, color, bg: '' } : cellOf(part.kind, color)
+      drawn.add(c)
     }
     if (withGlyphs && part.kind === 'tool' && part.family !== undefined && c1 > c0) cells[c0] = { glyph: FAMILY_CELL[part.family], color: C.ink, bg: color }
+  }
+  for (const [c0, c1] of edges) {
+    // Sans case libre entre les traits, une part dessinée garde ce qu'elle peut de la pause.
+    const isCovered = [c0, c1].some(c => drawn.has(c))
+    const ticks = !isCovered || c1 - c0 >= 2 ? [c0, c1] : c1 > c0 ? [c0] : []
+    for (const c of ticks) cells[c] = { glyph: '┊', color: C.gray, alpha: 0.7, bg: '' }
   }
   for (const m of marks) {
     const look = markLook(m, color)
@@ -136,7 +161,7 @@ export const laneCells = (
 }
 
 const cellOf = (kind: SegmentKind, color: string): LaneCell => {
-  if (kind === 'waitAgent' || kind === 'waitPerson' || kind === 'waitBg') return { glyph: '╱', color: WAIT_COLOR[kind], bg: '' }
+  if (kind === 'waitAgent' || kind === 'waitPerson' || kind === 'waitBg' || kind === 'waitAdvisor') return { glyph: WAIT_GLYPH[kind], color: WAIT_COLOR[kind], bg: '' }
   const look = KIND_CELL[kind]
   return { glyph: look.glyph, color, alpha: look.alpha, bg: '' }
 }
@@ -149,3 +174,22 @@ export const laneRaster = (cells: readonly LaneCell[]): RasterCells =>
 
 /** La couleur d'une case pour un Text (barres en blocs) : la teinte rendue en `#RRGGBB`. */
 export const textColorOf = (c: LaneCell): string => `#${fgOf(c).toString(16).padStart(6, '0')}`
+
+/**
+ * La règle graduée au terminal, sur `columns` cases : « ╵ » à chaque graduation et l'heure juste
+ * après quand elle tient sans toucher la suivante ; « ┊ » aux bords des pauses compressées. Les
+ * blancs sont insécables.
+ */
+export const rulerCells = (ticks: readonly { x: number; label: string }[], pauses: readonly { x0: number; x1: number }[], columns: number): string => {
+  const out = Array.from({ length: columns }, () => '\u00a0')
+  const at = (x: number) => Math.min(columns - 1, Math.max(0, Math.floor(x * columns)))
+  const cols = ticks.map(t => at(t.x))
+  cols.forEach((c, i) => {
+    out[c] = '╵'
+    const label = [...ticks[i]!.label]
+    const next = cols[i + 1] ?? columns
+    if (c + label.length < next && c + label.length < columns) label.forEach((ch, j) => (out[c + 1 + j] = ch))
+  })
+  for (const p of pauses) for (const c of [at(p.x0), at(Math.max(p.x0, p.x1 - 1e-9))]) out[c] = '┊'
+  return out.join('')
+}

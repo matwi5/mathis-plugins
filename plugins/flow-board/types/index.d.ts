@@ -49,10 +49,8 @@ export type TicketGroup = {
    * une ne vont pas en parallèle, même sans fichier commun.
    */
   resources?: string[]
-  /** À faire dans la discussion qui a créé les tickets, dont le contexte lui sert (un seul groupe). */
-  continuesHere?: boolean
-  /** Id de la discussion qui a envoyé le plan (`continuesHere`) : « cette discussion » n'a de sens que là. */
-  continuesIn?: string
+  // `continuesHere` et `continuesIn` (avant la 0.60.0) restent dans les anciens fichiers, sans effet :
+  // un groupe ne se fait qu'en session liée.
   /**
    * Groupe confié à une session liée depuis le panneau : le parcours reste dans la discussion
    * principale, qui suit la session et rend les statuts de ses tickets à sa note de fin.
@@ -265,10 +263,16 @@ export type AgentRow = {
 export type ToolFamily = 'read' | 'edit' | 'run' | 'web' | 'agent' | 'other'
 
 /**
- * Les sortes de segments de la frise (Q3) : réflexion, rédaction, appel d'outil, et trois attentes
- * (d'un sous-agent au premier plan, de la personne, d'une tâche de fond).
+ * Les sortes de segments de la frise (Q3) : réflexion, rédaction, appel d'outil, et quatre attentes
+ * (d'un sous-agent au premier plan, de la personne, d'une tâche de fond, de l'advisor consulté).
  */
-export type SegmentKind = 'think' | 'write' | 'tool' | 'waitAgent' | 'waitPerson' | 'waitBg'
+export type SegmentKind = 'think' | 'write' | 'tool' | 'waitAgent' | 'waitPerson' | 'waitBg' | 'waitAdvisor'
+
+/**
+ * La fenêtre de vue de la frise, en temps réel. Figée, elle montre `start`–`end` ; quand elle suit
+ * le direct (`isLive`), elle garde sa durée `end - start` et finit au bout de l'axe à chaque dessin.
+ */
+export type AgentsWindow = { start: number; end: number; isLive: boolean }
 
 /** Un segment daté d'une piste ; sans fin, il est en cours et s'allonge jusqu'à maintenant. */
 export type AgentSegment = {
@@ -361,6 +365,24 @@ export type AgentTokens = { input: number; output: number; cacheRead: number; ca
 /** Une période où une session a porté un parcours (S31, S37) : de `from` à `to`. */
 export type CarrySpan = { from: number; to: number }
 
+/**
+ * Un appel à l'advisor tel qu'un transcript le donne : l'id de l'appel (celui du bloc
+ * `server_tool_use`), ses heures (la fin manque quand la réponse s'est coupée avant son résultat),
+ * et, d'après l'entrée `advisor_message` de `usage.iterations`, son modèle et ses tokens (absents
+ * quand l'entrée ne les a pas). Aucun contenu de sa réponse.
+ */
+export type AdvisorFigures = { id: string; s: number; e?: number; model?: string; tokens?: AgentTokens }
+
+/**
+ * Un appel de la ligne advisor : ses chiffres, l'appelant (`main` pour l'orchestrateur, sinon l'id
+ * du sous-agent), et `isRead` une fois relu dans un transcript : sans tokens, il compte alors sans
+ * prix, au lieu d'attendre un rattrapage qui n'en dira pas plus.
+ */
+export type AdvisorCall = AdvisorFigures & { by: string; isRead?: boolean }
+
+/** La ligne advisor d'une session : ses appels, avec leurs chiffres une fois relus dans les transcripts. */
+export type AdvisorLane = { calls: AdvisorCall[] }
+
 /** Le fichier de registre d'une session : écrit par elle seule (Q7), lu par les autres. */
 export type SessionRegistry = {
   v: 1
@@ -377,6 +399,8 @@ export type SessionRegistry = {
   agents: RegistryAgent[]
   /** La piste de la session elle-même (l'orchestrateur) : ses tours, ses outils, ses attentes. */
   main?: AgentLane
+  /** La ligne advisor : les appels de l'orchestrateur et de ses sous-agents ; absente sans appel. */
+  advisor?: AdvisorLane
   /** Les sessions liées que cette session a lancées (`start_session`, `claude --bg`), avec ou sans parcours. */
   linked?: LinkedLaunch[]
   /**
@@ -469,7 +493,7 @@ export type Run = {
   /** Skill de départ : il fixe la forme du parcours. */
   entry: string
   title: string
-  /** Le titre vient de Claude ou des arguments, pas du nom du flux. */
+  /** Le titre vient de Claude (ou du parcours parent d'une suite), pas du nom du flux. */
   isTitled: boolean
   status: FlowStatus
   phases: FlowPhase[]
@@ -506,6 +530,16 @@ export type Run = {
   updatedAt: number
   /** Id de la discussion où le parcours est actif ; absent quand il ne l'est nulle part. */
   owner?: string
+  /**
+   * Id de la discussion où le parcours est né, posé à sa création et jamais effacé (depuis la
+   * 0.60.0) : seule elle prend son titre. Absent d'un parcours d'avant, qui ne compte pas.
+   */
+  bornIn?: string
+  /**
+   * Le premier lancement d'une session liée par ce parcours (groupe ou éléments d'une phase), jamais
+   * effacé : la discussion ne prend plus de titre ensuite (depuis la 0.60.0).
+   */
+  linkedAt?: number
   /** Rangé aux archives : caché de l'historique, ni repris ni proposé, jamais élagué ; se désarchive. */
   archivedAt?: number
   /**
@@ -666,8 +700,11 @@ export type UiState = {
   itemSelection?: string[]
   /** Parcours archivé dont la suppression attend sa confirmation. */
   confirmDrop?: string
-  /** Frise de l'onglet Agents : la dernière heure seulement, ou tout (par défaut). */
-  agentsRange?: 'hour' | 'all'
+  /**
+   * Frise de l'onglet Agents : la fenêtre de vue (zoom et déplacement), en temps réel ; absente,
+   * tout. Propre à la discussion, jamais enregistrée, remise à « tout » à la réouverture.
+   */
+  agentsWindow?: AgentsWindow
   /** Onglet Agents : la piste dont la carte de détail est ouverte (clé d'appel, ou `main`). */
   agentCard?: string
   /** Onglet Agents : la session liée dont la frise est montrée (sa clé) ; absente, l'orchestrateur. */
@@ -680,6 +717,8 @@ export type UiState = {
   confirmForget?: string
   /** La carte de détail montre le prompt en entier. */
   isPromptOpen?: boolean
+  /** Onglet Agents : la légende détaillée est dépliée (repliée par défaut). */
+  isLegendOpen?: boolean
   /** Frise : les Workflow dépliés (par leur `runId`), pour la discussion. */
   openWorkflows?: string[]
 }

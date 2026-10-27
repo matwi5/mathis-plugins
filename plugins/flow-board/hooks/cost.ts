@@ -6,8 +6,9 @@
 //   jour. Sur les discussions de ce poste, ils redonnent le coût de ccusage à 3 % près (médiane).
 // - Coût d'un sous-agent = ses tokens par sorte × les prix de son modèle ; toujours affiché « ≈ ».
 // - Un modèle trop peu vu (moins de jours que de prix à tirer) n'a pas de prix : « coût indisponible ».
+// - L'advisor se chiffre appel par appel, au prix de son modèle, à part de l'agent qui l'a appelé.
 
-import type { AgentTokens } from '../types'
+import type { AdvisorCall, AgentTokens } from '../types'
 
 /** Les prix d'un modèle, en dollars par token. */
 export type UnitPrices = { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -143,4 +144,28 @@ export const familyOf = <A extends FamilyMember>(agent: A, all: readonly A[], co
 export const costText = (usd: number): string => {
   const digits = usd >= 1 ? 2 : usd >= 0.01 ? 2 : 3
   return `≈${' '}${usd.toFixed(digits).replace('.', ',')}${' '}$`
+}
+
+/**
+ * Ce que coûtent des appels à l'advisor, chacun au prix de son modèle : la somme des tokens relus,
+ * leurs modèles, le coût (null sans aucun appel chiffré), `isUnknown` dès qu'un appel relu n'a pas
+ * de prix (sans modèle connu, ou sans tokens) : le total serait faux, il ne s'affiche pas ; et le
+ * nombre d'appels pas encore relus dans un transcript.
+ */
+export const advisorCostOf = (
+  calls: readonly AdvisorCall[],
+  prices: Readonly<Record<string, UnitPrices>>,
+): { tokens?: AgentTokens; models: string[]; cost: number | null; isUnknown: boolean; unread: number } => {
+  const read = calls.filter(c => c.tokens !== undefined || c.isRead === true)
+  const counted = read.filter(c => c.tokens !== undefined)
+  const tokens = counted.length > 0 ? (Object.fromEntries(KEYS.map(k => [k, counted.reduce((n, c) => n + c.tokens![k], 0)])) as AgentTokens) : undefined
+  const costs = read.map(c => costOf(c.tokens, pricesFor(prices, c.model)))
+  const known = costs.filter((c): c is number => c !== null)
+  return {
+    ...(tokens ? { tokens } : {}),
+    models: [...new Set(calls.flatMap(c => (c.model !== undefined ? [c.model] : [])))],
+    cost: known.length > 0 ? known.reduce((n, c) => n + c, 0) : null,
+    isUnknown: costs.some(c => c === null),
+    unread: calls.length - read.length,
+  }
 }

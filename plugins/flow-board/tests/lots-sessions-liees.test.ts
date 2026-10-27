@@ -61,7 +61,7 @@ const VENTES = {
     { id: 'e1', name: 'Enquête transporteur', files: ['travail/sql'] },
   ],
   groups: [
-    { id: 'A', name: 'Synchro', tickets: ['a1', 'a2'], continuesHere: true },
+    { id: 'A', name: 'Synchro', tickets: ['a1', 'a2'] },
     { id: 'C', name: 'Statut de commande', tickets: ['c1'], files: ['pbi/model/tables'] },
     { id: 'B', name: 'Règles', tickets: ['b1', 'b2'] },
     { id: 'D', name: 'Commandes', tickets: ['d1'] },
@@ -82,10 +82,8 @@ test('les fichiers des tickets comptent : le lot garde A ∥ E, et chaque groupe
     ['C', 'E'],
     ['D', 'E'],
   ])
-  // B attend C, mais son export n'attend rien : il peut partir seul.
-  const b = viewOf(board, 'B')
-  expect(b.state).toBe('waiting')
-  expect(b.readyNow.map(t => t.id)).toEqual(['b1'])
+  // B attend C (son export n'attend rien, mais le groupe part entier, en session liée).
+  expect(viewOf(board, 'B').state).toBe('waiting')
   // Un ticket fait ne retient plus personne : A fini, D n'est plus retenu que par C (même page).
   const later = applyReport(board, { set: [{ id: 'a1', status: 'done' }, { id: 'a2', status: 'done' }] }, 3_000).board
   expect(planOf(later).parallelBatch).toEqual(['C', 'E'])
@@ -172,10 +170,10 @@ test('un groupe confié à une session liée : hors des lots, il retient ceux qu
   expect(back.text).toMatch(/returned: no group in a linked session among Z/)
 })
 
-test('« cette discussion » est celle qui a envoyé le plan', () => {
-  const board = boardWith(VENTES, 'session-de-decoupage')
-  expect(viewOf(board, 'A').group).toMatchObject({ continuesHere: true, continuesIn: 'session-de-decoupage' })
-  expect(viewOf(board, 'C').group.continuesIn).toBeUndefined()
+test('un continuesHere reçu est ignoré : aucun groupe ne se garde pour la discussion du découpage', () => {
+  const board = boardWith({ ...VENTES, groups: VENTES.groups.map(g => (g.id === 'A' ? { ...g, continuesHere: true } : g)) }, 'session-de-decoupage')
+  expect(viewOf(board, 'A').group).not.toHaveProperty('continuesHere')
+  expect(viewOf(board, 'A').group).not.toHaveProperty('continuesIn')
 })
 
 test('une session déléguée n’ouvre ni ne reprend aucun parcours, et n’écrit rien', () => {
@@ -257,7 +255,7 @@ const world = (on: any, opts: { repo: boolean }) => {
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
-test('sans git : les lots partent en sessions liées, pas par /implement-spec ; raisons et autres lots affichés', { timeoutMs: 15000 }, async ($, on) => {
+test('sans git : les lots partent en sessions liées ; raisons et autres lots affichés', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 70_000_000 })
   const { mem, filled } = world(on, { repo: false })
   await start($)
@@ -267,17 +265,14 @@ test('sans git : les lots partent en sessions liées, pas par /implement-spec ; 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
   expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ E en parallèle · sessions liées$/)
-  expect(await ui.find({ type: 'Text', text: /\/implement-spec demande un dépôt git/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\/implement-spec/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /^∦.A.:.tables$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Autres lots possibles :$/ })).toBeDefined()
   expect(String((await ui.find({ key: 'launch-parallel-linked-1' }))?.props.label)).toMatch(/^⇉.C ∥ E en parallèle · sessions liées$/)
   expect(await ui.find({ key: 'launch-parallel-1' })).toBeUndefined()
-  // « Cette discussion » : celle qui a envoyé le plan, ici.
-  expect(await ui.find({ type: 'Text', text: /cette.discussion/ })).toBeDefined()
-
-  // B attend C, mais son export peut partir seul.
-  await ui.press({ key: 'launch-ready-B' })
-  expect(filled.at(-1)).toBe('/mattpocock-skills:implement Groupe B (Règles), tickets déjà prêts, un par un et dans cet ordre : 1) b1 — Export des retours')
+  // Un groupe se fait en session liée : ni « cette discussion », ni tickets prêts lancés ici.
+  expect(await ui.find({ type: 'Text', text: /cette.discussion/ })).toBeUndefined()
+  expect(await ui.find({ key: 'launch-ready-B' })).toBeUndefined()
 
   // Un autre lot, en sessions liées : une session par groupe, le parcours reste ici.
   await ui.press({ key: 'launch-parallel-linked-1' })
@@ -311,17 +306,18 @@ test('sans git : les lots partent en sessions liées, pas par /implement-spec ; 
   expect(run?.groups?.filter(g => g.linked).map(g => `${g.id}:${g.linked!.session}`)).toEqual(['C:local_C42', 'E:local_E42'])
 })
 
-test('dans un dépôt git, chaque lot propose aussi /implement-spec', { timeoutMs: 15000 }, async ($, on) => {
+test('dans un dépôt git aussi, chaque lot part en sessions liées, jamais par /implement-spec', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 71_000_000 })
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ key: 'launch-parallel' })).toBeDefined()
-  await ui.press({ key: 'launch-parallel-2' })
+  expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
+  expect(await ui.find({ key: 'launch-parallel-2' })).toBeUndefined()
+  await ui.press({ key: 'launch-parallel-linked-2' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^\/mattpocock-skills:implement-spec Groupes en parallèle, .* Groupes : D \(Commandes\) : 1\) d1 — Délai de livraison ∥ E \(Enquêtes\)/)
+  expect(filled.at(-1)).toMatch(/^Confie chacun de ces groupes à sa session liée, en parallèle, pour le parcours « Boutique » : Groupe D \(Commandes\) : 1\) d1 — Délai de livraison ∥ Groupe E \(Enquêtes\)/)
 })
 
 test('la session liée se déclare : son panneau le dit, ses skills ne lancent aucun parcours', { timeoutMs: 15000 }, async ($, on) => {
@@ -349,17 +345,17 @@ test('la session liée se déclare : son panneau le dit, ses skills ne lancent a
   expect(stored.runs[0]!.tickets.some(t => t.id === 'x9')).toBe(false)
 })
 
-test('vu d’une autre discussion, le groupe « continue ici » dit « discussion de découpage » et garde sa session liée', { timeoutMs: 15000 }, async ($, on) => {
+test('un ancien groupe « continue ici », repris ailleurs, n’a plus d’effet : il garde sa session liée', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 73_000_000 })
   const { mem } = world(on, { repo: false })
   const elsewhere = boardWith({ title: 'Boutique', ...VENTES }, 'session-B')
-  // Mise de côté dans la discussion de découpage : une autre peut la reprendre.
-  mem[KEY] = { ...elsewhere, runs: elsewhere.runs.map(r => ({ ...r, status: 'paused', owner: undefined })) }
+  // Un fichier d'avant la 0.60.0, mis de côté dans la discussion de découpage : une autre peut le reprendre.
+  const old = (g: any) => (g.id === 'A' ? { ...g, continuesHere: true, continuesIn: 'session-B' } : g)
+  mem[KEY] = { ...elsewhere, runs: elsewhere.runs.map(r => ({ ...r, status: 'paused', owner: undefined, groups: r.groups?.map(old) })) }
   await start($)
   await $.tool.call({ tool: TOOL, resume: activeRun(elsewhere)!.id } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /discussion.de.découpage/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /cette.discussion/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /discussion.de.découpage|cette.discussion/ })).toBeUndefined()
   expect(await ui.find({ key: 'launch-linked-A' })).toBeDefined()
   await ui.unmount()
 })
@@ -937,7 +933,7 @@ test('le fichier des choix déjà déclarés reprend ceux du parcours et ceux qu
   expect(decidedFileText({ ...run, decided: undefined }, null)).toContain("Aucun choix déclaré pour l'instant.")
 })
 
-test('le brief des sessions de groupe : renommer d’abord la discussion, background par renvoi, compte rendu déposé, délais et suivi sans claude logs', async ($, on) => {
+test('le brief des sessions de groupe : plus de renommage à la main, background par renvoi, compte rendu déposé, délais et suivi sans claude logs', async ($, on) => {
   mock.clock(on, { now: 74_000_000 })
   const { filled } = world(on, { repo: true })
   await start($)
@@ -946,7 +942,8 @@ test('le brief des sessions de groupe : renommer d’abord la discussion, backgr
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
   const first = filled.at(-1)!
-  expect(first).toContain("C'est la première session liée de ce parcours : si ce n'est pas déjà fait (la consigne d'/implement l'a peut-être demandé), demande-moi d'abord de renommer cette discussion de son nom définitif")
+  // Le nom de la discussion est fixé par la règle du titre (0.60.0) : plus de renommage à la main.
+  expect(first).not.toContain('renommer cette discussion')
   // Le background renvoie aux règles au lieu de les recopier, et cite le fichier des choix.
   expect(first).toContain('sans y reprendre le texte des règles')
   expect(first).toContain("dans le document du projet pour les sessions déléguées s'il en a un")
@@ -985,7 +982,7 @@ test('les consignes ajoutées aux skills : choix sensible en question au cadrage
   const impl = await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   expect(impl.text).toContain('- Declared choices: ')
   expect(impl.text).toContain('when the review has several axes (Standards and Spec), report only once all of them are back')
-  expect(impl.text).toContain('ask the user once to rename this discussion to its final name')
+  expect(impl.text).not.toContain('rename this discussion')
   expect(impl.text).not.toContain('is never a declared choice')
   const retro = await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
   expect(retro.text).toContain('Improvements that touch another repository')

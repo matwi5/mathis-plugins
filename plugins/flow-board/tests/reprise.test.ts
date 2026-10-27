@@ -28,7 +28,8 @@ test('après une interruption, la consigne de file dit ce qui est fait et ce qui
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, tickets: LOT, groups: [{ id: 'A', name: 'Worker', tickets: ['A1', 'A2', 'A3'] }] } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await ui.press({ key: 'launch-group-A' })
+  for (const id of ['A1', 'A2', 'A3']) await ui.press({ key: `pick-${id}` })
+  await ui.press({ key: 'launch-picks' })
   await ui.unmount()
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'y' })
   // Le ticket 1 est commité, le 2 en cours quand la discussion s'arrête.
