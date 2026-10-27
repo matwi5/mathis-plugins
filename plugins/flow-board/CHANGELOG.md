@@ -4,6 +4,56 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.58.0 — 2026-10-26
+
+Parcours « Onglet Agents flow-board » (spec et décisions de Mathis dans le dépôt privé, `travail/onglet-agents/`) : un suivi complet, fiable et visuel de l'orchestrateur, de ses sessions liées et de leurs sous-agents, pendant un parcours comme sans, et après l'archivage.
+
+### Ajouté
+- **Onglet « Agents »** (après Parcours), qui remplace l'encadré « Sous-agents » de l'onglet Parcours (une ligne de résumé « ◉ N agents au travail · ▸ Agents » y mène). En tête, un sélecteur d'historique (« Ici, maintenant », les parcours archivés compris, puis les discussions sans parcours du projet qui ont lancé des agents) et une pastille par session liée avec son état (au travail, rendue, échouée, fermée), « ◆ Orchestrateur » par défaut. Puis un résumé (agents, durée, gain par rapport à une exécution en série, coût estimé « ≈ ») et la frise.
+- **Frise** : une piste pour l'orchestrateur, une par session liée (départ et retour), une par sous-agent, sans limite ; segments de réflexion, rédaction, appel d'outil (glyphe de sa famille) et trois attentes hachurées (sous-agent, toi, tâche de fond) ; repères d'échec, d'interruption, de relais, de compaction, de message, de commit et de tests ; pauses compressées (« ⫽ 2 h ») et réglage « dernière heure / tout ». SVG sur le desktop, VS Code et le mobile ; grille de cases au terminal.
+- **9 types de sous-agents** (exploration, recherche, implémentation, relecture, sécurité, fusion, plan, transcripts, autre), chacun sa couleur et son glyphe ; enfants en retrait sous leur parent ; Workflow repliés en une piste.
+- **Carte de détail** d'une piste : prompt, tokens par sorte, outils par famille avec leurs arguments, lignes modifiées, coût estimé (prix tirés de ccusage), modèles, effort, période, « ↗ Ouvrir la transcription ».
+- **Registre des agents** : un fichier par session dans `~/.claude/flow-board/agents/`, écrit par elle seule, relu et fusionné à chaque écriture (une même discussion dans deux processus) ; découpé en morceaux au-delà de 3 Mo ; lecture validée entrée par entrée ; secrets masqués dans les arguments courts et les prompts ; dossier fermé aux autres comptes (`chmod 700`, sauf Windows).
+- **Rattrapage par transcripts** : à l'ouverture de l'onglet et à la fin d'un sous-agent sans chiffres, les transcripts de Claude Code complètent fins manquées, tokens et durées ; un registre illisible se reconstruit ; les parcours existants retrouvent leur frise une fois.
+- **« ◆ Agents »** sur chaque parcours de l'onglet Historique, archivés compris.
+- **« ✗ Oublier »** une discussion passée, avec une confirmation qui dit combien de sessions et de sous-agents partent.
+- **Méthode fixe de la revue de sécurité**, `reference/revue-securite.md`, que toutes les consignes de sécurité du mod citent par son chemin (avis après la revue d'un groupe ou du lot, brief des sessions liées, bouton « ⛨ Revue de sécurité ») : celle de `/security-review` (catégories, exclusions, une recherche puis une vérification par faille, seuil 8/10, rapport détaillé), sans exclure les dépendances ni les données sensibles sur disque, avec la plage exacte du groupe, le contexte du projet, les choix déclarés et la lecture seule. L'effort, `high` ou `xhigh`, suit un critère (l'enjeu, la taille) au lieu de `xhigh` d'office ; chaque faille gardée arrive avec un correctif prêt (« corrige F1 et F3 » suffit) ; les failles notées 5 à 7 ou de gravité basse vont dans une liste « à surveiller », et `findings` ne compte plus que les failles gardées.
+
+### Modifié
+- **Supprimer un parcours** efface aussi ses agents, ses sessions liées, son relais (`relais/`) et ses choix (`choix/`) : réécrits vides puis supprimés ; une trace (id et date) empêche le rattrapage de les faire revenir. Une session encore ouverte n'est jamais touchée par une autre : elle se compacte elle-même.
+- Le parcours n'enregistre plus ses sous-agents (12 au plus) : ses anciennes lignes sont recopiées dans le registre, puis son champ est vidé.
+- ccusage se lance en version fixe (20.0.30), depuis le dossier du mod, avec le registre npm officiel, au plus une fois par jour.
+- La lecture de transcripts prend le vert anis (le bleu était celui des hachures « attente d'une tâche de fond »), et les pistes des sessions liées le mauve, plus loin du violet de l'orchestrateur.
+
+### Corrigé (suites de la revue)
+- Un sous-agent retrouvé dans un transcript de la discussion se rattache au parcours qu'elle portait à son départ : il apparaît dans la vue du parcours et part avec « Supprimer ». Pour s'en souvenir une fois le parcours fini, l'en-tête du registre garde les ids des parcours que la discussion a portés.
+- « ✗ Oublier » pose aussi une trace par sous-agent : un sous-agent de fond qui se réveille après ne revient pas dans l'historique.
+- Le compte rendu du parcours compte aussi les sous-agents en échec de ses sessions liées.
+- Un transcript n'est lu que sous `<dossier de Claude>/projects/`, un fichier de sous-agent n'a qu'un nom strict (`agent-<id>.jsonl`), et sa lecture en flux a un délai ; sous Windows, `type` a la même garde des caractères spéciaux de `cmd.exe` que `del`, étendue pour les deux aux séparateurs `;`, `,` et `=`.
+- Un effacement dont une trace ne s'écrit pas retire celles qu'il venait de poser et le dit (« Effacement annulé ») ; comme une session ouverte a pu se compacter d'après elles entre-temps, le message ne promet plus que rien n'a été effacé ; si aucune n'avait été posée, il dit « rien n'a été effacé » ; si le retrait échoue aussi, il dit « effacement partiel ». Pendant un effacement, du début à la fin, les onglets Agents et Historique de la discussion qui efface disent « ⏳ Effacement en cours du parcours (de la discussion) « … » », une ligne par effacement ; un second effacement du même parcours ou de la même discussion pendant le premier ne fait rien. Tenue en mémoire, la ligne ne peut pas rester après un rechargement du mod.
+- Une trace d'effacement s'écrit dans un fichier à elle, un par id et par date (`<id>.<date>.erased.json`), et n'est jamais réécrite : un disque plein ne peut plus en perdre une en la remplaçant. La lecture réunit ces fichiers et prend la plus récente ; les traces d'avant (`<id>.erased.json`) se lisent toujours.
+- La garde des transcripts exige un chemin absolu et ne convertit les `\` en `/` que sous Windows (reconnu au seul dossier de Claude, lettre de lecteur, UNC ou chemin long) : sur Mac, un chemin relatif ou qui contient `\` est refusé.
+- Les parcours portés gardent aussi, dans l'en-tête du registre, les périodes où la discussion les portait (des dates seulement ; une nouvelle quand elle le reprend après plus de 10 min sans le porter, ce qu'une écriture faite entre-temps sans lui atteste ; 20 au plus). Un sous-agent rattrapé ne rejoint un parcours que la discussion a porté puis rendu que dans une de ces périodes (marge d'1 min avant, 10 min après), dans le rattrapage comme dans la reprise des anciens parcours ; à chaque rattrapage, une entrée rattrapée plus tôt sans parcours est rattachée de même (une entrée suivie en direct sans parcours le reste).
+- « Supprimer » relit d'abord les transcripts des discussions qui ont porté le parcours : un sous-agent manqué de leur période part aussi, au lieu de revenir ensuite sans parcours (sauf s'il est rangé dans un autre parcours) ; un transcript qui ne se relit pas n'arrête rien, et le message le dit (« N transcripts non relus » : discussion sans transcript connu, chemin refusé, dossier illisible, fichier trop gros ou délai dépassé ; un fichier disparu ne compte pas, un fichier plus ancien que le parcours n'est pas relu). Une discussion fermée qui portait le parcours, même sans sous-agent de lui, est réécrite tout de suite sans lui.
+- Méthode de la revue de sécurité : l'exclusion des expressions régulières ne vise plus que le déni de service ; une entrée qui change ce qu'une expression vise (un id non échappé) se rapporte.
+- Le masquage des secrets couvre aussi les valeurs entre guillemets (en entier), `nom: valeur` (`token:`, `client_secret:`), `curl -u`, `mysql -p`, `Cookie:`, les clés `sk_live_` et `hf_`, les blocs PEM (même coupés) et `Bearer x` seul ; une valeur entre guillemets qui ne se ferme pas sur la ligne en 400 signes (jeton long, guillemet ouvert, plusieurs lignes) reste masquée au moins sur son premier mot.
+- Le `chmod 700` du registre n'est noté fait qu'une fois réussi ; un en-tête de registre qui se dit d'une autre session que son fichier est refusé ; les ids sont échappés dans l'effacement ; « même projet » ne compte que le projet et ses worktrees (`.claude/worktrees/<nom>`).
+- Types : `tsc` passe sur le mod et ses tests (`allowImportingTsExtensions`, et les types des serveurs MCP connectés au poste ne sont plus lus : ils changent d'un poste à l'autre) ; une comparaison à `PowerShell`, outil absent de certains builds, ne casse plus le typage.
+- Tests : une écriture du registre coûtait une seconde de temps réel sous l'horloge simulée (une minuterie annulée depuis le rappel d'une autre), ce qui faisait passer trois tests près de leur délai de 5 s et en échouer parfois.
+
+### Retiré
+- L'encadré « Sous-agents » de l'onglet Parcours.
+
+---
+
+## 0.57.1 — 2026-10-26
+
+### Corrigé
+- **Une session liée dont les tickets sont des fichiers locaux** (`…/issues/<NN>-<nom>.md`, le tracker de `/to-tickets` sans Asana) **relaie maintenant leurs statuts** : le tableau de bord de la discussion principale ne voyait que ses commits, et le groupe restait à « 0 fait » jusqu'à son retour. Signalé par Mathis sur le groupe B du parcours « Durée des requêtes » : « flow board pour le groupe B ne s'update pas en live, pourquoi ? Corrige ». Le statut se lit dans la ligne `**Status:**` (ou « Statut : ») du fichier, après un Edit ou un Write, ou une commande shell qui nomme le fichier (un `sed`, par exemple) ; « en attente (porteur) » reste « en cours ».
+- Conséquence du même défaut : sans ticket « en cours » relayé, la passe « bogues » d'un ticket en zone sensible était prise pour la revue du groupe. Un ticket qui passe « en cours » efface maintenant une revue du groupe relayée avant lui.
+
+---
+
 ## 0.57.0 — 2026-10-26
 
 D'après l'article « How the Claude Code team does code review » (26/10/2026) : pour un auteur agent, une remarque mineure coûte un commit et un nouveau tour de revue, là où un humain l'écarte en une seconde.

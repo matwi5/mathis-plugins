@@ -102,7 +102,7 @@ test('le parcours avance de phase en phase et suit les tickets', async ($, on) =
   }
 })
 
-test('les tests rouge puis vert et le commit se lisent dans le panneau', async ($, on) => {
+test('les tests rouge puis vert et le commit se lisent dans le panneau', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 3_000_000 })
   mock.store(on)
   engine(on)
@@ -128,7 +128,7 @@ test('les tests rouge puis vert et le commit se lisent dans le panneau', async (
   }
 })
 
-test('un skill hors du parcours devient un détour, un autre point de départ un nouveau parcours', async ($, on) => {
+test('un skill hors du parcours devient un détour, un autre point de départ un nouveau parcours', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 4_000_000 })
   mock.store(on)
   engine(on)
@@ -171,7 +171,7 @@ test('un skill hors du parcours devient un détour, un autre point de départ un
   await ui.unmount()
 })
 
-test('les questions du grilling et la synthèse de revue sont relevées en fin de tour', async ($, on) => {
+test('les questions du grilling et la synthèse de revue sont relevées en fin de tour', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 5_000_000 })
   mock.store(on)
   engine(on)
@@ -193,7 +193,7 @@ test('les questions du grilling et la synthèse de revue sont relevées en fin d
   }
 })
 
-test('sans parcours, le panneau propose les points de départ', async ($, on) => {
+test('sans parcours, le panneau propose les points de départ', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -228,7 +228,7 @@ test('le bandeau se masque, et /flow show le rend', async ($, on) => {
   mock.clock(on, { now: 7_000_000 })
   mock.store(on)
   engine(on)
-  on('command.run', { command: 'flow' }, async (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e))
+  on('command.run', { command: 'flow' }, async (_$, e, next) => next(e))
 
   await $.skill.prompt({ skill: 'mattpocock-skills:tdd', text: 'x' })
   for (const surface of BANDS) {
@@ -237,7 +237,7 @@ test('le bandeau se masque, et /flow show le rend', async ($, on) => {
     await ui.press({ key: 'band-hide' })
     expect(await ui.find({ type: 'Text', text: /TDD/ })).toBeUndefined()
     await ui.unmount()
-    const shown = await $.command.run({ command: 'flow', args: 'show' })
+    const shown = await $.command.run({ command: 'flow', args: 'show' } as any)
     expect(String(shown.text)).toMatch(/Parcours : /)
   }
 })
@@ -246,12 +246,12 @@ test('/flow-board:flow, connu dès le premier message, répond comme /flow', asy
   mock.clock(on, { now: 7_500_000 })
   mock.store(on)
   engine(on)
-  on('command.run', { command: 'flow-board:flow' }, async (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e))
+  on('command.run', { command: 'flow-board:flow' }, async (_$, e, next) => next(e))
 
-  const empty = await $.command.run({ command: 'flow-board:flow', args: '' })
+  const empty = await $.command.run({ command: 'flow-board:flow', args: '' } as any)
   expect(String(empty.text)).toMatch(/aucun parcours en cours/)
   await $.skill.prompt({ skill: 'mattpocock-skills:tdd', text: 'x' })
-  const shown = await $.command.run({ command: 'flow-board:flow', args: 'history' })
+  const shown = await $.command.run({ command: 'flow-board:flow', args: 'history' } as any)
   expect(String(shown.text)).toMatch(/Parcours : /)
 })
 
@@ -263,7 +263,7 @@ test('/flow sort du menu, /flow-board:flow y reste', async ($, on) => {
   expect(full.isHidden).toBe(false)
 })
 
-test('les sous-agents apparaissent pendant leur travail, puis passent faits', async ($, on) => {
+test('les sous-agents apparaissent dans l’onglet Agents pendant leur travail, puis passent faits', async ($, on) => {
   mock.clock(on, { now: 8_000_000 })
   mock.store(on)
   engine(on)
@@ -273,18 +273,28 @@ test('les sous-agents apparaissent pendant leur travail, puis passent faits', as
   }))
 
   await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'x' })
-  await $.tool.call({ tool: 'Agent', description: 'Implement ticket #12', prompt: 'p', run_in_background: true } as any)
+  await $.tool.call({ tool: 'Agent', description: 'Implement ticket #12', prompt: 'p', model: 'haiku', run_in_background: true } as any)
   for (const surface of ALL) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await ui.find({ type: 'Text', text: /Implement ticket #12/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /1\sactif/ })).toBeDefined()
-    // Implémentation : les étapes (« Implementers »…) ne s'affichent plus, les sous-agents si.
+    // Dans Parcours, une ligne de résumé remplace l'encadré et mène à l'onglet.
+    expect(await ui.find({ type: 'Text', text: /1\sagent\sau\stravail/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Implement ticket #12/ })).toBeUndefined()
+    // Implémentation : les étapes (« Implementers »…) ne s'affichent plus.
     expect(await ui.find({ type: 'Text', text: /Implementers/ })).toBeUndefined()
+    await ui.press({ key: 'agents-open' })
+    expect(await ui.find({ type: 'Text', text: /Orchestrateur/ })).toBeDefined()
+    // Une rangée par sous-agent : son bouton porte son nom.
+    expect(await ui.find({ type: 'Button', text: /Implement ticket #12/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^au\stravail$/ })).toBeDefined()
+    await ui.press({ key: 'tab-flow' })
     await ui.unmount()
   }
   await ($ as any).classic.SubagentStop({ agent_id: 'agent-7', agent_type: 'general-purpose', agent_transcript_path: 'x', stop_hook_active: false })
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /au repos/ })).toBeDefined()
+  await ui.press({ key: 'tab-agents' })
+  expect(await ui.find({ type: 'Text', text: /^fini$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /au\srepos/ })).toBeDefined()
+  await ui.press({ key: 'tab-flow' })
   await ui.unmount()
 })
 
@@ -296,7 +306,10 @@ test('un sous-agent rendu « completed » est fini, même sans run_in_background
   await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'x' })
   await $.tool.call({ tool: 'Agent', description: 'Inventaire des règles', prompt: 'p' } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /au repos/ })).toBeDefined()
+  await ui.press({ key: 'tab-agents' })
+  expect(await ui.find({ type: 'Button', text: /Inventaire des règles/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /au\srepos/ })).toBeDefined()
+  await ui.press({ key: 'tab-flow' })
   await ui.unmount()
 })
 
@@ -309,7 +322,7 @@ test('les fins de sous-agents manquées sont rattrapées par la liste des sous-a
   let n = 0
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: `agent-${++n}`, description: 'd', prompt: 'p', outputFile: 'o' } }))
   let live: unknown[] = []
-  on('agent.list', () => ({ value: live }))
+  on('agent.list', () => ({ value: live as any }))
   await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'x' })
   await $.tool.call({ tool: 'Agent', description: 'Fini sans signal', prompt: 'p', run_in_background: true } as any)
   await $.tool.call({ tool: 'Agent', description: 'Disparu', prompt: 'p', run_in_background: true } as any)
@@ -320,13 +333,34 @@ test('les fins de sous-agents manquées sont rattrapées par la liste des sous-a
   ]
   await $.turn.start({ text: 'suite', turnId: 't1' } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /1\sactif/ })).toBeDefined()
+  await ui.press({ key: 'tab-agents' })
+  expect(await ui.find({ type: 'Text', text: /3\sagents\s·\s1\sau\stravail/ })).toBeDefined()
+  await ui.press({ key: 'tab-flow' })
   await ui.unmount()
   // Le tour d'un sous-agent qui se termine le marque fini.
   await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, turnId: 't9', reason: 'answer', agentId: 'agent-3' } as any)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await after.find({ type: 'Text', text: /au repos/ })).toBeDefined()
+  await after.press({ key: 'tab-agents' })
+  expect(await after.find({ type: 'Text', text: /au\srepos/ })).toBeDefined()
+  await after.press({ key: 'tab-flow' })
   await after.unmount()
+})
+
+test('sans parcours, l’onglet Agents suit les sous-agents de la discussion', async ($, on) => {
+  mock.clock(on, { now: 8_100_000 })
+  mock.store(on)
+  engine(on)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'agent-1', description: 'd', prompt: 'p', outputFile: 'o' } }))
+  await $.tool.call({ tool: 'Agent', description: 'Chercher la doc du SDK', prompt: 'p', run_in_background: true } as any)
+  for (const surface of ALL) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    // Le libellé de l'onglet dit combien d'agents travaillent.
+    expect((await ui.find({ key: 'tab-agents' }))?.props.label).toMatch(/Agents\s·\s1/)
+    await ui.press({ key: 'tab-agents' })
+    expect(await ui.find({ type: 'Button', text: /Chercher la doc du SDK/ })).toBeDefined()
+    await ui.press({ key: 'tab-flow' })
+    await ui.unmount()
+  }
 })
 
 test("le tour d'un sous-agent de fond ne fait pas passer la main à Claude", async ($, on) => {

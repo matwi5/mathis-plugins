@@ -1,6 +1,6 @@
 {
   "name": "files-board",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Navigateur de fichiers dans Claude Code CLI (/files), comme celui de l'app desktop : arborescence, recherche de fichiers, onglets d'aperçu, éditeur avec enregistrement automatique, menus contextuels (joindre comme contexte, copier, ouvrir dans, afficher dans l'Explorateur) et options d'affichage. /files-board:files dès le premier message.",
   "author": {
     "name": "Mathis"

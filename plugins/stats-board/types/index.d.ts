@@ -17,6 +17,14 @@ export type UsageRow = {
   cacheRead: number
   /** Coût équivalent API, en dollars. */
   cost: number
+  /**
+   * Publiés depuis la 0.10.0 : durée API, temps de génération, appels relevés et leurs tokens de
+   * sortie (pour la vitesse), durées arrondies à la minute ; absents sans mesure.
+   */
+  apiMs?: number
+  genMs?: number
+  calls?: number
+  genOutput?: number
 }
 
 /** Une conversation Claude Code d'un poste (`ccusage claude session`). */
@@ -27,13 +35,17 @@ export type SessionRow = {
   project: string
   /** Sous-agent de workflow : la discussion qui l'a lancé (son dossier est `<projet>\<parent>\subagents\…`). */
   parent: string | null
-  /** Première et dernière activité, en ms. */
+  /** Première et dernière activité, en ms ; publiées à la minute depuis la 0.10.0 (`publishedOf`). */
   first: number
   last: number
   cost: number
   tokens: number
   output: number
   models: string[]
+  /** Publiés depuis la 0.10.0 : temps actif, durée API (arrondis à la minute) et nombre de requêtes de la session ; absents sans mesure. */
+  activeMs?: number
+  apiMs?: number
+  requests?: number
 }
 
 /** Un bloc de facturation de 5 h (`ccusage claude blocks`), sans les creux. */
@@ -100,7 +112,54 @@ export type Snapshot = {
   /** Jours gardés par le mod alors que Claude Code a effacé leurs journaux. */
   keptDays: number
   warnings: string[]
+  /** Les durées de ce poste, tirées des fichiers de relevé des requêtes (depuis la 0.10.0). */
+  durations: Durations
+  /** Les durées publiées par les autres postes ; absent d'un relevé d'avant. */
+  peers?: PeerDurations
 }
+
+/** Temps des appels au modèle d'un jour, d'un projet et d'un modèle (requêtes envoyées ce jour-là). */
+export type ApiRow = {
+  date: string
+  project: string
+  machine: string
+  model: string
+  /** Durée API, en ms. */
+  apiMs: number
+  /** Temps de génération, en ms. */
+  genMs: number
+  /** Tokens de sortie, pour la vitesse. */
+  output: number
+  calls: number
+  /** Vitesse de chaque appel, en classes de 10 tokens/s (« 40 » : de 40 à 50) : leur nombre, pour la médiane ; absent d'un relevé d'avant. */
+  speeds?: Record<string, number>
+}
+
+/** Temps actif d'un jour et d'un projet (worktrees réunis à leur dépôt, brouillons ensemble), sans double compte. */
+export type ActiveRow = { date: string; project: string; machine: string; activeMs: number; requests: number }
+
+/** Temps actif d'un jour par heure locale (24 valeurs, en ms), toutes discussions confondues, sans double compte. */
+export type HourRow = { date: string; machine: string; hours: number[] }
+
+/** Une discussion un jour donné : son temps actif, sa durée API et ses requêtes. */
+export type SessionDayRow = { date: string; session: string; project: string; machine: string; activeMs: number; apiMs: number; requests: number }
+
+/** Les totaux de durée d'un poste, et ce qu'il faut pour ne relire que les fichiers de relevé modifiés. */
+export type Durations = {
+  /** Premier jour suivi (une requête relevée), AAAA-MM-JJ ; null avant toute requête. */
+  since: string | null
+  /** Les fichiers de relevé déjà lus : leur date de modification et les jours qu'ils touchent. */
+  files: Record<string, { mtimeMs: number; days: string[] }>
+  api: ApiRow[]
+  active: ActiveRow[]
+  hours: HourRow[]
+  sessions: SessionDayRow[]
+  /** La durée réelle de chaque requête envoyée ce jour-là, en secondes, pour les médianes (ce poste seulement) ; absent d'un relevé d'avant. */
+  times?: TimesRow[]
+}
+
+/** Les durées réelles des requêtes d'un jour et d'un projet affiché, en secondes. */
+export type TimesRow = { date: string; project: string; machine: string; seconds: number[] }
 
 /**
  * Le fichier qu'un poste publie dans le dépôt partagé `claude-usage` (`machines/<nom>.json`) :
@@ -115,6 +174,21 @@ export type Published = {
   rows: UsageRow[]
   sessions: SessionRow[]
   projects: Record<string, ProjectInfo>
+  /**
+   * Depuis la 0.10.0, au même format 1 (un poste pas encore mis à jour lit le reste) : temps actif et
+   * requêtes par jour et projet. Jamais une requête, son heure ni un texte ; durées à la minute.
+   */
+  active?: { date: string; project: string; activeMs: number; requests: number }[]
+  /** Depuis la 0.10.0 : temps actif par jour et heure locale, à la minute. */
+  hours?: { date: string; hours: number[] }[]
+  /** Depuis la 0.10.0 : les durées d'appels d'un jour, projet et modèle que ccusage n'a pas encore dans `rows`. */
+  apiOnly?: { date: string; project: string; model: string; apiMs: number; genMs: number; calls: number; genOutput: number }[]
+}
+
+/** Les durées des autres postes, lues dans leurs fichiers publiés (projets rapprochés de ceux de ce poste). */
+export type PeerDurations = Pick<Durations, 'api' | 'active' | 'hours' | 'sessions'> & {
+  /** Premier jour suivi de chaque poste qui publie des durées. */
+  sinceBy: Record<string, string>
 }
 
 export type Tab = 'discussion' | 'day' | 'overview' | 'trend' | 'models' | 'projects' | 'sessions' | 'rhythm'
@@ -123,7 +197,7 @@ export type Period = 'all' | '90' | '30' | '7'
 export type Machine = 'all' | (string & {})
 export type Metric = 'cost' | 'tokens'
 export type Grain = 'day' | 'week' | 'month'
-export type SessionSort = 'cost' | 'recent' | 'long'
+export type SessionSort = 'cost' | 'recent' | 'long' | 'active'
 
 /** Listes du panneau dépliées au-delà de leur plafond (« ▸ tout voir (N) »). */
 export type Expanded = { models: boolean; projects: boolean; sessions: boolean; days: boolean }
@@ -140,6 +214,10 @@ export type Ui = {
   /** Filtre de modèle ; null pour tous. */
   model: string | null
   sessionSort: SessionSort
+  /** Évolution : la durée (temps actif) à la place du coût ou des tokens ; absent d'un état d'avant la 0.10.0. */
+  isTrendDuration?: boolean
+  /** Tri de la carte « Requêtes » de l'onglet Discussion ; absent d'un état d'avant la 0.10.0. */
+  requestSort?: RequestSort
   expanded: Expanded
   /** Jour choisi dans l'onglet Journée (AAAA-MM-JJ) ; null pour celui du relevé. */
   day: string | null
@@ -185,6 +263,82 @@ export type Discussion = {
   error: string | null
 }
 
+/** Les appels d'un modèle dans une requête : tokens, durées et coût. */
+export type CallStats = {
+  calls: number
+  input: number
+  output: number
+  cacheWrite: number
+  cacheRead: number
+  /** Durée API : de l'envoi de chaque appel au dernier morceau de sa réponse, en ms. */
+  apiMs: number
+  /** Temps de génération : du premier morceau de chaque réponse au dernier, en ms. */
+  genMs: number
+  /** Coût au tarif public du modèle, en dollars ; estimé au prorata pour un modèle inconnu. */
+  cost: number
+  /** Modèle absent de la table de tarifs : coût estimé au prorata du coût de la session (« ≈ »). */
+  isEstimated: boolean
+  /** Vitesse de chaque appel, en classes de 10 tokens/s (« 40 » : de 40 à 50) : leur nombre ; absent d'un relevé d'avant. */
+  speeds?: Record<string, number>
+}
+
+/** Une requête : la réponse entière à un message de l'utilisateur (`GLOSSARY.md`). Aucun texte de message. */
+export type RequestRecord = {
+  /** Son rang dans le relevé, à partir de 1. */
+  id: number
+  /** Heure d'envoi du message, en ms. */
+  sentAt: number
+  /** Fin du dernier tour du fil principal rattaché, en ms ; null avant la fin du premier. */
+  endedAt: number | null
+  /** Durée réelle, de l'envoi à `endedAt`, en ms. */
+  realMs: number
+  /** Encore en cours : le fil principal n'a pas fini pour elle (durées provisoires). */
+  isOpen: boolean
+  /** Ses tâches de fond encore en cours (sous-agents, shells, Monitor) ; elles n'allongent sa durée réelle que si elles relancent un tour. */
+  tasks: number
+  /** Durée API : la somme des durées de ses appels, en ms. */
+  apiMs: number
+  /** Nombre de sous-agents rattachés, sous-agents de sous-agents compris. */
+  agents: number
+  /** Ses appels, par modèle (l'identifiant que l'API donne). */
+  models: Record<string, CallStats>
+}
+
+/** Le relevé d'une ouverture de session, écrit dans `~/.claude/stats-board/requetes/<session>_<ouverture>.json`. */
+export type RequestLog = {
+  /** Format du fichier. */
+  schema: number
+  session: string
+  /** Heure d'ouverture du relevé (premier message de la session dans ce processus), en ms. */
+  openedAt: number
+  /** Clé ccusage du dossier de la session. */
+  project: string | null
+  requests: RequestRecord[]
+  /** Les appels hors de toute requête, par modèle. */
+  outside: Record<string, CallStats>
+}
+
+/** Le suivi des requêtes de la discussion ouverte, gardé par l'hôte. */
+export type Tracker = {
+  log: RequestLog | null
+  /** La dernière requête ouverte. */
+  current: number | null
+  /** Les tours du fil principal en cours, et la requête de chacun (0 : hors requête). */
+  turns: Record<string, number>
+  /** Le tour du fil principal en cours, s'il y en a un. */
+  active?: string
+  /** Les agents de la session et leur requête ; `isSpawned` : rattaché par son premier `agent.spawn`. */
+  agents?: Record<string, { request: number; isSpawned: boolean }>
+  /** Les tâches de fond vues dans une liste `background_tasks`, et leur requête. */
+  tasks?: Record<string, number>
+  /** Les tâches de fond encore en cours, d'après la dernière liste. */
+  running?: string[]
+  /** Les requêtes finies par une interruption ou une erreur : seules à se rouvrir pour une tâche inconnue. */
+  interrupted?: number[]
+}
+
+export type RequestSort = 'cost' | 'real' | 'api'
+
 declare module 'claude-code' {
   interface PluginState {
     'stats-board': {
@@ -197,6 +351,8 @@ declare module 'claude-code' {
       /** Clé ccusage du dossier de la session (« Ce projet »). */
       here: string | null
       discussion: Discussion
+      /** Les requêtes de la discussion ouverte (sans texte de message). */
+      requests: Tracker
     }
   }
 }

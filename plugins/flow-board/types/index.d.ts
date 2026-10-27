@@ -257,6 +257,165 @@ export type AgentRow = {
   isEndUnseen?: boolean
 }
 
+/** La famille d'un outil, qui donne son glyphe sur la frise : ⌕ lecture, ✎ modification, ❯ commande, 🌐 web, ⇢ sous-agent. */
+export type ToolFamily = 'read' | 'edit' | 'run' | 'web' | 'agent' | 'other'
+
+/**
+ * Les sortes de segments de la frise (Q3) : réflexion, rédaction, appel d'outil, et trois attentes
+ * (d'un sous-agent au premier plan, de la personne, d'une tâche de fond).
+ */
+export type SegmentKind = 'think' | 'write' | 'tool' | 'waitAgent' | 'waitPerson' | 'waitBg'
+
+/** Un segment daté d'une piste ; sans fin, il est en cours et s'allonge jusqu'à maintenant. */
+export type AgentSegment = {
+  k: SegmentKind
+  /** Début et fin, en ms. */
+  s: number
+  e?: number
+  /** Pour un outil : sa famille, son nom, son argument court (fichier, motif, commande, adresse). */
+  f?: ToolFamily
+  t?: string
+  a?: string
+  /** L'outil a rendu une erreur. */
+  x?: boolean
+  /** Appels courts d'une même famille réunis dans ce segment (essai, point 13). */
+  n?: number
+  /** Une durée estimée (réflexion relue dans un transcript : ses blocs n'ont que l'heure de leur fin). */
+  est?: boolean
+}
+
+/**
+ * Les repères (des instants) : échec ✗, interruption ⊘, départ ↳ et retour ↲ d'un relais, compaction ⇣ ;
+ * sur l'orchestrateur seulement, message d'une autre session ✉, commit ⎇, tests ✓/✗.
+ */
+export type MarkKind = 'fail' | 'stop' | 'relay' | 'back' | 'compact' | 'msg' | 'commit' | 'test'
+
+export type AgentMark = {
+  k: MarkKind
+  at: number
+  /** Tests : au vert ou non. */
+  ok?: boolean
+  /** Relais : la clé de la piste du sous-agent parti ou revenu. */
+  to?: string
+}
+
+/** Une piste de la frise : ses segments et ses repères, et ce que la carte de détail en dit. */
+export type AgentLane = {
+  segments?: AgentSegment[]
+  marks?: AgentMark[]
+  /** L'effort demandé à ses requêtes, et les modèles qui ont répondu. */
+  effort?: string
+  models?: string[]
+  /** Ses tokens, additionnés requête par requête (essai, point 2). */
+  tokens?: AgentTokens
+  /** Lignes ajoutées et retirées par ses modifications de fichiers. */
+  lines?: { added: number; removed: number }
+}
+
+/**
+ * Un sous-agent du registre de la session (onglet Agents) : sans limite de nombre, gardé après
+ * l'archivage du parcours. Aucun texte de message ni rapport : la description, le prompt (Q8), des chiffres.
+ */
+export type RegistryAgent = AgentLane & {
+  /** tool_use_id de l'appel Agent ; `agent:<id>` pour un agent lancé sans appel vu (Workflow). */
+  key: string
+  /** Id du sous-agent (`agent.spawn`, résultat de l'appel), que les fins rappellent. */
+  agentId?: string
+  /** Id d'agent du lanceur ; absent quand c'est le fil principal de la session. */
+  parent?: string
+  /** Le Workflow qui l'a lancé. */
+  workflow?: string
+  /** Sa description. */
+  name: string
+  /** `subagent_type` de l'appel. */
+  subagentType?: string
+  /** Le prompt donné au sous-agent (Q8), coupé au-delà de PROMPT_MAX caractères. */
+  prompt?: string
+  model?: string
+  isBackground: boolean
+  status: AgentStatus
+  startedAt: number
+  finishedAt?: number
+  /** Fin constatée après coup (le sous-agent n'était plus actif) : sa durée n'est pas connue. */
+  isEndUnseen?: boolean
+  /** Réveils : un `agent.spawn` du même id après une fin, qui le rouvre (notification d'une de ses tâches). */
+  wakes?: number
+  /** Le parcours actif (ou servi, pour une session liée) à son lancement. */
+  run?: string
+  /** D'où vient l'entrée : le direct (hooks), ou le rattrapage par transcript. */
+  source: 'live' | 'transcript'
+  /** Son type (Q9), déduit à son lancement : il fixe sa couleur et son glyphe. */
+  type?: AgentType
+}
+
+/** Les 9 types de sous-agents (Q9). */
+export type AgentType = 'explore' | 'research' | 'implement' | 'review' | 'security' | 'merge' | 'plan' | 'transcripts' | 'other'
+
+/** Les tokens d'un agent par sorte ; la réflexion n'est pas comptée à part par l'API (essai, point 4). */
+export type AgentTokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+/** Une période où une session a porté un parcours (S31, S37) : de `from` à `to`. */
+export type CarrySpan = { from: number; to: number }
+
+/** Le fichier de registre d'une session : écrit par elle seule (Q7), lu par les autres. */
+export type SessionRegistry = {
+  v: 1
+  /** `$.session.id()` de la session. */
+  session: string
+  /** Racine du projet de la session. */
+  root: string
+  title?: string
+  /** `transcript_path` des hooks classiques, relevé tel quel. */
+  transcript?: string
+  /** Le parcours servi et le groupe, pour une session liée (appel `delegate`). */
+  run?: string
+  group?: string
+  agents: RegistryAgent[]
+  /** La piste de la session elle-même (l'orchestrateur) : ses tours, ses outils, ses attentes. */
+  main?: AgentLane
+  /** Les sessions liées que cette session a lancées (`start_session`, `claude --bg`), avec ou sans parcours. */
+  linked?: LinkedLaunch[]
+  /**
+   * Les ids des parcours que cette session a portés (S28) : actifs ici, ou un de leurs tickets passé
+   * « en cours » par elle ; des ids seulement. Le rattrapage y rattache ses sous-agents manqués (Q-a).
+   */
+  carried?: string[]
+  /**
+   * Pour chaque parcours de `carried`, les périodes où cette session le portait (S31, S37) : une
+   * par portage, une nouvelle après plus de 10 min sans le porter, 20 au plus ; des dates, aucun
+   * contenu. Le rattachement d'un sous-agent rattrapé s'y borne (R3). Un id sans dates (en-tête
+   * d'avant) n'a pas de borne.
+   */
+  carriedAt?: Record<string, CarrySpan[]>
+  /**
+   * S40 : la date de la première écriture qui ne portait plus un parcours daté, après sa dernière
+   * période. Une période ne se rouvre que si une écriture faite entre-temps ne le portait pas ;
+   * sans écriture entre-temps, la période en cours s'allonge, trou compris.
+   */
+  carriedNotedAt?: number
+  updatedAt: number
+  /**
+   * Le nombre de morceaux du registre sur le disque (R1), celui-ci compris : au-delà d'environ
+   * 3 Mo, la suite va dans `<session>.1.json`, `<session>.2.json`… Absent : un seul.
+   */
+  parts?: number
+}
+
+/**
+ * Une session liée lancée par cette session : l'id que son lancement rend (`local_…` de
+ * `start_session`, id court de `claude --bg`), son titre, quand.
+ */
+export type LinkedLaunch = { id: string; title?: string; at: number; via: 'bg' | 'desktop' }
+
+/** Un morceau du registre d'une session, après le premier (R1) : des sous-agents et un bout de la piste de l'orchestrateur. */
+export type RegistryPart = {
+  v: 1
+  session: string
+  part: number
+  agents: RegistryAgent[]
+  main?: Pick<AgentLane, 'segments' | 'marks'>
+}
+
 export type ArtifactKind =
   | 'glossary'
   | 'adr'
@@ -327,7 +486,12 @@ export type Run = {
   reviewedAt?: number
   /** La revue de sécurité du lot entier, pour un parcours sans groupes. */
   security?: SecurityCheck
-  agents: AgentRow[]
+  /**
+   * L'ancien champ des sous-agents (12 au plus), d'avant le registre : relu une fois pour être
+   * recopié dans le fichier du parcours, puis vidé (S1, S18, S21 : une liste vide, qu'une version
+   * d'avant lit sans casser). Plus jamais rempli.
+   */
+  agents?: AgentRow[]
   artifacts: Artifact[]
   tests: TestRun[]
   log: LogEntry[]
@@ -449,7 +613,7 @@ export type SyncState = {
   isRepo?: boolean | null
 }
 
-export type Tab = 'flow' | 'activity' | 'history' | 'commands'
+export type Tab = 'flow' | 'agents' | 'activity' | 'history' | 'commands'
 
 export type UiState = {
   tab: Tab
@@ -462,8 +626,6 @@ export type UiState = {
   showAllItems?: boolean
   /** Tous les livrables, pas seulement les 14 premiers. */
   showAllArtifacts?: boolean
-  /** Tous les sous-agents terminés gardés, pas seulement les 3 derniers. */
-  showAllAgents?: boolean
   /** Les choix « décidé sans toi » déjà relus, dépliés. */
   showDecided?: boolean
   /** Toutes les tâches trouvées en route, pas seulement celles qui attendent la personne. */
@@ -478,6 +640,22 @@ export type UiState = {
   itemSelection?: string[]
   /** Parcours archivé dont la suppression attend sa confirmation. */
   confirmDrop?: string
+  /** Frise de l'onglet Agents : la dernière heure seulement, ou tout (par défaut). */
+  agentsRange?: 'hour' | 'all'
+  /** Onglet Agents : la piste dont la carte de détail est ouverte (clé d'appel, ou `main`). */
+  agentCard?: string
+  /** Onglet Agents : la session liée dont la frise est montrée (sa clé) ; absente, l'orchestrateur. */
+  agentsSession?: string
+  /** Onglet Agents : l'entrée du sélecteur d'historique (`run:<id>`, `session:<id>`) ; absente, « Ici, maintenant ». */
+  agentsHistory?: string
+  /** Onglet Agents : la liste du sélecteur d'historique est dépliée. */
+  isAgentsHistoryOpen?: boolean
+  /** Onglet Agents : la discussion (`session:<id>`) dont « ✗ Oublier » attend sa confirmation. */
+  confirmForget?: string
+  /** La carte de détail montre le prompt en entier. */
+  isPromptOpen?: boolean
+  /** Frise : les Workflow dépliés (par leur `runId`), pour la discussion. */
+  openWorkflows?: string[]
 }
 
 declare module 'claude-code' {
@@ -492,6 +670,18 @@ declare module 'claude-code' {
       sync: SyncState
       /** L'avancement relayé par les sessions liées du parcours actif (discussion principale). */
       relay: Relay | null
+      /** Le registre des sous-agents de cette session (onglet Agents). */
+      agents: SessionRegistry | null
+      /** Les clés des sous-agents que ce processus a vus partir (S9). */
+      agentsOwn: string[]
+      /** Une écriture du registre a été refusée (S11) ; `'lost'` : un changement n'a pas pu s'appliquer à l'état (R2). */
+      agentsAlert: boolean | 'lost'
+      /** Les sessions liées vues à la dernière relecture (onglet Agents, ticket 07). */
+      agentsLinked: { key: string; session?: string; title: string; how: 'run' | 'relay' | 'id' | 'job' | 'title' | 'none'; state: 'working' | 'returned' | 'failed' | 'closed'; launchedAt?: number; returnedAt?: number }[]
+      /** Le sélecteur d'historique de l'onglet Agents (ticket 09). */
+      agentsHistory: { key: string; kind: 'now' | 'run' | 'session'; title: string; at?: number; isArchived?: boolean; agents?: number }[]
+      /** Les prix des modèles tirés de ccusage (Q15), relevés au plus une fois par jour. */
+      agentPrices: { at: number; prices: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> } | null
     }
   }
 }

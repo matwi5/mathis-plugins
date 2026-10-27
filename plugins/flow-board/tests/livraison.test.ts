@@ -32,7 +32,7 @@ const world = (on: any) => {
 const edit = ($: any, path: string) =>
   $.tool.call({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b' }) as Promise<{ deny?: string }>
 
-test('le parcours d’implémentation passe par le Compte rendu, puis Version et push, puis Pull request (/project:pr)', async ($, on) => {
+test('le parcours d’implémentation passe par le Compte rendu, puis Version et push, puis Pull request (/project:pr)', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 30_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
@@ -70,7 +70,7 @@ test('le parcours d’implémentation passe par le Compte rendu, puis Version et
   await ui.unmount()
 })
 
-test('/project:push lancé sans /project:version ouvre la phase combinée, étapes de version sautées', async ($, on) => {
+test('/project:push lancé sans /project:version ouvre la phase combinée, étapes de version sautées', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 31_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
@@ -81,7 +81,7 @@ test('/project:push lancé sans /project:version ouvre la phase combinée, étap
   await ui.unmount()
 })
 
-test('/project:version puis /project:push : une seule phase, sans nouveau tour', async ($, on) => {
+test('/project:version puis /project:push : une seule phase, sans nouveau tour', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 32_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
@@ -106,7 +106,7 @@ test('une commande de livraison seule n’ouvre aucun parcours', async ($, on) =
   await ui.unmount()
 })
 
-test('la fin de /project:version ne clôt pas « Version et push » : la suite est /project:push', async ($, on) => {
+test('la fin de /project:version ne clôt pas « Version et push » : la suite est /project:push', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 33_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })

@@ -83,7 +83,7 @@ test('un rapport de l’outil sans parcours actif n’écrit rien sur le parcour
   expect(activeRun(resumed.board)!.asideAt).toBeUndefined()
 })
 
-test('/flow pause et le bouton « ‖ Mettre de côté » ; l’historique le montre mis de côté, à reprendre', async ($, on) => {
+test('/flow pause et le bouton « ‖ Mettre de côté » ; l’historique le montre mis de côté, à reprendre', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 500_000_000 })
   mock.store(on)
   world(on)

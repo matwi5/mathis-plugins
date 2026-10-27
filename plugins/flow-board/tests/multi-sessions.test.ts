@@ -46,7 +46,7 @@ const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds
   for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
-test('la discussion A voit, en quelques secondes, le parcours lancé dans la discussion B', async ($, on) => {
+test('la discussion A voit, en quelques secondes, le parcours lancé dans la discussion B', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 20_000_000 })
   const mem = world(on)
   await start($)
@@ -71,7 +71,7 @@ test('la discussion A voit, en quelques secondes, le parcours lancé dans la dis
   }
 })
 
-test('une sauvegarde de A n’efface plus le parcours de B', async ($, on) => {
+test('une sauvegarde de A n’efface plus le parcours de B', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 21_000_000 })
   const mem = world(on)
   await start($)

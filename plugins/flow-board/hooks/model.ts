@@ -4,7 +4,6 @@
 // quand le signal ne change rien.
 
 import type {
-  AgentRow,
   Artifact,
   ArtifactKind,
   Board,
@@ -36,7 +35,6 @@ export const LIMITS = {
   log: 80,
   artifacts: 40,
   tests: 40,
-  agents: 12,
   tickets: 150,
   items: 60,
   touched: 300,
@@ -584,6 +582,7 @@ export const newRun = (entry: string, now: number, title?: string): Run => {
     phases: specs.map((spec, i) => newPhase(spec, i === 0 ? now : undefined)),
     cursor: 0,
     tickets: [],
+    // Toujours vide (S21) : une version d'avant lit ce champ sans garde.
     agents: [],
     artifacts: [],
     tests: [],
@@ -1513,7 +1512,7 @@ const reportHere = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean } = {},
+  opts: { hasPullRequests?: boolean; relay?: unknown } = {},
 ): { board: Board; fx: Effects; text: string } => {
   const b = clone(board)
   const fx = noFx()
@@ -1891,7 +1890,7 @@ export const startLinkedItems = (board: Board, ids: readonly string[], now: numb
  */
 export const linkedSessionsOf = (run: Run): { count: number; ids: string[] } => {
   const links = [...(run.groups ?? []).map(g => g.linked ?? g.delegated), ...run.phases.map(p => p.linked)].filter(
-    (l): l is { session?: string } => l !== undefined,
+    (l): l is NonNullable<typeof l> => l !== undefined,
   )
   const ids = [...new Set(links.map(l => l.session).filter((id): id is string => id !== undefined && id !== ''))]
   return { count: links.length, ids }
@@ -2140,6 +2139,38 @@ export const asanaChanges = (tasks: unknown): StatusChange[] =>
     .map(asanaChange)
     .filter((c): c is StatusChange => c !== null)
 
+/**
+ * Les fichiers de tickets locaux (`…/issues/<NN>-<nom>.md`, le tracker en fichiers de
+ * `/to-tickets`) que nomme une commande shell : un `sed` sur la ligne de statut, par exemple.
+ */
+export const ticketFilesIn = (command: string): string[] =>
+  [...new Set([...command.matchAll(/[^\s'"`]*issues[\\/]\d+-[^\s'"`\\/]+\.md/g)].map(m => m[0]))]
+
+/**
+ * Le statut d'un ticket en fichier local, d'après sa ligne `**Status:**` (ou « Statut : »).
+ * Son id est le numéro du fichier (`03-vue.md` → `03`). Null hors d'un dossier `issues`, ou
+ * sans ligne de statut lisible. « en attente (porteur) » reste « en cours » : le ticket attend
+ * un geste prévu par son groupe, pas un blocage externe.
+ */
+export const localTicketChange = (path: string, text: string): StatusChange | null => {
+  const file = /(?:^|[\\/])issues[\\/](\d+)-[^\\/]+\.md$/.exec(path)
+  const line = /^\s*(?:\*\*Status:\*\*|\*\*Statut\s*:\*\*|Statut\s*:)\s*(.+)$/im.exec(text)
+  if (!file || !line) return null
+  const value = line[1]!.trim().toLowerCase()
+  const status: TicketStatus | null = /^(fait|done|terminé)/.test(value)
+    ? 'done'
+    : /^(en cours|en attente|doing|in progress)/.test(value)
+      ? 'doing'
+      : /^(bloqué|blocked)/.test(value)
+        ? 'blocked'
+        : /^(ready-for-agent|à faire|todo|ready)/.test(value)
+          ? 'todo'
+          : null
+  if (!status) return null
+  const why = status === 'blocked' ? clip(line[1]!.trim().replace(/^(bloqué|blocked)\s*[:(—-]?\s*/i, '').replace(/\)$/, ''), TEXT_MAX) : ''
+  return why ? { id: file[1]!, status, why } : { id: file[1]!, status }
+}
+
 /** Les statuts envoyés par `set` dans un appel de l'outil. */
 export const reportedChanges = (input: Readonly<Record<string, unknown>>): StatusChange[] => parseChanges(input.set)
 
@@ -2170,6 +2201,9 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
     })
     if (moved.length === 0) return null
     for (const c of moved) entry.tickets[c.id] = { status: c.status, ...(c.why ? { why: c.why } : {}), at: now }
+    // Un ticket qui démarre : une revue relayée avant lui était la passe « bogues » d'un ticket (ou
+    // une revue lancée trop tôt), pas la revue du groupe, qui vient une fois tous ses tickets faits.
+    if (moved.some(c => c.status === 'doing')) delete entry.reviewedAt
     const last = moved[moved.length - 1]!
     entry.last = { kind: 'ticket', text: TICKET_WORDS[last.status], ticket: last.id, at: now }
   } else if (event.kind === 'command') {
@@ -3113,26 +3147,19 @@ export type AgentStart = {
   isBackground: boolean
 }
 
+/**
+ * Un appel Agent part pendant le parcours actif : ses étapes avancent (implementers, relecteurs,
+ * alternatives…). Le sous-agent lui-même vit dans le registre de la session, plus dans le parcours (S1).
+ */
 export const applyAgentStart = (board: Board, start: AgentStart, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
   const run = activeRun(b)!
-  const row: AgentRow = {
-    key: start.key,
-    name: clip(start.name, 80),
-    role: roleOf(start.name) ?? (start.type && start.type !== 'general-purpose' ? start.type : undefined),
-    model: start.model,
-    isBackground: start.isBackground,
-    status: 'running',
-    startedAt: now,
-  }
-  const running = run.agents.filter(a => a.status === 'running')
-  const ended = run.agents.filter(a => a.status !== 'running')
-  run.agents = [...ended.slice(-(LIMITS.agents - running.length - 1)), ...running, row]
+  const role = roleOf(start.name) ?? (start.type && start.type !== 'general-purpose' ? start.type : undefined)
   const { phase, detour } = focusOf(run)
   const target = detour ?? phase
   const focus = target.skill
-  if (focus === 'implement-spec') reachStep(target, row.role === 'merger' ? 'merge' : 'implementers', now)
+  if (focus === 'implement-spec') reachStep(target, role === 'merger' ? 'merge' : 'implementers', now)
   if (focus === 'code-review') reachStep(target, 'reviewers', now)
   if (focus === 'codebase-design') reachStep(target, 'alternatives', now)
   if (focus === 'improve-codebase-architecture') reachStep(target, 'explore', now)
@@ -3141,73 +3168,25 @@ export const applyAgentStart = (board: Board, start: AgentStart, now: number): O
   return { board: b, fx: noFx() }
 }
 
-export const applyAgentEnd = (
-  board: Board,
-  key: string,
-  end: { agentId?: string; model?: string; isFailed: boolean; isFinished: boolean; isCancelled?: boolean },
-  now: number,
-): Outcome => {
-  const run0 = activeRun(board)
-  if (!run0 || !run0.agents.some(a => a.key === key)) return null
-  const b = clone(board)
-  const run = activeRun(b)!
-  run.agents = run.agents.map(a =>
-    a.key !== key
-      ? a
-      : {
-          ...a,
-          agentId: end.agentId ?? a.agentId,
-          model: end.model ?? a.model,
-          status: end.isCancelled ? 'cancelled' : end.isFailed ? 'failed' : end.isFinished ? 'done' : a.status,
-          finishedAt: end.isCancelled || end.isFailed || end.isFinished ? now : a.finishedAt,
-        },
-  )
-  run.updatedAt = now
-  return { board: b, fx: noFx() }
-}
-
-export const applySubagentStop = (board: Board, agentId: string, now: number): Outcome => {
-  const run0 = activeRun(board)
-  if (!run0 || !run0.agents.some(a => a.agentId === agentId && a.status === 'running')) return null
-  const b = clone(board)
-  const run = activeRun(b)!
-  run.agents = run.agents.map(a =>
-    a.agentId === agentId && a.status === 'running' ? { ...a, status: 'done' as const, finishedAt: now } : a,
-  )
-  run.updatedAt = now
-  return { board: b, fx: noFx() }
-}
-
 /** Un sous-agent tel que `$.agent.list()` le donne : son id, sa description, où en est sa boucle. */
 export type LiveAgent = { id: string; description: string; status: string }
 
-const ENDED: Record<string, AgentRow['status']> = { completed: 'done', failed: 'failed', killed: 'cancelled' }
-
 /**
- * Rattrape les fins de sous-agents que le suivi n'a pas vues (SubagentStop manqué, session
- * fermée, sous-agent arrêté) : chaque ligne encore « en cours » est confrontée à la liste des
- * sous-agents de la session. Absente de la liste, une ligne dont l'appel est rendu est finie ;
- * `inFlight` garde les appels Agent pas encore rendus, dont l'id n'est pas encore connu.
+ * Le board dont l'ancien champ des sous-agents est vidé (S1, S21 : une liste vide, qu'une version
+ * d'avant lit sans casser), seulement pour les parcours dont toutes les lignes sont déjà recopiées
+ * (`isCopied`) ; null quand aucun ne change.
  */
-export const applyAgentList = (board: Board, live: readonly LiveAgent[], inFlight: ReadonlySet<string>, now: number): Outcome => {
-  const run0 = activeRun(board)
-  if (!run0 || !run0.agents.some(a => a.status === 'running' && !inFlight.has(a.key))) return null
+export const stripRunAgents = (board: Board, isCopied: (run: Run) => boolean = () => true): Board | null => {
+  const isDue = (r: Run) => (r.agents?.length ?? 0) > 0 && isCopied(r)
+  if (!board.runs.some(isDue)) return null
+  return { ...board, runs: board.runs.map(r => (isDue(r) ? { ...r, agents: [] } : r)) }
+}
+
+/** Un sous-agent du parcours actif a fini : le parcours a vécu (son seuil d'abandon repart). */
+export const applyAgentActivity = (board: Board, now: number): Outcome => {
+  if (!activeRun(board)) return null
   const b = clone(board)
-  const run = activeRun(b)!
-  const taken = new Set(run.agents.map(a => a.agentId).filter((id): id is string => id !== undefined))
-  let moved = 0
-  run.agents = run.agents.map(a => {
-    if (a.status !== 'running' || inFlight.has(a.key)) return a
-    // Sans id relevé, le sous-agent se retrouve par sa description, parmi ceux qu'aucune ligne ne tient.
-    const found = a.agentId !== undefined ? live.find(x => x.id === a.agentId) : live.find(x => !taken.has(x.id) && x.description === a.name)
-    if (found && a.agentId === undefined) taken.add(found.id)
-    const ended = found ? ENDED[found.status] : 'done'
-    if (ended === undefined) return found && a.agentId === undefined ? { ...a, agentId: found.id } : a
-    moved += 1
-    return { ...a, agentId: a.agentId ?? found?.id, status: ended, finishedAt: now, isEndUnseen: true }
-  })
-  if (moved === 0) return null
-  run.updatedAt = now
+  activeRun(b)!.updatedAt = now
   return { board: b, fx: noFx() }
 }
 
@@ -3365,7 +3344,7 @@ export const validateReport = (board: Board, now: number): Outcome => {
  * Ce que le tableau de bord sait du parcours, donné à Claude quand le compte rendu se charge :
  * il part de ces faits et les complète par git et le tracker.
  */
-export const reportFacts = (run: Run): string[] => {
+export const reportFacts = (run: Run, failedAgents = 0): string[] => {
   const lines = [`- Run "${run.title}", started ${isoMinute(run.startedAt)} UTC (use it for git log --since).`]
   const ticket = (t: Ticket) =>
     `${t.name} [${t.id}]: ${t.status}${t.why ? ` (waits for: ${t.why})` : ''}${t.startedAt !== undefined && t.finishedAt !== undefined ? `, ${Math.round((t.finishedAt - t.startedAt) / 60_000)} min` : ''}`
@@ -3399,8 +3378,7 @@ export const reportFacts = (run: Run): string[] => {
   if (plans.length > 0) lines.push(`- Plans written: ${plans.map(a => `${a.path}${a.detail ? ` (${a.detail})` : ''}`).join('; ')}.`)
   const tests = run.tests.filter(t => t.kind === 'test')
   if (tests.length > 0) lines.push(`- Test runs seen: ${tests.length}, ${tests.filter(t => !t.ok).length} red; last one ${tests.at(-1)!.ok ? 'green' : 'RED'}.`)
-  const failed = run.agents.filter(a => a.status === 'failed').length
-  if (failed > 0) lines.push(`- Subagents that failed: ${failed}.`)
+  if (failedAgents > 0) lines.push(`- Subagents that failed: ${failedAgents}.`)
   const warnings = run.log.filter(l => l.tone === 'warn' || l.tone === 'error').slice(0, 8)
   if (warnings.length > 0) lines.push(`- Warnings in the dashboard log: ${warnings.map(l => l.text).join('; ')}.`)
   return lines

@@ -34,6 +34,7 @@ import {
   sameDir,
   slash,
   VERSION_COMMAND,
+  localState,
   suggest,
   unique,
 } from './model.ts'
@@ -224,6 +225,23 @@ const TONE = { ok: C.green, error: C.red, info: C.tangerine } as const
 /** Couleur d'identité du mod (règle 8 : le violet est la marque du mod ; la mandarine dit « en cours »). */
 const BRAND = C.violet
 
+/**
+ * Une branche sans distante, pareille dans le bandeau, les pastilles et la route : vide,
+ * fusionnée, à fusionner (worktree lié) ou non publiée. Le mot garde ses espaces ordinaires
+ * (route SVG).
+ */
+const unpublishedOf = (r: GitRepo): { glyph: string; word: string; color: string } => {
+  const s = localState(r)
+  if (s === 'empty') return { glyph: '○', word: 'vide', color: C.gray }
+  if (s === 'merged') return { glyph: '✓', word: 'fusionnée', color: C.green }
+  if (s === 'toMerge') return { glyph: '⤞', word: `${r.toMerge} à fusionner`, color: C.slate }
+  return { glyph: '◌', word: 'non publiée', color: C.amber }
+}
+const unpublishedText = (r: GitRepo): [string, string] => {
+  const u = unpublishedOf(r)
+  return [`${u.glyph} ${u.word}`.replace(/ /g, NB), u.color]
+}
+
 // ─── Route de livraison (Commit → Push → PR → Checks → Fusion) ────────────
 
 /** Formes courtes de la route en texte, quand le libellé entier ne tient pas. */
@@ -238,9 +256,9 @@ const roadNodes = (r: GitRepo, pr: PullRequest | null, watch: NonNullable<CiWatc
     { label: 'Commit', sub: r.files.length ? plural(r.files.length, 'fichier') : 'propre', color: n.conflicts ? C.red : C.green, isDone: r.files.length === 0 },
     {
       label: 'Push',
-      sub: !r.upstream ? 'non publiée' : r.ahead ? `↑${r.ahead}` : 'à jour',
+      sub: !r.upstream ? unpublishedOf(r).word : r.ahead ? `↑${r.ahead}` : 'à jour',
       color: C.cyan,
-      isDone: Boolean(r.upstream) && r.ahead === 0,
+      isDone: (Boolean(r.upstream) && r.ahead === 0) || localState(r) === 'merged',
     },
   ]
   if (r.webUrl && r.branch !== r.defaultBranch) {
@@ -395,7 +413,7 @@ const hero = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
     if (r.ahead && !hasGauge) pills.push([`↑${NB}${r.ahead}${NB}à${NB}pousser`, C.green])
     if (!r.ahead && !r.behind) pills.push([`✓${NB}à${NB}jour`, C.green])
   } else if (r.branch && r.hasRemote) {
-    pills.push([`◌${NB}non${NB}publiée`, C.amber])
+    pills.push(unpublishedText(r))
   }
   if (n.changed) pills.push([`●${NB}${n.changed}${NB}modifié${n.changed > 1 ? 's' : ''}`, C.amber])
   if (n.fresh) pills.push([`+${NB}${n.fresh}${NB}nouveau${n.fresh > 1 ? 'x' : ''}`, C.teal])
@@ -646,6 +664,18 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
     )
   }
   if (open === 'push') {
+    // Une branche sans distante qui ne se pousse pas d'ici : ni version, ni push à proposer.
+    const s = localState(r)
+    if (r.hasRemote && s && s !== 'unpublished') {
+      const base = r.defaultBranch ?? 'la branche par défaut'
+      const why =
+        s === 'empty'
+          ? say('○ Branche vide : aucun commit depuis sa création, rien à pousser.', C.gray)
+          : s === 'merged'
+            ? say(`✓ Fusionnée dans ${base} : rien à pousser d'ici.`, C.green)
+            : say(`⤞ À fusionner dans ${base} d'abord : la branche d'un worktree se fusionne en local, elle ne se pousse pas.`, C.slate)
+      return card('push', '↑ Push', [why], null)
+    }
     const nothing = !r.files.length && !r.ahead && Boolean(r.upstream)
     return card(
       'push',
@@ -1064,12 +1094,13 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
   const isElsewhere = m.sessionRoot === null || !sameDir(m.sessionRoot, r.root)
   const fetched = fetchedText(m, view.now, r.hasRemote)
 
+  const [localText, localColor] = unpublishedText(r)
   const remote = r.upstream
     ? r.ahead || r.behind
       ? line(k, [r.ahead > 0 && T(k, `↑${r.ahead}`, { color: C.green, bold: true }), r.behind > 0 && T(k, `↓${r.behind}`, { color: C.amber, bold: true })])
       : T(k, `✓${NB}à${NB}jour`, { color: C.green })
     : r.branch && r.hasRemote
-      ? T(k, `◌${NB}non${NB}publiée`, { color: C.amber })
+      ? T(k, localText, { color: localColor })
       : null
   const files = line(k, [
     n.conflicts > 0 && T(k, `✖${NB}${n.conflicts}`, { color: C.red, bold: true }),

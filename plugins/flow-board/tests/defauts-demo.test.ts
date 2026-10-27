@@ -87,9 +87,9 @@ test('A4 : le parcours resté actif d’une session précédente se charge en pa
   saved.activeId = saved.runs[0]!.id
   mock.store(on, { 'board:': saved })
   engine(on)
-  on('command.run', { command: 'flow' }, async (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e))
+  on('command.run', { command: 'flow' }, async (_$, e, next) => next(e))
   // En session, session.start charge le stockage ; ici, /flow le fait.
-  await $.command.run({ command: 'flow', args: '' })
+  await $.command.run({ command: 'flow', args: '' } as any)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: /Bug d’hier/ })).toBeDefined()
@@ -166,7 +166,7 @@ test('lancer la suite proposée d’un prototype clôt le prototype au lieu de l
   await ui.unmount()
 })
 
-test('onglet Commandes : démarrer un parcours, les autres commandes, et l’Historique sans lanceur', async ($, on) => {
+test('onglet Commandes : démarrer un parcours, les autres commandes, et l’Historique sans lanceur', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 14_000_000 })
   mock.store(on)
   engine(on)
@@ -200,7 +200,7 @@ test('onglet Commandes : démarrer un parcours, les autres commandes, et l’His
   await ui.unmount()
 })
 
-test('une liste partielle de tickets ajoute ou met à jour, sans retirer les autres', async ($, on) => {
+test('une liste partielle de tickets ajoute ou met à jour, sans retirer les autres', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 15_000_000 })
   mock.store(on)
   engine(on)

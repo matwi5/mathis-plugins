@@ -91,7 +91,7 @@ test('le « x » masque aussi le bandeau d’accueil', async ($, on) => {
   await ui.press({ key: 'band-hide' })
   await ui.unmount()
   for (const surface of BANDS) {
-    ui = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: WELCOME })).toBeUndefined()
     expect(await ui.find({ key: 'band-open' })).toBeUndefined()
     await ui.unmount()

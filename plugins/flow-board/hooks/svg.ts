@@ -296,3 +296,70 @@ export const miniRoadSvg = (nodes: readonly { color: string; state: NodeState; i
   })
   return { source: svg(w, h, parts.join('')), width: w, height: h }
 }
+
+/** Une part de piste à dessiner (voir timeline.ts) : x de 0 à 1. */
+export type LaneDrawPart = { x0: number; x1: number; kind: 'think' | 'write' | 'tool' | 'waitAgent' | 'waitPerson' | 'waitBg'; glyph?: string; isLive?: boolean; isError?: boolean }
+
+/** Un repère d'une piste : son glyphe au-dessus, ou un point de relais sur le rail. */
+export type LaneDrawMark = { x: number; glyph: string; color: string; isRelay?: boolean; isStart?: boolean }
+
+const WAIT_TINT: Record<'waitAgent' | 'waitPerson' | 'waitBg', string> = { waitAgent: '#8B8B93', waitPerson: '#D9A520', waitBg: '#4A9EE8' }
+
+/**
+ * Une piste de la frise : une barre fine et arrondie par segment sur un rail pâle (variante A de
+ * la planche `travail/onglet-agents/planches/frise.html`). Réflexion pâle, rédaction pleine, outil
+ * mi-teinte avec le glyphe de sa famille quand la place le permet, attentes hachurées en trois
+ * teintes ; repères au-dessus, points de relais sur le rail, « ⫽ » sur les pauses compressées.
+ * Les parts de moins d'un pixel se fondent dans la précédente de même sorte : un SVG reste petit
+ * (131 072 caractères au plus), quel que soit le nombre de segments.
+ */
+export const laneSvg = (
+  parts: readonly LaneDrawPart[],
+  marks: readonly LaneDrawMark[],
+  pauses: readonly { x0: number; x1: number }[],
+  width: number,
+  color: string,
+  id: string,
+): Drawn => {
+  const w = Math.max(80, Math.round(width))
+  const h = 22
+  const y = 10
+  const bh = 9
+  const safe = id.replace(/[^a-zA-Z0-9_-]/g, '')
+  const usedWaits = new Set(parts.filter(p => p.kind.startsWith('wait')).map(p => p.kind as keyof typeof WAIT_TINT))
+  const defs = [...usedWaits]
+    .map(k => `<pattern id="${safe}-${k}" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" fill="${WAIT_TINT[k]}" fill-opacity="0.18"/><line x1="0" y1="0" x2="0" y2="4" stroke="${WAIT_TINT[k]}" stroke-width="1.6"/></pattern>`)
+    .join('')
+  const merged: LaneDrawPart[] = []
+  for (const p of parts) {
+    const last = merged[merged.length - 1]
+    // Quelle que soit sa sorte : au plus une part par pixel, donc un SVG borné.
+    if (last && (p.x1 - p.x0) * w < 1 && (p.x0 - last.x1) * w < 1) last.x1 = Math.max(last.x1, p.x1)
+    else merged.push({ ...p })
+  }
+  const rects = merged.map(p => {
+    const x = p.x0 * w
+    const pw = Math.max(1.5, (p.x1 - p.x0) * w)
+    const fill = p.kind.startsWith('wait') ? `url(#${safe}-${p.kind})` : p.isError ? '#E5534B' : color
+    const op = p.kind === 'think' ? 0.38 : p.kind === 'tool' ? 0.75 : 1
+    const anim = p.isLive ? '<animate attributeName="opacity" values="1;0.5;1" dur="1.6s" repeatCount="indefinite"/>' : ''
+    const glyph = p.glyph && pw >= 12 ? `<text x="${r1(x + pw / 2)}" y="${y + bh - 1.5}" text-anchor="middle" ${FONT} font-size="8" fill="#17171C">${esc(p.glyph)}</text>` : ''
+    return `<rect x="${r1(x)}" y="${y}" width="${r1(pw)}" height="${bh}" rx="2" fill="${fill}" fill-opacity="${op}">${anim}</rect>${glyph}`
+  })
+  const rail = `<rect x="0" y="${y + bh / 2 - 0.5}" width="${w}" height="1" fill="${MUTED}" fill-opacity="0.25"/>`
+  const cuts = pauses.map(p => `<text x="${r1(((p.x0 + p.x1) / 2) * w)}" y="${y + bh - 1}" text-anchor="middle" ${FONT} font-size="10" fill="${MUTED}">⫽</text>`)
+  const seen = new Set<string>()
+  const placed = marks.filter(m => {
+    const key = `${Math.round(m.x * w)}|${m.glyph}|${m.isRelay === true}|${m.isStart === true}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  const dots = placed
+    .filter(m => m.isRelay)
+    .map(m => `<circle cx="${r1(m.x * w)}" cy="${y + bh / 2}" r="2.6" fill="${m.isStart ? color : WHITE}" stroke="${color}" stroke-width="1.2"/>`)
+  const glyphs = placed
+    .filter(m => !m.isRelay)
+    .map(m => `<text x="${r1(Math.min(w - 4, Math.max(4, m.x * w)))}" y="8" text-anchor="middle" ${FONT} font-size="9" font-weight="700" fill="${m.color}">${esc(m.glyph)}</text>`)
+  return { source: svg(w, h, `${defs ? `<defs>${defs}</defs>` : ''}${rail}${rects.join('')}${cuts.join('')}${dots.join('')}${glyphs.join('')}`), width: w, height: h }
+}

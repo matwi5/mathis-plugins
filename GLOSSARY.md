@@ -1,6 +1,6 @@
 # mathis-plugins
 
-La config Claude Code partagée de Mathis : ses plugins, sa config globale et sa synchro entre postes. Ce glossaire fixe les mots de la mesure de l'usage (session-tools, stats-board).
+La config Claude Code partagée de Mathis : ses plugins, sa config globale et sa synchro entre postes. Ce glossaire fixe les mots de la mesure de l'usage (session-tools, stats-board) et du suivi des agents (flow-board).
 
 ## Mesure de l'usage
 
@@ -30,3 +30,17 @@ _Avoid_: durée de session, durée de la discussion
 **Vitesse** :
 Les tokens générés par un modèle divisés par le temps passé à les générer, du premier morceau de réponse au dernier, sur l'ensemble de ses appels.
 _Avoid_: débit, tokens/s moyen
+
+## Suivi des agents
+
+**Orchestrateur** :
+La discussion qui lance les autres : celle qui porte le parcours, ou, sans parcours, la discussion où l'on regarde.
+_Avoid_: discussion mère, session mère, discussion principale
+
+**Session liée** :
+Une discussion lancée par l'orchestrateur pour lui confier un travail (un groupe de tickets, un bug, des pistes), qui tourne à côté de lui.
+_Avoid_: session fille, session déléguée
+
+**Sous-agent** :
+Un agent lancé à l'intérieur d'une discussion (orchestrateur ou session liée), qui travaille pour elle et lui rend un rapport.
+_Avoid_: agent, worker

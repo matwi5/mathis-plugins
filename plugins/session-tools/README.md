@@ -2,19 +2,18 @@
 
 Petits mods de confort pour Claude Code, réunis dans un seul module (`hooks/register.tsx`).
 
-Version actuelle : **0.20.0**. S'appelait `mods-mathis` jusqu'à la 0.17.0. Une installation existante de `mods-mathis` est à désinstaller (`claude plugin uninstall mods-mathis@mathis-plugins`), sinon les deux tournent ensemble et doublent boutons et chrono. Avant le passage dans `mathis-plugins`, ce mod n'avait ni README ni CHANGELOG : l'historique commence avec le dépôt. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.22.0**. S'appelait `mods-mathis` jusqu'à la 0.17.0. Une installation existante de `mods-mathis` est à désinstaller (`claude plugin uninstall mods-mathis@mathis-plugins`), sinon les deux tournent ensemble et doublent boutons et chrono. Avant le passage dans `mathis-plugins`, ce mod n'avait ni README ni CHANGELOG : l'historique commence avec le dépôt. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ## Ce qu'il fait
 
 - **Pied du prompt** :
-  - la durée de la dernière réponse : le chrono part à l'envoi d'un message et s'arrête quand l'agent a fini ;
+  - la durée de la dernière requête, c'est-à-dire de tout le travail fait pour répondre à un message (« requête » et « tâche de fond » sont définis dans le `GLOSSARY.md` du dépôt) : le chrono part à l'envoi du message et s'arrête quand le fil principal a fini **et** qu'aucune tâche de fond de la requête (sous-agent, commande shell, workflow) ne tourne encore. En attendant, il affiche leur nombre (`Réponse 2:14 · 1 en fond`) ; la coche ✓ dit que la requête est finie. Le retour d'une tâche de fond ne le remet pas à zéro. Un nouveau message de ta part fait partir un nouveau chrono, sans compter les tâches des requêtes d'avant ; une notification, une tâche planifiée ou le message d'une autre session n'en lancent jamais. Un serveur de fond garde le chrono en marche jusqu'au message suivant. Après une interruption (Échap), le chrono s'arrête si plus rien ne tourne, et reprend sans repartir de zéro si une tâche lancée avant l'interruption revient ;
   - la vitesse du modèle en tokens/s, calculée sur le temps de génération seul, sans les outils ni les sous-agents ;
   - le temps restant avant que le cache de prompt expire ;
   - l'heure.
 - **Boutons** :
   - Réécrire partout : le brouillon du champ de saisie est réécrit en prompt par le modèle de l'option `model` (Opus par défaut, effort low), avec une version du skill prompt-architect adaptée au mod (`hooks/rewrite-system.ts`), puis remplace le brouillon sans l'envoyer. Si le brouillon change pendant la réécriture, il est laissé tel quel. Temps et coût selon le modèle : voir « Modèle des boutons » ;
   - Effort auto partout : le même modèle choisit le niveau d'effort du brouillon avec une version du skill choix-effort adaptée au mod (`hooks/effort-system.ts` : pas de question, le brouillon seul), puis le demande par `/effort` avant l'envoi ; une notification donne le niveau demandé et sa raison. Comme un `/effort` tapé, le niveau devient aussi l'effort par défaut des nouvelles sessions (sauf `max`), et Claude Code peut demander de confirmer un changement en cours de discussion. Ses repères chiffrés sont ceux d'Opus 5.5. Temps et coût du choix selon le modèle : voir « Modèle des boutons » ; changer d'effort en cours de discussion fait aussi repayer le cache du contexte ;
-  - Ultracode on/off partout : il lance `/effort ultracode on|off`, et l'état suit aussi un `/effort` tapé à la main ;
   - Fichiers (navigateur de `files-board`) et Diff, au terminal seulement, car l'app desktop a les siens.
 - **App desktop** : son pied est trop étroit, donc le chrono, les tokens/s et le cache passent dans un bandeau au-dessus du prompt.
 - **`/session-tools:start`** : un premier message qui démarre la session et tous les mods, avec leurs bandeaux, sans solliciter le modèle.

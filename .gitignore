@@ -14,7 +14,7 @@ node_modules/
 .env*
 
 # Propre à un poste : jamais versionné
-.claude/settings.local.json
+.claude/
 *.jsonl
 .machine
 claude-usage/

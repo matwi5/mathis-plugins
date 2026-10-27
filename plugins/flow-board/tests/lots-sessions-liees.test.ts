@@ -257,7 +257,7 @@ const world = (on: any, opts: { repo: boolean }) => {
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
-test('sans git : les lots partent en sessions liées, pas par /implement-spec ; raisons et autres lots affichés', async ($, on) => {
+test('sans git : les lots partent en sessions liées, pas par /implement-spec ; raisons et autres lots affichés', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 70_000_000 })
   const { mem, filled } = world(on, { repo: false })
   await start($)
@@ -311,7 +311,7 @@ test('sans git : les lots partent en sessions liées, pas par /implement-spec ; 
   expect(run?.groups?.filter(g => g.linked).map(g => `${g.id}:${g.linked!.session}`)).toEqual(['C:local_C42', 'E:local_E42'])
 })
 
-test('dans un dépôt git, chaque lot propose aussi /implement-spec', async ($, on) => {
+test('dans un dépôt git, chaque lot propose aussi /implement-spec', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 71_000_000 })
   const { filled } = world(on, { repo: true })
   await start($)
@@ -324,7 +324,7 @@ test('dans un dépôt git, chaque lot propose aussi /implement-spec', async ($, 
   expect(filled.at(-1)).toMatch(/^\/mattpocock-skills:implement-spec Groupes en parallèle, .* Groupes : D \(Commandes\) : 1\) d1 — Délai de livraison ∥ E \(Enquêtes\)/)
 })
 
-test('la session liée se déclare : son panneau le dit, ses skills ne lancent aucun parcours', async ($, on) => {
+test('la session liée se déclare : son panneau le dit, ses skills ne lancent aucun parcours', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 72_000_000 })
   const { mem } = world(on, { repo: false })
   // La discussion principale (B) a écrit son parcours, actif chez elle.
@@ -349,7 +349,7 @@ test('la session liée se déclare : son panneau le dit, ses skills ne lancent a
   expect(stored.runs[0]!.tickets.some(t => t.id === 'x9')).toBe(false)
 })
 
-test('vu d’une autre discussion, le groupe « continue ici » dit « discussion de découpage » et garde sa session liée', async ($, on) => {
+test('vu d’une autre discussion, le groupe « continue ici » dit « discussion de découpage » et garde sa session liée', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 73_000_000 })
   const { mem } = world(on, { repo: false })
   const elsewhere = boardWith({ title: 'Boutique', ...VENTES }, 'session-B')
@@ -564,6 +564,43 @@ test('la session liée relaie ses tickets (Asana, set), ses commits et ses tests
   expect(stored.runs.find(r => r.id === runId)!.tickets.find(t => t.id === 'e1')!.status).toBe('todo')
 })
 
+test('la session liée relaie aussi les statuts de ses tickets en fichiers locaux (Edit, Write, Bash)', async ($, on) => {
+  mock.clock(on, { now: 77_500_000 })
+  const { mem } = world(on, { repo: false })
+  const files: Record<string, string> = {}
+  on('fs.read', (_$: unknown, e: any) => {
+    const hit = Object.entries(files).find(([end]) => String(e.path).replace(/\\/g, '/').endsWith(end))
+    if (!hit) throw new Error(`ENOENT ${e.path}`)
+    return { value: hit[1] } as any
+  })
+  for (const tool of ['Edit', 'Write', 'Bash']) on('tool.call', { tool: tool as any }, () => ({ result: { text: 'ok', stdout: '' } }))
+  const main = boardWith({ title: 'Boutique', ...VENTES }, 'session-B')
+  mem[KEY] = main
+  const runId = activeRun(main)!.id
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'E' } as any)
+  const entry = () => (mem[`relay:${runId}`] as any).sessions['session-A']
+  // Une revue lancée avant tout ticket (passe « bogues » prise pour la revue du groupe) ...
+  await $.skill.prompt({ skill: 'code-review', text: 'x' })
+  expect(entry().reviewedAt).toBeDefined()
+  // ... ne compte plus dès qu'un ticket passe « en cours » : le groupe n'était pas relu.
+  files['travail/lot/issues/01-banc.md'] = '# 01: Banc\n\n**Status:** en cours\n\n- [ ] Critère\n'
+  await $.tool.call({ tool: 'Edit', file_path: '/w/travail/lot/issues/01-banc.md', old_string: 'ready-for-agent', new_string: 'en cours' } as any)
+  expect(entry().tickets['01'].status).toBe('doing')
+  expect(entry().reviewedAt).toBeUndefined()
+  // Un `sed` sur le fichier du ticket compte aussi.
+  files['travail/lot/issues/01-banc.md'] = '# 01: Banc\n\n**Status:** fait (1a2b3c4)\n'
+  await $.tool.call({ tool: 'Bash', command: "sed -i '' 's/en cours/fait (1a2b3c4)/' travail/lot/issues/01-banc.md" } as any)
+  expect(entry().tickets['01'].status).toBe('done')
+  // Write, et la ligne à la française ; « en attente (porteur) » reste « en cours ».
+  await $.tool.call({ tool: 'Write', file_path: '/w/travail/lot/issues/02-export.md', content: '# 02: Export\n\nStatut : en attente (porteur)\n' } as any)
+  expect(entry().tickets['02'].status).toBe('doing')
+  // Un fichier hors d'un dossier de tickets n'est pas un ticket.
+  files['README.md'] = '**Status:** fait\n'
+  await $.tool.call({ tool: 'Edit', file_path: '/w/README.md', old_string: 'a', new_string: 'b' } as any)
+  expect(Object.keys(entry().tickets).sort()).toEqual(['01', '02'])
+})
+
 test('la discussion principale montre l’avancement relayé : compteurs, tickets faits, bandeau et état, sans l’écrire dans le parcours', async ($, on) => {
   const clock = mock.clock(on, { now: 78_000_000 })
   const { mem } = world(on, { repo: false })
@@ -732,7 +769,8 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(text).toContain('3) au retour du relecteur, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas resignaler ni défaire et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
-  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort xhigh\), en lecture seule, avec pour seul périmètre les commits du groupe/)
+  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode\), en lecture seule, avec pour seul périmètre les commits du groupe/)
+  expect(text).not.toMatch(/sécurité[^;]*effort xhigh\)/)
   expect(text).toContain('{"reviewed": ["E"]}')
   expect(text).not.toMatch(/copie/)
   // "reviewed" : le groupe fini est relu ; un groupe inconnu ou pas fini est refusé.

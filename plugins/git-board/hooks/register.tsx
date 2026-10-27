@@ -45,6 +45,7 @@ import {
   parseStatus,
   prOf,
   sameDir,
+  isFreshReflog,
   isRunDone,
   slash,
   VERSION_COMMAND,
@@ -392,7 +393,7 @@ async function load($: any, opts: LoadOptions) {
     await step('Lecture du dépôt…')
   }
 
-  const [status, numstat, refs, log, unpushed, urls, originHead, gitDir, sessionTop] = await Promise.all([
+  const [status, numstat, refs, log, unpushed, urls, originHead, gitDir, commonDir, sessionTop] = await Promise.all([
     git($, root, ['status', '--porcelain=v2', '--branch', '--show-stash', '-z']),
     git($, root, ['diff', 'HEAD', '--numstat', '-z']),
     git($, root, ['for-each-ref', '--sort=-committerdate', `--format=${REF_FORMAT}`, 'refs/heads', 'refs/remotes']),
@@ -401,6 +402,7 @@ async function load($: any, opts: LoadOptions) {
     git($, root, ['config', '--get-regexp', '^remote\\..*\\.url$']),
     git($, root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']),
     git($, root, ['rev-parse', '--absolute-git-dir']),
+    git($, root, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
     sameDir(folder, cwd) ? Promise.resolve(top) : git($, cwd, ['rev-parse', '--show-toplevel']),
   ])
   if (status.exitCode !== 0) throw new Error(`git status : ${firstLine(status.stderr) || 'échec'}`)
@@ -425,6 +427,18 @@ async function load($: any, opts: LoadOptions) {
   const hasRemote = remoteUrls.size > 0
   const notPushed = new Set(unpushed.exitCode === 0 ? unpushed.stdout.split('\n').filter(Boolean) : [])
   const url = remoteUrls.get('origin') ?? [...remoteUrls.values()][0] ?? null
+  const defaultBranch = defaultOf(originHead, locals, remoteNames)
+  // Une branche sans distante : ses commits absents de la branche par défaut locale.
+  const counted =
+    !st.upstream && st.branch && defaultBranch && st.branch !== defaultBranch && locals.some((b) => b.name === defaultBranch)
+      ? await git($, root, ['rev-list', '--count', `refs/heads/${defaultBranch}..HEAD`])
+      : null
+  const toMerge = counted && counted.exitCode === 0 && /^\d+$/.test(counted.stdout.trim()) ? Number(counted.stdout.trim()) : null
+  // Rien d'absent de la branche par défaut : vide ou fusionnée ? Vide seulement si l'entrée la
+  // plus ancienne du reflog de la branche est sa création et qu'aucun commit n'y a été fait
+  // depuis (voir `isFreshReflog`). Sans reflog : fusionnée.
+  const reflog = toMerge === 0 ? await git($, root, ['reflog', 'show', '--format=%H%x00%gs', `refs/heads/${st.branch}`]) : null
+  const isFresh = reflog !== null && reflog.exitCode === 0 && isFreshReflog(reflog.stdout)
 
   const next: GitRepo = {
     root,
@@ -435,12 +449,15 @@ async function load($: any, opts: LoadOptions) {
     upstream: st.upstream,
     ahead: st.ahead,
     behind: st.behind,
-    defaultBranch: defaultOf(originHead, locals, remoteNames),
+    defaultBranch,
     webUrl: url ? githubUrl(url) : null,
     hasRemote,
     operation: gitDir.exitCode === 0 ? await operationOf($, gitDir.stdout.trim()) : null,
     stash: st.stash,
     unpushed: notPushed.size,
+    isLinkedWorktree: gitDir.exitCode === 0 && commonDir.exitCode === 0 && !sameDir(gitDir.stdout.trim(), commonDir.stdout.trim()),
+    toMerge,
+    isFresh,
     files,
     branches: locals,
     remotes,

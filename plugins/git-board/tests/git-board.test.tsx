@@ -7,6 +7,8 @@ const NOW = 1_759_510_000_000
 // La ligne d'état attendue quand le bandeau est masqué (relais).
 const STATUS = '⎇ feat/export ↑2 ↓1 · 4 modif.'
 
+// Ce que le moteur joint à une commande tapée : d'où elle vient et la taille de l'affichage.
+const TYPED = { origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as const
 const PANE_PROPS = { title: 'Git', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} }
 const bandProps = (bodyColumns = 120, hasSurvey = false) => ({ hasSurvey, isWorking: false, maxRows: 12, bodyColumns, scroll: { offset: 0, bodyRows: 12 }, view: {} })
 
@@ -26,6 +28,13 @@ type FakeOptions = {
   detached?: boolean
   /** Nombre de branches seulement distantes en plus de `origin/fix/login`. */
   remotes?: number
+  /**
+   * `feat/export` sans branche distante : `toMerge` commits absents de `main`
+   * (`git rev-list --count`), `linked` dans un worktree lié plutôt que le principal,
+   * `fresh` sans commit depuis sa création (son reflog commence à HEAD), `'ff'` aussi mais
+   * avancée depuis par un fast-forward de main.
+   */
+  local?: { toMerge: number; linked?: boolean; fresh?: boolean | 'ff' }
 }
 
 // Un faux dépôt : ce que répond chaque commande git ou gh que le mod lance.
@@ -68,7 +77,8 @@ function fakeRepo(options: FakeOptions = {}) {
     const isFeat = repo.branch === 'feat/export' && !options.detached
     switch (args[0]) {
       case 'rev-parse':
-        return ok(args.includes('--absolute-git-dir') ? `${ROOT}/.git\n` : `${ROOT}\n`)
+        if (args.includes('--git-common-dir')) return ok(options.local?.linked ? '/main/.git\n' : `${ROOT}/.git\n`)
+        return ok(args.includes('--absolute-git-dir') ? (options.local?.linked ? '/main/.git/worktrees/export\n' : `${ROOT}/.git\n`) : `${ROOT}\n`)
       case 'fetch':
         return options.fetch === 'fail' ? { exitCode: 128, stdout: '', stderr: 'fatal: unable to access origin' } : ok()
       case 'remote':
@@ -78,7 +88,7 @@ function fakeRepo(options: FakeOptions = {}) {
           [
             `# branch.oid ${repo.oid}`,
             `# branch.head ${options.detached ? '(detached)' : repo.branch}`,
-            ...(options.detached ? [] : [`# branch.upstream origin/${repo.branch}`, isFeat ? `# branch.ab +${repo.ahead} -${repo.behind}` : '# branch.ab +0 -0']),
+            ...(options.detached || (isFeat && options.local) ? [] : [`# branch.upstream origin/${repo.branch}`, isFeat ? `# branch.ab +${repo.ahead} -${repo.behind}` : '# branch.ab +0 -0']),
             '# stash 1',
             ...(repo.isDirty
               ? [
@@ -98,7 +108,9 @@ function fakeRepo(options: FakeOptions = {}) {
       case 'for-each-ref':
         return ok(
           [
-            ref('refs/heads/feat/export', isFeat, 'origin/feat/export', 'ahead 2, behind 1', 1_759_500_000, 'feat: export CSV'),
+            options.local
+              ? ref('refs/heads/feat/export', isFeat, '', '', 1_759_500_000, 'feat: export CSV')
+              : ref('refs/heads/feat/export', isFeat, 'origin/feat/export', 'ahead 2, behind 1', 1_759_500_000, 'feat: export CSV'),
             ref('refs/heads/main', repo.branch === 'main', 'origin/main', '', 1_759_400_000, 'chore: init'),
             ref('refs/heads/claude/promo', false, '', '', 1_759_350_000, 'chore: promo', '/work-promo'),
             ref('refs/remotes/origin/HEAD', false, '', '', 1_759_400_000, 'chore: init'),
@@ -116,7 +128,15 @@ function fakeRepo(options: FakeOptions = {}) {
           ].join('\n') + '\n',
         )
       case 'rev-list':
+        if (args.includes('--count')) return options.local ? ok(`${options.local.toMerge}\n`) : { exitCode: 1, stdout: '', stderr: 'inattendu : --count' }
         return ok('h1full\n')
+      case 'reflog': {
+        // Du plus récent au plus ancien : la création de la branche en dernier.
+        const fresh = options.local?.fresh
+        const created = `${fresh === true ? repo.oid : 'c0ffee0000000'}${NUL}branch: Created from main`
+        const moved = fresh === true ? [] : [`${repo.oid}${NUL}${fresh === 'ff' ? 'merge main: Fast-forward' : 'commit: feat: export CSV'}`]
+        return options.local ? ok([...moved, created].join('\n') + '\n') : { exitCode: 1, stdout: '', stderr: 'inattendu : reflog' }
+      }
       case 'config':
         return ok('remote.origin.url git@github.com:matwi5/demo.git\n')
       case 'symbolic-ref':
@@ -392,7 +412,7 @@ describe('git-board', () => {
       expect(await survey.find({ type: 'Text', text: 'feat/export' })).toBeUndefined()
       await survey.unmount()
 
-      await $.command.run({ command: 'git', args: 'hide' })
+      await $.command.run({ command: 'git', args: 'hide', ...TYPED })
       const hidden = await mountBand($, surface)
       expect(await hidden.find({ type: 'Text', text: /AUTRE BANDEAU/ })).toBeDefined()
       expect(await hidden.find({ type: 'Text', text: 'feat/export' })).toBeUndefined()
@@ -422,7 +442,7 @@ describe('git-board', () => {
       expect(seen.toasts).toContain('Bandeau Git masqué : /git show pour le réafficher')
       expect(seen.statuses.at(-1)).toBe(STATUS)
 
-      const shown = await $.command.run({ command: 'git', args: 'show' })
+      const shown = await $.command.run({ command: 'git', args: 'show', ...TYPED })
       expect(String(shown.text)).toMatch(/réaffiché/)
       expect(await band.find({ type: 'Text', text: 'feat/export' })).toBeDefined()
       expect(seen.statuses.at(-1)).toBeUndefined()
@@ -579,10 +599,10 @@ describe('git-board', () => {
   test('/git-board:git répond sans le modèle, ouvre le panneau, sans session.start', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const fake = fakeRepo()
-    on('command.run', { command: 'git-board:git' }, async (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e))
+    on('command.run', { command: 'git-board:git' }, async (_$, e, next) => next(e))
     const seen = engine(on, fake)
 
-    const out = await $.command.run({ command: 'git-board:git', args: '' })
+    const out = await $.command.run({ command: 'git-board:git', args: '', ...TYPED })
     expect(String(out.text)).toMatch(/Panneau Git ouvert/)
     expect(seen.opened).toEqual(['git'])
     // Le mod répond lui-même : rien ne descend jusqu'au moteur (ni donc au modèle).
@@ -590,14 +610,14 @@ describe('git-board', () => {
     await clock.settle()
     expect(fake.calls.some((c) => c.includes('fetch'))).toBe(true)
 
-    const tabbed = await $.command.run({ command: 'git-board:git', args: 'branches' })
+    const tabbed = await $.command.run({ command: 'git-board:git', args: 'branches', ...TYPED })
     expect(String(tabbed.text)).toMatch(/onglet Branches/)
     await clock.settle()
     const pane = await mountPane($, 'terminal')
     expect(await pane.find({ type: 'Button', text: /▸\sBranches/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /Locales/ })).toBeDefined()
 
-    const hidden = await $.command.run({ command: 'git-board:git', args: 'hide' })
+    const hidden = await $.command.run({ command: 'git-board:git', args: 'hide', ...TYPED })
     expect(String(hidden.text)).toMatch(/masqué/)
     expect(seen.ran).toEqual([])
   })
@@ -666,9 +686,9 @@ describe('git-board', () => {
     const clock = mock.clock(on, { now: NOW })
     const seen = engine(on, fakeRepo({ outside: '/ailleurs' }))
     await start($, clock)
-    await $.command.run({ command: 'git', args: 'hide' })
+    await $.command.run({ command: 'git', args: 'hide', ...TYPED })
     expect(seen.statuses.at(-1)).toBe(STATUS)
-    await $.command.run({ command: 'git', args: '/ailleurs' })
+    await $.command.run({ command: 'git', args: '/ailleurs', ...TYPED })
     await clock.settle()
     expect(seen.statuses.at(-1)).toBeUndefined()
   })
@@ -721,6 +741,54 @@ describe('git-board', () => {
       await pane.press({ key: 'remotes-toggle' })
       await pane.unmount()
     }
+  })
+
+  // Une branche sans distante : fusionnée dans main, à fusionner depuis un worktree lié (jamais
+  // poussée, elle se fusionne en local), ou non publiée. Bandeau, pastilles et route s'accordent.
+  const LOCAL_CASES = [
+    { name: 'tous ses commits dans main : fusionnée', local: { toMerge: 0 }, word: /✓\sfusionnée/, road: /Push : fait \(fusionnée\)/, push: false },
+    { name: 'worktree lié, fusionnée aussi', local: { toMerge: 0, linked: true }, word: /✓\sfusionnée/, road: /Push : fait \(fusionnée\)/, push: false },
+    { name: 'worktree lié, 3 commits absents de main : à fusionner', local: { toMerge: 3, linked: true }, word: /⤞\s3\sà\sfusionner/, road: /Push : en cours \(3 à fusionner\)/, push: false },
+    { name: 'aucun commit depuis sa création : vide', local: { toMerge: 0, fresh: true }, word: /○\svide/, road: /Push : en cours \(vide\)/, push: false },
+    { name: 'worktree lié, aucun commit depuis sa création : vide', local: { toMerge: 0, linked: true, fresh: true }, word: /○\svide/, road: /Push : en cours \(vide\)/, push: false },
+    { name: 'avancée par fast-forward depuis main, sans commit à elle : vide', local: { toMerge: 0, linked: true, fresh: 'ff' }, word: /○\svide/, road: /Push : en cours \(vide\)/, push: false },
+    { name: 'branche ordinaire, 3 commits absents de main : non publiée', local: { toMerge: 3 }, word: /◌\snon\spubliée/, road: /Push : en cours \(non publiée\)/, push: true },
+  ] as const
+  for (const c of LOCAL_CASES) {
+    test(`sans distante, ${c.name}`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const fake = fakeRepo({ local: c.local })
+      fake.repo.isDirty = false
+      engine(on, fake)
+      await start($, clock)
+      expect(fake.calls.some((x) => x.includes('--count') && x.includes('refs/heads/main..HEAD'))).toBe(true)
+      // Le reflog de la branche n'est lu que pour départager vide et fusionnée.
+      expect(fake.calls.some((x) => x.includes('reflog') && x.includes('refs/heads/feat/export'))).toBe(c.local.toMerge === 0)
+      for (const surface of BANDS) {
+        const band = await mountBand($, surface)
+        expect(await band.find({ type: 'Text', text: c.word })).toBeDefined()
+        if (!c.push) expect(await band.find({ type: 'Text', text: /non\spubliée/ })).toBeUndefined()
+        await band.unmount()
+      }
+      for (const surface of ALL) {
+        const pane = await mountPane($, surface)
+        expect(await pane.find({ type: 'Text', text: c.word })).toBeDefined()
+        if (!c.push) expect(await pane.find({ type: 'Text', text: /non\spubliée/ })).toBeUndefined()
+        if ('fresh' in c.local) expect(await pane.find({ type: 'Text', text: /fusionnée/ })).toBeUndefined()
+        if (surface === 'desktop') expect(JSON.stringify(await pane.findAll({ type: 'Svg' }))).toMatch(c.road)
+        // Arbre propre : seule une branche non publiée a une étape suggérée, le push.
+        expect(JSON.stringify(await pane.drawn())).toMatch(c.push ? /"variant":"primary"/ : /^(?!.*"variant":"primary")/s)
+        await pane.unmount()
+      }
+    })
+  }
+
+  test('une branche qui suit sa distante ne compte pas ses commits absents de main', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const fake = fakeRepo()
+    engine(on, fake)
+    await start($, clock)
+    expect(fake.calls.some((x) => x.includes('--count'))).toBe(false)
   })
 
   test('HEAD détachée : pull, push et PR le disent, sans commande à lancer', async ($, on) => {
@@ -835,6 +903,33 @@ describe('git-board', () => {
     expect(await pane.find({ type: 'Text', text: /Rien à pousser/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /Avant de pousser/ })).toBeUndefined()
   })
+
+  // Une branche sans distante qui ne se pousse pas : le tiroir le dit, sans /project:version
+  // ni « ▶ Lancer · /project:push ».
+  const NO_PUSH_CASES = [
+    { name: 'fusionnée', local: { toMerge: 0 }, say: /✓ Fusionnée dans main : rien à pousser d'ici/ },
+    { name: 'à fusionner', local: { toMerge: 3, linked: true }, say: /⤞ À fusionner dans main d'abord/ },
+    { name: 'vide', local: { toMerge: 0, linked: true, fresh: true }, say: /○ Branche vide : aucun commit depuis sa création, rien à pousser/ },
+  ] as const
+  for (const c of NO_PUSH_CASES) {
+    test(`tiroir Push d'une branche ${c.name} : rien à pousser d'ici`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const fake = fakeRepo({ local: c.local })
+      fake.repo.isDirty = false
+      engine(on, fake)
+      await start($, clock)
+      for (const surface of ALL) {
+        const pane = await mountPane($, surface)
+        // Le tiroir ouvert le reste d'une surface à l'autre.
+        if (surface === ALL[0]) await pane.press({ key: 'act-push' })
+        expect(await pane.find({ type: 'Text', text: c.say })).toBeDefined()
+        expect(await pane.find({ type: 'Text', text: /Avant de pousser/ })).toBeUndefined()
+        expect(await pane.find({ type: 'Button', key: 'launch-version' })).toBeUndefined()
+        expect(await pane.find({ type: 'Button', key: 'launch' })).toBeUndefined()
+        await pane.unmount()
+      }
+    })
+  }
 
   test('une commande dont le dépôt ne montre pas encore l’effet reste « en cours »', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })

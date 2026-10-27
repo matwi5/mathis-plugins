@@ -37,7 +37,14 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   const coaching = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
   // Claude sait dès l'implémentation qu'il donnera son avis, puis lancera lui-même le sous-agent relecteur, jamais /security-review.
   expect(coaching).toContain('"advised": true|false')
-  expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort xhigh), read-only, limited to git diff <group base>..HEAD')
+  expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort high or xhigh as the criterion of the method file decides), read-only, limited to git diff <group base>..HEAD')
+  // Ticket 13 : la méthode fixe, citée par son chemin (tiré de la racine du mod), sans être recopiée.
+  expect(coaching).toMatch(/the path of the security review method file, \S+\/reference\/revue-securite\.md \(it follows it:/)
+  expect(coaching).not.toContain('effort xhigh)')
+  // Les correctifs proposés, acceptés en une ligne ; findings ne compte que les failles gardées.
+  expect(coaching).toContain('each kept finding comes numbered (F1, F2…) with a ready fix')
+  expect(coaching).toContain('a reply such as "fix F1 and F3" is enough: apply those fixes, test them, commit them, then send "fixed"')
+  expect(coaching).toContain('"findings": <kept findings, not the to-watch list>')
   expect(coaching).toContain('never /security-review')
   expect(coaching).not.toContain('Never run /security-review yourself')
   await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)
@@ -67,6 +74,10 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   expect(filled.at(-1)).toMatch(/^Lance la revue de sécurité du groupe A \(Worker\) : confie-la à un sous-agent relecteur/)
   expect(filled.at(-1)).toContain("git diff <base>..HEAD (<base> : le commit d'avant le premier ticket du groupe A)")
   expect(filled.at(-1)).toContain('je décide de leur correction')
+  expect(filled.at(-1)).toMatch(/effort high ou xhigh selon le critère du fichier de méthode\)/)
+  expect(filled.at(-1)).toMatch(/le chemin du fichier de méthode de la revue de sécurité, \S+\/reference\/revue-securite\.md/)
+  expect(filled.at(-1)).toContain('une réponse comme « corrige F1 et F3 » suffit')
+  expect(filled.at(-1)).not.toContain('effort xhigh')
   expect(filled.at(-1)).not.toMatch(/copie/)
 
   // Les constats du sous-agent, sans skill chargé : la revue compte comme faite.
@@ -118,4 +129,15 @@ test('sans git, la revue de sécurité d’un groupe lit ses copies d’avant le
   await ui.unmount()
   expect(filled.at(-1)).toContain('avec pour seul périmètre les changements du groupe A (pour chaque fichier, la différence entre la plus ancienne copie prise avant ses tickets')
   expect(filled.at(-1)).not.toContain('git diff')
+})
+
+test('sans groupes, l’avis de sécurité du lot cite aussi le fichier de méthode, sans xhigh d’office', async ($, on) => {
+  mock.clock(on, { now: 97_600_000 })
+  mock.store(on)
+  world(on)
+  const text = (await $.skill.prompt({ skill: 'mattpocock-skills:code-review', text: 'x' })).text
+  expect(text).toContain('without "group": it covers the whole run')
+  expect(text).toMatch(/the path of the security review method file, \S+\/reference\/revue-securite\.md/)
+  expect(text).toContain('effort high or xhigh as the criterion of the method file decides')
+  expect(text).not.toContain('effort xhigh)')
 })

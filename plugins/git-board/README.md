@@ -7,7 +7,7 @@ Panneau Git et bandeau au-dessus du prompt, dans Claude Code. Il montre la branc
 - **Il suit le dépôt tout seul.** Une relecture suit chaque outil d'écriture de Claude, et un coup d'œil léger repère toutes les 10 s les changements faits ailleurs. Après un push, il suit la CI jusqu'à la fin de ses checks.
 - **Il propose le push.** À la fin d'un tour, des commits à pousser sur un arbre propre : `/project:push` apparaît grisé dans le prompt, Tab pour le prendre.
 
-Version actuelle : **0.4.3**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.4.5**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -69,9 +69,9 @@ De haut en bas :
 1. **La carte d'en-tête.**
    - Ligne 1 : la pastille de la branche (violette au repos, rouge pendant une opération ou un conflit, tronquée si le nom est long), la commande `/project` en file ou en cours, « ↩ session » quand un autre dossier est suivi, « ↻ Relire ».
    - Ligne 2 : la jauge ↑/↓ (SVG, sur le desktop, VS Code et le mobile), puis sur une ligne le nom du dépôt, la branche suivie et l'âge du fetch. « fetch jamais » quand aucun n'est connu. Un fetch en échec s'affiche en rouge.
-   - Les pastilles d'état, par gravité : opération en cours, conflits, à récupérer et à pousser (sur le terminal ; ailleurs la jauge les montre), à jour ou non publiée, modifiés, nouveaux, stash.
+   - Les pastilles d'état, par gravité : opération en cours, conflits, à récupérer et à pousser (sur le terminal ; ailleurs la jauge les montre), à jour, ou pour une branche sans distante « ○ vide » (aucun commit depuis sa création, d'après son reflog), « ✓ fusionnée » (tous ses commits sont dans la branche par défaut locale), « ⤞ N à fusionner » (worktree lié : sa branche ne se pousse pas, elle se fusionne en local) ou « ◌ non publiée », modifiés, nouveaux, stash.
    - La pull request, sur une ligne : numéro, état, relecture, checks, titre, lien. Sans PR : « pas encore de pull request ». Pendant le suivi de la CI (voir [Suivi de la CI](#suivi-de-la-ci)), son état remplace les checks ; sans PR, il a sa propre ligne. Une PR fusionnée ou fermée ne compte que tant que HEAD est encore sa tête : une branche réutilisée après une fusion (`dev`, par exemple) repart à « PR à ouvrir » dès qu'elle a de nouveaux commits.
-   - La route de livraison : Commit → Push → PR → Checks → Fusion (SVG, ou glyphes reliés sur le terminal). Elle se parcourt dans l'ordre : dès qu'une étape n'est pas faite, les suivantes sont « à venir » (un commit à pousser rend caducs la PR, les checks et la fusion d'avant ; seul le numéro d'une PR encore ouverte reste). Sur le terminal étroit, les libellés qui ne tiennent pas prennent une forme courte (« Com. », « CI », « Fus. »).
+   - La route de livraison : Commit → Push → PR → Checks → Fusion (SVG, ou glyphes reliés sur le terminal). Elle se parcourt dans l'ordre : dès qu'une étape n'est pas faite, les suivantes sont « à venir » (un commit à pousser rend caducs la PR, les checks et la fusion d'avant ; seul le numéro d'une PR encore ouverte reste). Sans distante, Push dit le même état que les pastilles et compte comme fait pour une branche fusionnée ; pour une branche vide, il reste l'étape en cours. Le tiroir Push d'une branche vide, fusionnée ou à fusionner le dit (« rien à pousser d'ici », « à fusionner dans main d'abord ») sans proposer `/project:version` ni `/project:push`. Sur le terminal étroit, les libellés qui ne tiennent pas prennent une forme courte (« Com. », « CI », « Fus. »).
 2. **La zone d'activité**, toujours sous l'en-tête : lecture en cours, bascule, commande `/project` en file ou en cours, dernier message. C'est le seul endroit où une lecture s'affiche. Une erreur reste jusqu'à son « x ». Une commande `/project` est finie dès que le dépôt relu montre son effet (« … : fait d'après le dépôt. ») : commit, HEAD a bougé ; sync, un fetch depuis le lancement et plus rien à récupérer ; push, plus rien à pousser ; PR, une PR existe. Sinon, la fin du tour de Claude la clôt, sans « ✓ » (« tour terminé » ou « interrompue »).
 3. **La carte d'opération** (rebase, merge…), en rouge, quand il y en a une.
 4. **La barre d'actions** : ✓ Commit, ↓ Pull, ↑ Push, ⇄ Pull request, sans comptes (l'en-tête les dit). Seule l'étape suggérée est mise en avant, tant que son tiroir est fermé. Chacune ouvre un tiroir sobre avec « ▶ Lancer · /project:… » ; son « ✕ » ne ferme que le tiroir. Quand il y a quelque chose à pousser, le tiroir Push suggère de lancer d'abord `/project:version` (numéro de version et CHANGELOG), avec un bouton « ▶ D'abord · /project:version » ; sans repère dans le dépôt, cette commande n'est finie qu'avec le tour de Claude. En HEAD détachée, les tiroirs Pull, Push et PR disent seulement de basculer sur une branche.
@@ -97,7 +97,7 @@ Une ligne, deux au plus, dans un dépôt git seulement.
   ▶ /project:commit en file
 ```
 
-- Ligne 1 : branche, ↑/↓ ou « ✓ à jour » ou « ◌ non publiée », conflits, modifiés et nouveaux.
+- Ligne 1 : branche, ↑/↓ ou « ✓ à jour », ou sans distante « ○ vide », « ✓ fusionnée », « ⤞ N à fusionner » ou « ◌ non publiée » (comme les pastilles du panneau), conflits, modifiés et nouveaux.
   - À partir de 72 colonnes : total `+a −r` (séparé des fichiers par « · ») et PR.
   - À partir de 90 colonnes : âge du fetch (« fetch jamais » quand aucun n'est connu), et nom du dépôt s'il diffère de celui de la session.
   - Un fetch en échec s'affiche dès 64 colonnes.

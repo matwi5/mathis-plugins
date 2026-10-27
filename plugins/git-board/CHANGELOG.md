@@ -4,6 +4,21 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.4.5 — 2026-10-26
+
+### Corrigé
+- **Branche neuve affichée « ✓ fusionnée »** : un worktree qu'on vient d'ouvrir, sans encore aucun commit, n'a aucun commit absent de la branche par défaut et passait pour fusionné. Une branche sans distante dont l'entrée la plus ancienne du reflog est sa création (« branch: Created from ») et qui n'a bougé depuis que par fast-forward ou reset, sans aucun commit à elle, dit désormais « ○ vide » (gris) ; Push reste l'étape en cours de la route et n'est pas suggéré. « ✓ fusionnée » est réservé à une branche qui a eu au moins un commit, et le reste quand le reflog ne permet pas de trancher (expiré, branche recréée, rebase). Une lecture git de plus, sans réseau : `reflog show`, seulement pour une branche sans distante qui n'a rien d'absent de la branche par défaut.
+- **Tiroir Push d'une branche qui ne se pousse pas** : pour une branche fusionnée, à fusionner ou vide, le tiroir proposait encore `/project:version` puis « ▶ Lancer · /project:push », que la pastille ne suggérait plus. Il dit maintenant « ✓ Fusionnée dans main : rien à pousser d'ici », « ⤞ À fusionner dans main d'abord » ou « ○ Branche vide : aucun commit depuis sa création, rien à pousser » (avec le vrai nom de la branche par défaut), sans aucune commande à lancer.
+
+---
+
+## 0.4.4 — 2026-10-26
+
+### Corrigé
+- **« ◌ non publiée » à tort sur une branche de worktree** : toute branche sans branche distante s'affichait en ambre, comme un oubli, alors que la branche d'un worktree lié (`.claude/worktrees/`) ne se pousse jamais : elle se fusionne en local dans la branche par défaut. Une branche sans distante dont tous les commits sont dans la branche par défaut locale dit désormais « ✓ fusionnée » (vert, étape Push faite sur la route) ; dans un worktree lié, avec des commits encore absents, « ⤞ N à fusionner » (gris-bleu) ; « ◌ non publiée » reste pour une branche ordinaire ni fusionnée ni poussée. Bandeau, pastilles du panneau et route disent la même chose, et Push n'est plus l'étape suggérée d'une branche fusionnée ou à fusionner. Deux lectures git de plus, sans réseau : `rev-parse --git-common-dir`, et `rev-list --count` pour une branche sans distante seulement.
+
+---
+
 ## 0.4.3 — 2026-10-17
 
 ### Corrigé

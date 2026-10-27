@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "claude-code/testing";
 
+// Les minuteries de l'hôte des tests, que les types du moteur (sans `dom` ni `node`) ne déclarent pas.
+declare const setTimeout: (callback: (value?: unknown) => void, ms: number) => unknown;
+
 // Sous le plugin : le moteur dessine les libellés du pied et laisse le bandeau vide (le mod
 // dessine les siens lui-même).
 const engineDraws = (on: any) =>
@@ -58,46 +61,11 @@ describe("session-tools", () => {
       await clock.advance(60 * 60 * 1000);
       expect(await ui.find({ type: "Text", text: "expiré" })).toBeDefined();
       if (surface === "desktop") {
-        // Le pied desktop, trop étroit, ne garde que le bouton : les valeurs sont dans le bandeau.
+        // Le pied desktop, trop étroit, ne garde que les boutons : les valeurs sont dans le bandeau.
         const footer = await $.ui.mount({ plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } } as any);
         expect(await footer.find({ type: "Text", text: /^Cache/ })).toBeUndefined();
-        expect(await footer.find({ key: "ultracode" })).toBeDefined();
+        expect(await footer.find({ key: "effort" })).toBeDefined();
       }
-    });
-  }
-
-  for (const surface of ["terminal", "desktop"] as const) {
-    test(`le bouton Ultracode lance /effort ultracode on|off (${surface})`, async ($, on) => {
-      const runs: string[] = [];
-      mock.clock(on, { now: 1_000_000 });
-      on("session.start", ($, e) => ({ cwd: e.cwd }));
-      engineDraws(on);
-      // Sous le plugin : la commande /effort intégrée. En interactif, c'est une commande à
-      // interface qui ne renvoie aucun texte ; `/effort auto` ne touche pas Ultracode.
-      on("command.run", { command: "effort" }, ($, e) => {
-        runs.push(e.args);
-        return {};
-      });
-      await $.session.start({ surface, isInteractive: true, cwd: "/work" } as any);
-
-      const ui = await $.ui.mount({ plugin: "session-tools", surface, component: "SessionMode", props: { modes: [] } } as any);
-      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/off$/);
-
-      await ui.press({ key: "ultracode" });
-      expect(runs).toEqual(["ultracode on"]);
-      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/on$/);
-
-      await ui.press({ key: "ultracode" });
-      expect(runs).toEqual(["ultracode on", "ultracode off"]);
-      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/off$/);
-
-      // Tapé à la main, /effort met aussi le bouton à jour.
-      await $.command.run({ command: "effort", args: "ultracode on" });
-      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/on$/);
-      await $.command.run({ command: "effort", args: "auto" });
-      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/on$/);
-      await $.command.run({ command: "effort", args: "ultracode off" });
-      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/off$/);
     });
   }
 
@@ -303,9 +271,8 @@ describe("session-tools", () => {
       expect(request.prompt).toBe("<brouillon>\ncorrige le bug de reconnexion en prod\n</brouillon>");
       expect(runs).toEqual(["high"]);
       expect(calls.toasts).toEqual(["Effort demandé : high (Bug en production, cas limites.)"]);
-      // Le brouillon reste tel quel, et Ultracode n'en est pas touché.
+      // Le brouillon reste tel quel.
       expect(calls.fills).toEqual([]);
-      expect((await ui.find({ key: "ultracode" }))?.text).toMatch(/off$/);
       expect((await ui.find({ key: "effort" }))?.text).toBe("Effort auto");
     });
   }
@@ -384,18 +351,19 @@ describe("session-tools", () => {
       const clock = mock.clock(on, { now: 1_000_000 });
       on("session.start", ($, e) => ({ cwd: e.cwd }));
       engineDraws(on);
-      // Sous le plugin : le moteur démarre le tour d'un prompt reçu au repos.
-      let turns = 0;
-      on("prompt.submit", async (_, e: any) => {
-        if (!e.turnId) await $.turn.start({ text: e.text, turnId: `t${++turns}` });
-        return { text: e.text };
-      });
+      on("prompt.submit", (_, e: any) => ({ text: e.text }));
       on("turn.start", ($, e: any) => ({ turnId: e.turnId }));
       on("turn.complete", () => ({ text: "" }));
       await $.session.start({ surface, isInteractive: true, cwd: "/work" } as any);
       const ui = await mountValues($, surface);
-      const send = (text: string, extra: object = {}) =>
-        $.prompt.submit({ text, wait: false, origin: { kind: surface === "terminal" ? "composer" : "sdk" }, ...extra } as any);
+      // Le moteur tel qu'observé (docs/evenements-moteur.md) : un prompt reçu au repos rend la main,
+      // puis son tour démarre avec le même texte ; envoyé pendant un tour (`turnId`), il le rejoint.
+      let turns = 0;
+      const submit = async (text: string, origin: object, extra: { turnId?: string } = {}) => {
+        await $.prompt.submit({ text, wait: false, origin, ...extra } as any);
+        if (!extra.turnId) await $.turn.start({ text, turnId: `t${++turns}` } as any);
+      };
+      const send = (text: string, extra: { turnId?: string } = {}) => submit(text, { kind: surface === "terminal" ? "composer" : "sdk" }, extra);
       const complete = (turnId: string, extra: object = {}) =>
         $.turn.complete({ answer: "", durationMs: 1, turnId, reason: "answer", ...extra } as any);
 
@@ -417,8 +385,9 @@ describe("session-tools", () => {
       await clock.advance(30_000);
       expect(await ui.find({ type: "Text", text: "1:25 ✓" })).toBeDefined();
 
-      // Un tour lancé par une notification ne touche pas au chrono.
-      await $.prompt.submit({ text: "tâche finie", wait: false, origin: { kind: "task-notification" } } as any);
+      // Un tour lancé par une notification sans tâche reconnue (pas de `<task-id>`) ne touche pas au
+      // chrono ; la reprise par la notification d'une tâche de la requête est testée plus bas.
+      await submit("tâche finie", { kind: "task-notification" });
       await clock.advance(2_000);
       expect(await ui.find({ type: "Text", text: "1:25 ✓" })).toBeDefined();
       // Un sous-agent de fond qui démarre au repos non plus.
@@ -442,15 +411,356 @@ describe("session-tools", () => {
     });
   }
 
+  // Le moteur tel que docs/evenements-moteur.md le décrit (essai du 26/10/2026, 2.1.310 et 2.1.308) : `prompt.submit` rend la
+  // main avant le `turn.start` de son tour, `classic.Stop` précède `turn.complete` avec la liste à jour
+  // des tâches de fond, et une interruption n'a pas de `classic.Stop`.
+  const realEngine = async ($: any, on: any, surface: "terminal" | "desktop") => {
+    const clock = mock.clock(on, { now: 1_000_000 });
+    let agents: any[] = [];
+    on("session.start", ($: any, e: any) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    on("prompt.submit", (_: any, e: any) => ({ text: e.text }));
+    on("turn.start", (_: any, e: any) => ({ turnId: e.turnId }));
+    on("turn.complete", () => ({ text: "" }));
+    on("classic.Stop", () => ({}));
+    on("classic.SubagentStop", () => ({}));
+    on("agent.list", () => ({ value: agents }));
+    await $.session.start({ surface, isInteractive: true, cwd: "/work" } as any);
+    const ui = await mountValues($, surface);
+    let turns = 0;
+    // Un prompt reçu au repos, puis le tour qu'il démarre (même texte).
+    const relaunch = async (text: string, origin: object) => {
+      await $.prompt.submit({ text, wait: false, origin } as any);
+      const turnId = `t${++turns}`;
+      await $.turn.start({ text, turnId } as any);
+      return turnId;
+    };
+    const engine = {
+      clock,
+      ui,
+      shows: async (text: string | RegExp) => (await ui.find({ type: "Text", text })) !== undefined,
+      send: (text: string) => relaunch(text, { kind: surface === "terminal" ? "composer" : "sdk" }),
+      // La notification de fin d'une commande shell de fond, et le message de retour d'un sous-agent.
+      shellDone: (id: string) => relaunch(`<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>`, { kind: "task-notification" }),
+      agentDone: (id: string) => relaunch(`<agent-message from="${id}">\n[Subagent hand-back] OK`, { kind: "peer" }),
+      // Fin normale d'un tour du fil principal : la liste des tâches de fond, puis la fin du tour.
+      finish: async (turnId: string, tasks: { id: string; type: string }[]) => {
+        await $.classic.Stop({ stop_hook_active: false, background_tasks: tasks.map((t) => ({ ...t, status: "running", description: t.id })) } as any);
+        await $.turn.complete({ answer: "", durationMs: 1, turnId, reason: "answer" } as any);
+      },
+      setAgents: (list: any[]) => {
+        agents = list;
+      },
+    };
+    return engine;
+  };
+
+  for (const surface of ["terminal", "desktop"] as const) {
+    test(`chrono : le retour d'une tâche de fond ne le remet pas à zéro (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un shell de fond");
+      await engine.clock.advance(6_000);
+      await engine.finish(t1, [{ id: "b1", type: "shell" }]);
+      await engine.clock.advance(14_000);
+      const t2 = await engine.shellDone("b1");
+      await engine.clock.advance(2_000);
+      expect(await engine.shows(/^0:0/)).toBe(false);
+      expect(await engine.shows("0:22")).toBe(true);
+      await engine.finish(t2, []);
+      await engine.clock.advance(30_000);
+      expect(await engine.shows("0:22 ✓")).toBe(true);
+    });
+  }
+
+  for (const surface of ["terminal", "desktop"] as const) {
+    test(`chrono : il attend les tâches de fond de la requête et les compte (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un sous-agent et un shell de fond");
+      await engine.clock.advance(5_000);
+      await engine.finish(t1, [
+        { id: "a1", type: "subagent" },
+        { id: "b1", type: "shell" },
+      ]);
+      await engine.clock.advance(10_000);
+      // Le fil principal a fini : le chrono court, avec ses deux tâches.
+      expect(await engine.shows("0:15")).toBe(true);
+      expect(await engine.shows("2 en fond")).toBe(true);
+      const t2 = await engine.agentDone("a1");
+      await engine.clock.advance(2_000);
+      await engine.finish(t2, [{ id: "b1", type: "shell" }]);
+      expect(await engine.shows("1 en fond")).toBe(true);
+      await engine.clock.advance(8_000);
+      const t3 = await engine.shellDone("b1");
+      await engine.clock.advance(2_000);
+      await engine.finish(t3, []);
+      await engine.clock.advance(60_000);
+      expect(await engine.shows("0:27 ✓")).toBe(true);
+      expect(await engine.shows(/en fond/)).toBe(false);
+    });
+
+    test(`chrono : un sous-agent peut aussi revenir par une task-notification (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un sous-agent de fond");
+      await engine.clock.advance(3_000);
+      await engine.finish(t1, [{ id: "a1", type: "subagent" }]);
+      await engine.clock.advance(20_000);
+      // Essai du 26/10/2026 : `<task-id>` porte alors l'identifiant de l'agent.
+      const t2 = await engine.shellDone("a1");
+      await engine.clock.advance(2_000);
+      await engine.finish(t2, []);
+      expect(await engine.shows("0:25 ✓")).toBe(true);
+    });
+
+    test(`chrono : le retour d'un sous-agent déjà sorti de la liste prolonge sa requête (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un sous-agent de fond");
+      await engine.clock.advance(2_000);
+      await engine.finish(t1, [{ id: "a1", type: "subagent" }]);
+      await engine.clock.advance(10_000);
+      // Essai du 26/10/2026 : le même agent annonce sa fin, puis envoie son message de retour.
+      const t2 = await engine.shellDone("a1");
+      await engine.clock.advance(1_000);
+      await engine.finish(t2, []);
+      expect(await engine.shows("0:13 ✓")).toBe(true);
+      await engine.clock.advance(2_000);
+      const t3 = await engine.agentDone("a1");
+      await engine.clock.advance(1_000);
+      expect(await engine.shows("0:16")).toBe(true);
+      await engine.finish(t3, []);
+      expect(await engine.shows("0:16 ✓")).toBe(true);
+    });
+
+    test(`chrono : il part à l'heure d'envoi, pas au début du tour (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      await $.prompt.submit({ text: "bonjour", wait: false, origin: { kind: surface === "terminal" ? "composer" : "sdk" } } as any);
+      await engine.clock.advance(2_000);
+      await $.turn.start({ text: "bonjour", turnId: "t1" } as any);
+      await engine.clock.advance(1_000);
+      expect(await engine.shows("0:03")).toBe(true);
+    });
+
+    test(`chrono : une tâche apparue après la fin d'une requête ne la rouvre pas (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("bonjour");
+      await engine.clock.advance(2_000);
+      await engine.finish(t1, []);
+      // Une tâche planifiée lance un shell de fond, après la fin de la requête.
+      await $.prompt.submit({ text: "tâche planifiée", wait: false, origin: { kind: "scheduled-trigger" } } as any);
+      await $.turn.start({ text: "tâche planifiée", turnId: "t8" } as any);
+      await engine.clock.advance(1_000);
+      await engine.finish("t8", [{ id: "b7", type: "shell" }]);
+      await engine.clock.advance(20_000);
+      const t2 = await engine.shellDone("b7");
+      await engine.clock.advance(2_000);
+      await engine.finish(t2, []);
+      expect(await engine.shows("0:02 ✓")).toBe(true);
+    });
+
+    test(`chrono : après un rechargement, une notification reste une notification (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un shell de fond");
+      await engine.clock.advance(3_000);
+      await engine.finish(t1, [{ id: "b1", type: "shell" }]);
+      await engine.clock.advance(10_000);
+      // Le module rechargé a perdu les prompts en attente : le tour démarre sans eux.
+      await $.turn.start({ text: "<task-notification>\n<task-id>b1</task-id>", turnId: "t5" } as any);
+      await engine.clock.advance(2_000);
+      expect(await engine.shows("0:15")).toBe(true);
+      await engine.finish("t5", []);
+      expect(await engine.shows("0:15 ✓")).toBe(true);
+    });
+
+    test(`chrono : un message tapé pendant un tour et livré au tour suivant ne le relance pas (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("bonjour");
+      await engine.clock.advance(3_000);
+      // Tapé pendant la réponse : sa requête part à son envoi…
+      await $.prompt.submit({ text: "précision", wait: false, turnId: t1, origin: { kind: surface === "terminal" ? "composer" : "sdk" } } as any);
+      await engine.clock.advance(2_000);
+      await engine.finish(t1, []);
+      // … puis le moteur le livre au tour suivant, au lieu du tour en cours : pas de second départ.
+      await engine.clock.advance(1_000);
+      await $.turn.start({ text: "précision", turnId: "t2" } as any);
+      await engine.clock.advance(4_000);
+      expect(await engine.shows("0:07")).toBe(true);
+      await engine.finish("t2", []);
+      expect(await engine.shows("0:07 ✓")).toBe(true);
+    });
+
+    test(`chrono : deux messages tapés pendant un tour, le premier livré seul au tour suivant (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const origin = { kind: surface === "terminal" ? "composer" : "sdk" };
+      const t1 = await engine.send("bonjour");
+      await engine.clock.advance(3_000);
+      await $.prompt.submit({ text: "A", wait: false, turnId: t1, origin } as any);
+      await engine.clock.advance(1_000);
+      await $.prompt.submit({ text: "B", wait: false, turnId: t1, origin } as any);
+      await engine.clock.advance(1_000);
+      await engine.finish(t1, []);
+      // Le tour de A : le fil principal travaille, le chrono (celui de B, le plus récent) n'est pas fini.
+      await $.turn.start({ text: "A", turnId: "t2" } as any);
+      await engine.clock.advance(2_000);
+      expect(await engine.shows("0:03")).toBe(true);
+      expect(await engine.shows(/✓/)).toBe(false);
+    });
+
+    test(`chrono : un nouveau message repart à zéro, sans les tâches de la requête d'avant (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un serveur de fond");
+      await engine.clock.advance(4_000);
+      await engine.finish(t1, [{ id: "srv", type: "shell" }]);
+      await engine.clock.advance(60_000);
+      // Un serveur garde la requête ouverte jusqu'au message suivant.
+      expect(await engine.shows("1:04")).toBe(true);
+      const t2 = await engine.send("dis bonjour");
+      await engine.clock.advance(3_000);
+      await engine.finish(t2, [{ id: "srv", type: "shell" }]);
+      await engine.clock.advance(1_000);
+      expect(await engine.shows("0:03 ✓")).toBe(true);
+      expect(await engine.shows(/en fond/)).toBe(false);
+      // La notification d'une tâche de la requête d'avant ne touche pas au chrono affiché.
+      const t3 = await engine.shellDone("srv");
+      await engine.clock.advance(2_000);
+      await engine.finish(t3, []);
+      expect(await engine.shows("0:03 ✓")).toBe(true);
+    });
+
+    test(`chrono : une interruption l'arrête, la notification d'une tâche inconnue le reprend (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un shell de fond puis attends au premier plan");
+      await engine.clock.advance(3_000);
+      // Échap : `turn.complete` interrompu, sans `classic.Stop`.
+      await $.turn.complete({ answer: "", durationMs: 1, turnId: t1, reason: "aborted", isAborted: true } as any);
+      await engine.clock.advance(1_000);
+      expect(await engine.shows("0:03 ✓")).toBe(true);
+      // Le shell lancé dans le tour interrompu finit : sa requête reprend, sans repartir de zéro.
+      await engine.clock.advance(36_000);
+      const t2 = await engine.shellDone("b9");
+      await engine.clock.advance(2_000);
+      expect(await engine.shows("0:42")).toBe(true);
+      await engine.finish(t2, []);
+      expect(await engine.shows("0:42 ✓")).toBe(true);
+    });
+
+    test(`chrono : un agent encore actif retient une requête interrompue (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un sous-agent de fond");
+      await engine.clock.advance(2_000);
+      engine.setAgents([{ id: "a1", status: "running", type: "general-purpose", description: "x" }]);
+      await $.turn.complete({ answer: "", durationMs: 1, turnId: t1, reason: "aborted", isAborted: true } as any);
+      await engine.clock.advance(5_000);
+      expect(await engine.shows("0:07")).toBe(true);
+      expect(await engine.shows("1 en fond")).toBe(true);
+    });
+
+    test(`chrono : la dernière tâche finie sans tour relancé le clôt à l'arrêt d'un agent (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un shell de fond");
+      await engine.clock.advance(2_000);
+      await engine.finish(t1, [{ id: "b1", type: "shell" }]);
+      await engine.clock.advance(10_000);
+      // Un agent de Claude Code (titre, suggestion) s'arrête : sa liste dit que le shell a fini.
+      await $.classic.SubagentStop({ stop_hook_active: false, agent_id: "interne", agent_type: "x", agent_transcript_path: "", background_tasks: [] } as any);
+      await engine.clock.advance(5_000);
+      expect(await engine.shows("0:12 ✓")).toBe(true);
+    });
+
+    test(`chrono : ni un pair d'une autre session ni une tâche planifiée ne le relancent (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("bonjour");
+      await engine.clock.advance(2_000);
+      await engine.finish(t1, []);
+      await engine.clock.advance(10_000);
+      const t2 = await engine.agentDone("autre-session");
+      await engine.clock.advance(3_000);
+      await engine.finish(t2, []);
+      await $.prompt.submit({ text: "tâche planifiée", wait: false, origin: { kind: "scheduled-trigger" } } as any);
+      await $.turn.start({ text: "tâche planifiée", turnId: "t9" } as any);
+      await engine.clock.advance(3_000);
+      await engine.finish("t9", []);
+      expect(await engine.shows("0:02 ✓")).toBe(true);
+    });
+
+    test(`chrono : sans liste des tâches de fond, il se rabat sur les agents actifs (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un sous-agent de fond");
+      await engine.clock.advance(2_000);
+      engine.setAgents([{ id: "a1", status: "running", type: "general-purpose", description: "x" }]);
+      // Une version de Claude Code sans `background_tasks`.
+      await $.classic.Stop({ stop_hook_active: false } as any);
+      await $.turn.complete({ answer: "", durationMs: 1, turnId: t1, reason: "answer" } as any);
+      await engine.clock.advance(3_000);
+      expect(await engine.shows("1 en fond")).toBe(true);
+      engine.setAgents([{ id: "a1", status: "completed", type: "general-purpose", description: "x" }]);
+      const t2 = await engine.agentDone("a1");
+      await engine.clock.advance(1_000);
+      await $.classic.Stop({ stop_hook_active: false } as any);
+      await $.turn.complete({ answer: "", durationMs: 1, turnId: t2, reason: "answer" } as any);
+      expect(await engine.shows("0:06 ✓")).toBe(true);
+    });
+
+    test(`chrono : une interruption du tour relancé par la dernière tâche l'arrête (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un shell de fond");
+      await engine.clock.advance(2_000);
+      await engine.finish(t1, [{ id: "b1", type: "shell" }]);
+      await engine.clock.advance(10_000);
+      const t2 = await engine.shellDone("b1");
+      await engine.clock.advance(1_000);
+      // Échap pendant le tour relancé : pas de `classic.Stop`, mais le shell a déjà notifié sa fin.
+      await $.turn.complete({ answer: "", durationMs: 1, turnId: t2, reason: "aborted", isAborted: true } as any);
+      await engine.clock.advance(5_000);
+      expect(await engine.shows("0:13 ✓")).toBe(true);
+      expect(await engine.shows(/en fond/)).toBe(false);
+    });
+
+    test(`chrono : une notification livrée pendant un tour libère sa tâche (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance deux shells de fond");
+      await engine.clock.advance(2_000);
+      await engine.finish(t1, [
+        { id: "b1", type: "shell" },
+        { id: "b2", type: "shell" },
+      ]);
+      await engine.clock.advance(10_000);
+      const t2 = await engine.shellDone("b2");
+      await engine.clock.advance(1_000);
+      // L'autre shell finit pendant ce tour : sa notification le rejoint, puis Échap.
+      await $.prompt.submit({ text: "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>", wait: false, origin: { kind: "task-notification" }, turnId: t2 } as any);
+      await engine.clock.advance(1_000);
+      await $.turn.complete({ answer: "", durationMs: 1, turnId: t2, reason: "aborted", isAborted: true } as any);
+      await engine.clock.advance(5_000);
+      expect(await engine.shows("0:14 ✓")).toBe(true);
+    });
+
+    test(`chrono : une erreur d'API, sans \`classic.Stop\`, garde les agents encore actifs (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      const t1 = await engine.send("lance un sous-agent de fond");
+      await engine.clock.advance(2_000);
+      engine.setAgents([{ id: "a1", status: "running", type: "general-purpose", description: "x" }]);
+      await $.turn.complete({ answer: "", durationMs: 1, turnId: t1, reason: "error" } as any);
+      await engine.clock.advance(5_000);
+      expect(await engine.shows("0:07")).toBe(true);
+      expect(await engine.shows("1 en fond")).toBe(true);
+    });
+
+    test(`chrono : un prompt resté sans tour ne prête pas son heure au même texte envoyé plus tard (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+      const engine = await realEngine($, on, surface);
+      // Un prompt refusé ou consommé par un hook : aucun tour ne le suit.
+      await $.prompt.submit({ text: "continue", wait: false, origin: { kind: surface === "terminal" ? "composer" : "sdk" } } as any);
+      await engine.clock.advance(600_000);
+      await engine.send("continue");
+      await engine.clock.advance(2_000);
+      expect(await engine.shows("0:02")).toBe(true);
+    });
+  }
+
   for (const surface of ["terminal", "desktop"] as const) {
     test(`tokens/s : le temps de génération du modèle seul, depuis le dernier message (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const clock = mock.clock(on, { now: 1_000_000 });
       on("session.start", ($, e) => ({ cwd: e.cwd }));
       engineDraws(on);
-      on("prompt.submit", async (_, e: any) => {
-        if (!e.turnId) await $.turn.start({ text: e.text, turnId: "t1" });
-        return { text: e.text };
-      });
+      on("prompt.submit", (_, e: any) => ({ text: e.text }));
       on("turn.start", ($, e: any) => ({ turnId: e.turnId }));
       // Sous le plugin : le modèle lit le prompt (`wait` ms), puis génère `tokens` en `generate` ms.
       let plan = { wait: 0, generate: 0, tokens: 0 };
@@ -472,7 +782,11 @@ describe("session-tools", () => {
           // les morceaux de la réponse, sans intérêt ici
         }
       };
-      const send = (text: string) => $.prompt.submit({ text, wait: false, origin: { kind: "composer" } } as any);
+      // Un message reçu au repos, puis son tour (docs/evenements-moteur.md).
+      const send = async (text: string) => {
+        await $.prompt.submit({ text, wait: false, origin: { kind: "composer" } } as any);
+        await $.turn.start({ text, turnId: "t1" } as any);
+      };
 
       await send("bonjour");
       expect(await ui.find({ type: "Text", text: /tok\/s$/ })).toBeUndefined();
@@ -505,13 +819,12 @@ describe("session-tools", () => {
       const { Text } = $.ui.resolve(e);
       return e.component === "AbovePrompt" ? Text({ key: "autre", children: "Stats" }) : Text({ children: "" });
     });
-    on("prompt.submit", async (_, e: any) => {
-      await $.turn.start({ text: e.text, turnId: "t1" });
-      return { text: e.text };
-    });
+    on("prompt.submit", (_, e: any) => ({ text: e.text }));
     on("turn.start", ($, e: any) => ({ turnId: e.turnId }));
     await $.session.start({ surface: "desktop", isInteractive: true, cwd: "/work" } as any);
+    // Un message reçu au repos, puis son tour (docs/evenements-moteur.md).
     await $.prompt.submit({ text: "bonjour", wait: false, origin: { kind: "sdk" } } as any);
+    await $.turn.start({ text: "bonjour", turnId: "t1" } as any);
     const ui = await mountValues($, "desktop");
     const root = await ui.find({ type: "Box" });
     const [mine, other] = (root?.children ?? []) as any[];
@@ -532,7 +845,7 @@ describe("session-tools", () => {
       opened.push(e.id);
       return { value: {} } as any;
     });
-    const out = await $.command.run({ command: "session-tools:start", args: "" });
+    const out = await $.command.run({ command: "session-tools:start", args: "" } as any);
     expect(String(out.text)).toBe("Mods démarrés.");
     expect(reachedBelow).toBe(false);
     expect(opened).toEqual([]);

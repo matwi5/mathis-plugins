@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.7.3 — 2026-10-27
+
+### Documentation
+- L'arbre « Architecture » du README cite le fichier de tests, que `scripts/check.sh` vérifie ; la section « Développement » renvoie à `scripts/check.sh asana-board`.
+
+---
+
 ## 0.7.2 — 2026-10-16
 
 ### Documentation

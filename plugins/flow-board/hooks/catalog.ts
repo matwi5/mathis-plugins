@@ -24,6 +24,10 @@ export const C = {
   magenta: '#C36BD9',
   indigo: '#7C83F2',
   sky: '#56B4E9',
+  /** Vert anis : la lecture de transcripts (B1), loin du bleu des hachures « attente d'une tâche de fond ». */
+  anise: '#9BC53D',
+  /** Mauve : les pistes des sessions liées, plus loin du violet de l'orchestrateur que le lilas. */
+  mauve: '#C9A3F0',
   sand: '#C9A66B',
   slate: '#7F8EA3',
   gray: '#8B8B93',
@@ -225,7 +229,7 @@ const GROUP_STEPS = [
     ...step(
       'security',
       'Revue de sécurité',
-      "in the same message as the group review (it is read-only, so it does not wait for the fixes): judge whether it is worth it and say so; if it is, launch it yourself: a read-only reviewer subagent limited to the group's diff, never /security-review (details in \"Security review\" below); once the group review's fixes are committed, it reads the diff of those fixes only; it fixes nothing: its findings go to the user, who decides on their fixes",
+      "in the same message as the group review (it is read-only, so it does not wait for the fixes): judge whether it is worth it and say so; if it is, launch it yourself: a read-only reviewer subagent limited to the group's diff, never /security-review (details in \"Security review\" below); once the group review's fixes are committed, it reads the diff of those fixes only; it follows the security review method file of flow-board and fixes nothing: each kept finding goes to the user with a ready fix, and the user decides",
     ),
     isWithPrevious: true,
   },
@@ -610,8 +614,9 @@ export const SKILLS: Record<string, SkillDef> = {
     role: 'event',
     isUserOnly: true,
     command: 'code-review',
-    // `high` fixe le nombre de constats (sinon, le dernier niveau tapé) ; la revue applique ses
-    // correctifs à la copie de travail, à relire avant le commit.
+    // `high` fixe l'effort de la revue et sa recette (nombre de chercheurs et de constats ; sans
+    // niveau, le dernier tapé) ; la revue applique ses correctifs à la copie de travail, à relire
+    // avant le commit.
     args: 'high --fix',
     steps: [],
   },
@@ -637,7 +642,7 @@ export const SKILLS: Record<string, SkillDef> = {
     label: 'Revue de sécurité',
     gender: 'f',
     flowLabel: 'Revue de sécurité',
-    verb: 'Après la revue du groupe, quand Claude la juge utile : un sous-agent relecteur qu’il lance lui-même, limité au diff du groupe ; les failles te reviennent, tu décides de leur correction',
+    verb: 'Après la revue du groupe, quand Claude la juge utile : un sous-agent relecteur qu’il lance lui-même, limité au diff du groupe, selon une méthode fixe ; chaque faille te revient avec un correctif prêt, tu décides de sa correction (« corrige F1 et F3 »)',
     glyph: '⛨',
     color: C.red,
     // Comme la revue du groupe, un événement de l'Implémentation ; elle ne bloque jamais la livraison.

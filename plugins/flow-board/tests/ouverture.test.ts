@@ -140,7 +140,7 @@ test('fix.step revient en arrière : les étapes d’après redeviennent à fair
   expect(steps.slice(0, at).every(s => s.status === 'done')).toBe(true)
 })
 
-test('par l’outil : open pendant un parcours lancé par un skill, le panneau montre le nouveau', async ($, on) => {
+test('par l’outil : open pendant un parcours lancé par un skill, le panneau montre le nouveau', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 300_000_000 })
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))

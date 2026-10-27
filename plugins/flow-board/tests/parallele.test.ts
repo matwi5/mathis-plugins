@@ -98,9 +98,9 @@ test('le panneau : ⇉ seulement pour le lot, et la raison quand un groupe est e
 
   // A et C commencés : plus de ⇉, B attend qu'ils soient finis.
   await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'doing' }, { id: 'c1', status: 'doing' }] } as any)
-  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
-  await ui.unmount()
+  const after = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  expect(await after.find({ key: 'launch-parallel' })).toBeUndefined()
+  await after.unmount()
 })
 
 test('lot retenu par un groupe en cours : le panneau le dit', async ($, on) => {

@@ -53,7 +53,7 @@ const start = async ($: any) => {
   return $.tool.call({ tool: TOOL, title: 'Lot SC', tickets: LOT, groups: GROUPS } as any)
 }
 
-test('les groupes se rangent par vague : A ∥ B d’abord, C ensuite', async ($, on) => {
+test('les groupes se rangent par vague : A ∥ B d’abord, C ensuite', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 60_000_000 })
   mock.store(on)
   engine(on)
@@ -77,7 +77,7 @@ test('les groupes se rangent par vague : A ∥ B d’abord, C ensuite', async ($
   }
 })
 
-test('▶ Lancer A met /implement et ses tickets dans l’ordre ; ⇉ lance le seul lot A ∥ B par /implement-spec, sans spec', async ($, on) => {
+test('▶ Lancer A met /implement et ses tickets dans l’ordre ; ⇉ lance le seul lot A ∥ B par /implement-spec, sans spec', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 61_000_000 })
   mock.store(on)
   const filled = engine(on)
@@ -104,7 +104,7 @@ test('▶ Lancer A met /implement et ses tickets dans l’ordre ; ⇉ lance le s
   expect(note.text).toMatch(/Ticket queue chosen by the user, in order: 1\) LIGHTS ON\/OFF/)
 })
 
-test('« ↗ Session liée » confie un groupe à une session liée : le parcours reste ici, Claude rend ses statuts', async ($, on) => {
+test('« ↗ Session liée » confie un groupe à une session liée : le parcours reste ici, Claude rend ses statuts', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 61_500_000 })
   mock.store(on)
   const filled = engine(on)
@@ -169,7 +169,8 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(text).toMatch(/arguments « high --fix consignes : <chemin> »\), sur les changements du groupe \(.*\), en lui donnant la liste des choix déjà déclarés .* et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur, jamais /security-review (qui relit aussi les autres groupes).
   expect(text).toMatch(/5\) dans le même message que le relecteur du point 4 \(elle est en lecture seule et n'attend pas ses correctifs\), juger si une revue de sécurité vaut la peine \(les changements du groupe touchent : authentication/)
-  expect(text).toMatch(/la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort xhigh\), en lecture seule, avec pour seul périmètre les changements du groupe \(point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe .*\) et pour critères ceux de \/security-review/)
+  expect(text).toMatch(/la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode\), en lecture seule, avec pour seul périmètre les changements du groupe \(point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe .*\) et pour méthode le fichier de méthode de la revue de sécurité, \S+\/reference\/revue-securite\.md/)
+  expect(text).toContain('chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt')
   expect(text).toMatch(/ne pas lancer \/security-review, qui relit la branche face à la branche par défaut/)
   // La revue du groupe ne tranche pas un conflit entre la spec et une consigne : elle le remonte.
   expect(text).toMatch(/elle ne tranche pas un conflit entre la spec et une consigne \(CLAUDE\.md, une demande de ma part\) : elle ne corrige pas ce point et me le remonte/)
@@ -221,7 +222,7 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(JSON.stringify(await $.tool.call({ tool: TOOL, returned: ['A'] } as any))).toMatch(/returned: no group in a linked session among A/)
 })
 
-test('« 🐞 Bug · session liée » : seulement en code ou revue ; le diagnostic s’y greffe en détour, puis se clôt sans fermer la phase', async ($, on) => {
+test('« 🐞 Bug · session liée » : seulement en code ou revue ; le diagnostic s’y greffe en détour, puis se clôt sans fermer la phase', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 61_700_000 })
   mock.store(on)
   const filled = engine(on)

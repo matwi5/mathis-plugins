@@ -43,7 +43,7 @@ test('un groupe fini propose sa revue (/code-review), puis passe « revu » ; la
   await $.tool.call({ tool: TOOL, set: [{ id: 'A1', status: 'done' }, { id: 'A2', status: 'done' }] } as any)
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     // Le groupe A est fini : son bouton de revue, sur sa ligne ; la carte « Ensuite » propose le groupe suivant.
     expect(await ui.find({ key: 'review-group-A' })).toBeDefined()
     expect(await ui.find({ key: 'go-final-review' })).toBeUndefined()

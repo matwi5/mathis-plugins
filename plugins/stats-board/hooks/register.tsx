@@ -16,9 +16,9 @@
 //   Pas de `/stats` : la commande intégrée de Claude Code porte ce nom.
 
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { PromptOrigin, Register } from 'claude-code'
 
-import type { Discussion, Meta, Notice, ProjectInfo, Published, SessionRow, Snapshot, Tab, Ui, UsageRow } from '../types'
+import type { Discussion, Meta, Notice, ProjectInfo, Published, SessionRow, Snapshot, Tab, Tracker, Ui, UsageRow } from '../types'
 import {
   LOCAL_LABEL,
   SCHEMA,
@@ -27,6 +27,7 @@ import {
   cwdOf,
   dayOf,
   discussionOf,
+  floorMinute,
   fmtCost,
   isStale,
   keepHistory,
@@ -48,6 +49,26 @@ import {
   unpricedOf,
   withLabels,
 } from './model.ts'
+import {
+  EMPTY_TRACKER,
+  REQUESTS_DIR,
+  attachAgent,
+  costed,
+  endTurn,
+  finishTask,
+  noteTasks,
+  openRequest,
+  ownerNow,
+  recordCall,
+  relaunchOwner,
+  requestFile,
+  requestOfAgent,
+  requestOfTurn,
+  startTurn,
+  type Call,
+  type Relaunch,
+} from './requests.ts'
+import { BROKEN, EMPTY_DURATIONS, MONTH_FILE, TOTALS_DIR, emptyMonth, joinMonths, monthOfJson, monthsOf, parseRequestLog, refreshDurations } from './durations.ts'
 import { drawBand, drawPane, kitOf, type Actions, type Caps, type View } from './view.tsx'
 
 const PANE = 'ccstats'
@@ -102,6 +123,13 @@ const LABELS_FILE = 'names.json'
 const GIT_ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' }
 /** Plafond du relevé gardé dans `$.store` (4 Mio en tout pour le plugin). */
 const STORE_LIMIT = 3_000_000
+/** Le délai d'un nouveau relevé après un relevé qui n'est pas net (totaux de durée lus en partie). */
+const RETRY_MS = 45_000
+/**
+ * Un mois de totaux illisible modifié depuis moins de 2 minutes est en cours d'écriture par une autre
+ * session (une écriture dure quelques millisecondes) ; plus ancien, il est cassé pour de bon (décision « Seuil »).
+ */
+const MONTH_BUSY_MS = 2 * 60_000
 
 const EMPTY_UI: Ui = {
   tab: 'overview',
@@ -112,6 +140,7 @@ const EMPTY_UI: Ui = {
   project: null,
   model: null,
   sessionSort: 'cost',
+  requestSort: 'cost',
   expanded: { models: false, projects: false, sessions: false, days: false },
   day: null,
 }
@@ -127,6 +156,8 @@ const notice = atom({ plugin: 'stats-board', key: 'notice' } as const, null as N
 const isBandHidden = atom({ plugin: 'stats-board', key: 'isBandHidden' } as const, false)
 const here = atom({ plugin: 'stats-board', key: 'here' } as const, null as string | null)
 const discussion = atom({ plugin: 'stats-board', key: 'discussion' } as const, EMPTY_DISCUSSION)
+// Sans texte de message : lisible par les autres plugins, comme tout `$.state`.
+const requests = atom({ plugin: 'stats-board', key: 'requests' } as const, EMPTY_TRACKER as Tracker)
 
 // Le contrat `Elements` du moteur : pas de `Svg` sur le terminal. La table de `$.ui.resolve`
 // le contient quand même (fragment vide) : on ne peut pas s'y fier.
@@ -141,6 +172,31 @@ let detailInFlight: Promise<void> | null = null
 /** Le lanceur de npx qui a marché : `npx` direct, `npx.cmd`, ou `cmd.exe /c npx` sous Windows. */
 let launcher: string[] | null = null
 let ticks = 0
+/** Heure (horloge du mod) où la relance d'un relevé qui n'est pas net a été armée ; null sans relance prévue. */
+let retryArmedAt: number | null = null
+
+// Les prompts reçus, en attente du `turn.start` de leur tour : le moteur rend la main de
+// `prompt.submit` avant ce tour (essai du 26/10/2026, Claude Code 2.1.310 et 2.1.308), donc
+// `turn.start` retrouve le sien par le texte, le même dans les deux événements (comme le chrono de
+// session-tools). Un message tapé pendant un tour a déjà sa requête (`request`) : s'il attend le
+// tour suivant, ce tour travaille pour elle. Seule l'empreinte du texte est gardée, jamais le
+// texte. Les dix derniers suffisent : un prompt attend son tour quelques millisecondes.
+let submitted: Submitted[] = []
+type Submitted = { print: string; at: number; isUser: boolean; kind: string | undefined; request?: number }
+
+// Le début de chaque message (Q15 bis) : dans cette variable seulement, jamais dans `$.state`,
+// `$.store` ni un fichier. Perdu au rechargement du module ou à la reprise de la session : la carte
+// « Requêtes » n'affiche alors que l'heure. Clé : `<fichier de relevé>#<requête>`.
+const openings = new Map<string, string>()
+const OPENINGS_MAX = 500
+const OPENING_CHARS = 60
+
+// L'écriture du fichier de relevé : une à la fois, dans l'ordre, et regroupée quand les arrêts se suivent.
+/** Heure (horloge du système) de la dernière écriture demandée et pas encore partie ; null sans attente. */
+let writeDueAt: number | null = null
+let writes: Promise<void> = Promise.resolve()
+const WRITE_DELAY_MS = 500
+const WRITE_STALE_MS = 10 * WRITE_DELAY_MS
 
 /** Un effet d'interface raté (pas d'écran, surface sans panneau) ne doit jamais gêner le relevé. */
 const quietly = async (effect: () => unknown) => {
@@ -213,10 +269,25 @@ export const register: Register = (on) => {
     // Un relevé d'un autre format (gardé par l'hôte au rechargement) est écarté, puis refait.
     const current = await read($, snapshot)
     if (current && !isSnapshot(current)) await update($, snapshot, () => null)
+    // Une nouvelle session repart sans relance prévue : une minuterie d'avant a pu se perdre au rechargement.
+    retryArmedAt = null
     // Le dernier relevé, gardé d'une session à l'autre : bandeau et panneau l'ont tout de suite.
     if (!(await read($, snapshot))) {
       const stored = await Promise.resolve($.store.get(STORE_SNAPSHOT)).catch(() => undefined)
-      if (isSnapshot(stored)) await update($, snapshot, () => stored)
+      if (isSnapshot(stored)) {
+        // Le store ne garde pas les durées : celles de ce poste se relisent dans leurs fichiers par
+        // mois, celles des autres dans leurs fichiers publiés (clone local, sans git).
+        const dir = await claudeDir($)
+        // Un store réduit à ce poste (trop gros) : les autres postes reviennent au relevé, comme avant.
+        const [found, peers] = await Promise.all([
+          readTotals($, dir, await $.clock.now()).catch(() => null),
+          stored.machines.length > 1 ? peersOf($, dir, stored).catch(() => undefined) : undefined,
+        ])
+        const totals = found?.durations ?? null
+        // Un mois mal lu à l'ouverture : un relevé sous une minute plutôt qu'à l'âge du dernier.
+        if (found && !found.isClean) await retrySoon($)
+        await update($, snapshot, () => ({ ...stored, ...(totals ? { durations: totals } : {}), ...(peers ? { peers } : {}) }))
+      }
     }
     // La discussion ouverte : coût et contexte d'après le moteur, tout de suite.
     await quietly(() => readLive($))
@@ -233,10 +304,115 @@ export const register: Register = (on) => {
   // En panne, le mod s'efface : la commande statique dit alors qu'il n'est pas actif.
   on('command.run', { command: STATIC_CMD }, answer).catch(() => undefined)
 
-  // Après un tour de la conversation principale : ses tokens et le coût du moteur pour la
-  // discussion, puis un relevé si le dernier a vieilli.
-  on('turn.complete', async ($, e, next) => {
+  // Requêtes : un message de l'utilisateur en ouvre une. Au repos, il est noté en attendant son
+  // tour ; pendant un tour, il le rejoint et prend la suite du tour.
+  on('prompt.submit', async ($, e, next) => {
+    const at = await $.clock.now()
+    const isUser = fromUser(e.origin)
+    const print = printOf(e.text)
+    const kind = e.origin?.kind
+    // Une notification livrée pendant un tour n'en crée pas : sa tâche, finie, quitte sa requête
+    // à cet instant, et le travail qui suit reste au tour en cours.
+    if (e.turnId && !isUser) await quietly(() => update($, requests, (t) => finishTask(t, notifiedTask(relaunchOf(kind, e.text)))))
+    // Une commande tapée pendant un tour (locale, ou un skill qui attendra le tour suivant) n'ouvre
+    // rien ici : si elle passe au modèle, son tour l'ouvre.
+    if (!e.turnId || !isUser || e.command) {
+      submitted = [...submitted.slice(-9), { print, at, isUser, kind }]
+      return next(e)
+    }
+    // Envoyé pendant un tour : le message ouvre sa requête et prend la suite du tour, s'il entre.
     const result = await next(e)
+    if (!('drop' in result)) {
+      await quietly(async () => {
+        const request = await openFor($, e.text, at, e.turnId)
+        submitted = [...submitted.slice(-9), { print, at, isUser, kind, request }]
+      })
+    }
+    return result
+  }).catch(() => undefined) // en cas de panne du mod, le message passe sans lui
+
+  on('turn.start', async ($, e, next) => {
+    const agentId = e.agentId
+    if (agentId === undefined) await quietly(() => noteTurn($, e.text, e.turnId))
+    // Le premier tour d'un agent vu sans `agent.spawn` (un agent interne de Claude Code) : rattaché en attendant.
+    else await quietly(() => update($, requests, (t) => attachAgent(t, agentId, { isSpawn: false })))
+    return next(e)
+  })
+
+  // Un agent lancé : rattaché à la requête de son parent, ou à celle du fil principal (docs/evenements-moteur.md, « Filiation »).
+  on('agent.spawn', async ($, e, next) => {
+    const result = await next(e)
+    const agentId = result.agentId
+    if (agentId) await quietly(() => update($, requests, (t) => attachAgent(t, agentId, { parent: e.parentAgentId, isSpawn: true })))
+    return result
+  }).catch(() => undefined) // en cas de panne du mod, l'agent part sans lui
+
+  // Chaque appel au modèle, du fil principal ou d'un agent : ses tokens, son modèle, sa durée (de
+  // l'entrée dans l'étape à la fin du flux) et son temps de génération (du premier morceau au dernier).
+  on('turn.step', async function* ($, e, next) {
+    const startedAt = await $.clock.now()
+    // La requête à l'entrée de l'appel : un message envoyé pendant l'appel ne le lui prend pas.
+    const t = await read($, requests)
+    const request = e.agentId ? requestOfAgent(t, e.agentId) : requestOfTurn(t, e.turnId)
+    const stream = next(e)
+    let firstAt: number | null = null
+    let stopAt: number | null = null
+    let usage: Call['usage'] & { model?: string } | null = null
+    for await (const chunk of stream) {
+      // Le premier morceau de la réponse ; l'enveloppe et les marques de nouvel essai n'en sont pas.
+      if (firstAt === null && chunk.kind !== 'engine') firstAt = await $.clock.now()
+      if (chunk.kind === 'stop' && chunk.usage) {
+        usage = chunk.usage
+        stopAt = await $.clock.now()
+      }
+      yield chunk
+    }
+    const result = await stream.result
+    usage ??= result?.usage ?? null
+    // Sans usage (appel interrompu ou en échec) : ses durées comptent, sans token.
+    const end = await $.clock.now()
+    // Sans usage, le modèle demandé, sans sa marque de variante (`[1m]`) : l'id que l'API rend aux autres appels.
+    const call: Call = { model: usage?.model || e.model.replace(/\[[^\]]*\]$/, ''), usage: usage ?? NO_USAGE, apiMs: end - startedAt, genMs: (stopAt ?? end) - (firstAt ?? end) }
+    await quietly(() => update($, requests, (t) => recordCall(t, request, call)))
+    return result
+  })
+
+  // Le fil principal s'arrête : la liste des tâches de fond est à jour (repli sans elle : les agents
+  // encore actifs), puis le relevé de la session est écrit (un peu après, pour la fin du tour).
+  on('classic.Stop', async ($, e, next) => {
+    const ids = e.background_tasks ? e.background_tasks.map((x) => x.id) : await activeAgents($)
+    await quietly(() => update($, requests, (t) => noteTasks(t, ids, ownerNow(t))))
+    scheduleWrite($)
+    return next(e)
+  }).catch(() => undefined) // en cas de panne du mod, l'arrêt passe sans lui
+
+  // Un agent s'arrête : sa liste est à jour aussi. Une tâche qui y apparaît pour la première fois va
+  // à la requête courante, comme à l'arrêt du fil principal (docs/evenements-moteur.md, « Filiation »).
+  on('classic.SubagentStop', async ($, e, next) => {
+    const list = e.background_tasks
+    if (list) await quietly(() => update($, requests, (t) => noteTasks(t, list.map((x) => x.id), ownerNow(t))))
+    return next(e)
+  }).catch(() => undefined) // en cas de panne du mod, l'arrêt passe sans lui
+
+  // Après un tour de la conversation principale : sa requête, ses tokens et le coût du moteur pour
+  // la discussion, puis un relevé si le dernier a vieilli.
+  on('turn.complete', async ($, e, next) => {
+    // L'heure de fin avant les hooks d'en dessous, et la requête close même si l'un d'eux échoue.
+    const at = await $.clock.now()
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } finally {
+      if (!e.agentId) {
+        // Hors d'une fin normale, pas de `classic.Stop` (interruption : docs/evenements-moteur.md ; erreur : à
+        // confirmer) : la requête garde ses tâches connues et ses agents encore actifs.
+        const isInterrupted = e.reason !== 'answer'
+        const active = isInterrupted ? await activeAgents($) : []
+        await quietly(() => update($, requests, (t) => endTurn(t, e.turnId, at, { isInterrupted, activeAgents: active })))
+      }
+      // Une interruption n'a pas de `classic.Stop`, un agent qui finit son tour non plus : l'écriture part d'ici aussi.
+      scheduleWrite($)
+    }
     if (!e.agentId) {
       const u = (result as { usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number } }).usage
       if (u) {
@@ -251,8 +427,20 @@ export const register: Register = (on) => {
     return result
   })
 
+  // Fin de la session (sortie, `claude -p` fini, `/clear`, reprise) : le relevé est écrit tout de
+  // suite, sans attendre le regroupement. Après `/clear`, le suivi repart de zéro.
+  on('session.end', async ($, e, next) => {
+    await quietly(() => writes.then(() => writeLog($)))
+    if (e.reason === 'clear') {
+      await quietly(() => update($, requests, () => EMPTY_TRACKER))
+      // Les débuts de message de la discussion d'avant ne servent plus.
+      openings.clear()
+    }
+    return next(e)
+  }).catch(() => undefined) // en cas de panne du mod, la fin passe sans lui
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const view = await readView($)
+    const view = await readView($, true)
     const kit = kitOf($.ui.resolve(e) as unknown as Record<string, unknown>, e.props.bodyColumns, capsOf(e.surface))
     return drawPane(kit, view, actionsFor($)) as any
   })
@@ -281,7 +469,9 @@ export const register: Register = (on) => {
 
 // ─── Vue et actions ─────────────────────────────────────────────────────────
 
-async function readView($: any): Promise<View> {
+/** `withRequests` : le panneau seulement ; le bandeau n'affiche pas les requêtes et ne s'abonne pas à elles. */
+async function readView($: any, withRequests = false): Promise<View> {
+  const tracker = withRequests ? await read($, requests) : EMPTY_TRACKER
   return {
     snapshot: await read($, snapshot),
     ui: await read($, ui),
@@ -290,6 +480,8 @@ async function readView($: any): Promise<View> {
     isBandHidden: await read($, isBandHidden),
     here: await read($, here),
     discussion: await read($, discussion),
+    requests: tracker,
+    openings: openingsOf(tracker),
     now: await $.clock.now(),
   }
 }
@@ -361,6 +553,29 @@ function refresh($: any, isAsked: boolean): Promise<void> {
   return inFlight
 }
 
+/**
+ * Un relevé sous une minute, après un relevé qui n'est pas net : une seule relance prévue à la fois,
+ * quel que soit le nombre de relevés non nets entre-temps. Échue pendant un relevé en cours, elle
+ * attend sa fin puis repart : ce relevé a pu passer son propre appel avant elle.
+ */
+async function retrySoon($: any) {
+  const now = await $.clock.now()
+  // Une minuterie refusée par un hook n'appelle jamais sa fonction : passé deux délais, une nouvelle est armée.
+  if (retryArmedAt !== null && now - retryArmedAt < 2 * RETRY_MS) return
+  retryArmedAt = now
+  try {
+    $.clock.after(RETRY_MS, () => {
+      void (async () => {
+        if (inFlight) await inFlight
+        retryArmedAt = null
+        await refresh($, false)
+      })()
+    })
+  } catch {
+    retryArmedAt = null
+  }
+}
+
 async function load($: any, isAsked: boolean) {
   const startedAt = await $.clock.now()
   const step = (loading: string) => update($, meta, (m) => ({ ...m, loading, startedAt: m.startedAt ?? startedAt }))
@@ -397,9 +612,32 @@ async function load($: any, isAsked: boolean) {
   const keys = unique([...kept.rows.map((r) => r.project), ...ownSessions.map((s) => s.project)])
   const ownProjects = await resolveProjects($, keys, previous?.projects ?? {}, dir, home)
 
+  await step('Durées : fichiers de relevé des requêtes…')
+  // Les totaux d'avant : ceux des fichiers par mois, que d'autres sessions ont pu avancer ; lus en
+  // partie seulement, ceux que cette session a déjà en mémoire (décision « Règle »).
+  const totals = await readTotals($, dir, await $.clock.now()).catch(() => ({ durations: null, texts: new Map<string, string>(), isClean: false }))
+  const prevDurations = (totals.isClean ? totals.durations : (previous?.durations ?? totals.durations)) ?? previous?.durations ?? EMPTY_DURATIONS
+  const fresh = await readDurations($, dir, prevDurations, tz.offset, machine)
+  const durations = fresh.durations
+  // Relevé net : le dossier des totaux, tous ses mois et la liste des fichiers de relevé se sont lus.
+  // Sinon, ni écriture ni publication ; un relevé repart sous une minute.
+  const isNet = totals.isClean && fresh.isListed
+  if (totals.isClean && fresh.isLost) {
+    warnings.push('Durées : dossier des relevés introuvable (~/.claude/stats-board/requetes) ; les totaux déjà connus sont gardés, rien n’est réécrit.')
+  } else if (isNet) {
+    try {
+      await writeTotals($, dir, durations, totals.texts)
+    } catch (err) {
+      warnings.push(`Totaux de durée : écriture impossible (${messageOf(err)}) ; ils se refont depuis les relevés à chaque relevé.`)
+    }
+  } else {
+    warnings.push('Durées : totaux lus en partie (un mois en cours d’écriture ou illisible) ; ni écrits ni publiés, nouveau relevé dans une minute.')
+    await retrySoon($)
+  }
+
   await step('Partage entre postes : publication et lecture des autres postes…')
-  const own = { machine, tzOffset: tz.offset, rows: kept.rows, sessions: ownSessions, projects: ownProjects }
-  const others = await share($, dir, name, own, warnings)
+  const own = { machine, tzOffset: tz.offset, rows: kept.rows, sessions: ownSessions, projects: ownProjects, durations }
+  const others = await share($, dir, name, own, warnings, isNet || (totals.isClean && !!fresh.isLost))
   const merged = mergeMachines(own, others)
 
   let snap: Snapshot = {
@@ -418,21 +656,149 @@ async function load($: any, isAsked: boolean) {
     sessionless: merged.sessionless,
     version,
     keptDays: kept.kept,
+    durations,
+    peers: merged.peers,
     warnings,
   }
-  // Le store du plugin tient en 4 Mio : au-delà, les plus vieilles sessions et blocs cèdent.
-  while (JSON.stringify(snap).length > STORE_LIMIT && (snap.sessions.length > 100 || snap.blocks.length > 50)) {
+  // Le store du plugin tient en 4 Mio, sans les durées, gardées dans leurs fichiers par mois : au-delà, les
+  // plus vieilles sessions et blocs cèdent.
+  const sizeOf = (x: Snapshot) => JSON.stringify({ ...x, durations: EMPTY_DURATIONS, peers: undefined }).length
+  while (sizeOf(snap) > STORE_LIMIT && (snap.sessions.length > 100 || snap.blocks.length > 50)) {
     blockRows = snap.blocks.slice(Math.floor(snap.blocks.length / 4))
     snap = { ...snap, sessions: snap.sessions.slice(Math.floor(snap.sessions.length / 4)), blocks: blockRows }
   }
   // Encore trop gros : le store ne garde que ce poste ; les autres reviennent au relevé suivant.
-  const toStore = JSON.stringify(snap).length > STORE_LIMIT ? { ...snap, rows: snap.rows.filter((r) => r.machine === machine), sessions: snap.sessions.filter((s) => s.machine === machine), machines: [machine] } : snap
+  const trimmed = sizeOf(snap) > STORE_LIMIT ? { ...snap, rows: snap.rows.filter((r) => r.machine === machine), sessions: snap.sessions.filter((s) => s.machine === machine), machines: [machine] } : snap
+  // Ni les durées de ce poste (fichiers par mois) ni celles des autres (fichiers publiés) : elles se relisent à l'ouverture.
+  const toStore = { ...trimmed, durations: EMPTY_DURATIONS, peers: undefined }
 
   await update($, snapshot, () => snap)
   await update($, meta, () => EMPTY_META)
   await quietly(() => $.store.set(STORE_SNAPSHOT, toStore))
   await syncStatus($)
   if (isAsked) await say($, 'ok', `✓ Relevé à jour : ${fmtCost(sum(snap.rows).cost)} au total, ${daily.isOffline ? 'prix hors ligne' : 'prix en ligne'}.`)
+}
+
+// ─── Durées ─────────────────────────────────────────────────────────────────
+
+/**
+ * Les durées de ce poste d'après les fichiers de relevé (`~/.claude/stats-board/requetes/`) : seuls
+ * les fichiers modifiés depuis le relevé précédent sont relus (`refreshDurations`). Un fichier
+ * illisible, en cours d'écriture par sa session, est relu au relevé suivant.
+ */
+async function readDurations($: any, dir: string | null, prev: Snapshot['durations'], tz: number, machine: string): Promise<{ durations: Snapshot['durations']; isListed: boolean; isLost?: boolean }> {
+  if (!dir) return { durations: prev, isListed: false }
+  const folder = `${dir}/${REQUESTS_DIR}`
+  let entries: { name: string; kind: string; mtimeMs: number }[]
+  try {
+    entries = await $.fs.list(folder)
+  } catch {
+    // Pas encore de dossier (aucune requête relevée sur ce poste, tous les postes à la mise à jour) :
+    // rien de neuf, et le relevé reste net tant qu'il n'y a aucun fichier d'avant à retirer. Une liste
+    // qui échoue sur un dossier qui existe, ou un dossier disparu sous des totaux, ne l'est pas.
+    // Disparu sous des totaux (effacé à la main) : les totaux restent tels quels, rien n'est réécrit, mais
+    // le relevé publie ses coûts avec les durées déjà connues (décision « Dossier perdu »).
+    const isAbsent = !(await Promise.resolve($.fs.exists(folder)).catch(() => true))
+    const isEmpty = !Object.keys(prev.files).length
+    return { durations: prev, isListed: isAbsent && isEmpty, isLost: isAbsent && !isEmpty }
+  }
+  const files = entries.filter((e) => e.kind === 'file' && e.name.endsWith('.json'))
+  // Une lecture qui échoue (erreur passagère, plus de 4 Mio) attend le relevé suivant ; un JSON coupé
+  // peut être laissé de côté ; un autre format (une version plus récente) attend aussi.
+  const read = async (name: string) => {
+    let text: string
+    try {
+      text = await $.fs.read(`${folder}/${name}`)
+    } catch {
+      return null
+    }
+    try {
+      return parseRequestLog(JSON.parse(text))
+    } catch {
+      return BROKEN
+    }
+  }
+  return { durations: await refreshDurations(prev, files, read, tz, machine, await $.clock.now()), isListed: true }
+}
+
+/**
+ * Les totaux de durée gardés par mois (`~/.claude/stats-board/totaux/`), lus ensemble, avec le texte
+ * de chaque mois (pour ne réécrire que ceux qui changent). `isClean` : le dossier et tous ses mois se
+ * sont lus proprement ; sinon (liste ou lecture en échec, mois illisible modifié depuis moins de 2
+ * minutes, donc en cours d'écriture par une autre session), le relevé n'écrit ni ne publie rien
+ * (décision « Règle »). Un mois illisible plus ancien est cassé pour de bon : il compte comme absent,
+ * et se réécrit depuis les relevés (décision « Mois illisible »). `durations` vaut null sans aucun
+ * mois lisible.
+ */
+async function readTotals($: any, dir: string | null, now: number): Promise<{ durations: Snapshot['durations'] | null; texts: Map<string, string>; isClean: boolean }> {
+  const texts = new Map<string, string>()
+  if (!dir) return { durations: null, texts, isClean: false }
+  const folder = `${dir}/${TOTALS_DIR}`
+  let entries: { name: string; kind: string; mtimeMs: number }[]
+  try {
+    entries = await $.fs.list(folder)
+  } catch {
+    // Pas encore de dossier : rien à lire, et c'est net. Une liste qui échoue sur un dossier qui existe ne l'est pas.
+    const isAbsent = !(await Promise.resolve($.fs.exists(folder)).catch(() => true))
+    return { durations: null, texts, isClean: isAbsent }
+  }
+  let isClean = true
+  const parts = await Promise.all(
+    entries
+      .filter((e) => e.kind === 'file' && MONTH_FILE.test(e.name))
+      .map(async (e) => {
+        const month = MONTH_FILE.exec(e.name)![1]!
+        let text: string
+        try {
+          text = await $.fs.read(`${folder}/${e.name}`)
+        } catch {
+          // Une lecture qui échoue (erreur passagère, verrou) attend le relevé suivant, comme un fichier de relevé.
+          isClean = false
+          return null
+        }
+        let part: ReturnType<typeof monthOfJson> = null
+        try {
+          part = monthOfJson(JSON.parse(text))
+        } catch {
+          // JSON coupé : illisible.
+        }
+        // Illisible, mal formé ou rangé sous un autre nom que le sien.
+        if (part?.month !== month) {
+          if (now - e.mtimeMs < MONTH_BUSY_MS) isClean = false
+          return null
+        }
+        texts.set(month, text)
+        return part
+      }),
+  )
+  return { durations: joinMonths(parts), texts, isClean }
+}
+
+/**
+ * Après un relevé net (décision « Règle ») : réécrit les mois dont les totaux ont changé, et vide un
+ * mois qui n'a vraiment plus rien. Deux sessions qui réécrivent les mêmes mois en même temps : la
+ * dernière gagne ; des mois qui ne s'accordent plus sur un fichier de relevé le font relire au relevé
+ * suivant. Lève si l'écriture échoue.
+ */
+async function writeTotals($: any, dir: string | null, d: Snapshot['durations'], texts: ReadonlyMap<string, string>) {
+  if (!dir) return
+  const folder = `${dir}/${TOTALS_DIR}`
+  const parts = monthsOf(d)
+  for (const month of texts.keys()) if (!parts.has(month)) parts.set(month, emptyMonth(month))
+  for (const [month, part] of parts) {
+    const text = JSON.stringify(part)
+    if (texts.get(month) !== text) await $.fs.write(`${folder}/${month}.json`, text)
+  }
+}
+
+/** Les durées des autres postes, relues dans leurs fichiers publiés du clone local de `claude-usage` (sans git). */
+async function peersOf($: any, dir: string | null, snap: Snapshot): Promise<Snapshot['peers']> {
+  if (!dir) return undefined
+  const repo = `${dir}/${USAGE_DIR}`
+  if (!(await Promise.resolve($.fs.exists(`${repo}/.git`)).catch(() => false))) return undefined
+  const others = await readOthers($, repo, await machineName($, dir), [])
+  const own = { machine: snap.machine, rows: snap.rows.filter((r) => r.machine === snap.machine), sessions: snap.sessions.filter((s) => s.machine === snap.machine), projects: snap.projects }
+  return mergeMachines(own, others).peers
 }
 
 // ─── Partage entre postes ───────────────────────────────────────────────────
@@ -483,13 +849,15 @@ async function git($: any, repo: string, args: string[]): Promise<Run> {
  * n'écrit que son fichier : `pull --rebase` ne peut pas entrer en conflit. Un échec de git
  * (hors ligne, identifiants) devient un avertissement ; les fichiers déjà là sont lus quand même.
  */
-async function share($: any, dir: string | null, name: string | null, own: Parameters<typeof publishedOf>[0], warnings: string[]): Promise<Published[]> {
+async function share($: any, dir: string | null, name: string | null, own: Parameters<typeof publishedOf>[0], warnings: string[], isPublishing = true): Promise<Published[]> {
   if (!dir) return []
   const repo = `${dir}/${USAGE_DIR}`
   if (!(await Promise.resolve($.fs.exists(`${repo}/.git`)).catch(() => false))) {
     warnings.push(`Partage entre postes désactivé : pas de dépôt ${USAGE_DIR} dans le dossier de Claude Code (/setup:install le clone).`)
     return []
   }
+  // Un relevé qui n'est pas net ne publie rien : les autres postes se lisent dans le clone local, sans git.
+  if (!isPublishing) return readOthers($, repo, name, warnings)
   if (!name) warnings.push(`Ce poste n’a pas de nom : ses usages ne sont pas publiés (/setup:install, ou une ligne dans ${USAGE_DIR}/${MACHINE_FILE}).`)
   // Plusieurs sessions de Claude Code font leur relevé en même temps sur ce poste : git refuse
   // alors la seconde (`index.lock`), ou son `pull` trouve `origin/main` déjà avancé par l'autre
@@ -541,7 +909,9 @@ async function publish($: any, repo: string, name: string, own: Parameters<typeo
   } catch {
     // Fichier absent ou abîmé : il est réécrit.
   }
-  if (!isSame) await $.fs.write(`${repo}/${file}`, JSON.stringify({ ...body, updatedAt: await $.clock.now() }))
+  // La date de publication part à la minute : un relevé suit de près l'ouverture d'une session ou
+  // la fin d'un tour, qu'elle ne doit pas dater à la seconde (décision « updatedAt »).
+  if (!isSame) await $.fs.write(`${repo}/${file}`, JSON.stringify({ ...body, updatedAt: floorMinute(await $.clock.now()) }))
   // Pas commité, cette fois ou une précédente (commit raté) : on (re)tente, sinon le rebase refuserait.
   const pending = await git($, repo, ['status', '--porcelain', '--', file])
   if (pending.exitCode === 0 && pending.stdout.trim()) {
@@ -766,6 +1136,151 @@ async function resolveProjects($: any, keys: readonly string[], known: Record<st
   // Au-delà des 120 lus par relevé : le dossier gardé, en attendant le relevé suivant.
   for (const k of keys) if (!out[k] && known[k]) out[k] = known[k]!
   return out
+}
+
+// ─── Requêtes ───────────────────────────────────────────────────────────────
+
+// Les messages de l'utilisateur : tapés au terminal ou dans l'app desktop, par Remote Control
+// ou Slack. `unclassified` en fait partie : l'app desktop peut envoyer sans marque d'origine.
+const USER_ORIGINS = new Set(['composer', 'sdk', 'bridge', 'slack-ping', 'unclassified'])
+
+function fromUser(origin: PromptOrigin | undefined): boolean {
+  if (!origin) return true
+  if (origin.kind === 'plugin') return origin.asUser === true
+  return USER_ORIGINS.has(origin.kind)
+}
+
+/** Les caractères de contrôle (C0, DEL, C1) : un seul ferait refuser tout le dessin du panneau (constaté par files-board). */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+
+/** Le début d'un message : sa première ligne non vide, sans caractère de contrôle, coupée à 60 caractères (sans couper un emoji). */
+function openingOf(text: string): string {
+  const chars = Array.from(firstLine(text).replace(/\s+/g, ' ').replace(CONTROL, ''))
+  return chars.length > OPENING_CHARS ? `${chars.slice(0, OPENING_CHARS - 1).join('').trimEnd()}…` : chars.join('')
+}
+
+/** L'empreinte d'un texte (FNV-1a sur 32 bits, et sa longueur) : de quoi retrouver un prompt sans garder son texte. */
+function printOf(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193)
+  return `${text.length}:${(h >>> 0).toString(36)}`
+}
+
+const NO_USAGE: Call['usage'] = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+
+const logKey = (t: Tracker): string | null => (t.log ? requestFile(t.log.session, t.log.openedAt) : null)
+
+/** Les débuts de message des requêtes du relevé en cours, gardés par ce module. */
+function openingsOf(t: Tracker): Record<number, string> {
+  const key = logKey(t)
+  const out: Record<number, string> = {}
+  if (!key || !t.log) return out
+  for (const r of t.log.requests) {
+    const text = openings.get(`${key}#${r.id}`)
+    if (text) out[r.id] = text
+  }
+  return out
+}
+
+/** Un message de l'utilisateur ouvre une requête, dont l'id est rendu ; son début reste dans ce module. */
+async function openFor($: any, text: string, at: number, turnId?: string): Promise<number | undefined> {
+  const session: string = await $.session.id()
+  const project = await read($, here)
+  const now = await $.clock.now()
+  const t = await update($, requests, (x) => openRequest(x, { session, project, at, now, turnId }))
+  // Une autre discussion (après `/clear`) : la vue suit tout de suite la nouvelle.
+  if ((await read($, discussion)).id !== session) await quietly(() => readLive($))
+  const key = logKey(t)
+  if (!key || t.current === null) return undefined
+  openings.set(`${key}#${t.current}`, openingOf(text))
+  while (openings.size > OPENINGS_MAX) openings.delete(openings.keys().next().value!)
+  return t.current
+}
+
+/**
+ * Le début d'un tour du fil principal : celui d'un message de l'utilisateur ouvre sa requête. Sans
+ * prompt noté (module rechargé entre les deux), une notification se reconnaît à son texte, et tout
+ * autre texte non vide compte comme un message (commande qui passe au modèle).
+ */
+async function noteTurn($: any, text: string, turnId: string): Promise<void> {
+  const print = printOf(text)
+  const noted = submitted[submitted.findLastIndex((p) => p.print === print)] ?? null
+  if (noted) submitted = submitted.filter((p) => p.print !== print)
+  // Tapé pendant le tour d'avant, le message a déjà sa requête : ce tour travaille pour elle.
+  if (noted?.request !== undefined) {
+    const request = noted.request
+    await update($, requests, (t) => startTurn(t, turnId, request))
+    return
+  }
+  const kind = noted?.kind ?? notificationKind(text)
+  const isUser = noted ? noted.isUser : text !== '' && kind === undefined
+  if (isUser) {
+    const request = await openFor($, text, noted?.at ?? (await $.clock.now()))
+    if (request !== undefined) await update($, requests, (t) => startTurn(t, turnId, request))
+    return
+  }
+  // Relancé sans message : la requête de la tâche notifiée, qui a fini, ou hors requête.
+  const relaunch = relaunchOf(kind, text)
+  await update($, requests, (t) => startTurn(finishTask(t, notifiedTask(relaunch)), turnId, relaunchOwner(t, relaunch)))
+}
+
+/** L'origine d'une notification reconnue à son seul texte (module rechargé, prompt non noté) ; undefined pour un autre texte. */
+const notificationKind = (text: string): string | undefined =>
+  text.startsWith('<task-notification>') ? 'task-notification' : text.startsWith('<agent-message from=') ? 'peer' : undefined
+
+/**
+ * Ce qui relance un tour sans message de l'utilisateur, d'après son origine et son texte : la
+ * `task-notification` d'une tâche (`<task-id>`), le message de retour d'un agent
+ * (`<agent-message from="…">`), une reprise (sans texte, `auto-continuation`), ou autre chose.
+ */
+function relaunchOf(kind: string | undefined, text: string): Relaunch {
+  if (kind === 'task-notification') return { kind: 'task', id: /<task-id>([^<]+)<\/task-id>/.exec(text)?.[1] ?? null }
+  if (kind === 'peer') return { kind: 'peer', id: /^<agent-message from="([^"]+)"/.exec(text)?.[1] ?? null }
+  if (kind === 'auto-continuation' || (kind === undefined && text === '')) return { kind: 'continue', id: null }
+  return { kind: 'other', id: null }
+}
+
+/** La tâche qui a fini d'après une relance : celle d'une notification ; aucune pour le message d'un agent, qui peut encore tourner. */
+const notifiedTask = (why: Relaunch): string | null => (why.kind === 'task' ? why.id : null)
+
+/** Repli sans liste des tâches de fond : les agents encore actifs ; aucun si la liste des agents manque aussi. */
+async function activeAgents($: any): Promise<string[]> {
+  try {
+    const agents: { id: string; status: string }[] = await $.agent.list()
+    return agents.filter((a) => a.status === 'running' || a.status === 'pending' || a.status === 'waiting').map((a) => a.id)
+  } catch {
+    return []
+  }
+}
+
+function scheduleWrite($: any) {
+  // Une minuterie refusée par un hook n'appelle jamais sa fonction et ne rejette rien (`$.clock.after`
+  // rend un `Timer`) : passé `WRITE_STALE_MS` sans écriture, une nouvelle est demandée.
+  if (writeDueAt !== null && Date.now() - writeDueAt < WRITE_STALE_MS) return
+  writeDueAt = Date.now()
+  try {
+    $.clock.after(WRITE_DELAY_MS, () => {
+      writeDueAt = null
+      writes = writes.then(() => quietly(() => writeLog($)))
+    })
+  } catch {
+    // Une minuterie qui lève ne doit ni gêner le hook appelant ni bloquer les écritures suivantes.
+    writeDueAt = null
+  }
+}
+
+/**
+ * Le relevé de la session, réécrit en entier dans son fichier : seule cette session l'écrit. Le
+ * coût des modèles sans tarif y est estimé au prorata du coût du moteur (celui de la même session).
+ */
+async function writeLog($: any): Promise<void> {
+  const t = await read($, requests)
+  const dir = await claudeDir($)
+  if (!t.log || !dir) return
+  const isSame = (await $.session.id()) === t.log.session
+  const usage = isSame ? await Promise.resolve($.session.usage()).catch(() => null) : null
+  const cost = typeof usage?.cost?.usd === 'number' ? usage.cost.usd : null
+  await $.fs.write(`${dir}/${REQUESTS_DIR}/${requestFile(t.log.session, t.log.openedAt)}`, JSON.stringify(costed(t.log, cost)))
 }
 
 // ─── Petits outils ──────────────────────────────────────────────────────────

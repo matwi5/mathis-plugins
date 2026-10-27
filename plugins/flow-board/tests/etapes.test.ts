@@ -98,7 +98,7 @@ test('pendant /implement, le ticket en cours se lit dans son groupe, avec sa pla
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'y' })
   await $.tool.call({ tool: 'mcp__flow-board__flow', set: [{ id: 'A1', status: 'doing' }] } as any)
   for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
-    ui = await $.ui.mount({ plugin: 'flow-board', surface, ...PANE })
+    const ui = await $.ui.mount({ plugin: 'flow-board', surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: /^▸.Premier$/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'ticket 1/2' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'Premier' })).toBeDefined()

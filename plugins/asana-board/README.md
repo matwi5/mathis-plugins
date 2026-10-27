@@ -6,7 +6,7 @@ Les tâches Asana du projet dans Claude Code, en **panneau** et en **bandeau** a
 - **Il permet d'agir.** Créer, cocher, changer le statut, assigner, commenter, modifier, abandonner ou supprimer une tâche, sans quitter Claude Code.
 - **Il suit Claude.** Quand Claude écrit dans Asana pendant la discussion, le panneau se relit, et la ligne de l'appel dit l'écriture avec le nom des tâches (« Asana · coche « Corriger le bandeau » ») au lieu des GID et du JSON.
 
-Version actuelle : **0.7.2**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.7.3**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -183,7 +183,7 @@ asana-board/
 │   └── svg.ts                   anneau de répartition, barres, indicateurs (copiés de flow-board)
 ├── skills/suivi-asana/          skill de tenue du projet de suivi (SKILL.md, references/)
 ├── types/index.d.ts             contrat de l'état (`PluginState`)
-└── tests/                       `claude plugin test`
+└── tests/asana-board.test.ts    `claude plugin test`
 ```
 
 `view.tsx` ne touche jamais `$` : il reçoit l'état lu et les actions en fermetures. `register.tsx` lui dit aussi ce que la surface dessine (SVG, champs de saisie), d'après le contrat des surfaces du moteur.
@@ -193,9 +193,10 @@ asana-board/
 ## Développement
 
 ```bash
-claude plugin validate plugins/asana-board
-claude plugin test plugins/asana-board
+scripts/check.sh asana-board
 ```
+
+Tous les contrôles, depuis la racine du dépôt (`scripts\check.cmd` sous Windows) : types, tests avec le Claude Code du terminal et celui de l'app desktop, `claude plugin validate`.
 
 - Les tests montent le panneau sur `terminal`, `desktop`, `vscode` et `mobile`, le bandeau sur `terminal` et `desktop`, sous un autre bandeau, et la ligne des écritures de Claude (`ToolUse`) sur `terminal` et `desktop`. Ils simulent Asana, le `CLAUDE.md`, l'horloge et le moteur.
 - Dans le kit de test, un hook qui remplace une opération du moteur (`fs.read`, `ui.open`, `mcp.call`…) doit rendre `{ value }`.

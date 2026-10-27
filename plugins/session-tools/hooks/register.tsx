@@ -1,16 +1,30 @@
 // Outils de session (session-tools), dans un seul module : le moteur suit `$` seulement dans le
 // fichier où il est passé, et n'accepte qu'un hook par événement sans filtre.
 //
-// - Pied du prompt : la durée de la dernière réponse (chrono lancé à l'envoi d'un message,
-//   arrêté quand l'agent a fini), la vitesse du modèle en tokens/s depuis ce message, le temps
+// - Pied du prompt : la durée de la dernière requête (chrono lancé à l'envoi d'un message,
+//   arrêté quand le fil principal a fini et que plus aucune tâche de fond de la requête ne tourne,
+//   avec leur nombre en attendant), la vitesse du modèle en tokens/s depuis ce message, le temps
 //   restant avant que le cache de prompt expire, l'heure, et des boutons : Fichiers (navigateur
-//   files-board) et Diff au terminal, Réécrire, Effort auto et Ultracode (on/off) partout. Sur
+//   files-board) et Diff au terminal, Réécrire et Effort auto partout. Sur
 //   desktop, le pied est trop étroit : les valeurs passent dans un bandeau au-dessus du prompt.
 // - Réécrire : le brouillon du champ de saisie, réécrit en prompt (option `model`, Opus par défaut,
 //   effort low) avec la consigne de `rewrite-system.ts`, remplace le brouillon sans être envoyé.
 // - Effort auto : le même modèle choisit le niveau d'effort du brouillon avec la consigne de
 //   `effort-system.ts`, puis le mod le règle par `/effort` avant l'envoi.
 // - `/session-tools:start` : un premier message qui démarre les mods sans solliciter le modèle.
+//
+// Le chrono applique la même filiation que le suivi des requêtes de stats-board
+// (`plugins/stats-board/hooks/requests.ts` et son `register.tsx`), décrite dans
+// `docs/evenements-moteur.md` (« Ordre des événements », « Filiation »), à garder alignés à la main :
+// un prompt reçu au repos retrouve son `turn.start` par le texte (`prompt.submit` rend la main
+// après) ; les origines d'un message de l'utilisateur (`USER_ORIGINS`, `fromUser`) ; une notification
+// reconnue par son origine (`task-notification` et son `<task-id>`, `peer` et son
+// `<agent-message from>`), ou par son seul texte après un rechargement ; une tâche de fond rattachée à
+// sa première apparition dans `background_tasks` ; la fin quand le fil principal est au repos et que
+// la dernière liste n'a plus de tâche de la requête ; sur une interruption ou une erreur (sans
+// `classic.Stop`), les tâches connues plus les agents `running`, `pending` ou `waiting` ; une
+// requête finie normalement jamais rouverte par une tâche inconnue. Le chrono ne suit que la dernière
+// requête, stats-board toutes : une règle changée d'un côté se change de l'autre, puis dans la doc.
 //
 // Le panneau Asana (/asana) est passé dans son propre plugin, asana-board.
 
@@ -21,15 +35,23 @@ import { REWRITE_SYSTEM } from "./rewrite-system";
 
 // Gardés par l'hôte : survivent au rechargement à chaud du module.
 const lastRequest = { plugin: "session-tools", key: "lastRequestAt" } as const;
-const ultracode = { plugin: "session-tools", key: "ultracode" } as const;
 const rewriting = { plugin: "session-tools", key: "rewriting" } as const;
 const choosingEffort = { plugin: "session-tools", key: "choosingEffort" } as const;
 const responseTimer = { plugin: "session-tools", key: "responseTimer" } as const;
 const generationSpeed = { plugin: "session-tools", key: "generationSpeed" } as const;
+const backgroundTasks = { plugin: "session-tools", key: "backgroundTasks" } as const;
 
-// Le message en route vers son tour : `at` est son heure d'envoi, null s'il ne vient pas de
-// l'utilisateur (le tour qu'il démarre ne touche alors pas au chrono).
-let pending: { at: number | null } | null = null;
+// Les prompts reçus au repos, en attente du `turn.start` de leur tour, et les messages envoyés
+// pendant un tour, que le moteur peut livrer au tour suivant (un message livré dans le tour en
+// cours n'a pas de `turn.start` : il sort de la liste avec les plus anciens). Le moteur rend la main de
+// `prompt.submit` avant ce tour (essai du 26/10/2026, Claude Code 2.1.310 et 2.1.308), donc
+// `turn.start` retrouve le sien par le texte, le même dans les deux événements. Une variable du
+// module, vide après un rechargement : un texte non vide compte alors comme un message. Les dix
+// derniers suffisent : un prompt attend son tour quelques millisecondes (essai), et la liste ne
+// grossit pas si un tour ne démarre jamais.
+let submitted: Submitted[] = [];
+// `isStarted` : un message envoyé pendant un tour, dont la requête est déjà partie à son envoi.
+type Submitted = { text: string; at: number; isUser: boolean; origin: PromptOrigin | undefined; isStarted?: boolean };
 
 // Les boutons dont l'appel au modèle est en cours : marqués avant tout `await`, un double clic ne
 // lance qu'un appel. Une variable du module repart à vide au rechargement, où l'appel est perdu.
@@ -56,48 +78,73 @@ export const register: Register = (on, options) => {
   // tous les mods et leurs bandeaux, sans passer par le modèle ni ouvrir de panneau.
   on("command.run", { command: "session-tools:start" }, async () => ({ text: "Mods démarrés." }));
 
-  // Ultracode se règle par `/effort` : le mod en déduit l'état, que la commande vienne du
-  // bouton ou de la saisie. Le sélecteur d'effort de l'app lui échappe.
-  on("command.run", { command: "effort" }, async ($, e, next) => {
-    const result = await next(e);
-    await noteUltracode($, e.args, result.text);
-    return result;
-  }).catch(() => undefined); // en cas de panne du mod, `/effort` passe sans lui
-
-  // Chrono de réponse : lancé à l'envoi d'un message, arrêté à la fin du tour du fil principal.
+  // Chrono de la requête : lancé à l'envoi d'un message, arrêté quand le fil principal a fini et
+  // qu'aucune tâche de fond de la requête ne tourne plus (`classic.Stop` en donne la liste).
   on("prompt.submit", async ($, e, next) => {
-    // Une notification, un pair, une tâche planifiée : le chrono n'y réagit pas.
-    const at = fromUser(e.origin) ? await $.clock.now() : null;
-    if (at !== null && e.turnId) {
-      // Envoyé pendant que l'agent répond : le message rejoint le tour en cours, le chrono repart.
-      await startTimer($, at);
+    const isUser = fromUser(e.origin);
+    const at = await $.clock.now();
+    if (e.turnId) {
+      // Envoyé pendant que l'agent répond : le message rejoint le tour en cours et ouvre une
+      // nouvelle requête. Une notification livrée dans ce tour ne touche pas au chrono, mais sa
+      // tâche, finie, quitte la requête à cet instant (docs/evenements-moteur.md, « Filiation »).
+      // Le moteur peut aussi le livrer au tour suivant : noté comme déjà parti, son `turn.start`
+      // ne relance pas le chrono.
+      if (isUser) {
+        await startTimer($, at);
+        submitted = [...submitted.slice(-9), { text: e.text, at, isUser, origin: e.origin, isStarted: true }];
+      } else await dropTask($, notifiedTask(e));
       return next(e);
     }
-    // `next` rend la main une fois le tour démarré : `turn.start` relève `pending` entre-temps.
-    pending = { at };
-    try {
-      return await next(e);
-    } finally {
-      pending = null;
-    }
+    submitted = [...submitted.slice(-9), { text: e.text, at, isUser, origin: e.origin }];
+    return next(e);
   }).catch(() => undefined); // en cas de panne du mod, le message passe sans lui
 
   on("turn.start", async ($, e, next) => {
     // Le tour d'un sous-agent (`agentId`) ne touche pas au chrono du fil principal.
     if (e.agentId !== undefined) return next(e);
-    // Un message de l'utilisateur, ou une commande qui passe au modèle sans `prompt.submit` ;
-    // une simple relance (texte vide, après une notification) ne touche pas au chrono.
-    const at = pending ? pending.at : e.text !== "" ? await $.clock.now() : null;
-    pending = null;
-    if (at !== null) await startTimer($, at);
+    // Le plus récent : un prompt resté sans tour (refusé, consommé par un hook) ne prête pas son
+    // heure à un message identique envoyé plus tard ; ses doublons partent avec.
+    const noted = submitted[submitted.findLastIndex((p) => p.text === e.text)] ?? null;
+    if (noted) submitted = submitted.filter((p) => p.text !== e.text);
+    // Sans prompt reçu (module rechargé entre les deux), une notification se reconnaît encore à
+    // son texte.
+    const prompt = noted ?? (await notificationOf($, e.text));
+    // Un message de l'utilisateur ouvre une requête ; une notification peut prolonger la sienne.
+    // Sans prompt reçu : une commande qui passe au modèle compte comme un message ; une simple
+    // relance (texte vide) ne touche pas au chrono.
+    if (prompt?.isStarted) await resumeTimer($);
+    else if (prompt ? prompt.isUser : e.text !== "") await startTimer($, prompt?.at ?? (await $.clock.now()));
+    else if (prompt) await noteRelaunch($, prompt);
     return next(e);
   });
+
+  on("classic.Stop", async ($, e, next) => {
+    // Le fil principal s'arrête : la liste des tâches de fond est à jour (`turn.complete` suit).
+    await noteBackground($, e.background_tasks ? e.background_tasks.map((t) => t.id) : await activeAgents($));
+    return next(e);
+  }).catch(() => undefined); // en cas de panne du mod, l'arrêt passe sans lui
+
+  on("classic.SubagentStop", async ($, e, next) => {
+    // Un agent s'arrête, ceux de Claude Code compris (titre, suggestion) : sa liste est à jour
+    // aussi, et peut dire que la dernière tâche de la requête a fini sans relancer de tour.
+    if (e.background_tasks) await noteBackground($, e.background_tasks.map((t) => t.id), true);
+    return next(e);
+  }).catch(() => undefined); // en cas de panne du mod, l'arrêt passe sans lui
 
   on("turn.complete", async ($, e, next) => {
     if (!e.agentId) {
       const { value: timer = null } = await $.state.get(responseTimer);
       if (timer && timer.endedAt === null) {
-        await $.state.set(responseTimer, { ...timer, endedAt: await $.clock.now() });
+        const { others, tasks: known } = listsOf(timer);
+        let tasks = known;
+        // Hors d'une fin normale, pas de `classic.Stop` pour mettre la liste à jour (interruption :
+        // docs/evenements-moteur.md ; erreur d'API ou refus : `StopFailure` à la place d'après les types du moteur,
+        // à confirmer) : restent les tâches déjà connues de la requête et ses agents encore actifs.
+        if (e.reason !== "answer") tasks = [...new Set([...tasks, ...(await activeAgents($)).filter((id) => !others.includes(id))])];
+        const endedAt = tasks.length ? null : await $.clock.now();
+        // Finie sans liste à jour, la requête peut avoir lancé une tâche que personne n'a vue :
+        // seule une requête finie ainsi se laisse rouvrir par une tâche inconnue.
+        await $.state.set(responseTimer, { ...timer, tasks, endedAt, isIdle: true, isInterrupted: e.reason !== "answer" });
         $.ui.invalidate("ui.render");
       }
     }
@@ -124,7 +171,6 @@ export const register: Register = (on, options) => {
   });
 
   on("ui.render", { component: "SessionMode" }, async ($, e, next) => {
-    const { value: isUltracode = false } = await $.state.get(ultracode);
     const { value: isRewriting = false } = await $.state.get(rewriting);
     const { value: isChoosingEffort = false } = await $.state.get(choosingEffort);
     const isTerminal = e.surface === "terminal";
@@ -138,24 +184,6 @@ export const register: Register = (on, options) => {
     // Le mod dessine lui-même le pied : l'app desktop ignore une liste `modes`
     // réécrite et laissée au dessin du moteur.
     const { Box, Text, Button } = $.ui.resolve(e);
-    // Un clic lance `/effort ultracode on|off`, comme si la commande était tapée. L'état est
-    // relu au clic : le terminal garde le premier `onPress` du bouton d'un dessin à l'autre.
-    const ultracodeButton = Button({
-      key: "ultracode",
-      label: `Ultracode ${isUltracode ? "on" : "off"}`,
-      plain: true,
-      dimColor: !isUltracode,
-      onPress: () => {
-        $.state
-          .get(ultracode)
-          .then(async ({ value: isOn = false }) => {
-            const args = `ultracode ${isOn ? "off" : "on"}`;
-            const result = await $.command.run({ command: "effort", args });
-            await noteUltracode($, args, result.text);
-          })
-          .catch((error) => $.ui.toast(`Ultracode : ${String(error)}`));
-      },
-    });
     const rewriteButton = Button({
       key: "rewrite",
       label: isRewriting ? "Réécriture…" : "Réécrire",
@@ -183,7 +211,7 @@ export const register: Register = (on, options) => {
     const texts = drawItems(Text, items);
     if (!isTerminal) {
       // L'app desktop place elle-même ses boutons natifs devant le texte, quel que soit l'ordre.
-      return Box({ flexDirection: "row", flexShrink: 0, children: [rewriteButton, effortButton, ultracodeButton, ...texts] });
+      return Box({ flexDirection: "row", flexShrink: 0, children: [rewriteButton, effortButton, ...texts] });
     }
     // Terminal seulement (l'app desktop a les siens) : « Fichiers » ouvre ou ferme le navigateur
     // de files-board, « Diff » le panneau de diff (`/diff` est une bascule en plein écran).
@@ -206,8 +234,6 @@ export const register: Register = (on, options) => {
       rewriteButton,
       sep(),
       effortButton,
-      sep(),
-      ultracodeButton,
     ];
     // Terminal : le pied calé à droite, les boutons en dernier, après l'heure.
     const children = [...texts, ...(texts.length ? [sep()] : []), ...buttons];
@@ -235,7 +261,7 @@ export const register: Register = (on, options) => {
   });
 };
 
-// ─── Chrono de réponse ──────────────────────────────────────────────────────
+// ─── Chrono de la requête ──────────────────────────────────────────────────────
 
 // Les messages de l'utilisateur : tapés au terminal ou dans l'app desktop, par Remote Control
 // ou Slack. `unclassified` en fait partie : l'app desktop peut envoyer sans marque d'origine.
@@ -248,10 +274,105 @@ function fromUser(origin: PromptOrigin | undefined) {
 }
 
 async function startTimer($: EngineInterface, at: number) {
-  await $.state.set(responseTimer, { startedAt: at, endedAt: null });
+  // Les tâches de fond déjà là appartiennent aux requêtes d'avant : elles ne retiennent pas celle-ci.
+  const { value: seen = [] } = await $.state.get(backgroundTasks);
+  await $.state.set(responseTimer, { startedAt: at, endedAt: null, tasks: [], others: seen, own: [], isIdle: false });
   // La vitesse repart du même message que le chrono.
   await $.state.set(generationSpeed, null);
   $.ui.invalidate("ui.render");
+}
+
+// Le tour d'un message envoyé pendant le tour d'avant et livré après lui : sa requête est partie à
+// l'envoi. La requête affichée (la sienne, ou celle d'un message plus récent, qui attend ce tour)
+// continue sans repartir de zéro, puisque le fil principal travaille.
+async function resumeTimer($: EngineInterface) {
+  const { value: timer = null } = await $.state.get(responseTimer);
+  if (!timer) return;
+  await $.state.set(responseTimer, { ...timer, endedAt: null, isIdle: false });
+  $.ui.invalidate("ui.render");
+}
+
+// Un tour relancé sans message de l'utilisateur. La notification d'une tâche de la requête, ou
+// d'une tâche inconnue (lancée dans un tour interrompu), la prolonge : le chrono reprend sans
+// repartir de zéro. Celle d'une requête d'avant, un pair, une tâche planifiée n'y touchent pas.
+async function noteRelaunch($: EngineInterface, prompt: Submitted) {
+  const { value: timer = null } = await $.state.get(responseTimer);
+  const id = notifiedTask(prompt);
+  if (!timer || id === null) return;
+  const { tasks, own, others } = listsOf(timer);
+  if (others.includes(id)) return;
+  // Une requête finie normalement ne se rouvre que pour une tâche qu'elle a eue : une tâche apparue
+  // après sa fin (lancée par une tâche planifiée, par exemple) n'est pas à elle.
+  if (timer.endedAt !== null && !timer.isInterrupted && !own.includes(id)) return;
+  // Un message de pair vient d'une autre session, sauf s'il est le retour d'un agent connu : une
+  // tâche que la requête a eue, même finie depuis (un agent annonce sa fin, puis envoie son
+  // message de retour), ou un agent encore actif.
+  if (prompt.origin?.kind === "peer" && !own.includes(id) && !(await activeAgents($)).includes(id)) return;
+  // La tâche notifiée a fini : elle ne retient plus la requête, même si ce tour est interrompu.
+  await $.state.set(responseTimer, { ...timer, tasks: tasks.filter((t) => t !== id), own, endedAt: null, isIdle: false });
+  $.ui.invalidate("ui.render");
+}
+
+// La tâche d'une notification livrée pendant un tour a fini : elle ne retient plus la requête,
+// même si ce tour est interrompu ensuite (pas de `classic.Stop` pour mettre la liste à jour).
+async function dropTask($: EngineInterface, id: string | null) {
+  const { value: timer = null } = await $.state.get(responseTimer);
+  if (!timer || id === null || timer.endedAt !== null) return;
+  const { tasks, own } = listsOf(timer);
+  if (!tasks.includes(id)) return;
+  await $.state.set(responseTimer, { ...timer, tasks: tasks.filter((t) => t !== id), own });
+  $.ui.invalidate("ui.render");
+}
+
+// La tâche qu'annonce une notification : `<task-id>` d'une commande de fond, ou l'agent d'un
+// message de retour (`<agent-message from="…">`) ; null pour tout autre prompt.
+function notifiedTask(prompt: { text: string; origin?: PromptOrigin }) {
+  const kind = prompt.origin?.kind;
+  const match =
+    kind === "task-notification"
+      ? /<task-id>([^<]+)<\/task-id>/.exec(prompt.text)
+      : kind === "peer"
+        ? /^<agent-message from="([^"]+)"/.exec(prompt.text)
+        : null;
+  return match?.[1] ?? null;
+}
+
+// La liste des tâches de fond vue à un arrêt : gardée pour la requête suivante, et, pour la
+// requête en cours, réduite à ses propres tâches. `isAgentStop` : l'arrêt d'un agent, qui ne
+// clôt la requête que si le fil principal a déjà fini.
+async function noteBackground($: EngineInterface, ids: string[], isAgentStop = false) {
+  await $.state.set(backgroundTasks, ids);
+  const { value: timer = null } = await $.state.get(responseTimer);
+  if (!timer || timer.endedAt !== null) return;
+  const { others, own } = listsOf(timer);
+  const tasks = ids.filter((id) => !others.includes(id));
+  const endedAt = isAgentStop && timer.isIdle && !tasks.length ? await $.clock.now() : null;
+  await $.state.set(responseTimer, { ...timer, tasks, own: [...new Set([...own, ...tasks])], endedAt });
+  $.ui.invalidate("ui.render");
+}
+
+// Le prompt d'une notification reconnue à son seul texte, sans `prompt.submit` gardé : la
+// `task-notification` d'une tâche, ou le message de retour d'un agent (origine `peer`).
+async function notificationOf($: EngineInterface, text: string): Promise<Submitted | null> {
+  const kind = text.startsWith("<task-notification>") ? "task-notification" : text.startsWith("<agent-message from=") ? "peer" : null;
+  if (!kind) return null;
+  return { text, at: await $.clock.now(), isUser: false, origin: { kind } as PromptOrigin };
+}
+
+// Les listes d'un chrono, vides quand une version d'avant la 0.21.0 l'a écrit sans elles.
+function listsOf(timer: NonNullable<ResponseTimer>) {
+  return { tasks: timer.tasks ?? [], others: timer.others ?? [], own: timer.own ?? timer.tasks ?? [] };
+}
+
+// Repli sans liste des tâches de fond (version de Claude Code qui ne la donne pas) : les agents
+// encore actifs ; aucun si la liste des agents manque aussi.
+async function activeAgents($: EngineInterface) {
+  try {
+    const agents = await $.agent.list();
+    return agents.filter((a) => a.status === "running" || a.status === "pending" || a.status === "waiting").map((a) => a.id);
+  } catch {
+    return [];
+  }
 }
 
 // Chrono, tokens/s et cache, tels que le pied (terminal) ou le bandeau (desktop) les affichent.
@@ -355,11 +476,10 @@ async function chooseEffort($: EngineInterface, draft: string) {
     await $.ui.toast("Effort auto : le brouillon a changé pendant le choix, l'effort est laissé tel quel.");
     return;
   }
-  // Comme le bouton Ultracode : la commande tapée, dont l'état d'Ultracode se déduit. Claude Code
-  // garde ce niveau comme défaut des nouvelles sessions (sauf max), et peut demander de confirmer
-  // un changement en cours de discussion : la notification dit « demandé », pas « réglé ».
-  const result = await $.command.run({ command: "effort", args: choice.effort });
-  await noteUltracode($, choice.effort, result.text);
+  // La commande, comme si elle était tapée. Claude Code garde ce niveau comme défaut des nouvelles
+  // sessions (sauf max), et peut demander de confirmer un changement en cours de discussion : la
+  // notification dit « demandé », pas « réglé ».
+  await $.command.run({ command: "effort", args: choice.effort });
   await $.ui.toast(`Effort demandé : ${choice.effort}${choice.reason ? ` (${choice.reason})` : ""}`);
 }
 
@@ -376,27 +496,13 @@ function effortChoice(text: string) {
 
 // ─── Pied du prompt ─────────────────────────────────────────────────────────
 
-// En interactif, `/effort` est une commande à interface : sa ligne s'affiche mais ne revient
-// pas au mod (`text` absent). L'état se déduit alors des arguments ; quand le texte revient
-// (« Ultracode on (this session only)… », « Ultracode off… », un refus), il fait foi.
-async function noteUltracode($: EngineInterface, args: string, text: string | undefined) {
-  const isOn = ultracodeFrom(text ?? "") ?? ultracodeFrom(args);
-  if (isOn !== undefined) await $.state.set(ultracode, isOn);
-}
-
-function ultracodeFrom(text: string) {
-  if (/Ultracode isn't available|Ultracode needs/.test(text)) return false;
-  if (/Ultracode on/i.test(text)) return true;
-  if (/Ultracode off/i.test(text)) return false;
-  return undefined;
-}
-
 // Durée de vie du cache de prompt : 1 h pour Claude Code (5 min en dépassement d'usage).
 // Passé ce délai, le tour suivant repaie l'écriture de tout le contexte.
 const TTL_MS = 60 * 60 * 1000;
-// Par exemple « Réponse 1:23 ✓ · 48 tok/s · Cache 59:49 · 18:05 · Ultracode off » au terminal,
+// Par exemple « Réponse 1:23 ✓ · 48 tok/s · Cache 59:49 · 18:05 » au terminal,
 // « Réponse 1:23 ✓ · 48 tok/s · Cache 59:49 » dans le bandeau desktop : libellés estompés,
-// valeurs claires ; la coche dit que l'agent a fini.
+// valeurs claires ; la coche dit que la requête est finie, « 2 en fond » qu'elle attend encore
+// ses tâches de fond.
 
 type FooterItem = { label?: string; value: string };
 
@@ -407,6 +513,8 @@ function footer(now: number, last: number | null, timer: ResponseTimer, speed: G
   if (timer) {
     const elapsed = duration((timer.endedAt ?? now) - timer.startedAt);
     items.push({ label: "Réponse", value: timer.endedAt === null ? elapsed : `${elapsed} ✓` });
+    const waiting = timer.endedAt === null ? listsOf(timer).tasks.length : 0;
+    if (waiting) items.push({ value: `${waiting} en fond` });
   }
   if (speed && speed.ms > 0) items.push({ value: `${Math.round((speed.tokens * 1000) / speed.ms)} tok/s` });
   if (last !== null) {

@@ -107,8 +107,10 @@ test('un sous-agent refusé s’affiche « annulé », pas en échec', async ($,
   await $.tool.call({ tool: 'Agent', description: 'Revue Spec du diff', prompt: 'p', run_in_background: false } as any)
 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: '⊘' })).toBeDefined()
+  await ui.press({ key: 'tab-agents' })
+  expect(await ui.find({ type: 'Button', text: /Revue Spec du diff$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'annulé' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'échoué' })).toBeUndefined()
+  await ui.press({ key: 'tab-flow' })
   await ui.unmount()
 })

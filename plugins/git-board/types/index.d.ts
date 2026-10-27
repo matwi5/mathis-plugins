@@ -70,6 +70,20 @@ export type GitRepo = {
   stash: number
   /** Commits de HEAD absents de tout distant (`git rev-list -n 500 HEAD --not --remotes`). */
   unpushed: number
+  /** Ouvert dans un worktree lié (`.claude/worktrees/…`), pas dans le worktree principal. */
+  isLinkedWorktree: boolean
+  /**
+   * Branche sans distante : commits de HEAD absents de la branche par défaut locale
+   * (`git rev-list --count refs/heads/<défaut>..HEAD`) ; null quand il n'est pas relevé.
+   */
+  toMerge: number | null
+  /**
+   * Branche sans distante et sans commit absent de la branche par défaut : aucun commit
+   * depuis sa création (l'entrée la plus ancienne de son reflog est « branch: Created from »,
+   * les suivantes seulement des fast-forward ou des reset, voir `isFreshReflog`). false quand
+   * le reflog ne permet pas de le dire.
+   */
+  isFresh: boolean
   files: GitFile[]
   branches: GitBranch[]
   remotes: GitRemoteBranch[]

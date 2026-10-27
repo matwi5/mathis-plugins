@@ -5,19 +5,12 @@ Marketplace de plugins Claude Code (`plugins/`), règles communes à importer da
 ## Commandes
 
 ```bash
+scripts/check.sh <plugin>...                # tous les contrôles d'un plugin, arrêtés au premier échec (scripts\check.cmd sous Windows)
 claude plugin validate .                    # la marketplace et ses entrées
-claude plugin validate plugins/<plugin>     # un plugin
-claude plugin test plugins/<plugin>         # tests d'un mod
-tsc -p plugins/<plugin>                     # types d'un mod (TypeScript 5.4+)
-"$(ls -d "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude | sort -V | tail -1)" plugin test plugins/<plugin>   # tests d'un mod avec le Claude Code de l'app desktop (Mac, version la plus récente)
+git config core.hooksPath scripts/hooks     # installe le hook pre-commit (validate et tests des plugins touchés)
 ```
 
-Sur Windows (PowerShell), le même test avec le Claude Code de l'app desktop :
-
-```powershell
-$desktop = Get-ChildItem "$env:APPDATA\Claude\claude-code" -Directory | Sort-Object { [version]$_.Name } | Select-Object -Last 1
-& (Get-ChildItem $desktop.FullName -Recurse -Filter claude.exe | Select-Object -First 1).FullName plugin test plugins/<plugin>
-```
+`check.sh` lance, chacun quand il s'applique : le refus des renvois aux tickets et à `travail/`, l'arbre « Architecture » du README (chaque fichier de `hooks/` et `tests/`), `tsc` par npx (TypeScript fixé dans `scripts/check.py`), `node --test` des skills, `claude plugin test` avec le Claude Code du terminal puis celui de l'app desktop (le plus récent, trouvé par le script), `claude plugin validate` du plugin puis du dépôt. `--no-desktop` pour un poste sans l'app.
 
 ## Règles
 

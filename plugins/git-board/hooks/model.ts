@@ -293,12 +293,37 @@ export function slash(c: { name: string; args: string }) {
   return `/project:${c.name}${c.args ? ` ${c.args}` : ''}`
 }
 
+/**
+ * Une branche sans distante (hors branche par défaut) : vide (aucun commit depuis sa
+ * création), déjà fusionnée dans la branche par défaut locale, à y fusionner depuis un
+ * worktree lié (elle ne s'y pousse jamais), ou non publiée. null pour la branche par
+ * défaut, une branche suivie ou une HEAD détachée.
+ */
+export function localState(r: GitRepo): 'empty' | 'merged' | 'toMerge' | 'unpublished' | null {
+  if (r.upstream || !r.branch || r.branch === r.defaultBranch) return null
+  if (r.toMerge === 0) return r.isFresh ? 'empty' : 'merged'
+  return r.isLinkedWorktree && r.toMerge !== null ? 'toMerge' : 'unpublished'
+}
+
+/**
+ * `git reflog show --format=%H%x00%gs refs/heads/<branche>` (du plus récent au plus ancien) :
+ * la branche n'a encore aucun commit à elle. Son entrée la plus ancienne est sa création, et
+ * elle n'a bougé depuis que par des mouvements qui ne créent pas de commit (fast-forward,
+ * reset). Toute autre entrée, ou un reflog illisible, laisse « fusionnée ».
+ */
+export function isFreshReflog(out: string) {
+  const subjects = out.split('\n').filter(Boolean).map((row) => row.split('\0')[1] ?? '')
+  const created = subjects.pop()
+  if (!created?.startsWith('branch: Created from ')) return false
+  return subjects.every((x) => /^(merge|pull)\b[^:]*: Fast-forward$/.test(x) || x.startsWith('reset: moving to '))
+}
+
 /** L'étape logique suivante ; rien pendant une opération ou un conflit. */
 export function suggest(r: GitRepo, p: PrState): Action | null {
   if (r.operation || r.files.some((x) => x.kind === 'conflict')) return null
   if (r.files.length) return 'commit'
   if (r.behind) return 'pull'
-  if (r.hasRemote && (r.ahead || (!r.upstream && r.branch && r.branch !== r.defaultBranch))) return 'push'
+  if (r.hasRemote && (r.ahead || localState(r) === 'unpublished')) return 'push'
   if (r.webUrl && r.branch && r.branch !== r.defaultBranch && r.upstream && p && p.branch === r.branch && !p.error && !prOfBranch(r, p)) return 'pr'
   return null
 }

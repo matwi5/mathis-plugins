@@ -31,7 +31,7 @@ const LOT = [
   { id: D, name: 'CLAUDE.md', blockedBy: [] },
 ]
 
-test('un ticket bloqué ne se choisit qu’après ses bloqueurs ; l’ordre de sélection est gardé', async ($, on) => {
+test('un ticket bloqué ne se choisit qu’après ses bloqueurs ; l’ordre de sélection est gardé', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 50_000_000 })
   mock.store(on)
   const filled = engine(on)

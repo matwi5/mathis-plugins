@@ -1,0 +1,1 @@
+{ "name": "sonde-evenements", "version": "0.1.0", "description": "Sonde : journalise les événements du moteur qui servent à suivre une requête. Jamais livrée, chargée par --plugin-dir (scripts/sonde.py)." }

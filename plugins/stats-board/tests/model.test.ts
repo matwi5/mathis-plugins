@@ -67,6 +67,7 @@ const UI: Ui = {
   model: null,
   sessionSort: 'cost',
   expanded: { models: false, projects: false, sessions: false, days: false },
+  day: null,
 }
 
 describe('model : formats français', () => {
@@ -156,6 +157,16 @@ describe('model : lecture de ccusage', () => {
     // Poste resté inactif plus longtemps que les journaux : rien de frais, tout l'historique reste.
     expect(keepHistory([], previous, 'Portable').rows.map((r) => r.date)).toEqual(['2026-08-01', '2026-09-01'])
     expect(keepSessions([], [session('s1', 'C--a', day('1'))], 'Portable').map((s) => s.id)).toEqual(['s1'])
+    {
+    // Une session reprise du fichier publié (fin arrondie à la minute d'après) qui finit dans la même
+    // minute que le début de la plus ancienne session fraîche reste gardée (décision « Historique »).
+    const published = { ...session('old', 'C--a', Date.UTC(2026, 9, 7, 10, 1)), first: Date.UTC(2026, 9, 7, 9, 0) }
+    const fresh = { ...session('new', 'C--a', Date.UTC(2026, 9, 7, 11)), first: Date.UTC(2026, 9, 7, 10, 0, 35) }
+    expect(keepSessions([fresh], [published], 'Portable').map((s) => s.id)).toEqual(['old', 'new'])
+    // Une session qui déborde vraiment sur la fraîche (fin après la minute de son début) ne l'est pas.
+    const overlap = { ...published, last: Date.UTC(2026, 9, 7, 10, 3) }
+    expect(keepSessions([fresh], [overlap], 'Portable').map((s) => s.id)).toEqual(['new'])
+    }
   })
 
   test("l'historique de ce poste : ancien format, « Ce poste », fichier déjà publié, sans doublon", async () => {
@@ -167,18 +178,29 @@ describe('model : lecture de ccusage', () => {
     expect(h.rows.map((r) => `${r.date}:${r.machine}`).sort()).toEqual(['2026-07-01:Portable', '2026-08-01:Portable', '2026-08-02:Portable'])
     expect(h.sessions.map((s) => `${s.id}:${s.machine}`)).toEqual(['s0:Portable'])
   })
+
+  test("un relevé gardé d'avant les durées (schéma 3) garde son historique", async () => {
+    const legacy = { schema: 3, rows: [row('2026-05-01', 'C--a', 'm', 4), row('2026-05-01', 'x', 'm', 1, 100, 'Mac')], sessions: [session('s9', 'C--a', 1), session('m9', 'x', 1, 'Mac')] }
+    const h = ownHistory('Portable', { previous: null, legacy, published: null })
+    expect(h.rows.map((r) => `${r.date}:${r.project}:${r.machine}`)).toEqual(['2026-05-01:C--a:Portable'])
+    expect(h.sessions.map((s) => s.id)).toEqual(['s9'])
+  })
 })
 
 describe('model : postes', () => {
   test('publication puis relecture : le même contenu, au nom du poste qui publie', async () => {
     const projects = { 'C--a': { name: 'a', path: 'C:\\a' }, 'C--b': { name: 'b', path: 'C:\\b' } }
-    const body = publishedOf({ machine: 'Portable', tzOffset: -120, rows: [row('2026-10-01', 'C--a', 'm', 3)], sessions: [session('s1', 'C--a', 1)], projects })
+    // Des heures de session à la minute, comme elles partent (voir la publication des durées).
+    const body = publishedOf({ machine: 'Portable', tzOffset: -120, rows: [row('2026-10-01', 'C--a', 'm', 3)], sessions: [session('s1', 'C--a', 7_200_000)], projects })
     // Seuls les projets cités partent.
     expect(Object.keys(body.projects)).toEqual(['C--a'])
     const back = parsePublished(JSON.parse(JSON.stringify({ ...body, updatedAt: 5 })))
     expect(back).toMatchObject({ machine: 'Portable', updatedAt: 5, tzOffset: -120 })
     expect(back!.rows[0]).toEqual(row('2026-10-01', 'C--a', 'm', 3))
-    expect(back!.sessions[0]).toEqual(session('s1', 'C--a', 1))
+    expect(back!.sessions[0]).toEqual(session('s1', 'C--a', 7_200_000))
+    // Un fichier publié avant la 0.10.0, à la milliseconde, se relit tel quel.
+    const older = parsePublished(JSON.parse(JSON.stringify({ ...body, sessions: [{ ...body.sessions[0], first: 1_234, last: 5_678 }], updatedAt: 5 })))
+    expect(older!.sessions[0]).toMatchObject({ first: 1_234, last: 5_678 })
     // Un fichier d'un autre format est écarté ; le nom du fichier suit le poste.
     expect(parsePublished({ schema: 99, machine: 'x', rows: [] })).toBeNull()
     expect(parsePublished({ schema: 1, rows: [] })).toBeNull()

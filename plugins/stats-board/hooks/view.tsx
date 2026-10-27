@@ -8,7 +8,7 @@
 // ignoré ; les écarts dans un texte sont donc insécables, ceux entre éléments des marges.
 // Aucune prop n'est passée à `undefined` : les arbres restent valides partout.
 
-import type { Discussion, Expanded, Grain, Machine, Meta, Metric, Notice, Period, SessionRow, SessionSort, Snapshot, Tab, Ui, UsageRow } from '../types'
+import type { Discussion, Expanded, Grain, Machine, Meta, Metric, Notice, Period, RequestLog, RequestRecord, RequestSort, SessionRow, SessionSort, Snapshot, Tab, Tracker, Ui, UsageRow } from '../types'
 import {
   BRAND,
   C,
@@ -43,13 +43,16 @@ import {
   fmtCostShort,
   fmtDate,
   fmtDay,
+  fmtDayMonth,
   fmtDelta,
   fmtDuration,
+  fmtHours,
   fmtInt,
   fmtMetric,
   fmtMonth,
   fmtMonthShort,
   fmtPct,
+  fmtSeconds,
   fmtTokens,
   funFact,
   groupOf,
@@ -76,6 +79,8 @@ import {
   type Filter,
   type Totals,
 } from './model.ts'
+import { EMPTY_DURATIONS, averageOf, combine, costPerActiveHour, measuresOf, periodOf, speedMedian, weightedSpeed, type Measures, type PeriodMeasures } from './durations.ts'
+import { activeMs, costed, isEstimated, mainModel, median, realMsOf, requestCost, requestTokens, spanOf } from './requests.ts'
 import { DEFAULT, columnsCells, heatCells, heatLegendCells, pack, type RasterCells } from './raster.ts'
 import { barSvg, blockSvg, columnsSvg, donutSvg, flameSvg, heatGaugeSvg, heatmapSvg, heroSvg, ringSvg, sparkSvg, spinnerSvg, stackSvg, type BarPart, type HeatCell } from './svg.ts'
 
@@ -150,6 +155,10 @@ export type View = {
   /** Clé ccusage du dossier de la session. */
   here: string | null
   discussion: Discussion
+  /** Les requêtes de la discussion ouverte. */
+  requests: Tracker
+  /** Le début du message de chaque requête du relevé en cours, par id ; absent après un rechargement. */
+  openings: Record<number, string>
   now: number
 }
 
@@ -352,6 +361,10 @@ type Ctx = {
   here: string | null
   /** Colonnes dans une carte bordée. */
   inner: number
+  /** Les durées sous les filtres (temps actif, temps API, requêtes), par jour. */
+  m: Measures
+  /** Les durées de la période affichée, sous les filtres : par modèle, projet, discussion, heure. */
+  p: PeriodMeasures
 }
 
 function contextOf(k: Kit, view: View): Ctx | null {
@@ -363,6 +376,8 @@ function contextOf(k: Kit, view: View): Ctx | null {
   const rows = selectRows(s.rows, f, s.projects)
   const homeKey = Object.entries(s.projects).find(([, i]) => i.name === '~')?.[0] ?? null
   const keys = unique([...s.rows.map((r) => groupOf(r.project, s.projects)), ...s.sessions.map((x) => groupOf(x.project, s.projects))])
+  // Les durées de ce poste et celles que les autres publient.
+  const all = combine(s.durations ?? EMPTY_DURATIONS, s.machine, s.peers)
   return {
     s,
     ui: view.ui,
@@ -379,8 +394,28 @@ function contextOf(k: Kit, view: View): Ctx | null {
     sessions: selectSessions(s.sessions, f, s.projects, s.tzOffset),
     here: view.here ? groupOf(view.here, s.projects) : null,
     inner: Math.max(20, k.width - 6),
+    m: measuresOf(all, f, s.projects),
+    p: periodOf(all, f, f.from, today, s.projects),
   }
 }
+
+/**
+ * Le coût des jours suivis d'une liste de lignes : à rapporter au temps actif, mesuré sur ces seuls
+ * jours, poste par poste (un poste au format publié 1 n'a pas de durée).
+ */
+const trackedDaysCost = (ctx: Ctx, rows: readonly UsageRow[]): number => rows.reduce((n, r) => (ctx.m.sinceBy[r.machine] !== undefined && r.date >= ctx.m.sinceBy[r.machine]! ? n + r.cost : n), 0)
+
+/** Le temps actif est mesuré pour ces filtres : un suivi a commencé, et pas de filtre de modèle. */
+const hasMeasure = (ctx: Ctx): boolean => ctx.m.hasActive && ctx.m.since !== null
+
+/** Le jour a une durée mesurée : il est suivi (depuis la 0.10.0, sur ce poste). */
+const isTracked = (ctx: Ctx, date: string): boolean => ctx.m.since !== null && date >= ctx.m.since
+
+/** Une durée, « — » quand elle n'est pas mesurée (null), jamais 0. */
+const durationText = (ms: number | null | undefined): string => (ms === null || ms === undefined ? '—' : fmtSeconds(ms))
+
+/** La mention de l'en-tête : depuis quand les durées sont suivies ; `glue` relie ses mots (insécables dans l'en-tête). */
+const trackedText = (ctx: Ctx, glue = NB): string => (ctx.m.since !== null ? ['durée', 'suivie', 'depuis', 'le', fmtDayMonth(ctx.m.since)] : ['durée', 'pas', 'encore', 'suivie']).join(glue)
 
 const nameOf = (ctx: Ctx, key: string): string => ctx.names.get(key) ?? key
 
@@ -533,6 +568,7 @@ const header = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
     plural(days, 'jour'),
     s.version ? `ccusage${NB}${s.version}` : null,
     s.isOffline ? `prix${NB}hors${NB}ligne` : null,
+    trackedText(ctx),
   ]
     .filter(Boolean)
     .join(SEP)
@@ -698,6 +734,10 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
   const totals = entries.reduce((t, e) => ({ input: t.input + e[2], output: t.output + e[3], cacheWrite: t.cacheWrite + e[4], cacheRead: t.cacheRead + e[5] }), { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 })
   const cacheShare = totals.input + totals.cacheWrite + totals.cacheRead > 0 ? totals.cacheRead / (totals.input + totals.cacheWrite + totals.cacheRead) : null
   const turns = live?.turns ?? 0
+  // Les requêtes de cette discussion, suivies par le mod, au tarif de chaque modèle.
+  const log = view.requests.log
+  const tracked = log && (!d.id || log.session === d.id) ? costed(log, live?.cost ?? null) : null
+  const requestCard = requestsCard(k, view, ctx, act, tracked, when)
 
   const status = d.loading
     ? line(k, [spinner(k, C.tangerine, view.now, 'détail'), T(k, 'ccusage…', { color: C.tangerine })])
@@ -775,7 +815,8 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
     live?.contextPercent !== null && live?.contextPercent !== undefined
       ? { key: 'd-context', label: 'Contexte', value: fmtPct(live.contextPercent / 100), sub: live.contextTokens !== null && window ? `${fmtTokens(live.contextTokens)} sur ${fmtTokens(window)}` : 'de la fenêtre', color: live.contextPercent >= 80 ? C.red : live.contextPercent >= 60 ? C.amber : C.green }
       : null,
-    startedAt ? { key: 'd-duration', label: 'Durée', value: fmtDuration(elapsed), sub: 'depuis le début', color: C.lilac } : null,
+    startedAt ? { key: 'd-duration', label: 'Ouverte depuis', value: fmtDuration(elapsed), sub: 'pauses comprises', color: C.slate } : null,
+    ...requestTiles(view, tracked),
     entries.length ? { key: 'd-calls', label: 'Appels API', value: fmtInt(entries.length), sub: turns ? `${fmtInt(Math.round(entries.length / turns))} par tour` : 'sur la discussion', color: C.indigo } : null,
     fig.children.length ? { key: 'd-agents', label: 'Sous-agents', value: fmtInt(fig.children.length), sub: `${fmtCost(fig.children.reduce((n, x) => n + x.cost, 0))} · workflows`, color: C.pink } : null,
   ] as (Tile | null)[]).filter((x): x is Tile => x !== null)
@@ -787,6 +828,7 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
         {hero}
         {rateCard}
         {tileGrid(k, tiles)}
+        {requestCard}
         {card(k, 'disc-none', 'Détail', C.violet, null, [say(k, 'Pas encore d’appel enregistré pour cette discussion : ↻ Discussion après le prochain tour.')])}
       </Box>
     )
@@ -799,6 +841,7 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
         {hero}
         {rateCard}
         {tileGrid(k, tiles)}
+        {requestCard}
         {card(k, 'disc-empty', 'Détail', C.violet, null, [
           say(k, d.loading ? 'ccusage lit la transcription de cette discussion…' : 'Le détail (frise, modèles, appels les plus chers) vient de ccusage, sur cette seule discussion.'),
           !d.loading && (
@@ -877,6 +920,7 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
       {hero}
       {rateCard}
       {tileGrid(k, tiles)}
+      {requestCard}
       {card(k, 'disc-chart', `${metric === 'cost' ? 'Coût estimé' : 'Tokens'} par tranche de ${stepText}`, toneOf(metric), metricToggle(k, ctx, act), [
         <Box marginTop={1}>{chart}</Box>,
         <Box marginTop={1}>{line(k, ranked.map(([m]) => TT(k, [T(k, '●', { color: ctx.colors[m] ?? C.gray }), T(k, `${NB}${modelName(m)}`, { dim: true })])), true)}</Box>,
@@ -925,9 +969,86 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
             </Box>
           )),
         ])}
-      {say(k, 'Coût en tête : celui du moteur (/cost). Tokens et détail : ccusage, au dernier ↻ Discussion. Le coût par appel est estimé : ccusage ne donne que le total, réparti selon les tokens de chaque appel et le barème de son modèle.')}
+      {say(k, 'Coût en tête : celui du moteur (/cost). Tokens et détail : ccusage, au dernier ↻ Discussion. Le coût par appel est estimé : ccusage ne donne que le total, réparti selon les tokens de chaque appel et le barème de son modèle. Requêtes : suivies par le mod depuis la 0.10.0, au tarif public de chaque modèle (≈ : modèle sans tarif, estimé au prorata du coût de la discussion).')}
     </Box>
   )
+}
+
+// ─── Requêtes de la discussion ────────────────────────────────────────────
+
+const REQUESTS_CAP = 5
+/** Au-delà de 2 % d'écart entre les requêtes suivies et le coût de la session, la carte le dit. */
+const GAP_LIMIT = 0.02
+const REQUEST_SORTS: [RequestSort, string][] = [
+  ['cost', `$${NB}coût`],
+  ['real', 'durée'],
+  ['api', 'API'],
+]
+
+/** Le coût d'une requête, « ≈ » devant quand un de ses modèles n'a pas de tarif. */
+const requestCostText = (r: RequestRecord): string => `${isEstimated(r) ? '≈' : ''}${fmtCost(requestCost(r))}`
+
+/** Les tuiles de durée de la discussion : temps actif, temps API, coût par heure active. */
+function requestTiles(view: View, tracked: RequestLog | null): Tile[] {
+  const list = tracked?.requests ?? []
+  if (!list.length) return []
+  const active = activeMs(list.map((r) => spanOf(r, view.now)))
+  const api = list.reduce((n, r) => n + r.apiMs, 0)
+  const cost = list.reduce((n, r) => n + requestCost(r), 0)
+  return [
+    { key: 'd-active', label: 'Temps actif', value: fmtSeconds(active), sub: `${plural(list.length, 'requête')}, pauses exclues`, color: C.lilac },
+    { key: 'd-api', label: 'Temps API', value: fmtSeconds(api), sub: active > 0 ? `${fmtPct(api / active)} du temps actif` : 'appels au modèle', color: C.indigo },
+    { key: 'd-rate', label: 'Coût / h active', value: hourlyCostText(costPerActiveHour(cost, active)), sub: 'au tarif de chaque modèle', color: MONEY },
+  ]
+}
+
+/** La carte « Requêtes » : médianes en tête, puis les cinq premières selon le tri choisi. */
+const requestsCard = (k: Kit, view: View, ctx: Ctx, act: Actions, tracked: RequestLog | null, when: (ms: number) => string): unknown => {
+  const { Box } = k
+  const list = tracked?.requests ?? []
+  const sort = view.ui.requestSort ?? 'cost'
+  const sorts = line(
+    k,
+    REQUEST_SORTS.map(([key, label]) => toggle(k, `req-sort-${key}`, label, sort === key, () => act.setUi({ requestSort: key }))),
+  )
+  if (!list.length) return card(k, 'disc-requests', 'Requêtes', C.lilac, null, [say(k, 'Chaque message envoyé ouvre une requête : sa durée, son coût et ses tokens s’affichent ici dès sa fin.')])
+  const valueOf = (r: RequestRecord): number => (sort === 'real' ? realMsOf(r, view.now) : sort === 'api' ? r.apiMs : requestCost(r))
+  const top = [...list].sort((a, b) => valueOf(b) - valueOf(a) || b.sentAt - a.sentAt).slice(0, REQUESTS_CAP)
+  const realMedian = median(list.map((r) => realMsOf(r, view.now)))
+  const costMedian = median(list.map(requestCost))
+  const head = [plural(list.length, 'requête'), realMedian !== null ? `durée médiane ${fmtSeconds(realMedian)}` : null, costMedian !== null ? `coût médian ${fmtCost(costMedian)}` : null].filter(Boolean).join(SEP)
+  // Contrôle (Q10) : les requêtes et le hors-requête, au tarif, face au coût de la session.
+  const sessionCost = view.discussion.live?.cost ?? null
+  const trackedCost = list.reduce((n, r) => n + requestCost(r), 0) + Object.values(tracked?.outside ?? {}).reduce((n, s) => n + s.cost, 0)
+  const gap = sessionCost !== null && sessionCost > 0 ? Math.abs(sessionCost - trackedCost) / sessionCost : 0
+  return card(k, 'disc-requests', 'Requêtes', C.lilac, sorts, [
+    <Box marginTop={1}>{T(k, head, { dim: true, wrap: 'truncate-end' })}</Box>,
+    gap > GAP_LIMIT && (
+      <Box flexDirection="column">
+        {T(k, `écart de ${Math.round(gap * 100)}${NB}% avec le coût de la session`, { color: C.tangerine, wrap: 'wrap' })}
+        {T(k, 'Le coût de la session compte aussi ce qui précède le suivi (reprise, mise à jour en cours de route) et les boutons Réécrire et Effort auto de session-tools, qui appellent le modèle hors des requêtes ; un modèle sans tarif, ou un tarif à mettre à jour, l’explique aussi.', { dim: true, wrap: 'wrap' })}
+      </Box>
+    ),
+    ...top.map((r, i) => {
+      const model = mainModel(r)
+      const opening = view.openings[r.id]
+      const detail = [
+        fmtTokens(requestTokens(r)),
+        `réelle${NB}${fmtSeconds(realMsOf(r, view.now))}`,
+        `API${NB}${fmtSeconds(r.apiMs)}`,
+        r.agents ? plural(r.agents, 'sous-agent') : null,
+        model ? modelName(model) : null,
+      ]
+        .filter(Boolean)
+        .join(SEP)
+      return (
+        <Box key={`rq-${r.id}`} flexDirection="column" marginTop={1}>
+          {TT(k, [T(k, when(r.sentAt), { bold: true }), r.isOpen ? T(k, `${NB}${NB}en${NB}cours`, { color: C.tangerine, bold: true }) : null, r.tasks ? T(k, `${NB}${NB}${r.tasks}${NB}en${NB}fond`, { color: C.tangerine }) : null, opening ? T(k, `${NB}${NB}${opening}`) : null], { wrap: 'truncate-end' })}
+          {TT(k, [T(k, requestCostText(r), { color: MONEY, bold: true }), T(k, `${SEP}${detail}`, { dim: true })], { wrap: 'truncate-end' })}
+        </Box>
+      )
+    }),
+  ])
 }
 
 // ─── Journée ──────────────────────────────────────────────────────────────
@@ -1058,7 +1179,11 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
   const lead = modelsOf(rows, 'cost')[0]
   // Le cache de /stats a en général un jour de retard : ses messages seulement s'il compte déjà ce jour-là.
   const acts = s.activity && isLocalView(ctx) && !ctx.f.project && !ctx.f.model ? (s.activity.days.find((d) => d.date === day) ?? null) : null
+  const dayActive = isTracked(ctx, day) && ctx.m.hasActive ? (ctx.m.active.get(day) ?? 0) : null
+  const dayApi = isTracked(ctx, day) ? (ctx.m.api.get(day) ?? 0) : null
   const tiles: Tile[] = ([
+    { key: 'day-active', label: 'Temps actif', value: durationText(dayActive), sub: dayActive !== null ? plural(ctx.m.requests.get(day) ?? 0, 'requête') : ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
+    { key: 'day-api', label: 'Temps API', value: durationText(dayApi), sub: dayApi !== null && dayActive ? `${fmtPct(dayApi / dayActive)} du temps actif` : 'appels au modèle', color: C.indigo },
     { key: 'day-tokens', label: 'Tokens', value: fmtTokens(t.tokens), sub: `entrée ${fmtTokens(t.input)} · sortie ${fmtTokens(t.output)}`, color: BRAND },
     { key: 'day-cache', label: 'Lu en cache', value: fmtPct(cacheRatio(t)), sub: `lu ${fmtTokens(t.cacheRead)} · écrit ${fmtTokens(t.cacheWrite)}`, color: C.teal },
     { key: 'day-previous', label: 'La veille', value: fmtCost(cmp.previous), sub: fmtDay(addDays(day, -1)), color: C.slate },
@@ -1102,7 +1227,8 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
     ...projects.slice(0, PROJECTS_CAP).map((p, i) => {
       const isHere = p.key === ctx.here
       const count = discussions.filter((d) => groupOf(d.project, s.projects) === p.key).length
-      const detail = [count ? plural(count, 'discussion') : null, elsewhere(ctx, p.byMachine, metric)].filter(Boolean).join(SEP)
+      const active = dayActive !== null ? (ctx.m.projects.get(day)?.get(p.key) ?? 0) : null
+      const detail = [count ? plural(count, 'discussion') : null, `actif${NB}${durationText(active)}`, elsewhere(ctx, p.byMachine, metric)].filter(Boolean).join(SEP)
       return shareRow(k, {
         key: `day-project-${p.key}`,
         mark: T(k, isHere ? '●' : '○', { color: isHere ? BRAND : C.gray, bold: isHere }),
@@ -1140,6 +1266,7 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
                     d.id === view.discussion.id ? T(k, `${NB}${NB}celle-ci`, { color: C.violet }) : '',
                     isMulti ? T(k, `${NB}·${NB}${d.machine}`, { dim: true }) : '',
                     d.agents ? T(k, `${NB}·${NB}+${plural(d.agents, 'sous-agent')}`, { dim: true }) : '',
+                    T(k, `${NB}·${NB}actif${NB}${durationText(dayActive !== null ? (ctx.m.sessions.get(day)?.get(d.id) ?? (d.machine === s.machine ? 0 : null)) : null)}`, { color: C.lilac }),
                   ],
                   { wrap: 'truncate-end' },
                 )}
@@ -1295,7 +1422,16 @@ const overviewTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const longest = ctx.sessions.reduce<SessionRow | null>((best, s) => (!best || s.last - s.first > best.last - best.first ? s : best), null)
   const hours = ctx.s.activity?.hours ?? []
   const peakHour = hours.length ? hours.indexOf(Math.max(...hours)) : -1
+  // Les durées de la période, sur les seuls jours suivis.
+  const activeDays = [...ctx.m.active].filter(([d, v]) => d >= ctx.from && d <= ctx.today && isTracked(ctx, d) && v > 0)
+  const isMeasured = hasMeasure(ctx) && ctx.m.since! <= ctx.today
+  const activeTotal = activeDays.reduce((n, [, v]) => n + v, 0)
+  const activeAverage = averageOf(new Map(activeDays), ctx.m.since)
+  const activeRecord = activeDays.reduce<[string, number] | null>((best, x) => (!best || x[1] > best[1] ? x : best), null)
   const tiles: Tile[] = [
+    { key: 'active', label: 'Temps actif', value: durationText(isMeasured ? activeTotal : null), sub: ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
+    { key: 'active-average', label: 'Moyenne par jour actif', value: durationText(activeAverage), sub: isMeasured ? `sur ${plural(activeDays.length, 'jour suivi', 'jours suivis')}` : 'jours suivis seulement', color: C.lilac },
+    { key: 'active-record', label: 'Jour record (temps)', value: activeRecord ? fmtDay(activeRecord[0]) : '—', sub: activeRecord ? fmtSeconds(activeRecord[1]) : 'jours suivis seulement', color: C.lilac },
     { key: 'tokens', label: 'Tokens', value: fmtTokens(t.tokens), sub: `entrée ${fmtTokens(t.input)} · sortie ${fmtTokens(t.output)}`, color: BRAND },
     { key: 'cache', label: 'Lu en cache', value: fmtPct(cacheRatio(t)), sub: `lu ${fmtTokens(t.cacheRead)} · écrit ${fmtTokens(t.cacheWrite)}`, color: C.teal },
     { key: 'days', label: 'Jours actifs', value: `${dates.length}/${span}`, sub: `record ${streak.longest}${NB}j · en cours ${streak.current}${NB}j`, color: C.green },
@@ -1449,7 +1585,95 @@ const GRAIN_PLURAL: Record<Grain, string> = { day: 'jours', week: 'semaines', mo
 
 const bucketLabel = (key: string, grain: Grain): string => (grain === 'month' ? fmtMonthShort(key) : fmtDate(key))
 
+/** Les réglages de l'Évolution : le grain, et la mesure (coût, tokens ou durée). */
+const trendToggles = (k: Kit, ctx: Ctx, act: Actions): unknown => {
+  const isDuration = ctx.ui.isTrendDuration === true
+  return line(
+    k,
+    [
+      ...GRAINS.map(([g, label]) => toggle(k, `grain-${g}`, label, ctx.ui.grain === g, () => act.setUi({ grain: g }))),
+      T(k, '│', { dim: true }),
+      toggle(k, 'metric-cost', `$${NB}coût`, !isDuration && ctx.metric === 'cost', () => act.setUi({ metric: 'cost', isTrendDuration: false })),
+      toggle(k, 'metric-tokens', `#${NB}tokens`, !isDuration && ctx.metric === 'tokens', () => act.setUi({ metric: 'tokens', isTrendDuration: false })),
+      toggle(k, 'metric-duration', `◷${NB}durée`, isDuration, () => act.setUi({ isTrendDuration: true })),
+    ],
+    true,
+  )
+}
+
+/** L'Évolution en durée : le temps actif par jour, semaine ou mois ; moyennes sur les seuls jours suivis. */
+const durationTrend = (k: Kit, ctx: Ctx, act: Actions): unknown => {
+  const { Box } = k
+  const color = C.lilac
+  const slots = k.isRich ? Math.floor(px(ctx.inner) / 5) : Math.max(8, ctx.inner - 2)
+  const grain = fitGrain(ctx.ui.grain, ctx.from, ctx.today, slots)
+  // Les mêmes seaux que le coût, remplis du temps actif de chaque jour.
+  const buckets = seriesOf([], grain, ctx.from, ctx.today)
+  const keyOf = (date: string) => (grain === 'day' ? date : grain === 'week' ? weekOf(date) : monthOf(date))
+  const sums = new Map<string, number>()
+  for (const [d, v] of ctx.m.active) if (d >= ctx.from && d <= ctx.today && isTracked(ctx, d)) sums.set(keyOf(d), (sums.get(keyOf(d)) ?? 0) + v)
+  const values = buckets.map((b) => sums.get(b.key) ?? 0)
+  // Un seau commencé avant le suivi n'est mesuré qu'en partie : il n'entre ni dans les moyennes, ni dans la médiane, ni dans le record.
+  const isWhole = (key: string) => ctx.m.since !== null && key >= ctx.m.since
+  const whole = new Map(buckets.filter((b) => isWhole(b.key)).map((b) => [b.key, sums.get(b.key) ?? 0] as const))
+  const tracked = [...whole.values()].filter((v) => v > 0)
+  const total = [...sums.values()].reduce((n, v) => n + v, 0)
+  const average = averageOf(whole, ctx.m.since)
+  const middle = median(tracked)
+  const maxIndex = buckets.findIndex((b) => isWhole(b.key) && (whole.get(b.key) ?? 0) === Math.max(0, ...tracked) && tracked.length > 0)
+  const firstTracked = ctx.m.since !== null && ctx.m.since > ctx.from ? ctx.m.since : null
+  const right = trendToggles(k, ctx, act)
+  const isMeasured = hasMeasure(ctx)
+  const chart = k.isRich
+    ? svgOf(
+        k,
+        stackSvg({ buckets: buckets.map((b, i) => ({ label: bucketLabel(b.key, grain), parts: [{ value: values[i] ?? 0, color }] })), width: px(ctx.inner), fmt: (v) => fmtHours(v), cumulative: null }),
+        `Temps actif par ${GRAIN_WORD[grain]}, du ${fmtDate(ctx.from)} au ${fmtDate(ctx.today)} ; ${fmtSeconds(total)} en tout`,
+      )
+    : (() => {
+        const cell = buckets.length * 2 <= ctx.inner - 2 ? 2 : 1
+        const width = buckets.length * cell
+        const first = bucketLabel(buckets[0]?.key ?? ctx.from, grain)
+        const last = bucketLabel(buckets[buckets.length - 1]?.key ?? ctx.today, grain)
+        return (
+          <Box flexDirection="column">
+            {T(k, `max${NB}${fmtHours(Math.max(...values, 0))}`, { dim: true })}
+            {columnsChart(k, 'trend-duration', values, 7, color, cell)}
+            {T(k, `${first}${NB.repeat(Math.max(1, width - first.length - last.length))}${last}`, { dim: true })}
+          </Box>
+        )
+      })()
+  return (
+    <Box key="trend" flexDirection="column">
+      {card(k, 'chart', `Temps actif par ${GRAIN_WORD[grain]}`, color, right, [
+        !isMeasured
+          ? say(k, ctx.m.hasActive ? 'Durée pas encore suivie : le temps actif se remplit à chaque requête, depuis la 0.10.0.' : 'Le temps actif ne se découpe pas par modèle : retirer le filtre de modèle.')
+          : <Box marginTop={1}>{chart}</Box>,
+        isMeasured && grain !== ctx.ui.grain && say(k, `Par ${GRAIN_WORD[grain]} : trop de ${GRAIN_PLURAL[ctx.ui.grain]} pour la largeur.`),
+        isMeasured && firstTracked && say(k, `Avant le ${fmtDate(firstTracked)}, la durée n’est pas suivie : ses barres sont vides, et les moyennes ne les comptent pas.`),
+        isMeasured && (
+          <Box marginTop={1}>
+            {T(
+              k,
+              [
+                average !== null ? `moyenne ${fmtSeconds(average)} par ${GRAIN_ACTIVE[grain]} suivi${grain === 'day' ? '' : 'e'}` : null,
+                middle !== null ? `médiane ${fmtSeconds(middle)}` : null,
+                maxIndex >= 0 ? `record ${fmtSeconds(values[maxIndex]!)} (${bucketLabel(buckets[maxIndex]!.key, grain)})` : null,
+                trackedText(ctx, ' '),
+              ]
+                .filter(Boolean)
+                .join(SEP),
+              { dim: true, wrap: 'wrap' },
+            )}
+          </Box>
+        ),
+      ])}
+    </Box>
+  )
+}
+
 const trendTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
+  if (ctx.ui.isTrendDuration) return durationTrend(k, ctx, act)
   const { Box } = k
   const metric = ctx.metric
   const color = toneOf(metric)
@@ -1466,7 +1690,7 @@ const trendTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const sorted = [...active].sort((a, b) => a - b)
   const median = sorted.length ? sorted[Math.floor(sorted.length / 2)]! : 0
 
-  const right = line(k, [...GRAINS.map(([g, label]) => toggle(k, `grain-${g}`, label, ctx.ui.grain === g, () => act.setUi({ grain: g }))), T(k, '│', { dim: true }), metricToggle(k, ctx, act)], true)
+  const right = trendToggles(k, ctx, act)
   const chart = k.isRich
     ? svgOf(
         k,
@@ -1719,6 +1943,7 @@ const modelsTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
                   { dim: true, wrap: 'truncate-end' },
                 )}
               </Box>
+              <Box marginLeft={2}>{T(k, modelTimes(ctx, m.model), { color: C.indigo, dim: true, wrap: 'truncate-end' })}</Box>
             </Box>
           )
         }),
@@ -1726,6 +1951,19 @@ const modelsTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
       ])}
     </Box>
   )
+}
+
+/**
+ * Le temps API et la vitesse d'un modèle sur la période : « API 2 h 05 · 48 tok/s (médiane ~45) ».
+ * La vitesse est la moyenne pondérée (tokens générés ÷ temps de génération) ; la médiane, celle des
+ * appels, au milieu de leur classe de 10 tok/s. « — » sans mesure (avant le suivi, un autre poste).
+ */
+function modelTimes(ctx: Ctx, model: string): string {
+  const t = ctx.p.models.get(model)
+  if (!t || !t.calls) return `API${NB}—${SEP}vitesse${NB}—`
+  const speed = weightedSpeed(t.output, t.genMs)
+  const medianSpeed = speedMedian(t.speeds)
+  return [`API${NB}${fmtSeconds(t.apiMs)}`, speed !== null ? `${Math.round(speed)}${NB}tok/s${medianSpeed !== null ? ` (médiane${NB}~${medianSpeed})` : ''}` : `vitesse${NB}—`].join(SEP)
 }
 
 // ─── Projets ──────────────────────────────────────────────────────────────
@@ -1747,9 +1985,14 @@ const projectsTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
           const isHere = p.key === ctx.here
           const isOn = ctx.ui.project === p.key
           const info = ctx.s.projects[p.key]
+          // Sans ligne de temps actif sur la période (activité d'avant le suivi, ou d'un autre poste) : « — ».
+          const active = hasMeasure(ctx) ? (ctx.p.projects.get(p.key) ?? null) : null
+          const rate = active !== null ? costPerActiveHour(trackedDaysCost(ctx, ctx.rows.filter((r) => groupOf(r.project, ctx.s.projects) === p.key)), active) : null
           const detail = [
             p.key === DRAFTS ? plural(p.members, 'dossier') : null,
             p.sessions ? plural(p.sessions, 'session') : null,
+            `actif${NB}${active !== null ? fmtSeconds(active) : '—'}`,
+            `${hourlyCostText(rate)}${NB}actif`,
             elsewhere(ctx, p.byMachine, metric),
             `dernier jour ${fmtDate(p.last)}`,
             ctx.inner >= 90 && info?.path ? info.path : null,
@@ -1795,6 +2038,7 @@ const SORTS: [SessionSort, string][] = [
   ['cost', `Plus${NB}chères`],
   ['recent', 'Récentes'],
   ['long', `Plus${NB}longues`],
+  ['active', `Temps${NB}actif`],
 ]
 
 /** Dans un projet, la part des autres postes : « dont Mac 3,00 $, Serveur 41,50 $ » ; rien sous un filtre de poste. */
@@ -1813,17 +2057,28 @@ const sessionsTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   }
   const list = ctx.sessions
   const dur = (s: SessionRow) => s.last - s.first
-  const sorted = [...list].sort((a, b) => (ctx.ui.sessionSort === 'recent' ? b.last - a.last : ctx.ui.sessionSort === 'long' ? dur(b) - dur(a) : b.cost - a.cost))
+  // Le temps actif d'une session sur la période ; null quand elle n'a pas de requête relevée (d'avant le suivi, un autre poste).
+  const activeOf = (s: SessionRow): number | null => ctx.p.sessions.get(s.id) ?? null
+  const orders: Record<SessionSort, (a: SessionRow, b: SessionRow) => number> = {
+    cost: (a, b) => b.cost - a.cost,
+    recent: (a, b) => b.last - a.last,
+    long: (a, b) => dur(b) - dur(a),
+    active: (a, b) => (activeOf(b) ?? -1) - (activeOf(a) ?? -1),
+  }
+  const sorted = [...list].sort(orders[ctx.ui.sessionSort] ?? orders.cost)
   const shown = sorted.slice(0, ctx.ui.expanded.sessions ? SESSIONS_MAX : SESSIONS_CAP)
   const costs = list.reduce((n, s) => n + s.cost, 0)
-  const durations = list.map(dur).sort((a, b) => a - b)
-  const median = durations.length ? durations[Math.floor(durations.length / 2)]! : 0
-  const longest = durations.length ? durations[durations.length - 1]! : 0
+  // Médiane et record sur le temps actif des seules sessions mesurées.
+  const actives = list.map(activeOf).filter((v): v is number => v !== null && v > 0)
+  const sessionMedian = median(actives)
+  const longest = actives.length ? Math.max(...actives) : null
+  const requestMedian = median(ctx.p.requestMs)
   const tiles: Tile[] = [
     { key: 's-count', label: 'Sessions', value: fmtInt(list.length), sub: 'sur la période', color: C.violet },
     { key: 's-avg', label: 'Coût moyen', value: fmtCost(list.length ? costs / list.length : 0), sub: 'par session', color: MONEY },
-    { key: 's-median', label: 'Durée médiane', value: fmtDuration(median), sub: 'par session', color: BRAND },
-    { key: 's-long', label: 'Plus longue', value: fmtDuration(longest), sub: 'reprises comprises', color: C.lilac },
+    { key: 's-median', label: 'Durée médiane', value: durationText(sessionMedian), sub: actives.length ? `temps actif, ${plural(actives.length, 'session mesurée', 'sessions mesurées')}` : `temps actif, sessions${NB}suivies`, color: BRAND },
+    { key: 's-long', label: 'Plus longue', value: durationText(longest), sub: 'en temps actif', color: C.lilac },
+    { key: 's-request', label: 'Durée médiane d’une requête', value: durationText(requestMedian), sub: ctx.p.requestMs.length ? `${plural(ctx.p.requestMs.length, 'requête')}, ce${NB}poste` : `ce${NB}poste, depuis le${NB}suivi`, color: C.indigo },
   ]
   const tz = ctx.s.tzOffset
   return (
@@ -1842,7 +2097,7 @@ const sessionsTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
             <Box flexShrink={0} marginLeft={1}>
               {/* Largeurs fixes : durées, modèles, tokens et coûts en colonnes. */}
               {line(k, [
-                ctx.inner >= 60 && <Box width={9} justifyContent="flex-end">{T(k, fmtDuration(dur(s)), { dim: true })}</Box>,
+                ctx.inner >= 60 && <Box width={9} justifyContent="flex-end">{T(k, durationText(activeOf(s)), { color: C.lilac, dim: true })}</Box>,
                 ctx.inner >= 50 && <Box width={4}>{modelDots(k, ctx, s.models)}</Box>,
                 ctx.inner >= 70 && <Box width={8} justifyContent="flex-end">{T(k, fmtTokens(s.tokens), { color: BRAND, dim: true })}</Box>,
                 <Box width={9} justifyContent="flex-end">{T(k, fmtCost(s.cost), { color: MONEY, bold: true })}</Box>,
@@ -1883,6 +2138,15 @@ const blocksHistory = (k: Kit, ctx: Ctx): unknown => {
 
 // ─── Rythme ───────────────────────────────────────────────────────────────
 
+/** Les étiquettes des 24 heures d'un graphique SVG : une toutes les trois heures. */
+const hourLabels = (hours: readonly number[]): string[] => hours.map((_, h) => (h % 3 === 0 ? `${h}h` : ''))
+
+/** L'axe des heures sous des colonnes de `cell` caractères (terminal) : une graduation toutes les six heures. */
+const hourAxis = (hours: readonly number[], cell: number): string => hours.map((_, h) => (h % 6 === 0 ? String(h).padEnd(cell * 6, NB) : '')).join('')
+
+/** Un coût par heure active, « — » quand il n'est pas mesuré. */
+const hourlyCostText = (rate: number | null): string => `${rate !== null ? fmtCostShort(rate) : '—'}/h`
+
 const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const { Box } = k
   const metric = ctx.metric
@@ -1900,10 +2164,10 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
     a && isLocalView(ctx)
       ? (() => {
           const peak = a.hours.indexOf(Math.max(...a.hours))
-          const labels = a.hours.map((_, h) => (h % 3 === 0 ? `${h}h` : ''))
+          const labels = hourLabels(a.hours)
           const cell = ctx.inner >= 50 ? 2 : 1
-          const axis = a.hours.map((_, h) => (h % 6 === 0 ? String(h).padEnd(cell * 6, NB) : '')).join('')
-          return card(k, 'hours', 'Heures de début des sessions', C.pink, T(k, `ce${NB}poste${a.since ? `, depuis le ${fmtDate(a.since.slice(0, 10), true)}` : ''}`, { dim: true }), [
+          const axis = hourAxis(a.hours, cell)
+          return card(k, 'hours', 'Heures de début des sessions (ce poste)', C.pink, T(k, `ce${NB}poste${a.since ? `, depuis le ${fmtDate(a.since.slice(0, 10), true)}` : ''}`, { dim: true }), [
             <Box marginTop={1}>
               {k.isRich ? (
                 svgOf(k, columnsSvg({ values: a.hours, labels, color: C.pink, width: px(Math.min(ctx.inner, 90)), fmt: (v) => fmtInt(v), highlight: peak }), `Sessions commencées par heure ; pointe à ${peak} h`)
@@ -1945,7 +2209,7 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
           const tools = acts.reduce((n, d) => n + d.tools, 0)
           const top = acts.reduce((best, d) => (d.messages > best.messages ? d : best), acts[0]!)
           const series = seriesOf([], 'day', acts[0]!.date, a?.through ?? ctx.today).map((b) => acts.find((d) => d.date === b.key)?.messages ?? 0)
-          return card(k, 'messages', 'Messages et outils', C.indigo, T(k, `ce${NB}PC${a?.through ? `, jusqu’au ${fmtDate(a.through)}` : ''}`, { dim: true }), [
+          return card(k, 'messages', 'Messages et outils (ce poste)', C.indigo, T(k, `ce${NB}poste${a?.through ? `, jusqu’au ${fmtDate(a.through)}` : ''}`, { dim: true }), [
             <Box marginTop={1}>
               {line(
                 k,
@@ -1977,8 +2241,35 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
     </Box>,
   ])
 
+  // Le temps actif par heure de la journée, sur la période : les heures où l'on travaille vraiment.
+  const activeHours = ctx.p.hours
+  const activePeak = activeHours.indexOf(Math.max(...activeHours))
+  const activeCard = card(k, 'active-hours', 'Temps actif par heure', C.lilac, T(k, ctx.f.machine !== 'all' ? ctx.f.machine.replace(/ /g, NB) : ctx.s.machines.length > 1 ? `tous${NB}les${NB}postes` : `ce${NB}poste`, { dim: true }), [
+    !hasMeasure(ctx) || ctx.f.project !== null || !activeHours.some((v) => v > 0)
+      ? say(
+          k,
+          !ctx.m.hasActive
+            ? 'Le temps actif ne se découpe pas par modèle : retirer le filtre de modèle.'
+            : ctx.f.project !== null
+              ? 'Le temps actif par heure ne se découpe pas par projet : retirer le filtre de projet.'
+              : `Pas encore de temps actif sur la période (${trackedText(ctx, ' ')}).`,
+        )
+      : <Box marginTop={1}>
+          {k.isRich ? (
+            svgOf(k, columnsSvg({ values: activeHours, labels: hourLabels(activeHours), color: C.lilac, width: px(Math.min(ctx.inner, 90)), fmt: (v) => fmtHours(v), highlight: activePeak }), `Temps actif par heure ; le plus à ${activePeak} h`)
+          ) : (
+            <Box flexDirection="column">
+              {columnsChart(k, 'active-hours', activeHours, 5, C.lilac, ctx.inner >= 50 ? 2 : 1, activePeak)}
+              {T(k, hourAxis(activeHours, ctx.inner >= 50 ? 2 : 1), { dim: true })}
+            </Box>
+          )}
+        </Box>,
+    ctx.m.hasActive && activeHours.some((v) => v > 0) && say(k, `Le plus à ${activePeak}${NB}h (${fmtSeconds(activeHours[activePeak] ?? 0)} sur la période)${SEP}${trackedText(ctx, ' ')}.`),
+  ])
+
   return (
     <Box key="rhythm" flexDirection="column">
+      {activeCard}
       {hoursCard}
       {weekCard}
       {msgCard}

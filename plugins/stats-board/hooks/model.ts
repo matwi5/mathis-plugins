@@ -2,7 +2,7 @@
 // /stats, fusion avec les usages des autres postes, filtres, agrégats et libellés en français.
 // Aucun appel au moteur ici : tout ce qui touche `$` vit dans register.tsx.
 
-import type { Activity, BlockRow, DiscussionEntry, Grain, Machine, Metric, Period, ProjectInfo, Published, SessionRow, Ui, UsageRow } from '../types'
+import type { Activity, ApiRow, BlockRow, DiscussionEntry, Durations, Grain, Machine, Metric, PeerDurations, Period, ProjectInfo, Published, SessionRow, Ui, UsageRow } from '../types'
 
 // Couleurs brutes (hex) mi-tons, copiées de git-board (hooks/model.ts) : lisibles en thème
 // clair comme sombre, sur le terminal comme sur le desktop.
@@ -37,9 +37,13 @@ export const SEP = `${NB}${NB}·${NB}${NB}`
 export const BRAND = C.sky
 export const MONEY = C.amber
 
-/** Format du relevé (`Snapshot.schema`) : 3 depuis que chaque ligne dit son poste. */
-export const SCHEMA = 3
-/** Format du fichier qu'un poste publie dans `claude-usage` (`Published.schema`). */
+/** Format du relevé (`Snapshot.schema`) : 3 depuis que chaque ligne dit son poste, 4 avec les durées. */
+export const SCHEMA = 4
+/**
+ * Format du fichier qu'un poste publie dans `claude-usage` (`Published.schema`). Les durées de la
+ * 0.10.0 s'y ajoutent sans changer de format : un poste pas encore mis à jour lit le reste (décision
+ * « Garder schema 1 + champs ») ; un fichier sans elles n'a pas de durée mesurée.
+ */
 export const PUBLISH_SCHEMA = 1
 /** Le nom de ce poste quand aucun n'est réglé : ses usages ne sont alors pas publiés. */
 export const LOCAL_LABEL = 'Ce poste'
@@ -54,6 +58,7 @@ export const DAY_MS = 86_400_000
 type Json = Record<string, any>
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+const finiteOrUndefined = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 export const unique = <T,>(list: readonly T[]): T[] => [...new Set(list)]
@@ -227,7 +232,10 @@ export function keepSessions(fresh: SessionRow[], previous: readonly SessionRow[
   if (!mine.length) return fresh
   const ids = new Set(fresh.map((s) => s.id))
   const first = fresh.length ? Math.min(...fresh.map((s) => s.first)) : Infinity
-  return [...mine.filter((s) => !ids.has(s.id) && s.last < first), ...fresh]
+  // À la minute près : une session reprise du fichier publié a sa fin arrondie à la minute d'après
+  // (décision « Historique »).
+  const limit = Number.isFinite(first) ? Math.ceil(first / 60_000) * 60_000 : first
+  return [...mine.filter((s) => !ids.has(s.id) && (s.last < first || s.last <= limit)), ...fresh]
 }
 
 /**
@@ -251,6 +259,11 @@ export function ownHistory(machine: string, sources: { previous?: { rows: readon
   for (const r of sources.previous?.rows ?? []) if (isMine(r.machine)) addRow(r)
   for (const s of sources.previous?.sessions ?? []) if (isMine(s.machine)) addSession(s)
   const legacy = sources.legacy
+  // Schéma 3 : la forme d'aujourd'hui, sans les durées (refaites depuis les fichiers de relevé).
+  if (legacy && legacy.schema === 3 && Array.isArray(legacy.rows)) {
+    for (const r of legacy.rows as UsageRow[]) if (r && isMine(str(r.machine)) && isDate(str(r.date)) && typeof r.project === 'string') addRow(r)
+    for (const s of Array.isArray(legacy.sessions) ? (legacy.sessions as SessionRow[]) : []) if (s && isMine(str(s.machine)) && typeof s.id === 'string' && Number.isFinite(s.last)) addSession(s)
+  }
   if (legacy && legacy.schema === 2 && Array.isArray(legacy.rows)) {
     for (const r of legacy.rows as Json[]) if (r && !r.isPast && isDate(str(r.date)) && typeof r.project === 'string') addRow({ date: r.date, project: r.project, machine, model: str(r.model) || UNKNOWN_MODEL, input: num(r.input), output: num(r.output), cacheWrite: num(r.cacheWrite), cacheRead: num(r.cacheRead), cost: num(r.cost) })
     for (const s of Array.isArray(legacy.sessions) ? (legacy.sessions as Json[]) : []) if (s && typeof s.id === 'string' && Number.isFinite(s.last)) addSession({ id: s.id, machine, project: str(s.project) || UNKNOWN, parent: typeof s.parent === 'string' ? s.parent : null, first: num(s.first) || num(s.last), last: num(s.last), cost: num(s.cost), tokens: num(s.tokens), output: num(s.output), models: strings(s.models) })
@@ -265,13 +278,91 @@ export function ownHistory(machine: string, sources: { previous?: { rows: readon
 /** Le fichier d'un poste dans le dépôt partagé : `Mac.json`, `Portable.json`… */
 export const machineFile = (machine: string): string => `${machine.replace(/[^A-Za-z0-9_-]/g, '_')}.json`
 
-/** Ce que ce poste publie : ses lignes, ses sessions, et les projets qu'elles citent (sans `updatedAt`). */
-export function publishedOf(o: { machine: string; tzOffset: number; rows: readonly UsageRow[]; sessions: readonly SessionRow[]; projects: Record<string, ProjectInfo> }): Omit<Published, 'updatedAt'> {
-  const keys = new Set([...o.rows.map((r) => r.project), ...o.sessions.map((s) => s.project)])
+/** Une durée publiée : à la minute, pour qu'aucune heure de requête ne se déduise des totaux (décision « Arrondir à la minute »). */
+const toMinute = (ms: number): number => Math.round(ms / 60_000) * 60_000
+/** Une heure publiée, vers la minute d'avant (début de session, date de publication). */
+export const floorMinute = (ms: number): number => Math.floor(ms / 60_000) * 60_000
+/**
+ * La fin d'une session publiée : vers la minute d'après, pour ne pas la raccourcir (décision
+ * « Heures publiées », avant la livraison), sauf si c'est passer minuit à l'heure du poste : vers la
+ * minute d'avant alors, pour que la session reste dans son jour chez les autres postes (décision
+ * « Minuit »).
+ */
+const endMinute = (ms: number, tzOffset: number): number => {
+  const up = Math.ceil(ms / 60_000) * 60_000
+  return dayOf(up, tzOffset) === dayOf(ms, tzOffset) ? up : floorMinute(ms)
+}
+
+/** La plus petite date d'une liste ; null pour une liste vide. */
+export const earliest = (dates: Iterable<string>): string | null => {
+  let first: string | null = null
+  for (const d of dates) if (first === null || d < first) first = d
+  return first
+}
+
+/**
+ * Ce que ce poste publie : ses lignes, ses sessions, et les projets qu'elles citent (sans
+ * `updatedAt`). Depuis la 0.10.0, ses totaux de durée aussi, jamais ses requêtes, leurs heures ni
+ * aucun texte (Q13, Q18 révisée), arrondis à la minute : chaque ligne (jour, projet, modèle) reçoit
+ * sa durée API, son temps de génération, ses appels relevés et leurs tokens de sortie (`apiOnly`
+ * quand ccusage n'a pas encore la ligne) ; chaque session, son temps actif, sa durée API et ses
+ * requêtes, et ses heures de début et de fin à la minute aussi ; s'y ajoutent le temps actif par
+ * jour et projet, et par jour et heure locale.
+ */
+export function publishedOf(o: { machine: string; tzOffset: number; rows: readonly UsageRow[]; sessions: readonly SessionRow[]; projects: Record<string, ProjectInfo>; durations?: Durations | null }): Omit<Published, 'updatedAt'> {
+  const d = o.durations ?? null
+  const timesOf = (a: ApiRow) => ({ apiMs: toMinute(a.apiMs), genMs: toMinute(a.genMs), calls: a.calls, genOutput: a.output })
+  const api = new Map<string, ApiRow>((d?.api ?? []).map((a) => [`${a.date}|${a.project}|${a.model}`, a]))
+  const used = new Set<string>()
+  const rows: UsageRow[] = o.rows.map(({ apiMs: _a, genMs: _g, calls: _c, genOutput: _o, ...r }) => {
+    const key = `${r.date}|${r.project}|${r.model}`
+    const a = api.get(key)
+    if (!a) return r
+    used.add(key)
+    return { ...r, ...timesOf(a) }
+  })
+  const apiOnly = [...api]
+    .filter(([key]) => !used.has(key))
+    .map(([, a]) => ({ date: a.date, project: a.project, model: a.model, ...timesOf(a) }))
+    .sort((x, y) => x.date.localeCompare(y.date) || x.project.localeCompare(y.project) || x.model.localeCompare(y.model))
+  const totals = new Map<string, { activeMs: number; apiMs: number; requests: number }>()
+  for (const s of d?.sessions ?? []) {
+    const t = totals.get(s.session) ?? { activeMs: 0, apiMs: 0, requests: 0 }
+    t.activeMs += s.activeMs
+    t.apiMs += s.apiMs
+    t.requests += s.requests
+    totals.set(s.session, t)
+  }
+  const sessions = o.sessions.map(({ activeMs: _a, apiMs: _p, requests: _r, ...row }) => {
+    const s = { ...row, first: floorMinute(row.first), last: endMinute(row.last, o.tzOffset) }
+    const t = totals.get(s.id)
+    return t ? { ...s, activeMs: toMinute(t.activeMs), apiMs: toMinute(t.apiMs), requests: t.requests } : s
+  })
+  const active = (d?.active ?? [])
+    .map((r) => ({ date: r.date, project: r.project, activeMs: toMinute(r.activeMs), requests: r.requests }))
+    .sort((x, y) => x.date.localeCompare(y.date) || x.project.localeCompare(y.project))
+  const hours = (d?.hours ?? []).map((h) => ({ date: h.date, hours: h.hours.map(toMinute) })).sort((x, y) => x.date.localeCompare(y.date))
+  const keys = new Set([...rows.map((r) => r.project), ...sessions.map((s) => s.project), ...apiOnly.map((a) => a.project)])
   const projects: Record<string, ProjectInfo> = {}
   for (const k of [...keys].sort()) if (o.projects[k]) projects[k] = { name: o.projects[k]!.name, path: o.projects[k]!.path }
-  return { schema: PUBLISH_SCHEMA, machine: o.machine, tzOffset: o.tzOffset, rows: [...o.rows], sessions: [...o.sessions], projects }
+  // Le temps actif est rangé au dépôt d'un worktree : son dossier, déduit d'un worktree cité, pour le rapprochement des postes.
+  for (const r of active) {
+    if (projects[r.project] || o.projects[r.project]) {
+      if (!projects[r.project] && o.projects[r.project]) projects[r.project] = { name: o.projects[r.project]!.name, path: o.projects[r.project]!.path }
+      continue
+    }
+    const member = Object.entries(o.projects).find(([k, info]) => baseKey(k) === r.project && info.path)
+    const path = member?.[1].path?.replace(WORKTREE_PATH, '')
+    if (path && projectKey(path) === r.project) projects[r.project] = { name: segments(path).pop() ?? '', path }
+  }
+  const body: Omit<Published, 'updatedAt'> = { schema: PUBLISH_SCHEMA, machine: o.machine, tzOffset: o.tzOffset, rows, sessions, projects }
+  if (d) Object.assign(body, { active, hours, apiOnly })
+  return body
 }
+
+/** Les champs de durée d'une ligne lue, seulement ceux qui sont là. */
+const durationFieldsOf = <K extends string>(x: Json, keys: readonly K[]): Partial<Record<K, number>> =>
+  Object.fromEntries(keys.flatMap((k) => (finiteOrUndefined(x[k]) === undefined ? [] : [[k, finiteOrUndefined(x[k])!]]))) as Partial<Record<K, number>>
 
 /** Le fichier publié d'un autre poste, ou null s'il n'a pas la bonne forme. Ses lignes prennent son nom. */
 export function parsePublished(json: Json): Published | null {
@@ -279,15 +370,23 @@ export function parsePublished(json: Json): Published | null {
   const machine: string = json.machine
   const rows = (json.rows as Json[])
     .filter((r) => r && isDate(str(r.date)) && typeof r.project === 'string' && typeof r.model === 'string')
-    .map((r): UsageRow => ({ date: r.date, project: r.project, machine, model: r.model, input: num(r.input), output: num(r.output), cacheWrite: num(r.cacheWrite), cacheRead: num(r.cacheRead), cost: num(r.cost) }))
+    .map((r): UsageRow => ({ date: r.date, project: r.project, machine, model: r.model, input: num(r.input), output: num(r.output), cacheWrite: num(r.cacheWrite), cacheRead: num(r.cacheRead), cost: num(r.cost), ...durationFieldsOf(r, ['apiMs', 'genMs', 'calls', 'genOutput'] as const) }))
   const sessions = (Array.isArray(json.sessions) ? (json.sessions as Json[]) : [])
     .filter((s) => s && typeof s.id === 'string' && typeof s.project === 'string' && Number.isFinite(s.last))
-    .map((s): SessionRow => ({ id: s.id, machine, project: s.project, parent: typeof s.parent === 'string' ? s.parent : null, first: num(s.first) || num(s.last), last: num(s.last), cost: num(s.cost), tokens: num(s.tokens), output: num(s.output), models: strings(s.models) }))
+    .map((s): SessionRow => ({ id: s.id, machine, project: s.project, parent: typeof s.parent === 'string' ? s.parent : null, first: num(s.first) || num(s.last), last: num(s.last), cost: num(s.cost), tokens: num(s.tokens), output: num(s.output), models: strings(s.models), ...durationFieldsOf(s, ['activeMs', 'apiMs', 'requests'] as const) }))
   const projects: Record<string, ProjectInfo> = {}
   for (const [k, v] of Object.entries((json.projects ?? {}) as Record<string, Json>)) {
     if (v && typeof v === 'object') projects[k] = { name: str(v.name), path: typeof v.path === 'string' ? v.path : null }
   }
-  return { schema: PUBLISH_SCHEMA, machine, updatedAt: num(json.updatedAt), tzOffset: num(json.tzOffset), rows, sessions, projects }
+  const out: Published = { schema: PUBLISH_SCHEMA, machine, updatedAt: num(json.updatedAt), tzOffset: num(json.tzOffset), rows, sessions, projects }
+  // Un poste d'avant la 0.10.0 ne publie pas de durée : elles valent « non mesuré ».
+  if (Array.isArray(json.active)) out.active = (json.active as Json[]).filter((r) => r && isDate(str(r.date)) && typeof r.project === 'string').map((r) => ({ date: r.date, project: r.project, activeMs: num(r.activeMs), requests: num(r.requests) }))
+  if (Array.isArray(json.hours)) out.hours = (json.hours as Json[]).filter((h) => h && isDate(str(h.date)) && Array.isArray(h.hours)).map((h) => ({ date: h.date, hours: Array.from({ length: 24 }, (_, i) => num(h.hours[i])) }))
+  if (Array.isArray(json.apiOnly))
+    out.apiOnly = (json.apiOnly as Json[])
+      .filter((a) => a && isDate(str(a.date)) && typeof a.project === 'string' && typeof a.model === 'string')
+      .map((a) => ({ date: a.date, project: a.project, model: a.model, apiMs: num(a.apiMs), genMs: num(a.genMs), calls: num(a.calls), genOutput: num(a.genOutput) }))
+  return out
 }
 
 /** Le dossier d'une session lancée par SSH depuis le desktop : `ssh-<id de la session>`. */
@@ -303,8 +402,9 @@ const SSH_KEY = /^ssh-(.+)$/
 export function mergeMachines(
   local: { machine: string; rows: readonly UsageRow[]; sessions: readonly SessionRow[]; projects: Record<string, ProjectInfo> },
   others: readonly Published[],
-): { rows: UsageRow[]; sessions: SessionRow[]; projects: Record<string, ProjectInfo>; machines: string[]; sessionless: string[] } {
+): { rows: UsageRow[]; sessions: SessionRow[]; projects: Record<string, ProjectInfo>; machines: string[]; sessionless: string[]; peers: PeerDurations } {
   const projects: Record<string, ProjectInfo> = { ...local.projects }
+  const peers: PeerDurations = { sinceBy: {}, api: [], active: [], hours: [], sessions: [] }
   const sessionless: string[] = []
   const byName = new Map<string, string>()
   const nameOf = (key: string, info: ProjectInfo | undefined): string | null => {
@@ -347,10 +447,30 @@ export function mergeMachines(
       keyOf.set(key, out)
       return out
     }
-    for (const r of o.rows) if (!isCopy(r.project, o.machine)) rows.push({ ...r, project: target(r.project) })
-    for (const s of o.sessions) if (!isCopy(s.project, o.machine)) sessions.push({ ...s, project: target(s.project) })
+    // Les durées publiées d'un autre poste ne sont gardées qu'une fois, dans `peers`, que lisent les
+    // vues : ses lignes et ses sessions les laissent (décision « Doublon »).
+    for (const { apiMs: _apiMs, genMs: _genMs, calls: _calls, genOutput: _genOutput, ...r } of o.rows) if (!isCopy(r.project, o.machine)) rows.push({ ...r, project: target(r.project) })
+    for (const { activeMs: _activeMs, apiMs: _apiMs, requests: _requests, ...s } of o.sessions) if (!isCopy(s.project, o.machine)) sessions.push({ ...s, project: target(s.project) })
+    addPeer(peers, o, target, (project) => isCopy(project, o.machine))
   }
-  return { rows, sessions: sessions.sort((a, b) => a.last - b.last), projects, machines, sessionless }
+  return { rows, sessions: sessions.sort((a, b) => a.last - b.last), projects, machines, sessionless, peers }
+}
+
+/**
+ * Les durées d'un fichier publié, aux projets de ce poste (`target`) ; rien pour un poste d'avant la
+ * 0.10.0. Une session y a un total : il est rangé au jour de sa dernière activité (décision « Total au dernier jour »).
+ */
+function addPeer(peers: PeerDurations, o: Published, target: (key: string) => string, isCopy: (project: string) => boolean): void {
+  const before = peers.active.length + peers.api.length
+  const calls = [...o.rows.filter((r) => r.apiMs !== undefined), ...(o.apiOnly ?? [])]
+  // La vitesse : les tokens de sortie des seuls appels relevés (Q5), jamais la sortie de ccusage.
+  for (const r of calls) if (!isCopy(r.project)) peers.api.push({ date: r.date, project: target(r.project), machine: o.machine, model: r.model, apiMs: r.apiMs ?? 0, genMs: r.genMs ?? 0, output: r.genOutput ?? 0, calls: r.calls ?? 0 })
+  for (const r of o.active ?? []) peers.active.push({ date: r.date, project: target(r.project), machine: o.machine, activeMs: r.activeMs, requests: r.requests })
+  for (const h of o.hours ?? []) peers.hours.push({ date: h.date, machine: o.machine, hours: h.hours })
+  for (const s of o.sessions) if (s.activeMs !== undefined && !isCopy(s.project)) peers.sessions.push({ date: dayOf(s.last, o.tzOffset), session: s.id, project: target(s.project), machine: o.machine, activeMs: s.activeMs, apiMs: s.apiMs ?? 0, requests: s.requests ?? 0 })
+  if (peers.active.length + peers.api.length === before) return
+  const first = earliest([...(o.active ?? []), ...calls].map((r) => r.date))
+  if (first) peers.sinceBy[o.machine] = first
 }
 
 // ─── Projets ────────────────────────────────────────────────────────────────
@@ -549,6 +669,17 @@ export function ago(ms: number, now: number): string {
   return `il${NB}y${NB}a${NB}${Math.round(s / 86_400)}${NB}j`
 }
 
+/** Pour les axes et les chiffres courts d'une durée : « 42 min », « 3,2 h », « 120 h ». */
+export function fmtHours(ms: number): string {
+  const min = Math.round(ms / 60_000)
+  if (min < 60) return `${min}${NB}min`
+  const h = ms / 3_600_000
+  return `${dec(h, h < 100 ? 1 : 0)}${NB}h`
+}
+
+/** La date courte d'un jour : « 26/10 ». */
+export const fmtDayMonth = (date: string): string => `${date.slice(8, 10)}/${date.slice(5, 7)}`
+
 /** « 45 min », « 2 h 05 », « 19 j 23 h ». */
 export function fmtDuration(ms: number): string {
   const min = Math.round(ms / 60_000)
@@ -557,6 +688,15 @@ export function fmtDuration(ms: number): string {
   const h = Math.floor(min / 60)
   if (h < 24) return `${h}${NB}h${NB}${String(min % 60).padStart(2, '0')}`
   return `${Math.floor(h / 24)}${NB}j${NB}${h % 24}${NB}h`
+}
+
+/** À la seconde, pour une requête : « 42 s », « 3 min 05 », « 1 h 02 ». */
+export function fmtSeconds(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}${NB}s`
+  const min = Math.floor(s / 60)
+  if (min < 60) return `${min}${NB}min${NB}${String(s % 60).padStart(2, '0')}`
+  return `${Math.floor(min / 60)}${NB}h${NB}${String(min % 60).padStart(2, '0')}`
 }
 
 // ─── Nombres ────────────────────────────────────────────────────────────────

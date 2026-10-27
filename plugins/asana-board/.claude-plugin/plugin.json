@@ -1,6 +1,6 @@
 {
   "name": "asana-board",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Tâches Asana du projet en panneau (/asana, ou /asana-board:asana dès le premier message) et en bandeau au-dessus du prompt : les tâches non terminées de la section, rangées par statut, à créer, modifier, cocher, commenter ou supprimer.",
   "author": {
     "name": "Mathis"

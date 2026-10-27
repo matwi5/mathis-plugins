@@ -6,7 +6,7 @@
 // `gap` ignoré ; les écarts dans un texte sont donc insécables, ceux entre éléments des
 // marges. Aucune prop n'est passée à `undefined` : les arbres restent valides partout.
 
-import type { SyncState, AgentRow, Artifact, ArtifactKind, Board, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, Ticket, TicketGroup, TicketStatus, Tone, UiState } from '../types'
+import type { SyncState, AgentStatus, Artifact, ArtifactKind, Board, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, AgentLane, AgentMark, AgentType, RegistryAgent, SegmentKind, SessionRegistry, Ticket, ToolFamily, TicketGroup, TicketStatus, Tone, UiState } from '../types'
 import { ANYTIME_GROUPS, C, CODE_SKILLS, COMMAND_GROUPS, FLOW_COMMANDS, LAUNCHERS, SKILLS, commandLineOf, slashOf, type AnytimeTool, type SkillDef, type StepDef } from './catalog.ts'
 import {
   relayForGroup,
@@ -47,9 +47,18 @@ import {
   commandArgsOf,
   groupReviewArgs,
 } from './model.ts'
+import { MAIN, runningOf } from './registry.ts'
+import type { LinkedSession, LinkedState } from './linked.ts'
+import type { HistoryEntry } from './history.ts'
+import { forgetCount, forgetText } from './erase.ts'
+import { isSureLink } from './linked.ts'
+import { costOf, costText, pricesFor, type UnitPrices } from './cost.ts'
+import { HOUR_MS, activityOf, buildAxis, laneMarks, laneParts, laneTree, summaryOf, unionOf, type Axis, type LanePart } from './timeline.ts'
+import { DEFAULT, WAIT_COLOR, laneCells, laneRaster, markLook, pack, textColorOf, type LaneCell } from './cells.ts'
 import {
   barSvg,
   dotsSvg,
+  laneSvg,
   miniRoadSvg,
   pulseSvg,
   ringSvg,
@@ -72,10 +81,28 @@ export type Kit = {
   Svg: any
   /** Lien externe ; absent d'une table qui n'en a pas. */
   Link: any
+  /** La grille de cases du terminal (`Raster`), ou null : la frise passe alors en barres en blocs. */
+  Raster: any
   /** La surface dessine les SVG (desktop, VS Code, mobile). */
   isRich: boolean
   /** Colonnes du corps. */
   width: number
+}
+
+/** Une case vide, pour essayer le constructeur `Raster` de la table. */
+const PROBE = pack([[[0x20, DEFAULT, DEFAULT]]])
+
+/**
+ * La table a vraiment `Raster` : le constructeur rend un élément `Raster`. Une surface qui ne le
+ * connaît pas n'en a pas, ou le complète d'un fragment vide qui ne dessinerait rien (constaté par stats-board).
+ */
+const drawsRaster = (ctor: unknown): boolean => {
+  if (typeof ctor !== 'function') return false
+  try {
+    return (ctor as (props: unknown) => { type?: unknown } | null)({ key: 'probe', columns: 1, rows: 1, cells: PROBE.cells })?.type === 'Raster'
+  } catch {
+    return false
+  }
 }
 
 export const kitOf = (table: Record<string, unknown>, width: number): Kit => ({
@@ -84,6 +111,7 @@ export const kitOf = (table: Record<string, unknown>, width: number): Kit => ({
   Button: table.Button,
   Svg: table.Svg ?? null,
   Link: table.Link ?? null,
+  Raster: typeof table.Svg !== 'function' && drawsRaster(table.Raster) ? table.Raster : null,
   isRich: typeof table.Svg === 'function',
   width: Math.max(24, Math.floor(width)),
 })
@@ -96,6 +124,21 @@ export type View = {
   now: number
   /** L'avancement relayé par les sessions liées du parcours actif. */
   relay?: Relay | null
+  /** Le registre des sous-agents de cette session (onglet Agents). */
+  agents?: SessionRegistry | null
+  /** Le suivi en défaut (S11, R2) : `true`, une écriture du registre refusée ; `'lost'`, un changement perdu. */
+  agentsAlert?: boolean | 'lost'
+  /** Les effacements que cette discussion fait en ce moment (R1, S36) : `run:<id>` ou `session:<id>`, et leur titre. */
+  erasing?: readonly { key: string; title: string }[]
+  /** Les prix des modèles tirés de ccusage (Q15) ; null tant qu'ils manquent : « coût indisponible ». */
+  agentPrices?: Readonly<Record<string, UnitPrices>> | null
+  /** Les sessions liées de cette discussion (onglet Agents), avec leur registre quand il se lit. */
+  linked?: readonly { session: LinkedSession; reg: SessionRegistry | null }[]
+  /**
+   * Le sélecteur d'historique de l'onglet Agents, et la vue de l'entrée choisie (un parcours passé,
+   * une ancienne discussion) quand elle est lue.
+   */
+  history?: { entries: readonly HistoryEntry[]; shown: { key: string; title: string; self: SessionRegistry; linked: readonly { session: LinkedSession; reg: SessionRegistry | null }[] } | null }
 }
 
 export type Actions = {
@@ -165,8 +208,6 @@ export type Actions = {
   toggleItems: () => unknown
   /** Déplie ou replie les livrables au-delà des 14 premiers. */
   toggleArtifacts: () => unknown
-  /** Déplie ou replie les sous-agents terminés au-delà des 3 derniers. */
-  toggleAgents: () => unknown
   /** La personne a relu les choix faits sans elle. */
   seeDecisions: () => unknown
   /** Déplie ou replie les choix déjà relus. */
@@ -181,6 +222,28 @@ export type Actions = {
   redoReport: () => unknown
   hideBand: () => unknown
   openPane: () => unknown
+  /** Onglet Agents : « dernière heure » ou « tout ». */
+  toggleAgentsRange: () => unknown
+  /** Onglet Agents : montre la frise d'une session liée (sa clé), ou celle de l'orchestrateur (null). */
+  selectAgentsSession: (key: string | null) => unknown
+  /** Onglet Agents : déplie ou replie le sélecteur d'historique. */
+  toggleAgentsHistory: () => unknown
+  /** Onglet Agents : montre une entrée de l'historique (`now`, `run:<id>`, `session:<id>`). */
+  chooseAgentsHistory: (key: string) => unknown
+  /** Historique : ouvre l'onglet Agents sur un parcours. */
+  openAgentsOf: (runId: string) => unknown
+  /** Onglet Agents : demande (ou retire) la confirmation d'« Oublier » une discussion (`session:<id>`). */
+  askForget: (key: string) => unknown
+  /** Onglet Agents : oublie une discussion et ses sessions liées sûres (S2, S15). */
+  forget: (sessionId: string) => unknown
+  /** Onglet Agents : ouvre ou referme la carte de détail d'une piste. */
+  toggleAgentCard: (key: string) => unknown
+  /** Carte de détail : déplie ou replie le prompt. */
+  togglePrompt: () => unknown
+  /** Frise : déplie ou replie la piste d'un Workflow. */
+  toggleWorkflow: (id: string) => unknown
+  /** Carte de détail : ouvre la transcription d'un sous-agent de cette discussion. */
+  openAgentTranscript: (agentId: string) => unknown
 }
 
 // ─── Petits outils ────────────────────────────────────────────────────────
@@ -406,7 +469,7 @@ const livePill = (k: Kit, run: Run, view: View): unknown => {
   if (run.status === 'done') return T(k, `✓${NB}Terminé`, { color: C.green, bold: true })
   if (run.status === 'active' && view.board?.activeId !== run.id) return T(k, `⇆${NB}Dans une autre discussion`, { color: C.blue, bold: true })
   if (run.status === 'paused') return T(k, run.asideAt !== undefined ? `‖${NB}Mis de côté` : `‖${NB}En pause`, { color: C.gray, bold: true })
-  const running = run.agents.filter(a => a.status === 'running').length
+  const running = agentsAtWork(view)
   const { live, now } = view
   // Des éléments chez une session liée lancée : c'est elle qui travaille, pas la personne.
   const phase = currentPhase(run)
@@ -1374,59 +1437,584 @@ const phaseCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
 
 // ─── Sous-agents ──────────────────────────────────────────────────────────
 
-const agentRow = (k: Kit, a: AgentRow, now: number): unknown => {
-  const { Box } = k
-  const icon =
-    a.status === 'running'
-      ? k.isRich
-        ? svgOf(k, spinnerSvg(C.blue), 'en cours', true)
-        : T(k, spinFrame(now), { color: C.blue })
-      : a.status === 'done'
-        ? T(k, '✓', { color: C.green })
-        : a.status === 'cancelled'
-          ? T(k, '⊘', { color: C.gray })
-          : T(k, '✗', { color: C.red })
+/** Ce que dit l'état d'un sous-agent, et sa couleur. */
+const AGENT_STATE: Record<AgentStatus, { word: string; color: string }> = {
+  running: { word: `au${NB}travail`, color: C.blue },
+  done: { word: 'fini', color: C.green },
+  failed: { word: 'échoué', color: C.red },
+  cancelled: { word: 'annulé', color: C.gray },
+}
+
+/** Les sous-agents de la session au travail : l'onglet, le bandeau et la pastille d'état les comptent. */
+const agentsAtWork = (view: View): number => runningOf(view.agents ?? null).length
+
+/** La couleur de la piste de l'orchestrateur ; celle d'un sous-agent est celle de son type (AGENT_TYPE). */
+const ORCHESTRATOR_COLOR = C.violet
+
+/** Le glyphe d'une famille d'outils dans le SVG ; le terminal a les siens (cells.ts). */
+const FAMILY_GLYPH: Record<ToolFamily, string> = { read: '⌕', edit: '✎', run: '❯', web: '🌐', agent: '⇢', other: '•' }
+
+const SEGMENT_WORD: Record<SegmentKind, string> = {
+  think: 'réflexion',
+  write: 'rédaction',
+  tool: 'outil',
+  waitAgent: 'attente d’un sous-agent',
+  waitPerson: 'attente de toi',
+  waitBg: 'attente d’une tâche de fond',
+}
+
+/** Le texte `alt` d'une piste : ce qui s'y voit, dans l'ordre, sans répétition côte à côte. */
+const laneAlt = (name: string, parts: readonly LanePart[]): string => {
+  const words: string[] = []
+  for (const p of parts) {
+    const word = p.kind === 'tool' && p.family !== undefined ? `${SEGMENT_WORD.tool} ${FAMILY_GLYPH[p.family]}` : SEGMENT_WORD[p.kind]
+    if (words[words.length - 1] !== word) words.push(word)
+  }
+  return `${name} : ${words.length > 0 ? words.slice(0, 12).join(', ') + (words.length > 12 ? '…' : '') : 'rien sur cette période'}`
+}
+
+/** Une piste de la frise, prête à dessiner. */
+type FriseLane = {
+  key: string
+  name: string
+  color: string
+  lane: AgentLane
+  agent?: RegistryAgent
+  /** Le retrait sous le parent (Q13). */
+  depth?: number
+  /** La piste d'un Workflow : ses agents réunis, et si elle est dépliée. */
+  workflow?: { id: string; count: number; running: number; isOpen: boolean }
+  /** La piste d'une session liée, dans la frise de l'orchestrateur : son bouton ouvre sa frise. */
+  linked?: LinkedSession
+  /** Sous le nom d'une piste sans sous-agent : « cette discussion » par défaut. */
+  caption?: string
+}
+
+/**
+ * La piste repliée d'un Workflow : l'union des périodes où au moins un de ses agents travaille
+ * (ses agents tournent en parallèle : leurs segments ne se suivent pas), ouverte tant que l'un
+ * d'eux travaille ; et les repères de ses agents, leurs échecs et interruptions compris.
+ */
+const workflowLane = (members: readonly RegistryAgent[], now: number): AgentLane => {
+  const segs = members.flatMap(m => m.segments ?? [])
+  const open = segs.filter(s => s.e === undefined)
+  const union = unionOf(segs.map(s => ({ s: s.s, e: s.e ?? now })))
+  return {
+    segments: union.map(i => (open.some(s => s.s >= i.s && s.s <= i.e) ? { k: 'write' as const, s: i.s } : { k: 'write' as const, s: i.s, e: i.e })),
+    marks: members.flatMap(m => [...(m.marks ?? []), ...ownMarks(m).filter(mark => mark.k === 'fail' || mark.k === 'stop')]),
+  }
+}
+
+/**
+ * La piste dessinée : SVG sur les surfaces riches, grille de cases (`Raster`) au terminal quand
+ * il l'a, sinon des barres en blocs. Les glyphes d'outil ne vont au terminal que si la piste a la place.
+ */
+const laneTrack = (k: Kit, l: FriseLane, axis: Axis, cells: number, now: number): unknown => {
+  const parts = laneParts(l.lane, axis, now)
+  const marks = laneMarks(l.agent ? { ...l.lane, marks: [...(l.lane.marks ?? []), ...ownMarks(l.agent)] } : l.lane, axis)
+  const pauses = axis.pieces.filter(p => p.pause !== undefined)
+  if (k.isRich) {
+    const drawn = laneSvg(
+      parts.map(p => ({ x0: p.x0, x1: p.x1, kind: p.kind, ...(p.kind === 'tool' && p.family !== undefined ? { glyph: FAMILY_GLYPH[p.family] } : {}), ...(p.isLive ? { isLive: true } : {}), ...(p.isError ? { isError: true } : {}) })),
+      marks.map(m => {
+        const look = markLook(m, l.color)
+        return { x: m.x, glyph: look.glyph, color: look.color, ...(m.k === 'relay' || m.k === 'back' ? { isRelay: true, isStart: m.k === 'relay' } : {}) }
+      }),
+      pauses,
+      px(cells),
+      l.color,
+      `lane-${l.key}`,
+    )
+    return svgOf(k, drawn, laneAlt(l.name, parts), parts.some(p => p.isLive === true))
+  }
+  const row = laneCells(parts, marks, pauses, cells, l.color, cells >= 40)
+  if (k.Raster) return h(k.Raster, { key: `cells-${l.key}`, columns: cells, rows: 1, cells: laneRaster(row).cells })
+  // Sans grille : des Text par suite de cases de même allure.
+  const runs: { text: string; cell: LaneCell }[] = []
+  for (const c of row) {
+    const last = runs[runs.length - 1]
+    if (last && last.cell.color === c.color && last.cell.alpha === c.alpha && last.cell.bg === c.bg) last.text += c.glyph
+    else runs.push({ text: c.glyph, cell: c })
+  }
+  return <k.Box flexDirection="row">{runs.map(r => T(k, r.text, { color: textColorOf(r.cell), ...(r.cell.bg !== '' ? { bg: r.cell.bg } : {}) }))}</k.Box>
+}
+
+/**
+ * Les 9 types de sous-agents (Q9) : libellé, glyphe et couleur, distincte et lisible en thème clair
+ * comme sombre. P1 : rose à la place du corail (proche de la mandarine et du rouge des échecs) ;
+ * B1 : vert anis pour les transcripts, à la place du ciel (proche du cyan) puis du bleu (celui des
+ * hachures « attente d'une tâche de fond ») ; planches `travail/onglet-agents/planches/carte.*` et `teintes.*`.
+ */
+const AGENT_TYPE: Record<AgentType, { label: string; glyph: string; color: string }> = {
+  explore: { label: 'Exploration du code', glyph: '⌕', color: C.cyan },
+  research: { label: 'Recherche web/doc', glyph: '🌐', color: C.indigo },
+  implement: { label: 'Implémentation', glyph: '✎', color: C.tangerine },
+  review: { label: 'Relecture de code', glyph: '◇', color: C.magenta },
+  security: { label: 'Revue de sécurité', glyph: '⛨', color: C.pink },
+  merge: { label: 'Fusion', glyph: '⤞', color: C.teal },
+  plan: { label: 'Plan/Design', glyph: '▤', color: C.sand },
+  transcripts: { label: 'Lecture de transcripts', glyph: '↺', color: C.anise },
+  other: { label: 'Autre', glyph: '●', color: C.slate },
+}
+
+const FAMILY_WORD: Record<ToolFamily, string> = { read: 'lecture', edit: 'modification', run: 'commande', web: 'web', agent: 'sous-agents', other: 'autres outils' }
+
+/** Une durée courte, au dixième de seconde sous 10 s. */
+const durShort = (ms: number): string => (ms < 10_000 ? `${(Math.max(0, ms) / 1000).toFixed(1).replace('.', ',')}${NB}s` : dur(ms))
+
+/** Un nombre de tokens : 820, 12,3 k, 1,2 M. */
+const tokensText = (n: number): string =>
+  n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(1).replace('.', ',').replace(/,0$/, '')}${NB}k` : `${(n / 1_000_000).toFixed(1).replace('.', ',').replace(/,0$/, '')}${NB}M`
+
+/** L'heure d'un instant, au format local. */
+const clockText = (ms: number): string => new Date(ms).toTimeString().slice(0, 8)
+
+/**
+ * Le coût estimé d'une piste : ses tokens aux prix de son modèle (le premier qui a répondu, sinon
+ * celui de l'appel) ; null sans tokens ou sans prix.
+ */
+const agentCost = (lane: AgentLane, a: RegistryAgent | undefined, view: View): number | null =>
+  costOf(lane.tokens, pricesFor(view.agentPrices ?? {}, lane.models?.[0] ?? a?.model))
+
+/** Les appels d'une famille gardés dans la carte : les plus récents, les autres comptés. */
+const CALLS_SHOWN = 8
+
+/** Une ligne « intitulé : valeur » de la carte. */
+const cardLine = (k: Kit, label: string, value: unknown): unknown =>
+  line(k, [T(k, `${label}${NB}:`, { color: C.slate, bold: true }), typeof value === 'string' ? T(k, value, { wrap: 'wrap' }) : value])
+
+/**
+ * La carte de détail d'une piste, ouverte par son bouton : type, modèles, effort, parent, début et
+ * fin ; tokens par sorte ; appels d'outils par famille, avec argument, durée et erreur ; lignes
+ * ajoutées et retirées ; prompt (déplié à la demande) ; « ↗ Ouvrir la transcription » pour un
+ * sous-agent de cette discussion.
+ */
+const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View, act: Actions, isOwn = true): unknown => {
+  const { Box, Button } = k
+  const a = l.agent
+  const now = view.now
+  const type = a ? AGENT_TYPE[a.type ?? 'other'] : null
+  const lane = l.lane
+  const tools = (lane.segments ?? []).filter(s => (s.k === 'tool' || s.k === 'waitAgent') && s.t !== undefined)
+  const families = (Object.keys(FAMILY_WORD) as ToolFamily[]).map(f => ({ f, calls: tools.filter(s => (s.f ?? 'other') === f) })).filter(g => g.calls.length > 0)
+  const t = lane.tokens
+  // Lancé par son parent, sinon par la session de la frise (l'orchestrateur, ou la session liée choisie).
+  const parent = a?.parent !== undefined ? lanes.find(x => x.agent?.agentId === a.parent)?.name ?? a.parent : (lanes[0]?.name ?? 'Orchestrateur')
+  const models = [...new Set([...(a?.model !== undefined ? [a.model] : []), ...(lane.models ?? [])].map(shortModel))]
+  const prompt = a?.prompt ?? ''
+  const promptLines = prompt.split('\n')
+  const isPromptOpen = view.ui.isPromptOpen === true
   return (
-    <Box flexDirection="row" alignItems="center">
-      <Box marginRight={1} flexShrink={0}>
-        {icon}
-      </Box>
-      <Box flexShrink={1}>{T(k, a.name, { wrap: 'wrap', dim: a.status !== 'running' })}</Box>
-      {a.role !== undefined && <Box marginLeft={1} flexShrink={0}>{T(k, a.role, { color: C.indigo })}</Box>}
-      {a.model !== undefined && <Box marginLeft={1} flexShrink={0}>{chip(k, shortModel(a.model), C.lilac)}</Box>}
-      {a.status === 'cancelled' && <Box marginLeft={1} flexShrink={0}>{T(k, 'annulé', { dim: true })}</Box>}
-      {a.status === 'failed' && <Box marginLeft={1} flexShrink={0}>{T(k, 'échoué', { color: C.red })}</Box>}
-      {a.isEndUnseen !== true && (
-        <Box marginLeft={1} flexShrink={0}>
-          {T(k, dur((a.finishedAt ?? now) - a.startedAt), { dim: true })}
+    <Box key={`card-${l.key}`} flexDirection="column" borderStyle="round" borderColor={l.color} paddingX={1} marginBottom={1}>
+      {line(k, [type ? T(k, `${type.glyph}${NB}${type.label}`, { color: type.color, bold: true }) : T(k, l.caption !== undefined ? `↗${NB}Session${NB}liée` : `◆${NB}Orchestrateur`, { color: l.color, bold: true }), T(k, l.name, { bold: true, wrap: 'truncate-end' })], true)}
+      {models.length > 0 && cardLine(k, 'Modèles', models.join(' · '))}
+      {lane.effort !== undefined && cardLine(k, 'Effort', lane.effort)}
+      {a && cardLine(k, 'Lancé par', parent)}
+      {a && cardLine(k, 'Période', `${clockText(a.startedAt)}${a.finishedAt !== undefined ? ` → ${clockText(a.finishedAt)}` : ' → en cours'}${a.isEndUnseen === true ? ' (fin constatée après coup)' : ` · ${dur((a.finishedAt ?? now) - a.startedAt)}`}`)}
+      {t && cardLine(k, 'Coût', agentCost(l.lane, a, view) !== null ? costText(agentCost(l.lane, a, view)!) : 'coût indisponible')}
+      {t && cardLine(k, 'Tokens', `entrée ${tokensText(t.input)} · sortie ${tokensText(t.output)} · cache lu ${tokensText(t.cacheRead)} · cache écrit ${tokensText(t.cacheWrite)} · réflexion non comptée à part`)}
+      {lane.lines && cardLine(k, 'Lignes', line(k, [T(k, `+${lane.lines.added}`, { color: C.green, bold: true }), T(k, `−${lane.lines.removed}`, { color: C.red, bold: true })]))}
+      {families.length > 0 && (
+        <Box flexDirection="column">
+          {T(k, `Outils${NB}:`, { color: C.slate, bold: true })}
+          {families.map(g => {
+            const count = g.calls.reduce((n, s) => n + (s.n ?? 1), 0)
+            const shown = g.calls.slice(-CALLS_SHOWN)
+            return (
+              <Box key={`card-${l.key}-${g.f}`} flexDirection="column" marginLeft={2}>
+                {T(k, `${FAMILY_GLYPH[g.f]}${NB}${FAMILY_WORD[g.f]}${NB}(${count})${g.calls.length > shown.length ? `${NB}·${NB}les${NB}${shown.length}${NB}derniers` : ''}`, { bold: true })}
+                {shown.map(s =>
+                  line(k, [
+                    T(k, s.a ?? s.t ?? '', { dim: s.x !== true, wrap: 'truncate-end' }),
+                    T(k, s.e !== undefined ? durShort(s.e - s.s) : 'en cours', { dim: true }),
+                    (s.n ?? 1) > 1 && T(k, `×${s.n}`, { dim: true }),
+                    s.x === true && T(k, 'erreur', { color: C.red }),
+                  ]),
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )}
+      {prompt !== '' && (
+        <Box flexDirection="column">
+          {T(k, `Prompt${NB}:`, { color: C.slate, bold: true })}
+          <Box marginLeft={2}>{T(k, isPromptOpen ? prompt : `${promptLines.slice(0, 3).join('\n')}${promptLines.length > 3 || prompt.length > 300 ? ' …' : ''}`.slice(0, isPromptOpen ? undefined : 300), { wrap: 'wrap' })}</Box>
+          {(promptLines.length > 3 || prompt.length > 300) && (
+            <Button key={`prompt-${l.key}`} plain={true} dimColor={true} label={isPromptOpen ? '▾ réduire le prompt' : '▸ tout le prompt'} onPress={() => act.togglePrompt()} />
+          )}
+        </Box>
+      )}
+      {a?.agentId !== undefined && isOwn && (
+        <Box marginTop={1}>
+          <Button key={`transcript-${l.key}`} label={`↗${NB}Ouvrir${NB}la${NB}transcription`} onPress={() => act.openAgentTranscript(a.agentId!)} />
         </Box>
       )}
     </Box>
   )
 }
 
-const AGENTS_SHOWN = 3
 
-const agentsCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
+/** Une rangée de la frise : à gauche le bouton (nom) et l'état, à droite la piste. */
+const laneRow = (k: Kit, l: FriseLane, axis: Axis, view: View, act: Actions, labelCells: number, trackCells: number): unknown => {
   const { Box, Button } = k
+  const a = l.agent
   const now = view.now
-  const running = run.agents.filter(a => a.status === 'running')
-  const allEnded = run.agents.filter(a => a.status !== 'running')
-  const ended = (view.ui.showAllAgents ? allEnded : allEnded.slice(-AGENTS_SHOWN)).reverse()
-  if (running.length === 0 && ended.length === 0) return null
+  const state = a ? AGENT_STATE[a.status] : null
+  // Le glyphe de son type (Q9) ; l'état se dit à côté, en mots et en couleur.
+  const glyph = a ? AGENT_TYPE[a.type ?? 'other'].glyph : '◆'
+  const indent = Math.min(6, l.depth ?? 0) * 2
+  const wf = l.workflow
+  const ls = l.linked
+  if (ls) {
+    const look = LINKED_STATE[ls.state]
+    return (
+      <Box key={`lane-row-${l.key}`} flexDirection="row" alignItems="center">
+        <Box width={labelCells} flexShrink={0} flexDirection="column" marginRight={1} paddingLeft={indent}>
+          <Button key={`lane-${l.key}`} plain={true} label={`↗${NB}${l.name}`} onPress={() => act.selectAgentsSession(ls.key)} />
+          {line(k, [T(k, look.word, { color: look.color, dim: ls.state === 'closed' }), T(k, `session${NB}liée`, { dim: true })])}
+        </Box>
+        <Box flexShrink={1}>{laneTrack(k, l, axis, trackCells, now)}</Box>
+      </Box>
+    )
+  }
+  if (wf) {
+    return (
+      <Box key={`lane-row-${l.key}`} flexDirection="row" alignItems="center">
+        <Box width={labelCells} flexShrink={0} flexDirection="column" marginRight={1} paddingLeft={indent}>
+          <Button key={`workflow-${wf.id}`} plain={true} label={`${wf.isOpen ? '▾' : '▸'}${NB}${l.name}`} onPress={() => act.toggleWorkflow(wf.id)} />
+          {T(k, wf.running > 0 ? `${wf.running}${NB}au${NB}travail` : `au${NB}repos`, { color: wf.running > 0 ? C.blue : C.gray, dim: wf.running === 0 })}
+        </Box>
+        <Box flexShrink={1}>{laneTrack(k, l, axis, trackCells, now)}</Box>
+      </Box>
+    )
+  }
   return (
-    <Box key="agents" flexDirection="column" borderStyle="round" borderColor={running.length > 0 ? C.blue : C.gray} borderDimColor={running.length === 0} paddingX={1} marginTop={1}>
-      {line(k, [
-        T(k, 'Sous-agents', { bold: true }),
-        T(k, running.length > 0 ? `${running.length}${NB}actif${running.length > 1 ? 's' : ''}` : 'au repos', { color: running.length > 0 ? C.blue : C.gray }),
-      ])}
-      {running.map(a => agentRow(k, a, now))}
-      {ended.map(a => agentRow(k, a, now))}
-      {allEnded.length > AGENTS_SHOWN && (
-        <Button key="agents-toggle" plain={true} dimColor={true} label={view.ui.showAllAgents ? '▾ réduire' : `▸ tous les terminés (${allEnded.length})`} onPress={() => act.toggleAgents()} />
+    <Box key={`lane-row-${l.key}`} flexDirection="row" alignItems="center">
+      <Box width={labelCells} flexShrink={0} flexDirection="column" marginRight={1} paddingLeft={indent}>
+        <Button key={`lane-${l.key}`} plain={true} label={`${glyph}${NB}${l.name}`} onPress={() => act.toggleAgentCard(l.key)} />
+        {a && state
+          ? line(k, [
+              a.model !== undefined && chip(k, shortModel(a.model), C.lilac),
+              T(k, state.word, { color: state.color, dim: a.status === 'done' }),
+              a.isEndUnseen !== true && T(k, dur((a.finishedAt ?? now) - a.startedAt), { dim: true }),
+            ])
+          : T(k, l.caption ?? `cette${NB}discussion`, { dim: true })}
+      </Box>
+      <Box flexShrink={1}>{laneTrack(k, l, axis, trackCells, now)}</Box>
+    </Box>
+  )
+}
+
+/** « 3 agents · 1 au travail », ou « … · au repos ». */
+const agentsSummary = (agents: readonly RegistryAgent[]): string => {
+  const running = runningOf({ agents } as SessionRegistry).length
+  return `${plural(agents.length, 'agent')}${NB}·${NB}${running > 0 ? `${running}${NB}au${NB}travail` : `au${NB}repos`}`
+}
+
+/** Le gain par rapport à une exécution en série, quand il y en a un. */
+const gainText = (gain: number | null): string =>
+  gain !== null && gain >= 1.05 ? `${gain.toFixed(1).replace('.', ',')}×${NB}plus${NB}rapide${NB}qu’en${NB}série` : ''
+
+/** Dans l'onglet Parcours, une ligne de résumé à la place de l'ancien encadré : elle mène à l'onglet Agents. */
+const agentsLine = (k: Kit, view: View, act: Actions): unknown => {
+  const { Box, Button } = k
+  const agents = view.agents?.agents ?? []
+  if (agents.length === 0) return null
+  const running = agentsAtWork(view)
+  const text = running > 0 ? `◉${NB}${plural(running, 'agent')}${NB}au${NB}travail` : `○${NB}${agentsSummary(agents)}`
+  return (
+    <Box key="agents" flexDirection="row" alignItems="center" marginTop={1}>
+      <Box marginRight={1}>{T(k, text, { color: running > 0 ? C.blue : C.gray, bold: running > 0 })}</Box>
+      <Button key="agents-open" plain={true} dimColor={true} label={`▸${NB}Agents`} onPress={() => act.setTab('agents')} />
+    </Box>
+  )
+}
+
+/**
+ * La légende : chaque entrée dans sa couleur, les trois teintes d'attente distinctes. Une ligne
+ * quand la largeur le permet ; sur un panneau étroit, elle passe à la ligne plutôt que de perdre
+ * ses dernières entrées. Écarts insécables (le desktop fond les espaces ordinaires).
+ */
+const legendRow = (k: Kit): unknown => {
+  const item = (glyph: string, word: string, color: string, isDim = true) => line(k, [T(k, glyph, { color, bold: true }), T(k, word, { dim: isDim })])
+  return line(
+    k,
+    [
+      item('▒', 'réflexion', C.blue),
+      item('█', 'rédaction', C.blue),
+      item(`⌕✎❯🌐⇢`, 'outils', C.blue),
+      item('╱', 'agent', WAIT_COLOR.waitAgent),
+      item('╱', 'toi', WAIT_COLOR.waitPerson),
+      item('╱', 'fond', WAIT_COLOR.waitBg),
+      item('✗', 'échec', C.red),
+      item('⊘', 'interrompu', C.gray),
+      item('●○', 'départ/retour', C.blue),
+      item('⇣', 'compaction', C.slate),
+      item(`✉⎇✓`, 'message/commit/tests', C.green),
+      item('⫽', 'pause', C.gray),
+    ],
+    true,
+  )
+}
+
+/**
+ * Les repères que la piste d'un sous-agent porte d'elle-même : son départ et son retour (les
+ * points du relais, en face de ceux du lanceur), son échec ou son annulation à sa fin.
+ */
+const ownMarks = (a: RegistryAgent): AgentMark[] => {
+  const marks: AgentMark[] = [{ k: 'relay', at: a.startedAt }]
+  if (a.finishedAt === undefined || a.isEndUnseen === true || a.status === 'running') return marks
+  return [...marks, { k: a.status === 'failed' ? 'fail' : a.status === 'cancelled' ? 'stop' : 'back', at: a.finishedAt }]
+}
+
+/** L'état d'une session liée (pastille, piste) : glyphe, mot, couleur. */
+const LINKED_STATE: Record<LinkedState, { glyph: string; word: string; color: string }> = {
+  working: { glyph: '◉', word: `au${NB}travail`, color: C.blue },
+  returned: { glyph: '✓', word: 'rendue', color: C.green },
+  failed: { glyph: '✗', word: 'échouée', color: C.red },
+  closed: { glyph: '○', word: 'fermée', color: C.gray },
+}
+
+/** La couleur des pistes des sessions liées dans la frise de l'orchestrateur : mauve, loin du violet de l'orchestrateur (planche `teintes.*`). */
+const LINKED_COLOR = C.mauve
+
+/**
+ * Une session liée qui ne travaille plus ne s'allonge plus : ses segments restés ouverts (session
+ * arrêtée en plein outil) se ferment à son retour, sinon à sa dernière écriture.
+ */
+const settledLane = (lane: AgentLane, ls: LinkedSession, reg: SessionRegistry | null): AgentLane => {
+  const end = ls.returnedAt ?? reg?.updatedAt
+  if (ls.state === 'working' || end === undefined || !(lane.segments ?? []).some(x => x.e === undefined)) return lane
+  return { ...lane, segments: (lane.segments ?? []).map(x => (x.e === undefined ? { ...x, e: Math.max(x.s, end) } : x)) }
+}
+
+/**
+ * Le sélecteur d'historique en tête de l'onglet (Q12) : un bouton dit l'entrée montrée ; déplié, il
+ * liste « Ici, maintenant », les parcours (archivés compris), puis les discussions sans parcours qui
+ * ont lancé des agents, les plus récentes d'abord.
+ */
+const historySelector = (k: Kit, view: View, act: Actions): unknown => {
+  const { Box, Button } = k
+  const entries = view.history?.entries ?? []
+  const current = entries.find(e => e.key === (view.ui.agentsHistory ?? 'now'))
+  const isOpen = view.ui.isAgentsHistoryOpen === true
+  const label = current?.title ?? (view.ui.agentsHistory !== undefined ? '…' : 'Ici, maintenant')
+  const entry = (e: HistoryEntry) => {
+    const isShown = e.key === (view.ui.agentsHistory ?? 'now')
+    const glyph = e.kind === 'now' ? '◉' : e.kind === 'run' ? (e.isArchived ? '▣' : '◆') : '○'
+    const when = e.at !== undefined ? `il${NB}y${NB}a${NB}${dur(view.now - e.at)}` : ''
+    return (
+      <Box key={`history-${e.key}`} flexDirection="row" alignItems="center" marginLeft={2}>
+        <Button key={`agents-history-${e.key}`} plain={true} dimColor={!isShown} label={`${isShown ? '▸' : NB}${NB}${glyph}${NB}${e.title}`} onPress={() => act.chooseAgentsHistory(e.key)} />
+        {when !== '' && <Box marginLeft={1}>{T(k, [when, e.agents !== undefined ? plural(e.agents, 'agent') : ''].filter(Boolean).join(SEP), { dim: true, wrap: 'truncate-end' })}</Box>}
+      </Box>
+    )
+  }
+  const runs = entries.filter(e => e.kind === 'run')
+  const discussions = entries.filter(e => e.kind === 'session')
+  return (
+    <Box key="agents-history-box" flexDirection="column" marginTop={1}>
+      <Button key="agents-history" plain={true} label={`🕘${NB}${label}${NB}${isOpen ? '▴' : '▾'}`} onPress={() => act.toggleAgentsHistory()} />
+      {isOpen && (
+        <Box flexDirection="column">
+          {entries.filter(e => e.kind === 'now').map(entry)}
+          {runs.length > 0 && T(k, 'Parcours', { color: C.slate, bold: true })}
+          {runs.map(entry)}
+          {discussions.length > 0 && T(k, `Discussions${NB}sans${NB}parcours`, { color: C.slate, bold: true })}
+          {discussions.map(entry)}
+        </Box>
       )}
     </Box>
   )
+}
+
+/**
+ * La confirmation d'« ✗ Oublier » une discussion (S2), comme « Supprimer » d'un parcours : ce qui
+ * sera effacé, en nombres ; les sessions liées reconnues par leur titre seul n'y sont pas (S15).
+ */
+const forgetBox = (k: Kit, past: NonNullable<NonNullable<View['history']>['shown']>, act: Actions): unknown => {
+  const { Box, Button } = k
+  const sure = past.linked.filter(l => isSureLink(l.session.how) && l.session.session !== undefined).map(l => l.reg)
+  const byTitle = past.linked.filter(l => l.session.how === 'title').length
+  return (
+    <Box key="agents-forget-box" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
+      <Box marginRight={1}>{T(k, forgetText(forgetCount(past.self, sure, byTitle)), { color: C.red, bold: true, wrap: 'wrap' })}</Box>
+      <Box marginRight={1}>
+        <Button key="agents-forget-yes" variant="primary" label={`✗${NB}Oublier`} onPress={() => act.forget(past.key.slice('session:'.length))} />
+      </Box>
+      <Button key="agents-forget-no" plain={true} dimColor={true} label="Annuler" onPress={() => act.askForget(past.key)} />
+    </Box>
+  )
+}
+
+/**
+ * La rangée de pastilles en tête de l'onglet : « ◆ Orchestrateur », puis une pastille par session
+ * liée avec son état ; la sélectionnée porte « ▸ », comme les onglets.
+ */
+const sessionPills = (k: Kit, linked: readonly LinkedSession[], selected: string | null, act: Actions): unknown => {
+  const { Box, Button } = k
+  return (
+    <Box key="agents-sessions" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
+      <Box marginRight={2}>
+        <Button key="agents-session-main" plain={true} dimColor={selected !== null} label={`${selected === null ? '▸' : NB}${NB}◆${NB}Orchestrateur`} onPress={() => act.selectAgentsSession(null)} />
+      </Box>
+      {linked.map(ls => {
+        const look = LINKED_STATE[ls.state]
+        return (
+          <Box key={`pill-${ls.key}`} flexDirection="row" marginRight={2}>
+            <Button key={`agents-session-${ls.key}`} plain={true} dimColor={selected !== ls.key} label={`${selected === ls.key ? '▸' : NB}${NB}${ls.title}`} onPress={() => act.selectAgentsSession(ls.key)} />
+            <Box marginLeft={1}>{T(k, `${look.glyph}${NB}${look.word}`, { color: look.color, dim: ls.state === 'closed' })}</Box>
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
+/**
+ * R1, S36 : les effacements que cette discussion fait en ce moment, du début à la fin, dans la ligne
+ * ambre des alertes de l'onglet, une ligne chacun ; rien sinon.
+ */
+const erasingLine = (k: Kit, view: View): unknown => {
+  const all = view.erasing ?? []
+  if (all.length === 0) return null
+  const lines = all.map(e => `⏳${NB}Effacement${NB}en${NB}cours ${e.key.startsWith('run:') ? `du${NB}parcours` : `de${NB}la${NB}discussion`} « ${e.title} »…`)
+  return T(k, lines.join('\n'), { color: C.amber, wrap: 'wrap' })
+}
+
+/**
+ * L'onglet Agents : en tête, l'orchestrateur et ses sessions liées en pastilles ; puis le résumé
+ * et la frise de la session choisie. Celle de l'orchestrateur a sa piste en tête, une piste par
+ * session liée (lancement et retour), puis une par sous-agent dans l'ordre de départ, sans
+ * limite. Pendant un parcours comme sans. « dernière heure / tout » règle l'axe, retenu pour la
+ * discussion. Ouvert dans une session liée, l'onglet la montre comme son propre orchestrateur.
+ */
+const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
+  const { Box, Button } = k
+  // L'entrée du sélecteur d'historique : un parcours passé, une ancienne discussion, ou ici.
+  const past = view.ui.agentsHistory !== undefined && view.history?.shown?.key === view.ui.agentsHistory ? view.history.shown : null
+  const isPastLoading = view.ui.agentsHistory !== undefined && past === null
+  const linked = past ? past.linked : isPastLoading ? [] : (view.linked ?? [])
+  const chosen = linked.find(l => l.session.key === view.ui.agentsSession) ?? null
+  const chosenReg = chosen?.reg ?? null
+  // La session liée choisie, figée si elle ne travaille plus.
+  const reg = chosen
+    ? chosenReg && { ...chosenReg, main: settledLane(chosenReg.main ?? {}, chosen.session, chosenReg), agents: chosenReg.agents.map(a => ({ ...a, ...settledLane(a, chosen.session, chosenReg) })) }
+    : past
+      ? past.self
+      : isPastLoading
+        ? null
+        : (view.agents ?? null)
+  const agents = [...(reg?.agents ?? [])].sort((a, b) => a.startedAt - b.startedAt)
+  const now = view.now
+  // Une entrée passée se montre en entier : « dernière heure » ne vaut que pour ici.
+  const range = past ? 'all' : (view.ui.agentsRange ?? 'all')
+  // Les sous-agents en arbre (Q13) : enfants en retrait sous leur parent, Workflow repliés.
+  const tree = laneTree(agents, new Set(view.ui.openWorkflows ?? []))
+  // Dans la frise de l'orchestrateur, une piste par session liée : ses périodes de travail et
+  // d'attente, un départ à son lancement, un retour à son compte rendu (ou à sa fin).
+  const linkedLanes: FriseLane[] = chosen
+    ? []
+    : linked.map(({ session: ls, reg: theirs }) => ({
+        key: `linked-${ls.key}`,
+        name: ls.title,
+        color: LINKED_COLOR,
+        lane: {
+          segments: settledLane(theirs?.main ?? {}, ls, theirs).segments ?? [],
+          marks: [
+            ...(ls.launchedAt !== undefined ? [{ k: 'relay' as const, at: ls.launchedAt }] : []),
+            ...(ls.returnedAt !== undefined ? [{ k: 'back' as const, at: ls.returnedAt }] : []),
+          ],
+        },
+        linked: ls,
+      }))
+  const returns: AgentMark[] = chosen ? [] : linked.flatMap(({ session: ls }) => (ls.returnedAt !== undefined ? [{ k: 'back' as const, at: ls.returnedAt, to: `session:${ls.key}` }] : []))
+  const main = reg?.main ?? {}
+  const lanes: FriseLane[] = [
+    {
+      key: MAIN,
+      name: chosen ? chosen.session.title : 'Orchestrateur',
+      color: ORCHESTRATOR_COLOR,
+      lane: returns.length > 0 ? { ...main, marks: [...(main.marks ?? []), ...returns] } : main,
+      ...(chosen ? { caption: `session${NB}liée` } : {}),
+    },
+    ...linkedLanes,
+    ...tree.map((row): FriseLane =>
+      row.kind === 'agent'
+        ? { key: row.agent.key, name: row.agent.name, color: AGENT_TYPE[row.agent.type ?? 'other'].color, lane: row.agent, agent: row.agent, depth: row.depth }
+        : {
+            key: `wf-${row.id}`,
+            name: `⚙${NB}Workflow${NB}·${NB}${plural(row.agents.length, 'agent')}`,
+            color: C.teal,
+            lane: workflowLane(row.agents, now),
+            depth: row.depth,
+            workflow: { id: row.id, count: row.agents.length, running: row.agents.filter(a => a.status === 'running').length, isOpen: row.isOpen },
+          },
+    ),
+  ]
+  const activity = activityOf(lanes.map(l => l.lane), agents, now)
+  const first = activity.length > 0 ? Math.min(...activity.map(i => i.s)) : now
+  const isLive = agents.some(a => a.status === 'running') || linkedLanes.some(l => l.linked?.state === 'working')
+  const last = activity.length > 0 ? Math.max(now * Number(isLive), ...activity.map(i => i.e)) : now
+  const start = range === 'hour' ? Math.max(first, now - HOUR_MS) : first
+  // « dernière heure » va jusqu'à maintenant, même sans activité dans l'heure.
+  const axis = buildAxis(activity, start, Math.max(range === 'hour' ? now : last, start + 1))
+  const summary = summaryOf(agents, now)
+  // Le résumé additionne les coûts connus (Q15) ; aucun connu : rien.
+  const costs = agents.map(a => agentCost(a, a, view)).filter((c): c is number => c !== null)
+  const totalCost = costs.length > 0 ? costs.reduce((n, c) => n + c, 0) : null
+  const pauses = axis.pieces.filter(p => p.pause !== undefined)
+  const labelCells = Math.max(18, Math.min(34, Math.floor(k.width * 0.36)))
+  const trackCells = Math.max(16, k.width - labelCells - 5)
+  const delegate = view.board?.delegate
+  // Ce que montre la frise : cette discussion, la session liée choisie, ou cette session liée elle-même.
+  const context = chosen
+    ? `session${NB}liée${NB}·${NB}${LINKED_STATE[chosen.session.state].word}`
+    : past
+      ? `${past.key.startsWith('run:') ? 'parcours' : 'discussion'}${NB}·${NB}${past.title}`
+      : delegate
+        ? `session${NB}liée${NB}de${NB}${delegate.main ?? delegate.title ?? 'l’orchestrateur'}`
+        : `cette${NB}discussion`
+  const isBusy = chosen ? chosen.session.state === 'working' : agentsAtWork(view) > 0
+  return [
+    historySelector(k, view, act),
+    erasingLine(k, view),
+    sessionPills(k, linked.map(l => l.session), chosen ? chosen.session.key : null, act),
+    <Box key="agents-head" flexDirection="row" flexWrap="wrap" alignItems="center">
+      <Box marginRight={1}>{chip(k, chosen ? `↗${NB}${chosen.session.title}` : `◆${NB}Orchestrateur`, chosen ? LINKED_COLOR : C.violet)}</Box>
+      <Box marginRight={1}>{T(k, context, { dim: true })}</Box>
+      {past?.key.startsWith('session:') === true && view.ui.confirmForget !== past.key && (
+        <Button key="agents-forget" plain={true} dimColor={true} label={`✗${NB}Oublier`} onPress={() => act.askForget(past.key)} />
+      )}
+    </Box>,
+    past?.key.startsWith('session:') === true && view.ui.confirmForget === past.key && forgetBox(k, past, act),
+    <Box key="agents-body" flexDirection="column" borderStyle="round" borderColor={isBusy ? C.blue : C.gray} borderDimColor={!isBusy} paddingX={1} marginTop={1}>
+      {isPastLoading
+        ? T(k, 'Lecture de l’historique…', { dim: true })
+        : chosen && !reg
+        ? T(k, 'Pas encore de registre lisible pour cette session (pas encore écrit, ou en cours d’écriture).', { dim: true, wrap: 'wrap' })
+        : agents.length === 0 && linkedLanes.length === 0
+          ? T(k, chosen ? 'Aucun sous-agent dans cette session pour l’instant.' : 'Aucun sous-agent dans cette discussion pour l’instant.', { dim: true, wrap: 'wrap' })
+          : line(k, [
+              T(k, agentsSummary(agents), { bold: true }),
+              linkedLanes.length > 0 && T(k, `·${NB}${plural(linkedLanes.length, 'session')}${NB}${linkedLanes.length > 1 ? 'liées' : 'liée'}`, { dim: true }),
+              summary.activeMs > 0 && T(k, `·${NB}${dur(summary.activeMs)}`, { dim: true }),
+              gainText(summary.gain) !== '' && T(k, `·${NB}${gainText(summary.gain)}`, { color: C.teal }),
+              totalCost !== null && T(k, `·${NB}${costText(totalCost)}`, { color: C.sand }),
+              <Button key="agents-range" plain={true} dimColor={true} label={range === 'hour' ? `▸${NB}tout` : `▸${NB}dernière${NB}heure`} onPress={() => act.toggleAgentsRange()} />,
+            ], true)}
+      {!chosen && !past && view.agentsAlert === true && T(k, '⚠ Le registre des agents n’est plus enregistré : une écriture a été refusée (fichier trop gros ou disque).', { color: C.amber, wrap: 'wrap' })}
+      {!chosen && !past && view.agentsAlert === 'lost' && T(k, '⚠ Un changement du suivi des agents n’a pas pu s’appliquer : la frise peut être incomplète.', { color: C.amber, wrap: 'wrap' })}
+      {pauses.length > 0 && T(k, `⫽${NB}pauses${NB}compressées${NB}:${NB}${pauses.map(p => dur(p.pause ?? 0)).join(', ')}`, { dim: true, wrap: 'truncate-end' })}
+      {!isPastLoading && (!chosen || reg) && (
+        <Box flexDirection="column" marginTop={1}>
+          {lanes.flatMap(l => [laneRow(k, l, axis, view, act, labelCells, trackCells), view.ui.agentCard === l.key ? agentCard(k, l, lanes, view, act, !chosen && !past) : null])}
+        </Box>
+      )}
+      <Box marginTop={1}>{legendRow(k)}</Box>
+    </Box>,
+  ]
 }
 
 // ─── Prochaine étape ──────────────────────────────────────────────────────
@@ -1513,6 +2101,7 @@ const tabsRow = (k: Kit, view: View, run: Run | null, act: Actions): unknown => 
   const { Box, Button } = k
   const tabs: [Tab, string][] = [
     ['flow', 'Parcours'],
+    ['agents', agentsAtWork(view) > 0 ? `Agents${NB}·${NB}${agentsAtWork(view)}` : 'Agents'],
     ['activity', run && run.log.length > 0 ? `Activité${NB}·${NB}${run.log.length}` : 'Activité'],
     ['history', `Historique${NB}·${NB}${view.board?.runs.filter(r => r.archivedAt === undefined).length ?? 0}`],
     ['commands', 'Commandes'],
@@ -1654,7 +2243,7 @@ const asideRow = (k: Kit, act: Actions): unknown => {
 
 const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
   const isMine = run.id === view.board?.activeId
-  if (run.status === 'active' && isMine) return [phaseCard(k, run, view, act), agentsCard(k, run, view, act), nextCard(k, run, view, act), asideRow(k, act), anytimeCard(k, act, run)]
+  if (run.status === 'active' && isMine) return [phaseCard(k, run, view, act), agentsLine(k, view, act), nextCard(k, run, view, act), asideRow(k, act), anytimeCard(k, act, run)]
   const { Box, Button } = k
   const isElsewhere = run.status === 'active'
   const isAside = run.status === 'paused' && run.asideAt !== undefined
@@ -1769,6 +2358,8 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
   const live = sorted.filter(r => r.archivedAt === undefined)
   const archived = sorted.filter(r => r.archivedAt !== undefined).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0))
   const isArchiveOpen = view.ui.showArchived === true
+  // Chaque parcours, archivés compris, ouvre l'onglet Agents sur lui (Q12).
+  const agentsOf = (r: Run) => <Button key={`agents-of-${r.id}`} plain={true} dimColor={true} label={`◆${NB}Agents`} onPress={() => act.openAgentsOf(r.id)} />
   const card = (r: Run) => {
     const isArchived = r.archivedAt !== undefined
     const def = SKILLS[r.entry]!
@@ -1814,23 +2405,26 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
               <Box marginRight={1}>
                 <Button key={`unarchive-${r.id}`} label="▢ Désarchiver" onPress={() => act.unarchive(r.id)} />
               </Box>
+              <Box marginRight={1}>{agentsOf(r)}</Box>
               <Button key={`drop-${r.id}`} plain={true} dimColor={true} label="✗ Supprimer" onPress={() => act.askDrop(r.id)} />
             </Box>
           )
         ) : (
-          !isMine && (
-            <Box flexDirection="row" marginTop={1}>
+          <Box flexDirection="row" marginTop={1}>
+            {!isMine && (
               <Box marginRight={1}>
                 <Button key={`resume-${r.id}`} label={r.status === 'active' ? '↻ Reprendre ici' : '↻ Reprendre'} onPress={() => act.resume(r.id)} />
               </Box>
-              {r.status !== 'active' && <Button key={`archive-${r.id}`} plain={true} dimColor={true} label="▣ Archiver" onPress={() => act.archive(r.id)} />}
-            </Box>
-          )
+            )}
+            <Box marginRight={1}>{agentsOf(r)}</Box>
+            {!isMine && r.status !== 'active' && <Button key={`archive-${r.id}`} plain={true} dimColor={true} label="▣ Archiver" onPress={() => act.archive(r.id)} />}
+          </Box>
         )}
       </Box>
     )
   }
   return [
+    erasingLine(k, view),
     T(k, `Projet${NB}${board.name}${SEP}${plural(live.length, 'parcours', 'parcours')}${archived.length > 0 ? `${SEP}${archived.length}${NB}archivé${archived.length > 1 ? 's' : ''}` : ''}`, { dim: true, wrap: 'truncate-end' }),
     ...live.map(card),
     archived.length > 0 && (
@@ -1892,7 +2486,7 @@ export const drawPane = (k: Kit, view: View, act: Actions): unknown => {
       <Box flexDirection="column" paddingX={1} paddingBottom={1}>
         {welcome(k, board)}
         {tabsRow(k, view, null, act)}
-        {view.ui.tab === 'commands' ? commandsTab(k, act) : [launcher(k, act), anytimeCard(k, act)]}
+        {view.ui.tab === 'commands' ? commandsTab(k, act) : view.ui.tab === 'agents' ? agentsTab(k, view, act) : [launcher(k, act), anytimeCard(k, act)]}
       </Box>
     )
   }
@@ -1906,11 +2500,13 @@ export const drawPane = (k: Kit, view: View, act: Actions): unknown => {
   const body: unknown[] =
     tab === 'commands'
       ? commandsTab(k, act)
-      : tab === 'history' || !run
-        ? historyTab(k, board, view, act)
-        : tab === 'activity'
-          ? activityTab(k, run, view, act)
-          : flowTab(k, run, view, act)
+      : tab === 'agents'
+        ? agentsTab(k, view, act)
+        : tab === 'history' || !run
+          ? historyTab(k, board, view, act)
+          : tab === 'activity'
+            ? activityTab(k, run, view, act)
+            : flowTab(k, run, view, act)
   return (
     <Box flexDirection="column" paddingX={1} paddingBottom={1}>
       {selected !== null ? hero(k, selected, view) : noRunHero(k, board)}
@@ -2006,7 +2602,7 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
               bold: x.state === 'active',
             })),
           )
-  const running = run.agents.filter(a => a.status === 'running').length
+  const running = agentsAtWork(view)
   // Une seule ligne, l'essentiel : le parcours, sa phase, les tickets, les groupes en sessions
   // liées, ce qui attend la personne. L'état de la session et le détail des tickets sont dans /flow.
   return (

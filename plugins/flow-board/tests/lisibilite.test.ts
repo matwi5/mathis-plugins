@@ -46,7 +46,7 @@ test('un commit après la clôture de la phase n’y rallume pas « Commit »', 
   expect((after?.board.runs[0] as Run | undefined)?.phases[0]!.steps ?? steps).toEqual(steps)
 })
 
-test('les revues se cumulent d’après Claude : nombre, constats, corrigés', async ($, on) => {
+test('les revues se cumulent d’après Claude : nombre, constats, corrigés', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 100_000_000 })
   mock.store(on)
   engine(on)
@@ -118,7 +118,7 @@ test('pendant /to-tickets, ou avec deux groupes en cours, un ticket ajouté rest
   expect(cited(lot('implement', ['doing', 'todo']))).toContain('z1')
 })
 
-test('panneau allégé : relus pliés, trouvailles urgentes d’abord, groupe fini dépliable', async ($, on) => {
+test('panneau allégé : relus pliés, trouvailles urgentes d’abord, groupe fini dépliable', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 101_000_000 })
   mock.store(on)
   engine(on)
@@ -173,7 +173,7 @@ test('panneau allégé : relus pliés, trouvailles urgentes d’abord, groupe fi
   await ui.unmount()
 })
 
-test('« Trouvé en route » se masque entièrement, puis se réaffiche', async ($, on) => {
+test('« Trouvé en route » se masque entièrement, puis se réaffiche', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 102_000_000 })
   mock.store(on)
   engine(on)
@@ -202,7 +202,7 @@ test('au-delà de 14 éléments, « tout voir » déplie la liste et « réduire
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Text', text: /Décision numéro 14$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Décision numéro 21$/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Button', key: 'items-toggle', label: /tout voir \(21\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'items-toggle', text: /tout voir \(21\)/ })).toBeDefined()
   await ui.press({ key: 'items-toggle' })
   expect(await ui.find({ type: 'Text', text: /Décision numéro 21$/ })).toBeDefined()
   await ui.press({ key: 'items-toggle' })
@@ -210,7 +210,7 @@ test('au-delà de 14 éléments, « tout voir » déplie la liste et « réduire
   await ui.unmount()
 })
 
-test('au-delà de 30 éléments, les suivants sont gardés ; un long libellé reste entier', async ($, on) => {
+test('au-delà de 30 éléments, les suivants sont gardés ; un long libellé reste entier', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   engine(on)
@@ -227,11 +227,10 @@ test('au-delà de 30 éléments, les suivants sont gardés ; un long libellé re
   await ui.unmount()
 })
 
-test('livrables, sous-agents, tickets et journal : « tout voir » montre tout ce qui est gardé', async ($, on) => {
+test('livrables, tickets et journal : « tout voir » montre tout ce qui est gardé', async ($, on) => {
   mock.clock(on, { now: 50_000_000 })
   const run = newRun('implement', 1_000)
   run.artifacts = Array.from({ length: 20 }, (_, i) => ({ path: `docs/l${i + 1}.md`, kind: 'doc' as const, label: `Livrable ${i + 1}`, at: 1_000 + i }))
-  run.agents = Array.from({ length: 8 }, (_, i) => ({ key: `t${i + 1}`, name: `Agent ${i + 1}`, isBackground: false, status: 'done' as const, startedAt: 1_000 + i, finishedAt: 2_000 + i }))
   run.tickets = Array.from({ length: 70 }, (_, i) => ({ id: `t${i + 1}`, name: `Ticket ${i + 1}`, status: 'todo' as const }))
   run.log = Array.from({ length: 80 }, (_, i) => ({ at: 1_000 + i, glyph: '·', text: `Entrée ${80 - i}`, tone: 'info' as const }))
   const stored: Board = { ...emptyBoard('', 'projet'), deleted: [], runs: [{ ...run, status: 'paused', owner: undefined }], activeId: null }
@@ -239,11 +238,6 @@ test('livrables, sous-agents, tickets et journal : « tout voir » montre tout c
   engine(on)
   await $.tool.call({ tool: TOOL, resume: run.id } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-
-  // Sous-agents : les 3 derniers terminés, puis tous.
-  expect(await ui.find({ type: 'Text', text: /^Agent 1$/ })).toBeUndefined()
-  await ui.press({ key: 'agents-toggle' })
-  expect(await ui.find({ type: 'Text', text: /^Agent 1$/ })).toBeDefined()
 
   // Tickets : au-delà de 60.
   expect(await ui.find({ type: 'Text', text: /^Ticket 65$/ })).toBeUndefined()

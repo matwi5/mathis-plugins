@@ -14,7 +14,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Board, FlowPhase, Relay, Run, SyncState, Tab } from '../types'
+import type { AgentLane, AgentMark, AgentSegment, AgentType, Board, FlowPhase, Relay, Run, SessionRegistry, SyncState, Tab } from '../types'
 import {
   CODE_SKILLS,
   GROUP_REVIEWER,
@@ -40,12 +40,13 @@ import {
 import {
   activeDetour,
   activeRun,
-  applyAgentEnd,
   applyAgentStart,
   applyAnswer,
   applyAsana,
   applyRelay,
   asanaChanges,
+  localTicketChange,
+  ticketFilesIn,
   askCloseLinkedGroup,
   reloadText,
   restoreDelegate,
@@ -57,8 +58,8 @@ import {
   applyFileChange,
   applyReport,
   applySkill,
-  applySubagentStop,
-  applyAgentList,
+  stripRunAgents,
+  applyAgentActivity,
   applyUserAnswer,
   backgroundLaunches,
   commandSignals,
@@ -115,6 +116,45 @@ import {
   commandArgsOf,
 } from './model.ts'
 import type { LiveAgent } from './model.ts'
+import { delegatedTitle } from './model.ts'
+import {
+  emptyRegistry,
+  endCall as endRegistryCall,
+  failedAgentsOf,
+  joinRegistry,
+  noteCarried,
+  mergeRegistry,
+  parsePart,
+  parseOwnRegistry,
+  registrySlug,
+  PARTS_MAX,
+  splitRegistry,
+  noteLaunch,
+  rowsFromRun,
+  reconcileAgents as reconcileRegistry,
+  spawnAgent as spawnRegistryAgent,
+  startCall as startRegistryCall,
+  stopAgent as stopRegistryAgent,
+  runningOf,
+  withHeader,
+  MAIN,
+  addMark as addRegistryMark,
+  closeSegment,
+  closeToolCall,
+  closeOpen,
+  openSegment,
+  addLines,
+  addUsage,
+  linesOf,
+  type StepUsage,
+} from './registry.ts'
+import type { LinkedLaunch, RegistryPart } from '../types'
+import { isSameProject, isSureLink, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
+import { catchUp, drainWithin, isTranscriptPath, laneFromTranscript, metaFromText, readArgv, SUBAGENT_FILE, subagentsDirOf, type TranscriptAgent } from './transcript.ts'
+import { agentTraces, applyTraces, applyTracesToRebuilt, cleanTrace, eraseWith, isClosedSession, removeArgv, type Trace } from './erase.ts'
+import { agentsOfRun, applyRebuilt, attachCarried, carriedRunAt, cleanRebuilt, clipLane, historyEntries, runFileId, runRegistry, runsCarriedBy, runWindow, unionRebuilt, withCarriedRuns, withRun, type HistoryEntry, type Rebuilt } from './history.ts'
+import { shortArg, toolFamily } from './timeline.ts'
+import { pricesFromCcusage, type UnitPrices } from './cost.ts'
 import { drawBand, drawPane, drawWelcomeBand, kitOf, type Actions, type View } from './view.tsx'
 
 const PANE = 'flow-board'
@@ -244,7 +284,7 @@ const TOOL_SCHEMA = {
         group: { type: 'string', description: 'Group id (A, B...); omitted = the last finished group, or the whole run when it has no groups' },
         advised: { type: 'boolean', description: 'true when the changes touch authentication, permissions or access rules, user input reaching a query, a path or HTML, secrets or tokens, network or file access, uploads or dependencies' },
         why: { type: 'string', description: "Why, short, in the user's language" },
-        findings: { type: 'number', description: 'Real findings of the security review' },
+        findings: { type: 'number', description: 'Kept findings of the security review (confidence 8/10 or more, high or medium severity), not its "to watch" list' },
         fixed: { type: 'number', description: 'How many of them were fixed' },
       },
     },
@@ -334,7 +374,7 @@ const TOOL_SCHEMA = {
     delegate: {
       type: 'string',
       description:
-        'Only when a linked session\'s brief gives it: id of the workflow this discussion works for, sent first, with "group" and "main".The workflow stays in the main discussion and nothing is recorded on it from here: your progress is relayed to its dashboard on its own (Asana ticket statuses, commits, tests). Afterwards, only "set" (a ticket status that changed without an Asana update), "decided" (sent at once, shown on the main dashboard for review), "report" (your final report) and "note" are accepted',
+        'Only when a linked session\'s brief gives it: id of the workflow this discussion works for, sent first, with "group" and "main".The workflow stays in the main discussion and nothing is recorded on it from here: your progress is relayed to its dashboard on its own (Asana ticket statuses, commits, tests). Afterwards, only "set" (a ticket status that changed without an Asana update or an edit of a local ticket file), "decided" (sent at once, shown on the main dashboard for review), "report" (your final report) and "note" are accepted',
     },
     group: {
       type: 'string',
@@ -455,6 +495,19 @@ const claudeHome = ($: any): string | null => {
     return at >= 0 ? root.slice(0, at + '/.claude'.length) : null
   } catch {
     return null
+  }
+}
+
+/** Le fichier de méthode de la revue de sécurité (ticket 13), à la racine du mod. */
+const SECURITY_METHOD_FILE = 'reference/revue-securite.md'
+/** Son chemin, tiré de `$.plugin.root` au premier hook qui construit une consigne de sécurité. */
+let securityMethod = SECURITY_METHOD_FILE
+const noteSecurityMethod = ($: any) => {
+  try {
+    const root = String($.plugin.root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+    if (root !== '') securityMethod = `${root}/${SECURITY_METHOD_FILE}`
+  } catch {
+    // Racine inconnue : le chemin relatif au mod.
   }
 }
 
@@ -665,6 +718,9 @@ const relaySignal = async ($: any, event: RelayEvent) => {
   const board: Board | null = await read($, boardAtom)
   const runId = board?.delegate?.run
   if (!runId) return
+  // Un parcours effacé (S23) : la session liée le lâche, son relais ne revient pas.
+  await quietly(() => readTraces($))
+  if (erasedRuns.has(runId)) return
   const now = await $.clock.now()
   const next = applyRelay(await readRelay($, runId), runId, await sessionId($), event, now)
   if (next) await writeRelay($, next)
@@ -687,13 +743,34 @@ const relayTool = async ($: any, e: any, next: (e: any) => Promise<any>) => {
         // Ni commit ni tests : pas de lecture du relais pour rien.
         if (signals.commit !== undefined || signals.test !== undefined) await relaySignal($, { kind: 'command', ...signals })
       }
+      if (isOk) await relayTicketFiles($, ticketFilesIn(String(e.command ?? '')))
     } else if (String(e.tool).endsWith('__update_tasks') && isOk) {
       await relaySignal($, { kind: 'tickets', changes: asanaChanges(e.tasks) })
+    } else if ((e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'MultiEdit') && isOk && typeof e.file_path === 'string') {
+      // Write porte le texte entier : pas de relecture du fichier.
+      await relayTicketFiles($, [e.file_path], e.tool === 'Write' && typeof e.content === 'string' ? e.content : undefined)
     }
   } catch {
     // Un signal mal lu ne doit jamais gêner l'outil.
   }
   return ran
+}
+
+/**
+ * Dans une session liée, un tracker en fichiers locaux (`…/issues/<NN>-<nom>.md`) n'a pas d'appel
+ * Asana à relayer : le statut part au relais quand un outil a touché le fichier d'un ticket, relu
+ * tel qu'il est après l'écriture (Edit, Write, ou une commande shell qui le nomme). `written` : le
+ * texte entier qu'un Write vient d'écrire, quand il y en a un.
+ */
+const relayTicketFiles = async ($: any, paths: string[], written?: string) => {
+  const changes = []
+  for (const path of paths) {
+    if (!/(?:^|[\\/])issues[\\/]\d+-[^\\/]+\.md$/.test(path)) continue
+    const text = written ?? (await $.fs.read(path).catch(() => null))
+    const change = typeof text === 'string' ? localTicketChange(path, text) : null
+    if (change) changes.push(change)
+  }
+  if (changes.length > 0) await relaySignal($, { kind: 'tickets', changes })
 }
 
 /** Dans la discussion principale : relit le relais du parcours actif quand un groupe est confié. */
@@ -807,10 +884,1983 @@ const agentCalls = new Set<string>()
 const reconcileAgents = async ($: any) => {
   try {
     const live = (await $.agent.list()) as LiveAgent[]
+    // Les appels en vol tels qu'au moment de la liste : un appel rendu pendant l'attente de la file
+    // n'en sort pas avant que son retour soit passé.
+    const inFlight = new Set(agentCalls)
     const now = await $.clock.now()
-    await commit($, board => applyAgentList(board, live, agentCalls, now))
+    const own = new Set(await read($, ownAtom))
+    await quietly(() => commitRegistry($, reg => reconcileRegistry(reg, live, inFlight, own, now)))
   } catch {
     // Pas de liste (version de Claude Code sans `agent.list`) : on garde les lignes telles quelles.
+  }
+}
+
+// ─── Registre des agents de la session ────────────────────────────────────
+//
+// Un fichier par session, `~/.claude/flow-board/agents/<session>.json` (`$.store` en secours),
+// écrit par cette session seule (Q7) et lu par l'onglet Agents. Pendant un parcours comme sans.
+
+const REGISTRY_REF = { plugin: 'flow-board', key: 'agents' } as const
+const registryAtom = atom(REGISTRY_REF, null)
+/**
+ * Les clés des sous-agents que ce processus a vus partir : les seuls que la liste du moteur peut
+ * clore (S9). Dans l'état de la session, qui survit à /reload-plugins ; jamais sur le disque.
+ */
+const ownAtom = atom({ plugin: 'flow-board', key: 'agentsOwn' } as const, [] as string[])
+/**
+ * Le suivi en défaut, que l'onglet dit (S11, R2) : `true`, une écriture du registre a été refusée
+ * (fichier trop gros, disque) ; `'lost'`, un changement n'a pas pu s'appliquer à l'état.
+ */
+const registryAlertAtom = atom({ plugin: 'flow-board', key: 'agentsAlert' } as const, false as boolean | 'lost')
+const registryKey = (session: string, part = 0): string => (part === 0 ? `agents:${session}` : `agents:${session}:${part}`)
+
+/** Le dossier du registre, `~/.claude/flow-board/agents` ; null quand le dossier de Claude ne se déduit pas. */
+const registryDir = ($: any): string | null => {
+  const home = claudeHome($)
+  return home ? `${home}/flow-board/agents` : null
+}
+
+/** Le fichier d'un morceau du registre d'une session (R1) : `<session>.json`, puis `<session>.1.json`… */
+const registryPath = ($: any, session: string, part = 0): string | null => {
+  const dir = registryDir($)
+  const slug = registrySlug(session)
+  return dir && slug ? `${dir}/${slug}${part === 0 ? '' : `.${part}`}.json` : null
+}
+
+let registrySaveTimer: { cancel: () => void } | null = null
+
+type ReadPiece = { ok: boolean; value: unknown; isAbsent: boolean }
+
+/**
+ * Un morceau du registre tel qu'il est enregistré : le fichier s'il existe, sinon `$.store`.
+ * `ok` faux : la relecture a échoué (fichier occupé, droits). Un fichier absent dont l'ancien
+ * stockage répond par une erreur est absent, pas en erreur (R3) : il se crée.
+ */
+const readPiece = async ($: any, session: string, part: number): Promise<ReadPiece> => {
+  const path = registryPath($, session, part)
+  let isThere = false
+  let isKnown = path === null
+  if (path) {
+    try {
+      isThere = await $.fs.exists(path)
+      isKnown = true
+    } catch {
+      // Dossier hors d'atteinte : l'ancien stockage prend le relais.
+    }
+    if (isThere) {
+      try {
+        return { ok: true, value: String(await $.fs.read(path)), isAbsent: false }
+      } catch {
+        return { ok: false, value: null, isAbsent: false }
+      }
+    }
+  }
+  // Sans fichier, le registre a pu être écrit dans `$.store` (écriture du fichier refusée).
+  try {
+    const value = await $.store.get(registryKey(session, part))
+    return { ok: true, value: value ?? null, isAbsent: value === undefined || value === null }
+  } catch {
+    return { ok: isKnown, value: null, isAbsent: isKnown }
+  }
+}
+
+/**
+ * `count` : le nombre de morceaux trouvés, que la prochaine écriture ne descend pas (R1) ;
+ * `isWhole` : l'en-tête s'est lu (sinon `value` ne tient que des morceaux, le repli de S8).
+ */
+type ReadRegistry = { ok: boolean; value: SessionRegistry | null; placed: Map<string, number>; count: number; isWhole: boolean; isBroken?: boolean }
+
+/**
+ * Le registre enregistré de la session, morceaux réunis (R1). `ok` faux : une relecture a échoué
+ * (fichier occupé, droits), à ne pas confondre avec un contenu illisible, qui rend `value: null`
+ * (S8 : il sera réécrit) ou saute le morceau. Au-delà du nombre que dit l'en-tête, les morceaux
+ * qui existent se lisent aussi : un morceau né d'une écriture coupée avant l'en-tête, qui l'aurait
+ * compté, garde ce qui y est monté.
+ */
+const readRegistry = async ($: any, session: string): Promise<ReadRegistry> => {
+  const failed: ReadRegistry = { ok: false, value: null, placed: new Map(), count: 1, isWhole: false }
+  const first = await readPiece($, session, 0)
+  if (!first.ok) return failed
+  const head = parseOwnRegistry(first.value, session)
+  const parts: (RegistryPart | null)[] = []
+  for (let i = 1; i < PARTS_MAX; i++) {
+    const piece = await readPiece($, session, i)
+    if (!piece.ok) return failed
+    if (piece.isAbsent && i >= (head?.parts ?? 1)) break
+    const part = parsePart(piece.value)
+    parts.push(part?.part === i ? part : null)
+  }
+  const count = parts.length + 1
+  // Un en-tête là mais illisible (écriture coupée) : sa session le reconstruira depuis son transcript (ticket 08).
+  const isBroken = head === null && !first.isAbsent
+  // En-tête illisible (S8) : il sera réécrit, mais les morceaux lisibles comptent déjà.
+  const base = head ?? (parts.some(p => p !== null) ? emptyRegistry(session, '', 0) : null)
+  if (!base) return { ok: true, value: null, placed: new Map(), count, isWhole: false, isBroken }
+  const joined = joinRegistry(base, parts)
+  return { ok: true, value: joined.reg, placed: joined.placed, count, isWhole: head !== null && parts.every(p => p !== null), isBroken }
+}
+
+/**
+ * Écrit un morceau : le fichier, sinon `$.store` ; faux quand les deux le refusent. Un morceau
+ * après le premier ne se replie pas dans `$.store` quand son fichier existe ailleurs : la lecture
+ * prendrait l'ancien fichier, et ce qui y est monté disparaîtrait.
+ */
+const writePiece = async ($: any, session: string, part: number, value: SessionRegistry | RegistryPart): Promise<boolean> => {
+  const path = registryPath($, session, part)
+  if (path) {
+    try {
+      await $.fs.write(path, JSON.stringify(value))
+      await lockRegistryDir($)
+      return true
+    } catch {
+      // Repli sur `$.store`, pour le premier morceau seulement.
+      if (part > 0) return false
+    }
+  }
+  try {
+    await $.store.set(registryKey(session, part), value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Écrit le registre en morceaux (R1), du dernier au premier : une unité qui monte d'un morceau
+ * est en double un instant plutôt que perdue. Faux quand un morceau est refusé partout.
+ */
+const writeRegistry = async ($: any, reg: SessionRegistry, placed: ReadonlyMap<string, number>, minParts: number): Promise<boolean> => {
+  const { head, parts } = splitRegistry(reg, placed, undefined, Math.max(minParts, reg.parts ?? 1))
+  // Un morceau refusé arrête tout : ceux d'avant gardent ce qui serait monté dans le refusé.
+  for (const part of [...parts].reverse()) if (!(await writePiece($, reg.session, part.part, part))) return false
+  return writePiece($, reg.session, 0, head)
+}
+
+/**
+ * Le dossier du registre fermé aux autres comptes une fois par processus (F2) ; rien sous Windows
+ * ni sans commande. Noté fait une fois réussi seulement (F6) : un échec se retente à l'écriture suivante.
+ */
+let isRegistryLocked = false
+let isRegistryLocking = false
+const lockRegistryDir = async ($: any) => {
+  if (isRegistryLocked || isRegistryLocking) return
+  const dir = registryDir($)
+  if (!dir || /^[a-z]:/i.test(dir)) {
+    isRegistryLocked = true
+    return
+  }
+  isRegistryLocking = true
+  try {
+    isRegistryLocked = (await $.process.run(['chmod', '700', dir], { timeoutMs: 10_000 })).exitCode === 0
+  } catch {
+    // Commande absente ou refusée : retentée à l'écriture suivante.
+  } finally {
+    isRegistryLocking = false
+  }
+}
+
+/** Le registre de cette session : celui de l'état, sinon celui du fichier, sinon un neuf. */
+const ensureRegistry = async ($: any): Promise<SessionRegistry> => {
+  const current: SessionRegistry | null = await read($, registryAtom)
+  if (current) return current
+  // L'id lu à l'instant : après un /clear, la discussion suivante a le sien, donc son propre fichier.
+  let session = ''
+  await quietly(async () => {
+    const id = await $.session.id()
+    if (typeof id === 'string') session = id
+  })
+  if (session === '') session = await sessionId($)
+  const now = await $.clock.now()
+  const got = await readRegistry($, session)
+  if (got.isBroken) needsRebuild = true
+  const read0 = got.value
+  // Un en-tête illisible relu par ses seuls morceaux n'a pas de racine : celle de la session.
+  const loaded = read0 ? (read0.root === '' ? { ...read0, root: await sessionRoot($) } : read0) : emptyRegistry(session, await sessionRoot($), now)
+  await update($, registryAtom, reg => reg ?? loaded)
+  return (await read($, registryAtom)) ?? loaded
+}
+
+/**
+ * Toutes les écritures de l'état du registre passent par cette file, une à la fois (R2) : les hooks
+ * d'outils, de requêtes et de fins ne se disputent plus la même version. Une tâche de la file
+ * n'attend jamais une autre tâche de la file.
+ */
+let registryQueue: Promise<unknown> = Promise.resolve()
+const inRegistryQueue = <T,>(job: () => Promise<T>): Promise<T> => {
+  const run = registryQueue.then(job, job)
+  registryQueue = run.catch(() => undefined)
+  return run
+}
+
+/**
+ * Applique une transition pure au registre, par la file (R2), puis l'enregistre bientôt
+ * (`isSaved` faux : un changement venu du disque, déjà enregistré). Un changement qui ne
+ * s'applique toujours pas se dit dans l'onglet au lieu de se perdre en silence.
+ */
+const commitRegistry = ($: any, change: (reg: SessionRegistry) => SessionRegistry | null, isSaved = true): Promise<void> =>
+  inRegistryQueue(async () => {
+    await ensureRegistry($)
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { value, version } = await $.state.get(REGISTRY_REF)
+      if (!value) return
+      const next = change(value)
+      if (!next) return
+      if ((await $.state.set(REGISTRY_REF, next, { ifVersion: version })).isSet) {
+        if (isSaved) scheduleRegistrySave($)
+        return
+      }
+    }
+    await update($, registryAlertAtom, alert => alert || 'lost')
+  })
+
+/** Ce processus a vu partir ce sous-agent. */
+const ownAgent = ($: any, key: string) => update($, ownAtom, own => (own.includes(key) ? own : [...own, key]))
+
+/** Sous la charge de la frise, l'attente d'une écriture ne dépasse pas ce délai. */
+const REGISTRY_SAVE_MAX_MS = 5_000
+/** L'échéance posée au premier changement en attente, jamais repoussée. */
+let registryDueTimer: { cancel: () => void } | null = null
+
+/**
+ * Au rythme des parcours : 600 ms après le dernier changement. Les `turn.step` et les appels
+ * d'outil des sous-agents en parallèle peuvent se suivre sans répit : l'échéance garantit une
+ * écriture au plus REGISTRY_SAVE_MAX_MS après le premier changement en attente.
+ */
+const scheduleRegistrySave = ($: any) => {
+  registrySaveTimer?.cancel()
+  const soon: { cancel: () => void } = $.clock.after(600, () => {
+    if (registrySaveTimer === soon) void saveRegistryNow($)
+  })
+  registrySaveTimer = soon
+  if (registryDueTimer) return
+  const due: { cancel: () => void } = $.clock.after(REGISTRY_SAVE_MAX_MS, () => {
+    if (registryDueTimer === due) void saveRegistryNow($)
+  })
+  registryDueTimer = due
+}
+
+/**
+ * Relit le fichier, fusionne (S7 : un autre processus de la même session a pu l'écrire), écrit.
+ * Un contenu illisible n'apporte rien et se trouve réécrit (S8) ; une relecture en erreur
+ * reporte l'écriture au prochain changement (S10). Une écriture refusée se dit une fois (S11).
+ * Ce que le fichier apportait rejoint l'état par la file (R2), sans rien écraser de ce qui a
+ * changé entre-temps. Une seule écriture à la fois : demandée pendant qu'une autre tourne, elle
+ * suit celle-ci.
+ */
+let registrySaving: Promise<void> | null = null
+let isRegistrySaveAgain = false
+const saveRegistryNow = async ($: any): Promise<void> => {
+  // L'une des deux minuteries a tiré (ou un /clear) : l'autre n'a plus lieu d'être. Oubliée sans
+  // être annulée : annuler une minuterie depuis le rappel d'une autre fait attendre l'horloge des
+  // tests une seconde de temps réel par écriture (le test instable du groupe B) ; arrivée à son
+  // heure, elle voit qu'elle n'est plus la bonne et ne fait rien.
+  registrySaveTimer = null
+  registryDueTimer = null
+  if (registrySaving) {
+    isRegistrySaveAgain = true
+    return registrySaving
+  }
+  registrySaving = (async () => {
+    do {
+      isRegistrySaveAgain = false
+      await saveRegistryOnce($)
+    } while (isRegistrySaveAgain)
+  })().finally(() => {
+    registrySaving = null
+  })
+  return registrySaving
+}
+
+const saveRegistryOnce = async ($: any) => {
+  const { value } = await $.state.get(REGISTRY_REF)
+  if (!value) return
+  const stored = await readRegistry($, value.session)
+  if (!stored.ok) return
+  const board: Board | null = await read($, boardAtom)
+  const patch = {
+    // Le titre de la discussion d'abord (hooks classiques), sinon celui du parcours qu'elle porte ou sert.
+    title: value.title ?? (board?.delegate ? delegatedTitle(board) : activeRun(board)?.title),
+    // Un parcours effacé n'est plus déclaré (S23).
+    run: board?.delegate?.run !== undefined && !erasedRuns.has(board.delegate.run) ? board.delegate.run : undefined,
+    group: board?.delegate?.run !== undefined && !erasedRuns.has(board.delegate.run) ? board.delegate.group : undefined,
+  }
+  // S28 : le parcours actif ici et ceux dont elle porte un ticket « en cours », notés dans l'en-tête ;
+  // S31 : avec la date de cette écriture, la dernière où elle les portait.
+  const carriedNow = board && !board.delegate ? board.runs.filter(r => (r.id === board.activeId && r.status === 'active') || r.tickets.some(t => t.by === value.session)).map(r => r.id).filter(id => !erasedRuns.has(id)) : []
+  const noted = await $.clock.now()
+  const titled = withHeader(value, patch) ?? value
+  const header = noteCarried(titled, carriedNow, noted) ?? (titled === value ? null : titled)
+  // S6 : les traces relues avant chaque écriture ; ce qu'elles couvrent sort du fichier et de l'état.
+  const traces = await readTraces($)
+  const joined = mergeRegistry(header ?? value, stored.value)
+  // Les traces d'abord (celle du parcours couvre la session liée qui le déclare), puis le parcours
+  // effacé quitte l'en-tête : la fusion, qui garde l'en-tête déjà écrit, ne le retirerait jamais.
+  const merged = withoutErasedRun(applyTraces(joined, traces) ?? joined)
+  const isWritten = await writeRegistry($, merged, stored.placed, stored.count)
+  if (!isWritten && (await read($, registryAlertAtom)) !== true) {
+    await update($, registryAlertAtom, () => true)
+    await quietly(() => $.ui.toast('Registre des agents : écriture refusée, la suite n’est plus enregistrée'))
+  }
+  if (merged !== value) await quietly(() => commitRegistry($, reg => {
+    const titledReg = withHeader(reg, patch) ?? reg
+    const joined = mergeRegistry(noteCarried(titledReg, carriedNow, noted) ?? titledReg, merged)
+    const next = withoutErasedRun(applyTraces(joined, traces) ?? joined)
+    return next === reg ? null : next
+  }, false))
+}
+
+/** Le registre sans le parcours effacé qu'il déclarait (S23), ni son groupe ; tel quel sinon. */
+const withoutErasedRun = (reg: SessionRegistry): SessionRegistry => {
+  if (reg.run === undefined || !erasedRuns.has(reg.run)) return reg
+  const next = { ...reg }
+  delete next.run
+  delete next.group
+  return next
+}
+
+// ─── Sessions liées de l'onglet Agents ────────────────────────────────────
+//
+// L'orchestrateur relève ses lancements (`start_session`, `claude --bg`) dans son registre, avec ou
+// sans parcours, puis lit, toutes les 5 s, les fichiers des sessions qu'il a lancées ou que son
+// parcours déclare. Il ne les écrit jamais (Q7). Un fichier lu à moitié écrit est ignoré jusqu'à
+// la relecture suivante.
+
+/** Les sessions liées vues à la dernière relecture, avec leur registre (null : pas encore lisible). */
+const linkedAtom = atom({ plugin: 'flow-board', key: 'agentsLinked' } as const, [] as LinkedSession[])
+/**
+ * Ce qui a été lu des autres sessions, par id, avec la date du fichier : l'en-tête (premier
+ * morceau) de chaque fichier récent, pour les reconnaître ; le registre entier des seules
+ * sessions liées. Relus seulement quand la date change ; oubliés quand ils ne servent plus.
+ */
+const otherHeads = new Map<string, { mtime: number; head: SessionRegistry }>()
+const otherRegistries = new Map<string, { mtime: number; reg: SessionRegistry; traces?: string }>()
+/** Les jobs de `claude --bg` finis : leur `state.json` ne change plus. */
+const endedJobs = new Map<string, JobInfo>()
+
+/** Une relecture a trouvé le registre d'une session liée changé : l'onglet se redessine. */
+let isOtherChanged = false
+
+/** Les fichiers du dossier du registre (`<session>.json`), avec leur date ; `$.store` quand le dossier ne se lit pas (date -1). */
+const registryFiles = async ($: any): Promise<{ session: string; mtime: number }[]> => {
+  const dir = registryDir($)
+  if (dir) {
+    try {
+      const entries = (await $.fs.list(dir)) as { name: string; kind: string; mtimeMs: number }[]
+      return entries.filter(x => x.kind === 'file' && /^[a-z0-9_-]+\.json$/.test(x.name)).map(x => ({ session: x.name.replace(/\.json$/, ''), mtime: x.mtimeMs }))
+    } catch {
+      // Dossier absent ou hors d'atteinte : l'ancien stockage.
+    }
+  }
+  try {
+    const head = registryKey('')
+    return ((await $.store.keys()) as string[]).filter(k => k.startsWith(head) && !k.slice(head.length).includes(':')).map(k => ({ session: k.slice(head.length), mtime: -1 }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Les en-têtes des autres sessions du dossier, modifiés depuis `since` (le premier morceau seul).
+ * Lu à moitié écrit, un en-tête garde la lecture d'avant jusqu'à la suivante.
+ */
+const readOtherHeads = async ($: any, self: string, since: number): Promise<SessionRegistry[]> => {
+  const files = (await registryFiles($)).filter(f => f.session !== self && (f.mtime < 0 || f.mtime >= since))
+  const seen = new Set(files.map(f => f.session))
+  for (const id of [...otherHeads.keys()]) if (!seen.has(id)) otherHeads.delete(id)
+  for (const { session, mtime } of files) {
+    const kept = otherHeads.get(session)
+    if (kept && mtime >= 0 && kept.mtime === mtime) continue
+    const piece = await readPiece($, session, 0)
+    const head = piece.ok ? parseOwnRegistry(piece.value, session) : null
+    if (head) otherHeads.set(session, { mtime, head })
+  }
+  const traces = await readTraces($)
+  return [...otherHeads.values()].map(x => applyTraces(x.head, traces) ?? x.head)
+}
+
+/**
+ * Le registre entier des sessions liées (tous ses morceaux). Un morceau lu à moitié écrit garde
+ * la lecture d'avant jusqu'à la suivante ; un registre qui ne sert plus est oublié.
+ */
+const readLinkedRegistries = async ($: any, ids: ReadonlySet<string>) => {
+  for (const id of [...otherRegistries.keys()]) if (!ids.has(id)) otherRegistries.delete(id)
+  const traces = await readTraces($)
+  const tracesKey = traces.map(t => `${t.id}@${t.at}`).sort().join(',')
+  for (const id of ids) {
+    const mtime = otherHeads.get(id)?.mtime ?? -1
+    const kept = otherRegistries.get(id)
+    // Une nouvelle trace change ce qui se montre sans changer la date du fichier.
+    if (kept && mtime >= 0 && kept.mtime === mtime && kept.traces === tracesKey) continue
+    const got = await readRegistry($, id)
+    if (!got.ok || !got.value || !got.isWhole) continue
+    // Ce que le rattrapage a reconstruit à part (S13) complète le fichier de la session.
+    const rebuiltValue = applyRebuilt(got.value, await readRebuilt($, id), await $.clock.now())
+    const value = applyTraces(rebuiltValue, traces) ?? rebuiltValue
+    if (JSON.stringify(value) !== JSON.stringify(kept?.reg)) isOtherChanged = true
+    otherRegistries.set(id, { mtime, reg: value, traces: tracesKey })
+  }
+}
+
+/** Ce que `~/.claude/jobs/<id court>/state.json` dit d'une session de `claude --bg` ; un job fini n'est plus relu. */
+const readJob = async ($: any, id: string): Promise<JobInfo | null> => {
+  const ended = endedJobs.get(id)
+  if (ended) return ended
+  const home = claudeHome($)
+  if (!home || !/^[0-9a-f]{8,}$/i.test(id)) return null
+  try {
+    const raw = JSON.parse(String(await $.fs.read(`${home}/jobs/${id}/state.json`))) as Record<string, unknown>
+    const text = (k: string) => (typeof raw[k] === 'string' ? (raw[k] as string) : undefined)
+    const updatedAt = Date.parse(text('updatedAt') ?? '')
+    const job: JobInfo = { sessionId: text('sessionId'), name: text('name'), state: text('state'), ...(Number.isFinite(updatedAt) ? { updatedAt } : {}) }
+    if (job.state !== undefined && /done|finished|exited|stopped|fail|error|crash/i.test(job.state)) endedJobs.set(id, job)
+    return job
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Relit les sessions liées de cette discussion, une relecture à la fois (demandée pendant qu'une
+ * autre tourne, elle la suit). Rien à lire sans parcours ni lancement : pas de session liée.
+ */
+let linkedReading: Promise<void> | null = null
+let isLinkedReadAgain = false
+const refreshLinked = async ($: any): Promise<void> => {
+  if (linkedReading) {
+    isLinkedReadAgain = true
+    return linkedReading
+  }
+  linkedReading = (async () => {
+    do {
+      isLinkedReadAgain = false
+      await refreshLinkedOnce($)
+    } while (isLinkedReadAgain)
+  })().finally(() => {
+    linkedReading = null
+  })
+  return linkedReading
+}
+
+const refreshLinkedOnce = async ($: any) => {
+  const self: SessionRegistry | null = await read($, registryAtom)
+  if (!self) return
+  const board: Board | null = await read($, boardAtom)
+  const run = board?.delegate ? null : activeRun(board)
+  const launches = self.linked ?? []
+  if (!run && launches.length === 0) {
+    otherHeads.clear()
+    otherRegistries.clear()
+    if ((await read($, linkedAtom)).length > 0) await update($, linkedAtom, () => [])
+    return
+  }
+  // Une session liée écrit son fichier après son lancement : les fichiers plus anciens sont d'autres sessions.
+  const since = Math.min(run?.startedAt ?? Infinity, ...launches.map(l => l.at)) - 60_000
+  const heads = await readOtherHeads($, self.session, since)
+  const stored = run ? await readRelay($, run.id) : undefined
+  const relay = stored !== null && typeof stored === 'object' && (stored as Relay).run === run?.id && typeof (stored as Relay).sessions === 'object' ? (stored as Relay) : null
+  const jobs: Record<string, JobInfo> = {}
+  for (const l of launches) {
+    if (l.via !== 'bg') continue
+    const job = await readJob($, l.id)
+    if (job) jobs[l.id] = job
+  }
+  const sessions = linkedSessions({ self, ...(run ? { run: run.id } : {}), relay, others: heads, jobs, now: await $.clock.now() })
+  await readLinkedRegistries($, new Set(sessions.flatMap(l => (l.session !== undefined ? [l.session] : []))))
+  const isSame = JSON.stringify(sessions) === JSON.stringify(await read($, linkedAtom))
+  if (isSame && !isOtherChanged) return
+  isOtherChanged = false
+  if (!isSame) await update($, linkedAtom, () => sessions)
+  $.ui.invalidate('ui.render')
+}
+
+/** Le registre lu d'une session liée, pour l'onglet ; null tant qu'il ne se lit pas. */
+const linkedRegistryOf = (session: string | undefined): SessionRegistry | null => (session !== undefined ? (otherRegistries.get(session)?.reg ?? null) : null)
+
+/**
+ * Une session liée vient d'être lancée (`start_session`, `claude --bg`) : son lancement va dans le
+ * registre d'ici, avec un départ sur la piste de l'orchestrateur. Dans toute session, avec ou sans
+ * parcours. La relecture des sessions liées part sans être attendue (la durée de l'outil n'en dépend pas).
+ */
+const noteLinkedLaunches = async ($: any, e: any, ran: any) => {
+  if (!ran || ran.deny !== undefined || ran.isError === true) return
+  const launches: Omit<LinkedLaunch, 'at'>[] = []
+  if (e.tool === START_SESSION) {
+    const id = /\blocal_[A-Za-z0-9_-]+/.exec(JSON.stringify(ran.result ?? ran.text ?? ''))?.[0]
+    const asked = e as { title?: unknown; name?: unknown }
+    const title = String(asked.title ?? asked.name ?? '').trim()
+    if (id) launches.push({ id, via: 'desktop', ...(title !== '' ? { title } : {}) })
+  } else if (e.tool === 'Bash' || (e.tool as string) === 'PowerShell') {
+    const record = ran.result as { stdout?: unknown; backgroundTaskId?: unknown } | undefined
+    if (typeof record?.backgroundTaskId === 'string') return
+    const out = typeof record?.stdout === 'string' ? record.stdout : typeof ran.text === 'string' ? ran.text : ''
+    for (const l of backgroundLaunches(String(e.command ?? ''), out)) launches.push({ id: l.id, via: 'bg', ...(l.title.trim() !== '' ? { title: l.title.trim() } : {}) })
+  }
+  if (launches.length === 0) return
+  const at = await $.clock.now()
+  for (const l of launches) {
+    const isKnown = ((await read($, registryAtom)) as SessionRegistry | null)?.linked?.some(x => x.id === l.id) === true
+    if (isKnown) continue
+    await quietly(() => commitRegistry($, reg => noteLaunch(reg, { ...l, at }, at)))
+    await markLane($, MAIN, { k: 'relay', at, to: `session:${l.id}` })
+  }
+  void quietly(() => refreshLinked($))
+}
+
+/**
+ * Ce que flow-board a lui-même demandé au moment d'un lancement (Q9, deuxième source du type) :
+ * d'après la phase ou le détour en cours du parcours actif ici. Rien hors parcours.
+ */
+const askedTypeOf = (board: Board | null): AgentType | undefined => {
+  const run = board?.delegate ? null : activeRun(board)
+  if (!run) return undefined
+  const { phase, detour } = focusOf(run)
+  const target = detour ?? phase
+  // Une phase de revue l'est tout entière ; ailleurs, c'est l'étape en cours qui dit ce qui est demandé.
+  const bySkill: Record<string, AgentType> = { 'security-review': 'security', 'final-review': 'review', 'code-review': 'review', 'branch-review': 'review', 'codebase-design': 'plan', research: 'research', 'improve-codebase-architecture': 'explore' }
+  if (bySkill[target.skill] !== undefined) return bySkill[target.skill]
+  const step = target.steps.find(st => st.status === 'active')?.id
+  if (step === undefined) return undefined
+  if (target.skill === 'retro') return step === 'read' ? 'transcripts' : undefined
+  const byStep: Record<string, AgentType> = { security: 'security', review: 'review', 'group-review': 'review', implementers: 'implement', merge: 'merge', graph: 'explore', explore: 'explore' }
+  return byStep[step]
+}
+
+/** Le parcours auquel rattacher un sous-agent qui part : l'actif ici, ou celui que sert la session liée ; jamais un parcours effacé (S23). */
+const agentRunOf = (board: Board | null): string | undefined => {
+  const run = board?.delegate?.run ?? activeRun(board)?.id
+  return run !== undefined && !erasedRuns.has(run) ? run : undefined
+}
+
+/**
+ * Un appel Agent, dans toute session (parcours actif, session liée, ou aucun parcours) : le
+ * registre le suit, et le parcours actif d'ici garde ses étapes (implementers, relecteurs…).
+ * Un suivi en échec ne gêne jamais l'appel.
+ */
+const trackAgentCall = async ($: any, e: any, next: (e: any) => Promise<any>) => {
+  const key = String(e.tool_use_id)
+  const startedAt = await $.clock.now()
+  const isBackground = e.run_in_background !== false
+  const board0: Board | null = await read($, boardAtom)
+  const isRunHere = !board0?.delegate && activeRun(board0) !== null
+  // Une session liée relit les traces : un parcours effacé ne reçoit plus ses sous-agents (S23).
+  if (board0?.delegate) await quietly(() => readTraces($))
+  agentCalls.add(key)
+  await quietly(async () => {
+    await ownAgent($, key)
+    await commitRegistry($, reg =>
+      startRegistryCall(
+        reg,
+        {
+          key,
+          name: String(e.description ?? ''),
+          model: typeof e.model === 'string' ? e.model : undefined,
+          subagentType: typeof e.subagent_type === 'string' ? e.subagent_type : undefined,
+          prompt: typeof e.prompt === 'string' ? e.prompt : undefined,
+          isBackground,
+          parent: typeof e.agentId === 'string' ? e.agentId : undefined,
+          run: agentRunOf(board0),
+          asked: askedTypeOf(board0),
+        },
+        startedAt,
+      ),
+    )
+  })
+  await markLane($, laneOfLoop(e.agentId), { k: 'relay', at: startedAt, to: key })
+  if (isRunHere) await commit($, board => applyAgentStart(board, { key, name: e.description, model: e.model, type: e.subagent_type, isBackground }, startedAt))
+  const ran = await Promise.resolve(next(e)).finally(() => agentCalls.delete(key))
+  const failed = ran.deny !== undefined || ran.isError === true
+  // Un lancement refusé (par la personne ou un hook) ou interrompu n'est pas un échec du sous-agent.
+  const isCancelled = ran.deny !== undefined || (ran.isError === true && CANCELLED.test(String(ran.text ?? ran.result ?? '')))
+  const record = failed ? undefined : (ran.result as { agentId?: string; resolvedModel?: string; status?: string } | undefined)
+  // Un sous-agent rendu `completed` est fini, même demandé en fond : son SubagentStop est passé
+  // avant que son id soit connu, et ne le marquera plus.
+  const isFinished = record?.status === 'completed' || (record?.status === undefined && !isBackground)
+  const end = { agentId: record?.agentId, model: record?.resolvedModel, isFailed: failed, isFinished, isCancelled }
+  const endedAt = await $.clock.now()
+  await quietly(() => commitRegistry($, reg => endRegistryCall(reg, key, end, endedAt)))
+  if (isRunHere) await commit($, board => applyAgentActivity(board, endedAt))
+  // Annulé ou échoué au lancement : le repère va sur la piste du lanceur ; rendu fini, le retour aussi.
+  if (isCancelled || failed) await markLane($, laneOfLoop(e.agentId), { k: isCancelled ? 'stop' : 'fail', at: endedAt, to: key })
+  else if (isFinished) await markLane($, laneOfLoop(e.agentId), { k: 'back', at: endedAt, to: key })
+  return ran
+}
+
+/** Une fin de tour de sous-agent (SubagentStop, `turn.complete` avec son id), dans toute session. */
+const stopAgentHere = async ($: any, agentId: string) => {
+  const now = await $.clock.now()
+  await commit($, board => applyAgentActivity(board, now))
+  // Fini (jusqu'à un éventuel réveil) : tous ses segments encore ouverts se ferment avec lui.
+  await quietly(() =>
+    commitRegistry($, reg => {
+      const stopped = stopRegistryAgent(reg, agentId, now)
+      return closeOpen(stopped ?? reg, agentId, now) ?? stopped
+    }),
+  )
+  // Lancé par un sous-agent : son rapport revient au lanceur sans message du fil principal ; le
+  // retour se pose sur la piste du lanceur à sa première fin (essai, point 6).
+  const launcher = await launcherOf($, agentId)
+  if (launcher && launcher.lane !== MAIN) {
+    const parentLane = ((await read($, registryAtom)) as SessionRegistry | null)?.agents.find(a => a.agentId === launcher.lane)
+    if (!(parentLane?.marks ?? []).some(m => m.k === 'back' && m.to === launcher.key)) await markLane($, launcher.lane, { k: 'back', at: now, to: launcher.key })
+  }
+}
+
+/**
+ * Le retour d'un sous-agent au fil principal (essai, point 6) : son message (`<agent-message
+ * from="<id>">`) ou sa notification (`<task-id><id></task-id>`) ; l'id du sous-agent, ou null.
+ */
+const returnedAgentOf = (text: string): string | null =>
+  /^\s*<agent-message\s+from="([^"]+)"/.exec(text)?.[1] ?? /<task-notification>[\s\S]*?<task-id>([^<]+)<\/task-id>/.exec(text)?.[1] ?? null
+
+/** Le chemin du transcript de la session, tel que les hooks classiques le donnent. */
+const noteTranscript = async ($: any, e: any) => {
+  const transcript = typeof e?.transcript_path === 'string' ? e.transcript_path : undefined
+  // Le titre de la discussion, quand le hook le porte (SessionStart, UserPromptSubmit).
+  const title = typeof e?.session_title === 'string' && e.session_title.trim() !== '' ? e.session_title.trim() : undefined
+  if (transcript === undefined && title === undefined) return
+  await quietly(() => commitRegistry($, reg => withHeader(reg, { transcript, title })))
+  if (needsRebuild && transcript !== undefined) await quietly(() => catchUpOwn($, true))
+}
+
+// ─── Rattrapage par transcripts (ticket 08) ───────────────────────────────
+//
+// Les transcripts de Claude Code font foi pour les chiffres. Le rattrapage tourne à l'ouverture de
+// l'onglet sur la session affichée, et à la fin d'un sous-agent dont les chiffres manquent. Pour
+// cette session, il complète son propre registre ; pour une session liée affichée, il écrit son
+// fichier à part, `<session>.rebuilt.json`, que seule le rattrapage écrit (S13).
+
+/** Le fichier de registre de cette session était illisible au chargement : il se reconstruit dès que son transcript est connu. */
+let needsRebuild = false
+/** Les transcripts de sous-agents déjà lus, par chemin, avec leur date : relus seulement quand elle change. */
+const transcriptCache = new Map<string, { mtime: number; agent: TranscriptAgent }>()
+/** Au-delà, un transcript ne se relit pas en entier (la piste de la session seulement : ses sous-agents ont chacun le leur). */
+const TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
+
+/** Au-delà, la lecture en flux d'un transcript est abandonnée (F6 : un délai sur chaque commande). */
+const TRANSCRIPT_READ_MS = 60_000
+
+/**
+ * Le dossier de Claude Code où vivent les transcripts : `CLAUDE_CONFIG_DIR` (le premier s'il y en a
+ * plusieurs), sinon celui d'où le mod est installé, sinon `~/.claude` ; null quand rien ne le dit.
+ */
+const claudeDir = async ($: any): Promise<string | null> => {
+  // `$.env.get` veut un nom littéral : chaque variable a son appel.
+  const env = async (read: () => Promise<unknown>): Promise<string | undefined> => {
+    try {
+      const value = await read()
+      return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const custom = await env(() => $.env.get('CLAUDE_CONFIG_DIR'))
+  // Sans barre finale : les chemins listés sous lui et la garde de lecture se comparent pareil.
+  const first = custom?.split(',')[0]!.trim().replace(/[\\/]+$/, '')
+  if (first) return first
+  const home = claudeHome($)
+  if (home) return home
+  const user = (await env(() => $.env.get('USERPROFILE'))) ?? (await env(() => $.env.get('HOME')))
+  return user ? `${user.replace(/[\\/]+$/, '')}/.claude` : null
+}
+
+/**
+ * Le texte d'un transcript : `$.fs.read` jusqu'à 4 Mio, sinon lu en flux par une commande
+ * système (`cat --`, `type` sous Windows), dans un délai ; null quand il ne se lit pas. Seul un
+ * transcript sous `<dossier Claude>/projects/` se lit (F4).
+ */
+const readTranscript = async ($: any, path: string): Promise<string | null> => {
+  if (!isTranscriptPath(path, await claudeDir($))) return null
+  try {
+    return String(await $.fs.read(path))
+  } catch {
+    // Trop gros pour une lecture, ou absent.
+  }
+  try {
+    const stat = await $.fs.stat(path)
+    if (stat.kind !== 'file' || stat.size > TRANSCRIPT_MAX_BYTES) return null
+    const argv = readArgv(path)
+    if (!argv) return null
+    // Le délai ne s'annule pas : arrivé après la fin, il ne fait rien.
+    const deadline = new Promise<void>(resolve => $.clock.after(TRANSCRIPT_READ_MS, () => resolve()))
+    return await drainWithin($.process.spawn({ argv }), deadline)
+  } catch {
+    return null
+  }
+}
+
+/** Un sous-agent d'après son transcript et son `.meta.json` (à côté) ; relu seulement quand le fichier change. */
+const transcriptAgent = async ($: any, path: string, mtime: number): Promise<TranscriptAgent | null> => {
+  const agentId = SUBAGENT_FILE.exec(path.split(/[\\/]/).pop() ?? '')?.[1]
+  if (!agentId) return null
+  const kept = transcriptCache.get(path)
+  if (kept && mtime >= 0 && kept.mtime === mtime) return kept.agent
+  const text = await readTranscript($, path)
+  if (text === null) return kept?.agent ?? null
+  let meta = {}
+  try {
+    meta = metaFromText(String(await $.fs.read(path.replace(/\.jsonl$/, '.meta.json'))))
+  } catch {
+    // Sans `.meta.json` : le transcript seul.
+  }
+  const agent: TranscriptAgent = { agentId, lane: laneFromTranscript(text), meta }
+  transcriptCache.set(path, { mtime, agent })
+  return agent
+}
+
+/** Un fichier présent ; faux quand il manque ou ne se voit pas. */
+const isPresent = async ($: any, path: string): Promise<boolean> => {
+  try {
+    return Boolean(await $.fs.exists(path))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Les sous-agents d'une session d'après leurs transcripts (`<session>/subagents/agent-<id>.jsonl`),
+ * et le nombre de transcripts qui n'ont pas pu se relire (S34, S39) : refusé par la garde, dossier
+ * illisible, trop gros, délai dépassé. Un dossier ou un fichier absent (pas de sous-agent, nettoyé
+ * par Claude Code) n'est pas un échec. `since` : les fichiers modifiés pour la dernière fois avant
+ * ne sont pas relus (ils ne peuvent pas tenir un sous-agent parti après).
+ */
+const scanTranscriptAgents = async ($: any, transcript: string, since = -Infinity): Promise<{ agents: TranscriptAgent[]; failed: number }> => {
+  const dir = subagentsDirOf(transcript)
+  // Le dossier d'un transcript que la garde refuse ne se liste pas non plus (F4).
+  if (!isTranscriptPath(transcript, await claudeDir($))) return { agents: [], failed: 1 }
+  if (!dir) return { agents: [], failed: 0 }
+  let entries: { name: string; kind: string; mtimeMs: number }[] = []
+  try {
+    entries = (await $.fs.list(dir)) as typeof entries
+  } catch {
+    return { agents: [], failed: (await isPresent($, dir)) ? 1 : 0 }
+  }
+  const agents: TranscriptAgent[] = []
+  let failed = 0
+  for (const x of entries) {
+    if (x.kind !== 'file' || !SUBAGENT_FILE.test(x.name) || x.mtimeMs < since) continue
+    const path = `${dir}/${x.name}`
+    const agent = await transcriptAgent($, path, x.mtimeMs)
+    if (agent) agents.push(agent)
+    else if (await isPresent($, path)) failed += 1
+  }
+  return { agents, failed }
+}
+
+/** Les sous-agents d'une session d'après leurs transcripts. */
+const transcriptAgents = async ($: any, transcript: string): Promise<TranscriptAgent[]> => (await scanTranscriptAgents($, transcript)).agents
+
+/**
+ * Le rattrapage de cette session : ses sous-agents d'après leurs transcripts ; reconstruit
+ * (`isRebuild`, fichier illisible), aussi la piste de la session d'après son propre transcript.
+ */
+const catchUpOwn = async ($: any, isRebuild = false) => {
+  const reg: SessionRegistry | null = await read($, registryAtom)
+  const transcript = reg?.transcript
+  if (!transcript) return
+  const found = await transcriptAgents($, transcript)
+  const mainText = isRebuild ? await readTranscript($, transcript) : null
+  const main = mainText !== null ? laneFromTranscript(mainText, true) : null
+  const now = await $.clock.now()
+  // Les appels encore en vol ici ne se closent pas d'après leur transcript.
+  const inFlight = new Set(agentCalls)
+  const traces = await readTraces($)
+  const board: Board | null = await read($, boardAtom)
+  // Une session liée n'est pas concernée (S27) : sa suppression l'efface déjà en entier.
+  const runs = board && !board.delegate ? board.runs : []
+  await commitRegistry($, r => {
+    // Q-a (S27) : un sous-agent qui manquait au registre rejoint le parcours que la discussion portait à son départ ;
+    // R2 (S32) : une entrée rattrapée plus tôt sans parcours aussi, à chaque rattrapage.
+    let next = catchUp(r, withCarriedRuns(found, r, runsCarriedBy(runs, r)), now, inFlight) ?? r
+    next = attachCarried(next, runsCarriedBy(runs, next)) ?? next
+    // Une session effacée en partie ne reprend pas les totaux de tout son transcript.
+    const isCovered = traces.some(t => t.id === r.session)
+    if (main && (main.segments ?? []).length > 0) {
+      // La piste vécue ici depuis le démarrage reste ; le transcript rend ce qui la précède, et ses
+      // chiffres font foi.
+      const live = next.main?.segments ?? []
+      const since = live.length > 0 ? Math.min(...live.map(x => x.s)) : Infinity
+      const before = (main.segments ?? []).filter(x => (x.e ?? x.s) <= since)
+      next = {
+        ...next,
+        main: { ...next.main, segments: [...before, ...live].sort((a, b) => a.s - b.s), ...(main.tokens && !isCovered ? { tokens: main.tokens } : {}), ...(main.models ? { models: main.models } : {}) },
+      }
+    }
+    // Les traces après la fusion : rien de ce qu'elles couvrent ne revient (S5).
+    next = applyTraces(next, traces) ?? next
+    return next === r ? null : next
+  })
+  if (isRebuild) needsRebuild = false
+}
+
+/**
+ * Le fichier à part d'une session reconstruite (S13), `<session>.rebuilt.json`, ou d'un parcours
+ * (S18), `run-<parcours>.rebuilt.json` ; sa clé de `$.store` en repli.
+ */
+const rebuiltPath = ($: any, id: string): string | null => registryPath($, id)?.replace(/\.json$/, '.rebuilt.json') ?? null
+const rebuiltKey = (id: string): string => `${registryKey(id)}:rebuilt`
+
+/**
+ * Le fichier à part `id`, entrée par entrée (F3) ; `session` : ce qu'il doit déclarer. `ok` faux :
+ * la relecture a échoué (fichier occupé, droits, écriture coupée), à ne pas confondre avec un
+ * fichier absent (`value: null`) ; un écrivain ne réécrit jamais un fichier qu'il n'a pas pu relire.
+ */
+const readRebuiltState = async ($: any, id: string, session: string = id): Promise<{ ok: boolean; value: Rebuilt | null }> => {
+  const path = rebuiltPath($, id)
+  let isThere = false
+  try {
+    isThere = path !== null && (await $.fs.exists(path))
+  } catch {
+    // Dossier hors d'atteinte : l'ancien stockage.
+  }
+  try {
+    const raw = isThere ? JSON.parse(String(await $.fs.read(path!))) : await $.store.get(rebuiltKey(id))
+    if (raw === undefined || raw === null) return { ok: true, value: null }
+    const value = cleanRebuilt(raw, session)
+    return value ? { ok: true, value } : { ok: false, value: null }
+  } catch {
+    return { ok: false, value: null }
+  }
+}
+
+/** Le fichier à part `id` pour l'affichage, sans ce que les traces couvrent (S5) ; null quand il manque ou ne se lit pas. */
+const readRebuilt = async ($: any, id: string, session: string = id): Promise<Rebuilt | null> => {
+  const value = (await readRebuiltState($, id, session)).value
+  return value ? (applyTracesToRebuilt(value, await readTraces($)) ?? value) : null
+}
+
+/** Écrit le fichier à part `id` : le fichier, sinon `$.store` quand il n'existe pas déjà ; faux quand rien ne l'accepte. */
+const writeRebuilt = async ($: any, id: string, rebuilt: Rebuilt): Promise<boolean> => {
+  const path = rebuiltPath($, id)
+  let isThere = false
+  if (path) {
+    try {
+      await $.fs.write(path, JSON.stringify(rebuilt))
+      await lockRegistryDir($)
+      return true
+    } catch {
+      try {
+        isThere = await $.fs.exists(path)
+      } catch {
+        // Inconnu : le repli reste permis.
+      }
+    }
+  }
+  // Un fichier là mais refusé : un repli dans `$.store` serait caché par lui à la lecture.
+  if (isThere) return false
+  try {
+    await $.store.set(rebuiltKey(id), rebuilt)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Un fichier à part qui ne tient rien : ni sous-agent, ni ligne recopiée, ni parcours repris, ni piste. */
+const isEmptyRebuilt = (r: Rebuilt): boolean =>
+  r.agents.length === 0 && (r.rows ?? []).length === 0 && (r.runs ?? []).length === 0 && (r.main?.segments ?? []).length === 0 && (r.main?.marks ?? []).length === 0
+
+/** Une écriture des fichiers à part à la fois dans ce processus (S20). */
+let rebuiltQueue: Promise<unknown> = Promise.resolve()
+const inRebuiltQueue = <T,>(job: () => Promise<T>): Promise<T> => {
+  const run = rebuiltQueue.then(job, job)
+  rebuiltQueue = run.catch(() => undefined)
+  return run
+}
+
+/**
+ * Change le fichier à part `id` (S20) : relu juste avant, `change` rend sa nouvelle version (une
+ * fusion, sauf la sortie d'une ligne retrouvée, S18), écrite si elle diffère. Faux quand il ne se
+ * relit pas, ou que l'écriture est refusée.
+ */
+const updateRebuilt = (
+  $: any,
+  id: string,
+  session: string,
+  change: (before: Rebuilt | null) => Rebuilt | null,
+): Promise<boolean> =>
+  inRebuiltQueue(async () => {
+    const before = await readRebuiltState($, id, session)
+    if (!before.ok) return false
+    // Ce que les traces couvrent ne s'y réécrit pas (S5) : une écriture compacte aussi.
+    const traces = await readTraces($)
+    const changed = change(before.value)
+    const next = changed ? (applyTracesToRebuilt(changed, traces) ?? changed) : null
+    if (!next || JSON.stringify(next) === JSON.stringify(before.value)) return true
+    // Un fichier absent ne se crée pas vide (tout couvert par les traces) : un effacement passé entre-temps ne revient pas.
+    if (before.value === null && isEmptyRebuilt(next)) return true
+    return writeRebuilt($, id, next)
+  })
+
+/**
+ * Le rattrapage d'une session liée affichée : d'après le transcript que son en-tête relève, son
+ * fichier à part se fusionne (S13, S20) ; son propre fichier n'est jamais touché (Q7).
+ */
+const catchUpLinked = async ($: any, session: string) => {
+  const reg = otherRegistries.get(session)?.reg
+  if (!reg?.transcript) return
+  const agents = await transcriptAgents($, reg.transcript)
+  if (agents.length === 0) return
+  const before = JSON.stringify(await readRebuilt($, session))
+  await updateRebuilt($, session, session, was => unionRebuilt(was, { v: 1, session, agents }))
+  if (JSON.stringify(await readRebuilt($, session)) === before) return
+  // La prochaine relecture applique le fichier à part.
+  otherRegistries.delete(session)
+  await refreshLinked($)
+}
+
+/** Le rattrapage de ce que l'onglet montre : cette session, ou la session liée choisie. */
+const catchUpShown = async ($: any) => {
+  const ui = await read($, uiAtom)
+  if (ui.tab !== 'agents') return
+  const chosen = ui.agentsSession !== undefined ? (await read($, linkedAtom)).find(l => l.key === ui.agentsSession) : undefined
+  if (chosen?.session !== undefined) await catchUpLinked($, chosen.session)
+  else await catchUpOwn($, needsRebuild)
+}
+
+/**
+ * La fin d'un sous-agent dont les chiffres manquent (aucun token relevé) : son transcript, donné
+ * par la fin elle-même (`agent_transcript_path`), les apporte.
+ */
+const catchUpAgent = async ($: any, agentId: string, path: unknown) => {
+  if (typeof path !== 'string' || !/\.jsonl$/.test(path)) return
+  const known = ((await read($, registryAtom)) as SessionRegistry | null)?.agents.find(a => a.agentId === agentId)
+  if (!known || known.tokens !== undefined) return
+  const agent = await transcriptAgent($, path, -1)
+  if (!agent) return
+  const now = await $.clock.now()
+  const inFlight = new Set(agentCalls)
+  const traces = await readTraces($)
+  await commitRegistry($, r => {
+    const next = catchUp(r, [agent], now, inFlight)
+    return next ? (applyTraces(next, traces) ?? next) : null
+  })
+}
+
+// ─── Historique de l'onglet Agents (ticket 09) ────────────────────────────
+//
+// Le sélecteur liste le dossier du registre et lit les en-têtes (relus quand leur date change),
+// sans index commun écrit par plusieurs sessions. Un parcours passé se montre d'après les
+// registres des discussions qui l'ont porté, leurs fichiers à part et celui du parcours.
+
+/** Les en-têtes de tout le dossier, par id, avec la date du fichier lu. */
+const historyHeads = new Map<string, { mtime: number; head: SessionRegistry }>()
+
+/** Les en-têtes de toutes les autres sessions du dossier ; lu à moitié écrit, un en-tête garde la lecture d'avant. */
+const readAllHeads = async ($: any, self: string): Promise<SessionRegistry[]> => {
+  const files = (await registryFiles($)).filter(f => f.session !== self)
+  const seen = new Set(files.map(f => f.session))
+  for (const id of [...historyHeads.keys()]) if (!seen.has(id)) historyHeads.delete(id)
+  for (const { session, mtime } of files) {
+    const kept = historyHeads.get(session)
+    if (kept && mtime >= 0 && kept.mtime === mtime) continue
+    const piece = await readPiece($, session, 0)
+    const head = piece.ok ? parseOwnRegistry(piece.value, session) : null
+    if (head) historyHeads.set(session, { mtime, head })
+  }
+  const traces = await readTraces($)
+  return [...historyHeads.values()].map(x => applyTraces(x.head, traces) ?? x.head)
+}
+
+/** Les ids des fichiers à part du dossier (`<id>.rebuilt.json`), ou de leurs clés de `$.store`. */
+const rebuiltIds = async ($: any): Promise<string[]> => {
+  const dir = registryDir($)
+  if (dir) {
+    try {
+      const entries = (await $.fs.list(dir)) as { name: string; kind: string }[]
+      return entries.flatMap(x => (x.kind === 'file' ? (/^([a-z0-9_-]+)\.rebuilt\.json$/.exec(x.name)?.slice(1, 2) ?? []) : []))
+    } catch {
+      // Dossier absent : l'ancien stockage.
+    }
+  }
+  try {
+    return ((await $.store.keys()) as string[]).flatMap(k => /^agents:([^:]+):rebuilt$/.exec(k)?.slice(1, 2) ?? [])
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Q-c : les sous-agents en échec d'un parcours, dans le registre de cette discussion et dans ceux
+ * de ses sessions liées (celles que leur fichier déclare, et celles du relais), relus entiers.
+ */
+const failedOfRun = async ($: any, run: Run): Promise<number> => {
+  const self: SessionRegistry | null = await read($, registryAtom)
+  const regs: (SessionRegistry | null)[] = [self]
+  try {
+    const heads = await readAllHeads($, self?.session ?? '')
+    const stored = await readRelay($, run.id)
+    const relayIds = stored !== null && typeof stored === 'object' && typeof (stored as Relay).sessions === 'object' ? Object.keys((stored as Relay).sessions) : []
+    const ids = new Set([...heads.filter(h => h.run === run.id).map(h => h.session), ...relayIds])
+    if (self) ids.delete(self.session)
+    for (const id of ids) regs.push(await fullRegistry($, id))
+  } catch {
+    // Les autres registres hors d'atteinte : celui de cette discussion seul.
+  }
+  return failedAgentsOf(run.id, regs)
+}
+
+/** Le registre d'une session complété par son fichier à part ; null quand ni l'un ni l'autre ne se lit. */
+const fullRegistry = async ($: any, id: string): Promise<SessionRegistry | null> => {
+  const got = await readRegistry($, id)
+  const rebuilt = await readRebuilt($, id)
+  if (!got.value && !rebuilt) return null
+  const full = applyRebuilt(got.value ?? emptyRegistry(id, '', 0), rebuilt, await $.clock.now())
+  return applyTraces(full, await readTraces($)) ?? full
+}
+
+/** Ce que montre une entrée du sélecteur : sa vue d'orchestrateur, ses sessions liées, son titre. */
+type HistoryShown = { key: string; title: string; self: SessionRegistry; linked: { session: LinkedSession; reg: SessionRegistry | null }[] }
+
+/** Le sélecteur de l'onglet ; la vue de l'entrée choisie vit à côté (`historyShown`), trop grosse pour l'état. */
+const historyAtom = atom({ plugin: 'flow-board', key: 'agentsHistory' } as const, [] as HistoryEntry[])
+let historyShown: HistoryShown | null = null
+
+/** La vue d'une entrée passée : un parcours, ou une discussion sans parcours. */
+const buildShown = async ($: any, key: string, board: Board | null, heads: readonly SessionRegistry[]): Promise<HistoryShown | null> => {
+  const now = await $.clock.now()
+  const linkedOf = async (self: SessionRegistry, run: string | undefined, others: readonly SessionRegistry[]) => {
+    const stored = run !== undefined ? await readRelay($, run) : undefined
+    const relay = stored !== null && typeof stored === 'object' && (stored as Relay).run === run && typeof (stored as Relay).sessions === 'object' ? (stored as Relay) : null
+    const sessions = linkedSessions({ self, ...(run !== undefined ? { run } : {}), relay, others, now })
+    const out: HistoryShown['linked'] = []
+    for (const session of sessions) out.push({ session, reg: session.session !== undefined ? await fullRegistry($, session.session) : null })
+    return out
+  }
+  if (key.startsWith('run:')) {
+    const run = board?.runs.find(r => r.id === key.slice(4))
+    if (!run) return null
+    // Les discussions qui l'ont porté : leurs sous-agents de ce parcours, ou leur fichier à part qui le reprend.
+    // Ses sessions liées ont leur pastille : elles ne se fondent pas dans l'orchestrateur.
+    const stored = await readRelay($, run.id)
+    const relayIds = stored !== null && typeof stored === 'object' && typeof (stored as Relay).sessions === 'object' ? Object.keys((stored as Relay).sessions) : []
+    const linkedIds = new Set([...heads.filter(h => h.run === run.id).map(h => h.session), ...relayIds])
+    const self: SessionRegistry | null = await read($, registryAtom)
+    if (self?.run === run.id) linkedIds.add(self.session)
+    // Un registre en morceaux peut tenir les sous-agents du parcours ailleurs que dans son en-tête.
+    const isMaybe = (h: SessionRegistry) => (h.parts ?? 1) > 1 && h.updatedAt >= run.startedAt && self !== null && isSameProject(self.root, h.root)
+    const carriers = heads.filter(h => !linkedIds.has(h.session) && (h.agents.some(a => a.run === run.id) || isMaybe(h))).map(h => h.session)
+    for (const id of await rebuiltIds($)) {
+      if (id.startsWith('run-') || carriers.includes(id) || linkedIds.has(id)) continue
+      if ((await readRebuilt($, id))?.runs?.includes(run.id)) carriers.push(id)
+    }
+    const regs: SessionRegistry[] = []
+    // Cette discussion, quand elle l'a porté (et n'en est pas une session liée) : son registre tel qu'il est maintenant.
+    if (self && !linkedIds.has(self.session) && self.agents.some(a => a.run === run.id)) regs.push(self)
+    for (const id of carriers) {
+      const reg = await fullRegistry($, id)
+      if (reg) regs.push(reg)
+    }
+    const view = runRegistry(run, regs, await readRebuilt($, runFileId(run.id), `run:${run.id}`), now)
+    const linkedHeads = [...heads.filter(h => h.run === run.id), ...(self?.run === run.id ? [self] : [])]
+    return { key, title: run.title, self: view, linked: await linkedOf(view, run.id, linkedHeads) }
+  }
+  if (key.startsWith('session:')) {
+    const self = await fullRegistry($, key.slice(8))
+    if (!self) return null
+    return { key, title: self.title ?? self.session.slice(0, 8), self, linked: await linkedOf(self, undefined, heads) }
+  }
+  return null
+}
+
+/** Relit le sélecteur, et la vue de l'entrée choisie s'il y en a une. */
+const refreshHistory = async ($: any) => {
+  const self: SessionRegistry | null = await read($, registryAtom)
+  if (!self) return
+  const board: Board | null = await read($, boardAtom)
+  const heads = await readAllHeads($, self.session)
+  const entries = historyEntries(board, self, heads)
+  if (JSON.stringify(entries) !== JSON.stringify(await read($, historyAtom))) await update($, historyAtom, () => entries)
+  const key = (await read($, uiAtom)).agentsHistory
+  const found = key !== undefined && key !== 'now' ? await buildShown($, key, board, heads) : null
+  const shown = found ?? (key !== undefined && key !== 'now' ? { key, title: 'introuvable', self: emptyRegistry(key, '', 0), linked: [] } : null)
+  if (JSON.stringify(shown) !== JSON.stringify(historyShown)) {
+    historyShown = shown
+    $.ui.invalidate('ui.render')
+  }
+}
+
+/**
+ * S1, S18 et S21 : les lignes de l'ancien champ des sous-agents d'un parcours vont dans le fichier
+ * du parcours, puis le champ se vide dans le board (liste vide : une version d'avant qui le lirait
+ * ne casse pas). Rien n'est vidé tant que la copie relue ne tient pas toutes ses lignes.
+ */
+const migrateRunAgents = async ($: any) => {
+  const board: Board | null = await read($, boardAtom)
+  const legacy = (board?.runs ?? []).filter(r => (r.agents?.length ?? 0) > 0)
+  if (legacy.length === 0) return
+  for (const run of legacy) {
+    const rows = rowsFromRun(run)
+    if (rows.length === 0) continue
+    // Un fichier du parcours qui ne se relit pas n'est pas réécrit : ce parcours attend.
+    await updateRebuilt($, runFileId(run.id), `run:${run.id}`, before => unionRebuilt(before, { v: 1, session: `run:${run.id}`, agents: [], rows, runs: [run.id] }))
+  }
+  // Ce que le fichier de chaque parcours tient, relu après l'écriture : seul un parcours dont toutes
+  // les lignes y sont perd les siennes (une fusion a pu en apporter d'autres entre-temps).
+  const copied = new Map<string, Set<string>>()
+  for (const run of legacy) copied.set(run.id, new Set(((await readRebuilt($, runFileId(run.id), `run:${run.id}`))?.rows ?? []).map(r => r.key)))
+  await commit($, b => {
+    const next = stripRunAgents(b, run => rowsFromRun(run).every(r => copied.get(run.id)?.has(r.key) === true))
+    return next ? { board: next, fx: { toasts: [], openPane: false, note: 'none' as const } } : null
+  })
+}
+
+/** Les parcours déjà repris depuis les transcripts (Q14), sur ce poste : une fois chacun. */
+const REBUILT_RUNS_KEY = 'agentsRebuiltRuns'
+let isRebuildingRuns = false
+let isRunsRebuildDone = false
+
+/** Le nom de dossier que Claude Code donne aux transcripts d'un projet : sa racine, chaque signe non alphanumérique en tiret. */
+const projectSlug = (root: string): string => root.replace(/[^A-Za-z0-9]/g, '-')
+
+/** Les transcripts de session du projet (et de ses worktrees) : chemin, date. */
+const projectTranscripts = async ($: any, root: string): Promise<{ path: string; id: string; mtime: number }[]> => {
+  // Le même dossier que la garde de lecture (F4) : rien n'est listé qu'elle refuserait ensuite.
+  const home = await claudeDir($)
+  if (!home || root === '') return []
+  const slug = projectSlug(root)
+  const out: { path: string; id: string; mtime: number }[] = []
+  try {
+    for (const dir of (await $.fs.list(`${home}/projects`)) as { name: string; kind: string }[]) {
+      // Le projet, ou un de ses worktrees (`<racine>/.claude/worktrees/…`) ; pas un voisin au même début.
+      if (dir.kind !== 'dir' || (dir.name !== slug && !dir.name.startsWith(`${slug}--claude-worktrees-`))) continue
+      for (const f of (await $.fs.list(`${home}/projects/${dir.name}`)) as { name: string; kind: string; mtimeMs: number }[]) {
+        const id = /^([0-9a-f-]{8,})\.jsonl$/i.exec(f.name)?.[1]
+        if (f.kind === 'file' && id) out.push({ path: `${home}/projects/${dir.name}/${f.name}`, id, mtime: f.mtimeMs })
+      }
+    }
+  } catch {
+    // Dossier des transcripts hors d'atteinte : rien à reprendre.
+  }
+  return out
+}
+
+/**
+ * Q14 : au premier affichage de l'onglet, les parcours existants (en cours et archivés) retrouvent
+ * leur frise depuis les transcripts, une fois chacun, et seulement ceux d'avant la première reprise
+ * sur ce poste (les suivants sont suivis en direct). Les discussions d'un parcours : celle qui le
+ * tient, ses sessions liées (relais), les registres qui le citent, les tickets passés « en cours »,
+ * et celles dont le transcript contient un appel de ses anciennes lignes. Ce qui est reconstruit
+ * va dans leur fichier à part (S13, S20) ; pour cette discussion, dans son propre registre. Une
+ * ligne retrouvée, une fois sa copie relue, quitte le fichier du parcours (S18).
+ */
+const rebuildPastRuns = async ($: any) => {
+  if (isRebuildingRuns || isRunsRebuildDone) return
+  isRebuildingRuns = true
+  try {
+    const board: Board | null = await read($, boardAtom)
+    const self: SessionRegistry | null = await read($, registryAtom)
+    if (!board || !self) return
+    // `since` : la première reprise sur ce poste ; les parcours nés après sont suivis en direct.
+    let done: string[] = []
+    let since = await $.clock.now()
+    try {
+      const kept = (await $.store.get(REBUILT_RUNS_KEY)) as { since?: unknown; done?: unknown } | undefined
+      if (kept && typeof kept.since === 'number') since = kept.since
+      if (kept && Array.isArray(kept.done)) done = kept.done.filter((x): x is string => typeof x === 'string')
+    } catch {
+      return
+    }
+    const save = () => quietly(() => $.store.set(REBUILT_RUNS_KEY, { since, done }))
+    // Un parcours dont l'ancien champ n'est pas encore recopié attend la migration.
+    const todo = board.runs.filter(r => !done.includes(r.id) && r.startedAt <= since && (r.agents?.length ?? 0) === 0)
+    if (todo.length === 0) {
+      await save()
+      isRunsRebuildDone = true
+      return
+    }
+    const now = await $.clock.now()
+    const heads = await readAllHeads($, self.session)
+    const transcripts = await projectTranscripts($, self.root || board.root)
+    // Les anciennes lignes encore sans session, de tous les parcours à reprendre : un seul passage
+    // sur les transcripts du projet, chaque clé retrouvée sortant de la recherche.
+    const looseRuns = new Map<string, string>()
+    for (const run of todo) for (const r of (await readRebuilt($, runFileId(run.id), `run:${run.id}`))?.rows ?? []) looseRuns.set(r.key, run.id)
+    const keyHolders = new Map<string, Set<string>>()
+    const oldest = Math.min(...todo.map(r => runWindow(r).s))
+    for (const t of transcripts) {
+      if (looseRuns.size === 0) break
+      if (t.mtime < oldest) continue
+      const text = await readTranscript($, t.path)
+      if (text === null) continue
+      for (const [key, runId] of [...looseRuns]) {
+        if (!text.includes(key)) continue
+        looseRuns.delete(key)
+        const holders = keyHolders.get(runId) ?? new Set<string>()
+        holders.add(t.id)
+        keyHolders.set(runId, holders)
+      }
+    }
+    // La piste d'une session, relue une fois pour tous ses parcours.
+    const mainLanes = new Map<string, AgentLane | null>()
+    const mainOf = async (path: string): Promise<AgentLane | null> => {
+      if (!mainLanes.has(path)) {
+        const text = await readTranscript($, path)
+        mainLanes.set(path, text !== null ? laneFromTranscript(text, true) : null)
+      }
+      return mainLanes.get(path) ?? null
+    }
+    for (const run of todo) {
+      const w = runWindow(run)
+      const ids = new Set<string>(keyHolders.get(run.id) ?? [])
+      if (run.owner) ids.add(run.owner)
+      const stored = await readRelay($, run.id)
+      if (stored !== null && typeof stored === 'object' && typeof (stored as Relay).sessions === 'object') for (const id of Object.keys((stored as Relay).sessions)) ids.add(id)
+      for (const h of heads) if (h.run === run.id || h.agents.some(a => a.run === run.id)) ids.add(h.session)
+      for (const t of run.tickets) if (t.by) ids.add(t.by)
+      const found = new Set<string>()
+      let isComplete = true
+      for (const id of ids) {
+        const transcript = id === self.session ? self.transcript : (heads.find(h => h.session === id)?.transcript ?? transcripts.find(t => t.id === id)?.path)
+        if (!transcript) continue
+        // R3 (S31) : une discussion qui a porté le parcours puis l'a rendu ne lui donne que les sous-agents de sa période.
+        const holder = id === self.session ? self : heads.find(h => h.session === id)
+        const agents = agentsOfRun(await transcriptAgents($, transcript), run, board.runs).filter(a => !holder || carriedRunAt([run], holder, a.lane.startedAt!) === run.id)
+        const whole = await mainOf(transcript)
+        const main = whole ? clipLane(whole, w) : null
+        if (agents.length === 0 && (main?.segments ?? []).length === 0) continue
+        if (id === self.session) {
+          // Cette discussion se rattrape elle-même, dans son propre registre (jamais de fichier à part pour elle).
+          // Comme catchUpOwn : les appels en vol ne se closent pas, et rien de ce que les traces couvrent ne revient.
+          const inFlight = new Set(agentCalls)
+          const traces = await readTraces($)
+          await commitRegistry($, r => {
+            const rebuilt = applyRebuilt(r, { v: 1, session: r.session, agents, ...(main ? { main } : {}) }, now, inFlight)
+            const next = applyTraces(rebuilt, traces) ?? rebuilt
+            return next === r ? null : next
+          })
+        } else if (!(await updateRebuilt($, id, id, before => withRun(before, id, run, agents, main)))) {
+          isComplete = false
+          continue
+        }
+        // La copie relue : seuls les appels qui y sont vraiment comptent comme retrouvés.
+        const kept = id === self.session ? ((await read($, registryAtom)) as SessionRegistry | null)?.agents.map(a => a.key) ?? [] : ((await readRebuilt($, id))?.agents ?? []).map(a => a.meta.toolUseId)
+        for (const a of agents) if (a.meta.toolUseId && kept.includes(a.meta.toolUseId)) found.add(a.meta.toolUseId)
+      }
+      // S18 : une ligne retrouvée dans le transcript de sa session quitte le fichier du parcours.
+      if (found.size > 0) {
+        const isOut = await updateRebuilt($, runFileId(run.id), `run:${run.id}`, before => (before?.rows?.some(r => found.has(r.key)) ? { ...before, rows: before.rows.filter(r => !found.has(r.key)) } : null))
+        if (!isOut) isComplete = false
+      }
+      // Une écriture refusée : le parcours se reprendra à la prochaine ouverture.
+      if (!isComplete) continue
+      done.push(run.id)
+      await save()
+    }
+    isRunsRebuildDone = todo.every(r => done.includes(r.id))
+    await refreshHistory($)
+  } finally {
+    isRebuildingRuns = false
+  }
+}
+
+// ─── Effacement (ticket 10) ───────────────────────────────────────────────
+//
+// Supprimer un parcours efface ses agents, ceux de ses sessions liées, son relais et ses choix ;
+// « ✗ Oublier » efface une discussion et ses sessions liées sûres (S15). Une trace par id effacé
+// (session, parcours, sous-agent : S5, S22), dans le dossier du registre. Le fichier d'une session
+// fermée s'efface tout de suite (réécrit vide, puis supprimé : S4) ; celui d'une session ouverte
+// n'est jamais touché, elle se compacte elle-même d'après les traces (S6, S19). Les transcripts
+// de Claude Code ne sont jamais touchés.
+
+/**
+ * Le nom de fichier d'une trace (D2 b) : son id, chaque signe hors `[a-z0-9_-]` en tiret, puis sa
+ * date ; un fichier par couple (id, date), jamais réécrit. Les traces d'avant, `<id>.erased.json`
+ * (une par id, réécrite), se lisent toujours.
+ */
+const traceSlug = (id: string): string => id.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
+const tracePath = ($: any, t: Trace): string | null => {
+  const dir = registryDir($)
+  return dir ? `${dir}/${traceSlug(t.id)}.${t.at}.erased.json` : null
+}
+const traceKey = (t: Trace): string => `${registryKey(traceSlug(t.id))}:${t.at}:erased`
+
+/** Les traces déjà lues, par nom de fichier, avec sa date : relues seulement quand elle change. */
+const traceCache = new Map<string, { mtime: number; trace: Trace }>()
+
+/** Toutes les traces : les fichiers `*.erased.json` du dossier du registre, et les clés de `$.store`. */
+const readTraces = async ($: any): Promise<Trace[]> => {
+  const out: Trace[] = []
+  const dir = registryDir($)
+  if (dir) {
+    try {
+      const entries = (await $.fs.list(dir)) as { name: string; kind: string; mtimeMs: number }[]
+      for (const x of entries) {
+        if (x.kind !== 'file' || !x.name.endsWith('.erased.json')) continue
+        const kept = traceCache.get(x.name)
+        if (kept && kept.mtime === x.mtimeMs) {
+          out.push(kept.trace)
+          continue
+        }
+        let trace: Trace | null = null
+        try {
+          trace = cleanTrace(JSON.parse(String(await $.fs.read(`${dir}/${x.name}`))))
+        } catch {
+          // Illisible (en pleine écriture) : relue au prochain tour.
+        }
+        // Seule une trace bien lue se garde : une lecture ratée se refait.
+        if (trace) {
+          traceCache.set(x.name, { mtime: x.mtimeMs, trace })
+          out.push(trace)
+        }
+      }
+    } catch {
+      // Dossier absent : seulement `$.store`.
+    }
+  }
+  try {
+    for (const key of (await $.store.keys()) as string[]) {
+      if (!key.endsWith(':erased')) continue
+      const trace = cleanTrace(await $.store.get(key))
+      if (trace) out.push(trace)
+    }
+  } catch {
+    // Stockage indisponible : les traces du dossier seulement.
+  }
+  for (const t of out) if (t.id.startsWith('run:')) erasedRuns.add(t.id.slice(4))
+  return out
+}
+
+/** Les parcours effacés (leur trace), vus par les dernières lectures : une session liée les lâche (S23). */
+const erasedRuns = new Set<string>()
+
+/** Une trace posée par un appel de writeTraces : son fichier, ou sa clé de `$.store`. */
+type PosedTrace = { path: string } | { key: string }
+
+/** Une trace de sous-agent ou de lancement (S22, S25) couvre quelle que soit sa date. */
+const isUndatedTrace = (id: string): boolean => id.startsWith('agent:') || id.startsWith('call:') || id.startsWith('launch:')
+
+/**
+ * Pose les traces (S5) : l'id et la date, rien d'autre, chacune dans un fichier à elle (D2 b) : une
+ * trace existante n'est jamais réécrite, une plus récente s'ajoute à côté (la lecture prend la plus
+ * récente). Une trace déjà là aussi récente, ou de sous-agent ou de lancement, ne se repose pas.
+ * Toutes ou aucune (S29) : si l'une échoue, celles que cet appel vient de poser sont retirées.
+ * `ok` : toutes posées ; `none` : aucune posée ; `retracted` : posées puis toutes retirées ;
+ * `partial` : le retrait a échoué aussi.
+ */
+const writeTraces = async ($: any, traces: readonly Trace[]): Promise<'ok' | 'none' | 'retracted' | 'partial'> => {
+  const known = await readTraces($)
+  const posed: PosedTrace[] = []
+  for (const t of traces) {
+    const before = known.filter(k => k.id === t.id)
+    if (before.length > 0 && (isUndatedTrace(t.id) || before.some(k => k.at >= t.at))) continue
+    const value: Trace = { id: t.id, at: t.at }
+    const path = tracePath($, value)
+    let isWritten = false
+    if (path) {
+      try {
+        // Le même fichier déjà là (même id, même date, en pleine écriture ailleurs) : pas touché.
+        if (!(await $.fs.exists(path))) {
+          await $.fs.write(path, JSON.stringify(value))
+          posed.push({ path })
+        }
+        isWritten = true
+      } catch {
+        // Repli sur `$.store`.
+      }
+    }
+    if (!isWritten) {
+      try {
+        if ((await $.store.get(traceKey(value))) === undefined) {
+          await $.store.set(traceKey(value), value)
+          posed.push({ key: traceKey(value) })
+        }
+      } catch {
+        // S38 : rien de posé, rien à retirer ; posées puis retirées, une session ouverte a pu s'en servir (S33).
+        if (posed.length === 0) return 'none'
+        return (await removeTraces($, posed)) ? 'retracted' : 'partial'
+      }
+    }
+    // Le même id plus loin dans la liste (un sous-agent vu dans deux fichiers) ne se repose pas.
+    known.push(value)
+  }
+  return 'ok'
+}
+
+/**
+ * Retire les traces qu'un effacement vient de poser (S29), et elles seules : un fichier se vide
+ * (une trace vide ne se lit plus) puis se supprime, une clé s'efface. Une trace d'avant n'est
+ * jamais touchée. Faux quand l'une reste lisible.
+ */
+const removeTraces = async ($: any, posed: readonly PosedTrace[]): Promise<boolean> => {
+  let isOk = true
+  for (const p of posed) {
+    if ('path' in p) {
+      traceCache.delete(p.path.split('/').pop() ?? p.path)
+      const done = await eraseWith(
+        {
+          write: (path, text) => $.fs.write(path, text),
+          remove: async (path: string) => {
+            const argv = removeArgv(path)
+            return argv !== null && (await $.process.run(argv, { timeoutMs: 10_000 })).exitCode === 0
+          },
+        },
+        p.path,
+      )
+      if (!done.isEmptied) isOk = false
+    } else {
+      try {
+        await $.store.delete(p.key)
+      } catch {
+        isOk = false
+      }
+    }
+  }
+  return isOk
+}
+
+/**
+ * Ce que dit un effacement dont les traces n'ont pas toutes pu s'écrire (S24, S29). Retirées, elles
+ * ont pu servir entre-temps à une session ouverte qui s'est compactée d'après elles (S33) ; aucune
+ * posée, rien n'a été effacé (S38).
+ */
+const tracesRefusedText = (result: 'none' | 'retracted' | 'partial'): string =>
+  result === 'none'
+    ? 'Effacement impossible : les traces n’ont pas pu s’écrire, rien n’a été effacé.'
+    : result === 'retracted'
+      ? 'Effacement annulé : les traces n’ont pas pu s’écrire ; une session ouverte a pu en effacer une partie entre-temps.'
+      : 'Effacement partiel : les traces n’ont pas toutes pu s’écrire ni se retirer ; une partie de l’historique est masquée, rien d’autre n’a été effacé.'
+
+/**
+ * Efface un fichier (S4) : réécrit vide, puis supprimé par `rm` (`del` sous Windows) ; sans
+ * commande, le fichier vide reste. Faux quand il n'a pas pu être vidé.
+ */
+const eraseFile = async ($: any, path: string | null): Promise<boolean> => {
+  if (!path) return true
+  let isThere = false
+  try {
+    isThere = await $.fs.exists(path)
+  } catch {
+    // Hors d'atteinte : rien à effacer là.
+  }
+  if (!isThere) return true
+  const done = await eraseWith(
+    {
+      write: (p, text) => $.fs.write(p, text),
+      // Sans `$.process.run` (surface sans commandes) ou sans commande sûre, le fichier vide reste (S4).
+      remove: async (p: string) => {
+        const argv = removeArgv(p)
+        return argv !== null && (await $.process.run(argv, { timeoutMs: 10_000 })).exitCode === 0
+      },
+    },
+    path,
+  )
+  if (!done.isEmptied || !done.isRemoved) eraseFailures.push(path.split(/[\\/]/).pop() ?? path)
+  return done.isEmptied
+}
+
+/** Les fichiers qu'un effacement n'a pas pu vider ou supprimer, dits à la fin (S24). */
+let eraseFailures: string[] = []
+
+/** Dit ce qu'un effacement n'a pas pu faire (S24). */
+const reportEraseFailures = async ($: any) => {
+  if (eraseFailures.length === 0) return
+  const names = eraseFailures.slice(0, 3).join(', ') + (eraseFailures.length > 3 ? '…' : '')
+  eraseFailures = []
+  await quietly(() => $.ui.toast(`Effacement incomplet : ${names} n’a pas pu être supprimé (vidé s’il a pu l’être).`))
+}
+
+/** Efface une clé de `$.store` (le repli des fichiers). */
+const eraseKey = async ($: any, key: string) => {
+  await quietly(async () => {
+    if ((await $.store.get(key)) !== undefined) await $.store.delete(key)
+  })
+}
+
+/** Un texte pris tel quel dans une expression régulière. */
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Efface tout ce qu'une session a dans le registre : tous ses morceaux et son fichier à part, fichiers et clés. */
+const eraseSession = async ($: any, id: string) => {
+  const dir = registryDir($)
+  const slug = registryPath($, id)?.split('/').pop()?.replace(/\.json$/, '')
+  if (dir && slug) {
+    let names: string[] = []
+    try {
+      names = ((await $.fs.list(dir)) as { name: string }[]).map(x => x.name)
+    } catch {
+      // Dossier absent.
+    }
+    // Tous ses morceaux, même après un trou (ils s'écrivent du dernier au premier).
+    // Les ids sont échappés (F6) : un signe d'expression régulière n'y vise pas d'autres fichiers.
+    for (const name of names) if (name === `${slug}.json` || new RegExp(`^${escapeRegExp(slug)}\\.\\d+\\.json$`).test(name)) await eraseFile($, `${dir}/${name}`)
+  }
+  await quietly(async () => {
+    for (const key of (await $.store.keys()) as string[]) if (key === registryKey(id) || new RegExp(`^${escapeRegExp(registryKey(id))}:\\d+$`).test(key)) await eraseKey($, key)
+  })
+  await eraseFile($, rebuiltPath($, id))
+  await eraseKey($, rebuiltKey(id))
+  // Sa délégation gardée ne lui fait plus reprendre un parcours effacé (S23).
+  await eraseKey($, delegateKey(id))
+  otherRegistries.delete(id)
+  otherHeads.delete(id)
+  historyHeads.delete(id)
+}
+
+/** La dernière écriture du fichier d'une session (sa date, sinon celle de son en-tête), pour savoir si elle est fermée (S19). */
+const lastWriteOf = async ($: any, head: SessionRegistry): Promise<number> => {
+  const file = (await registryFiles($)).find(f => f.session === head.session)
+  return file && file.mtime >= 0 ? file.mtime : head.updatedAt
+}
+
+/**
+ * Le registre entier d'une session dont l'en-tête annonce des morceaux (R1) : ses sous-agents au
+ * travail et ce que les traces couvrent peuvent être dans un morceau suivant (les nouveaux vont au
+ * dernier). L'en-tête seul quand il n'y a qu'un morceau, ou quand la relecture échoue.
+ */
+const wholeOf = async ($: any, head: SessionRegistry): Promise<SessionRegistry> => {
+  if ((head.parts ?? 1) <= 1) return head
+  const got = await readRegistry($, head.session)
+  return got.ok && got.value ? got.value : head
+}
+
+/**
+ * Supprimer un parcours (Q6 a1, S3, S14) : les traces d'abord (le parcours, ses sessions liées,
+ * chacun de ses sous-agents), puis cette discussion se compacte, les orchestrateurs fermés sont
+ * réécrits sans lui, ses sessions liées fermées s'effacent, et son relais, ses choix et son
+ * fichier à part s'effacent. Les sessions ouvertes se compactent elles-mêmes.
+ */
+const eraseRun = async ($: any, run: Run): Promise<boolean> => (await whileErasing($, `run:${run.id}`, run.title, () => eraseRunNow($, run))) === true
+
+/**
+ * R1, S36 : les effacements en cours dans ce processus, par clé (`run:<id>`, `session:<id>`), avec
+ * leur titre. En mémoire seulement : un rechargement du mod repart d'une liste vide, et la ligne
+ * « effacement en cours » ne peut pas rester bloquée.
+ */
+const erasingNow = new Map<string, string>()
+
+/**
+ * Fait un effacement en le disant dans l'onglet du début à la fin (R1) ; chacun ne retire que le
+ * sien (S36). Un second effacement de la même clé déjà en cours ne fait rien (rend null).
+ */
+const whileErasing = async <T,>($: any, key: string, title: string, work: () => Promise<T>): Promise<T | null> => {
+  if (erasingNow.has(key)) return null
+  // Un redessin refusé n'arrête rien : la clé part toujours, la ligne ne reste jamais bloquée (S36).
+  const redraw = () => {
+    try {
+      $.ui.invalidate('ui.render')
+    } catch {
+      // L'onglet se redessinera au prochain changement.
+    }
+  }
+  erasingNow.set(key, title)
+  try {
+    redraw()
+    return await work()
+  } finally {
+    erasingNow.delete(key)
+    redraw()
+  }
+}
+
+/**
+ * D4 (S34) : les sous-agents manqués d'un parcours qu'on supprime, relus dans les transcripts des
+ * discussions qui l'ont porté (les sessions liées sont couvertes en entier par leur trace) : ceux
+ * dont le départ tombe dans la période où elles le portaient (R3), sauf ceux qu'un registre ou un
+ * fichier à part range ailleurs, dans un autre parcours ou suivis en direct sans parcours (S32).
+ * `failed` : les transcripts qui n'ont pas pu se relire (S39).
+ */
+const missedAgentsOf = async ($: any, run: Run, runs: readonly Run[], carriers: readonly SessionRegistry[]): Promise<{ agents: { key: string; agentId?: string }[]; failed: number }> => {
+  const agents: { key: string; agentId?: string }[] = []
+  let failed = 0
+  for (const reg of carriers) {
+    // S39 (a) : sans transcript connu, rien ne se relit : non relu.
+    if (!reg.transcript) {
+      failed += 1
+      continue
+    }
+    const scanned = await scanTranscriptAgents($, reg.transcript, runWindow(run).s)
+    failed += scanned.failed
+    const carried = runsCarriedBy(runs, reg)
+    // Son fichier à part (Q14) range aussi des sous-agents, chacun avec son parcours.
+    const side = (await readRebuiltState($, reg.session)).value?.agents ?? []
+    for (const a of scanned.agents) {
+      if (a.lane.startedAt === undefined || carriedRunAt(carried, reg, a.lane.startedAt) !== run.id) continue
+      const known = reg.agents.find(x => x.agentId === a.agentId || (a.meta.toolUseId !== undefined && x.key === a.meta.toolUseId))
+      if (known && (known.run !== undefined ? known.run !== run.id : known.source === 'live')) continue
+      const ranged = side.find(x => x.agentId === a.agentId)
+      if (ranged?.run !== undefined && ranged.run !== run.id) continue
+      agents.push({ key: a.meta.toolUseId ?? `agent:${a.agentId}`, agentId: a.agentId })
+    }
+  }
+  return { agents, failed }
+}
+
+const eraseRunNow = async ($: any, run: Run): Promise<boolean> => {
+  const now = await $.clock.now()
+  const self: SessionRegistry | null = await read($, registryAtom)
+  const board: Board | null = await read($, boardAtom)
+  const heads = await readAllHeads($, self?.session ?? '')
+  const stored = await readRelay($, run.id)
+  const relay = stored !== null && typeof stored === 'object' && typeof (stored as Relay).sessions === 'object' ? (stored as Relay) : null
+  const linkedIds = new Set([...heads.filter(h => h.run === run.id).map(h => h.session), ...Object.keys(relay?.sessions ?? {})])
+  if (self) linkedIds.delete(self.session)
+  const orchestrators: SessionRegistry[] = []
+  // Les discussions qui l'ont porté (S27, S28), à relire pour D4.
+  const carriers: SessionRegistry[] = []
+  // S39 : une discussion qui l'a porté dont le registre ne se relit pas en entier n'est pas relue : elle compte.
+  let unreadCarriers = 0
+  const runs = board?.runs.some(r => r.id === run.id) ? board.runs : [...(board?.runs ?? []), run]
+  for (const h of heads) {
+    if (linkedIds.has(h.session)) continue
+    const isMaybe = self !== null && (h.parts ?? 1) > 1 && h.updatedAt >= run.startedAt && isSameProject(self.root, h.root)
+    // R5 : une discussion qui l'a porté, même sans sous-agent de lui, perd aussi son id tout de suite.
+    const isCarrier = runsCarriedBy([run], h).length > 0
+    if (!h.agents.some(a => a.run === run.id) && !isMaybe && !isCarrier) continue
+    const full = (await readRegistry($, h.session)).value
+    if (!full) {
+      if (isCarrier) unreadCarriers += 1
+      continue
+    }
+    const isFullCarrier = runsCarriedBy([run], full).length > 0
+    if (isFullCarrier) carriers.push(full)
+    if (full.agents.some(a => a.run === run.id) || isFullCarrier) orchestrators.push(full)
+  }
+  if (self && runsCarriedBy([run], self).length > 0) carriers.unshift(self)
+  // S22 : une trace par sous-agent effacé, qu'il vive dans un registre, un fichier à part repris
+  // (Q14) ou le fichier du parcours (anciennes lignes).
+  const erased: { key: string; agentId?: string }[] = [...(self?.agents ?? []), ...orchestrators.flatMap(o => o.agents)].filter(a => a.run === run.id)
+  const sideIds = (await rebuiltIds($)).filter(id => !id.startsWith('run-'))
+  for (const id of sideIds) {
+    for (const a of (await readRebuiltState($, id)).value?.agents ?? []) if (a.run === run.id) erased.push({ key: a.meta.toolUseId ?? `agent:${a.agentId}`, agentId: a.agentId })
+  }
+  for (const r of (await readRebuiltState($, runFileId(run.id), `run:${run.id}`)).value?.rows ?? []) erased.push(r)
+  // D4 (S34) : relus avant d'effacer, les sous-agents manqués partent aussi ; un transcript qui ne se relit pas n'arrête rien.
+  const missed = await missedAgentsOf($, run, runs, carriers)
+  missed.failed += unreadCarriers
+  erased.push(...missed.agents)
+  // Les traces datent de leur pose : ce qui part pendant la relecture dans une session ouverte est couvert aussi.
+  const at = await $.clock.now()
+  // S25 : les lancements de ses sessions liées, chez les orchestrateurs.
+  const launches: string[] = []
+  for (const o of [...(self ? [self] : []), ...orchestrators]) {
+    for (const ls of linkedSessions({ self: o, run: run.id, relay, others: heads, now })) {
+      if ((ls.session !== undefined && linkedIds.has(ls.session)) || ls.how === 'run' || ls.how === 'relay') if (o.linked?.some(l => l.id === ls.key)) launches.push(ls.key)
+    }
+  }
+  const traces: Trace[] = [
+    { id: `run:${run.id}`, at },
+    ...[...linkedIds].map(id => ({ id, at })),
+    ...erased.flatMap(a => agentTraces(a, at)),
+    ...launches.map(id => ({ id: `launch:${id}`, at })),
+  ]
+  // S24, S29 : sans toutes les traces posées, rien n'est effacé, et le parcours reste.
+  const posed = await writeTraces($, traces)
+  if (posed !== 'ok') {
+    await quietly(() => $.ui.toast(tracesRefusedText(posed)))
+    return false
+  }
+  // La pierre tombale prend la date des traces : un parcours mis à jour ailleurs pendant la relecture D4 ne revient pas par la fusion du board.
+  await commit($, board => dropRun(board, run.id, at))
+  const all = await readTraces($)
+  // Cette discussion : tout de suite, dans son état ; son fichier suit à la prochaine écriture.
+  if (self) await quietly(() => commitRegistry($, r => applyTraces(r, all)))
+  // Un orchestrateur fermé (jugé sans ce que les traces retirent) est réécrit sans le parcours
+  // (S14), s'il se relit en entier ; ouvert, il se compacte lui-même.
+  for (const o of orchestrators) {
+    const head = heads.find(h => h.session === o.session)!
+    if (!isClosedSession(applyTraces(o, all) ?? o, await lastWriteOf($, head), now)) continue
+    await rewriteCovered($, o.session, all)
+  }
+  // Ses sessions liées fermées s'effacent ; les ouvertes, ou celles dont l'en-tête ne se lit pas
+  // (peut-être en pleine écriture), se compactent d'après la trace (S6).
+  for (const id of linkedIds) {
+    const head = heads.find(h => h.session === id)
+    const isEnded = relay?.sessions[id]?.endedAt !== undefined
+    if (head && isClosedSession(await wholeOf($, head), await lastWriteOf($, head), now, isEnded)) await eraseSession($, id)
+    // Ouverte aussi, sa délégation gardée part (S23) : rechargée, elle ne reprend pas le parcours effacé.
+    else await eraseKey($, delegateKey(id))
+  }
+  // Les fichiers à part se compactent (seul le rattrapage les écrit : leur session ne le fera pas) ;
+  // le sien, son relais et ses choix s'effacent.
+  for (const id of sideIds) await updateRebuilt($, id, id, before => before)
+  await eraseFile($, rebuiltPath($, runFileId(run.id)))
+  await eraseKey($, rebuiltKey(runFileId(run.id)))
+  await eraseFile($, relayPath($, run.id))
+  await eraseKey($, relayKey(run.id))
+  await eraseFile($, decidedPath($, run.id))
+  await reportEraseFailures($)
+  if (missed.failed > 0) await quietly(() => $.ui.toast(`${missed.failed} ${missed.failed > 1 ? 'transcripts non relus' : 'transcript non relu'} : un sous-agent manqué pourrait revenir sans parcours.`))
+  await refreshHistory($)
+  return true
+}
+
+/** Réécrit le registre d'une session fermée sans ce que les traces couvrent (S14), s'il se relit en entier. */
+const rewriteCovered = async ($: any, id: string, traces: readonly Trace[]) => {
+  const got = await readRegistry($, id)
+  const next = got.ok && got.value && got.isWhole ? applyTraces(got.value, traces) : null
+  if (next && !(await writeRegistry($, next, got.placed, got.count))) eraseFailures.push(`${id}.json`)
+}
+
+/**
+ * « ✗ Oublier » une discussion (S2) : sa trace et celles de ses sessions liées sûres (S15), puis
+ * l'effacement de leurs fichiers, tout de suite pour une session fermée ; une session ouverte se
+ * compacte elle-même.
+ */
+const forgetSession = async ($: any, id: string) => {
+  const heads = await readAllHeads($, ((await read($, registryAtom)) as SessionRegistry | null)?.session ?? '')
+  const shown = historyShown?.key === `session:${id}` ? historyShown : await buildShown($, `session:${id}`, await read($, boardAtom), heads)
+  await whileErasing($, `session:${id}`, shown?.title ?? id, () => forgetSessionNow($, id, heads, shown))
+}
+
+const forgetSessionNow = async ($: any, id: string, heads: SessionRegistry[], shown: HistoryShown | null) => {
+  const now = await $.clock.now()
+  const self: SessionRegistry | null = await read($, registryAtom)
+  const sure = (shown?.linked ?? []).filter(l => isSureLink(l.session.how) && l.session.session !== undefined).map(l => l.session.session!)
+  const ids = [id, ...sure]
+  // Q-b (comme S22) : une trace par sous-agent oublié, de son registre ou de son fichier à part ;
+  // un sous-agent de fond qui se réveille ensuite ne revient pas dans l'historique.
+  const erased: { key: string; agentId?: string }[] = []
+  for (const x of ids) {
+    const reg = self && x === self.session ? self : (await readRegistry($, x)).value
+    erased.push(...(reg?.agents ?? []))
+    for (const a of (await readRebuiltState($, x)).value?.agents ?? []) erased.push({ key: a.meta.toolUseId ?? `agent:${a.agentId}`, agentId: a.agentId })
+  }
+  const posed = await writeTraces($, [...ids.map(x => ({ id: x, at: now })), ...erased.flatMap(a => agentTraces(a, now))])
+  if (posed !== 'ok') {
+    await quietly(() => $.ui.toast(tracesRefusedText(posed)))
+    return
+  }
+  const all = await readTraces($)
+  for (const x of ids) {
+    if (self && x === self.session) {
+      await quietly(() => commitRegistry($, r => applyTraces(r, all)))
+      await updateRebuilt($, x, x, before => before)
+      continue
+    }
+    // Fermée, elle s'efface ; ouverte, ou d'en-tête illisible (peut-être en pleine écriture), elle se compacte elle-même (S6).
+    const head = heads.find(h => h.session === x)
+    if (head && isClosedSession(await wholeOf($, head), await lastWriteOf($, head), now)) await eraseSession($, x)
+    else await updateRebuilt($, x, x, before => before)
+  }
+  await reportEraseFailures($)
+  await update($, uiAtom, ui => ({ ...ui, agentsHistory: undefined, confirmForget: undefined, agentsSession: undefined }))
+  historyShown = null
+  await refreshHistory($)
+}
+
+/**
+ * S26 : à chaque relecture, une session fermée qu'une trace couvre et qui ne l'a pas encore
+ * appliquée (trace plus récente que sa dernière écriture) est traitée comme à l'effacement :
+ * effacée si une trace la couvre toute (la sienne, ou celle du parcours qu'elle servait),
+ * réécrite sans ce qu'elles couvrent sinon. Les fichiers à part se compactent quand les traces changent.
+ */
+let reconciledTraces = ''
+/** Les registres en morceaux que les traces ne couvrent pas, par session (date du fichier et traces) : pas relus en entier pour rien. */
+const uncoveredParts = new Map<string, string>()
+const reconcileErased = async ($: any) => {
+  const self: SessionRegistry | null = await read($, registryAtom)
+  const traces = await readTraces($)
+  if (traces.length === 0) return
+  const now = await $.clock.now()
+  await readAllHeads($, self?.session ?? '')
+  const key = traces.map(t => `${t.id}@${t.at}`).sort().join(',')
+  for (const { mtime, head } of [...historyHeads.values()]) {
+    // Ce que les traces couvrent encore dans son fichier (tel qu'écrit, tous ses morceaux) ; rien : rien à faire.
+    const seen = `${mtime}|${key}`
+    if (mtime >= 0 && uncoveredParts.get(head.session) === seen) continue
+    const raw = await wholeOf($, head)
+    const covered = applyTraces(raw, traces)
+    if (!covered) {
+      if (raw !== head) uncoveredParts.set(head.session, seen)
+      continue
+    }
+    const last = await lastWriteOf($, raw)
+    // Fermée d'après ce qui reste une fois les traces appliquées (S19).
+    if (!isClosedSession(covered, last, now)) continue
+    const isWhole = traces.some(t => (t.id === raw.session || (raw.run !== undefined && t.id === `run:${raw.run}`)) && t.at > last)
+    if (isWhole) await eraseSession($, raw.session)
+    else await rewriteCovered($, raw.session, traces)
+  }
+  if (key !== reconciledTraces) {
+    reconciledTraces = key
+    for (const id of await rebuiltIds($)) await updateRebuilt($, id, id.startsWith('run-') ? `run:${id.slice(4)}` : id, before => before)
+  }
+  await reportEraseFailures($)
+}
+
+// ─── Prix des modèles (coût estimé des sous-agents) ───────────────────────
+//
+// Q15 : les prix de ccusage, comme stats-board, repris ici pour que les deux plugins restent
+// indépendants. Relevés au plus une fois par jour, essai raté compris, gardés dans `$.store`
+// d'une session à l'autre. Sans npx, sans `$.process.run` ou en échec : pas de prix, et la carte
+// dit « coût indisponible ». F1 : une version exacte de ccusage, lancée depuis le dossier du mod
+// (jamais celui du projet, dont un `.npmrc` détournerait le téléchargement), le registre npm
+// officiel imposé.
+
+const PRICES_KEY = 'agentPrices'
+const DAY_MS = 86_400_000
+/** Les discussions des 60 derniers jours suffisent à tirer les prix des modèles en usage. */
+const PRICES_SINCE_MS = 60 * DAY_MS
+/** La version de ccusage lancée (F1) : publiée depuis plus de deux semaines, essayée sur ce poste. */
+const CCUSAGE = 'ccusage@20.0.30'
+const NPM_REGISTRY = 'https://registry.npmjs.org/'
+/** `at` : le relevé des prix ; `triedAt` : le dernier essai, réussi ou non (au plus un par jour). */
+type KeptPrices = { at: number; prices: Record<string, UnitPrices>; triedAt?: number }
+const pricesAtom = atom({ plugin: 'flow-board', key: 'agentPrices' } as const, null as KeptPrices | null)
+let isPricing = false
+/** Le lanceur de npx qui a marché (Windows en a plusieurs) ; le premier essai les parcourt. */
+let npxLauncher: string[] | null = null
+
+const runNpx = async ($: any, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+  const tries = npxLauncher ? [npxLauncher] : [['npx'], ['npx.cmd'], ['cmd.exe', '/d', '/s', '/c', 'npx']]
+  let first: unknown = null
+  for (const l of tries) {
+    try {
+      const res = await $.process.run([...l, ...args], {
+        timeoutMs: 240_000,
+        cwd: String($.plugin.root),
+        env: { NO_COLOR: '1', FORCE_COLOR: '0', npm_config_update_notifier: 'false', npm_config_fund: 'false', npm_config_registry: NPM_REGISTRY },
+      })
+      npxLauncher = l
+      return { exitCode: res.exitCode, stdout: String(res.stdout ?? ''), stderr: String(res.stderr ?? '') }
+    } catch (err) {
+      first ??= err
+      // Lancé mais trop lent : un autre lanceur ne ferait pas mieux.
+      if (/time|still running|délai/i.test(String(err))) break
+    }
+  }
+  throw first ?? new Error('npx introuvable')
+}
+
+/** `AAAAMMJJ` d'un instant, pour `--since` de ccusage. */
+const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10).replace(/-/g, '')
+
+/**
+ * Relève les prix des modèles par ccusage (`claude session --json`), au plus une fois par jour ;
+ * second essai `--offline` si le barème en ligne échoue. Hors d'un hook d'outil : ccusage prend
+ * quelques secondes. Un échec garde les prix d'avant (ou aucun) jusqu'au lendemain.
+ */
+const refreshPrices = async ($: any) => {
+  if (isPricing) return
+  isPricing = true
+  try {
+    const now = await $.clock.now()
+    let kept: KeptPrices | null = await read($, pricesAtom)
+    let isKnown = kept !== null
+    if (kept === null) {
+      await quietly(async () => {
+        const stored = (await $.store.get(PRICES_KEY)) as KeptPrices | undefined
+        isKnown = true
+        if (stored && typeof stored.at === 'number' && stored.prices && typeof stored.prices === 'object') kept = stored
+      })
+    }
+    if (kept !== null && now - (kept.triedAt ?? kept.at) < DAY_MS) {
+      await update($, pricesAtom, () => kept)
+      return
+    }
+    // L'essai compte avant même d'aboutir : un échec ne se retente que le lendemain.
+    const tried: KeptPrices = { at: kept?.at ?? 0, prices: kept?.prices ?? {}, triedAt: now }
+    await update($, pricesAtom, () => tried)
+    // Des prix gardés qu'on n'a pas pu relire ne s'écrasent pas.
+    if (isKnown) await quietly(() => $.store.set(PRICES_KEY, tried))
+    const args = ['-y', CCUSAGE, 'claude', 'session', '--json', '--since', ymd(now - PRICES_SINCE_MS)]
+    const once = async (offline: boolean): Promise<unknown> => {
+      const res = await runNpx($, offline ? [...args, '--offline'] : args)
+      if (res.exitCode !== 0) throw new Error(res.stderr.split('\n')[0] || `code ${res.exitCode}`)
+      // Ce qui précède la première accolade (messages de npx) est ignoré, comme dans stats-board.
+      const start = res.stdout.indexOf('{')
+      const end = res.stdout.lastIndexOf('}')
+      if (start < 0 || end < start) throw new Error('sortie illisible (pas de JSON)')
+      return JSON.parse(res.stdout.slice(start, end + 1))
+    }
+    let json: unknown
+    try {
+      json = await once(false)
+    } catch {
+      json = await once(true)
+    }
+    const value: KeptPrices = { at: now, prices: pricesFromCcusage(json), triedAt: now }
+    await update($, pricesAtom, () => value)
+    await quietly(() => $.store.set(PRICES_KEY, value))
+    $.ui.invalidate('ui.render')
+  } catch {
+    // ccusage absent ou en échec : « coût indisponible », sans erreur.
+  } finally {
+    isPricing = false
+  }
+}
+
+// ─── Frise : segments et repères en direct ────────────────────────────────
+//
+// Chaque requête au modèle et chaque appel d'outil devient un segment daté de sa piste : celle
+// du sous-agent qui le fait (`agentId`), ou celle de la session (MAIN). Règles de l'essai du
+// ticket 01 : Réflexion du début de la requête au premier morceau de texte ou d'outil,
+// Rédaction le temps d'un bloc de texte, l'appel d'outil dès que le modèle l'écrit.
+
+/** La piste d'une boucle : celle du sous-agent, ou celle de la session (fil principal). */
+const laneOfLoop = (agentId: unknown): string => (typeof agentId === 'string' && agentId !== '' ? agentId : MAIN)
+
+/** Les appels dont le modèle a commencé l'écriture (morceau `tool`) : leur segment part de là. */
+const toolWritten = new Map<string, number>()
+/** Une demande d'autorisation en cours, par piste et par outil : le début de l'attente de la personne. */
+const permissionAt = new Map<string, number>()
+/** La durée hors autorisation de chaque appel (`classic.PostToolUse`). */
+const toolDurations = new Map<string, number>()
+/** Le dernier `classic.Stop` listait des tâches de fond : le repos qui suit est une attente. */
+let hasBackgroundWork = false
+
+const isModelSegment = (s: AgentSegment): boolean => s.k === 'think' || s.k === 'write'
+
+/** Un repère sur une piste ; un suivi raté ne gêne rien. */
+const markLane = ($: any, lane: string, mark: AgentMark) => quietly(() => commitRegistry($, reg => addRegistryMark(reg, lane, mark, mark.at)))
+
+/** La piste du lanceur d'un sous-agent (son parent, ou la session) et sa clé. */
+const launcherOf = async ($: any, agentId: string): Promise<{ lane: string; key: string } | null> => {
+  const reg: SessionRegistry | null = await read($, registryAtom)
+  const agent = reg?.agents.find(a => a.agentId === agentId)
+  return agent ? { lane: agent.parent ?? MAIN, key: agent.key } : null
+}
+
+/**
+ * Un appel d'outil devient un segment de sa piste : ouvert à son écriture par le modèle (ou à son
+ * départ), fermé à son retour. Une question posée est une attente de la personne ; une
+ * autorisation demandée coupe le segment par une attente de la personne (essai, point 5).
+ */
+const timedTool = async ($: any, e: any, inner: () => Promise<any>) => {
+  const lane = laneOfLoop(e.agentId)
+  const id = String(e.tool_use_id ?? '')
+  const tool = String(e.tool)
+  const written = toolWritten.get(id)
+  toolWritten.delete(id)
+  const startedAt = written ?? (await $.clock.now())
+  const arg = shortArg(tool, e as Record<string, unknown>)
+  const seg: AgentSegment = { k: tool === 'AskUserQuestion' ? 'waitPerson' : 'tool', s: startedAt, f: toolFamily(tool), t: tool }
+  if (arg !== undefined) seg.a = arg
+  await quietly(() => commitRegistry($, reg => openSegment(reg, lane, seg, startedAt)))
+  let ran: any
+  try {
+    ran = await inner()
+    return ran
+  } finally {
+    await quietly(async () => {
+      const end = await $.clock.now()
+      const permission = permissionAt.get(`${lane}|${tool}`)
+      permissionAt.delete(`${lane}|${tool}`)
+      const execMs = toolDurations.get(id)
+      toolDurations.delete(id)
+      const isError = ran === undefined || ran.isError === true || ran.deny !== undefined
+      // Un sous-agent rendu `completed` dans l'appel : le lanceur l'a attendu au premier plan.
+      const isForeground = tool === 'Agent' && (ran?.result as { status?: string } | undefined)?.status === 'completed'
+      const patch: Partial<AgentSegment> = {}
+      if (isError) patch.x = true
+      if (isForeground) patch.k = 'waitAgent'
+      await commitRegistry($, reg =>
+        closeToolCall(reg, lane, tool, { end, patch, start: startedAt, ...(permission !== undefined && execMs !== undefined ? { permission: { at: permission, execMs } } : {}) }),
+      )
+      if (isError && ran?.deny === undefined) await markLane($, lane, { k: 'fail', at: end })
+      if (!isError) {
+        const lines = linesOf(tool, e as Record<string, unknown>)
+        await commitRegistry($, reg => addLines(reg, lane, lines.added, lines.removed, end))
+      }
+      // Sur l'orchestrateur : les commits et les verdicts de tests, d'où qu'ils viennent.
+      if ((tool === 'Bash' || tool === 'PowerShell') && ran !== undefined && ran.deny === undefined) {
+        const record = ran.result as { stdout?: unknown } | undefined
+        const out = typeof record?.stdout === 'string' ? record.stdout : typeof ran.text === 'string' ? ran.text : ''
+        const signals = commandSignals(String(e.command ?? ''), ran.isError !== true, out)
+        if (signals.commit !== undefined) await markLane($, MAIN, { k: 'commit', at: end })
+        if (signals.test !== undefined) await markLane($, MAIN, { k: 'test', at: end, ok: signals.test })
+      }
+    })
   }
 }
 
@@ -887,7 +2937,15 @@ const INSTRUCTIONS_IN_PROMPT_FR = `ses consignes dans un fichier dont le chemin 
  * aussi les autres groupes (il ignore la base qu'on lui donne). Les failles vont au compte rendu.
  */
 const linkedSecurityReview = (scope: string): string =>
-  `la confier à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), en lecture seule, avec pour seul périmètre ${scope} et pour critères ceux de /security-review (${SECURITY_CRITERIA}), ${INSTRUCTIONS_IN_PROMPT_FR} ; ne pas lancer /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes ; ne pas corriger ce qu'il trouve : les failles vont dans le compte rendu`
+  `la confier à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode), en lecture seule, avec pour seul périmètre ${scope} et pour méthode ${securityMethodFr()}, ${INSTRUCTIONS_IN_PROMPT_FR} ; ne pas lancer /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes ; ne pas corriger ce qu'il trouve : les failles vont dans le compte rendu ; ${SECURITY_FIXES_FR}`
+
+/** Le fichier de méthode de la revue de sécurité, dit dans les consignes en français : cité, jamais recopié. */
+const securityMethodFr = (): string =>
+  `le fichier de méthode de la revue de sécurité, ${securityMethod} (il le suit : catégories, exclusions, une recherche puis une vérification par faille, seuil 8/10, format du rapport ; son chemin va dans le prompt du relecteur, à côté du fichier de consignes)`
+
+/** C5 a : la revue reste en lecture seule et rend des correctifs prêts, que la personne accepte en une ligne. */
+const SECURITY_FIXES_FR =
+  "chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt (ce qu'il change, le choix qu'il implique s'il y en a un), la liste « à surveiller » à part ; une réponse comme « corrige F1 et F3 » suffit : la session applique ces correctifs, les teste, les commite, puis envoie \"fixed\" à l'outil flow ; \"findings\" ne compte que les failles gardées"
 
 /**
  * Les choix déjà déclarés du parcours, à donner à une revue pour qu'elle ne les resignale pas : le
@@ -942,14 +3000,15 @@ const LINKED_GROUP_REVIEWER =
 
 /** Le même sous-agent relecteur, dit à Claude dans la discussion principale. */
 const securityReviewer = (scope: string): string =>
-  `launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort xhigh), read-only, limited to ${scope}, with these criteria, ${INSTRUCTIONS_IN_PROMPT}; never /security-review, which diffs against the default branch and rereads the other groups too. The subagent fixes nothing: tell the user its findings plainly, they decide on their fixes (fix one only once they agree; create a tracker task for each real finding left unfixed)`
+  `launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort high or xhigh as the criterion of the method file decides), read-only, limited to ${scope}; give it in its prompt the path of the security review method file, ${securityMethod} (it follows it: categories, exclusions, one search then one verification subtask per finding, threshold 8/10, report format), next to ${INSTRUCTIONS_IN_PROMPT}; never /security-review, which diffs against the default branch and rereads the other groups too. The subagent fixes nothing: each kept finding comes numbered (F1, F2…) with a ready fix (what it changes, and the choice it implies if any), the "to watch" list apart. Tell the user plainly; they decide: a reply such as "fix F1 and F3" is enough: apply those fixes, test them, commit them, then send "fixed". Create a tracker task for each kept finding left unfixed`
 
 /** La revue de sécurité après la revue d'un groupe : Claude juge, puis la lance lui-même. */
 const securityAdvice = (isRepo: boolean): string =>
-  `- Security review: in the same message as the review of a finished group (/code-review high --fix, or high for a sensitive group), since it is read-only and does not wait for the fixes, judge whether a security review is worth it (its changes touch ${SECURITY_CRITERIA}). Tell the user in one line, with the reason, and send {"security": {"group": "<id>", "advised": true|false, "why": "<short reason, in the user's language>"}}. If it is worth it, ${securityReviewer(isRepo ? "git diff <group base>..HEAD (<group base>: the commit before the group's first ticket)" : `the group's diff (${NO_GIT_GROUP_FIXED_POINT}; new files read whole)`)}. Once the group review's fixes are committed, have it (or a new reviewer) read the diff of those fixes only, with the same criteria. Then send {"security": {"group": "<id>", "findings": <real findings>, "fixed": <fixed>}}.`
+  `- Security review: in the same message as the review of a finished group (/code-review high --fix, or high for a sensitive group), since it is read-only and does not wait for the fixes, judge whether a security review is worth it (its changes touch ${SECURITY_CRITERIA}). Tell the user in one line, with the reason, and send {"security": {"group": "<id>", "advised": true|false, "why": "<short reason, in the user's language>"}}. If it is worth it, ${securityReviewer(isRepo ? "git diff <group base>..HEAD (<group base>: the commit before the group's first ticket)" : `the group's diff (${NO_GIT_GROUP_FIXED_POINT}; new files read whole)`)}. Once the group review's fixes are committed, have it (or a new reviewer) read the diff of those fixes only, with the same criteria. Then send {"security": {"group": "<id>", "findings": <kept findings, not the to-watch list>, "fixed": <fixed>}}.`
 
 /** Le même avis pour un parcours sans groupes (relecture de branche, chasse au bug, TDD) : il porte sur tout le lot. */
-const LOT_SECURITY_ADVICE = `- Security review: once this review is done and its fixes are in, judge whether a security review is worth it on these changes (they touch ${SECURITY_CRITERIA}). Tell the user in one line, with the reason, and send {"security": {"advised": true|false, "why": "<short reason, in the user's language>"}}, without "group": it covers the whole run. If it is worth it, ${securityReviewer('the changes this review covered')}. Then send {"security": {"findings": <real findings>, "fixed": <fixed>}}.`
+const lotSecurityAdvice = (): string =>
+  `- Security review: once this review is done and its fixes are in, judge whether a security review is worth it on these changes (they touch ${SECURITY_CRITERIA}). Tell the user in one line, with the reason, and send {"security": {"advised": true|false, "why": "<short reason, in the user's language>"}}, without "group": it covers the whole run. If it is worth it, ${securityReviewer('the changes this review covered')}. Then send {"security": {"findings": <kept findings, not the to-watch list>, "fixed": <fixed>}}.`
 
 /** La revue d'un groupe, lancée par la personne depuis la ligne du groupe : ce qu'elle doit savoir. */
 const groupReviewNote = (isRepo: boolean): string =>
@@ -965,7 +3024,7 @@ const FRAMING_SKILLS = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-q
 /** Les consignes où une revue reçoit le fichier des choix déclarés. */
 const REVIEW_NOTES = new Set(['implement', 'implement-spec', 'final-review', 'code-review', 'branch-review'])
 
-const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, session?: string, decidedAt?: string | null): string => {
+const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, session?: string, decidedAt?: string | null, failedAgents = 0): string => {
   const def = SKILLS[id]!
   const lines = [
     '',
@@ -1032,22 +3091,22 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     if (isBugPass(run, session)) lines.push(bugPassNote(isRepo))
     else {
       if (hasGroups) lines.push(groupReviewNote(isRepo))
-      lines.push(hasGroups ? securityAdvice(isRepo) : LOT_SECURITY_ADVICE)
+      lines.push(hasGroups ? securityAdvice(isRepo) : lotSecurityAdvice())
     }
   }
   if (id === 'branch-review') {
     lines.push('- The review target and options (a PR number, a branch, --fix, --comment) are in the command arguments; if none is given, review the current branch against its base.')
-    lines.push(LOT_SECURITY_ADVICE)
+    lines.push(lotSecurityAdvice())
   }
   // La phase « Revue » de Chasse au bug, TDD ou Revue de code (le /code-review de Matt), sans groupes.
-  if (id === 'code-review' && currentPhase(run).skill === 'code-review' && !hasGroups) lines.push(LOT_SECURITY_ADVICE)
+  if (id === 'code-review' && currentPhase(run).skill === 'code-review' && !hasGroups) lines.push(lotSecurityAdvice())
   // Un /security-review tapé à la main : il relit toute la branche ; son résultat se rend pareil.
   if (id === 'security-review') {
-    lines.push('- When the security review is done, tell the user plainly what it found. Fix a finding only once the user agrees; create a tracker task for each real finding left unfixed. Then send {"security": {"group": "<id>", "findings": <real findings>, "fixed": <fixed>}}.')
+    lines.push('- When the security review is done, tell the user plainly what it found. Fix a finding only once the user agrees; create a tracker task for each real finding left unfixed. Then send {"security": {"group": "<id>", "findings": <kept findings, not the to-watch list>, "fixed": <fixed>}}.')
   }
   if (id === 'compte-rendu') {
     lines.push('- What the dashboard knows about this run (start from it, then check and complete it with git and the tracker):')
-    lines.push(...reportFacts(run).map(l => `  ${l}`))
+    lines.push(...reportFacts(run, failedAgents).map(l => `  ${l}`))
     lines.push('- When the report is written: {"step": "validate"}. Never send {"complete": true}: the user validates the report from the dashboard (✓ Valider le rapport). If the user asks for changes, rewrite the report and send {"step": "validate"} again.')
   }
   const advice = CODE_SKILLS.has(id) ? syncAdvice(sync) : null
@@ -1355,6 +3414,7 @@ const LINKED_NO_GIT_GROUP_POINT =
  * /implement selon le CLAUDE.md du projet, puis rend compte ; Claude rend les statuts ici.
  */
 const delegationText = async ($: any, run: Run, views: readonly GroupView[], isFirst = false, decidedAt: string | null = null): Promise<string> => {
+  noteSecurityMethod($)
   // Sans git, pas de worktree possible : les sessions travaillent dans ce dossier.
   const isRepo = await measureRepo($)
   const implement = `/${await commandFor($, 'implement')}`
@@ -1420,6 +3480,7 @@ const delegateGroups = async ($: any, ids: readonly string[]) => {
  * session, sur les commits du groupe lus sur le code actuel, puis marque le groupe relu.
  */
 const reviewLinkedGroup = async ($: any, groupId: string) => {
+  noteSecurityMethod($)
   const run = activeRun(await read($, boardAtom))
   const group = run?.groups?.find(g => g.id === groupId)
   if (!run || !group?.delegated) return
@@ -1465,10 +3526,11 @@ const securityReview = async ($: any, id: string) => {
         ? `les commits du groupe ${group.id}, lus sur le code actuel`
         : `git diff <base>..HEAD (<base> : le commit d'avant le premier ticket du groupe ${group.id})`
   const what = group ? `du groupe ${group.id} (${group.name})` : 'de ce parcours'
-  const send = group ? `{"security": {"group": "${group.id}", "findings": <failles réelles>, "fixed": <corrigées>}}` : '{"security": {"findings": <failles réelles>, "fixed": <corrigées>}}'
+  const send = group ? `{"security": {"group": "${group.id}", "findings": <failles gardées>, "fixed": <corrigées>}}` : '{"security": {"findings": <failles gardées>, "fixed": <corrigées>}}'
+  noteSecurityMethod($)
   const text =
-    `Lance la revue de sécurité ${what} : confie-la à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort xhigh), en lecture seule, avec pour seul périmètre ${scope} et pour critères ${SECURITY_CRITERIA}, ${INSTRUCTIONS_IN_PROMPT_FR} ; ` +
-    `pas /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes. Le sous-agent ne corrige rien : dis-moi les failles trouvées, je décide de leur correction. Puis envoie à l'outil flow ${send}.`
+    `Lance la revue de sécurité ${what} : confie-la à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode), en lecture seule, avec pour seul périmètre ${scope}, pour critères ${SECURITY_CRITERIA} et pour méthode ${securityMethodFr().replace('le fichier de méthode', 'le chemin du fichier de méthode')}, ${INSTRUCTIONS_IN_PROMPT_FR} ; ` +
+    `pas /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes. Le sous-agent ne corrige rien : chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt (ce qu'il change, le choix qu'il implique s'il y en a un), je décide de leur correction ; une réponse comme « corrige F1 et F3 » suffit : applique-les, teste-les, commite-les. Puis envoie à l'outil flow ${send} (les failles gardées seulement, pas la liste « à surveiller »).`
   let isFilled = false
   await quietly(async () => {
     isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
@@ -1744,7 +3806,26 @@ const launchParallel = async ($: any, at = 0) => {
 }
 
 const actionsFor = ($: any): Actions => ({
-  setTab: (tab: Tab) => update($, uiAtom, ui => ({ ...ui, tab })),
+  setTab: async (tab: Tab) => {
+    await update($, uiAtom, ui => ({ ...ui, tab }))
+    // L'onglet Agents s'ouvre : le rattrapage de la session affichée, l'historique et, la première
+    // fois, la reprise des parcours existants (Q14), sans attendre.
+    if (tab === 'agents') {
+      void quietly(() => catchUpShown($))
+      void quietly(() => refreshHistory($))
+      void quietly(() => rebuildPastRuns($))
+    }
+  },
+  toggleAgentsHistory: () => update($, uiAtom, ui => ({ ...ui, isAgentsHistoryOpen: ui.isAgentsHistoryOpen !== true })),
+  chooseAgentsHistory: async (key: string) => {
+    await update($, uiAtom, ui => ({ ...ui, agentsHistory: key === 'now' ? undefined : key, isAgentsHistoryOpen: false, agentsSession: undefined, agentCard: undefined, isPromptOpen: false, confirmForget: undefined }))
+    await quietly(() => refreshHistory($))
+  },
+  openAgentsOf: async (runId: string) => {
+    await update($, uiAtom, ui => ({ ...ui, tab: 'agents' as const, agentsHistory: `run:${runId}`, isAgentsHistoryOpen: false, agentsSession: undefined, agentCard: undefined, isPromptOpen: false }))
+    await quietly(() => refreshHistory($))
+    void quietly(() => rebuildPastRuns($))
+  },
   launch: (skill: string, args?: string) => launch($, skill, args),
   prepare: (skill: string, args?: string) => prepare($, skill, args),
   fillCommand: (command: string) => fillCommand($, command),
@@ -1759,13 +3840,19 @@ const actionsFor = ($: any): Actions => ({
   resume: async (id: string) => {
     const now = await $.clock.now()
     await commit($, board => resumeRun(board, id, now))
-    await update($, uiAtom, ui => ({ ...ui, tab: 'flow' }))
+    await update($, uiAtom, ui => ({ ...ui, tab: 'flow' as const }))
   },
   drop: async (id: string) => {
     const now = await $.clock.now()
-    await commit($, board => dropRun(board, id, now))
-    await update($, uiAtom, ui => ({ ...ui, confirmDrop: undefined }))
+    const run = ((await read($, boardAtom)) as Board | null)?.runs.find(r => r.id === id)
+    await update($, uiAtom, ui => ({ ...ui, confirmDrop: undefined, ...(ui.agentsHistory === `run:${id}` ? { agentsHistory: undefined } : {}) }))
+    // « Définitivement » : ses agents, ses sessions liées, son relais et ses choix (Q6 a1, S3) ; les
+    // traces d'abord, et le parcours ne quitte le board qu'une fois elles posées (S24).
+    if (run) await quietly(() => eraseRun($, run))
+    else await commit($, board => dropRun(board, id, now))
   },
+  askForget: (key: string) => update($, uiAtom, ui => ({ ...ui, confirmForget: ui.confirmForget === key ? undefined : key })),
+  forget: (id: string) => quietly(() => forgetSession($, id)),
   archive: async (id: string) => {
     const now = await $.clock.now()
     await commit($, board => archiveRun(board, id, now))
@@ -1816,7 +3903,6 @@ const actionsFor = ($: any): Actions => ({
   toggleLog: () => update($, uiAtom, ui => ({ ...ui, showAllLog: !ui.showAllLog })),
   toggleItems: () => update($, uiAtom, ui => ({ ...ui, showAllItems: !ui.showAllItems })),
   toggleArtifacts: () => update($, uiAtom, ui => ({ ...ui, showAllArtifacts: !ui.showAllArtifacts })),
-  toggleAgents: () => update($, uiAtom, ui => ({ ...ui, showAllAgents: !ui.showAllAgents })),
   toggleDecided: () => update($, uiAtom, ui => ({ ...ui, showDecided: !ui.showDecided })),
   toggleFound: () => update($, uiAtom, ui => ({ ...ui, showFound: !ui.showFound })),
   toggleHideFound: () => update($, uiAtom, ui => ({ ...ui, hideFound: !ui.hideFound })),
@@ -1843,6 +3929,19 @@ const actionsFor = ($: any): Actions => ({
     await syncStatus($, await read($, boardAtom))
     await quietly(() => $.ui.toast('Bandeau masqué : /flow show pour le réafficher'))
   },
+  toggleAgentsRange: () => update($, uiAtom, ui => ({ ...ui, agentsRange: ui.agentsRange === 'hour' ? ('all' as const) : ('hour' as const) })),
+  selectAgentsSession: async (key: string | null) => {
+    await update($, uiAtom, ui => ({ ...ui, agentsSession: key ?? undefined, agentCard: undefined, isPromptOpen: false }))
+    void quietly(() => catchUpShown($))
+  },
+  toggleAgentCard: (key: string) => update($, uiAtom, ui => ({ ...ui, agentCard: ui.agentCard === key ? undefined : key, isPromptOpen: false })),
+  togglePrompt: () => update($, uiAtom, ui => ({ ...ui, isPromptOpen: ui.isPromptOpen !== true })),
+  toggleWorkflow: (id: string) =>
+    update($, uiAtom, ui => {
+      const open = ui.openWorkflows ?? []
+      return { ...ui, openWorkflows: open.includes(id) ? open.filter(x => x !== id) : [...open, id] }
+    }),
+  openAgentTranscript: (agentId: string) => quietly(() => $.ui.view({ agentId })),
   openPane: async () => {
     await update($, uiAtom, ui => ({ ...ui, isPaneDismissed: false }))
     await quietly(() => $.ui.open({ id: PANE, title: PANE_TITLE }))
@@ -1987,6 +4086,12 @@ const readView = async ($: any): Promise<View> => {
     sync,
     now: await $.clock.now(),
     relay: await read($, relayAtom),
+    agents: await read($, registryAtom),
+    linked: (await read($, linkedAtom)).map(session => ({ session, reg: linkedRegistryOf(session.session) })),
+    history: { entries: await read($, historyAtom), shown: historyShown },
+    agentsAlert: await read($, registryAlertAtom),
+    erasing: [...erasingNow].map(([key, title]) => ({ key, title })),
+    agentPrices: (await read($, pricesAtom))?.prices ?? null,
   }
 }
 
@@ -2002,13 +4107,24 @@ const tick = async ($: any) => {
   if (ticks % 5 === 0) {
     await pull($)
     await pullRelay($, (await read($, boardAtom)) ?? board)
+    await quietly(() => refreshLinked($))
+    await quietly(() => migrateRunAgents($))
+    const ui = await read($, uiAtom)
+    if (ui.tab === 'agents' && ui.agentsHistory !== undefined) await quietly(() => refreshHistory($))
+    if (ui.tab === 'agents') await quietly(() => reconcileErased($))
   }
   const run = activeRun(board)
-  if (!run) return
+  // Une session liée au travail fait aussi avancer les durées de l'onglet Agents.
+  const hasAgentsAtWork = runningOf(await read($, registryAtom)).length > 0 || (await read($, linkedAtom)).some(l => l.state === 'working')
+  if (!run) {
+    // Sans parcours, l'onglet Agents garde ses durées vivantes tant qu'un sous-agent travaille.
+    if (hasAgentsAtWork && ticks % 5 === 0) $.ui.invalidate('ui.render')
+    return
+  }
   if (ticks % 300 === 0 && CODE_SKILLS.has(currentPhase(run).skill)) void checkRemote($, true)
   const live = await read($, liveAtom)
   // Durées vivantes : toutes les 5 s pendant le travail, toutes les 30 s au repos.
-  const isBusy = live.mode === 'working' || run.agents.some(a => a.status === 'running')
+  const isBusy = live.mode === 'working' || hasAgentsAtWork
   if (ticks % (isBusy ? 5 : 30) === 0) $.ui.invalidate('ui.render')
 }
 
@@ -2054,7 +4170,7 @@ const runFlow = async ($: any, e: { args: string }) => {
   await syncStatus($, board)
   await quietly(() => $.ui.open({ id: PANE, title: PANE_TITLE }))
   const run = activeRun(board)
-  return { text: run ? summaryOf(run).replace(/^Dashboard: /, 'Parcours : ') : noActiveFrench(board ?? (await read($, boardAtom))) }
+  return { text: run ? summaryOf(run).replace(/^Dashboard: /, 'Parcours : ') : noActiveFrench((board ?? (await read($, boardAtom)))!) }
 }
 
 // `/flow` reste utilisable tapée en entier, mais sort du menu : `/flow-board:flow`, déjà là
@@ -2086,6 +4202,9 @@ export const register: Register = on => {
     isReloadToAnnounce = !isAfterClear && (await read($, boardAtom)) !== null
     isAfterClear = false
     await ensureBoard($)
+    await quietly(() => ensureRegistry($))
+    // S1 : les anciens sous-agents des parcours rejoignent le registre, puis quittent le board.
+    await quietly(() => migrateRunAgents($))
     // /implement-spec a besoin d'un dépôt git (worktrees, branche d'intégration) : le panneau ne le propose pas ailleurs.
     await quietly(async () => {
       const repo = await $.session.repo()
@@ -2093,6 +4212,8 @@ export const register: Register = on => {
     })
     $.clock.every(1000, () => void tick($))
     scheduleCheck($, true)
+    // Les prix des modèles, hors du démarrage : ccusage prend quelques secondes.
+    $.clock.after(1000, () => void refreshPrices($))
     return next(e)
   })
 
@@ -2195,114 +4316,232 @@ export const register: Register = on => {
     if (run && CODE_SKILLS.has(currentPhase(run).skill)) scheduleCheck($, true)
     // `/code-review` qui vient d'ouvrir (ou de relancer) une relecture de branche en reçoit la consigne.
     const noteId = id === 'final-review' && run && currentPhase(run).skill === 'branch-review' ? 'branch-review' : id
-    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)))}` } : result
+    // Les sous-agents de ce parcours en échec, d'après les registres (S1 : plus dans le parcours) :
+    // celui de cette discussion et ceux de ses sessions liées (Q-c), pour le seul compte rendu.
+    const failedAgents = run && noteId === 'compte-rendu' ? await failedOfRun($, run) : 0
+    noteSecurityMethod($)
+    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents)}` } : result
   })
 
   // Ce qui se passe pendant un parcours : sous-agents, fichiers, commandes, Asana, questions.
-  on('tool.call', async ($, e, next) => {
-    if (e.tool === TOOL || e.tool === 'Skill') return next(e)
-    const board0: Board | null = await read($, boardAtom)
-    if (board0?.delegate) return relayTool($, e, next)
-    if (!activeRun(board0)) return next(e)
-
-    // Avant de modifier le code : /project:sync, demandé une fois quand le distant a avancé.
-    if ((e.tool === 'Write' || e.tool === 'Edit' || e.tool === 'NotebookEdit') && e.agentId === undefined) {
-      const path = String((e as { file_path?: unknown; notebook_path?: unknown }).file_path ?? (e as { notebook_path?: unknown }).notebook_path ?? '')
-      const reason = await syncGate($, path)
-      if (reason) return { deny: reason }
-    }
-
-    // Une session liée lancée pendant que des éléments ou des groupes lui sont confiés : son id est
-    // gardé, et va au groupe que son titre nomme (« Groupe A · … »).
-    if (e.tool === START_SESSION) {
-      const ran = await next(e)
-      if (ran.deny !== undefined || ran.isError === true) return ran
-      const session = /\blocal_[A-Za-z0-9_-]+/.exec(JSON.stringify(ran.result ?? ran.text ?? ''))?.[0]
-      if (session) {
-        const now = await $.clock.now()
-        const asked = e as { title?: unknown; name?: unknown }
-        const title = `${String(asked.title ?? '')} ${String(asked.name ?? '')}`
-        // Une session prise par un groupe n'est pas celle des éléments confiés.
-        if (!(await commit($, board => linkGroupSession(board, title, session, now)))) await commit($, board => linkSession(board, session, now, title))
-      }
-      return ran
-    }
-
-    if (e.tool === 'Agent') {
-      const key = e.tool_use_id
-      const startedAt = await $.clock.now()
-      const isBackground = e.run_in_background !== false
-      agentCalls.add(key)
-      await commit($, board =>
-        applyAgentStart(board, { key, name: e.description, model: e.model, type: e.subagent_type, isBackground }, startedAt),
-      )
-      const ran = await Promise.resolve(next(e)).finally(() => agentCalls.delete(key))
-      const failed = ran.deny !== undefined || ran.isError === true
-      // Un lancement refusé (par la personne ou un hook) ou interrompu n'est pas un échec du sous-agent.
-      const isCancelled = ran.deny !== undefined || (ran.isError === true && CANCELLED.test(String(ran.text ?? ran.result ?? '')))
-      const record = failed ? undefined : (ran.result as { agentId?: string; resolvedModel?: string; status?: string } | undefined)
-      // Un sous-agent rendu `completed` est fini, même demandé en fond : son SubagentStop est passé
-      // avant que son id soit connu, et ne le marquera plus.
-      const isFinished = record?.status === 'completed' || (record?.status === undefined && !isBackground)
-      const endedAt = await $.clock.now()
-      await commit($, board =>
-        applyAgentEnd(board, key, { agentId: record?.agentId, model: record?.resolvedModel, isFailed: failed, isFinished, isCancelled }, endedAt),
-      )
-      return ran
-    }
-
-    if (e.tool === 'AskUserQuestion') {
-      await setLive($, 'waiting', null)
-      const ran = await next(e)
-      await setLive($, 'working', null)
-      const answeredAt = await $.clock.now()
-      await commit($, board => applyUserAnswer(board, answeredAt))
-      return ran
-    }
-
-    const ran = await next(e)
-    if (ran.deny !== undefined) return ran
-    try {
-      const now = await $.clock.now()
-      const isOk = ran.isError !== true
-      if (e.tool === 'Write' && isOk) {
-        await commit($, board => applyFileChange(board, { path: e.file_path, content: e.content }, now))
-      } else if (e.tool === 'Edit' && isOk) {
-        await commit($, board => applyFileChange(board, { path: e.file_path, before: e.old_string, after: e.new_string }, now))
-      } else if (e.tool === 'Bash' || e.tool === 'PowerShell') {
-        // Après un fetch, pull, rebase ou merge (le travail de /project:sync), le retard est remesuré.
-        if (/\bgit\s+(?:fetch|pull|rebase|merge)\b/.test(String(e.command ?? ''))) scheduleCheck($, false)
-        const record = ran.result as { stdout?: unknown; backgroundTaskId?: unknown } | undefined
-        if (typeof record?.backgroundTaskId !== 'string') {
-          const out = typeof record?.stdout === 'string' ? record.stdout : typeof ran.text === 'string' ? ran.text : ''
-          await commit($, board => applyCommand(board, String(e.command ?? ''), isOk, out, now))
-          // Le CLI lance ses sessions liées par `claude --bg` : leur id va au groupe que leur titre nomme.
-          for (const launched of backgroundLaunches(String(e.command ?? ''), out)) {
-            if (!(await commit($, board => linkGroupSession(board, launched.title, launched.id, now)))) await commit($, board => linkSession(board, launched.id, now, launched.title))
+  on('tool.call', async ($, e, next) =>
+    timedTool($, e, async () => {
+      if (e.tool === TOOL || e.tool === 'Skill') return next(e)
+      // Les sous-agents d'abord, dans toute session : avant la sortie vers le relais d'une session
+      // liée et celle de l'absence de parcours.
+      if (e.tool === 'Agent') return trackAgentCall($, e, next)
+      // Les sessions liées lancées ici, dans toute session : avant les mêmes sorties.
+      const isLaunch = e.tool === START_SESSION || e.tool === 'Bash' || (e.tool as string) === 'PowerShell'
+      const nextNoting = isLaunch
+        ? async (ev: any) => {
+            const ran = await next(ev)
+            await quietly(() => noteLinkedLaunches($, e, ran))
+            return ran
           }
-        }
-      } else if (e.tool.endsWith('__update_tasks') && isOk) {
-        await commit($, board => applyAsana(board, (e as unknown as { tasks?: unknown }).tasks, now))
-      } else if (e.tool.endsWith('__create_tasks') && isOk) {
-        // Les tâches créées en route : « Trouvé en route », hors du lot. `text` (ce que lit le
-        // modèle) est toujours là depuis le cœur ; `result` a la forme propre à chaque outil.
-        await commit($, board => applyCreatedTasks(board, (e as unknown as { tasks?: unknown }).tasks, ran.text ?? ran.result, now))
+        : next
+      const board0: Board | null = await read($, boardAtom)
+      if (board0?.delegate) return relayTool($, e, nextNoting)
+      if (!activeRun(board0)) return nextNoting(e)
+
+      // Avant de modifier le code : /project:sync, demandé une fois quand le distant a avancé.
+      if ((e.tool === 'Write' || e.tool === 'Edit' || e.tool === 'NotebookEdit') && e.agentId === undefined) {
+        const path = String((e as { file_path?: unknown; notebook_path?: unknown }).file_path ?? (e as { notebook_path?: unknown }).notebook_path ?? '')
+        const reason = await syncGate($, path)
+        if (reason) return { deny: reason }
       }
-    } catch {
-      // Un signal mal lu ne doit jamais gêner l'outil.
-    }
-    return ran
-  })
+
+      // Une session liée lancée pendant que des éléments ou des groupes lui sont confiés : son id est
+      // gardé, et va au groupe que son titre nomme (« Groupe A · … »).
+      if (e.tool === START_SESSION) {
+        const ran = await nextNoting(e)
+        if (ran.deny !== undefined || ran.isError === true) return ran
+        const session = /\blocal_[A-Za-z0-9_-]+/.exec(JSON.stringify(ran.result ?? ran.text ?? ''))?.[0]
+        if (session) {
+          const now = await $.clock.now()
+          const asked = e as { title?: unknown; name?: unknown }
+          const title = `${String(asked.title ?? '')} ${String(asked.name ?? '')}`
+          // Une session prise par un groupe n'est pas celle des éléments confiés.
+          if (!(await commit($, board => linkGroupSession(board, title, session, now)))) await commit($, board => linkSession(board, session, now, title))
+        }
+        return ran
+      }
+
+      if (e.tool === 'AskUserQuestion') {
+        await setLive($, 'waiting', null)
+        const ran = await next(e)
+        await setLive($, 'working', null)
+        const answeredAt = await $.clock.now()
+        await commit($, board => applyUserAnswer(board, answeredAt))
+        return ran
+      }
+
+      const ran = await nextNoting(e)
+      if (ran.deny !== undefined) return ran
+      try {
+        const now = await $.clock.now()
+        const isOk = ran.isError !== true
+        if (e.tool === 'Write' && isOk) {
+          await commit($, board => applyFileChange(board, { path: e.file_path, content: e.content }, now))
+        } else if (e.tool === 'Edit' && isOk) {
+          await commit($, board => applyFileChange(board, { path: e.file_path, before: e.old_string, after: e.new_string }, now))
+        } else if (e.tool === 'Bash' || (e.tool as string) === 'PowerShell') {
+          // PowerShell n'existe pas dans tous les builds : sa commande se lit sans le type de l'outil.
+          const command = String((e as { command?: unknown }).command ?? '')
+          // Après un fetch, pull, rebase ou merge (le travail de /project:sync), le retard est remesuré.
+          if (/\bgit\s+(?:fetch|pull|rebase|merge)\b/.test(command)) scheduleCheck($, false)
+          const record = ran.result as { stdout?: unknown; backgroundTaskId?: unknown } | undefined
+          if (typeof record?.backgroundTaskId !== 'string') {
+            const out = typeof record?.stdout === 'string' ? record.stdout : typeof ran.text === 'string' ? ran.text : ''
+            await commit($, board => applyCommand(board, command, isOk, out, now))
+            // Le CLI lance ses sessions liées par `claude --bg` : leur id va au groupe que leur titre nomme.
+            for (const launched of backgroundLaunches(command, out)) {
+              if (!(await commit($, board => linkGroupSession(board, launched.title, launched.id, now)))) await commit($, board => linkSession(board, launched.id, now, launched.title))
+            }
+          }
+        } else if (e.tool.endsWith('__update_tasks') && isOk) {
+          await commit($, board => applyAsana(board, (e as unknown as { tasks?: unknown }).tasks, now))
+        } else if (e.tool.endsWith('__create_tasks') && isOk) {
+          // Les tâches créées en route : « Trouvé en route », hors du lot. `text` (ce que lit le
+          // modèle) est toujours là depuis le cœur ; `result` a la forme propre à chaque outil.
+          await commit($, board => applyCreatedTasks(board, (e as unknown as { tasks?: unknown }).tasks, ran.text ?? ran.result, now))
+        }
+      } catch {
+        // Un signal mal lu ne doit jamais gêner l'outil.
+      }
+      return ran
+    }),
+  )
 
   on('classic.SubagentStop', async ($, e, next) => {
-    const now = await $.clock.now()
-    await commit($, board => applySubagentStop(board, e.agent_id, now))
+    await stopAgentHere($, e.agent_id)
+    await quietly(() => catchUpAgent($, e.agent_id, (e as unknown as { agent_transcript_path?: unknown }).agent_transcript_path))
+    await noteTranscript($, e)
+    return next(e)
+  })
+
+  // Le premier lancement d'un id donne son identité ; un suivant le réveille (notification d'une
+  // de ses tâches de fond) : il repasse au travail.
+  on('agent.spawn', async ($, e, next) => {
+    const result = await next(e)
+    const agentId = (result as { agentId?: unknown } | undefined)?.agentId
+    if (typeof agentId !== 'string' || agentId === '') return result
+    await quietly(async () => {
+      const now = await $.clock.now()
+      const spawned = e as unknown as Record<string, unknown>
+      const text = (k: string): string | undefined => (typeof spawned[k] === 'string' && spawned[k] !== '' ? (spawned[k] as string) : undefined)
+      const run = agentRunOf(await read($, boardAtom))
+      // Un agent de Workflow : `workflow` est `{ runId, agentIndex }`, et son `tool_use_id` est celui du Workflow.
+      const workflow = spawned.workflow as { runId?: unknown } | undefined
+      const workflowRun = workflow && typeof workflow === 'object' ? String(workflow.runId ?? '') || 'workflow' : undefined
+      const resolved = (result as { model?: unknown }).model
+      await commitRegistry($, reg =>
+        spawnRegistryAgent(
+          reg,
+          {
+            agentId,
+            callKey: workflowRun === undefined ? text('tool_use_id') : undefined,
+            parent: text('parentAgentId'),
+            name: text('description'),
+            subagentType: text('subagentType'),
+            model: text('model') ?? (typeof resolved === 'string' ? resolved : undefined),
+            isBackground: spawned.background !== false,
+            workflow: workflowRun,
+            run,
+            isTeammate: spawned.teammate === true,
+          },
+          agentCalls,
+          now,
+        ),
+      )
+      // Lancé dans ce processus : la liste du moteur pourra le clore (S9).
+      const entry = (await read($, registryAtom))?.agents.find(a => a.agentId === agentId)
+      if (entry) await ownAgent($, entry.key)
+    })
+    return result
+  })
+
+  // Le chemin du transcript de la session, relevé tel quel pour l'en-tête du registre.
+  on('classic.Stop', async ($, e, next) => {
+    await noteTranscript($, e)
+    // Des tâches de fond encore en cours à la fin du tour : le repos qui suit est une attente.
+    const tasks = (e as unknown as { background_tasks?: unknown }).background_tasks
+    hasBackgroundWork = Array.isArray(tasks) && tasks.length > 0
+    return next(e)
+  })
+
+  // Une requête au modèle, de la session ou d'un sous-agent : Réflexion jusqu'au premier morceau
+  // de texte ou d'outil, Rédaction le temps d'un bloc de texte ; l'écriture d'un appel d'outil
+  // ouvre son segment (essai du ticket 01, points 3 et 4 : moins d'une milliseconde par réponse).
+  on('turn.step', async function* ($, e, next) {
+    const lane = laneOfLoop(e.agentId)
+    const startedAt = await $.clock.now()
+    await quietly(() => commitRegistry($, reg => openSegment(reg, lane, { k: 'think', s: startedAt }, startedAt)))
+    let phase: 'think' | 'write' | 'tool' = 'think'
+    const stream = next(e)
+    let result: any
+    try {
+      for await (const chunk of stream) {
+        if (chunk.kind === 'text' && phase !== 'write') {
+          const at = await $.clock.now()
+          await quietly(() => commitRegistry($, reg => openSegment(closeSegment(reg, lane, isModelSegment, at) ?? reg, lane, { k: 'write', s: at }, at)))
+          phase = 'write'
+        } else if (chunk.kind === 'tool') {
+          const at = await $.clock.now()
+          toolWritten.set(chunk.id, at)
+          if (phase !== 'tool') await quietly(() => commitRegistry($, reg => closeSegment(reg, lane, isModelSegment, at)))
+          phase = 'tool'
+        }
+        yield chunk
+      }
+      result = await stream.result
+    } finally {
+      // Fin normale, interruption ou erreur : la réflexion ou la rédaction se ferme ; les tokens
+      // de la réponse, son modèle et l'effort demandé s'ajoutent à la piste.
+      const endedAt = await $.clock.now()
+      const effort = e.effort === undefined ? undefined : String(e.effort)
+      await quietly(() =>
+        commitRegistry($, reg => {
+          const closed = closeSegment(reg, lane, isModelSegment, endedAt) ?? reg
+          return addUsage(closed, lane, (result?.usage ?? null) as StepUsage | null, effort, endedAt) ?? (closed === reg ? null : closed)
+        }),
+      )
+    }
+    return result
+  })
+
+  // Le début d'une demande d'autorisation, et la durée d'un outil hors autorisation.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const at = await $.clock.now()
+    const input = e as unknown as { tool_name?: unknown; agent_id?: unknown }
+    permissionAt.set(`${laneOfLoop(input.agent_id)}|${String(input.tool_name ?? '')}`, at)
+    return next(e)
+  })
+  on('classic.PostToolUse', async ($, e, next) => {
+    const input = e as unknown as { tool_use_id?: unknown; duration_ms?: unknown }
+    if (typeof input.tool_use_id === 'string' && typeof input.duration_ms === 'number') toolDurations.set(input.tool_use_id, input.duration_ms)
+    return next(e)
+  })
+
+  // La compaction se voit en direct (essai, point 9) : un repère sur l'orchestrateur.
+  on('session.compact', async ($, e, next) => {
+    await markLane($, MAIN, { k: 'compact', at: await $.clock.now() })
+    return next(e)
+  })
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await noteTranscript($, e)
+    return next(e)
+  })
+  on('classic.SessionStart', async ($, e, next) => {
+    await noteTranscript($, e)
     return next(e)
   })
 
   // Le tour d'un sous-agent (`agentId`) ne rend pas la main à Claude : seul le fil principal compte.
   on('turn.start', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
+    // Fin de l'attente d'une tâche de fond, s'il y en avait une.
+    const at = await $.clock.now()
+    await quietly(() => commitRegistry($, reg => closeSegment(reg, MAIN, s => s.k === 'waitBg', at)))
     await setLive($, 'working', null)
     await reconcileAgents($)
     return next(e)
@@ -2316,10 +4555,16 @@ export const register: Register = on => {
     const result = await next(e)
     // La fin du tour d'un sous-agent : sa réponse est rendue, il a fini.
     if (e.agentId !== undefined) {
-      const ended = await $.clock.now()
-      await commit($, board => applySubagentStop(board, e.agentId!, ended))
+      if (e.isAborted) await markLane($, e.agentId, { k: 'stop', at: await $.clock.now() })
+      await stopAgentHere($, e.agentId)
       return result
     }
+    // Le tour de la session est fini : ce qui restait ouvert se ferme ; interrompu, un repère ;
+    // des tâches de fond restent, une attente.
+    const endedAt = await $.clock.now()
+    await quietly(() => commitRegistry($, reg => closeOpen(reg, MAIN, endedAt, s => s.k === 'waitBg')))
+    if (e.isAborted) await markLane($, MAIN, { k: 'stop', at: endedAt })
+    if (hasBackgroundWork && !e.isAborted) await quietly(() => commitRegistry($, reg => openSegment(reg, MAIN, { k: 'waitBg', s: endedAt }, endedAt)))
     await reconcileAgents($)
     // Un message de la personne envoyé après la demande d'une session liée, et le tour fini sans la lancer : le panneau le dit.
     if (askedAt !== null) {
@@ -2360,6 +4605,12 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin.kind
+    // Un message d'une autre session (pas le rapport d'un sous-agent) : un repère sur l'orchestrateur.
+    if ((kind === 'peer' && !e.text.trimStart().startsWith('<agent-message')) || kind === 'peer-send-message') await markLane($, MAIN, { k: 'msg', at: await $.clock.now() })
+    // Le retour d'un sous-agent au fil principal : sur la piste de son lanceur.
+    const returned = kind === 'peer' || kind === 'task-notification' ? returnedAgentOf(e.text) : null
+    const launcher = returned !== null ? await launcherOf($, returned) : null
+    if (launcher) await markLane($, launcher.lane, { k: 'back', at: await $.clock.now(), to: launcher.key })
     if (kind === 'composer' || kind === 'bridge' || kind === 'sdk') submitAt = await $.clock.now()
     if ((kind === 'composer' || kind === 'bridge' || kind === 'sdk') && !e.text.trimStart().startsWith('/')) {
       const now = await $.clock.now()
@@ -2380,6 +4631,17 @@ export const register: Register = on => {
       if (parked) await $.state.set(BOARD_REF, parked.board, { ifVersion: version })
     }
     await saveNow($)
+    registrySaveTimer?.cancel()
+    // Les changements encore dans la file passent d'abord, puis la dernière écriture (R2).
+    await registryQueue
+    await quietly(() => saveRegistryNow($))
+    // Le registre est celui de cette discussion : après un /clear, la suivante charge le sien.
+    await update($, registryAtom, () => null)
+    await update($, ownAtom, () => [])
+    await update($, registryAlertAtom, () => false)
+    await update($, linkedAtom, () => [])
+    otherHeads.clear()
+    otherRegistries.clear()
     return next(e)
   })
 

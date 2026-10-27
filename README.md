@@ -23,12 +23,12 @@ Les mods (panneaux et bandeaux) demandent Claude Code 2.1.286 ou plus récent, 2
 | [`agents`](plugins/agents/README.md) | Sous-agents routés par coût : cartographie, recherche documentaire, implémentation | `agents:explorer`, `agents:researcher`, `agents:worker` | 1.0.1 |
 | [`project`](plugins/project/README.md) | Convention de projet et commandes git que seul l'utilisateur lance | `/project:new`, `audit`, `commit`, `sync`, `push`, `pr`, `version` | 1.2.10 |
 | [`mattpocock-skills`](plugins/mattpocock-skills/README.md) | Copie figée des skills de Matt Pocock (MIT) : grilling, spec, tickets, TDD, revue | `/mattpocock-skills:*` | 1.3.1 |
-| [`flow-board`](plugins/flow-board/README.md) | Tableau de bord des parcours mattpocock-skills : phases, tickets, sous-agents, revues | `/flow`, skill `compte-rendu` | 0.56.0 |
+| [`flow-board`](plugins/flow-board/README.md) | Tableau de bord des parcours mattpocock-skills : phases, tickets, revues, et onglet Agents (orchestrateur, sessions liées, sous-agents en frise) | `/flow`, skill `compte-rendu` | 0.58.0 |
 | [`asana-board`](plugins/asana-board/README.md) | Tâches Asana du projet en panneau et en bandeau, skill de suivi | `/asana`, skill `suivi-asana` | 0.7.2 |
-| [`git-board`](plugins/git-board/README.md) | Panneau Git : branche, écarts, modifications, historique, PR, CI | `/git` | 0.4.3 |
+| [`git-board`](plugins/git-board/README.md) | Panneau Git : branche, écarts, modifications, historique, PR, CI | `/git` | 0.4.5 |
 | [`files-board`](plugins/files-board/README.md) | Navigateur de fichiers dans le terminal | `/files` | 0.3.3 |
-| [`stats-board`](plugins/stats-board/README.md) | Statistiques d'usage et de coût de Claude Code, partagées entre postes si on le souhaite | `/ccstats`, `/stats-board:recap` | 0.8.0 |
-| [`session-tools`](plugins/session-tools/README.md) | Pied du prompt (chrono, tokens/s, cache, heure) et boutons Réécrire, Effort auto, Ultracode, Fichiers, Diff | `/session-tools:start` | 0.20.0 |
+| [`stats-board`](plugins/stats-board/README.md) | Statistiques d'usage, de coût et de durée de Claude Code, partagées entre postes si on le souhaite | `/ccstats`, `/stats-board:recap` | 0.10.0 |
+| [`session-tools`](plugins/session-tools/README.md) | Pied du prompt (chrono de la requête, tokens/s, cache, heure) et boutons Réécrire, Effort auto, Fichiers, Diff | `/session-tools:start` | 0.22.0 |
 
 ## Sous-agents routés par coût
 
@@ -84,9 +84,10 @@ mathis-plugins/
 ## Développer
 
 ```bash
-claude plugin validate .
-claude plugin test plugins/<plugin>
+scripts/check.sh <plugin>
 ```
+
+`scripts/check.sh` (`scripts\check.cmd` sous Windows) enchaîne les contrôles d'un plugin et s'arrête au premier échec : types par `npx` (sans installation de TypeScript), tests avec le Claude Code du terminal puis celui de l'app desktop, `claude plugin validate`. `git config core.hooksPath scripts/hooks` installe le hook pre-commit, qui lance `validate` et les tests des plugins touchés à chaque commit.
 
 Les conventions (version à deux endroits, CHANGELOG, tests avec le Claude Code du terminal et celui de l'app desktop) sont dans [`CLAUDE.md`](CLAUDE.md).
 

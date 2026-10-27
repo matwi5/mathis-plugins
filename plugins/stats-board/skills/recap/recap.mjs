@@ -6,8 +6,13 @@
 // - Les chiffres viennent de ccusage (`npx ccusage@latest claude daily|session|blocks --json`),
 //   comme le panneau ; les autres postes, de `~/.claude/claude-usage/machines/*.json`, et les noms
 //   d'affichage des projets, de `~/.claude/claude-usage/names.json`.
+// - Les durées (temps actif, temps API, requêtes) viennent des fichiers de relevé des requêtes de ce
+//   poste (`~/.claude/stats-board/requetes/*.json`, écrits par le mod depuis la 0.10.0). Le temps
+//   actif est l'union des intervalles des requêtes, sans double compte, comme `activeMs` de
+//   `hooks/requests.ts`. Un fichier illisible (en cours d'écriture par sa session) est omis et signalé.
 // - Script autonome, sans dépendance : les formats français, les niveaux de rythme et la lecture des noms
-//   d'affichage reprennent ceux de `hooks/model.ts` (fmtCost, fmtTokens, RATE_LEVELS, parseLabels et LABEL_MAX),
+//   d'affichage reprennent ceux de `hooks/model.ts` (fmtCost, fmtTokens, fmtSeconds, RATE_LEVELS, parseLabels et
+//   LABEL_MAX), et les durées ceux de `hooks/durations.ts` (spanOfRecord) et de `hooks/requests.ts` (activeMs),
 //   à garder alignés à la main.
 
 import { execFile } from 'node:child_process'
@@ -58,6 +63,15 @@ export function fmtDuration(ms) {
   return `${Math.floor(h / 24)}${NB}j${NB}${h % 24}${NB}h`
 }
 
+/** À la seconde, pour une durée de requête : « 42 s », « 3 min 05 », « 1 h 02 » (`fmtSeconds` de model.ts). */
+export function fmtSeconds(ms) {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}${NB}s`
+  const min = Math.floor(s / 60)
+  if (min < 60) return `${min}${NB}min${NB}${String(s % 60).padStart(2, '0')}`
+  return `${Math.floor(min / 60)}${NB}h${NB}${String(min % 60).padStart(2, '0')}`
+}
+
 /** Les seuils de `RATE_LEVELS` (model.ts), en $/h. */
 const RATE_LEVELS = [7, 14, 22, 32]
 const HEATS = ['calme', 'posé', 'soutenu', 'intense', 'en feu']
@@ -106,11 +120,72 @@ function byModel(breakdowns) {
 
 const modelLine = (pairs, total) => pairs.filter(([, c]) => c > 0).map(([m, c]) => `${modelName(m)} ${fmtCost(c)}${total > 0 ? ` (${fmtPct(c / total)})` : ''}`).join(' · ') || '—'
 
+// ─── Durées des fichiers de relevé ──────────────────────────────────────────
+
+const HOUR_MS = 3_600_000
+const DAY_MS = 86_400_000
+
+/** La session d'un fichier de relevé, d'après son nom : `<session>_<heure d'ouverture>.json`. */
+const sessionOfFile = (name) => name.replace(/_\d+\.json$/, '')
+
+/**
+ * L'avertissement des fichiers de relevé illisibles qui comptent pour ce récap (ceux de `isRelevant`) :
+ * en cours d'écriture par leur session, ils sont relus au récap suivant.
+ */
+function unreadableLine(names, isRelevant) {
+  const n = (names ?? []).filter(isRelevant).length
+  return n ? `⚠ ${plural(n, 'fichier de relevé illisible', 'fichiers de relevé illisibles')} (en cours d'écriture ?), omis : relancer le récap.` : null
+}
+
+/** Les durées quand rien n'est relevé : « — », jamais 0. */
+const noTimes = (why) => `- Temps actif — · temps API — (${why})`
+
+/** L'intervalle [envoi, fin] d'une requête relevée (comme `spanOfRecord` de `hooks/durations.ts`). */
+const spanOf = (r) => [num(r.sentAt), num(r.sentAt) + Math.max(num(r.realMs), num(r.endedAt ?? r.sentAt) - num(r.sentAt))]
+
+/** La durée de l'union des intervalles : les chevauchements comptés une fois (`activeMs` de `hooks/requests.ts`). */
+export function unionMs(spans) {
+  let total = 0
+  let end = -Infinity
+  for (const [a, b] of spans.filter(([x, y]) => y > x).sort((x, y) => x[0] - y[0])) {
+    if (b <= end) continue
+    total += b - Math.max(a, end)
+    end = b
+  }
+  return total
+}
+
+/** Les morceaux d'intervalles du jour `day` (dans le fuseau `tz`), coupés à chaque heure pile. */
+function piecesOfDay(spans, day, tz) {
+  const out = []
+  for (const [a, b] of spans) {
+    for (let start = a; start < b; ) {
+      const end = Math.min(b, (Math.floor(start / HOUR_MS) + 1) * HOUR_MS)
+      if (localDay(new Date(start), tz) === day) out.push([start, end])
+      start = end
+    }
+  }
+  return out
+}
+
+const requestCost = (r) => Object.values(r.models ?? {}).reduce((n, m) => n + num(m.cost), 0)
+const isEstimated = (r) => Object.values(r.models ?? {}).some((m) => m.isEstimated)
+
+/** Les durées d'une liste de relevés : temps actif sans double compte, temps API, requêtes, la plus chère. */
+function durationsOf(logs) {
+  const requests = logs.flatMap((l) => l.requests ?? [])
+  const top = requests.reduce((best, r) => (!best || requestCost(r) > requestCost(best) ? r : best), null)
+  return { activeMs: unionMs(requests.map(spanOf)), apiMs: sum(requests, (r) => num(r.apiMs)), requests: requests.length, top }
+}
+
+const plural = (n, one, many = `${one}s`) => `${n} ${n > 1 ? many : one}`
+
 // ─── Rendu ──────────────────────────────────────────────────────────────────
 
 /**
  * Le récap en Markdown, à partir des rapports déjà lus.
- * data : { now, tz, today, sessionId, isGuessed, version, isOffline, daily, sessions, blocks, projectNames, machine, others }
+ * data : { now, tz, today, sessionId, isGuessed, version, isOffline, daily, sessions, blocks, projectNames, machine, others,
+ *          requestLogs (fichiers de relevé lus), unreadable (noms des fichiers de relevé illisibles) }
  */
 export function render(data) {
   const { now, tz, today } = data
@@ -125,6 +200,10 @@ export function render(data) {
 
   // La discussion : sa ligne et celles de ses sous-agents.
   const rows = (data.sessions ?? []).map(sessionInfo)
+  const logs = data.requestLogs ?? []
+  // Ceux de cette discussion, et ceux du jour (la fenêtre de lecture : modifiés depuis deux jours).
+  const warning = unreadableLine(data.unreadable, () => true)
+  if (warning) out.push('', warning)
   const own = rows.find((r) => r.id === data.sessionId && !r.parent)
   const subs = rows.filter((r) => r.parent === data.sessionId)
   out.push('', '### Cette discussion', '')
@@ -141,6 +220,7 @@ export function render(data) {
     out.push(`- ${clock(first, tz)} → ${clock(last, tz)} (${fmtDuration(last - first)}) · projet ${nameOf((own ?? subs[0]).project)}`)
     out.push(`- Modèles : ${modelLine(byModel(all.flatMap((r) => r.models)), cost)}`)
     if (subs.length) out.push(`- Dont ${subs.length} sous-agent${subs.length > 1 ? 's' : ''} de workflow : ${fmtCost(sum(subs, (r) => r.cost))}`)
+    out.push(discussionTimes(logs.filter((l) => l.session === data.sessionId), tz))
     if (data.isGuessed) out.push('- ⚠ Discussion devinée (la plus récente du dossier) : l\'identifiant de session manquait.')
   }
 
@@ -149,12 +229,20 @@ export function render(data) {
   for (const list of Object.values(data.daily?.projects ?? {})) for (const r of Array.isArray(list) ? list : []) if (r.date === today) day.push(r)
   const dayCost = sum(day, (r) => num(r.totalCost))
   const dayTokens = sum(day, (r) => num(r.totalTokens))
+  // Les durées du jour : les morceaux de requêtes de ce jour-là ; temps API et requêtes au jour de l'envoi.
+  const dayLogs = logs.filter((l) => (l.requests ?? []).some((r) => piecesOfDay([spanOf(r)], today, tz).length || localDay(new Date(num(r.sentAt)), tz) === today))
+  const sentToday = dayLogs.flatMap((l) => (l.requests ?? []).filter((r) => localDay(new Date(num(r.sentAt)), tz) === today))
+  const dayActiveOf = (list) => unionMs(piecesOfDay(list.flatMap((l) => (l.requests ?? []).map(spanOf)), today, tz))
+  const dayTimes = dayLogs.length
+    ? `- Temps actif ${fmtSeconds(dayActiveOf(dayLogs))} · temps API ${fmtSeconds(sum(sentToday, (r) => num(r.apiMs)))} · ${plural(sentToday.length, 'requête')}`
+    : noTimes("aucune requête relevée aujourd'hui")
   out.push('', `### Aujourd'hui${data.machine ? ` sur ${data.machine}` : ''}`, '')
   if (!day.length) out.push('- Aucun usage enregistré aujourd\'hui.')
   else {
     out.push(`- **${fmtCost(dayCost)}** · ${fmtTokens(dayTokens)} tokens`)
+    out.push(dayTimes)
     out.push(`- Modèles : ${modelLine(byModel(day.flatMap((r) => (r.modelBreakdowns ?? []).map((b) => ({ model: String(b.modelName), cost: num(b.cost) })))), dayCost)}`)
-    out.push('', '| Projet | Coût | Part | Tokens |', '|---|---:|---:|---:|')
+    out.push('', '| Projet | Coût | Part | Tokens | Temps actif |', '|---|---:|---:|---:|---:|')
     const projects = new Map()
     for (const r of day) {
       const p = projects.get(r.project) ?? { cost: 0, tokens: 0 }
@@ -162,7 +250,10 @@ export function render(data) {
       p.tokens += num(r.totalTokens)
       projects.set(r.project, p)
     }
-    for (const [key, p] of [...projects].sort((a, b) => b[1].cost - a[1].cost)) out.push(`| ${nameOf(key)} | ${fmtCost(p.cost)} | ${dayCost > 0 ? fmtPct(p.cost / dayCost) : '—'} | ${fmtTokens(p.tokens)} |`)
+    for (const [key, p] of [...projects].sort((a, b) => b[1].cost - a[1].cost)) {
+      const projectLogs = dayLogs.filter((l) => l.project === key)
+      out.push(`| ${nameOf(key)} | ${fmtCost(p.cost)} | ${dayCost > 0 ? fmtPct(p.cost / dayCost) : '—'} | ${fmtTokens(p.tokens)} | ${projectLogs.length ? fmtSeconds(dayActiveOf(projectLogs)) : '—'} |`)
+    }
   }
 
   // Les discussions actives aujourd'hui (sous-agents rattachés à leur discussion).
@@ -201,6 +292,14 @@ export function render(data) {
     out.push(`- **Tous les postes : ${fmtCost(dayCost + sum(others, (o) => o.cost))}** · ${fmtTokens(dayTokens + sum(others, (o) => o.tokens))} tokens`)
   }
   return out.join('\n')
+}
+
+/** La ligne des durées d'une discussion : temps actif, temps API, requêtes et la plus chère ; « — » sans relevé. */
+function discussionTimes(logs, tz) {
+  if (!logs.length) return noTimes("pas de relevé : discussion d'avant la 0.10.0")
+  const d = durationsOf(logs)
+  const top = d.top ? ` · la plus chère : ${clock(num(d.top.sentAt), tz)}, ${isEstimated(d.top) ? '≈' : ''}${fmtCost(requestCost(d.top))}` : ''
+  return `- Temps actif ${fmtSeconds(d.activeMs)} · temps API ${fmtSeconds(d.apiMs)} · ${plural(d.requests, 'requête')}${top}`
 }
 
 // ─── Récap d'un parcours ────────────────────────────────────────────────────
@@ -254,8 +353,10 @@ const inParcours = (r, title, { prefix, worktreesKey, sessionId }) =>
 /**
  * Le récap d'un parcours en Markdown, sous-agents compris : les sessions dont le titre commence par `prefix`,
  * et celles des worktrees `groupe-*` du projet `worktreesKey` avec la discussion principale `sessionId`.
- * La durée d'une session va de sa première à sa dernière activité.
- * data : { tz, since, until (AAAA-MM-JJ, facultatif), prefix, worktreesKey, sessionId, sessions, titles, projectNames }
+ * La durée d'une session va de sa première à sa dernière activité ; son temps actif et celui du parcours
+ * viennent des fichiers de relevé (`requestLogs`), sans double compte entre sessions qui tournent en même temps.
+ * data : { tz, since, until (AAAA-MM-JJ, facultatif), prefix, worktreesKey, sessionId, sessions, titles, projectNames, requestLogs,
+ *          unreadable (noms des fichiers de relevé illisibles) }
  */
 export function renderParcours(data) {
   const { tz } = data
@@ -283,14 +384,24 @@ export function renderParcours(data) {
   if (wt && !prefix && !data.sessionId) out.push('- ⚠ Discussion principale non comptée : son identifiant manque.')
   out.push(`- **${fmtCost(cost)}** · ${picked.length} session${picked.length > 1 ? 's' : ''} · ${fmtTokens(sum(all, (r) => r.tokens))} tokens`)
   out.push(`- Modèles : ${modelLine(byModel(all.flatMap((r) => r.models)), cost)}`)
-  out.push('', '| Session | Projet | Heures | Durée | Coût |', '|---|---|---|---|---:|')
+  const logs = (data.requestLogs ?? []).filter((l) => ids.has(l.session))
+  const times = durationsOf(logs)
+  // Des sessions sans relevé (d'avant la 0.10.0) : le total ne les compte pas, et le dit.
+  const missing = picked.filter((r) => !logs.some((l) => l.session === r.id)).length
+  const partial = missing && logs.length ? `, sans ${plural(missing, 'session')} non relevée${missing > 1 ? 's' : ''}` : ''
+  out.push(logs.length ? `- Temps actif ${fmtSeconds(times.activeMs)} (sans double compte entre sessions${partial}) · temps API ${fmtSeconds(times.apiMs)} · ${plural(times.requests, 'requête')}` : noTimes("pas de relevé : sessions d'avant la 0.10.0"))
+  // Seuls les fichiers des sessions du parcours comptent.
+  const warning = unreadableLine(data.unreadable, (name) => ids.has(sessionOfFile(name)))
+  if (warning) out.push(`- ${warning}`)
+  out.push('', '| Session | Projet | Heures | Durée | Actif | Coût |', '|---|---|---|---|---:|---:|')
   const cell = (s) => String(s).replace(/\|/g, '\\|')
   for (const r of picked.sort((a, b) => a.first - b.first)) {
     // La session et ses sous-agents : heures et coût d'ensemble, comme pour la discussion du récap du jour.
     const own = [r, ...subs.filter((s) => s.parent === r.id)]
     const first = Math.min(...own.map((s) => s.first))
     const last = Math.max(...own.map((s) => s.last))
-    out.push(`| ${cell(titles[r.id] ?? '(sans titre)')} | ${cell(names[r.project] ?? r.project)} | ${dayClock(first, tz)} → ${dayClock(last, tz)} | ${fmtDuration(last - first)} | ${fmtCost(sum(own, (s) => s.cost))} |`)
+    const ownLogs = logs.filter((l) => l.session === r.id)
+    out.push(`| ${cell(titles[r.id] ?? '(sans titre)')} | ${cell(names[r.project] ?? r.project)} | ${dayClock(first, tz)} → ${dayClock(last, tz)} | ${fmtDuration(last - first)} | ${ownLogs.length ? fmtSeconds(durationsOf(ownLogs).activeMs) : '—'} | ${fmtCost(sum(own, (s) => s.cost))} |`)
   }
   return out.join('\n')
 }
@@ -456,6 +567,64 @@ function nameMissing(projectNames, keys, projectsDir, labels) {
   }
 }
 
+/** Bornes d'une requête plausible (`parseRecord` de durations.ts) : envoyée entre 2020 et 2100, 30 jours au plus. */
+const FIRST_DATE = Date.UTC(2020, 0, 1)
+const LAST_DATE = Date.UTC(2100, 0, 1)
+const MAX_REQUEST_MS = 30 * DAY_MS
+const isFiniteIn = (v, min, max) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max
+
+/**
+ * Une requête relevée plausible : dates et durées finies et dans les bornes (un fichier édité à la main
+ * ou abîmé ne doit pas faire tourner la découpe aux heures des millions de fois). Ses modèles non objets sont écartés.
+ */
+export function plausibleRequest(r) {
+  if (!r || typeof r !== 'object') return null
+  if (!isFiniteIn(r.sentAt, FIRST_DATE, LAST_DATE) || !isFiniteIn(r.realMs, 0, MAX_REQUEST_MS) || !isFiniteIn(r.apiMs, 0, Number.MAX_SAFE_INTEGER)) return null
+  if (r.endedAt !== null && r.endedAt !== undefined && !isFiniteIn(r.endedAt, r.sentAt, r.sentAt + MAX_REQUEST_MS)) return null
+  const models = {}
+  for (const [k, m] of Object.entries(r.models && typeof r.models === 'object' ? r.models : {})) if (m && typeof m === 'object' && !Array.isArray(m)) models[k] = m
+  return { ...r, models }
+}
+
+/** Un fichier de relevé illisible et inchangé depuis une heure n'est plus en cours d'écriture (`ABANDONED_MS` de durations.ts). */
+const ABANDONED_MS = HOUR_MS
+
+/**
+ * Les fichiers de relevé des requêtes de ce poste que `wanted(nom, date de modification)` retient, et les
+ * noms des fichiers illisibles récents (en cours d'écriture par leur session : relus au récap suivant).
+ * Illisible depuis plus d'une heure, un fichier est laissé de côté sans avertissement.
+ */
+export function readRequestLogs(dir, wanted, now = Date.now()) {
+  const logs = []
+  const unreadable = []
+  let names = []
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith('.json'))
+  } catch {
+    // Pas encore de relevé sur ce poste (avant la 0.10.0).
+    return { logs, unreadable }
+  }
+  for (const name of names) {
+    let mtimeMs = 0
+    try {
+      mtimeMs = statSync(join(dir, name)).mtimeMs
+    } catch {
+      continue
+    }
+    if (!wanted(name, mtimeMs)) continue
+    const log = readJson(join(dir, name))
+    if (log && log.schema === 1 && typeof log.session === 'string' && Array.isArray(log.requests)) logs.push({ ...log, requests: log.requests.map(plausibleRequest).filter(Boolean) })
+    else if (now - mtimeMs <= ABANDONED_MS) unreadable.push(name)
+  }
+  return { logs, unreadable }
+}
+
+/** Le dossier de Claude Code : `CLAUDE_CONFIG_DIR` (le premier s'il y en a plusieurs, comme `claudeDir` de register.tsx), sinon `~/.claude`. */
+const claudeDir = (home) => process.env.CLAUDE_CONFIG_DIR?.split(',')[0]?.trim() || join(home, '.claude')
+
+/** Le dossier des fichiers de relevé : `stats-board/requetes` du dossier de Claude Code. */
+const requestsDir = (home) => join(claudeDir(home), 'stats-board', 'requetes')
+
 const readMachineName = (usageDir) => {
   try {
     return readFileSync(join(usageDir, '.machine'), 'utf8').trim() || null
@@ -491,7 +660,7 @@ function parcoursArgs(argv) {
 
 async function mainParcours(opts, { home, projectsDir, tz, now }) {
   // Un parcours dure souvent plusieurs semaines : 60 jours par défaut.
-  const since = opts.since ?? localDay(new Date(now - 60 * 86_400_000), tz)
+  const since = opts.since ?? localDay(new Date(now - 60 * DAY_MS), tz)
   const until = opts.until ? ['--until', opts.until.replace(/-/g, '')] : []
   const report = await ccusage(['claude', 'session', '--since', since.replace(/-/g, ''), ...until, '--json', '--timezone', tz])
   const sessions = report.json?.sessions ?? report.json?.session ?? []
@@ -516,12 +685,15 @@ async function mainParcours(opts, { home, projectsDir, tz, now }) {
   const { projectNames } = readMachines(usageDir, readMachineName(usageDir), labels, localDay(new Date(now), tz))
   nameMissing(projectNames, keys, projectsDir, labels)
 
-  process.stdout.write(`${renderParcours({ tz, since, until: opts.until, prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId, sessions, titles, projectNames })}\n`)
+  // Les relevés modifiés depuis le début du parcours : ceux de ses sessions en font partie.
+  const from = Date.parse(`${since}T00:00:00Z`) - DAY_MS
+  const { logs, unreadable } = readRequestLogs(requestsDir(home), (_, mtimeMs) => mtimeMs >= from)
+  process.stdout.write(`${renderParcours({ tz, since, until: opts.until, prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId, sessions, titles, projectNames, requestLogs: logs, unreadable })}\n`)
 }
 
 async function main() {
   const home = homedir()
-  const projectsDir = join(process.env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'projects')
+  const projectsDir = join(claudeDir(home), 'projects')
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
   const now = Date.now()
   const parcours = parcoursArgs(process.argv.slice(2))
@@ -530,7 +702,7 @@ async function main() {
   const arg = (process.argv[2] ?? '').trim()
   const today = localDay(new Date(now), tz)
   // Une discussion commencée il y a quelques jours reste trouvée : les sessions sont prises sur 7 jours.
-  const since = localDay(new Date(now - 7 * 86_400_000), tz).replace(/-/g, '')
+  const since = localDay(new Date(now - 7 * DAY_MS), tz).replace(/-/g, '')
   const base = ['--json', '--timezone', tz]
 
   const isValid = /^[0-9a-f-]{36}$/i.test(arg)
@@ -552,6 +724,8 @@ async function main() {
   const keys = new Set(Object.keys(daily.json?.projects ?? {}))
   for (const s of sessions.json?.sessions ?? []) keys.add(String(s.projectPath ?? '').split(/[\\/]/)[0])
   nameMissing(projectNames, keys, projectsDir, labels)
+  // Les relevés de cette discussion, et ceux modifiés depuis deux jours (la journée en cours).
+  const { logs, unreadable } = readRequestLogs(requestsDir(home), (name, mtimeMs) => (!!sessionId && name.startsWith(`${sessionId}_`)) || mtimeMs >= now - 2 * DAY_MS)
 
   process.stdout.write(`${render({
     now,
@@ -567,6 +741,8 @@ async function main() {
     projectNames,
     machine,
     others,
+    requestLogs: logs,
+    unreadable,
   })}\n`)
 }
 

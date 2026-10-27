@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.3.4 — 2026-10-27
+
+### Documentation
+- L'arbre « Architecture » du README cite chaque fichier de tests, que `scripts/check.sh` vérifie ; la section « Développement » renvoie à `scripts/check.sh files-board`, qui lance aussi le contrôle de types par npx.
+
+---
+
 ## 0.3.3 — 2026-10-22
 
 ### Documentation

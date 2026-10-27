@@ -114,11 +114,11 @@ test('/flow-board:flow nomme les parcours à reprendre au lieu de « aucun parco
     mem[e.key] = JSON.parse(JSON.stringify(e.value))
     return { value: undefined }
   })
-  on('command.run', { command: 'flow-board:flow' }, async (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e))
+  on('command.run', { command: 'flow-board:flow' }, async (_$, e, next) => next(e))
   const stored = boardWithRun()
   mem['board:'] = { ...stored, root: '', runs: [{ ...stored.runs[0]!, status: 'paused', owner: undefined, updatedAt: 79_000_000 }], activeId: null }
 
-  const answer = await $.command.run({ command: 'flow-board:flow', args: '' })
+  const answer = await $.command.run({ command: 'flow-board:flow', args: '' } as any)
   expect(String(answer.text)).toMatch(/Aucun parcours actif dans cette discussion\. À reprendre .*« Lot SC » \(en pause, 0\/3 tickets\)/)
   const tool = await $.tool.call({ tool: TOOL, tickets: [{ id: 'Q1', name: 'Autre lot' }] } as any)
   expect(JSON.stringify(tool)).toMatch(/nothing was recorded/)

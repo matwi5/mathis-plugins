@@ -8,6 +8,9 @@ const ME = 'Alex Martin'
 const ALL = ['terminal', 'desktop', 'vscode', 'mobile'] as const
 const BANDS = ['terminal', 'desktop'] as const
 
+// Ce que le moteur joint à une commande tapée : d'où elle vient et la taille de l'affichage.
+const TYPED = { origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as const
+
 const PANE = (bodyColumns = 80) =>
   ({
     component: 'Pane',
@@ -98,7 +101,7 @@ const PERSISTED_FILE = String.raw`C:\Users\M B\.claude\projects\p\tool-results\t
 const world = (on: any, options: WorldOptions = {}) => {
   const clock = mock.clock(on, { now: NOW })
   const log = {
-    writes: [] as unknown[],
+    writes: [] as any[],
     reads: [] as string[],
     calls: [] as string[],
     toolLists: 0,
@@ -239,7 +242,7 @@ describe('asana-board', () => {
       const { log } = world(on)
       await $.session.start({ surface, isInteractive: true, cwd: '/work' } as any)
 
-      const answer = await $.command.run({ command: 'asana', args: '/projet' })
+      const answer = await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
       expect(String(answer.text)).toBe('Panneau Asana ouvert (Client · Essai (LLM + API)).')
       const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE() })
       // Les tâches terminées ne sont pas demandées à Asana : seulement celles terminées depuis maintenant.
@@ -272,7 +275,7 @@ describe('asana-board', () => {
 
   test('le panneau se dessine sur les quatre surfaces sans arbre refusé, plié, déplié et en création', async ($, on) => {
     world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     for (const surface of ALL) {
       const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE() })
       expect(await pane.drawn()).toMatchObject({ type: 'Box' })
@@ -310,7 +313,7 @@ describe('asana-board', () => {
 
   test('le bandeau s’empile sous celui d’un autre plugin, sans l’effacer', async ($, on) => {
     world(on, { below: 'other' })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     for (const surface of BANDS) {
       const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND() })
       expect(await band.find({ type: 'Text', text: /AUTRE BANDEAU/ })).toBeDefined()
@@ -336,13 +339,13 @@ describe('asana-board', () => {
       expect(await band.drawn()).toMatchObject({ type: 'Text', children: ['AUTRE BANDEAU'] })
       await band.unmount()
     }
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     for (const surface of BANDS) {
       const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND(120, true) })
       expect(await band.drawn()).toMatchObject({ type: 'Text', children: ['AUTRE BANDEAU'] })
       await band.unmount()
     }
-    await $.command.run({ command: 'asana', args: 'hide' })
+    await $.command.run({ command: 'asana', args: 'hide', ...TYPED })
     for (const surface of BANDS) {
       const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND() })
       expect(await band.drawn()).toMatchObject({ type: 'Text', children: ['AUTRE BANDEAU'] })
@@ -352,7 +355,7 @@ describe('asana-board', () => {
 
   test('« x » masque le bandeau, la ligne d’état prend le relais, /asana show le rend', async ($, on) => {
     const { log } = world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     for (const surface of BANDS) {
       const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND() })
       expect(await band.find({ type: 'Text', text: /à trancher/ })).toBeDefined()
@@ -361,7 +364,7 @@ describe('asana-board', () => {
       expect(log.toasts).toContain('Bandeau Asana masqué : /asana show pour le réafficher')
       expect(log.statuses.at(-1)).toMatch(/^◆ Client · Essai \(LLM \+ API\) · 1 à trancher/)
       await band.unmount()
-      const shown = await $.command.run({ command: 'asana', args: 'show' })
+      const shown = await $.command.run({ command: 'asana', args: 'show', ...TYPED })
       expect(String(shown.text)).toMatch(/^Panneau Asana ouvert/)
       expect(log.statuses.at(-1)).toBeUndefined()
       const again = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND() })
@@ -374,10 +377,10 @@ describe('asana-board', () => {
     const { log } = world(on)
     on('command.describe', (_$: unknown, e: any) => ({ description: e.description, isHidden: e.isHidden }))
     // Pas de session.start : la commande statique est là dès le premier message.
-    const out = await $.command.run({ command: 'asana-board:asana', args: '' })
+    const out = await $.command.run({ command: 'asana-board:asana', args: '', ...TYPED })
     expect(String(out.text)).toBe('Panneau Asana ouvert (Client · Essai (LLM + API)).')
     expect(log.opened).toContain('asana')
-    const tab = await $.command.run({ command: 'asana-board:asana', args: 'toi' })
+    const tab = await $.command.run({ command: 'asana-board:asana', args: 'toi', ...TYPED })
     expect(String(tab.text)).toMatch(/^Panneau Asana ouvert/)
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     expect(await pane.find({ key: 'tab-toi', text: /▸ Pour toi/ })).toBeDefined()
@@ -397,7 +400,7 @@ describe('asana-board', () => {
 
   test('le bandeau à 30 et à 160 colonnes', async ($, on) => {
     world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     for (const surface of BANDS) {
       const narrow = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND(30) })
       expect(await narrow.drawn()).toMatchObject({ type: 'Box' })
@@ -422,7 +425,7 @@ describe('asana-board', () => {
 
   test('le titulaire du compte : lu par get_me, ses tâches sont « pour Toi » ; inconnu, aucune ne l’est', async ($, on) => {
     const { log } = world(on, { failGetMe: true })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     expect(log.calls).toContain('get_me')
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE() })
     await pane.press({ key: 'x-t3' })
@@ -433,7 +436,7 @@ describe('asana-board', () => {
 
   test('le titulaire du compte, lu par get_me : sa tâche est « pour Toi » et se confie à Claude', async ($, on) => {
     world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE() })
     await pane.press({ key: 'x-t3' })
     expect(await pane.find({ type: 'Text', text: /pour\sToi/ })).toBeDefined()
@@ -443,7 +446,7 @@ describe('asana-board', () => {
 
   test('états vides : aucune tâche, aucune tâche pour toi', async ($, on) => {
     world(on, { sectionTasks: () => [] })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE() })
     expect(await pane.find({ type: 'Text', text: /Aucune tâche ouverte dans cette section/ })).toBeDefined()
     await pane.press({ key: 'tab-toi' })
@@ -456,7 +459,7 @@ describe('asana-board', () => {
 
   test('état d’erreur : pas de section, une carte avec reprise, pas de bandeau', async ($, on) => {
     world(on, { md: '# Projet sans Asana' })
-    const out = await $.command.run({ command: 'asana', args: '/projet' })
+    const out = await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     expect(String(out.text)).toMatch(/^Panneau Asana : Pas de section Asana/)
     for (const surface of ALL) {
       const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE() })
@@ -521,7 +524,7 @@ describe('asana-board', () => {
     test(`section trop longue (${format}) : le panneau relit la réponse rangée dans un fichier par le moteur`, async ($, on) => {
       world(on, { persisted: format })
       await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
-      await $.command.run({ command: 'asana', args: '/projet' })
+      await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
       const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
       expect(await pane.find({ type: 'Text', text: /Lecture impossible/ })).toBeUndefined()
       expect(await pane.find({ type: 'Text', text: 'Trancher le filtre' })).toBeDefined()
@@ -558,7 +561,7 @@ describe('asana-board', () => {
     expect(await quiet.find({ key: 'tab-tous' })).toBeUndefined()
     await quiet.unmount()
 
-    const out = await $.command.run({ command: 'asana', args: '' })
+    const out = await $.command.run({ command: 'asana', args: '', ...TYPED })
     expect(String(out.text)).toMatch(/^Panneau Asana : Asana \(get_tasks\)/)
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     expect(await pane.find({ type: 'Text', text: /Lecture impossible/ })).toBeDefined()
@@ -568,7 +571,7 @@ describe('asana-board', () => {
   test('une écriture en cours bloque le second appui ; la suppression n’est pas l’action principale', async ($, on) => {
     // Asana lent à répondre aux écritures.
     const { clock, log } = world(on, { writeDelay: 2_000 })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     const pressing = pane.press({ key: 'c-t1' })
     await clock.settle()
@@ -611,7 +614,7 @@ describe('asana-board', () => {
 
   test('quand Claude écrit dans Asana, le panneau se relit en silence', async ($, on) => {
     const { clock, log } = world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const before = log.calls.filter(c => c === 'get_tasks').length
     await $.tool.call({ tool: 'mcp__srv__update_tasks', tasks: [] } as any)
     await clock.settle()
@@ -624,7 +627,7 @@ describe('asana-board', () => {
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await clock.settle()
     expect(log.calls.filter(c => c === 'get_tasks')).toHaveLength(1)
-    const asking = $.command.run({ command: 'asana-board:asana', args: '' })
+    const asking = $.command.run({ command: 'asana-board:asana', args: '', ...TYPED })
     await clock.settle()
     await clock.advance(1_000)
     const out = await asking
@@ -641,7 +644,7 @@ describe('asana-board', () => {
     const { clock, log } = world(on, { readDelay: 1_000, failGetTasks: true })
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await clock.settle()
-    const asking = $.command.run({ command: 'asana', args: '' })
+    const asking = $.command.run({ command: 'asana', args: '', ...TYPED })
     await clock.settle()
     await clock.advance(1_000)
     await clock.settle()
@@ -657,7 +660,7 @@ describe('asana-board', () => {
     const { clock, log } = world(on, { hasServer: () => isUp })
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await clock.settle()
-    const out = await $.command.run({ command: 'asana', args: '' })
+    const out = await $.command.run({ command: 'asana', args: '', ...TYPED })
     expect(String(out.text)).toMatch(/Connecteur Asana introuvable/)
     isUp = true
     await clock.advance(5_000)
@@ -673,7 +676,7 @@ describe('asana-board', () => {
 
   test('/asana-board:asana qui échoue répond elle-même, sans laisser le modèle dire « mod non chargé »', async ($, on) => {
     world(on, { failCwd: true })
-    const out = await $.command.run({ command: 'asana-board:asana', args: '' })
+    const out = await $.command.run({ command: 'asana-board:asana', args: '', ...TYPED })
     // Le kit rapporte « no implementation for session.cwd » : c'est le .catch qui répond.
     expect(String(out.text)).toMatch(/^Panneau Asana : .*session.cwd/)
   })
@@ -687,7 +690,7 @@ describe('asana-board', () => {
 
   test('la ligne 1 du bandeau tient dans sa largeur à chaque palier', async ($, on) => {
     world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const section = 'Client · Essai (LLM + API)'
     for (const cols of [24, 30, 40, 56, 64, 72, 80, 90, 100, 120, 160]) {
       const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND(cols) })
@@ -709,7 +712,7 @@ describe('asana-board', () => {
 
   test('sous 24 colonnes, le bandeau ne se dit pas plus large que sa place', async ($, on) => {
     world(on, { below: 'other' })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     for (const surface of BANDS) {
       const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND(20) })
       expect((await band.find({ key: 'asana-band' }))?.props.width).toBe(20)
@@ -719,7 +722,7 @@ describe('asana-board', () => {
 
   test('les tâches sans statut comptent dans le bandeau et la ligne d’état', async ($, on) => {
     const { log } = world(on, { sectionTasks: () => [task('n1', '[code] Sans ligne de statut', 'Contexte : rien')] })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND() })
     expect(await band.find({ type: 'Text', text: /1\ssans statut/ })).toBeDefined()
     await band.press({ key: 'asana-band-hide' })
@@ -729,7 +732,7 @@ describe('asana-board', () => {
 
   test('décocher remet le statut à « à faire » ; abandonner l’écrit « abandonnée »', async ($, on) => {
     const { log } = world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     await pane.press({ key: 'c-t1' })
     await pane.press({ key: 'fold-done' })
@@ -748,7 +751,7 @@ describe('asana-board', () => {
 
   test('description mise en forme dans Asana : la coche part quand même, sans toucher au statut', async ($, on) => {
     const { log } = world(on, { formatted: true })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     await pane.press({ key: 'c-t1' })
     expect(log.writes).toEqual([{ tasks: [{ task: 't1', completed: true }] }])
@@ -758,7 +761,7 @@ describe('asana-board', () => {
 
   test('une écriture refusée : toast court, détail complet sous la tâche dépliée', async ($, on) => {
     const { log } = world(on, { failWrite: true })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     await pane.press({ key: 'c-t1' })
     expect(log.toasts).toContain('« Trancher le filtre » : Asana a refusé (détail sous la tâche)')
@@ -768,7 +771,7 @@ describe('asana-board', () => {
 
   test('prompt indisponible : le toast donne la demande à taper', async ($, on) => {
     const { log } = world(on, { canFill: false })
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     await pane.press({ key: 'x-t1' })
     await pane.press({ key: 'w-t1' })
@@ -778,7 +781,7 @@ describe('asana-board', () => {
 
   test('une lecture vieille de plus de 10 min n’est plus dite « À jour »', async ($, on) => {
     const { clock } = world(on)
-    await $.command.run({ command: 'asana', args: '/projet' })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     const fresh = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
     expect(await fresh.find({ type: 'Text', text: 'À jour' })).toBeDefined()
     await fresh.unmount()
@@ -803,7 +806,7 @@ describe('asana-board', () => {
         ].join('\n'),
       },
     })
-    const out = await $.command.run({ command: 'asana', args: '/projet' })
+    const out = await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     expect(String(out.text)).toBe('Panneau Asana ouvert (PolePredict).')
     expect(log.section).toBe('1200000000000003')
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE() })
@@ -813,7 +816,7 @@ describe('asana-board', () => {
 
   test('GID dans le CLAUDE.md seul (sans docs/agents/issue-tracker.md) : la forme d’origine marche toujours', async ($, on) => {
     const { log } = world(on, { files: { 'CLAUDE.md': SECTION_MD } })
-    const out = await $.command.run({ command: 'asana', args: '/projet' })
+    const out = await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
     expect(String(out.text)).toBe('Panneau Asana ouvert (Client · Essai (LLM + API)).')
     expect(log.section).toBe('222')
   })
@@ -832,7 +835,7 @@ describe('asana-board', () => {
   for (const surface of BANDS) {
     test(`écritures de Claude : une ligne avec le nom des tâches, pour chaque outil (${surface})`, async ($, on) => {
       world(on)
-      await $.command.run({ command: 'asana', args: '/projet' })
+      await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
       const cases: [string, unknown, string][] = [
         ['mcp__srv__update_tasks', { tasks: [{ task: 't1', completed: true, notes: 'Statut : fait' }] }, 'coche « Trancher le filtre »'],
         ['mcp__srv__update_tasks', { tasks: [{ task: 't1', completed: false }] }, 'décoche « Trancher le filtre »'],
@@ -856,7 +859,7 @@ describe('asana-board', () => {
 
     test(`écritures de Claude : un GID inconnu s'affiche tel quel, sans relecture (${surface})`, async ($, on) => {
       const { log } = world(on)
-      await $.command.run({ command: 'asana', args: '/projet' })
+      await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
       const calls = log.calls.length
       const row = await $.ui.mount({ plugin: PLUGIN, surface, ...TOOL_USE('mcp__srv__update_tasks', { tasks: [{ task: '1200000000000999', completed: true }] }) })
       expect(await rowText(row)).toBe('Asana · coche tâche 1200000000000999')
@@ -870,7 +873,7 @@ describe('asana-board', () => {
 
     test(`écritures de Claude : entrée non reconnue, erreur, interruption ou autre outil → ligne du moteur (${surface})`, async ($, on) => {
       world(on)
-      await $.command.run({ command: 'asana', args: '/projet' })
+      await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
       const engine = [
         TOOL_USE('mcp__srv__update_tasks', { tasks: [] }),
         TOOL_USE('mcp__srv__update_tasks', { tasks: [{ name: 'sans gid' }] }),

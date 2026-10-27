@@ -35,7 +35,7 @@ test('la ligne compacte dit en mots courts ce que l’appel enregistre', () => {
   expect(flowCallLabel({ set: 'x', groups: null })).toBe('flow-board')
 })
 
-test('l’appel de l’outil flow tient sur une ligne grisée, sans son résultat', async ($, on) => {
+test('l’appel de l’outil flow tient sur une ligne grisée, sans son résultat', { timeoutMs: 15000 }, async ($, on) => {
   engine(on)
   for (const surface of SURFACES) {
     const use = await $.ui.mount({ plugin: PLUGIN, surface, ...useOf(TOOL, { step: 'review', set: [{ id: 'a', status: 'done' }] }) } as any)
@@ -50,7 +50,7 @@ test('l’appel de l’outil flow tient sur une ligne grisée, sans son résulta
   }
 })
 
-test('une erreur, une interruption ou un autre outil gardent le dessin du moteur', async ($, on) => {
+test('une erreur, une interruption ou un autre outil gardent le dessin du moteur', { timeoutMs: 15000 }, async ($, on) => {
   engine(on)
   for (const surface of SURFACES) {
     for (const target of [

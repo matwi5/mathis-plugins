@@ -4,6 +4,32 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.22.0 — 2026-10-27
+
+### Retiré
+- **Le bouton Ultracode on/off** du pied du prompt, au terminal comme sur desktop, avec l'état qu'il gardait et le suivi de `/effort` qui le tenait à jour. Demande de Mathis : « supprimes le bouton ultracod on/off dans le plugin des tools ». `/effort ultracode on|off` reste disponible à la main.
+
+---
+
+## 0.21.0 — 2026-10-26
+
+### Ajouté
+- Le nombre de tâches de fond que la requête attend encore, à côté du chrono (`Réponse 2:14 · 1 en fond`).
+
+### Corrigé
+- **Le chrono ne s'arrête plus quand une tâche de fond tourne encore, et ne repart plus de zéro à son retour.** Demande de Mathis : « Il faut que ce soit le timer jusqu'a la fin complete de la requete quand claude a fini de repondre sans aucune tache en arriere plan qui tourne. » Il mesure maintenant toute la requête (« requête » et « tâche de fond » sont définis dans `GLOSSARY.md`) : il court tant que le fil principal travaille ou qu'une tâche de fond de la requête tourne, et ne pose la ✓ qu'à la vraie fin. Le message de retour d'un sous-agent de la requête la prolonge, même après que l'agent a quitté la liste des tâches. La liste des tâches vient de `background_tasks` (`classic.Stop`, et `classic.SubagentStop` pour une tâche qui finit sans relancer de tour) ; sans elle, les agents actifs de `$.agent.list()`. Une interruption, qui n'a pas de `classic.Stop`, garde les tâches déjà connues, sauf celles qui ont notifié leur fin depuis, et les agents encore actifs ; une erreur d'API ou un refus font de même (`StopFailure` remplace alors `classic.Stop` d'après les types du moteur, à confirmer).
+- Cause du retour à zéro (essai du 26/10/2026 avec Claude Code 2.1.310 et le moteur 2.1.308 de l'app desktop) : `turn.start` lisait le prompt en cours après que `prompt.submit` l'avait déjà oublié, et prenait alors la notification pour un message. `turn.start` retrouve maintenant son prompt par le texte, sans dépendre de l'ordre d'exécution, en prenant le plus récent : un prompt resté sans tour (refusé, consommé par un hook) ne prête pas son heure à un message identique envoyé plus tard.
+- Une requête finie normalement ne se rouvre plus pour une tâche qu'elle n'a pas lancée (un shell d'une tâche planifiée, par exemple) ; seule une requête finie par une interruption le peut. Après un rechargement du plugin, une notification se reconnaît à son texte et ne remet plus le chrono à zéro. Choix de Mathis sur les points laissés par la revue du groupe : « oui pour tout ».
+- Un message tapé pendant que Claude répond, et que le moteur livre au tour suivant, ne relance plus le chrono une seconde fois : sa requête part à son envoi, une seule fois (groupe « durcissement », choix de Mathis : « Chrono relancé (Recommandé) »).
+- Tests du chrono sur le moteur tel qu'observé : retour d'un shell ou d'un sous-agent, plusieurs tâches, nouveau message pendant une tâche d'avant, serveur sans fin, interruption (dont celle du tour relancé par la dernière tâche), notification livrée pendant un tour, erreur d'API, prompt resté sans tour, pair d'une autre session, tâche planifiée, version sans `background_tasks`, au terminal et sur desktop.
+
+### Développement
+- Le contrôle de types (`tsc`, lancé par `scripts/check.sh`) passe : l'identifiant d'une notification est `null` quand le texte n'en porte pas, au lieu d'`undefined`.
+- Tous les tests du chrono et de la vitesse suivent l'ordre réel des événements du moteur (`docs/evenements-moteur.md`) : `prompt.submit` rend la main avant le `turn.start` de son tour.
+- La tête de `hooks/register.tsx` nomme le suivi des requêtes de stats-board, qui applique la même filiation, et ce qui doit rester aligné entre les deux ; les commentaires renvoient à `docs/evenements-moteur.md` au lieu de la spec du parcours.
+
+---
+
 ## 0.20.0 — 2026-10-24
 
 ### Ajouté
