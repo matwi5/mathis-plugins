@@ -12,14 +12,17 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
 3. types : `tsc` d'une version fixée de TypeScript, par npx (aucune installation globale). Les types
    du moteur (`.claude-plugin/types/`, ignorés par git) manquent dans un worktree : ils sont copiés
    depuis le clone principal ;
-4. `node --test` des tests Node des skills (`skills/**/*.test.mjs`) ;
+4. `node --test` des tests Node des skills et du plugin (`skills/**/*.test.mjs`, `tests/**/*.test.mjs` :
+   ceux qui lisent les sources, ce que `claude plugin test` ne permet pas) ;
 5. `claude plugin test` avec le Claude Code du terminal, puis avec le binaire le plus récent de
    l'app desktop, trouvé ici (Mac et Windows) ;
 6. `claude plugin validate` du plugin, puis du dépôt.
 
 --staged (hook pre-commit, décision « Hook ») : rien pour un commit de documentation seule ; sinon
-`validate` du dépôt, puis `validate` et tests (terminal seulement) des plugins touchés. Le test avec
-l'app desktop reste à `check.sh <plugin>`, avant le push.
+`validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
+(terminal seulement) des plugins touchés : 39 erreurs de types étaient passées inaperçues sur trois
+groupes quand le hook ne lançait que `validate` et les tests. Le test avec l'app desktop reste à
+`check.sh <plugin>`, avant le push.
 
 Sans dépendance hors de la bibliothèque standard ; Python 3.9 ou plus récent.
 """
@@ -50,9 +53,7 @@ DESKTOP_DIRS = {
 TICKET_REFS = re.compile(r"\btickets?\s+(?:n°\s*)?\d{2}\b|\bQ\d+ de la revue\b|\btravail/(?!tasks/)[\w-]+/", re.I)
 CODE_SUFFIXES = {".ts", ".tsx", ".js", ".mjs", ".cjs", ".py", ".sh"}
 # Contrôles 1 et 2 pas encore tenus par un plugin : signalés sans échec, jusqu'à leur reprise.
-PENDING = {
-    "flow-board": "renvois aux tickets et arbre « Architecture » à reprendre avec les pistes de flow-board",
-}
+PENDING = {}
 
 
 class Failed(Exception):
@@ -233,7 +234,7 @@ def typecheck(plugin):
 
 
 def node_tests(plugin):
-    tests = sorted((plugin / "skills").rglob("*.test.mjs")) if (plugin / "skills").is_dir() else []
+    tests = sorted(t for folder in ("skills", "tests") if (plugin / folder).is_dir() for t in (plugin / folder).rglob("*.test.mjs"))
     if tests:
         step("node --test " + " ".join(t.relative_to(REPO).as_posix() for t in tests),
              [tool("node"), "--test", *tests], 600, r"pass \d+")
@@ -291,6 +292,7 @@ def staged():
         plugin = PLUGINS / name
         if (plugin / ".claude-plugin" / "plugin.json").is_file():
             validate(plugin, claude)
+            typecheck(plugin)
             plugin_tests(plugin, claude, "terminal")
 
 

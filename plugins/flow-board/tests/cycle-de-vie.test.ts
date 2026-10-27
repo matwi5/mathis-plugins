@@ -158,7 +158,7 @@ test('un groupe rendu par sa session liée propose de fermer sa session et son w
   // Une session de l'app (id local_…) : aucun outil connu ne l'arrête, la personne la ferme.
   expect(text).toContain("c'est une session de l'app Desktop : demande-moi de la fermer dans l'app")
   expect(text).toContain('Vérifie d\'abord, n\'arrête et ne retire qu\'ensuite')
-  expect(text).toContain("s'appelle normalement groupe-E (branche worktree-groupe-E)")
+  expect(text).toContain("s'appelle normalement groupe-boutique-E (branche worktree-groupe-boutique-E ; groupe-E pour un groupe lancé avant la 0.59.0)")
   expect(text).toContain('git worktree list')
   expect(text).toContain('git -C <worktree> status --porcelain --ignored')
   expect(text).toContain('git branch --merged')

@@ -5,6 +5,8 @@
 // Pièges du desktop (relevés dans git-board) : les espaces ordinaires y sont fondus et
 // `gap` ignoré ; les écarts dans un texte sont donc insécables, ceux entre éléments des
 // marges. Aucune prop n'est passée à `undefined` : les arbres restent valides partout.
+// `tests/dessin.test.mjs` refuse deux espaces ordinaires de suite dans un texte, `gap` et une
+// prop à `undefined`, ici comme dans `cells.ts` et `svg.ts`.
 
 import type { SyncState, AgentStatus, Artifact, ArtifactKind, Board, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, AgentLane, AgentMark, AgentType, RegistryAgent, SegmentKind, SessionRegistry, Ticket, ToolFamily, TicketGroup, TicketStatus, Tone, UiState } from '../types'
 import { ANYTIME_GROUPS, C, CODE_SKILLS, COMMAND_GROUPS, FLOW_COMMANDS, LAUNCHERS, SKILLS, commandLineOf, slashOf, type AnytimeTool, type SkillDef, type StepDef } from './catalog.ts'
@@ -43,6 +45,7 @@ import {
   syncAdvice,
   tddCycles,
   unseenDecisions,
+  inForce,
   isDelegable,
   commandArgsOf,
   groupReviewArgs,
@@ -52,7 +55,7 @@ import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
 import { isSureLink } from './linked.ts'
-import { costOf, costText, pricesFor, type UnitPrices } from './cost.ts'
+import { costOf, costText, familyOf, pricesFor, type UnitPrices } from './cost.ts'
 import { HOUR_MS, activityOf, buildAxis, laneMarks, laneParts, laneTree, summaryOf, unionOf, type Axis, type LanePart } from './timeline.ts'
 import { DEFAULT, WAIT_COLOR, laneCells, laneRaster, markLook, pack, textColorOf, type LaneCell } from './cells.ts'
 import {
@@ -63,7 +66,6 @@ import {
   pulseSvg,
   ringSvg,
   roadmapSvg,
-  spinnerSvg,
   type BarPart,
   type NodeState,
   type RoadNode,
@@ -149,6 +151,8 @@ export type Actions = {
   prepare: (skill: string, args?: string) => unknown
   /** Met une commande de Claude Code (`compact`) dans le prompt, sans passer par le catalogue. */
   fillCommand: (command: string) => unknown
+  /** Met dans le prompt une demande à Claude : mettre à jour le dossier `dir` par `git pull --ff-only`. */
+  askFastForward: (dir: string | null) => unknown
   finish: () => unknown
   /** Met de côté le parcours actif ici, sans le clore : la discussion peut en ouvrir un autre. */
   setAside: () => unknown
@@ -355,7 +359,6 @@ const TICKET: Record<TicketStatus, { glyph: string; color: string; label: string
   done: { glyph: '✓', color: C.green, label: 'fait' },
   blocked: { glyph: '!', color: C.amber, label: 'bloqué' },
 }
-const TICKET_ORDER: Record<TicketStatus, number> = { doing: 0, blocked: 1, todo: 2, done: 3 }
 
 const ITEM: Record<ItemStatus, { glyph: string; color: string }> = {
   todo: { glyph: '○', color: C.gray },
@@ -1026,7 +1029,8 @@ const reportGate = (k: Kit, phase: FlowPhase, act: Actions): unknown => {
  */
 const decidedBlock = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const { Box, Button } = k
-  const all = run.decided ?? []
+  // Un choix retiré (`withdrawn`) ne se montre plus : seuls les choix en vigueur.
+  const all = inForce(run.decided ?? [], view.relay)
   if (all.length === 0) return null
   const unseen = all.filter(d => d.seenAt === undefined)
   const seen = all.filter(d => d.seenAt !== undefined)
@@ -1249,6 +1253,14 @@ const waitCallout = (k: Kit, run: Run, view: View): unknown => {
   )
 }
 
+/** « dans .claude/worktrees/dev » quand le retard est mesuré ailleurs qu'à la racine du board, sinon rien. */
+const whereMeasured = (view: View): string => {
+  const dir = (view.sync.dir ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+  const root = (view.board?.root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+  if (dir === '' || root === '' || dir.toLowerCase() === root.toLowerCase()) return ''
+  return ` dans ${dir.toLowerCase().startsWith(`${root.toLowerCase()}/`) ? dir.slice(root.length + 1) : dir}`
+}
+
 /** Phase qui modifie le code : le distant a-t-il avancé depuis le dernier sync ? */
 const syncCallout = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const { Box, Button } = k
@@ -1257,17 +1269,22 @@ const syncCallout = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const advice = syncAdvice(view.sync)
   if (!advice) {
     const ref = view.sync.main ? `origin/${view.sync.main}` : 'le distant'
-    return <Box key="sync" marginTop={1}>{T(k, `✓${NB}À jour avec ${ref}${SEP}vérifié il y a ${dur(view.now - view.sync.checkedAt)}`, { dim: true })}</Box>
+    return <Box key="sync" marginTop={1}>{T(k, `✓${NB}À jour avec ${ref}${whereMeasured(view)}${SEP}vérifié il y a ${dur(view.now - view.sync.checkedAt)}`, { dim: true })}</Box>
   }
   const first = advice.commands[0]!
+  const where = whereMeasured(view)
   return (
     <Box key="sync" flexDirection="row" alignItems="center" marginTop={1} borderStyle="round" borderColor={C.cyan} paddingX={1}>
       <Box flexDirection="column" flexShrink={1} marginRight={1}>
         {T(k, `⟳${NB}${advice.reason[0]!.toUpperCase()}${advice.reason.slice(1)}`, { color: C.cyan, bold: true, wrap: 'wrap' })}
-        {T(k, `Avant de modifier le code : ${advice.commands.map(commandText).join(' puis ')}`, { dim: true, wrap: 'wrap' })}
+        {T(k, `Avant de modifier le code${where} : ${advice.commands.map(commandText).join(' puis ')}`, { dim: true, wrap: 'wrap' })}
       </Box>
       <Box flexShrink={0}>
-        <Button key="sync-now" label={`Préparer ${commandText(first)}`} onPress={() => act.prepare(first.skill, first.args)} />
+        <Button
+          key="sync-now"
+          label={`Préparer ${commandText(first)}`}
+          onPress={() => ('shell' in first ? act.askFastForward(first.dir) : act.prepare(first.skill, first.args))}
+        />
       </Box>
     </Box>
   )
@@ -1543,7 +1560,7 @@ const laneTrack = (k: Kit, l: FriseLane, axis: Axis, cells: number, now: number)
  * Les 9 types de sous-agents (Q9) : libellé, glyphe et couleur, distincte et lisible en thème clair
  * comme sombre. P1 : rose à la place du corail (proche de la mandarine et du rouge des échecs) ;
  * B1 : vert anis pour les transcripts, à la place du ciel (proche du cyan) puis du bleu (celui des
- * hachures « attente d'une tâche de fond ») ; planches `travail/onglet-agents/planches/carte.*` et `teintes.*`.
+ * hachures « attente d'une tâche de fond ») ; planches de la carte et des teintes validées par Mathis, dans le dépôt privé.
  */
 const AGENT_TYPE: Record<AgentType, { label: string; glyph: string; color: string }> = {
   explore: { label: 'Exploration du code', glyph: '⌕', color: C.cyan },
@@ -1604,6 +1621,10 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
   const prompt = a?.prompt ?? ''
   const promptLines = prompt.split('\n')
   const isPromptOpen = view.ui.isPromptOpen === true
+  // Un sous-agent qui en a lancé d'autres : son coût et ses tokens avec ceux de ses descendants.
+  const agents = lanes.map(x => x.agent).filter((x): x is RegistryAgent => x !== undefined)
+  const sum = a ? familyOf(a, agents, m => agentCost(m, m, view)) : null
+  const family = sum && sum.descendants > 0 ? sum : null
   return (
     <Box key={`card-${l.key}`} flexDirection="column" borderStyle="round" borderColor={l.color} paddingX={1} marginBottom={1}>
       {line(k, [type ? T(k, `${type.glyph}${NB}${type.label}`, { color: type.color, bold: true }) : T(k, l.caption !== undefined ? `↗${NB}Session${NB}liée` : `◆${NB}Orchestrateur`, { color: l.color, bold: true }), T(k, l.name, { bold: true, wrap: 'truncate-end' })], true)}
@@ -1613,6 +1634,7 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
       {a && cardLine(k, 'Période', `${clockText(a.startedAt)}${a.finishedAt !== undefined ? ` → ${clockText(a.finishedAt)}` : ' → en cours'}${a.isEndUnseen === true ? ' (fin constatée après coup)' : ` · ${dur((a.finishedAt ?? now) - a.startedAt)}`}`)}
       {t && cardLine(k, 'Coût', agentCost(l.lane, a, view) !== null ? costText(agentCost(l.lane, a, view)!) : 'coût indisponible')}
       {t && cardLine(k, 'Tokens', `entrée ${tokensText(t.input)} · sortie ${tokensText(t.output)} · cache lu ${tokensText(t.cacheRead)} · cache écrit ${tokensText(t.cacheWrite)} · réflexion non comptée à part`)}
+      {family && cardLine(k, 'Avec ses sous-agents', `${family.cost !== null ? costText(family.cost) : 'coût indisponible'} · ${plural(family.descendants, 'sous-agent')}${family.tokens ? ` · entrée ${tokensText(family.tokens.input)} · sortie ${tokensText(family.tokens.output)} · cache lu ${tokensText(family.tokens.cacheRead)} · cache écrit ${tokensText(family.tokens.cacheWrite)}` : ''}`)}
       {lane.lines && cardLine(k, 'Lignes', line(k, [T(k, `+${lane.lines.added}`, { color: C.green, bold: true }), T(k, `−${lane.lines.removed}`, { color: C.red, bold: true })]))}
       {families.length > 0 && (
         <Box flexDirection="column">
@@ -2617,7 +2639,7 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
           t.total > 0 && T(k, `${t.done}/${t.total}`, { bold: true }),
           ...relayPills(k, run, view),
           running > 0 && T(k, `${spinFrame(view.now)}${NB}${plural(running, 'agent')}`, { color: C.blue }),
-          unseenDecisions(run) > 0 && T(k, `⚑${NB}${unseenDecisions(run)}${NB}à${NB}relire`, { color: C.amber, bold: true }),
+          unseenDecisions(run, view.relay) > 0 && T(k, `⚑${NB}${unseenDecisions(run, view.relay)}${NB}à${NB}relire`, { color: C.amber, bold: true }),
         ])}
       </Box>
       <Box flexDirection="row" flexShrink={0} marginLeft={1}>

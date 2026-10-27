@@ -1,4 +1,4 @@
-// Effacement de l'historique des agents (ticket 10). Fonctions pures ; les fichiers, les commandes
+// Effacement de l'historique des agents. Fonctions pures ; les fichiers, les commandes
 // système et la file d'écriture vivent dans register.tsx.
 //
 // - Supprimer un parcours efface ses agents, ceux de ses sessions liées et ses fichiers de relais

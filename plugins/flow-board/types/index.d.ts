@@ -238,6 +238,10 @@ export type SoloDecision = {
   seenAt?: number
   /** Affichage seulement, jamais enregistré : le groupe confié dont la session liée a relayé ce choix. */
   relayedFrom?: string
+  /** Le choix ne tient plus (`withdrawn` de l'outil) : il reste au parcours, hors du fichier des choix et du panneau. */
+  withdrawnAt?: number
+  /** Pourquoi il a été retiré, et ce qui le remplace s'il y a lieu. */
+  withdrawnWhy?: string
 }
 
 export type AgentRow = {
@@ -542,6 +546,8 @@ export type Board = {
      * pas sa référence. Rappelé à chaque réponse de l'outil, pour que la session puisse la joindre.
      */
     main?: string
+    /** Quand `main` a été connu : au `delegate`, puis à chaque nouvelle référence lue à côté du relais. */
+    mainAt?: number
   }
   /** Parcours supprimés récemment (toutes discussions confondues). */
   deleted?: Tombstone[]
@@ -564,11 +570,24 @@ export type RelayEntry = {
   securedAt?: number
   /** Les choix faits sans la personne que la session a signalés (`decided`), dans l'ordre. */
   decided?: { what: string; why?: string; at: number }[]
+  /** Les choix déclarés que la session a retirés (`withdrawn`), le sien comme un autre : hors du fichier des choix. */
+  withdrawn?: { what: string; why?: string; at: number }[]
   /**
    * Le compte rendu final de la session (`report`), en filet de son envoi par SendMessage : la
    * discussion principale, renommée ou redémarrée, peut ne jamais recevoir le message.
    */
-  report?: { text: string; at: number }
+  report?: {
+    text: string
+    at: number
+    /** La longueur du compte rendu envoyé, quand `text` en est coupé (au-delà de 8 000 caractères). */
+    length?: number
+    /** Le compte rendu entier est écrit dans son fichier, à côté du relais (`<parcours>.<session>.report.md`). */
+    isWhole?: boolean
+  }
+  /** Les constats des revues que la session a envoyés (`review`), cumulés : comptés au retour du groupe. */
+  reviews?: { count: number; standards: number; spec: number; fixed: number }
+  /** La revue de sécurité que la session a envoyée (`security`) : reprise au retour du groupe. */
+  security?: { advised?: boolean; why?: string; findings?: number; fixed?: number; at: number }
   /** Le dernier signal reçu : un ticket, un commit, des tests, une note, une revue, le compte rendu. */
   last?: { kind: 'ticket' | 'commit' | 'test' | 'note' | 'review' | 'decided' | 'report'; text: string; at: number; ticket?: string }
   startedAt: number
@@ -588,7 +607,7 @@ export type Live = {
 }
 
 /**
- * Où en est la branche par rapport au dépôt distant, d'après le dernier `git fetch` du mod.
+ * Où en est la branche du dossier où l'on code par rapport au dépôt distant, d'après le dernier `git fetch` du mod.
  * Les nombres sont null tant que rien n'a été mesuré (pas de dépôt, pas de distant, erreur).
  */
 export type SyncState = {
@@ -600,6 +619,13 @@ export type SyncState = {
   /** Nom de la branche principale (`main`, `master`…). */
   main: string | null
   isOnMain: boolean
+  /** Commits de la branche courante absents de origin/main ; null tant que ce n'est pas mesuré. */
+  aheadMain?: number | null
+  /**
+   * Le dossier mesuré (racine de son worktree) : celui de la session quand elle travaille dans un
+   * autre worktree du dépôt que la racine du board, sinon cette racine ; null tant que ce n'est pas mesuré.
+   */
+  dir?: string | null
   /** Sommets distants mesurés, `<sha de main>|<sha suivi>` : change à chaque fusion ou push distant. */
   remoteKey: string | null
   /** Sommets pour lesquels le sync a déjà été demandé une fois. */
@@ -676,9 +702,9 @@ declare module 'claude-code' {
       agentsOwn: string[]
       /** Une écriture du registre a été refusée (S11) ; `'lost'` : un changement n'a pas pu s'appliquer à l'état (R2). */
       agentsAlert: boolean | 'lost'
-      /** Les sessions liées vues à la dernière relecture (onglet Agents, ticket 07). */
+      /** Les sessions liées vues à la dernière relecture (onglet Agents). */
       agentsLinked: { key: string; session?: string; title: string; how: 'run' | 'relay' | 'id' | 'job' | 'title' | 'none'; state: 'working' | 'returned' | 'failed' | 'closed'; launchedAt?: number; returnedAt?: number }[]
-      /** Le sélecteur d'historique de l'onglet Agents (ticket 09). */
+      /** Le sélecteur d'historique de l'onglet Agents. */
       agentsHistory: { key: string; kind: 'now' | 'run' | 'session'; title: string; at?: number; isArchived?: boolean; agents?: number }[]
       /** Les prix des modèles tirés de ccusage (Q15), relevés au plus une fois par jour. */
       agentPrices: { at: number; prices: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> } | null

@@ -62,7 +62,8 @@ test('le brief : installation du worktree d’abord, discussion désignée par s
   const text = await brief($, on)
   expect(text).toContain("écris-la en clair en tête du background : c'est la première commande de la session, avant toute lecture")
   // Le nom de la discussion se périme (renommage) : sa seule référence, résolue par ListAgents.
-  expect(text).toContain('par sa seule référence entre crochets ([<ref>])')
+  expect(text).toContain('par sa référence entre crochets ([<ref>])')
+  expect(text).toContain('et donne en repli son nom du moment')
   expect(text).toContain('"main": "[<ref>]"')
   expect(text).not.toContain('« <nom> [<ref>] »')
   // Un seul compte rendu complet : le relais ; SendMessage et la réponse finale n'en portent qu'une ligne.

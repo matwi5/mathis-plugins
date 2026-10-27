@@ -9,7 +9,7 @@ import { maskSecrets } from '../hooks/timeline.ts'
 import { drainWithin, isTranscriptPath, readArgv, SUBAGENT_FILE, type TranscriptAgent } from '../hooks/transcript.ts'
 import type { Run, SessionRegistry } from '../types'
 
-// Ticket 14 : les suites de la revue du groupe B, de sa revue de sécurité et de ses passes
+// Les suites de la revue du groupe B, de sa revue de sécurité et de ses passes
 // « bogues » (DECISIONS.md, série 16 ; S27 pour Q-a), et le test instable.
 
 // Les faux secrets se composent à l'exécution : écrits d'un bloc, gitleaks les prendrait pour des vrais.

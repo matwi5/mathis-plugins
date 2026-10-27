@@ -1,4 +1,4 @@
-// Historique de l'onglet Agents (ticket 09) : retrouver les agents d'un parcours passé ou d'une
+// Historique de l'onglet Agents : retrouver les agents d'un parcours passé ou d'une
 // ancienne discussion. Fonctions pures ; la lecture des fichiers vit dans register.tsx.
 //
 // - Le sélecteur liste « Ici, maintenant », les parcours du projet (archivés compris), puis les

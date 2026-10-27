@@ -86,13 +86,18 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   mock.store(on)
   world(on)
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
-  // Le seuil des 100 lignes ne compte que le code écrit.
-  expect(implement).toContain('git diff --numstat, without generated files nor binaries')
-  expect(implement).toContain('both axes in a single reviewer subagent')
-  // La revue de sécurité, en lecture seule, part avec la revue du groupe, puis relit le diff des correctifs.
+  // Un seul relecteur pour les deux axes, quelle que soit la taille : il lit CODING_STANDARDS.md, compte ses Mineurs.
+  expect(implement).toContain('both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads CODING_STANDARDS.md at the root of the project when it exists, besides CLAUDE.md, and gives its Nits as a count, without detail')
+  expect(implement).not.toContain('under 100 changed lines')
+  // La revue de sécurité, en lecture seule, part avec la revue du groupe ; pas de seconde passe sur ses
+  // correctifs, sauf zone coûteuse ou plus de 150 lignes hors tests, et alors une passe high sans vérifications.
   expect(implement).toContain('Revue du groupe (')
   expect(implement).toContain('in the same message as the group review')
-  expect(implement).toContain('the diff of those fixes only')
+  expect(implement).toContain("no second pass on the diff of the group review's fixes, unless it touches a costly area of the method file (its section 1) or exceeds 150 changed lines outside tests; then a single pass at high effort, without verification subtasks")
+  expect(implement).not.toContain('the diff of those fixes only')
+  // La recherche part d'abord, et seuls les candidats moyens ou hauts sont vérifiés.
+  expect(implement).toContain('the search starts at once, without a reading of the diff beforehand')
+  expect(implement).toContain('one verification subtask per finding of medium or high severity only')
   // Un groupe d'un seul ticket sans logique ni zone sensible n'a pas de revue du groupe.
   expect(implement).toContain('A group of a single ticket sent with "sensitive": false and "logic": false has no group review')
   // Les constats sur du code antérieur au lot : à part, non corrigés, un groupe « durcissement » en fin de lot.
@@ -141,7 +146,7 @@ test('un ticket hors zone sensible se commite avant sa revue ; un ticket sensibl
   expect(implement).toContain('the ticket turns done in the tracker only once its review is back and its fixes are committed')
   expect(implement).toContain('its fixes land in a commit of their own')
   expect(implement).toContain('a ticket that touches a sensitive area, or did not say, keeps its review before its commit')
-  expect(implement).toContain('/code-review high --fix (high without --fix for a group with a sensitive ticket)')
+  expect(implement).toContain("/code-review high --fix <group base>..HEAD consignes : <path> (high without --fix for a group with a sensitive ticket; <group base>: the commit before the group's first ticket)")
 })
 
 test('sans groupes, la revue proposée perd --fix dès qu’un ticket du lot est sensible', () => {

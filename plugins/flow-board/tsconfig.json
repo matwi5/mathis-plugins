@@ -2,6 +2,7 @@
   "extends": "./.claude-plugin/types/tsconfig.json",
   "compilerOptions": {
     "allowImportingTsExtensions": true,
+    "noUnusedLocals": true,
     "types": ["claude-code", "claude-code-tools"]
   }
 }

@@ -117,6 +117,13 @@ export const hintOf = (s: StepDef, isRepo: boolean): string => (isRepo ? s.hint 
 export const SECURITY_CRITERIA =
   'authentication, permissions or access rules, user input reaching a query, a path or HTML, secrets or tokens, network or file access, uploads, dependencies'
 
+/**
+ * La seconde passe de sécurité, sur le seul diff des correctifs de la revue du groupe (lu par
+ * Claude) : 33 min et 4 agents xhigh pour 0 faille sur 111 lignes (rétro de l'onglet Agents).
+ */
+export const SECURITY_FIXES_PASS =
+  "no second pass on the diff of the group review's fixes, unless it touches a costly area of the method file (its section 1) or exceeds 150 changed lines outside tests; then a single pass at high effort, without verification subtasks"
+
 /** Les zones où un ticket passe aussi par la passe « bogues » (lu par Claude). */
 export const SENSITIVE_AREAS = 'privacy, data deletion, encryption, concurrency'
 
@@ -139,7 +146,7 @@ export const DECIDED_HINT = 'the path of the file of the choices already declare
  * de l'équipe Claude Code : pour un auteur agent, une remarque mineure coûte un commit et un tour de revue.
  */
 export const REVIEWER_BRIEF =
-  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot; tag every finding Important, Nit or Pre-existing (the code older than the lot just above): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are listed and not fixed, so that a nit costs neither a commit nor another review cycle; for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not report again nor undo the declared choices; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes of a group review'
+  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot; tag every finding Important, Nit or Pre-existing (the code older than the lot just above): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not report again nor undo the declared choices; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review'
 
 /**
  * Le canal des consignes d'une revue (lu par Claude) : `/code-review` tourne en exécution dérivée
@@ -148,20 +155,25 @@ export const REVIEWER_BRIEF =
  * annoncé par « consignes : » après la cible, est lu d'abord et ne devient pas la cible.
  */
 export const reviewInstructions = (isRepo: boolean): string =>
-  `write each review's instructions in a file of your temporary folder: its scope, the path of the declared choices file, the points left to the user, what it must not do, and the reviewer brief; pass its path after the target, ${isRepo ? '/code-review <level> <base>..HEAD consignes : <path> (the target is always a range <base>..HEAD or a branch, never a commit hash alone; before a ticket\'s commit, the scope also names the uncommitted changes)' : '/code-review <level> consignes : <path> (the file lists the copies and files to compare)'}, and to a reviewer subagent in its prompt (${REVIEW_RULE})`
+  `write each review's instructions in a file of your temporary folder: its scope, the path of the declared choices file, the points left to the user, what it must not do, and the reviewer brief; pass its path after the target, ${isRepo ? '/code-review <level> <base>..HEAD consignes : <path> (the target is always a range <base>..HEAD or a branch, never a commit hash alone; before a ticket\'s commit, the scope also names the uncommitted changes; when other runs commit on the same branch, git log <base>..HEAD shows commits that are not this run\'s: the scope is then limited to this run\'s paths, given in the file as a pathspec, git diff <base>..HEAD -- <paths>)' : '/code-review <level> consignes : <path> (the file lists the copies and files to compare)'}, and to a reviewer subagent in its prompt (${REVIEW_RULE})`
 
 /** Une revue de groupe en zone sensible n'applique rien seule : son relecteur trie les constats. */
-export const SENSITIVE_NO_FIX = `when a ticket of the group touches a sensitive area (${SENSITIVE_AREAS}) or did not say, without --fix: the reviewer applies itself only the findings it keeps`
+export const SENSITIVE_NO_FIX = `when a ticket of the group touches a sensitive area (${SENSITIVE_AREAS}) or did not say, without --fix: the session applies itself only the findings it keeps`
 
 /**
  * Commit avant la revue (Mathis, 26/10/2026) : un ticket hors zone sensible n'attend plus sa revue
  * pour laisser démarrer le suivant ; un ticket sensible garde sa revue avant son commit.
  */
 export const COMMIT_BEFORE_REVIEW =
-  'a ticket sent with "sensitive": false is committed once its checks pass, before its review, so the next ticket starts while the review runs: the review target is then <commit before the ticket>..<the ticket\'s commit>, never ..HEAD (HEAD and the working tree already hold the next ticket); its fixes land in a commit of their own, and its findings go in "review" without "step" (the next ticket\'s steps stay where they are); the ticket turns done in the tracker only once its review is back and its fixes are committed; a ticket that touches a sensitive area, or did not say, keeps its review before its commit'
+  'a ticket sent with "sensitive": false is committed once its checks pass, before its review, so the next ticket starts while the review runs: the review target is then <commit before the ticket>..<the ticket\'s commit>, never ..HEAD (HEAD and the working tree already hold the next ticket); its fixes land in a commit of their own, and its findings go in "review" without "step" (the next ticket\'s steps stay where they are); the ticket turns done in the tracker only once its review is back and its fixes are committed; a ticket that touches a sensitive area, or did not say, keeps its review before its commit, on a snapshot ref (refs/worktree/flow-board/<ticket id>, see the review step)'
 
-/** Le seuil d'un seul relecteur pour les deux axes : seul le code écrit compte (346 lignes de SVG généré avaient compté). */
-export const SMALL_DIFF = 'under 100 changed lines, counted by git diff --numstat, without generated files nor binaries, and outside a sensitive area: both axes in a single reviewer subagent; otherwise two in parallel'
+/**
+ * Un seul relecteur pour les deux axes d'un ticket, quelle que soit sa taille (rétro de l'onglet
+ * Agents) : l'axe Standards seul avait rendu 1 Important en une douzaine de passes, sans lire
+ * `CODING_STANDARDS.md`. Ses Mineurs se rendent en un compte : leur détail ne servait pas.
+ */
+export const TICKET_REVIEWER =
+  'both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads CODING_STANDARDS.md at the root of the project when it exists, besides CLAUDE.md, and gives its Nits as a count, without detail'
 
 /**
  * Un groupe d'un seul ticket sans logique ni zone sensible : la revue du ticket est la seule, et la
@@ -169,9 +181,20 @@ export const SMALL_DIFF = 'under 100 changed lines, counted by git diff --numsta
  */
 export const SINGLE_TICKET_GROUP = 'A group of a single ticket sent with "sensitive": false and "logic": false has no group review: its ticket review is its only review, the dashboard shows it reviewed, and its security judgement comes once that ticket is committed'
 
+/**
+ * L'instantané d'un ticket sensible avant sa passe « bogues » (Mathis, L2 a de la rétro de l'onglet
+ * Agents) : la revue relisait un arbre qui bougeait, et la session attendait sans rien faire. Une
+ * référence locale à part, propre au worktree (`refs/worktree/`, jamais partagée entre parcours),
+ * sans toucher à la branche ; des commandes simples, sans `$(…)`, que le garde-fou d'un worktree
+ * accepte (essayé le 27/10/2026). Le ticket suivant n'avance pas dans un autre dossier : le garde-fou
+ * y refuse git, et un HEAD détaché perdait ses commits au retrait du dossier (passe « bogues » du lot).
+ */
+export const TICKET_SNAPSHOT =
+  'Before the bug pass of a sensitive ticket (its review runs before its commit), pin what both reviews read on a ref of this worktree, without touching the branch, each command alone and the printed hash copied into the next one: git add <the ticket\'s files, by path>, then git diff --cached --name-only must list the ticket\'s files and nothing else (unstage anything else first), git write-tree (prints <tree>), git commit-tree <tree> -p HEAD -m "flow-board snapshot <ticket id>" (prints <snapshot>), git update-ref refs/worktree/flow-board/<ticket id> <snapshot>. Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id> (the bug pass takes it as its target; the instructions file of the two axes gives that diff command) and files at that ref (git show refs/worktree/flow-board/<ticket id>:<path>), never the working tree. While they run, move on with work that touches none of the ticket\'s files (a next ticket that shares no file, the report, the delivery); a next ticket that touches the same files waits. The ticket\'s real commit still comes after its review: git add each of its files again (its fixes included), commit, then git update-ref -d refs/worktree/flow-board/<ticket id>'
+
 /** La consigne de la revue d'un ticket, pour un point fixe donné ; sans git, la passe « bogues » n'a pas de plage. */
 const ticketReviewHint = (fixedPoint: string, isRepo: boolean): string =>
-  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}), its Standards and Spec axes, even for a small diff (${SMALL_DIFF}). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), launch in the same message the bug pass, /code-review xhigh of Claude Code (Skill tool "code-review", arguments "xhigh ${isRepo ? '<range> ' : ''}consignes : <path>"), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}`
+  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}), its Standards and Spec axes, ${TICKET_REVIEWER}. Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the effort criterion of the security review method file decides (the stakes, the size), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
 
 /** Le point fixe d'une revue de ticket. */
 export const TICKET_FIXED_POINT = 'fixed point: the commit before the ticket'
@@ -209,15 +232,16 @@ const TICKET_STEPS = [
 ]
 
 /**
- * Qui fait la revue d'un groupe (lu par Claude) : un sous-agent Opus en effort high, qui lance la
- * revue au niveau `high` et écrit aussi les correctifs de `--fix` ; la discussion les relit et les commite.
+ * Qui fait la revue d'un groupe (lu par Claude) : la session elle-même, par l'outil Skill.
+ * `/code-review` tourne en exécution dérivée de celui qui la lance, à l'effort de son niveau : le
+ * sous-agent qui l'enveloppait refaisait une analyse, 38 à 46 % du coût d'une passe (rétro de l'onglet Agents).
  */
 export const GROUP_REVIEWER =
-  `a reviewer subagent (Agent tool, general-purpose, model opus, effort high; ${REVIEW_RULE}) that launches /code-review high --fix itself, the path of its instructions file after the target, and applies its fixes itself`
+  `this session itself, through the Skill tool, the path of its instructions file after the target: /code-review runs as a fork of whoever launches it, at the effort of its level, so no reviewer subagent wraps it (only a session that does not run on Opus hands it to a reviewer subagent with model opus, which launches it itself; ${REVIEW_RULE})`
 
 /** La consigne de la revue d'un groupe ; le point fixe ne se précise que sans git. */
 const groupReviewHint = (fixedPoint: string): string =>
-  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a linked session, by the session itself), run in ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review); ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
+  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a linked session, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review); ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
 
 /** Ce qui suit, par groupe, une fois ses tickets commités : revue du groupe, revue de sécurité, rendu. */
 const GROUP_STEPS = [
@@ -229,7 +253,7 @@ const GROUP_STEPS = [
     ...step(
       'security',
       'Revue de sécurité',
-      "in the same message as the group review (it is read-only, so it does not wait for the fixes): judge whether it is worth it and say so; if it is, launch it yourself: a read-only reviewer subagent limited to the group's diff, never /security-review (details in \"Security review\" below); once the group review's fixes are committed, it reads the diff of those fixes only; it follows the security review method file of flow-board and fixes nothing: each kept finding goes to the user with a ready fix, and the user decides",
+      `in the same message as the group review (it is read-only, so it does not wait for the fixes): judge whether it is worth it and say so; if it is, launch it yourself: a read-only reviewer subagent limited to the group's diff, never /security-review (details in "Security review" below); ${SECURITY_FIXES_PASS}; it follows the security review method file of flow-board and fixes nothing: each kept finding goes to the user with a ready fix, and the user decides`,
     ),
     isWithPrevious: true,
   },
@@ -607,7 +631,7 @@ export const SKILLS: Record<string, SkillDef> = {
     label: 'Revue du groupe',
     gender: 'f',
     flowLabel: 'Revue du groupe',
-    verb: 'Le groupe relu par /code-review high --fix de Claude Code (sans --fix pour un groupe sensible), une fois ses tickets commités et relus, dans un sous-agent relecteur qui applique lui-même ses correctifs : les bugs entre ses tickets, y compris avec les groupes déjà livrés ; un conflit entre la spec et une consigne n’est pas tranché, il remonte',
+    verb: 'Le groupe relu par /code-review high --fix de Claude Code (sans --fix pour un groupe sensible), une fois ses tickets commités et relus, lancé par la session elle-même, sans sous-agent qui l’enveloppe : les bugs entre ses tickets, y compris avec les groupes déjà livrés ; un conflit entre la spec et une consigne n’est pas tranché, il remonte',
     glyph: '◆',
     color: C.coral,
     // Pas une phase : un événement de l'Implémentation, qui marque les groupes finis comme relus.

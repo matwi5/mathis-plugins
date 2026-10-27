@@ -2,7 +2,7 @@
 
 Ce fichier est la méthode fixe que suit le sous-agent relecteur d'une revue de sécurité lancée par flow-board : après la revue d'un groupe, après celle d'un parcours sans groupes, ou par le bouton « ⛨ Revue de sécurité ». Il reprend la méthode de `/security-review` de Claude Code (catégories, exclusions, une recherche puis une vérification par faille, seuil de confiance, rapport détaillé) et garde ce que la revue de flow-board fait en plus : la plage exacte du groupe, le contexte du projet, les choix déclarés, la lecture seule.
 
-Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de consignes (périmètre, fichier des choix déclarés, points réservés à la personne). Lis les deux avant de commencer.
+Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de consignes (périmètre, fichier des choix déclarés, points réservés à la personne). Lis les deux, puis lance tout de suite la recherche (section 5) : ne relis pas le diff toi-même avant, c'est la sous-tâche de recherche qui le lit avec son contexte (une relecture préalable avait coûté 7 minutes sans rien changer à la suite).
 
 ## 1. Choisir l'effort de la revue de sécurité (et de ses vérifications)
 
@@ -12,7 +12,7 @@ Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de 
 
 Sinon `high` : petit diff, affichage, lecture de fichiers propres au plugin, réorganisation sans nouvelle entrée venue de l'extérieur. Dans le doute entre les deux, `xhigh`. Le relecteur écrit en tête de son rapport l'effort choisi et le cas qui l'a décidé.
 
-Celui qui lance le relecteur lui passe cet effort (`model: "opus"`, `effort` choisi) ; le relecteur passe le même à chacune de ses sous-tâches de vérification.
+Celui qui lance le relecteur lui passe cet effort (`model: "opus"`, `effort` choisi) ; le relecteur passe le même à sa sous-tâche de recherche et à chacune de ses sous-tâches de vérification. Pour juger l'enjeu et la taille, la liste des fichiers du diff et `git diff --numstat` suffisent : pas de lecture du diff.
 
 ## 2. Périmètre et contexte
 
@@ -71,12 +71,12 @@ Pour chaque faille qui reste, juge la qualité du signal : un chemin d'attaque c
 
 ## 5. Méthode en trois étapes
 
-1. **Recherche** : une sous-tâche (outil Agent, `model: "opus"` et l'effort choisi, passés explicitement) cherche les failles du diff avec tout ce fichier et le fichier de consignes. Elle rend chaque faille avec son `fichier:ligne`, sa catégorie, sa gravité et son scénario d'attaque.
-2. **Vérification** : pour chaque faille trouvée, une sous-tâche de vérification (outil Agent, `model: "opus"` et le même effort, passés explicitement), toutes lancées en parallèle dans un seul message. Chacune essaie d'en faire un faux positif en relisant le code (exclusions, précédents, gardes existantes) et rend une note de confiance de 1 à 10 :
+1. **Recherche** : la première chose que fait le relecteur, sans relecture préalable du diff : une sous-tâche (outil Agent, `model: "opus"` et l'effort choisi, passés explicitement) cherche les failles du diff avec tout ce fichier et le fichier de consignes. Elle rend chaque faille avec son `fichier:ligne`, sa catégorie, sa gravité et son scénario d'attaque.
+2. **Vérification** : pour chaque faille trouvée de gravité **moyenne ou haute**, une sous-tâche de vérification (outil Agent, `model: "opus"` et le même effort, passés explicitement), toutes lancées en parallèle dans un seul message. Une faille de gravité basse n'est pas vérifiée : elle va droit dans la liste « à surveiller » (vérifier des candidats déjà jugés bas coûtait des passes xhigh sans rien garder). Chaque sous-tâche essaie d'en faire un faux positif en relisant le code (exclusions, précédents, gardes existantes) et rend une note de confiance de 1 à 10 :
    - 1 à 3 : probablement un faux positif ;
    - 4 à 6 : à creuser ;
    - 7 à 10 : probablement une vraie faille.
-3. **Tri** : une faille notée **8 ou plus**, de gravité haute ou moyenne, est **gardée**. Une faille notée 5 à 7, ou de gravité basse, va dans la liste **« à surveiller »**, sans être supprimée. En dessous de 5, elle est écartée.
+3. **Tri** : une faille notée **8 ou plus**, de gravité haute ou moyenne, est **gardée**. Une faille notée 5 à 7, ou de gravité basse (non vérifiée), va dans la liste **« à surveiller »**, sans être supprimée. En dessous de 5, elle est écartée.
 
 Gravité :
 - **Haute** : exploitable directement, jusqu'à l'exécution de code, une fuite de données ou un contournement d'authentification ;
@@ -98,9 +98,13 @@ Puis chaque faille gardée, numérotée F1, F2… :
 - Recommandation : le correctif proposé, prêt à appliquer : ce qu'il change, fichier par fichier, et le choix qu'il implique s'il y en a un (à trancher par la personne).
 ```
 
-Puis la liste « à surveiller » (notées 5 à 7, gravité basse, absence de durcissement), une ligne chacune avec son `fichier:ligne` et sa note. Puis, à part, ce que le diff rend exploitable dans le code déjà livré, et les constats sur du code antérieur au lot.
+Puis la liste « à surveiller » (notées 5 à 7, gravité basse non vérifiée, absence de durcissement), une ligne chacune avec son `fichier:ligne` et sa note. Puis, à part, ce que le diff rend exploitable dans le code déjà livré, et les constats sur du code antérieur au lot.
 
-## 7. Correctifs
+## 7. Après les correctifs de la revue du groupe
+
+Pas de seconde passe sur le diff des correctifs de la revue du groupe (une seconde passe de 33 minutes sur 111 lignes n'avait rien trouvé), sauf dans deux cas : ce diff touche une zone coûteuse de la section 1 (« Enjeu »), ou il dépasse 150 lignes modifiées hors tests (comptées par `git diff --numstat`, sans fichiers générés ni binaires). Alors une seule passe, en effort `high`, sans sous-tâches de vérification : le relecteur cherche lui-même dans ce seul diff et rend ses constats au format de la section 6, la note de confiance étant la sienne.
+
+## 8. Correctifs
 
 La revue ne corrige rien : elle reste en lecture seule, et la personne décide. Chaque faille gardée arrive avec son correctif proposé (section 6). Une réponse de la personne comme « corrige F1 et F3 » suffit : la session applique ces correctifs, les teste, les commite, puis envoie à l'outil flow le nombre corrigé dans `fixed`. Une faille gardée laissée ouverte reçoit une tâche du suivi.
 

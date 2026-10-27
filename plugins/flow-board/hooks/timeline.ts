@@ -79,7 +79,8 @@ export const maskSecrets = (text: string): string =>
     .replace(new RegExp(`(--?${SECRET_NAME}(?:=|\\s+))(?!-)(${VALUE})`, 'gi'), (_m, head: string, value: string) => `${head}${maskValue(value)}`)
     .replace(new RegExp(`(\\b${SECRET_NAME}=)(${VALUE.replace("[^\\s'\"]+", "[^\\s'\"&;]+")})`, 'gi'), (_m, head: string, value: string) => `${head}${maskValue(value)}`)
     .replace(new RegExp(`(["']${SECRET_NAME}["']\\s*:\\s*["'])[^"']+`, 'gi'), `$1${MASKED}`)
-    .replace(new RegExp(`(\\b${SECRET_NAME}\\s*:[ \\t]*)(${VALUE})`, 'gi'), (_m, head: string, value: string) => `${head}${maskValue(value)}`)
+    // Le nom entre guillemets et la valeur sans (`"client_secret": abc`, trouvé par le test de propriétés) : masquée aussi.
+    .replace(new RegExp(`(\\b${SECRET_NAME}["']?\\s*:[ \\t]*)(${VALUE})`, 'gi'), (_m, head: string, value: string) => `${head}${maskValue(value)}`)
     .replace(/((?:^|\s)(?:-u|--user)(?:\s+|=)(["'])[^\s:'"]{1,200}:)[^"'\n]{1,400}(?=\2)/g, `$1${MASKED}`)
     .replace(/((?:^|\s)(?:-u|--user)(?:\s+|=)[^\s:'"]{1,200}:)[^\s'"]+/g, `$1${MASKED}`)
     .replace(/(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n;|&]{0,400}?\s-p)(?=\S)(?!-)("[^"\n]{0,400}"|'[^'\n]{0,400}'|[^\s'"]+)/g, (_m, head: string, value: string) => `${head}${maskValue(value)}`)

@@ -51,15 +51,52 @@ test('dans la discussion, chaque revue reçoit ses consignes par un fichier, sur
   expect(implement).toContain('/code-review <level> <base>..HEAD consignes : <path>')
   expect(implement).toContain('never a commit hash alone')
   expect(implement).toContain('the points left to the user')
-  // Une zone sensible : pas de --fix, le relecteur n'applique que ce qu'il retient.
-  expect(implement).toContain('without --fix: the reviewer applies itself only the findings it keeps')
+  // Une zone sensible : pas de --fix, la session n'applique que ce qu'elle retient.
+  expect(implement).toContain('without --fix: the session applies itself only the findings it keeps')
   // Un relecteur n'écrit jamais dans l'arbre : la preuve rouge reste à la session.
   expect(implement).toContain('never write in the working tree, not even for a moment')
   // Les constats triés : seuls les importants sont corrigés, une remarque mineure ne coûte pas un tour de revue.
   expect(implement).toContain('tag every finding Important, Nit or Pre-existing')
-  expect(implement).toContain('the Nits (style, naming, a cleanup that changes no behaviour) are listed and not fixed')
+  expect(implement).toContain('the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail')
   expect(implement).toContain('for a defect, name its class')
   expect(implement).toContain('config/rules/agents.md')
+  // L2 a : la passe « bogues » d'un ticket sensible relit un instantané posé sur une référence à part.
+  expect(implement).toContain('git add <the ticket\'s files, by path>, then git diff --cached --name-only must list the ticket\'s files and nothing else')
+  expect(implement).toContain('git write-tree (prints <tree>), git commit-tree <tree> -p HEAD -m "flow-board snapshot <ticket id>" (prints <snapshot>), git update-ref refs/worktree/flow-board/<ticket id> <snapshot>')
+  expect(implement).toContain('Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id>')
+  expect(implement).toContain('a next ticket that touches the same files waits')
+  expect(implement).not.toContain('git worktree add')
+  expect(implement).toContain("The ticket's real commit still comes after its review: git add each of its files again")
+  expect(implement).not.toMatch(/\$\(/)
+})
+
+// Rétro de l'onglet Agents : groupes trop gros (L3 a), ticket sensible en tête sans raison, écriture
+// hors du dépôt découverte en route, décisions sensibles nées des revues, skill cité sans son nom.
+test('le découpage borne les groupes à 5 tickets, range le ticket sensible, et fait trancher au cadrage', async ($, on) => {
+  mock.clock(on, { now: 96_200_000 })
+  world(on)
+  await start($)
+  const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
+  expect(tickets).toContain('A group holds 5 tickets at most: the context of a linked session reached 820 to 920k tokens, close to its ceiling of about 1M, for 6 tickets (the first ticket costs 375 to 500k, each next one 60 to 150k)')
+  expect(tickets).toContain('keep a sensitive ticket with other tickets rather than alone')
+  expect(tickets).toContain('In a group, a sensitive ticket goes first only when it blocks the next one')
+  expect(tickets).toContain('A write planned outside the repository (a file of another repository, of ~/.claude or anywhere else on the machine) is a decision to take with the user before the group is launched')
+  expect(tickets).toContain('erasures that overlap, a resume after an interruption, the state after /reload-plugins, and what a failure message says')
+  expect(tickets).toContain('the one-sentence invariant of its persisted data')
+  expect(tickets).not.toContain('« charger le skill <name> »')
+})
+
+test('la spec fait trancher les cas sensibles et nomme le skill dont elle a besoin ; la passe « bogues » reçoit l’invariant', async ($, on) => {
+  mock.clock(on, { now: 96_300_000 })
+  world(on)
+  await start($)
+  const spec = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text as string
+  expect(spec).toContain('For a ticket in a sensitive area, settle with the user while framing')
+  expect(spec).toContain('the instructions file of its bug pass copies it')
+  expect(spec).toContain('says « charger le skill <name> » where it needs it')
+  expect(spec).not.toContain('A group holds 5 tickets at most')
+  const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
+  expect(implement).toContain("and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it")
 })
 
 test('dans une session liée, les consignes de revue passent par un fichier et la revue du groupe vise une plage', async ($, on) => {
@@ -76,13 +113,22 @@ test('dans une session liée, les consignes de revue passent par un fichier et l
   expect(text).toContain('jamais un hash seul')
   expect(text).toContain("ne jamais écrire dans l'arbre de travail, même un instant")
   expect(text).toContain('étiqueter chaque constat Important, Mineur ou Antérieur')
-  expect(text).toContain('les Mineurs (style, nommage, nettoyage qui ne change aucun comportement) sont listés sans être corrigés')
+  expect(text).toContain('les Mineurs (style, nommage, nettoyage qui ne change aucun comportement) ne sont pas corrigés et se rendent en un compte, sans détail')
   expect(text).toContain('pour un défaut, nommer sa classe')
-  expect(text).toContain("sans --fix : le relecteur applique lui-même les seuls constats qu'il retient")
+  expect(text).toContain("sans --fix : la session applique elle-même les seuls constats qu'elle retient")
   // Les arguments donnés au skill portent la cible et le chemin des consignes.
   expect(text).toContain('arguments « high --fix <base>..HEAD consignes : <chemin> »')
-  expect(text).toContain('arguments « xhigh <base>..HEAD consignes : <chemin> »')
+  expect(text).toContain("arguments « <niveau> <plage de l'instantané> consignes : <chemin> »")
   // La revue du groupe a pour cible la plage de sa branche, sans « le nom de la branche » en repli.
   expect(text).toContain("avec pour cible <base>..HEAD (<base> : le commit d'où part sa branche)")
   expect(text).not.toContain('lui donner le nom de la branche')
+  // L2 a : l'instantané du ticket sensible, la cible de ses revues, le ticket suivant dans un autre dossier.
+  expect(text).toContain('git update-ref refs/worktree/flow-board/<id du ticket> <instantané>')
+  expect(text).toContain('les deux revues lisent alors la plage refs/worktree/flow-board/<id du ticket>^..refs/worktree/flow-board/<id du ticket>')
+  expect(text).toContain('le vrai commit du ticket vient toujours après sa revue')
+  // p2 : la passe « bogues » reçoit l'invariant du ticket.
+  expect(text).toContain("et dans son fichier de consignes l'invariant du ticket quand il en a un")
+  // r6 : pendant une revue en arrière-plan, la session avance et pose ses questions prêtes.
+  expect(text).toContain("pendant une revue qui tourne en arrière-plan, avancer ce qui ne dépend pas d'elle")
+  expect(text).toContain('me poser tout de suite une question prête, sans attendre la fin de la revue')
 })

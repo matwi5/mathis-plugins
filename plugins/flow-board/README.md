@@ -7,7 +7,7 @@ Tableau de bord en direct du workflow [mattpocock-skills](https://github.com/mat
 - **Il garde les parcours par projet.** Plusieurs discussions peuvent travailler sur le même projet sans se marcher dessus.
 - **Il suit les conventions de livraison du plugin `project`** : `/project:sync`, `/project:version`, `/project:push`, `/project:pr`.
 
-Version actuelle : **0.58.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.59.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -304,7 +304,7 @@ Dans l'onglet Parcours, les tickets sont alors rangés par vague puis par groupe
 - régler d'abord avec la personne ce dont les sessions auront besoin (une décision, un accès, un geste qui lui est réservé) ;
 - lancer une session par groupe, avec un titre de la forme « <parcours> › Groupe <id> · <thème> » : `start_session` dans l'app (`context` « fresh », `wake_when_done`, un worktree, ou le dossier s'il n'a pas de git), `claude --bg -n "<parcours> › Groupe <id> · …"` dans le CLI (`-w groupe-<id>` dans un dépôt git). Depuis la 0.53.0, Claude choisit l'effort de chaque session (`effort` de `start_session`, `--effort` de `claude --bg`) : medium par défaut, high si le groupe a un ticket qui touche une zone sensible, s'il reste des choix de conception ou s'il touche plusieurs modules, et il le dit en une ligne ; avant, la session prenait l'effort de la discussion (l'app ne lui en donne jamais un plus haut). Le mod relève l'id de la session dans la réponse de `start_session` ou dans la sortie de `claude --bg`, et le range au groupe que le titre nomme (« ↗ en cours · session liée » depuis la 0.56.0, « ↗ session liée au travail » avant) ;
 - avant la première session liée du parcours (depuis la 0.54.0), te demander de renommer la discussion de son nom définitif et attendre que ce soit fait : le nom donné dans les briefs ne bouge plus ensuite (au début de l'implémentation, la consigne d'`/implement` le rappelle) ;
-- rédiger le background sans y reprendre le texte des règles (depuis la 0.54.0 : écritures permises, gestes réservés, dépôt public, modèle et effort des revues se citent par leur document, une copie se périmait) ; il ne garde que ce qui varie : le projet, les tickets, ce que font les autres sessions, les décisions par renvoi, le chemin du fichier des choix déclarés ; puis le prompt de chaque session : appeler d'abord l'outil avec `{"delegate": "<id du parcours>", "group": "<id du groupe>", "main": "[ref]"}` (`main` : la discussion principale, depuis la 0.45.0, par sa seule référence depuis la 0.56.0 ; chaque réponse de l'outil rappelle alors comment la joindre) ; puis faire les tickets du groupe dans l'ordre, chacun avec `/mattpocock-skills:tdd`, les contrôles, `/mattpocock-skills:code-review` sur le seul ticket (même pour un petit diff) et un commit ; pour un ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), la passe « bogues » `/code-review xhigh` part dans le même message que cette revue, sur le même périmètre, avec le chemin du fichier des choix déjà déclarés (depuis la 0.54.0 ; avant, leur liste) et la consigne des relecteurs ; une fois tous commités, lancer elle-même `/code-review high --fix` sur le groupe, dans un sous-agent relecteur (general-purpose, Opus, effort high depuis la 0.52.0) qui applique lui-même ses correctifs (depuis la 0.49.0 ; le seul sous-agent qui écrit), avec cette même liste et la consigne de se concentrer sur les interactions entre les tickets (elle ne tranche pas un conflit entre la spec et une consigne : elle le remonte, depuis la 0.46.0), puis relire le diff de ses correctifs, relancer les contrôles et les commiter ; puis, si elle la juge utile, confier la revue de sécurité à un sous-agent relecteur (general-purpose, Opus, lecture seule ; effort `xhigh` jusqu’à la 0.57.1, `high` ou `xhigh` selon la méthode depuis la 0.58.0) limité à `git diff <base>..HEAD`, avec les critères de `/security-review`, sans corriger ses failles (depuis la 0.45.1 ; avant, elle lançait `/security-review`, qui calcule son diff contre la branche par défaut et relisait aussi les autres groupes) ; sans autre sous-agent qui écrit ; écrire chaque script par Write puis le lancer par une commande simple, avec le chemin absolu de son dossier temporaire écrit en clair (lu une fois par `printenv CLAUDE_JOB_DIR`) ; donner un délai maximal à chaque commande longue et ne jamais rendre la main en attendant un processus d'arrière-plan qui n'en a pas (le surveiller par Monitor ou l'arrêter, depuis la 0.54.0) ; et finir par un compte rendu (tickets, revue du groupe, revue de sécurité), envoyé par SendMessage et, depuis la 0.54.0, déposé aussi par l'outil (`{"report": "…"}`) dans le relais du parcours. Depuis la 0.38.0, les étapes d'`/implement` sont écrites en clair : `/mattpocock-skills:implement` est réservé à l'utilisateur, une session ne peut pas le lancer par l'outil Skill.
+- rédiger le background sans y reprendre le texte des règles (depuis la 0.54.0 : écritures permises, gestes réservés, dépôt public, modèle et effort des revues se citent par leur document, une copie se périmait) ; il ne garde que ce qui varie : le projet, les tickets, ce que font les autres sessions, les décisions par renvoi, le chemin du fichier des choix déclarés ; puis le prompt de chaque session : appeler d'abord l'outil avec `{"delegate": "<id du parcours>", "group": "<id du groupe>", "main": "[ref]"}` (`main` : la discussion principale, depuis la 0.45.0, par sa seule référence depuis la 0.56.0 ; chaque réponse de l'outil rappelle alors comment la joindre) ; puis faire les tickets du groupe dans l'ordre, chacun avec `/mattpocock-skills:tdd`, les contrôles, `/mattpocock-skills:code-review` sur le seul ticket (même pour un petit diff) et un commit ; pour un ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), la passe « bogues » `/code-review <niveau>` (voir le tableau des revues) part dans le même message que cette revue, sur le même périmètre, avec le chemin du fichier des choix déjà déclarés (depuis la 0.54.0 ; avant, leur liste) et la consigne des relecteurs ; une fois tous commités, lancer elle-même `/code-review high --fix` sur le groupe, dans un sous-agent relecteur (general-purpose, Opus, effort high depuis la 0.52.0) qui applique lui-même ses correctifs (depuis la 0.49.0 ; le seul sous-agent qui écrit), avec cette même liste et la consigne de se concentrer sur les interactions entre les tickets (elle ne tranche pas un conflit entre la spec et une consigne : elle le remonte, depuis la 0.46.0), puis relire le diff de ses correctifs, relancer les contrôles et les commiter ; puis, si elle la juge utile, confier la revue de sécurité à un sous-agent relecteur (general-purpose, Opus, lecture seule ; effort `xhigh` jusqu’à la 0.57.1, `high` ou `xhigh` selon la méthode depuis la 0.58.0) limité à `git diff <base>..HEAD`, avec les critères de `/security-review`, sans corriger ses failles (depuis la 0.45.1 ; avant, elle lançait `/security-review`, qui calcule son diff contre la branche par défaut et relisait aussi les autres groupes) ; sans autre sous-agent qui écrit ; écrire chaque script par Write puis le lancer par une commande simple, avec le chemin absolu de son dossier temporaire écrit en clair (lu une fois par `printenv CLAUDE_JOB_DIR`) ; donner un délai maximal à chaque commande longue et ne jamais rendre la main en attendant un processus d'arrière-plan qui n'en a pas (le surveiller par Monitor ou l'arrêter, depuis la 0.54.0) ; et finir par un compte rendu (tickets, revue du groupe, revue de sécurité), envoyé par SendMessage et, depuis la 0.54.0, déposé aussi par l'outil (`{"report": "…"}`) dans le relais du parcours. Depuis la 0.38.0, les étapes d'`/implement` sont écrites en clair : `/mattpocock-skills:implement` est réservé à l'utilisateur, une session ne peut pas le lancer par l'outil Skill.
 - pendant le travail, suivre chaque session par l'état git de son worktree, le tracker et `ListAgents`, jamais par `claude logs` (depuis la 0.54.0) ; un compte rendu perdu en route (discussion renommée ou redémarrée) revient par le relais : tant que son groupe n'est pas rendu, chaque réponse de l'outil dans la discussion principale cite le compte rendu déposé, en entier la première fois et à chaque reprise, puis en une ligne qui renvoie au relais ;
 - à la note de fin, dans la discussion principale : vérifier dans le compte rendu de la session que la revue du groupe a tourné (sinon, la lui demander) avant de fusionner sa branche, puis rendre le groupe (`set`, `returned`) et envoyer l'avis et les constats de sécurité de la session (`security`).
 
@@ -337,7 +337,7 @@ Modèle et effort des relecteurs, fichier de consignes, cible (une plage `<base>
 | Quand | Commande | Ce qu'elle vérifie | Où elle apparaît |
 |---|---|---|---|
 | Chaque ticket, avant son commit (après, pour un ticket hors zone sensible, depuis la 0.56.0 : cible `<commit d'avant>..<commit du ticket>`, correctifs dans un commit à part) | `/mattpocock-skills:code-review` (axes Standards et Spec), lancée par Claude, point fixe : le commit d'avant le ticket | Le code du ticket face à son ticket (axe Spec) et aux standards du dépôt | Étape « Revue du ticket » de l'Implémentation |
-| Chaque ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), avant son commit | Passe « bogues » : `/code-review xhigh` de Claude Code (niveau `xhigh` depuis la 0.52.0), lancée par Claude **dans le même message** que la revue du ticket, sur le même périmètre, avec les choix déjà déclarés à ne pas resignaler (depuis la 0.45.1 ; depuis la 0.54.0, le chemin de leur fichier et la consigne des relecteurs) | Les bugs du diff du ticket, que les axes Standards et Spec ne cherchent pas | Une ligne du journal (« Passe « bogues » du ticket en cours ») ; depuis la 0.46.0, elle ne marque plus aucun groupe relu, ici comme dans une session liée |
+| Chaque ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), avant son commit | Passe « bogues » : `/code-review <niveau>` de Claude Code (niveau `xhigh` de la 0.52.0 à la 0.58.0 ; depuis la 0.59.0, `xhigh` si le ticket supprime des données ou touche la concurrence, sinon `high` ou `xhigh` selon le critère d'effort de la méthode de sécurité), lancée par Claude **dans le même message** que la revue du ticket, sur le même périmètre, avec les choix déjà déclarés à ne pas resignaler (depuis la 0.45.1 ; depuis la 0.54.0, le chemin de leur fichier et la consigne des relecteurs) | Les bugs du diff du ticket, que les axes Standards et Spec ne cherchent pas | Une ligne du journal (« Passe « bogues » du ticket en cours ») ; depuis la 0.46.0, elle ne marque plus aucun groupe relu, ici comme dans une session liée |
 | Chaque groupe fini | `/code-review high --fix` de Claude Code (sans `--fix` pour un groupe qui a un ticket sensible, bouton compris, depuis la 0.56.0) (niveau `high` depuis la 0.52.0), lancée par la personne dans la discussion du groupe ; pour un groupe en session liée, par la session elle-même (depuis la 0.38.0) ; dans un sous-agent relecteur (voir la règle) qui applique lui-même ses correctifs, que Claude relit et commite (depuis la 0.49.0) ; avec les choix déjà déclarés (depuis la 0.54.0, le chemin de leur fichier et la consigne des relecteurs), centrée sur les interactions entre les tickets | Les bugs sur le diff du groupe, y compris avec les groupes déjà faits ; `--fix` applique les correctifs à la copie de travail ; un conflit entre la spec et une consigne (CLAUDE.md, ta demande) n'est pas tranché : la revue ne corrige pas ce point et te le remonte | En-tête du groupe fini : « ◆ Revue du groupe · /code-review high --fix » (ou `high` sans `--fix` pour un groupe sensible), puis « ✓ revu » (plus dans la carte « Ensuite » depuis la 0.42.0) |
 | Un groupe relu, si Claude la juge utile (facultative) | Depuis la 0.46.0, un sous-agent relecteur en lecture seule (voir la règle) que Claude lance lui-même, dans la discussion principale comme dans une session liée, limité à `git diff <base du groupe>..HEAD` ; plus `/security-review`, qui calcule son diff contre la branche par défaut | Les failles de sécurité du diff ; il rend un rapport sans rien corriger : tu décides de leur correction | Sous le groupe fini : « conseillée » et la raison de l'avis, ou « sécurité jugée inutile » ; puis « ⛨ sécurité relue », avec ses constats. Le bouton « ⛨ Revue de sécurité · sous-agent relecteur » (ou « La lancer quand même ») la demande à Claude s'il ne l'a pas lancée |
 
@@ -349,11 +349,11 @@ La revue d'un groupe n'est pas une phase de la feuille de route : c'est un évé
 
 **Avis sécurité sans groupes (depuis la 0.28.0).** Dans un parcours sans groupes (Relecture de branche, et la phase Revue de Chasse au bug, TDD ou Revue de code), Claude juge si une revue de sécurité vaut la peine pour **tout le lot**, une fois la revue faite, et la lance lui-même si oui (sous-agent relecteur limité aux changements relus, depuis la 0.46.0) ; l'avis et le bouton « ⛨ Revue de sécurité » s'affichent dans la carte de la phase, puis « ⛨ sécurité relue ».
 
-**Revues d'un groupe en session liée (depuis la 0.38.0).** La session liée lance elle-même `/code-review --fix` une fois ses tickets commités, puis (depuis la 0.56.0 : dans le même message) la revue de sécurité si elle la juge utile (un sous-agent relecteur depuis la 0.45.1) ; elle ne corrige pas les failles trouvées, qui vont dans son compte rendu. Depuis la 0.49.0, `/code-review --fix` tourne dans un sous-agent relecteur (Opus, effort high et niveau `high` depuis la 0.52.0) qui lance la revue et écrit lui-même ses correctifs, pour qu'ils aient le modèle et l'effort du relecteur ; c'est la seule exception à « sans sous-agents qui écrivent » du brief (il tourne seul, une fois les tickets commités), et la session relit le diff de ses correctifs, relance les contrôles et les commite. Le chargement de ces revues dans la session part au relais : la ligne du groupe affiche « ◆ revu » et « ⛨ sécurité relue ». Quand la discussion principale rend le groupe (`returned`), une revue relayée depuis l'envoi du groupe compte comme la sienne : le groupe est relu, et « Version et push » n'attend plus. Sans revue relayée, le groupe rendu attend sa revue, et la réponse de l'outil le dit à Claude.
+**Revues d'un groupe en session liée (depuis la 0.38.0).** La session liée lance elle-même `/code-review --fix` une fois ses tickets commités, puis (depuis la 0.56.0 : dans le même message) la revue de sécurité si elle la juge utile (un sous-agent relecteur depuis la 0.45.1) ; elle ne corrige pas les failles trouvées, qui vont dans son compte rendu. De la 0.49.0 à la 0.58.0, `/code-review --fix` tournait dans un sous-agent relecteur qui lançait la revue et écrivait ses correctifs ; depuis la 0.59.0, la session la lance elle-même par l'outil Skill (exécution dérivée, à l'effort de son niveau `high`), sans sous-agent qui l'enveloppe (il refaisait l'analyse), puis relit le diff de ses correctifs, relance les contrôles et les commite. Le chargement de ces revues dans la session part au relais : la ligne du groupe affiche « ◆ revu » et « ⛨ sécurité relue ». Quand la discussion principale rend le groupe (`returned`), une revue relayée depuis l'envoi du groupe compte comme la sienne : le groupe est relu, et « Version et push » n'attend plus. Sans revue relayée, le groupe rendu attend sa revue, et la réponse de l'outil le dit à Claude.
 
-**Groupe rendu sans revue (depuis la 0.39.0).** Un groupe fait par une session liée garde cette trace (`delegated`) une fois rendu. S'il revient sans revue, son bouton n'est plus « ◆ Revue du groupe · /code-review --fix » : dans la discussion principale, sa branche est déjà fusionnée, et `/code-review` sans cible n'aurait rien à lire tout en marquant le groupe relu. Le bouton devient « ◆ Revue du groupe · session liée ». Il met dans le prompt une demande à Claude : retrouver la session (ListAgents), lui faire remettre sa branche au niveau de la branche principale, lancer `/code-review --fix` sur les seuls commits du groupe dans un sous-agent relecteur qui applique lui-même ses correctifs, les relire et les commiter, puis la revue de sécurité par un sous-agent relecteur si utile. Au compte rendu, Claude fusionne et envoie `{"reviewed": ["<id>"]}`, qui marque le groupe relu, et `security`. Depuis la 0.43.0, quand le compte rendu final de la session dit que la revue du groupe a tourné mais que le relais ne l'a pas vue, Claude envoie `reviewed` avec `returned`, dans le même appel : le groupe revient relu, sans bouton de revue. Les groupes faits dans la discussion gardent le bouton `/code-review --fix`. Un groupe rendu avant la 0.39.0 retrouve cette trace dans le journal du parcours (« ↩ Groupe A rendu par sa session liée »), depuis la 0.42.0. À confirmer à l'usage : que `/code-review` sans cible relise bien, dans un worktree, la branche face à sa base (le brief dit sinon de lui donner le nom de la branche) ; et, depuis la 0.49.0, qu'un sous-agent general-purpose puisse lancer `/code-review --fix` par l'outil Skill et y appliquer ses correctifs.
+**Groupe rendu sans revue (depuis la 0.39.0).** Un groupe fait par une session liée garde cette trace (`delegated`) une fois rendu. S'il revient sans revue, son bouton n'est plus « ◆ Revue du groupe · /code-review --fix » : dans la discussion principale, sa branche est déjà fusionnée, et `/code-review` sans cible n'aurait rien à lire tout en marquant le groupe relu. Le bouton devient « ◆ Revue du groupe · session liée ». Il met dans le prompt une demande à Claude : retrouver la session (ListAgents), lui faire remettre sa branche au niveau de la branche principale, lancer `/code-review --fix` sur les seuls commits du groupe, elle-même par l'outil Skill (depuis la 0.59.0, sans sous-agent qui l'enveloppe), relire ses correctifs et les commiter, puis la revue de sécurité par un sous-agent relecteur si utile. Au compte rendu, Claude fusionne et envoie `{"reviewed": ["<id>"]}`, qui marque le groupe relu, et `security`. Depuis la 0.43.0, quand le compte rendu final de la session dit que la revue du groupe a tourné mais que le relais ne l'a pas vue, Claude envoie `reviewed` avec `returned`, dans le même appel : le groupe revient relu, sans bouton de revue. Les groupes faits dans la discussion gardent le bouton `/code-review --fix`. Un groupe rendu avant la 0.39.0 retrouve cette trace dans le journal du parcours (« ↩ Groupe A rendu par sa session liée »), depuis la 0.42.0. À confirmer à l'usage : que `/code-review` sans cible relise bien, dans un worktree, la branche face à sa base (le brief dit sinon de lui donner le nom de la branche) ; et, depuis la 0.49.0, qu'un sous-agent general-purpose puisse lancer `/code-review --fix` par l'outil Skill et y appliquer ses correctifs.
 
-**Revues allégées (depuis la 0.56.0).** Un groupe d'un seul ticket envoyé avec `"sensitive": false` et `"logic": false` (une icône, un document) n'a pas de revue du groupe : la revue de son ticket suffit, et la ligne du groupe fini affiche « ✓ revu par son ticket » au lieu du bouton. La revue d'un ticket se fait dans un seul relecteur pour les deux axes sous 100 lignes comptées par `git diff --numstat`, sans les fichiers générés ni les binaires, hors zone sensible. La revue de sécurité, en lecture seule, part dans le même message que la revue du groupe, puis relit seulement le diff des correctifs de la revue du groupe. Les constats sur du code antérieur au lot sont classés à part par les relecteurs, non corrigés, et proposés en fin de lot comme un groupe « durcissement ».
+**Revues allégées (depuis la 0.56.0).** Un groupe d'un seul ticket envoyé avec `"sensitive": false` et `"logic": false` (une icône, un document) n'a pas de revue du groupe : la revue de son ticket suffit, et la ligne du groupe fini affiche « ✓ revu par son ticket » au lieu du bouton. La revue d'un ticket se fait dans un seul relecteur pour les deux axes, quelle que soit la taille du diff (depuis la 0.59.0 ; avant, sous 100 lignes seulement) : il lit `CODING_STANDARDS.md` en plus du `CLAUDE.md` et rend ses Mineurs en un compte. La revue de sécurité, en lecture seule, part dans le même message que la revue du groupe ; depuis la 0.59.0, elle ne relit le diff des correctifs de la revue du groupe que s'il touche une zone coûteuse de sa méthode ou dépasse 150 lignes hors tests. Les constats sur du code antérieur au lot sont classés à part par les relecteurs, non corrigés, et proposés en fin de lot comme un groupe « durcissement ».
 
 **Constats triés (depuis la 0.57.0).** La consigne des relecteurs leur fait étiqueter chaque constat « Important », « Nit » (mineur) ou « Pre-existing » (antérieur au lot). Seuls les importants sont corrigés ; les remarques mineures (style, nommage, nettoyage sans effet sur le comportement) sont listées sans être corrigées, pour qu'elles ne coûtent ni commit ni nouveau tour de revue. Pour un défaut, le relecteur nomme sa classe, pour que toutes ses occurrences soient corrigées.
 
@@ -375,12 +375,14 @@ La revue de sécurité ne bloque jamais la livraison et n'est jamais la suite pr
 **Synchronisation avant de modifier le code**
 - Le mod lance `git fetch` en arrière-plan : au démarrage, au début d'une phase qui touche au code, puis toutes les 5 minutes.
 - Il compte ensuite les commits de `origin/main` et de la branche distante suivie qui manquent à la branche locale. Les modifications locales ne comptent pas, `/project:sync` s'en charge.
+- **Là où l'on code** (depuis la 0.59.1) : l'encadré mesure le worktree de la session quand elle travaille dans un autre worktree du dépôt que la racine du projet (par exemple `.claude/worktrees/dev`, le dossier principal restant sur `main` pour un service), et le nomme (« À jour avec origin/main dans .claude/worktrees/dev ») ; sinon, la racine du projet. Le refus, lui, se juge sur le worktree du fichier modifié (`git rev-parse --show-toplevel` depuis son dossier) : un worktree dont la branche contient déjà `origin/main` ne déclenche ni avis ni refus, même si le dossier principal est en retard.
 - Si le distant a avancé :
   - un encadré l'indique, avec la commande à lancer ;
   - la première modification de code est refusée **une fois par avancée du distant**, pour que Claude demande le sync. Une seconde tentative passe.
 - La commande proposée :
   - `/project:sync` d'abord, si la branche distante a bougé ;
-  - `/project:sync base` ensuite, seulement si main est encore en avance après ce premier sync.
+  - `/project:sync base` ensuite, seulement si main est encore en avance après ce premier sync ;
+  - sur main, sans aucun commit local en avance sur `origin/main` : une mise à jour en avance rapide, `git pull --ff-only` dans ce dossier, au lieu de `/project:sync`. Le bouton met dans le prompt une demande à Claude ; le refus lui dit de la proposer et d'attendre l'accord. Quand l'avance ne se mesure pas, `/project:sync` reste proposé.
 - Sans dépôt git, sans distant ou sans réseau, rien n'est demandé. Sans distant `origin`, l'encadré « À jour » n'est pas affiché non plus : il n'y a rien à quoi se comparer.
 - flow-board fonctionne avec n'importe quel hébergeur git (GitHub, GitLab, Bitbucket, serveur maison) : seule la phase « Pull request » est propre à GitHub.
 
@@ -453,6 +455,9 @@ flow-board/
 ├── hooks/
 │   ├── hooks.json               déclare le module register.tsx
 │   ├── register.tsx             branchement : événements, outil flow, commande /flow, stockage, git
+│   ├── registry-file.ts         file d'écriture du registre des agents : lecture, morceaux, file, écriture différée
+│   ├── catch-up.ts              rattrapage du registre par les transcripts, fichiers à part
+│   ├── erase-run.ts             effacement d'un parcours ou d'une discussion : fichiers, clés, traces
 │   ├── catalog.ts               les 27 skills mattpocock, les 4 commandes project, la revue de groupe et le compte rendu : étapes, couleurs, parcours
 │   ├── model.ts                 moteur : transitions pures du parcours (testables sans interface)
 │   ├── view.tsx                 dessin du panneau et du bandeau, toutes surfaces
@@ -468,7 +473,65 @@ flow-board/
 ├── reference/revue-securite.md  méthode fixe de la revue de sécurité, citée par son chemin
 ├── skills/compte-rendu/SKILL.md /flow-board:compte-rendu, le rapport à valider avant la livraison
 ├── types/index.d.ts             contrat de l'état (`PluginState`)
-└── tests/                       410 tests `claude plugin test` (0.58.0)
+└── tests/                       423 tests `claude plugin test` et 9 tests `node --test` (0.59.0)
+    ├── a-tout-moment.test.ts
+    ├── accueil.test.ts
+    ├── archives.test.ts
+    ├── brief-sessions-liees.test.ts
+    ├── cadrage-zone-sensible.test.ts
+    ├── chantier.test.ts
+    ├── compte-rendu.test.ts
+    ├── consignes-revue.test.ts
+    ├── cout.test.ts
+    ├── cycle-de-vie.test.ts
+    ├── decisions.test.ts
+    ├── defauts-demo.test.ts
+    ├── dessin.test.mjs   (node --test : lit les sources, règles de dessin)
+    ├── durcissement.test.ts
+    ├── effacement-onglet.test.ts
+    ├── effacement.test.ts
+    ├── en-cours-parallele.test.ts
+    ├── ensuite.test.ts
+    ├── etapes.test.ts
+    ├── externes.test.ts
+    ├── flow-board.test.tsx
+    ├── frise-onglet.test.ts
+    ├── frise.test.ts
+    ├── groupes.test.ts
+    ├── historique-agents.test.ts
+    ├── imbrication.test.ts
+    ├── ligne-compacte.test.tsx
+    ├── lisibilite.test.ts
+    ├── livraison.test.ts
+    ├── lots-sessions-liees.test.ts
+    ├── masque-proprietes.test.ts
+    ├── mise-de-cote.test.ts
+    ├── multi-sessions.test.ts
+    ├── ouverture.test.ts
+    ├── parallele.test.ts
+    ├── pistes-session-liee.test.ts
+    ├── rattrapage.test.ts
+    ├── registre-agents.test.ts
+    ├── registre-session.test.ts
+    ├── relais-pistes.test.ts
+    ├── relecture-branche.test.ts
+    ├── renommer.test.ts
+    ├── reprise.test.ts
+    ├── retrait.test.ts
+    ├── retro-livraison.test.ts
+    ├── revue-groupe.test.ts
+    ├── revues-allegees.test.ts
+    ├── securite.test.ts
+    ├── selection.test.ts
+    ├── sessions-liees-agents.test.ts
+    ├── sessions-liees-onglet.test.ts
+    ├── suggestions.test.ts
+    ├── suites-groupe-b.test.ts
+    ├── suites-groupe-c.test.ts
+    ├── suites-onglet-agents.test.ts
+    ├── sync.test.ts
+    ├── trouvailles.test.ts
+    └── types-detail.test.ts
 ```
 
 Le moteur (`model.ts`) ne fait que des transitions pures : chacune prend le parcours, applique un signal et rend le nouveau parcours avec les effets d'interface à jouer. `register.tsx` relie ces transitions aux événements de Claude Code et écrit l'état de façon conditionnelle (`ifVersion`).
@@ -483,15 +546,23 @@ claude plugin test plugins/flow-board
 ```
 
 - Les tests montent le panneau et le bandeau sur les surfaces `terminal`, `desktop`, `vscode` et `mobile`. Ils simulent le stockage, git et une seconde discussion.
+- Les modules qui touchent au moteur hors de `register.tsx` (`registry-file.ts`, `catch-up.ts`, `erase-run.ts`) suivent deux règles du chargeur de Claude Code : une fonction qui reçoit `$` et franchit un import s'écrit `function nom($, …) { … }`, jamais `const nom = ($, …) =>` (sinon le module ne charge pas) ; un fichier qui lit ou met à jour un atome le déclare lui-même, avec un plugin et une clé littéraux (le défaut partagé de l'interface est `EMPTY_UI`, dans `model.ts`). Un `let` importé ne s'écrit que par une fonction de son module (`markRebuildNeeded`, `clearHistoryShown`).
 - Dans le kit de test, un hook qui remplace une opération du moteur (`store.get`, `session.id`, `process.run`…) doit rendre `{ value }`.
 - Les versions précédentes sont dans l'historique git du dépôt ; celles d'avant le passage à git restent dans `~/.claude/mods-archives/flow-board-<version>` sur le PC Windows.
 
 ---
 
+**Rétro de l'onglet Agents (depuis la 0.59.0).**
+- **Instantané d'un ticket sensible** : avant sa passe « bogues », la session fige le ticket sur `refs/worktree/flow-board/<ticket>`, une référence propre à son worktree (`git add` de ses fichiers, index vérifié par `git diff --cached --name-only`, `git write-tree`, `git commit-tree -p HEAD`, `git update-ref`, chaque commande seule) ; les deux revues relisent `<ref>^..<ref>` et les fichiers à cette référence, et la session avance pendant ce temps ce qui ne touche aucun fichier du ticket (pas d'autre dossier : le garde-fou d'un worktree y refuse git). Au commit, chaque fichier du ticket se ré-ajoute, correctifs compris.
+- **Fichiers à côté du relais** (`~/.claude/flow-board/relais/`) : `<parcours>.main.json`, la référence du moment de la discussion principale, écrite par elle seule à la reprise (`{"resume": …, "main": "[<ref>]"}`) et relue par chaque session liée à son appel de l'outil flow ; `<parcours>.<session>.report.md`, le compte rendu entier d'une session liée, écrit par elle seule. Supprimer le parcours efface les deux, leurs chemins calculés d'après les ids. Sans le dossier, la référence passe par `$.store` (`relay-main:<parcours>`) et le compte rendu reste coupé à 8 000 caractères, ce que la réponse dit.
+- **`review`, `security` et `withdrawn` en session liée** : relayés ; au retour du groupe, les constats s'ajoutent aux statistiques de l'implémentation et la revue de sécurité vaut celle du groupe, sauf si la discussion principale en a déjà envoyé une.
+- **Rétro** : lancée pendant le parcours de la discussion, elle ouvre son propre parcours, « Rétrospective · <parcours> », au lieu de reprendre un autre parcours en pause qui aurait une phase Rétro.
+- **`/implement` d'un groupe déjà passé** : quand ses arguments nomment un groupe (« groupe B ») ou un id de ticket du parcours de la discussion, le parcours revient à son implémentation (nouveau tour) et son compte rendu redevient à faire.
+
 ## Limites connues
 
 - **Animations.** Les dessins sont des images : sur le desktop, les animations SVG ne tournent probablement plus. Le mode interactif tournait, mais il donnait un fond blanc qui clignotait à chaque redessin.
-- **Demande de sync.** Un fichier de code modifié par une commande shell, et non par l'outil d'édition, échappe au refus. La consigne donnée à Claude couvre ce cas.
+- **Demande de sync.** Un fichier de code modifié par une commande shell, et non par l'outil d'édition, échappe au refus. La consigne donnée à Claude couvre ce cas. Depuis la 0.59.1, l'encadré suit le dossier de la session (`$.session.cwd()`) : qu'il suive un `cd` du shell vers un worktree reste à confirmer à l'usage, et un `cd` seul ne relance pas la mesure (elle attend la vérification suivante, toutes les 5 minutes, ou un `git fetch`, `pull`, `rebase` ou `merge`). Le refus « une fois par avancée du distant » garde une seule mémoire : des modifications qui alternent entre deux worktrees en retard tous les deux sont refusées une fois à chaque changement de worktree.
 - **Ligne compacte de l'outil `flow`.** Claude Code ne dit pas à un mod si la vue détaillée (ctrl+o) est ouverte sur une ligne d'outil : la ligne compacte y reste, sans le JSON de l'appel.
 - **Données de suivi.** Elles dépendent en partie des comptes rendus de Claude : étapes, éléments suivis, dépendances.
 - **Trouvé en route.** Seules les créations par `create_tasks` d'Asana et `gh issue create` sont vues. Une tâche créée autrement (interface d'Asana, autre outil) n'apparaît que si Claude l'envoie au panneau.

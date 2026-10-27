@@ -4,9 +4,50 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.59.1 — 2026-10-27
+
+### Corrigé
+- **« Main a N nouveaux commits · /project:sync » à tort dans un dépôt qui code dans un worktree** : le retard se mesurait toujours dans la racine du projet, le dossier principal resté sur `main` (en retard jusqu'à son `git pull --ff-only`), jamais dans le worktree où l'on code. L'encadré mesure désormais le worktree de la session quand il diffère de la racine, et le refus avant une modification de code se juge sur le worktree du fichier modifié (`git rev-parse --show-toplevel` depuis son dossier, en remontant pour un dossier pas encore créé), par une mesure locale sans fetch. Un worktree qui contient déjà `origin/main` ne déclenche plus ni avis ni refus.
+- **Dossier sur la branche principale, seulement en retard** (aucun commit local en avance, mesuré par `origin/main..HEAD`) : le conseil devient une mise à jour en avance rapide, `git pull --ff-only` dans ce dossier, au lieu de `/project:sync` ; le bouton « Préparer git pull --ff-only » met dans le prompt une demande à Claude, et le refus lui dit de la proposer et d'attendre l'accord. Avance inconnue : `/project:sync`, comme avant.
+- Le retard est remesuré aussi après un `git -C <dossier> pull` (ou fetch, rebase, merge).
+
+---
+
+## 0.59.0 — 2026-10-27
+
+Les pistes de la rétro du parcours « Onglet Agents flow-board » et celles de flow-board de la rétro « Durée des requêtes » (réponses de Mathis dans le dépôt privé).
+
+### Modifié
+- **Revue du groupe sans sous-agent qui l'enveloppe** : la session lance elle-même `/code-review high --fix <base>..HEAD consignes : <chemin>` par l'outil Skill (exécution dérivée, à l'effort de son niveau), trie ses constats et commite ses correctifs ; le sous-agent relecteur refaisait l'analyse (38 à 46 % du coût d'une passe). Plus d'exception « sous-agent qui écrit » dans le brief des sessions liées. Seule une session qui ne tourne pas sur Opus la confie encore à un relecteur Opus.
+- **Revue de sécurité économe** : la recherche part d'abord, sans relecture préalable du diff ; seuls les candidats de gravité moyenne ou haute sont vérifiés ; pas de seconde passe sur les correctifs de la revue du groupe, sauf zone coûteuse ou plus de 150 lignes hors tests, et alors une seule passe high sans vérifications (`reference/revue-securite.md`, section 7).
+- **Un seul relecteur Standards+Spec pour tout ticket**, quelle que soit la taille du diff (plus de seuil des 100 lignes) : il lit `CODING_STANDARDS.md` en plus du `CLAUDE.md` et rend ses Mineurs en un compte.
+- **Niveau de la passe « bogues » selon le ticket** : `xhigh` si le ticket supprime des données ou touche la concurrence, sinon `high` ou `xhigh` selon le critère d'effort de la méthode de sécurité (l'enjeu, la taille). Un essai sur un même diff d'effacement a trouvé 11 défauts importants en xhigh contre 6 en high, pour environ 4 fois le temps.
+- **Instantané avant la passe « bogues »** d'un ticket sensible : `git add` de ses fichiers (index vérifié), `git write-tree`, `git commit-tree -p HEAD`, `git update-ref refs/worktree/flow-board/<ticket>` (propre au worktree) ; ses revues relisent `<ref>^..<ref>`, la session avance ce qui ne touche aucun fichier du ticket ; le vrai commit reste après la revue, fichiers ré-ajoutés.
+- **Brief des sessions liées** : avancer pendant une revue en arrière-plan et poser tout de suite une question prête ; lire chaque document par l'outil Read ; envoyer `review` après chaque revue et `security` après la revue de sécurité ; la version du dépôt des règles communes (`config/rules`) fait foi sur celle installée ; la référence de la discussion principale se relit par l'outil flow, sinon se cherche par le nom du parcours.
+- **Worktree d'un groupe nommé d'après son parcours** : `groupe-<nom court du parcours>-<id>` (le préfixe `groupe-` reste, pour `/stats-board:recap --worktrees`).
+- **Découpage** : un groupe compte 5 tickets au plus (mesure du contexte dans la consigne), un ticket sensible ne passe en tête que s'il bloque le suivant, une écriture hors du dépôt se décide avant le lancement ; cadrage d'un ticket sensible : cas à trancher (effacements qui se chevauchent, reprise, état après `/reload-plugins`, message d'échec) et invariant, recopié par la passe « bogues » ; une spec qui s'appuie sur un skill dit « charger le skill X ».
+- **Revue limitée aux chemins du parcours** (pathspec) quand d'autres parcours commitent sur la branche ; la consigne de la revue du groupe donne sa commande exacte, plage comprise.
+- `register.tsx` scindé : le registre des agents (`registry-file.ts`), le rattrapage (`catch-up.ts`) et l'effacement (`erase-run.ts`) vivent à part, sans changement de comportement.
+
+### Ajouté
+- **Référence de la discussion principale qui suit ses redémarrages** : `{"resume": "<id>", "main": "[<ref>]"}` l'écrit à côté du relais (`<parcours>.main.json`) ; une session liée la relit à chaque appel de l'outil flow et la réponse dit la nouvelle.
+- **Compte rendu entier** : une session liée écrit son compte rendu complet à côté du relais (`<parcours>.<session>.report.md`) ; le relais en garde 8 000 caractères et dit la coupe, avec le fichier.
+- **`review` et `security` en session liée** : relayés, puis comptés au retour du groupe (statistiques de l'implémentation, revue de sécurité du groupe).
+- **`withdrawn`** : retirer ou remplacer un choix déclaré, avec sa raison ; le fichier des choix et le panneau ne montrent que les choix en vigueur.
+- **Coût d'un sous-agent avec ses descendants** dans sa carte de détail (un relecteur et ses chercheurs).
+- **Contrôles du dessin** : `tests/dessin.test.mjs` (node --test) refuse deux espaces ordinaires de suite dans un texte, `gap` et une prop à `undefined` ; `noUnusedLocals` dans le `tsconfig.json`.
+- **Test de propriétés du masque de secrets** (600 cas générés) ; il a trouvé un trou, corrigé : `"client_secret": valeur` sans guillemets autour de la valeur.
+
+### Corrigé
+- Une rétro lancée pendant le parcours de la discussion reprenait un autre parcours en pause qui avait une phase Rétro : elle ouvre maintenant son parcours, titré « Rétrospective · <parcours> ».
+- `/implement` lancé pour un groupe ou des tickets du parcours, une fois son implémentation passée, en ouvrait un second : il revient à l'implémentation de ce parcours (nouveau tour), et son compte rendu est à refaire.
+- Deux tests lents ont 15 s : sous la charge d'une passe complète, ils dépassaient les 5 s par défaut.
+
+---
+
 ## 0.58.0 — 2026-10-26
 
-Parcours « Onglet Agents flow-board » (spec et décisions de Mathis dans le dépôt privé, `travail/onglet-agents/`) : un suivi complet, fiable et visuel de l'orchestrateur, de ses sessions liées et de leurs sous-agents, pendant un parcours comme sans, et après l'archivage.
+Parcours « Onglet Agents flow-board » (spec et décisions de Mathis dans le dépôt privé) : un suivi complet, fiable et visuel de l'orchestrateur, de ses sessions liées et de leurs sous-agents, pendant un parcours comme sans, et après l'archivage.
 
 ### Ajouté
 - **Onglet « Agents »** (après Parcours), qui remplace l'encadré « Sous-agents » de l'onglet Parcours (une ligne de résumé « ◉ N agents au travail · ▸ Agents » y mène). En tête, un sélecteur d'historique (« Ici, maintenant », les parcours archivés compris, puis les discussions sans parcours du projet qui ont lancé des agents) et une pastille par session liée avec son état (au travail, rendue, échouée, fermée), « ◆ Orchestrateur » par défaut. Puis un résumé (agents, durée, gain par rapport à une exécution en série, coût estimé « ≈ ») et la frise.

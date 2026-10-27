@@ -5,7 +5,7 @@
 // - Une même session peut tourner dans deux processus (reprise) : chaque écriture relit le
 //   fichier et fusionne, l'état le plus avancé de chaque sous-agent l'emporte (S7).
 // - Un fichier illisible est réécrit avec ce que la session sait (S8) ; le rattrapage par
-//   transcript (ticket 08) rendra ce qui manque.
+//   transcript (catch-up.ts) rendra ce qui manque.
 // - Sur le disque, jamais de rapport ni de texte de message : la description, le prompt (Q8), des chiffres.
 
 import type { AgentLane, AgentMark, AgentSegment, AgentStatus, AgentType, CarrySpan, LinkedLaunch, RegistryAgent, RegistryPart, Run, SessionRegistry } from '../types'

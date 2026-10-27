@@ -29,9 +29,6 @@ const world = (on: any) => {
   return mem
 }
 
-const edit = ($: any, path: string) =>
-  $.tool.call({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b' }) as Promise<{ deny?: string }>
-
 test('le parcours d’implémentation passe par le Compte rendu, puis Version et push, puis Pull request (/project:pr)', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 30_000_000 })
   world(on)

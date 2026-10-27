@@ -307,7 +307,7 @@ const WAIT_TINT: Record<'waitAgent' | 'waitPerson' | 'waitBg', string> = { waitA
 
 /**
  * Une piste de la frise : une barre fine et arrondie par segment sur un rail pâle (variante A de
- * la planche `travail/onglet-agents/planches/frise.html`). Réflexion pâle, rédaction pleine, outil
+ * la planche de la frise validée par Mathis, dans le dépôt privé). Réflexion pâle, rédaction pleine, outil
  * mi-teinte avec le glyphe de sa famille quand la place le permet, attentes hachurées en trois
  * teintes ; repères au-dessus, points de relais sur le rail, « ⫽ » sur les pauses compressées.
  * Les parts de moins d'un pixel se fondent dans la précédente de même sorte : un SVG reste petit

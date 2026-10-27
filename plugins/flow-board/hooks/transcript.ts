@@ -1,4 +1,4 @@
-// Rattrapage par transcripts (ticket 08) : les transcripts de Claude Code font foi pour les
+// Rattrapage par transcripts : les transcripts de Claude Code font foi pour les
 // chiffres. Fonctions pures ; la lecture des fichiers vit dans register.tsx.
 //
 // Ce que les lignes JSONL donnent (vérifié sur le disque le 26/10/2026, noms de champs seulement) :

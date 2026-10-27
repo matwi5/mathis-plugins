@@ -302,7 +302,7 @@ test('P1 : la revue de sécurité et la lecture de transcripts ont des couleurs 
   const svgs = await ui.findAll({ type: 'Svg' })
   const sourceOf = (name: string) => String(svgs.find(svg => String(svg.props.alt).startsWith(name))?.props.source ?? '')
   // Rose pour la sécurité (plus le corail, proche de la mandarine et du rouge) ; vert anis pour les
-  // transcripts (plus le ciel, proche du cyan, ni le bleu des hachures « fond » : B1, ticket 14).
+  // transcripts (plus le ciel, proche du cyan, ni le bleu des hachures « fond » : B1 des suites du groupe B).
   expect(sourceOf('Revue de sécurité du groupe')).toMatch(/#E06C9F/i)
   expect(sourceOf('Revue de sécurité du groupe')).not.toMatch(/#EF7D57/i)
   expect(sourceOf('Lecture des transcripts de la rétro')).toMatch(/#9BC53D/i)

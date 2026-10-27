@@ -38,7 +38,7 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   // Claude sait dès l'implémentation qu'il donnera son avis, puis lancera lui-même le sous-agent relecteur, jamais /security-review.
   expect(coaching).toContain('"advised": true|false')
   expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort high or xhigh as the criterion of the method file decides), read-only, limited to git diff <group base>..HEAD')
-  // Ticket 13 : la méthode fixe, citée par son chemin (tiré de la racine du mod), sans être recopiée.
+  // La méthode fixe, citée par son chemin (tiré de la racine du mod), sans être recopiée.
   expect(coaching).toMatch(/the path of the security review method file, \S+\/reference\/revue-securite\.md \(it follows it:/)
   expect(coaching).not.toContain('effort xhigh)')
   // Les correctifs proposés, acceptés en une ligne ; findings ne compte que les failles gardées.
@@ -76,6 +76,8 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   expect(filled.at(-1)).toContain('je décide de leur correction')
   expect(filled.at(-1)).toMatch(/effort high ou xhigh selon le critère du fichier de méthode\)/)
   expect(filled.at(-1)).toMatch(/le chemin du fichier de méthode de la revue de sécurité, \S+\/reference\/revue-securite\.md/)
+  expect(filled.at(-1)).toContain("la recherche part d'abord, sans relecture préalable du diff")
+  expect(filled.at(-1)).toContain('une vérification par faille de gravité moyenne ou haute seulement')
   expect(filled.at(-1)).toContain('une réponse comme « corrige F1 et F3 » suffit')
   expect(filled.at(-1)).not.toContain('effort xhigh')
   expect(filled.at(-1)).not.toMatch(/copie/)

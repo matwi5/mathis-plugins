@@ -8,7 +8,23 @@ const PANE = {
 } as const
 
 /** Ce que git répond : la branche, la branche principale distante, et le retard de chacune. */
-type Remote = { branch: string; mainSha: string; behindMain: number; upSha: string; behindUp: number; hasUpstream: boolean; url?: string | null }
+type Remote = {
+  branch: string
+  mainSha: string
+  behindMain: number
+  upSha: string
+  behindUp: number
+  hasUpstream: boolean
+  url?: string | null
+  /** Commits locaux absents de origin/main ; absent, git échoue (avance inconnue). */
+  aheadMain?: number
+  /** Le worktree `C:/proj/.claude/worktrees/dev`, s'il existe, et ce que git y répond. */
+  dev?: Omit<Remote, 'mainSha' | 'url' | 'dev' | 'cwd'>
+  /** Le dossier de la session (`$.session.cwd()`) ; `C:/proj` par défaut. */
+  cwd?: string
+}
+
+const DEV = 'C:/proj/.claude/worktrees/dev'
 
 /** Le moteur sous le plugin : un projet `C:/proj` dans un dépôt git dont le test règle le distant. */
 const world = (on: any, remote: Remote) => {
@@ -20,6 +36,7 @@ const world = (on: any, remote: Remote) => {
   on('command.list', () => ({ value: [] }))
   on('session.root', () => ({ value: 'C:/proj' }))
   on('session.id', () => ({ value: 'session-A' }))
+  on('session.cwd', () => ({ value: remote.cwd ?? 'C:/proj' }))
   on('store.get', (_$: unknown, e: { key: string }) => ({ value: mem[e.key] }))
   on('store.set', (_$: unknown, e: { key: string; value: unknown }) => {
     mem[e.key] = e.value
@@ -27,22 +44,28 @@ const world = (on: any, remote: Remote) => {
   })
   on('tool.call', { tool: 'Edit' }, () => ({ result: { filePath: 'x' } }))
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
-  on('process.run', (_$: unknown, e: { argv: readonly string[] }) => {
+  on('process.run', (_$: unknown, e: { argv: readonly string[]; init?: { cwd?: string } }) => {
     const args = e.argv.slice(e.argv.indexOf('core.quotepath=off') + 1).join(' ')
     gitCalls.push(args)
     const out = (stdout: string, exitCode = 0) => ({
       value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
     })
+    const cwd = String(e.init?.cwd ?? '')
+    const inDev = remote.dev !== undefined && (cwd === DEV || cwd.startsWith(`${DEV}/`))
+    if (args === 'rev-parse --show-toplevel') return out(inDev ? DEV : 'C:/proj')
+    // Ce que répond le worktree du dossier où git tourne.
+    const tree = inDev ? { ...remote, ...remote.dev! } : remote
     if (args === 'rev-parse --is-inside-work-tree') return out('true')
     if (args === 'remote get-url origin') return remote.url === null ? out('', 2) : out(remote.url ?? 'git@github.com:me/proj.git')
     if (args.startsWith('fetch')) return out('')
     if (args.startsWith('symbolic-ref')) return out('origin/main')
-    if (args === 'rev-parse --abbrev-ref HEAD') return out(remote.branch)
-    if (args === 'rev-list --count HEAD..origin/main') return out(String(remote.behindMain))
-    if (args.includes('--symbolic-full-name')) return remote.hasUpstream ? out(`origin/${remote.branch}`) : out('', 128)
-    if (args === 'rev-list --count HEAD..@{u}') return out(String(remote.behindUp))
+    if (args === 'rev-parse --abbrev-ref HEAD') return out(tree.branch)
+    if (args === 'rev-list --count HEAD..origin/main') return out(String(tree.behindMain))
+    if (args === 'rev-list --count origin/main..HEAD') return tree.aheadMain === undefined ? out('', 1) : out(String(tree.aheadMain))
+    if (args.includes('--symbolic-full-name')) return tree.hasUpstream ? out(`origin/${tree.branch}`) : out('', 128)
+    if (args === 'rev-list --count HEAD..@{u}') return out(String(tree.behindUp))
     if (args === 'rev-parse origin/main') return out(remote.mainSha)
-    if (args === 'rev-parse @{u}') return out(remote.upSha)
+    if (args === 'rev-parse @{u}') return out(tree.upSha)
     return out('', 1)
   })
   return { mem, gitCalls }
@@ -167,6 +190,116 @@ test('un dépôt sans distant origin : ni « À jour », ni demande de sync', as
     expect(await ui.find({ key: 'sync-now' })).toBeUndefined()
     await ui.unmount()
   }
+})
+
+// ─── Dépôt qui code dans un worktree : le dossier principal reste sur main ─────────────
+
+/** Le dossier principal sur main, qui ne reçoit que des avances rapides, et `dev` dans son worktree. */
+const mainFolder = (behindMain: number, dev: NonNullable<Remote['dev']>, cwd: string): Remote => ({
+  branch: 'main',
+  mainSha: 'm1',
+  behindMain,
+  upSha: 'm1',
+  behindUp: behindMain,
+  hasUpstream: true,
+  aheadMain: 0,
+  dev,
+  cwd,
+})
+
+test('dossier principal sur main en retard, worktree dev à jour : ni avis ni refus pour un fichier du worktree', async ($, on) => {
+  const clock = mock.clock(on, { now: 48_000_000 })
+  const remote = mainFolder(2, { branch: 'dev', behindMain: 0, aheadMain: 3, upSha: 'd1', behindUp: 0, hasUpstream: true }, `${DEV}/src`)
+  world(on, remote)
+  await start($, clock)
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await clock.advance(10)
+
+  // La session travaille dans le worktree : c'est lui qui est mesuré, et il contient origin/main.
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    expect(await ui.find({ key: 'sync-now' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Main a 2/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /À jour avec origin\/main dans \.claude\/worktrees\/dev/ })).toBeDefined()
+    await ui.unmount()
+  }
+  expect((await edit($, `${DEV}/src/a.py`)).deny).toBeUndefined()
+  // Un fichier neuf dans un dossier qui n'existe pas encore : son worktree se trouve en remontant.
+  expect((await edit($, `${DEV}/src/neuf/b.py`)).deny).toBeUndefined()
+
+  // Même mesurée depuis le dossier principal (session revenue à la racine), la modification d'un
+  // fichier du worktree se juge sur le worktree : rien n'est refusé.
+  remote.cwd = 'C:/proj'
+  await $.tool.call({ tool: 'Bash', command: 'git fetch origin' } as any)
+  await clock.advance(10)
+  expect((await edit($, `${DEV}/src/a.py`)).deny).toBeUndefined()
+})
+
+test('worktree dev en retard sur origin/main : avis et refus comme aujourd’hui', async ($, on) => {
+  const clock = mock.clock(on, { now: 49_000_000 })
+  world(on, mainFolder(2, { branch: 'dev', behindMain: 2, aheadMain: 3, upSha: 'd1', behindUp: 0, hasUpstream: true }, DEV))
+  await start($, clock)
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await clock.advance(10)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    expect(await ui.find({ type: 'Text', text: /Main a 2 nouveaux commits/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Avant de modifier le code dans \.claude\/worktrees\/dev : \/project:sync base/ })).toBeDefined()
+    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer /project:sync base' })
+    await ui.unmount()
+  }
+  expect((await edit($, `${DEV}/src/a.py`)).deny).toMatch(/lancer \/project:sync base/)
+  expect((await edit($, `${DEV}/src/a.py`)).deny).toBeUndefined()
+})
+
+test('worktree dev en retard, session au dossier principal à jour : le fichier du worktree est quand même refusé une fois', async ($, on) => {
+  const clock = mock.clock(on, { now: 50_000_000 })
+  world(on, mainFolder(0, { branch: 'dev', behindMain: 2, aheadMain: 3, upSha: 'd1', behindUp: 0, hasUpstream: true }, 'C:/proj'))
+  await start($, clock)
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await clock.advance(10)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await ui.find({ key: 'sync-now' })).toBeUndefined()
+  await ui.unmount()
+  expect((await edit($, 'C:/proj/src/a.py')).deny).toBeUndefined()
+  expect((await edit($, `${DEV}/src/a.py`)).deny).toMatch(/lancer \/project:sync base/)
+  expect((await edit($, `${DEV}/src/a.py`)).deny).toBeUndefined()
+})
+
+test('dossier principal sur main en retard sans commit en avance : avance rapide par git pull --ff-only', async ($, on) => {
+  const clock = mock.clock(on, { now: 51_000_000 })
+  world(on, mainFolder(2, { branch: 'dev', behindMain: 0, aheadMain: 3, upSha: 'd1', behindUp: 0, hasUpstream: true }, 'C:/proj'))
+  const filled: string[] = []
+  on('prompt.fill', (_$: unknown, e: { text: string }) => {
+    filled.push(e.text)
+    return { isFilled: true }
+  })
+  await start($, clock)
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await clock.advance(10)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    expect(await ui.find({ type: 'Text', text: /Main a 2 nouveaux commits/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Avant de modifier le code : git pull --ff-only/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /project:sync/ })).toBeUndefined()
+    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer git pull --ff-only' })
+    await ui.unmount()
+  }
+  // Le bouton met dans le prompt une demande à Claude, pas une commande réservée.
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await ui.press({ key: 'sync-now' })
+  await ui.unmount()
+  expect(filled.at(-1)).toBe('Mets à jour C:/proj en avance rapide : git -C "C:/proj" pull --ff-only')
+
+  // Un fichier de l'autre worktree, à jour, n'est pas bloqué.
+  expect((await edit($, `${DEV}/src/a.py`)).deny).toBeUndefined()
+  // Un fichier du dossier principal : refusé une fois, avec l'avance rapide et non /project:sync.
+  const first = await edit($, 'C:/proj/src/a.py')
+  expect(first.deny).toMatch(/git pull --ff-only dans C:\/proj/)
+  expect(first.deny).not.toMatch(/project:sync/)
+  expect((await edit($, 'C:/proj/src/a.py')).deny).toBeUndefined()
 })
 
 const TOOL = 'mcp__flow-board__flow'

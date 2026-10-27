@@ -108,6 +108,37 @@ export const pricesFor = (prices: Readonly<Record<string, UnitPrices>>, model: s
 export const costOf = (tokens: AgentTokens | undefined, prices: UnitPrices | undefined): number | null =>
   tokens && prices ? KEYS.reduce((sum, k) => sum + tokens[k] * prices[k], 0) : null
 
+/** Un sous-agent tel que la somme de sa famille le lit : son id, celui de son lanceur, ses tokens. */
+type FamilyMember = { agentId?: string; parent?: string; tokens?: AgentTokens }
+
+/**
+ * Un sous-agent avec ses descendants, ceux qu'il a lancés et ceux qu'ils ont lancés à leur tour
+ * (r18 : un relecteur et les chercheurs qu'il lance) : leur nombre, leurs tokens et leur coût
+ * sommés. `cost` rend le coût d'un membre (null sans prix) ; le coût de la famille ne somme que les
+ * coûts connus, null quand aucun ne l'est. Un lien qui boucle ne compte chaque membre qu'une fois.
+ */
+export const familyOf = <A extends FamilyMember>(agent: A, all: readonly A[], cost: (a: A) => number | null): { descendants: number; tokens?: AgentTokens; cost: number | null } => {
+  const members: A[] = [agent]
+  const seen = new Set<A>([agent])
+  for (let i = 0; i < members.length; i++) {
+    const id = members[i]!.agentId
+    if (id === undefined) continue
+    for (const child of all) {
+      if (child.parent === id && !seen.has(child)) {
+        seen.add(child)
+        members.push(child)
+      }
+    }
+  }
+  const withTokens = members.filter(m => m.tokens !== undefined)
+  const tokens =
+    withTokens.length > 0
+      ? (Object.fromEntries(KEYS.map(k => [k, withTokens.reduce((n, m) => n + m.tokens![k], 0)])) as AgentTokens)
+      : undefined
+  const costs = members.map(cost).filter((c): c is number => c !== null)
+  return { descendants: members.length - 1, ...(tokens ? { tokens } : {}), cost: costs.length > 0 ? costs.reduce((n, c) => n + c, 0) : null }
+}
+
 /** « ≈ 0,84 $ », « ≈ 0,004 $ » : toujours avec « ≈ ». */
 export const costText = (usd: number): string => {
   const digits = usd >= 1 ? 2 : usd >= 0.01 ? 2 : 3

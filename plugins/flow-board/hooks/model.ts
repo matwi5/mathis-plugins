@@ -23,6 +23,7 @@ import type {
   Ticket,
   TicketGroup,
   TicketStatus,
+  UiState,
   Tone,
 } from '../types'
 import { SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
@@ -803,6 +804,46 @@ const enterImplementation = (run: Run, now: number, fx: Effects) => {
   else if (at < run.cursor) reopenSkipped(run, phase.skill, now, fx)
 }
 
+/** Les groupes et les tickets du parcours que nomment les arguments d'une commande (« groupe B », un id de ticket). */
+const namedInArgs = (run: Run, args: string): string[] => {
+  const groups = (run.groups ?? []).filter(g => /[A-Za-z0-9]/.test(g.id) && new RegExp(`\\b(?:groupe?|group)\\s+${g.id.replace(/[^A-Za-z0-9]/g, '')}\\b`, 'i').test(args)).map(g => `groupe ${g.id}`)
+  const tokens = new Set(args.split(/[\s,;:()[\]«»"']+/).filter(Boolean))
+  const tickets = run.tickets.filter(t => tokens.has(t.id)).map(t => t.id)
+  return [...groups, ...tickets]
+}
+
+/**
+ * `/implement` lancé pour un groupe ou des tickets du parcours de cette discussion, une fois
+ * l'implémentation passée (compte rendu en cours ou fait) : le parcours revient à son
+ * implémentation, et son compte rendu, comme les phases d'après, est à refaire. Lancé pour un
+ * groupe d'un parcours en phase compte rendu, il en ouvrait un second. Faux quand rien ne s'applique.
+ */
+const backToImplementation = (run: Run, id: string, args: string, now: number, fx: Effects): boolean => {
+  if (id !== 'implement' && id !== 'implement-spec') return false
+  const at = run.phases.findIndex(p => p.skill === 'implement' || p.skill === 'implement-spec' || p.alts.includes(id))
+  if (at < 0 || at >= run.cursor) return false
+  const named = namedInArgs(run, args)
+  if (named.length === 0) return false
+  resetAfter(run, at, now)
+  for (const p of run.phases.slice(at + 1)) if (p.skill === 'compte-rendu') p.isOptional = false
+  const def = SKILLS[id]!
+  const phase = run.phases[at]!
+  closeDetours(phase, now)
+  phase.skill = id
+  phase.status = 'active'
+  phase.finishedAt = undefined
+  phase.startedAt = phase.startedAt ?? now
+  phase.round = phase.round + 1
+  phase.steps = stepsFor(id, now)
+  run.cursor = at
+  run.status = 'active'
+  run.finishedAt = undefined
+  run.updatedAt = now
+  log(run, now, def.glyph, `${def.label} ${agree(def, 'relancé')} pour ${named.join(', ')} (tour ${phase.round}) : le compte rendu est à refaire`, 'accent')
+  fx.toasts.push(`${def.glyph} ${def.label} · tour ${phase.round} · compte rendu à refaire`)
+  return true
+}
+
 const startDetour = (run: Run, phase: FlowPhase, id: string, now: number, fx: Effects) => {
   const def = SKILLS[id]!
   closeDetours(phase, now)
@@ -900,6 +941,10 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
       fx.note = 'phase'
       return { board: b, fx }
     }
+    if (backToImplementation(run, id, str(ctx.args), now, fx)) {
+      fx.note = 'phase'
+      return { board: b, fx }
+    }
     if (reopenSkipped(run, id, now, fx)) {
       fx.note = 'phase'
       return { board: b, fx }
@@ -920,16 +965,23 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
 
   // Une suite proposée par la phase en cours la clôt, même quand elle ouvre un autre parcours :
   // le parcours quitté est alors terminé, plus seulement en pause, s'il ne lui reste rien d'obligatoire.
+  const followed = run && (SKILLS[currentPhase(run).skill]?.next ?? []).includes(id) ? run : null
   if (run) {
     const phase = currentPhase(run)
-    if (phase.status === 'active' && (SKILLS[phase.skill]?.next ?? []).includes(id)) {
+    if (phase.status === 'active' && followed) {
       finishPhase(phase, now)
       log(run, now, '✓', `${SKILLS[phase.skill]!.label} ${agree(SKILLS[phase.skill]!, 'terminé')}`, 'ok')
     }
   }
 
-  const title = clip(str(ctx.args), 70) || undefined
-  const paused = b.runs
+  // La suite du parcours de cette discussion, et la rétro lancée pendant qu'il est actif ici, portent
+  // son titre et ne reprennent pas un autre parcours en pause qui aurait la même phase : une rétro
+  // lancée dans la discussion « Onglet Agents » avait repris le parcours « Durée des requêtes ».
+  const parent = followed ?? (id === 'retro' ? run : null)
+  const title = parent ? clip(`${def.flowLabel} · ${parent.title}`, 70) : clip(str(ctx.args), 70) || undefined
+  const paused = parent
+    ? undefined
+    : b.runs
     // Un parcours mis de côté ne revient qu'à la demande de la personne : un skill ouvre alors le sien.
     .filter(r => r.archivedAt === undefined && r.asideAt === undefined)
     .filter(r => r.status === 'paused' || (r.status === 'active' && r.id !== b.activeId && now - r.updatedAt > ORPHAN_MS))
@@ -1368,8 +1420,19 @@ const reportOnce = (
 /** Les comptes rendus finals déposés au relais par les sessions des groupes encore confiés. */
 const relayedReports = (run: Run, relay: Relay | null | undefined) =>
   (run.groups ?? [])
-    .map(g => ({ g, report: relayForGroup(relay, g)?.report }))
-    .filter((x): x is { g: TicketGroup; report: NonNullable<RelayEntry['report']> } => x.report !== undefined)
+    .map(g => {
+      const relayed = relayForGroup(relay, g)
+      return { g, report: relayed?.report, session: relayed?.reportSession }
+    })
+    .filter((x): x is { g: TicketGroup; report: NonNullable<RelayEntry['report']>; session: string | undefined } => x.report !== undefined)
+
+/** Un compte rendu coupé dans le relais le dit, avec le fichier qui le garde entier. */
+const reportCutText = (run: Run, report: NonNullable<RelayEntry['report']>, session: string | undefined): string =>
+  report.length === undefined
+    ? ''
+    : report.isWhole && session !== undefined
+      ? ` [cut at ${REPORT_MAX} of ${report.length} characters: the whole report is in ~/.claude/flow-board/relais/${reportFileName(run.id, session)}; read it with the Read tool before acting on it]`
+      : ` [cut at ${REPORT_MAX} of ${report.length} characters, and the whole text could not be written to a file: ask the session for the rest]`
 
 /** La clé d'un compte rendu déjà cité en entier : parcours, groupe, heure du dépôt. */
 const reportKey = (run: Run, group: string, at: number): string => `${run.id}:${group}:${at}`
@@ -1389,12 +1452,12 @@ export const relayedReportsText = (run: Run, relay: Relay | null | undefined, se
   const parts: string[] = []
   if (fresh.length > 0) {
     parts.push(
-      ` · Final report(s) left in the relay by linked sessions whose group is not returned yet (their SendMessage may never have reached you): ${fresh.map(x => `Group ${x.g.id} (${isoMinute(x.report.at)} UTC): ${x.report.text}`).join(' ∥ ')} · Check each one's work as its report would have asked, then send "returned" for its group.`,
+      ` · Final report(s) left in the relay by linked sessions whose group is not returned yet (their SendMessage may never have reached you): ${fresh.map(x => `Group ${x.g.id} (${isoMinute(x.report.at)} UTC): ${x.report.text}${reportCutText(run, x.report, x.session)}`).join(' ∥ ')} · Check each one's work as its report would have asked, then send "returned" for its group.`,
     )
   }
   if (known.length > 0) {
     parts.push(
-      ` · Not returned yet, final report already given above: ${known.map(x => `group ${x.g.id} (${isoMinute(x.report.at)} UTC)`).join(', ')}; its full text stays in the "report" field of this run's relay file (~/.claude/flow-board/relais/).`,
+      ` · Not returned yet, final report already given above: ${known.map(x => `group ${x.g.id} (${isoMinute(x.report.at)} UTC)`).join(', ')}; its full text stays in the "report" field of this run's relay file (~/.claude/flow-board/relais/), or, for a report cut at 8000 characters, in its own file there (${known.filter(x => x.report.isWhole && x.session).map(x => reportFileName(run.id, x.session!)).join(', ') || 'none written'}).`,
     )
   }
   return parts.join('')
@@ -1450,10 +1513,11 @@ export const delegatedTitle = (board: Board): string =>
  */
 const reachText = (board: Board): string => {
   const main = board.delegate?.main
-  const how =
-    'call ListAgents, find the row whose [ref] is the one your brief gives, and send to that row\'s "<name> [ref]" exactly as listed (its name can change, its [ref] does not); if no row has it, say so in the first line of your final message.'
+  // Une référence suivie depuis (`mainAt`) remplace celle du brief, à chaque réponse.
+  const isFollowed = board.delegate?.mainAt !== undefined
+  const how = `call ListAgents, find the row whose [ref] is ${main ? 'that one' : 'the one your brief gives'}, and send to that row's "<name> [ref]" exactly as listed (its name can change, its [ref] does not); if no row has it, say so in the first line of your final message.`
   return main
-    ? `Reach the main discussion, "${main}" in your brief, by its [ref]: ${how}`
+    ? `Reach the main discussion, "${main}" ${isFollowed ? '(its reference of the moment, newer than your brief\'s)' : 'in your brief'}, by its [ref]: ${how}`
     : `Reach the main discussion by the [ref] your brief gives: ${how}`
 }
 
@@ -1475,10 +1539,15 @@ const delegatedReportText = (board: Board, input: Readonly<Record<string, unknow
   const decided = reportedDecisions(input)
   const note = str(input.note)
   const report = reportedReport(input)
-  if (changes.length === 0 && decided.length === 0 && note === '' && report === '') return delegateText(board)
+  const counts = reportedCounts(input)
+  const withdrawn = reportedWithdrawals(input)
+  if (changes.length === 0 && decided.length === 0 && withdrawn.length === 0 && note === '' && report === '' && !counts.review && !counts.security) return delegateText(board)
   const parts = [
     changes.length > 0 ? `${changes.length} ticket status(es)` : '',
     decided.length > 0 ? `${decided.length} choice(s) made without the user` : '',
+    withdrawn.length > 0 ? `${withdrawn.length} withdrawn choice(s)` : '',
+    counts.review ? 'the review findings' : '',
+    counts.security ? 'the security review' : '',
     report !== '' ? 'the final report' : '',
     note !== '' ? 'the note' : '',
   ]
@@ -1756,6 +1825,24 @@ const reportHere = (
     }
   }
 
+  let withdrawnText = ''
+  for (const w of reportedWithdrawals(input)) {
+    // Un choix relayé par une session liée et pas encore gardé ici se garde, retiré.
+    const relayed = relayedDecisions(run, isRelay(opts.relay, run.id) ? opts.relay : null).find(d => sameChoice(d.what, w.what))
+    if (relayed) keepDecisions(run, [relayed])
+    const kept = (run.decided ?? []).find(d => sameChoice(d.what, w.what) && d.withdrawnAt === undefined)
+    if (!kept) {
+      withdrawnText += ` · "withdrawn": no choice in force reads "${w.what}" (send it as it was declared)`
+      continue
+    }
+    kept.withdrawnAt = now
+    kept.withdrawnWhy = w.replacedBy ? `${w.why ? `${w.why} ; ` : ''}remplacé par « ${w.replacedBy} »` : w.why
+    log(run, now, '⚑', `Choix retiré : ${kept.what}${w.why ? ` (${w.why})` : ''}`, 'info')
+    if (w.replacedBy && !(run.decided ?? []).some(x => sameChoice(x.what, w.replacedBy!) && x.withdrawnAt === undefined)) {
+      run.decided = [...(run.decided ?? []), { at: now, what: w.replacedBy, ...(w.why ? { why: w.why } : {}) }].slice(-LIMITS.decided)
+      log(run, now, '⚑', `Décidé sans toi : ${w.replacedBy}`, 'warn')
+    }
+  }
   for (const d of reportedDecisions(input)) {
     // Le même choix renvoyé deux fois n'est compté qu'une fois.
     if ((run.decided ?? []).some(x => x.what === d.what)) continue
@@ -1818,7 +1905,7 @@ const reportHere = (
     withSession.length > 0
       ? ` · with the linked session until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
       : ''
-  return { board: b, fx, text: `${summaryOf(run)}${fixText}${removeText}${groupText}${returnText}${reviewedText}${gateText}${linkedText}` }
+  return { board: b, fx, text: `${summaryOf(run)}${fixText}${removeText}${groupText}${returnText}${reviewedText}${gateText}${linkedText}${withdrawnText}` }
 }
 
 // ─── Éléments confiés à une session liée ──────────────────────────────────
@@ -2093,17 +2180,41 @@ const returnGroups = (run: Run, value: unknown, now: number, stored?: unknown): 
     keepDecisions(run, decided)
     for (const d of decided) log(run, now, '⚑', `Décidé sans toi (groupe ${d.relayedFrom}) : ${d.what}`, 'warn')
     const reviewedThere: string[] = []
+    const impl = run.phases.find(p => p.skill === 'implement' || p.skill === 'implement-spec')
     run.groups = run.groups!.map(g => {
       if (!back.includes(g.id)) return g
       const relayed = relayForGroup(relay, g)
       if (g.reviewedAt === undefined && relayed?.reviewedAt !== undefined) reviewedThere.push(g.id)
       const reviewedAt = g.reviewedAt ?? relayed?.reviewedAt
       const ranAt = g.security?.ranAt ?? relayed?.securedAt
+      // Les constats relayés comptent dans la phase d'implémentation, une fois (le groupe n'est rendu qu'une fois).
+      if (relayed?.reviews && impl) {
+        const s = impl.stats
+        s.reviews = (s.reviews ?? 0) + relayed.reviews.count
+        s.standards = Math.max(0, s.standards) + relayed.reviews.standards
+        s.spec = Math.max(0, s.spec) + relayed.reviews.spec
+        s.fixed = (s.fixed ?? 0) + relayed.reviews.fixed
+        log(run, now, '◈', `Revues du groupe ${g.id} (session liée) : ${relayed.reviews.standards} Standards · ${relayed.reviews.spec} Spec · ${relayed.reviews.fixed} corrigé(s)`, 'info')
+      }
+      // La revue de sécurité relayée vaut celle que la discussion n'a pas encore reçue (un envoi d'ici l'emporte).
+      const sec = relayed?.security
+      const security: SecurityCheck | undefined =
+        sec && g.security?.findings === undefined
+          ? {
+              ...(sec.advised !== undefined ? { isAdvised: sec.advised } : {}),
+              ...(sec.why !== undefined ? { why: sec.why } : {}),
+              ...(sec.findings !== undefined ? { findings: sec.findings, fixed: sec.fixed ?? 0 } : {}),
+              ...g.security,
+              ...(ranAt !== undefined ? { ranAt } : {}),
+            }
+          : ranAt !== undefined
+            ? { ...g.security, ranAt }
+            : g.security
       return withoutLink({
         ...g,
         delegated: g.linked!,
         ...(reviewedAt !== undefined ? { reviewedAt } : {}),
-        ...(ranAt !== undefined ? { security: { ...g.security, ranAt } } : {}),
+        ...(security !== undefined ? { security } : {}),
       })
     })
     if (reviewedThere.length > 0) log(run, now, '◆', `Revue du groupe faite dans sa session liée : ${reviewedThere.join(', ')}`, 'accent')
@@ -2125,7 +2236,9 @@ export type RelayEvent =
   | { kind: 'command'; commit?: string; test?: boolean }
   | { kind: 'note'; text: string }
   | { kind: 'decided'; items: { what: string; why?: string }[] }
-  | { kind: 'report'; text: string }
+  | { kind: 'withdrawn'; items: { what: string; why?: string; replacedBy?: string }[] }
+  | { kind: 'report'; text: string; isWhole?: boolean }
+  | { kind: 'counts'; review?: { standards: number; spec: number; fixed: number }; security?: { advised?: boolean; why?: string; findings?: number; fixed?: number } }
   | { kind: 'review' }
   | { kind: 'security' }
   | { kind: 'end' }
@@ -2173,6 +2286,51 @@ export const localTicketChange = (path: string, text: string): StatusChange | nu
 
 /** Les statuts envoyés par `set` dans un appel de l'outil. */
 export const reportedChanges = (input: Readonly<Record<string, unknown>>): StatusChange[] => parseChanges(input.set)
+
+/** Un compte envoyé à l'outil : un nombre fini et positif, arrondi ; absent sinon. */
+const countOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined)
+
+/**
+ * Les constats d'une revue (`review`) et la revue de sécurité (`security`) qu'une session liée
+ * envoie : ils partent au relais (r12 de la rétro de l'onglet Agents : le groupe B ne les avait pas
+ * envoyés, l'outil les ignorait en session liée), et la discussion principale les reprend au retour du groupe.
+ */
+export const reportedCounts = (input: Readonly<Record<string, unknown>>): Extract<RelayEvent, { kind: 'counts' }> => {
+  const review = input.review !== null && typeof input.review === 'object' ? (input.review as Record<string, unknown>) : null
+  const security = input.security !== null && typeof input.security === 'object' ? (input.security as Record<string, unknown>) : null
+  const sec = security
+    ? {
+        ...(typeof security.advised === 'boolean' ? { advised: security.advised } : {}),
+        ...(str(security.why) !== '' ? { why: str(security.why) } : {}),
+        ...(countOf(security.findings) !== undefined ? { findings: countOf(security.findings) } : {}),
+        ...(countOf(security.fixed) !== undefined ? { fixed: countOf(security.fixed) } : {}),
+      }
+    : null
+  return {
+    kind: 'counts',
+    ...(review ? { review: { standards: countOf(review.standards) ?? 0, spec: countOf(review.spec) ?? 0, fixed: countOf(review.fixed) ?? 0 } } : {}),
+    ...(sec && Object.keys(sec).length > 0 ? { security: sec } : {}),
+  }
+}
+
+/** Deux choix sont le même quand leurs textes le sont, sans la casse ni les espaces. */
+const sameChoice = (a: string, b: string): boolean => a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase()
+
+/**
+ * Les choix déclarés qui ne tiennent plus, envoyés par `withdrawn` (p13 de la rétro « Durée des
+ * requêtes » : un choix devenu faux restait dans le fichier des choix), avec ce qui les remplace.
+ */
+export const reportedWithdrawals = (input: Readonly<Record<string, unknown>>): { what: string; why?: string; replacedBy?: string }[] =>
+  asList(input.withdrawn)
+    .map(w => ({ what: clip(str(w.what), TEXT_MAX), why: clip(str(w.why), TEXT_MAX) || undefined, replacedBy: clip(str(w.replacedBy), TEXT_MAX) || undefined }))
+    .filter(w => w.what !== '')
+    .map(w => ({ what: w.what, ...(w.why ? { why: w.why } : {}), ...(w.replacedBy ? { replacedBy: w.replacedBy } : {}) }))
+
+/** Les choix en vigueur : ni retirés ici, ni retirés par une session liée dans le relais. */
+export const inForce = (list: readonly SoloDecision[], relay?: Relay | null): SoloDecision[] => {
+  const gone = Object.values(relay?.sessions ?? {}).flatMap(e => e.withdrawn ?? [])
+  return list.filter(d => d.withdrawnAt === undefined && !gone.some(w => sameChoice(w.what, d.what)))
+}
 
 /** Les choix faits sans la personne envoyés par `decided` dans un appel de l'outil. */
 export const reportedDecisions = (input: Readonly<Record<string, unknown>>): { what: string; why?: string }[] =>
@@ -2226,10 +2384,32 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
     if (fresh.length === 0) return null
     entry.decided = [...(entry.decided ?? []), ...fresh.map(d => ({ ...d, at: now }))].slice(-LIMITS.decided)
     entry.last = { kind: 'decided', text: `décidé sans toi : ${clip(fresh[fresh.length - 1]!.what, 140)}`, at: now }
+  } else if (event.kind === 'withdrawn') {
+    const fresh = event.items.filter(w => !(entry.withdrawn ?? []).some(x => sameChoice(x.what, w.what)))
+    if (fresh.length === 0) return null
+    entry.withdrawn = [...(entry.withdrawn ?? []), ...fresh.map(w => ({ what: w.what, ...(w.why ? { why: w.why } : {}), at: now }))].slice(-LIMITS.decided)
+    // Un choix qui en remplace un autre arrive comme un choix déclaré.
+    const replacing = fresh.filter(w => w.replacedBy).map(w => ({ what: w.replacedBy!, ...(w.why ? { why: w.why } : {}), at: now }))
+    entry.decided = [...(entry.decided ?? []).filter(d => !fresh.some(w => sameChoice(w.what, d.what))), ...replacing].slice(-LIMITS.decided)
+    entry.last = { kind: 'decided', text: `choix retiré : ${clip(fresh[fresh.length - 1]!.what, 140)}`, at: now }
   } else if (event.kind === 'report') {
-    if (event.text === '' || entry.report?.text === clip(event.text, REPORT_MAX)) return null
-    entry.report = { text: clip(event.text, REPORT_MAX), at: now }
+    const length = event.text.length > REPORT_MAX ? event.text.length : undefined
+    if (event.text === '' || (entry.report?.text === clip(event.text, REPORT_MAX) && entry.report.length === length)) return null
+    entry.report = { text: clip(event.text, REPORT_MAX), at: now, ...(length !== undefined ? { length } : {}), ...(event.isWhole ? { isWhole: true } : {}) }
     entry.last = { kind: 'report', text: 'compte rendu final déposé', at: now }
+  } else if (event.kind === 'counts') {
+    if (!event.review && !event.security) return null
+    if (event.review) {
+      const was = entry.reviews ?? { count: 0, standards: 0, spec: 0, fixed: 0 }
+      entry.reviews = { count: was.count + 1, standards: was.standards + event.review.standards, spec: was.spec + event.review.spec, fixed: was.fixed + event.review.fixed }
+      entry.last = { kind: 'review', text: `revue : ${event.review.standards + event.review.spec} constat(s), ${event.review.fixed} corrigé(s)`, at: now }
+    }
+    if (event.security) {
+      const why = event.security.why !== undefined ? clip(event.security.why, 160) : undefined
+      entry.security = { ...entry.security, ...event.security, ...(why !== undefined ? { why } : {}), at: now }
+      if (event.security.findings !== undefined || event.security.fixed !== undefined) entry.securedAt = now
+      entry.last = { kind: 'review', text: 'revue de sécurité', at: now }
+    }
   } else if (event.kind === 'review') {
     // Pendant un ticket en cours, `/code-review` est la passe « bogues » de ce ticket (zone
     // sensible), pas la revue du groupe : le groupe n'est pas relu pour autant.
@@ -2256,6 +2436,44 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
 
 const TICKET_WORDS: Record<TicketStatus, string> = { todo: 'à faire', doing: 'en cours', done: 'fait', blocked: 'bloqué' }
 
+/** Un id en nom de fichier du relais : minuscules, chaque suite de signes hors `[a-z0-9]` en tiret. */
+export const relayFileSlug = (id: string): string => id.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+
+/**
+ * Le fichier du compte rendu entier d'une session liée, à côté du relais : écrit par elle seule
+ * (r11 : un compte rendu coupé à 8 000 caractères avait perdu la fin de celui du groupe B).
+ */
+export const reportFileName = (runId: string, session: string): string => `${relayFileSlug(runId)}.${relayFileSlug(session)}.report.md`
+
+/**
+ * Le fichier de la référence du moment de la discussion principale, à côté du relais, écrit par
+ * elle seule à la reprise (r10 : sa référence change quand elle redémarre).
+ */
+export const mainRefFileName = (runId: string): string => `${relayFileSlug(runId)}.main.json`
+
+/** Ce que dit ce fichier : la référence « [ref] » de la discussion principale, et quand elle l'a écrite. */
+export type MainRef = { v: 1; run: string; main: string; at: number }
+
+/** Le fichier de la référence, lu sur le disque : borné avant usage, null quand il ne se lit pas. */
+export const parseMainRef = (value: unknown, runId: string): MainRef | null => {
+  if (value === null || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+  // Une date au-delà de l'an 2286 (1e13 ms) ne se lit pas : elle figerait la référence pour toujours.
+  if (v.run !== runId || typeof v.main !== 'string' || typeof v.at !== 'number' || !Number.isFinite(v.at) || v.at < 0 || v.at > 1e13) return null
+  const main = clip(v.main.trim(), 120)
+  return main === '' ? null : { v: 1, run: runId, main, at: v.at }
+}
+
+/**
+ * Dans une session liée : la référence de la discussion principale lue à côté du relais, plus
+ * récente que celle connue, remplace celle du brief. Null quand rien ne change.
+ */
+export const updateDelegateMain = (board: Board, ref: MainRef | null): Board | null => {
+  const d = board.delegate
+  if (!d || !ref || ref.run !== d.run || ref.main === d.main || ref.at <= (d.mainAt ?? d.at)) return null
+  return { ...board, delegate: { ...d, main: ref.main, mainAt: ref.at } }
+}
+
 /** Longueur gardée du compte rendu final d'une session liée. */
 const REPORT_MAX = 8000
 
@@ -2275,6 +2493,10 @@ export type GroupRelay = {
   securedAt?: number
   decided: NonNullable<RelayEntry['decided']>
   report?: RelayEntry['report']
+  /** La session qui a déposé `report` : le nom de son fichier entier en dépend. */
+  reportSession?: string
+  reviews?: RelayEntry['reviews']
+  security?: RelayEntry['security']
   last?: RelayEntry['last']
   at: number
   endedAt?: number
@@ -2292,14 +2514,30 @@ export const relayForGroup = (relay: Relay | null | undefined, group: TicketGrou
   // « E », « Groupe E », « E · Enquêtes » nomment le même groupe ; un nom qui ne dit rien laisse les tickets décider.
   const named = (e: RelayEntry) => (e.group === undefined ? '' : (/^(?:groupe\s+)?([^\s·:,()]+)/i.exec(e.group.trim())?.[1] ?? '').toLowerCase())
   const touches = (e: RelayEntry) => Object.keys(e.tickets).some(id => ids.some(t => sameTicket(t, id)))
-  const mine = Object.values(relay.sessions)
-    .filter(e => e.startedAt >= since)
-    .filter(e => named(e) === group.id.toLowerCase() || touches(e))
-    .sort((x, y) => y.at - x.at)
+  const mineWithIds = Object.entries(relay.sessions)
+    .filter(([, e]) => e.startedAt >= since)
+    .filter(([, e]) => named(e) === group.id.toLowerCase() || touches(e))
+    .sort((x, y) => y[1].at - x[1].at)
+  const mine = mineWithIds.map(([, e]) => e)
   const entry = mine[0]
   if (!entry) return null
   // Une session redémarrée sous un autre id ne masque pas le compte rendu déposé par la précédente.
-  const report = mine.map(e => e.report).filter(r => r !== undefined).sort((x, y) => y!.at - x!.at)[0]
+  const reported = mineWithIds.filter(([, e]) => e.report !== undefined).sort((x, y) => y[1].report!.at - x[1].report!.at)[0]
+  const report = reported?.[1].report
+  // Les constats envoyés par toutes les sessions du groupe (une session redémarrée en garde une part).
+  // Un fichier d'une autre session : chaque nombre est borné avant d'être additionné.
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 10_000 ? Math.round(v) : 0)
+  const reviews = mine.reduce<RelayEntry['reviews']>((sum, e) => (e.reviews && typeof e.reviews === 'object' ? { count: (sum?.count ?? 0) + n(e.reviews.count), standards: (sum?.standards ?? 0) + n(e.reviews.standards), spec: (sum?.spec ?? 0) + n(e.reviews.spec), fixed: (sum?.fixed ?? 0) + n(e.reviews.fixed) } : sum), undefined)
+  const latest = mine.map(e => e.security).filter(s => s !== undefined && typeof s === 'object' && typeof s.at === 'number').sort((x, y) => y!.at - x!.at)[0]
+  const security = latest
+    ? {
+        at: latest.at,
+        ...(typeof latest.advised === 'boolean' ? { advised: latest.advised } : {}),
+        ...(typeof latest.why === 'string' ? { why: clip(latest.why, 160) } : {}),
+        ...(latest.findings !== undefined ? { findings: n(latest.findings) } : {}),
+        ...(latest.fixed !== undefined ? { fixed: n(latest.fixed) } : {}),
+      }
+    : undefined
   const tickets: GroupRelay['tickets'] = {}
   for (const id of ids) {
     const key = Object.keys(entry.tickets).find(k => sameTicket(k, id))
@@ -2321,7 +2559,9 @@ export const relayForGroup = (relay: Relay | null | undefined, group: TicketGrou
     ...(entry.securedAt !== undefined ? { securedAt: entry.securedAt } : {}),
     ...(entry.last ? { last: entry.last } : {}),
     decided: entry.decided ?? [],
-    ...(report ? { report } : {}),
+    ...(report ? { report, reportSession: reported![0] } : {}),
+    ...(reviews ? { reviews } : {}),
+    ...(security ? { security } : {}),
     at: entry.at,
     ...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
   }
@@ -2363,10 +2603,11 @@ export const withRelay = (run: Run, relay: Relay | null | undefined): Run => {
  */
 const relayedDecisions = (run: Run, relay: Relay | null | undefined): SoloDecision[] => {
   const known = new Set((run.decided ?? []).map(d => d.what))
+  const gone = Object.values(relay?.sessions ?? {}).flatMap(e => e.withdrawn ?? [])
   const out: SoloDecision[] = []
   for (const g of run.groups ?? []) {
     for (const d of relayForGroup(relay, g)?.decided ?? []) {
-      if (known.has(d.what)) continue
+      if (known.has(d.what) || gone.some(w => sameChoice(w.what, d.what))) continue
       known.add(d.what)
       out.push({ at: d.at, what: d.what, ...(d.why ? { why: d.why } : {}), relayedFrom: g.id })
     }
@@ -2380,7 +2621,7 @@ const relayedDecisions = (run: Run, relay: Relay | null | undefined): SoloDecisi
  * chemin au lieu de recopier la liste, qui se périmait d'une consigne à l'autre.
  */
 export const decidedFileText = (run: Run, relay: Relay | null | undefined): string => {
-  const all = withRelay(run, relay).decided ?? []
+  const all = inForce(withRelay(run, relay).decided ?? [], relay)
   const line = (d: SoloDecision) => `- ${d.what}${d.why ? ` — ${d.why}` : ''} (${d.relayedFrom ? `groupe ${d.relayedFrom}, ` : ''}${isoMinute(d.at)} UTC)`
   return [
     `# Choix déjà déclarés · ${run.title}`,
@@ -3304,7 +3545,7 @@ export const finishActive = (board: Board, now: number): Outcome => {
 }
 
 /** Les choix faits sans la personne qu'elle n'a pas encore relus. */
-export const unseenDecisions = (run: Run): number => (run.decided ?? []).filter(d => d.seenAt === undefined).length
+export const unseenDecisions = (run: Run, relay?: Relay | null): number => inForce(run.decided ?? [], relay).filter(d => d.seenAt === undefined).length
 
 /**
  * La personne a relu les choix faits sans elle, y compris ceux que les sessions liées ont relayés
@@ -3368,12 +3609,14 @@ export const reportFacts = (run: Run, failedAgents = 0): string[] => {
   )
   const found = run.found ?? []
   if (found.length > 0) lines.push(`- Found on the way (tracker tasks created during the run, outside the lot): ${found.map(f => `${f.name} [${f.id}]: ${f.status}${f.why ? ` (${f.why})` : ''}${f.isForUser ? ', assigned to the user' : ''}`).join('; ')}.`)
-  const decided = run.decided ?? []
+  const decided = inForce(run.decided ?? [])
+  const withdrawn = (run.decided ?? []).filter(d => d.withdrawnAt !== undefined)
   lines.push(
     decided.length > 0
       ? `- Choices reported as made without the user: ${decided.map(d => `${d.what}${d.why ? ` (because ${d.why})` : ''}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list.`
       : '- No choice was reported as made without the user: check the work for any, and put them in « Décidé sans toi ».',
   )
+  if (withdrawn.length > 0) lines.push(`- Choices withdrawn during the run (no longer in force; say so apart in « Décidé sans toi », with why): ${withdrawn.map(d => `${d.what}${d.withdrawnWhy ? ` (${d.withdrawnWhy})` : ''}`).join('; ')}.`)
   const plans = run.artifacts.filter(a => a.kind === 'plan')
   if (plans.length > 0) lines.push(`- Plans written: ${plans.map(a => `${a.path}${a.detail ? ` (${a.detail})` : ''}`).join('; ')}.`)
   const tests = run.tests.filter(t => t.kind === 'test')
@@ -3463,12 +3706,26 @@ export const dropRun = (board: Board, id: string, now: number): Outcome => {
 
 // ─── Synchronisation avec le distant ──────────────────────────────────────
 
+/** L'état de l'interface au départ (onglet, volets, sélection) : le défaut de chaque déclaration de son atome. */
+export const EMPTY_UI: UiState = {
+  tab: 'flow',
+  isBandHidden: false,
+  isPaneDismissed: false,
+  showAllTickets: false,
+  showAllLog: false,
+  showDecided: false,
+  showFound: false,
+  selection: [],
+}
+
 export const EMPTY_SYNC: SyncState = {
   behindMain: null,
   behindUpstream: null,
   branch: null,
   main: null,
   isOnMain: false,
+  aheadMain: null,
+  dir: null,
   remoteKey: null,
   askedFor: null,
   checkedAt: null,
@@ -3476,9 +3733,15 @@ export const EMPTY_SYNC: SyncState = {
   isGitHub: null,
 }
 
+/**
+ * Une étape du conseil : un skill réservé à l'utilisateur (`/project:sync`), ou une commande git
+ * à lancer dans un dossier (`git pull --ff-only`, avance rapide d'une branche principale en retard).
+ */
+export type SyncStep = { skill: string; args: string } | { shell: string; dir: string | null }
+
 export type SyncAdvice = {
   /** Les commandes à lancer, dans l'ordre (`project:sync`, puis `project:sync base`). */
-  commands: { skill: string; args: string }[]
+  commands: SyncStep[]
   /** Ce qui manque, en une ligne : « main a 3 nouveaux commits ». */
   reason: string
 }
@@ -3492,16 +3755,20 @@ const commits = (n: number): string => `${n} nouveau${n > 1 ? 'x' : ''} commit${
  * s'intègre par `/project:sync base` (sans argument, sync ne ramène que la branche distante suivie).
  * Quand la branche distante a bougé, `/project:sync` seul d'abord : elle a souvent été remise sur
  * main après la fusion (comme `dev` par sync-dev.yml dans polepredict). Le retard est remesuré
- * après, et `base` n'est proposé que si main est encore en avance.
+ * après, et `base` n'est proposé que si main est encore en avance. Sur main sans commit local en
+ * avance (dossier principal d'un dépôt qui code dans un worktree), une avance rapide suffit :
+ * `git pull --ff-only`. Avance inconnue (null) : `/project:sync`, par prudence.
  */
 export const syncAdvice = (state: SyncState): SyncAdvice | null => {
   const main = state.behindMain ?? 0
   const upstream = state.behindUpstream ?? 0
   const name = state.main ?? 'main'
   if (state.isOnMain) {
-    return main > 0 ? { commands: [{ skill: 'project:sync', args: '' }], reason: `${name} a ${commits(main)}` } : null
+    if (main === 0) return null
+    const step: SyncStep = state.aheadMain === 0 ? { shell: 'git pull --ff-only', dir: state.dir ?? null } : { skill: 'project:sync', args: '' }
+    return { commands: [step], reason: `${name} a ${commits(main)}` }
   }
-  const commands: { skill: string; args: string }[] = []
+  const commands: SyncStep[] = []
   const reasons: string[] = []
   if (upstream > 0) {
     commands.push({ skill: 'project:sync', args: '' })
@@ -3516,7 +3783,7 @@ export const syncAdvice = (state: SyncState): SyncAdvice | null => {
   return commands.length > 0 ? { commands, reason: reasons.join(' et ') } : null
 }
 
-export const commandText = (c: { skill: string; args: string }): string => `/${c.skill}${c.args ? ` ${c.args}` : ''}`
+export const commandText = (c: SyncStep): string => ('shell' in c ? c.shell : `/${c.skill}${c.args ? ` ${c.args}` : ''}`)
 
 // ─── Choix des tickets à lancer ───────────────────────────────────────────
 

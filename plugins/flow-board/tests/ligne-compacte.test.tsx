@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, test } from 'claude-code/testing'
 
 import { flowCallLabel } from '../hooks/model.ts'
 
