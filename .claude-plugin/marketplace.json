@@ -36,7 +36,7 @@
       "name": "flow-board",
       "source": "./plugins/flow-board",
       "description": "Tableau de bord du workflow mattpocock-skills : un parcours adapté au skill de départ (phases, étapes, tickets, sous-agents, tests, livrables) en panneau et en bandeau ; /flow (onglet Commandes : toutes les commandes).",
-      "version": "0.64.0"
+      "version": "0.64.1"
     },
     {
       "name": "mattpocock-skills",

@@ -405,3 +405,15 @@ test('retroTranscriptNote : affirmative quand la compaction est vue, sinon une v
   for (const note of [seen, unseen]) expect(note).toContain('logicalParentUuid')
   expect(retroTranscriptNote(undefined, 's1', false)).toContain('~/.claude/projects/<project folder>/s1.jsonl')
 })
+
+test('/retro dans une session liée de groupe : la consigne de transcript seule, sans bloc du tableau de bord', async ($, on) => {
+  mock.clock(on, { now: 70_000_000 })
+  world(on, 'linked')
+  await start($)
+  // Une session liée de groupe : son /retro n'ouvre ni ne touche aucun parcours, la consigne reste.
+  await $.tool.call({ tool: TOOL, delegate: 'run-x', group: 'A', main: '[e5eb08]' } as any)
+  const delegated = await retroText($)
+  expect(delegated.startsWith('RETRO')).toBe(true)
+  expect(delegated).not.toContain('Dashboard (flow-board)')
+  expect(delegated).toContain('Transcript (flow-board)')
+})

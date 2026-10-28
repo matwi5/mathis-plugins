@@ -7,7 +7,7 @@ Tableau de bord en direct du workflow [mattpocock-skills](https://github.com/mat
 - **Il garde les parcours par projet.** Plusieurs discussions peuvent travailler sur le même projet sans se marcher dessus.
 - **Il suit les conventions de livraison du plugin `project`** : `/project:sync`, `/project:version`, `/project:push`, `/project:pr`.
 
-Version actuelle : **0.64.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.64.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -123,7 +123,7 @@ En bas de l'onglet Parcours, qu'un parcours soit en cours ou non, un cadre « À
 | S'orienter | § Préciser un terme | `/domain-modeling` | Un terme flou ou une règle métier précisés par des questions (écarts avec le glossaire, cas limites, contradictions avec le code), puis écrits dans le glossaire ou, pour une décision difficile à défaire, dans les décisions du projet. Le cadrage l'appelle déjà : le bouton sert surtout en implémentation ; ajouter le sujet |
 | Contexte | ⇣ Compact | `/compact` | Commande de Claude Code qui allège le contexte ; tes consignes sont facultatives, flow-board ajoute les siennes pendant un parcours (voir « Compaction ») |
 | Contexte | ➜ Passation | `/handoff` | La discussion résumée en document de passation pour une autre session ; ajouter son but |
-| Déléguer | 🐞 Bug · session liée | `/diagnosing-bugs` | Depuis la 0.26.0, seulement pendant Implémentation, Implémentation de spec, TDD, Revue ou Compte rendu. Met dans le prompt une demande à Claude, à compléter après « Bug : ». Claude lance une session liée dans ce dossier (pas de worktree : elle doit lire le même fichier de parcours), qui reprend le parcours (`resume`), diagnostique le bug en détour de la phase en cours, le corrige selon le `CLAUDE.md` du projet, puis clôt le détour (`complete`). Depuis la 0.55.0, la session est lancée en effort high, et xhigh pour une deuxième tentative sur un bug toujours là après la première ; pas de troisième session : on replanifie. À sa note de fin, Claude vérifie son travail ; si le bug est toujours là, il le dit et propose la deuxième tentative, sinon il reprend le parcours |
+| Déléguer | 🐞 Bug · session liée | `/diagnosing-bugs` | Depuis la 0.26.0, seulement pendant Implémentation, TDD, Revue ou Compte rendu. Met dans le prompt une demande à Claude, à compléter après « Bug : ». Claude lance une session liée dans ce dossier (pas de worktree : elle doit lire le même fichier de parcours), qui reprend le parcours (`resume`), diagnostique le bug en détour de la phase en cours, le corrige selon le `CLAUDE.md` du projet, puis clôt le détour (`complete`). Depuis la 0.55.0, la session est lancée en effort high, et xhigh pour une deuxième tentative sur un bug toujours là après la première ; pas de troisième session : on replanifie. À sa note de fin, Claude vérifie son travail ; si le bug est toujours là, il le dit et propose la deuxième tentative, sinon il reprend le parcours |
 
 ### Le panneau
 
@@ -208,7 +208,7 @@ La carte suit l'envoi :
 - Un **sous-skill** déclaré par la phase fait avancer l'étape correspondante, par exemple `/tdd` pendant `/implement`.
 - Un skill **hors du fil** devient un détour.
 - Un **autre point de départ** ouvre un nouveau parcours et met le précédent en pause. Le parcours en pause reprend tout seul quand on relance un de ses skills, sauf s'il a été **mis de côté** (voir plus bas) : le skill ouvre alors un nouveau parcours.
-- Exception : `/diagnosing-bugs` pendant Implémentation, Implémentation de spec, TDD, Revue ou Compte rendu devient un **détour** (liste `detourIn` du catalogue). Le bug reste dans le lot qui l'a fait apparaître. Ailleurs (cadrage, spec…), il ouvre toujours sa « Chasse au bug ».
+- Exception : `/diagnosing-bugs` pendant Implémentation, TDD, Revue ou Compte rendu devient un **détour** (liste `detourIn` du catalogue). Le bug reste dans le lot qui l'a fait apparaître. Ailleurs (cadrage, spec…), il ouvre toujours sa « Chasse au bug ».
 
 ---
 
@@ -496,7 +496,7 @@ flow-board/
 ├── termes-retires.txt           termes retirés, refusés par scripts/check.py hors de l'historique
 ├── skills/compte-rendu/SKILL.md /flow-board:compte-rendu, le rapport à valider avant la livraison
 ├── types/index.d.ts             contrat de l'état (`PluginState`)
-└── tests/                       538 tests `claude plugin test` et 32 tests `node --test` (0.64.0)
+└── tests/                       540 tests `claude plugin test` et 32 tests `node --test` (0.64.1)
     ├── a-tout-moment.test.ts
     ├── accueil.test.ts
     ├── advisor.test.ts
@@ -617,7 +617,7 @@ claude plugin test plugins/flow-board
 - **Ligne compacte de l'outil `flow`.** Claude Code ne dit pas à un mod si la vue détaillée (ctrl+o) est ouverte sur une ligne d'outil : la ligne compacte y reste, sans le JSON de l'appel.
 - **Données de suivi.** Elles dépendent en partie des comptes rendus de Claude : étapes, éléments suivis, dépendances.
 - **Trouvé en route.** Seules les créations par `create_tasks` d'Asana et `gh issue create` sont vues. Une tâche créée autrement (interface d'Asana, autre outil) n'apparaît que si Claude l'envoie au panneau.
-- **Une discussion par parcours.** Deux discussions ne peuvent pas suivre le même parcours en même temps : un seul écrivain à la fois, sinon deux discussions qui cochent des tickets du même parcours s'écraseraient (la fusion garde le parcours le plus récent en entier). Le parallélisme des groupes passe par des sessions liées qui n'écrivent pas sur le parcours (`delegate`) ; `/implement-spec`, dans une seule discussion, ne lance plus qu'une sélection de tickets.
+- **Une discussion par parcours.** Deux discussions ne peuvent pas suivre le même parcours en même temps : un seul écrivain à la fois, sinon deux discussions qui cochent des tickets du même parcours s'écraseraient (la fusion garde le parcours le plus récent en entier). Le parallélisme des groupes passe par des sessions liées qui n'écrivent pas sur le parcours (`delegate`).
 - **Groupes en session liée.** Le panneau ne suit pas les étapes d'une session liée (lecture, TDD, revue…). Depuis la 0.36.0, ses tickets, commits et tests s'affichent en direct, relayés ; les tickets du parcours n'avancent qu'au moment où Claude, dans la discussion principale, rend leurs statuts à sa note de fin. Le relais compte sur les mises à jour Asana de la session : un projet sans suivi Asana n'en montre que les commits et les tests, sauf `set` envoyé par la session. Plusieurs sessions liées écrivent le même fichier de relais : deux écritures simultanées peuvent perdre un signal, rattrapé au signal suivant de la même session (elle réécrit toute son entrée). Le mode `delegate` est propre à la discussion ; depuis la 0.56.0, il est gardé par session (`$.store`, clé `delegate:<session>`, trois jours au plus, jamais sur un parcours fini, lu dans le board du dépôt principal quand la session est dans un worktree) et revient quand le mod recharge le tableau de bord (à confirmer à l'usage avec `/reload-plugins` dans une session liée). Le mod ne connaît pas l'id d'application d'une discussion (`$.session.id()` donne celui de sa transcription) : pas de lien cliquable vers la discussion de découpage.
 - **Pistes en session liée.** La session liée ne touche pas au tableau de bord : les pistes avancent dans le panneau quand Claude, dans la discussion principale, rend leur statut à la note de fin de la session, pas au fil de son travail. Une session lancée qui s'arrête sans note laisse ses pistes « en cours » : « ↻ Reprendre les pistes » demande à Claude de les rendre (faites ou écartées) pour pouvoir clore la rétro.
 - **Discussion d'un ticket en cours.** Le mod ne lit le titre d'une discussion que dans ses propres hooks (`session_title`) : pour un ticket porté ailleurs, il dit « ici » ou « autre discussion », pas laquelle.

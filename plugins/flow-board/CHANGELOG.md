@@ -4,6 +4,14 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.64.1 — 2026-10-28
+
+### Corrigé
+- **README** : « Implémentation de spec » et `/implement-spec` n'y sont plus cités comme s'ils existaient encore (phases du bouton 🐞 Bug et des détours, limite « une discussion par parcours ») ; la 0.63.0 les a retirés.
+- **Rétro dans une session liée de groupe** : un test couvre la consigne de transcript ajoutée seule à `/retro`, sans bloc du tableau de bord.
+
+---
+
 ## 0.64.0 — 2026-10-28
 
 La compaction pendant un parcours : quand compacter, quoi garder, et une rétro qui relit le transcript.
