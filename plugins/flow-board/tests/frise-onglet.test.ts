@@ -246,7 +246,7 @@ test('la barre de navigation : chaque bouton a sa lettre et son raccourci, la r√
   for (const surface of ALL) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     await ui.press({ key: 'tab-agents' })
-    for (const [key, letter] of [['agents-zoom-out', 'o'], ['agents-zoom-in', 'i'], ['agents-left', 'h'], ['agents-right', 'l'], ['agents-all', 't']] as const) {
+    for (const [key, letter] of [['agents-zoom-out', 's'], ['agents-zoom-in', 'z'], ['agents-left', 'q'], ['agents-right', 'd'], ['agents-all', 't']] as const) {
       const button = await ui.find({ key })
       expect(button?.props.hotkey).toBe(letter)
       expect(String(button?.props.label)).toMatch(new RegExp(`${letter}$`))

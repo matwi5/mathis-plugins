@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.62.0 — 2026-10-28
+
+### Modifié
+- **Raccourcis de la frise des agents en ZQSD** : `z` zoome (`＋`), `s` dézoome (`−`), `q` décale vers la gauche (`◀`) et `d` vers la droite (`▶`), à la place de `i`, `o`, `h` et `l` ; `t` (« tout ») ne change pas. Les flèches ne sont pas possibles : le moteur n'accepte comme raccourci de bouton qu'une lettre ou un chiffre, et s'en sert déjà pour passer d'un bouton à l'autre dans le volet.
+
+---
+
 ## 0.61.1 — 2026-10-28
 
 ### Corrigé

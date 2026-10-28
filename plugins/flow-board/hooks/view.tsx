@@ -1806,10 +1806,10 @@ const navBar = (k: Kit, full: Axis, shown: Axis, isLiveNow: boolean, view: View,
   const set = (next: AgentsWindow | null) => () => act.setAgentsWindow(next)
   const lastHour: AgentsWindow | null = full.end - full.start > HOUR_MS ? { start: full.end - HOUR_MS, end: full.end, isLive: true } : null
   const buttons: [string, string, string | null, () => unknown][] = [
-    ['agents-zoom-out', `−${NB}o`, 'o', set(zoomWindow(full, win, 'out'))],
-    ['agents-zoom-in', `＋${NB}i`, 'i', set(zoomWindow(full, win, 'in'))],
-    ['agents-left', `◀${NB}h`, 'h', set(zoomWindow(full, win, 'left'))],
-    ['agents-right', `▶${NB}l`, 'l', set(zoomWindow(full, win, 'right'))],
+    ['agents-zoom-out', `−${NB}s`, 's', set(zoomWindow(full, win, 'out'))],
+    ['agents-zoom-in', `＋${NB}z`, 'z', set(zoomWindow(full, win, 'in'))],
+    ['agents-left', `◀${NB}q`, 'q', set(zoomWindow(full, win, 'left'))],
+    ['agents-right', `▶${NB}d`, 'd', set(zoomWindow(full, win, 'right'))],
     ['agents-hour', `dernière${NB}heure`, null, set(lastHour)],
     ['agents-all', `tout${NB}t`, 't', set(null)],
   ]
