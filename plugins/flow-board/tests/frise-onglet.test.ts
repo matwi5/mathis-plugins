@@ -348,8 +348,8 @@ test('la fenêtre repart de « tout » à la réouverture de l’onglet', { time
   await ui.unmount()
 })
 
-// Le terminal du faux moteur a un Svg que le vrai terminal n'a pas : un Svg n'y dessine rien, et
-// les assertions « terminal » qui le cherchaient étaient vides. La frise du terminal se teste par
+// Le terminal du faux moteur a un Svg, comme le vrai (table complétée, 2.1.312) : un Svg n'y dessine
+// rien, et les assertions « terminal » qui le cherchaient étaient vides. La frise du terminal se teste par
 // ses cases (laneCells, rulerCells), et l'onglet n'y émet jamais de Svg.
 test('au terminal, l’onglet Agents n’émet aucun Svg, légende détaillée et zoom compris', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 47_000_000 })
@@ -361,6 +361,25 @@ test('au terminal, l’onglet Agents n’émet aucun Svg, légende détaillée e
   await ui.press({ key: 'agents-legend' })
   await ui.press({ key: 'agents-zoom-in' })
   expect(await ui.findAll({ type: 'Svg' })).toEqual([])
+  await ui.unmount()
+})
+
+// La table de `$.ui.resolve(e)` porte tous les éléments, même ceux que la surface ne dessine pas :
+// au terminal (2.1.312), `Svg` y rend une boîte vide. Choisir le SVG d'après la table effaçait la
+// règle et les pistes du vrai terminal, l'onglet ne gardant que les noms et la légende.
+test('au terminal, la règle et les pistes se dessinent en cases même si la table porte un Svg', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 48_000_000 })
+  world(on)
+  on('ui.resolve', async (_$: unknown, e: any, next: any) => {
+    const table = await next(e)
+    return e.surface === 'terminal' ? { ...table, Svg: (props: any) => ({ type: 'Box', props: {}, key: props?.key ?? null }) } : table
+  })
+  await scenario($, on, clock)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await ui.press({ key: 'tab-agents' })
+  expect(await ui.find({ type: 'Text', text: /╵/ })).toBeDefined()
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(/"cells-|▒▒/.test(drawn)).toBe(true)
   await ui.unmount()
 })
 

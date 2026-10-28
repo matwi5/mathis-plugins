@@ -92,6 +92,14 @@ export type Kit = {
   width: number
 }
 
+/**
+ * Ce que la surface dessine vraiment. La table de `$.ui.resolve(e)` est complétée : un élément
+ * absent de la surface y figure quand même et dessine un fragment vide (au terminal 2.1.312, `Svg`
+ * rend une boîte vide, et la frise des agents n'y montrait plus ni règle ni pistes). register.tsx
+ * lit donc la capacité d'après la surface et la passe ici, comme git-board et stats-board.
+ */
+export type Caps = { hasSvg: boolean }
+
 /** Une case vide, pour essayer le constructeur `Raster` de la table. */
 const PROBE = pack([[[0x20, DEFAULT, DEFAULT]]])
 
@@ -108,14 +116,14 @@ const drawsRaster = (ctor: unknown): boolean => {
   }
 }
 
-export const kitOf = (table: Record<string, unknown>, width: number): Kit => ({
+export const kitOf = (table: Record<string, unknown>, width: number, caps: Caps): Kit => ({
   Box: table.Box,
   Text: table.Text,
   Button: table.Button,
-  Svg: table.Svg ?? null,
+  Svg: caps.hasSvg ? (table.Svg ?? null) : null,
   Link: table.Link ?? null,
-  Raster: typeof table.Svg !== 'function' && drawsRaster(table.Raster) ? table.Raster : null,
-  isRich: typeof table.Svg === 'function',
+  Raster: !caps.hasSvg && drawsRaster(table.Raster) ? table.Raster : null,
+  isRich: caps.hasSvg && typeof table.Svg === 'function',
   width: Math.max(24, Math.floor(width)),
 })
 

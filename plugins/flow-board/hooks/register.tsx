@@ -162,12 +162,14 @@ import { applyTraces } from './erase.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
 import { minOf, shortArg, toolFamily } from './timeline.ts'
 import { pricesFromCcusage, type UnitPrices } from './cost.ts'
-import { drawBand, drawPane, drawWelcomeBand, kitOf, type Actions, type View } from './view.tsx'
+import { drawBand, drawPane, drawWelcomeBand, kitOf, type Actions, type Caps, type View } from './view.tsx'
 import { commitRegistry, ensureRegistry, ownAgent, readPiece, readRegistry, registryDir, registryKey, registryQueue, registrySaveTimer, saveRegistryNow } from './registry-file.ts'
 import { catchUpAgent, catchUpOwn, catchUpShown, claudeDir, needsRebuild, readRebuilt, readTranscript, transcriptAgents, updateRebuilt } from './catch-up.ts'
 import { eraseRun, erasedRuns, erasingNow, forgetSession, readTraces, reconcileErased } from './erase-run.ts'
 
 const PANE = 'flow-board'
+/** Le terminal seul ne dessine pas les SVG (sa table porte quand même un `Svg`, qui rend une boîte vide). */
+const capsOf = (surface: string): Caps => ({ hasSvg: surface !== 'terminal' })
 const PANE_TITLE = 'Parcours'
 const TOOL = 'mcp__flow-board__flow'
 /** Le plugin dont la suggestion `/project:push` s'écarte pendant un parcours (pas de push en cours de route). */
@@ -3757,7 +3759,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const view = await readView($)
-    const kit = kitOf($.ui.resolve(e) as unknown as Record<string, unknown>, e.props.bodyColumns)
+    const kit = kitOf($.ui.resolve(e) as unknown as Record<string, unknown>, e.props.bodyColumns, capsOf(e.surface))
     return drawPane(kit, view, actionsFor($)) as any
   })
 
@@ -3787,7 +3789,7 @@ export const register: Register = on => {
     const view = await readView($)
     if (view.ui.isBandHidden) return next(e)
     const below = await next(e)
-    const kit = kitOf($.ui.resolve(e) as unknown as Record<string, unknown>, e.props.bodyColumns)
+    const kit = kitOf($.ui.resolve(e) as unknown as Record<string, unknown>, e.props.bodyColumns, capsOf(e.surface))
     const draw = view.board && activeRun(view.board) ? drawBand : drawWelcomeBand
     const own = draw(kit, view, actionsFor($)) as any
     if (!own) return below

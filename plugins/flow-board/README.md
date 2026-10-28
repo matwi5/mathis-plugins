@@ -7,7 +7,7 @@ Tableau de bord en direct du workflow [mattpocock-skills](https://github.com/mat
 - **Il garde les parcours par projet.** Plusieurs discussions peuvent travailler sur le même projet sans se marcher dessus.
 - **Il suit les conventions de livraison du plugin `project`** : `/project:sync`, `/project:version`, `/project:push`, `/project:pr`.
 
-Version actuelle : **0.61.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.61.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

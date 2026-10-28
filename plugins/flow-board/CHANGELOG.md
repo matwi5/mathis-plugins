@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.61.1 — 2026-10-28
+
+### Corrigé
+- **Frise des agents vide au terminal** : l'onglet Agents n'y montrait que les noms des pistes et la légende, sans règle graduée ni pistes (l'app desktop, elle, les dessinait). La table de `$.ui.resolve(e)` porte tous les éléments, même ceux que la surface ne dessine pas : au terminal (Claude Code 2.1.312), `Svg` y rend une boîte vide, et le mod, qui choisissait le SVG dès que la table avait un `Svg`, dessinait des SVG invisibles. Il choisit maintenant d'après la surface, comme git-board et stats-board : cases (`Raster`) ou barres en blocs au terminal, SVG ailleurs. L'anneau, la feuille de route et les barres du panneau et du bandeau suivent le même choix.
+
+---
+
 ## 0.61.0 — 2026-10-28
 
 Les pistes de la rétro du parcours « Frise, groupes et titres ».
