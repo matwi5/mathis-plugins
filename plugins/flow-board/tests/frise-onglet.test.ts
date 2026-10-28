@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { laneCells, rulerCells } from '../hooks/cells.ts'
+import { C } from '../hooks/catalog.ts'
 import { familyGlyphs, relayGlyphs } from '../hooks/view.tsx'
 import type { SessionRegistry } from '../types'
 
@@ -344,4 +346,45 @@ test('la fenêtre repart de « tout » à la réouverture de l’onglet', { time
   await ui.press({ key: 'tab-agents' })
   expect(await explorerAlt(ui)).toContain('outil ⌕')
   await ui.unmount()
+})
+
+// Le terminal du faux moteur a un Svg que le vrai terminal n'a pas : un Svg n'y dessine rien, et
+// les assertions « terminal » qui le cherchaient étaient vides. La frise du terminal se teste par
+// ses cases (laneCells, rulerCells), et l'onglet n'y émet jamais de Svg.
+test('au terminal, l’onglet Agents n’émet aucun Svg, légende détaillée et zoom compris', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 47_000_000 })
+  world(on)
+  await scenario($, on, clock, 20 * 60_000)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await ui.press({ key: 'tab-agents' })
+  expect(await ui.findAll({ type: 'Svg' })).toEqual([])
+  await ui.press({ key: 'agents-legend' })
+  await ui.press({ key: 'agents-zoom-in' })
+  expect(await ui.findAll({ type: 'Svg' })).toEqual([])
+  await ui.unmount()
+})
+
+test('les cases d’une piste au terminal : réflexion, outil et son glyphe, attente, pause coupée, repère', () => {
+  const parts = [
+    { kind: 'think' as const, x0: 0, x1: 0.2, s: 0, e: 2 },
+    { kind: 'tool' as const, family: 'read' as const, x0: 0.2, x1: 0.4, s: 2, e: 4 },
+    { kind: 'waitPerson' as const, x0: 0.4, x1: 0.5, s: 4, e: 5 },
+  ]
+  const pauses = [{ x0: 0.6, x1: 0.9, label: '2 h' }]
+  const cells = laneCells(parts, [{ k: 'back', at: 0, x: 0.95 } as any], pauses, 20, C.blue, true)
+  expect(cells.map(c => c.glyph).join('')).toBe(`▒▒▒▒⌕███╱╱··┊2 h ┊·${cells[19]!.glyph}`)
+  expect(cells[19]!.glyph).not.toBe('·')
+  // La réflexion est plus pâle que l'outil ; l'attente de la personne est ambre ; le glyphe d'outil se pose sur la couleur de la piste.
+  expect(cells[0]!.alpha).toBeLessThan(cells[5]!.alpha!)
+  expect(cells[8]!.color).toBe(C.amber)
+  expect(cells[4]!.bg).toBe(C.blue)
+  // La ligne advisor : des cases cerclées à la place des blocs pleins.
+  expect(laneCells(parts.slice(0, 1), [], [], 10, C.gold, false, true).map(c => c.glyph).join('')).toBe('▭▭········')
+})
+
+test('la règle graduée au terminal : « ╵ » et l’heure quand elle tient, « ┊ » aux bords des pauses', () => {
+  const ruler = rulerCells([{ x: 0, label: '10:00' }, { x: 0.5, label: '10:30' }], [{ x0: 0.8, x1: 0.9 }], 20)
+  expect(ruler.replace(/\u00a0/g, ' ')).toBe('╵10:00    ╵10:30┊┊  ')
+  // Une heure qui toucherait la graduation suivante ne s'écrit pas.
+  expect(rulerCells([{ x: 0, label: '10:00' }, { x: 0.1, label: '10:05' }], [], 10).replace(/\u00a0/g, ' ')).toBe('╵╵10:05   ')
 })

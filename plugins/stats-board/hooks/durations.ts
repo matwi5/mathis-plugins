@@ -7,7 +7,7 @@
 // (`joinMonths`) en faisant relire tout fichier sur lequel les mois ne s'accordent pas.
 
 import type { ActiveRow, ApiRow, CallStats, Durations, HourRow, PeerDurations, ProjectInfo, RequestLog, RequestRecord, SessionDayRow, TimesRow } from '../types'
-import { dayOf, earliest, groupOf, UNKNOWN } from './model.ts'
+import { dayOf, earliest, groupOf, maxOf, UNKNOWN } from './model.ts'
 import { REQUEST_SCHEMA, activeMs, mergeSpeeds, weightedSpeed } from './requests.ts'
 
 export { weightedSpeed }
@@ -123,7 +123,7 @@ export function joinMonths(parts: readonly unknown[]): Durations | null {
     const isCovered = monthsOfFile({ mtimeMs: first.mtimeMs, days }).every((month) => read.get(month)?.files[name] !== undefined)
     if (isSame && isCovered) files[name] = first
     // Sans aucun jour (fichier laissé de côté), rien à refaire : la date la plus récente suffit.
-    else files[name] = days.length ? { mtimeMs: -1, days } : { mtimeMs: Math.max(...list.map((f) => f.mtimeMs)), days: [] }
+    else files[name] = days.length ? { mtimeMs: -1, days } : { mtimeMs: maxOf(list.map((f) => f.mtimeMs)), days: [] }
   }
   const all = <T extends { date: string }>(pick: (m: MonthTotals) => readonly T[]): T[] => months.flatMap((m) => [...pick(m)]).sort(byDateThenAll)
   const next = { files, api: all((m) => m.api), active: all((m) => m.active), hours: all((m) => m.hours), sessions: all((m) => m.sessions), times: all((m) => m.times ?? []) }

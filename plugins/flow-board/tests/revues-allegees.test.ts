@@ -101,7 +101,7 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   world(on)
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   // Un seul relecteur pour les deux axes, quelle que soit la taille : il lit CODING_STANDARDS.md, compte ses Mineurs.
-  expect(implement).toContain('both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads CODING_STANDARDS.md at the root of the project when it exists, besides CLAUDE.md, and gives its Nits as a count, without detail')
+  expect(implement).toContain('both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail')
   expect(implement).not.toContain('under 100 changed lines')
   // La revue de sécurité, en lecture seule, part avec la revue du groupe ; pas de seconde passe sur ses
   // correctifs, sauf zone coûteuse ou plus de 150 lignes hors tests, et alors une passe high sans vérifications.

@@ -27,6 +27,8 @@ import type {
   Tone,
 } from '../types'
 import { SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
+import { ownPart } from './linked.ts'
+import { maxOf, minOf } from './timeline.ts'
 
 /** Longueur gardée d'un texte affiché en entier (élément, ticket, raison, choix, entrée du journal). */
 const TEXT_MAX = 300
@@ -133,7 +135,12 @@ export type Suggestions = {
   others: string[]
   /** Toutes les phases requises sont faites : le parcours peut se clore. */
   canFinish: boolean
+  /** À la livraison, ce que la mesure des versions dit de /project:version (déjà posée, ou à poser). */
+  versionNote?: string
 }
+
+/** Ce que la carte « Ensuite » sait du dépôt : GitHub (pour la PR), versions déjà posées face au distant. */
+export type SuggestOpts = { hasPullRequests?: boolean; isVersionSet?: boolean | null }
 
 /**
  * Sans GitHub (distant ailleurs, ou aucun), la PR par /project:pr n'a pas de sens : le parcours
@@ -144,7 +151,7 @@ export const withoutPullRequest = (run: Run): Run => {
   return phases.length === run.phases.length ? run : { ...run, phases }
 }
 
-export const suggestionsFor = (run: Run, opts: { hasPullRequests?: boolean } = {}): Suggestions => {
+export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions => {
   const phase = currentPhase(run)
   const next = run.phases.slice(run.cursor + 1).find(p => p.status === 'pending')
   const list: string[] = []
@@ -178,6 +185,19 @@ export const suggestionsFor = (run: Run, opts: { hasPullRequests?: boolean } = {
     // La pull request attend le push : elle n'est même pas proposée en second.
     kept.splice(0, kept.length, 'project:push', ...kept.filter(skill => skill !== 'project:push' && skill !== 'project:pr' && skill !== 'pr'))
   }
+  // Version et push côte à côte, au choix : une version déjà posée par le lot (chaque plugin ou
+  // paquet changé a une nouvelle version face au distant) ne se repropose pas, le push suffit.
+  let versionNote: string | undefined
+  if (kept[0] === 'project:version' && phase.skill !== 'project:version') {
+    const rest = kept.slice(1).filter(skill => skill !== 'project:push' && skill !== 'project:version')
+    if (opts.isVersionSet === true) {
+      kept.splice(0, kept.length, 'project:push', ...rest)
+      versionNote = 'version déjà posée : chaque plugin changé a une nouvelle version face au distant'
+    } else {
+      kept.splice(0, kept.length, 'project:version', 'project:push', ...rest)
+      if (opts.isVersionSet === false) versionNote = 'un plugin changé n’a pas encore de nouvelle version : /project:version, ou /project:push sans version'
+    }
+  }
   // La rétro n'est plus une étape du parcours, mais reste à portée de main.
   if (opts.hasPullRequests === false) kept.splice(0, kept.length, ...kept.filter(skill => skill !== 'project:pr'))
   const others = kept.slice(1, 4).filter(skill => skill !== 'retro')
@@ -186,7 +206,7 @@ export const suggestionsFor = (run: Run, opts: { hasPullRequests?: boolean } = {
     phase.status === 'done' && !run.phases.slice(run.cursor + 1).some(p => p.status === 'pending' && !p.isOptional)
   // Avec des groupes, une revue qui manque n'a pas de skill pour suite : elle se lance sur la ligne du groupe.
   const primary = isReviewDue && !isUnfinished && (run.groups ?? []).length > 0 ? null : (kept[0] ?? null)
-  return { primary, others, canFinish }
+  return { primary, others, canFinish, ...(versionNote ? { versionNote } : {}) }
 }
 
 /**
@@ -231,8 +251,35 @@ export const nextLaunchFor = (run: Run): NextLaunch | null => {
  * bouton principal de la carte « Ensuite ». Null quand la suite n'est pas une commande (lancer un
  * groupe, attendre une session liée, revue sur la ligne d'un groupe) ou qu'il n'y a pas de suite.
  */
-export const nextCommandSkill = (run: Run, opts: { hasPullRequests?: boolean } = {}): string | null =>
+export const nextCommandSkill = (run: Run, opts: SuggestOpts = {}): string | null =>
   nextLaunchFor(run) !== null ? null : suggestionsFor(run, opts).primary
+
+/** Les manifestes qui portent la version d'un plugin ou d'un paquet. */
+export const VERSION_MANIFESTS = ['.claude-plugin/plugin.json', 'package.json', 'pyproject.toml', 'Cargo.toml']
+
+/** Le dossier que versionne un manifeste : celui du plugin pour `.claude-plugin/plugin.json`. */
+const unitOf = (manifest: string): string => {
+  const dir = manifest.endsWith('.claude-plugin/plugin.json') ? manifest.slice(0, -'.claude-plugin/plugin.json'.length) : manifest.replace(/[^/]*$/, '')
+  return dir.replace(/\/+$/, '')
+}
+
+/**
+ * Les versions sont-elles déjà posées face au distant ? Chaque fichier changé (`changed`) relève du
+ * manifeste le plus proche au-dessus de lui (`manifests`, chemins depuis la racine du dépôt) ; vrai
+ * quand chacun de ces manifestes a changé sa ligne de version (`bumped`). Null sans manifeste
+ * (rien à mesurer) ; un dépôt dont aucun dossier versionné n'a changé n'a rien à poser : vrai.
+ */
+export const versionSet = (changed: readonly string[], manifests: readonly string[], bumped: readonly string[]): boolean | null => {
+  if (manifests.length === 0) return null
+  const units = manifests.map(m => ({ manifest: m, dir: unitOf(m) })).sort((a, b) => b.dir.length - a.dir.length)
+  const touched = new Set<string>()
+  for (const path of changed) {
+    const unit = units.find(u => u.dir === '' || path === u.dir || path.startsWith(`${u.dir}/`))
+    // Un fichier hors de tout dossier versionné (la marketplace, la doc de la racine) ne demande rien.
+    if (unit) touched.add(unit.manifest)
+  }
+  return [...touched].every(m => bumped.includes(m))
+}
 
 const counted = (count: number, one: string, many: string): string => `${count} ${count > 1 ? many : one}`
 
@@ -296,12 +343,6 @@ const AFTER_TICKETS = new Set([...DELIVERY, 'compte-rendu'])
  */
 export const upgradeRun = (run: Run): Run => repairRun(upgradePhases(run))
 
-/**
- * Répare ce que des versions antérieures ont laissé de faux, sans rien changer d'autre :
- * - une Implémentation close à la fin d'un groupe alors que le lot a encore des tickets ouverts
- *   (avant la 0.18.3) redevient en cours, ses étapes prêtes pour le ticket suivant ;
- * - des compteurs de revue lus dans le texte des réponses (avant la 0.19.0), faux, sont effacés.
- */
 /** Les étapes de /project:push dans la phase « Version et push ». */
 const PUSH_STEPS = new Set(['push', 'checks', 'docs', 'pushed'])
 
@@ -309,6 +350,12 @@ const PUSH_STEPS = new Set(['push', 'checks', 'docs', 'pushed'])
 const isPushed = (phase: FlowPhase): boolean =>
   phase.steps.some(s => s.id === 'pushed' && (s.status === 'done' || s.status === 'active'))
 
+/**
+ * Répare ce que des versions antérieures ont laissé de faux, sans rien changer d'autre :
+ * - une Implémentation close à la fin d'un groupe alors que le lot a encore des tickets ouverts
+ *   (avant la 0.18.3) redevient en cours, ses étapes prêtes pour le ticket suivant ;
+ * - des compteurs de revue lus dans le texte des réponses (avant la 0.19.0), faux, sont effacés.
+ */
 const repairRun = (run: Run): Run => {
   const at = run.cursor
   const current = run.phases[at]
@@ -363,7 +410,7 @@ const returnedWithoutTrace = (run: Run): Map<string, number> => {
     for (const id of idsIn(entry.text, RETURNED)) {
       if (!candidates.some(g => g.id === id) || found.has(id)) continue
       const sent = run.log.filter(l => l.at <= entry.at && idsIn(l.text, SENT).includes(id)).map(l => l.at)
-      found.set(id, sent.length > 0 ? Math.max(...sent) : entry.at)
+      found.set(id, sent.length > 0 ? maxOf(sent) : entry.at)
     }
   }
   return found
@@ -1217,12 +1264,6 @@ export const summaryOf = (run: Run): string => {
 }
 
 /**
- * Des tickets ajoutés au lot pendant l'exécution d'un groupe, sans que Claude dise où les ranger :
- * ils rejoignent ce groupe (avant le premier de ses tickets qu'ils retiennent, sinon à la fin).
- * Le groupe en cours est celui d'un ticket « en cours », sinon du premier ticket ouvert de la file ;
- * rien ne bouge si ce n'est pas un seul groupe, ni pendant les skills qui publient le lot.
- */
-/**
  * Le groupe qui s'exécute : celui d'un ticket « en cours », sinon du premier ticket ouvert de la
  * file ; aucun s'il y en a plusieurs ou si le parcours n'a pas de groupes.
  */
@@ -1235,6 +1276,12 @@ const runningGroupOf = (run: Run, tickets: readonly Ticket[]): TicketGroup | und
   return running.length === 1 ? running[0] : undefined
 }
 
+/**
+ * Des tickets ajoutés au lot pendant l'exécution d'un groupe, sans que Claude dise où les ranger :
+ * ils rejoignent ce groupe (avant le premier de ses tickets qu'ils retiennent, sinon à la fin).
+ * Le groupe en cours est celui d'un ticket « en cours », sinon du premier ticket ouvert de la file ;
+ * rien ne bouge si ce n'est pas un seul groupe, ni pendant les skills qui publient le lot.
+ */
 const placeInRunningGroup = (run: Run, ids: readonly string[], before: readonly Ticket[], now: number) => {
   if (!run.groups || run.groups.length === 0 || !isFindingTime(run)) return
   const groupOf = (id: string) => run.groups!.find(g => g.tickets.some(x => sameTicket(x, id)))
@@ -1390,7 +1437,7 @@ export const applyReport = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string> } = {},
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string> } = {},
 ): { board: Board; fx: Effects; text: string } => {
   const out = reportOnce(board, input, now, opts)
   if (board.delegate || str(input.delegate) !== '') return out
@@ -1404,7 +1451,7 @@ const reportOnce = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string> },
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string> },
 ): { board: Board; fx: Effects; text: string } => {
   // Une session liée qui travaille pour un groupe d'un parcours resté ailleurs : rien ne s'écrit ici.
   const delegateId = str(input.delegate)
@@ -1592,7 +1639,7 @@ const reportHere = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; relay?: unknown } = {},
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; relay?: unknown } = {},
 ): { board: Board; fx: Effects; text: string } => {
   const b = clone(board)
   const fx = noFx()
@@ -2020,15 +2067,15 @@ export const linkedSessionsOf = (run: Run): { count: number; ids: string[] } => 
 /**
  * La session liée est lancée : son id, relevé dans la réponse de start_session ou dans la sortie
  * de `claude --bg`, est gardé, et les éléments passent « en cours ». Une session dont le titre
- * nomme un groupe ou un bug (« … › Groupe A · », « … › Bug · ») n'est pas celle des éléments.
+ * nomme un groupe ou un bug (« … > Groupe A · », « … > Bug · ») n'est pas celle des éléments.
  */
 export const linkSession = (board: Board, session: string, now: number, title = ''): Outcome => {
   const run0 = activeRun(board)
   if (!run0 || run0.status !== 'active') return null
   const phase0 = currentPhase(run0)
   if (!phase0.linked || phase0.linked.session !== undefined || linkedInFlight(phase0).length === 0) return null
-  // Après le dernier « › » ; une page de code peut déformer « › » en « â€º » et « · » en « Â· ».
-  const own = title.split(/›|â€º/).at(-1)!
+  // Après le dernier séparateur (« > », ou un ancien) ; une page de code peut déformer « · » en « Â· ».
+  const own = ownPart(title)
   if (/^\s*(?:groupe\s+\S+|bug)\s*(?:Â)?·/i.test(own)) return null
   const b = clone(board)
   const run = activeRun(b)!
@@ -2134,9 +2181,9 @@ export const startLinkedGroups = (board: Board, ids: readonly string[], now: num
 }
 
 /**
- * Une session liée est lancée : son id va au groupe que son titre nomme (« <parcours> › Groupe A · … »),
+ * Une session liée est lancée : son id va au groupe que son titre nomme (« <parcours> > Groupe A · … »),
  * sinon au seul groupe confié qui n'a pas encore de session. Rien quand on ne sait pas lequel. Seule
- * compte la partie après le dernier « › » : le titre du parcours, en tête, peut lui-même dire
+ * compte la partie après le dernier séparateur : le titre du parcours, en tête, peut lui-même dire
  * « groupe … ».
  */
 export const linkGroupSession = (board: Board, title: string, session: string, now: number): Outcome => {
@@ -2144,8 +2191,8 @@ export const linkGroupSession = (board: Board, title: string, session: string, n
   if (!run0) return null
   const pending = (run0.groups ?? []).filter(g => g.linked !== undefined && g.linked.session === undefined)
   if (pending.length === 0) return null
-  // Après le dernier « › » : le titre du parcours, devant, ne nomme pas le groupe de la session.
-  const own = title.slice(title.lastIndexOf('›') + 1)
+  // Après le dernier séparateur : le titre du parcours, devant, ne nomme pas le groupe de la session.
+  const own = ownPart(title)
   const named = [...own.matchAll(/\bgroupe\s+([^\s·:,()]+)/gi)].map(m => m[1]!.toLowerCase())
   const target =
     named.length > 0
@@ -2662,7 +2709,7 @@ export const decidedFileText = (run: Run, relay: Relay | null | undefined): stri
   return [
     `# Choix déjà déclarés · ${run.title}`,
     '',
-    "Tenu par flow-board d'après le champ « decided » de l'outil flow (discussion principale et sessions liées), réécrit à chaque changement : ne pas le modifier à la main. Ces choix ont été faits sans le porteur et attendent sa relecture : une revue ne les resignale pas et une passe --fix ne les défait pas.",
+    "Tenu par flow-board d'après le champ « decided » de l'outil flow (discussion principale et sessions liées), réécrit à chaque changement : ne pas le modifier à la main. Ces choix ont été faits sans le porteur et attendent sa relecture : une revue ne les défait pas par préférence (une passe --fix non plus), mais signale tout cas où l'un d'eux produit un défaut, avec son scénario.",
     '',
     ...(all.length > 0 ? all.map(line) : ["Aucun choix déclaré pour l'instant."]),
     '',
@@ -2719,7 +2766,7 @@ export const clampFuture = (board: Board, now: number): Board => {
   if (!board.runs.some(isAhead)) return board
   const b = clone(board)
   for (const r of b.runs) {
-    if (isAhead(r)) r.updatedAt = Math.min(now, Math.max(r.startedAt, ...r.log.map(e => e.at).filter(at => at <= now)))
+    if (isAhead(r)) r.updatedAt = Math.min(now, maxOf(r.log.map(e => e.at).filter(at => at <= now), r.startedAt))
   }
   return b
 }
@@ -2757,8 +2804,8 @@ export const applyAnswer = (board: Board, answer: string, now: number): { board:
   if (numbers.length > 0) {
     phase.stats.questions += numbers.length
     phase.stats.rounds += 1
-    const lo = Math.min(...numbers)
-    const hi = Math.max(...numbers)
+    const lo = minOf(numbers)
+    const hi = maxOf(numbers)
     ask = lo === hi ? `Q${lo}` : `Q${lo}–Q${hi}`
     if (target.steps.some(s => s.id === 'rounds')) reachStep(target, 'rounds', now)
     else if (target.steps.some(s => s.id === 'grill')) reachStep(target, 'grill', now)
@@ -2887,7 +2934,7 @@ const CHECK_START = new RegExp(`^${CHECK_RE.source}`, 'i')
 const GIT_START = /^git(?:\s+-[Cc]\s+\S+)*\s+(commit|checkout\s+-b|switch\s+-c|worktree\s+(?:add|remove|prune)|merge|bisect|push)\b/
 const GH_START = /^(gh|glab)\s+(issue|pr|mr)\s+(create|close|ready|merge)\b/
 const BG_START = /^claude(?:\.exe)?\s(?:[\s\S]*\s)?--(?:bg|background)\b/i
-// « backgrounded · 60481870 · Lot SC › Groupe A · Synchro » ; le point médian peut arriver déformé (page de code).
+// « backgrounded · 60481870 · Lot SC > Groupe A · Synchro » ; le point médian peut arriver déformé (page de code).
 const BG_OUT = /^\s*backgrounded\s+\S+\s+([0-9a-f]{6,})\s+\S+\s+(.+?)\s*$/gim
 
 /**
@@ -4071,10 +4118,6 @@ export type GroupPlan = {
 export const FALLBACK_GROUP = '…'
 
 /**
- * Le plan d'exécution du parcours, ou null sans groupes déclarés. Un groupe en attend un autre
- * quand l'un de ses tickets a un bloqueur encore ouvert dans cet autre ; les vagues en découlent.
- */
-/**
  * Un ticket ajouté au lot après le plan, sans groupe (un ticket trouvé en route qui retient le lot,
  * par exemple) : il rejoint le groupe dont il fait partie de la chaîne. D'abord le groupe des
  * tickets qu'il retient, placé avant le premier ; sinon le groupe des tickets qu'il attend, à la
@@ -4092,13 +4135,17 @@ const attachLoose = (run: Run, groups: TicketGroup[]) => {
       const targets = [...new Set((held.length > 0 ? held : awaited).map(x => owner(x.id)!))]
       if (targets.length !== 1) continue
       const g = targets[0]!
-      const at = held.length > 0 ? Math.min(...held.map(x => g.tickets.findIndex(id => sameTicket(id, x.id))).filter(i => i >= 0)) : g.tickets.length
+      const at = held.length > 0 ? minOf(held.map(x => g.tickets.findIndex(id => sameTicket(id, x.id))).filter(i => i >= 0)) : g.tickets.length
       g.tickets = [...g.tickets.slice(0, at), t.id, ...g.tickets.slice(at)]
       isMoved = true
     }
   }
 }
 
+/**
+ * Le plan d'exécution du parcours, ou null sans groupes déclarés. Un groupe en attend un autre
+ * quand l'un de ses tickets a un bloqueur encore ouvert dans cet autre ; les vagues en découlent.
+ */
 export const groupPlan = (run: Run): GroupPlan | null => {
   const declared = (run.groups ?? [])
     .map(g => ({ ...g, tickets: g.tickets.filter(id => ticketOf(run, id) !== undefined) }))
@@ -4148,7 +4195,7 @@ export const groupPlan = (run: Run): GroupPlan | null => {
   })
 
   // Vagues : un groupe passe dès que ceux qu'il attend sont passés. Une attente circulaire ne
-  // bloque pas le calcul : ses groupes forment ensemble la vague suivante, marqués « à revoir ».
+  // bloque pas le calcul : ses groupes passent ensemble au niveau suivant, marqués « à revoir ».
   let remaining = views.filter(v => v.state !== 'done')
   let wave = 0
   while (remaining.length > 0) {

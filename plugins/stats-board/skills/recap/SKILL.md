@@ -16,7 +16,7 @@ Tous les chiffres viennent du script, qui interroge ccusage et lit les fichiers 
      node "${CLAUDE_SKILL_DIR}/recap.mjs" "${CLAUDE_SESSION_ID}"
      ```
 
-   - un parcours, par le titre de sa discussion principale ou son début (les sessions liées de flow-board, dont le titre reprend celui du parcours coupé et suivi de « … › Groupe X », sont retrouvées aussi) :
+   - un parcours, par le titre de sa discussion principale ou son début (les sessions liées de flow-board, dont le titre reprend celui du parcours coupé et suivi de « … > Groupe X », « … › Groupe X » avant flow-board 0.61.0, sont retrouvées aussi) :
 
      ```bash
      node "${CLAUDE_SKILL_DIR}/recap.mjs" --parcours "<début du titre>"

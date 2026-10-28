@@ -278,9 +278,9 @@ test('sans git : les lots partent en sessions liées ; raisons et autres lots af
   await ui.press({ key: 'launch-parallel-linked-1' })
   const text = filled.at(-1)!
   expect(text).toMatch(/^Confie chacun de ces groupes à sa session liée, en parallèle, pour le parcours « Boutique » : Groupe C \(Statut de commande\) : 1\) c1 — Statut de commande ∥ Groupe E \(Enquêtes\) : 1\) e1 — Enquête transporteur\./)
-  expect(text).toMatch(/Puis lance une session par groupe, avec un titre qui commence par « Boutique › Groupe <id> · »/)
+  expect(text).toMatch(/Puis lance une session par groupe, avec un titre qui commence par « Boutique > Groupe <id> · »/)
   expect(text).toMatch(/start_session une fois par groupe, avec initiation user_asked/)
-  expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n "Boutique › Groupe <id> · <thème>" --effort <effort>/)
+  expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n "Boutique > Groupe <id> · <thème>" --effort <effort>/)
   // Plusieurs groupes : l'effort se choisit groupe par groupe.
   expect(text).toContain("Effort de chaque session (<effort>, choisi groupe par groupe) : medium par défaut ; high si son groupe a un ticket qui touche une zone sensible")
   expect(text).toContain("Dis-moi en une ligne l'effort choisi pour chaque groupe et pourquoi.")
@@ -389,9 +389,9 @@ test('dans le CLI : la session lancée par claude --bg va au groupe que son titr
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
-  // Dans un dépôt git, la session du CLI a son worktree, et rend sa branche.
-  expect(filled.at(-1)).toContain('claude --bg -n "Boutique › Groupe <id> · <thème>" --effort <effort> -w groupe-boutique-<id> (un worktree à elle) "<prompt>"')
-  expect(filled.at(-1)).toMatch(/les fichiers modifiés, sa branche, les contrôles lancés/)
+  // Dans un dépôt git, la session du CLI a son worktree (sa branche va au compte rendu : la procédure).
+  expect(filled.at(-1)).toContain('claude --bg -n "Boutique > Groupe <id> · <thème>" --effort <effort> -w groupe-boutique-<id> (un worktree à elle) "<prompt>"')
+  expect(filled.at(-1)).toContain('que son dossier est un dépôt git')
   expect(await ui.find({ key: 'group-linked-cancel-E' })).toBeDefined()
   await ui.unmount()
 
@@ -419,16 +419,11 @@ test('le titre d’une session liée commence par le titre du parcours, raccourc
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
-  expect(filled.at(-1)).toContain('avec un titre qui commence par « Tickets lots, espace privé… › Groupe <id> · »')
-  expect(filled.at(-1)).toContain('claude --bg -n "Tickets lots, espace privé… › Groupe <id> · <thème>" --effort <effort> -w groupe-tickets-lots-espace-<id>')
-  // Dans un dépôt git, le relecteur de sécurité a pour seul périmètre le diff de la branche.
-  expect(filled.at(-1)).toContain("avec pour seul périmètre git diff <base>..HEAD (<base> : le commit d'où part sa branche)")
-  expect(filled.at(-1)).not.toMatch(/la base de sa branche/)
-  // Avec git, le point fixe des revues reste le commit : pas de copies.
-  expect(filled.at(-1)).toContain("sur les seuls changements du ticket (point fixe : le commit d'avant le ticket), les deux axes dans un seul sous-agent relecteur (outil Agent, modèle opus, effort high, passés explicitement), quelle que soit la taille du diff ; il lit CODING_STANDARDS.md à la racine du projet quand il existe, en plus du CLAUDE.md, et rend ses Mineurs en un compte, sans détail")
-  expect(filled.at(-1)).toContain("sur le même périmètre (point fixe : le commit d'avant le ticket)")
-  expect(filled.at(-1)).toContain("avec pour cible <base>..HEAD (<base> : le commit d'où part sa branche)")
-  expect(filled.at(-1)).not.toMatch(/copie/)
+  expect(filled.at(-1)).toContain('avec un titre qui commence par « Tickets lots, espace privé… > Groupe <id> · »')
+  expect(filled.at(-1)).toContain('claude --bg -n "Tickets lots, espace privé… > Groupe <id> · <thème>" --effort <effort> -w groupe-tickets-lots-espace-<id>')
+  // Avec git, la procédure s'applique sans sa section « Sans git » (périmètres et points fixes : la procédure).
+  expect(filled.at(-1)).toContain('que son dossier est un dépôt git')
+  expect(filled.at(-1)).not.toMatch(/copie|section 9/)
 })
 
 test('une session liée dans un worktree se déclare quand même : le titre vient du board du dépôt principal', async ($, on) => {
@@ -759,11 +754,12 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   await ui.unmount()
   const text = filled.at(-1)!
   expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) du parcours « Boutique » par sa session liée/)
-  expect(text).toContain('« Boutique › Groupe E · » ou « Groupe E · »')
+  expect(text).toContain("« Boutique > Groupe E · » (« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0) ou « Groupe E · »")
   expect(text).toMatch(/git merge --ff-only /)
-  expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans sous-agent qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un sous-agent relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md quand elle est installée) ; la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix <plage> consignes : <chemin> ») sur les seuls commits du groupe')
+  expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans sous-agent qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un sous-agent relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix <plage> consignes : <chemin> ») sur les seuls commits du groupe')
   expect(text).toContain('3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
-  expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas resignaler ni défaire et la consigne des relecteurs, à leur donner telle quelle : .*, et en lui demandant de se concentrer sur les interactions entre les tickets/)
+  // La consigne des relecteurs : celle de la procédure des sessions de groupe, citée par son chemin.
+  expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des sessions liées de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
   expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode\), en lecture seule, avec pour seul périmètre les commits du groupe/)
   expect(text).not.toMatch(/sécurité[^;]*effort xhigh\)/)
@@ -846,7 +842,7 @@ test('la rétro d’un parcours à sessions liées : la mère fait la sienne, un
   await ui.unmount()
   const text = filled.at(-1)!
   expect(text).toMatch(/^\/mattpocock-skills:retro Rétro globale du parcours « Boutique » : cette discussion \(la session mère\) et ses sessions filles/)
-  expect(text).toContain('« Boutique › » (ids relevés : local_E42)')
+  expect(text).toContain("« Boutique > » (« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0) (ids relevés : local_E42)")
   expect(text).toContain('lance un sous-agent par session fille, tous en parallèle et en lecture seule')
   expect(text).toContain('lit le transcript de sa session')
   expect(text).not.toContain('SendMessage')
@@ -921,7 +917,7 @@ test('le fichier des choix déjà déclarés reprend ceux du parcours et ceux qu
     [
       '# Choix déjà déclarés · Lot',
       '',
-      "Tenu par flow-board d'après le champ « decided » de l'outil flow (discussion principale et sessions liées), réécrit à chaque changement : ne pas le modifier à la main. Ces choix ont été faits sans le porteur et attendent sa relecture : une revue ne les resignale pas et une passe --fix ne les défait pas.",
+      "Tenu par flow-board d'après le champ « decided » de l'outil flow (discussion principale et sessions liées), réécrit à chaque changement : ne pas le modifier à la main. Ces choix ont été faits sans le porteur et attendent sa relecture : une revue ne les défait pas par préférence (une passe --fix non plus), mais signale tout cas où l'un d'eux produit un défaut, avec son scénario.",
       '',
       '- Export en CSV — demandé par la compta (1970-01-01 00:00 UTC)',
       '',
@@ -949,16 +945,12 @@ test('le brief des sessions de groupe : plus de renommage à la main, background
   expect(first).toContain("dans le document du projet pour les sessions déléguées s'il en a un")
   expect(first).toContain('config/rules/agents.md')
   expect(first).not.toMatch(/Rédige toi-même le background : le projet, les contraintes \(ressource à ne pas partager, écritures autorisées/)
-  // La consigne des relecteurs et le compte rendu déposé au relais.
-  expect(first).toContain("si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu'une fois tous les axes revenus")
-  expect(first).toContain("ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe")
+  // La consigne des relecteurs, le compte rendu déposé au relais et les délais des commandes longues
+  // sont dans la procédure (tests/procedure-groupe.test.mjs) ; le texte la cite par son chemin.
+  expect(first).toMatch(/\S*reference\/procedure-groupe\.md/)
   // Hors d'atteinte (pas de ~/.claude ici), le fichier n'est pas cité : la liste se donne.
   expect(first).toContain("les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste")
-  expect(first).toContain('le déposer en entier par l\'outil flow, {"report": "<le compte rendu entier>"}')
   expect(first).toContain("Le compte rendu complet d'une session est dans le relais, son message n'en porte qu'une ligne")
-  // Une commande longue a un délai maximal ; la session ne rend pas la main sur un processus sans délai.
-  expect(first).toContain("une commande longue (tests, build) se lance avec un délai maximal")
-  expect(first).toContain("ne jamais rendre la main en attendant un processus d'arrière-plan qui n'a pas de délai : le surveiller (outil Monitor) ou l'arrêter")
   // Le suivi passe par le worktree, le tracker et ListAgents.
   expect(first).toContain("l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status), le tracker (statuts des tickets) et ListAgents")
   expect(first).toContain('jamais claude logs')

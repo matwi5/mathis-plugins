@@ -4,6 +4,36 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.61.0 — 2026-10-28
+
+Les pistes de la rétro du parcours « Frise, groupes et titres ».
+
+### Ajouté
+- **Procédure d'une session liée de groupe** dans `reference/procedure-groupe.md` : questions sensibles, chaque ticket (TDD, contrôles, revue, passe « bogues », instantané, commit), règles de travail, revue du groupe, revue de sécurité, compte rendu, consigne des relecteurs, fichier des choix, cas sans git. Le texte de délégation la cite par son chemin installé au lieu de la recopier (environ 8 000 signes au lieu de 15 000) et ne garde que ce qui varie ; « Revue du groupe · session liée » cite aussi la consigne des relecteurs par ce chemin.
+- **Termes retirés** (`termes-retires.txt`, une version et un terme par ligne) : les boutons de lancement d'un groupe dans la discussion et l'ancien nom des niveaux d'attente, retirés en 0.60.0, sont refusés par `scripts/check.py` dans le README, les consignes et les entrées plus récentes du CHANGELOG.
+
+- **CODING_STANDARDS.md cité par le mod** : quand il existe à la racine du projet, les consignes d'`/implement` (« Project judgement rules ») et le texte de délégation en donnent le chemin, à écrire dans le fichier de consignes de chaque revue ; sinon elles disent qu'il n'y en a pas. Laissé à la session, il manquait aux six fichiers de consignes d'un groupe.
+- **Critères cochés avant le commit** : l'étape « Commit et suivi » (et la procédure des sessions liées) demande de cocher chaque critère du fichier de ticket et de nommer le test qui le couvre.
+- **Critères des tickets déjà faits** : le fichier de consignes de la revue d'un ticket recopie ceux des tickets faits du groupe qui touchent les mêmes fichiers (3 des 7 constats d'une revue de groupe étaient la règle d'un ticket non appliquée dans un autre).
+- **Champ persisté = zone sensible** : la consigne de `/to-tickets` dit qu'un ticket qui ajoute un champ à des données persistées (fichier ou registre gardé, enregistrement partagé entre discussions, clé du store) est en zone sensible (effacement ou concurrence), nomme les chemins qui effacent et fusionnent ce champ, et porte un invariant.
+- **Après le compte rendu d'une session liée** : un correctif qu'elle applique ensuite suit la procédure du ticket (passe « bogues » s'il est sensible) ; une question du compte rendu se tranche dans la discussion principale, qui lit la branche de la session avant d'appliquer un correctif qu'elle a proposé.
+- **Lecture d'une décision non sensible** : la session liée la code, la déclare dans `decided` et continue ; seules les questions sensibles ou de conception attendent la réponse.
+
+- **Index du README** : « concept → fichier et fonction » près de l'arbre « Architecture » (titre et renommage, plan de groupes, lancements, titres des sessions liées, revues, fermeture, frise, registre, effacement, rattrapage) ; `index-readme.test.mjs` vérifie que chaque fonction citée existe.
+- **Tests** : `champs-persistes.test.mjs` exige que chaque champ de `SessionRegistry`, `AgentLane` et `Rebuilt` soit traité par l'effacement (`erase.ts`), l'historique (`history.ts`) et le rattrapage (`catch-up.ts`), ou y porte une exception motivée (il échoue si l'on retire l'advisor d'`erase.ts`) ; la frise du terminal se teste par ses cases (`laneCells`, `rulerCells`) et l'onglet Agents n'y émet aucun `Svg` ; les teintes des attentes (gris, ambre, bleu, or) restent à ΔE76 ≥ 10 en teintes pleines et ≥ 15 en motifs (hachures, pointillés de l'advisor) fondus sur fond foncé et sur fond blanc.
+
+### Modifié
+- **Règle des revues** : les consignes citent `config/rules/agents.md` et son détail `config/reference/revues.md`, où la section des revues a déménagé (elle n'est plus chargée dans chaque session).
+- **Version et push côte à côte en fin de lot** : une fois le compte rendu validé, la carte propose `/project:version` et `/project:push`, au choix. Quand chaque plugin ou paquet changé face à la branche distante a déjà une nouvelle version dans son manifeste (`.claude-plugin/plugin.json`, `package.json`, `pyproject.toml`, `Cargo.toml` ; dans un dépôt de marketplace, ceux de ses plugins publiés), `/project:push` passe en tête, `/project:version` n'est plus proposé et la carte dit « version déjà posée ».
+- **Séparateur « > »** dans le titre des sessions liées (« Boutique > Groupe A · … ») : l'app affichait « ' » à la place de « › ». Les anciens titres (« › », « ' » entre deux espaces, « â€º ») se relient encore à leur groupe ; les demandes qui cherchent une session par son titre (revue d'un groupe rendu, fermeture, rétro) citent les deux formes.
+- **Lancement depuis l'app avec `branch_name`** « groupe-<parcours>-<id> » ; la fermeture d'un groupe prend la branche dans la liste des sessions liées (ou la note de fin) et reconnaît aussi `claude/groupe-…-<suffixe>`.
+- **Fermeture d'une session de l'app** : la demande dit de l'archiver dans l'app, `stop_session` n'interrompant qu'un tour en cours, et attend la confirmation avant toute commande (plus de « à confirmer »).
+- **Choix déclarés et relecteurs** : un relecteur ne défait pas un choix déclaré par préférence, mais signale tout cas où il produit un défaut, avec son scénario (consigne des relecteurs, fichier des choix, consignes des revues).
+- **Règles de travail des sessions liées** : elles disent ce que le garde-fou d'un worktree refuse vraiment (une boucle, un calcul `$((…))`, une suite de commandes où paraît le mot git) au lieu d'imposer Read et Edit ; pas de `cd` dans un sous-dossier ; `timeout` n'existe pas sur macOS, et un script de contrôles qui a son propre délai n'en a pas besoin.
+- Les plus petits et plus grands nombres d'une liste se prennent par une boucle (`minOf`, `maxOf`) : `Math.min(...liste)` lève une erreur au-delà de 100 000 éléments. Six blocs de documentation détachés retrouvent leur déclaration.
+
+---
+
 ## 0.60.0 — 2026-10-27
 
 Le parcours « Frise, groupes et titres » : la frise des agents se zoome et montre l'advisor, ses pauses se compressent dès une minute, sa légende s'explique ; un groupe ne se lance plus qu'en session liée, un lot d'un seul groupe n'en a pas, une vague veut dire « en parallèle » ; un parcours prend un titre réfléchi, que sa discussion prend aussi.

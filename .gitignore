@@ -19,3 +19,5 @@ node_modules/
 .machine
 claude-usage/
 plugins/*/.claude-plugin/types/
+# Le titre du mode « --titre » de la sonde (scripts/sonde.py).
+scripts/sonde/titre.txt

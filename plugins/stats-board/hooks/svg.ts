@@ -10,6 +10,8 @@
 // - Chaque SVG reste sous 131 072 caractères et compte dans les 100 000 du panneau : valeurs
 //   arrondies au dixième, pas d'attribut inutile.
 
+import { maxOf } from './model.ts'
+
 const FONT = `font-family="'Segoe UI', system-ui, -apple-system, sans-serif"`
 const MUTED = '#8B8B93'
 const WHITE = '#FFFFFF'
@@ -83,7 +85,7 @@ export const spinnerSvg = (color: string, size = 12): Drawn => {
 
 /** Les points d'une courbe dans un cadre ; une valeur seule devient un plateau. */
 const points = (values: readonly number[], x0: number, x1: number, y0: number, y1: number): [number, number][] => {
-  const max = Math.max(...values, 1e-9)
+  const max = maxOf(values, 1e-9)
   const n = values.length
   return values.map((v, i) => [r1(n > 1 ? x0 + (i * (x1 - x0)) / (n - 1) : (x0 + x1) / 2), r1(y1 - (v / max) * (y1 - y0))])
 }
@@ -197,7 +199,7 @@ export function stackSvg(o: {
   const ph = h - top - bottom
   const n = Math.max(1, o.buckets.length)
   const totals = o.buckets.map((b) => b.parts.reduce((s, p) => s + Math.max(0, p.value), 0))
-  const max = o.max ?? niceMax(Math.max(...totals, 0))
+  const max = o.max ?? niceMax(maxOf(totals, 0))
   const slot = pw / n
   const bw = Math.max(1, Math.min(22, slot * 0.72))
   const parts: string[] = []
@@ -228,7 +230,7 @@ export function stackSvg(o: {
   })
   if (o.cumulative && o.cumulative.values.length > 1) {
     const vals = o.cumulative.values
-    const cmax = Math.max(...vals, 1e-9)
+    const cmax = maxOf(vals, 1e-9)
     const pts = vals.map((v, i) => [r1(left + i * slot + slot / 2), r1(top + ph - (v / cmax) * ph)] as const)
     const last = pts[pts.length - 1]!
     parts.push(`<polyline points="${pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${o.cumulative.color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`)
@@ -283,8 +285,8 @@ export function columnsSvg(o: { values: readonly number[]; labels: readonly stri
   const n = Math.max(1, o.values.length)
   const slot = (w - 4) / n
   const bw = Math.max(2, Math.min(34, slot * 0.66))
-  const max = Math.max(...o.values, 1e-9)
-  const peak = o.highlight ?? o.values.indexOf(Math.max(...o.values))
+  const max = maxOf(o.values, 1e-9)
+  const peak = o.highlight ?? o.values.indexOf(maxOf(o.values))
   const parts: string[] = [`<line x1="2" y1="${top + ph + 0.5}" x2="${w - 2}" y2="${top + ph + 0.5}" stroke="${MUTED}" stroke-opacity="0.4"/>`]
   o.values.forEach((v, i) => {
     const bh = v > 0 ? Math.max(2, (v / max) * ph) : 0

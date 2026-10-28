@@ -23,6 +23,10 @@ import { pathToFileURL } from 'node:url'
 
 const NB = ' '
 
+/** `Math.min(...values)` et `Math.max(...values)` par une boucle : au-delà de 100 000 éléments, l'étalement lève une erreur. */
+const minOf = (values) => values.reduce((min, v) => (v < min ? v : min), Infinity)
+const maxOf = (values) => values.reduce((max, v) => (v > max ? v : max), -Infinity)
+
 // ─── Formats (copie de model.ts) ────────────────────────────────────────────
 
 export function fmtInt(n) {
@@ -214,8 +218,8 @@ export function render(data) {
     const cost = sum(all, (r) => r.cost)
     const tokens = sum(all, (r) => r.tokens)
     const cacheRead = sum(all, (r) => r.cacheRead)
-    const first = Math.min(...all.map((r) => r.first))
-    const last = Math.max(...all.map((r) => r.last))
+    const first = minOf(all.map((r) => r.first))
+    const last = maxOf(all.map((r) => r.last))
     out.push(`- **${fmtCost(cost)}** · ${fmtTokens(tokens)} tokens${tokens > 0 ? `, dont ${fmtPct(cacheRead / tokens)} lus en cache` : ''} · sortie ${fmtTokens(sum(all, (r) => r.output))}`)
     out.push(`- ${clock(first, tz)} → ${clock(last, tz)} (${fmtDuration(last - first)}) · projet ${nameOf((own ?? subs[0]).project)}`)
     out.push(`- Modèles : ${modelLine(byModel(all.flatMap((r) => r.models)), cost)}`)
@@ -333,15 +337,15 @@ const bareTitle = (s) => String(s ?? '').replace(/["`$\\«»]/g, '').replace(/\s
 
 /**
  * Le titre `title` relève-t-il du parcours `prefix` ? Il commence par le préfixe, ou c'est celui d'une session
- * liée de flow-board, « <titre du parcours coupé à 28 signes>… › Groupe X · … », dont le début coupé
- * commence le préfixe.
+ * liée de flow-board, « <titre du parcours coupé à 28 signes>… > Groupe X · … », dont le début coupé
+ * commence le préfixe. Jusqu'à flow-board 0.60.0, le séparateur était « › », que l'app affichait « ' ».
  */
 function titleMatches(title, prefix) {
   const t = bareTitle(title)
   const p = bareTitle(prefix)
   if (!p) return false
   if (t.startsWith(p)) return true
-  const head = t.match(/^(.+?)… › /)?.[1]
+  const head = t.match(/^(.+?)… [>›'] /)?.[1]
   return !!head && p.startsWith(head)
 }
 
@@ -398,8 +402,8 @@ export function renderParcours(data) {
   for (const r of picked.sort((a, b) => a.first - b.first)) {
     // La session et ses sous-agents : heures et coût d'ensemble, comme pour la discussion du récap du jour.
     const own = [r, ...subs.filter((s) => s.parent === r.id)]
-    const first = Math.min(...own.map((s) => s.first))
-    const last = Math.max(...own.map((s) => s.last))
+    const first = minOf(own.map((s) => s.first))
+    const last = maxOf(own.map((s) => s.last))
     const ownLogs = logs.filter((l) => l.session === r.id)
     out.push(`| ${cell(titles[r.id] ?? '(sans titre)')} | ${cell(names[r.project] ?? r.project)} | ${dayClock(first, tz)} → ${dayClock(last, tz)} | ${fmtDuration(last - first)} | ${ownLogs.length ? fmtSeconds(durationsOf(ownLogs).activeMs) : '—'} | ${fmtCost(sum(own, (s) => s.cost))} |`)
   }

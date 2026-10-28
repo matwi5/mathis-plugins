@@ -4,6 +4,14 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.10.1 — 2026-10-28
+
+### Modifié
+- **Récap d'un parcours** : les sessions liées de flow-board dont le titre sépare le parcours par « > » (flow-board 0.61.0) ou par « ' » (l'ancien « › », tel que l'app l'affichait) sont retrouvées comme celles à « › ».
+- Les plus grands et plus petits nombres d'une liste se prennent par une boucle (`maxOf`, `minOf`) au lieu d'un étalement dans `Math.max`, qui lève une erreur au-delà de 100 000 éléments ; `scripts/check.py` refuse désormais cet étalement.
+
+---
+
 ## 0.10.0 — 2026-10-26
 
 ### Ajouté

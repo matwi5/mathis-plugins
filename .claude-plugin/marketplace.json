@@ -30,13 +30,13 @@
       "name": "session-tools",
       "source": "./plugins/session-tools",
       "description": "Outils autour du champ de saisie : boutons Fichiers (navigateur files-board) et Diff au terminal, boutons Réécrire (le brouillon réécrit en prompt par Opus, Sonnet ou Haiku au choix, sans envoi) et Effort auto (le niveau d'effort choisi pour le brouillon), chrono de la requête (jusqu'à la fin de ses tâches de fond, avec leur nombre en attendant), vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /session-tools:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
-      "version": "0.22.0"
+      "version": "0.23.0"
     },
     {
       "name": "flow-board",
       "source": "./plugins/flow-board",
       "description": "Tableau de bord du workflow mattpocock-skills : un parcours adapté au skill de départ (phases, étapes, tickets, sous-agents, tests, livrables) en panneau et en bandeau ; /flow (onglet Commandes : toutes les commandes).",
-      "version": "0.60.0"
+      "version": "0.61.0"
     },
     {
       "name": "mattpocock-skills",
@@ -68,7 +68,7 @@
       "name": "stats-board",
       "source": "./plugins/stats-board",
       "description": "Panneau de statistiques Claude Code (/ccstats) et bandeau au-dessus du prompt : discussion ouverte (coût, contexte, rythme horaire), récap de la journée, coût équivalent API (ccusage), tokens, modèles, projets, sessions, blocs de 5 h, calendrier d'activité et rythme, pour tous les postes (Portable, Mac, Serveur) partagés par le dépôt claude-usage. /stats-board:ccstats dès le premier message ; /stats-board:recap fait le récap de la discussion et de la journée, ou d'un parcours entier, dans le chat.",
-      "version": "0.10.0"
+      "version": "0.10.1"
     }
   ]
 }

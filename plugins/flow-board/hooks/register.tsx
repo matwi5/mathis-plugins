@@ -104,6 +104,8 @@ import {
   detachOnLoad,
   mergeBoards,
   nextCommandSkill,
+  VERSION_MANIFESTS,
+  versionSet,
   parkActive,
   resumeRun,
   setAsideActive,
@@ -154,11 +156,11 @@ import {
   type StepUsage,
 } from './registry.ts'
 import type { LinkedLaunch } from '../types'
-import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
+import { TITLE_SEPARATOR, isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
 import { applyTraces } from './erase.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
-import { shortArg, toolFamily } from './timeline.ts'
+import { minOf, shortArg, toolFamily } from './timeline.ts'
 import { pricesFromCcusage, type UnitPrices } from './cost.ts'
 import { drawBand, drawPane, drawWelcomeBand, kitOf, type Actions, type View } from './view.tsx'
 import { commitRegistry, ensureRegistry, ownAgent, readPiece, readRegistry, registryDir, registryKey, registryQueue, registrySaveTimer, saveRegistryNow } from './registry-file.ts'
@@ -514,14 +516,23 @@ export function claudeHome($: any): string | null {
 
 /** Le fichier de méthode de la revue de sécurité, à la racine du mod. */
 const SECURITY_METHOD_FILE = 'reference/revue-securite.md'
-/** Son chemin, tiré de `$.plugin.root` au premier hook qui construit une consigne de sécurité. */
+/**
+ * La procédure d'une session liée de groupe (tickets, revues, compte rendu) : le texte de
+ * délégation la cite par son chemin au lieu de la recopier (15 000 signes par lancement, que la
+ * discussion principale recopiait à son tour dans le prompt de la session).
+ */
+const PROCEDURE_FILE = 'reference/procedure-groupe.md'
+/** Leurs chemins, tirés de `$.plugin.root` au premier hook qui construit une consigne qui les cite. */
 let securityMethod = SECURITY_METHOD_FILE
-const noteSecurityMethod = ($: any) => {
+let procedurePath = PROCEDURE_FILE
+const noteReferences = ($: any) => {
   try {
     const root = String($.plugin.root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
-    if (root !== '') securityMethod = `${root}/${SECURITY_METHOD_FILE}`
+    if (root === '') return
+    securityMethod = `${root}/${SECURITY_METHOD_FILE}`
+    procedurePath = `${root}/${PROCEDURE_FILE}`
   } catch {
-    // Racine inconnue : le chemin relatif au mod.
+    // Racine inconnue : les chemins relatifs au mod.
   }
 }
 
@@ -1125,7 +1136,7 @@ const refreshLinkedOnce = async ($: any) => {
     return
   }
   // Une session liée écrit son fichier après son lancement : les fichiers plus anciens sont d'autres sessions.
-  const since = Math.min(run?.startedAt ?? Infinity, ...launches.map(l => l.at)) - 60_000
+  const since = minOf(launches.map(l => l.at), run?.startedAt ?? Infinity) - 60_000
   const heads = await readOtherHeads($, self.session, since)
   const stored = run ? await readRelay($, run.id) : undefined
   const relay = stored !== null && typeof stored === 'object' && (stored as Relay).run === run?.id && typeof (stored as Relay).sessions === 'object' ? (stored as Relay) : null
@@ -1300,8 +1311,9 @@ export const discussionTitleKey = (session: string): string => `discussion-title
  * Le titre que la discussion doit prendre (parcours né ici, série 1 Q14) part une fois au moteur,
  * dans `sessionTitle` du prochain message ou de la reprise ; rien quand elle le porte déjà (Claude
  * l'a renommée par l'outil de l'app), ni dans une session liée. Le titre en attente s'efface dans
- * tous les cas. Sans le board : `classic.SessionStart` d'une reprise peut passer avant
- * `session.start`, qui le charge (l'ordre des deux reste à confirmer), et une session liée n'a
+ * tous les cas. Sans le board : `classic.SessionStart` suit `session.start` dans la même
+ * milliseconde (mesuré le 28/10/2026, docs/evenements-moteur.md), trop tôt pour compter sur ce
+ * qu'il charge, et une session liée n'a
  * jamais de titre en attente (`nameDiscussion` le refuse).
  */
 const withDiscussionTitle = async ($: any, e: any, result: any) => {
@@ -1563,7 +1575,7 @@ const rebuildPastRuns = async ($: any) => {
     const looseRuns = new Map<string, string>()
     for (const run of todo) for (const r of (await readRebuilt($, runFileId(run.id), `run:${run.id}`))?.rows ?? []) looseRuns.set(r.key, run.id)
     const keyHolders = new Map<string, Set<string>>()
-    const oldest = Math.min(...todo.map(r => runWindow(r).s))
+    const oldest = minOf(todo.map(r => runWindow(r).s))
     for (const t of transcripts) {
       if (looseRuns.size === 0) break
       if (t.mtime < oldest) continue
@@ -1877,6 +1889,21 @@ const setLive = async ($: any, mode: 'idle' | 'working' | 'waiting' | 'agents', 
   }))
 }
 
+/**
+ * Le `CODING_STANDARDS.md` à la racine du projet, s'il existe : les consignes des revues en écrivent
+ * le chemin elles-mêmes. Laissé à la session, il manquait aux six fichiers de consignes d'un groupe.
+ */
+const standardsPath = async ($: any): Promise<string | null> => {
+  const root = (await read($, boardAtom))?.root || (await sessionRoot($))
+  if (!root) return null
+  const path = `${normRoot(root)}/CODING_STANDARDS.md`
+  let isThere = false
+  await quietly(async () => {
+    isThere = (await $.fs.exists(path)) === true
+  })
+  return isThere ? path : null
+}
+
 /** Le projet est un dépôt git (mesuré à l'appel) ; faux quand la mesure échoue. */
 const measureRepo = async ($: any): Promise<boolean> => {
   let isRepo = false
@@ -1892,7 +1919,7 @@ const measureRepo = async ($: any): Promise<boolean> => {
 const SENSITIVE_AREAS_FR = 'confidentialité, suppression de données, chiffrement, concurrence'
 
 /** La règle des revues, citée par les consignes des relecteurs des sessions liées. */
-const REVIEW_RULE_FR = 'règle des revues, config/rules/agents.md quand elle est installée'
+const REVIEW_RULE_FR = 'règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés'
 
 /** Un relecteur lancé par l'outil Agent reçoit le chemin de son fichier de consignes dans son prompt. */
 const INSTRUCTIONS_IN_PROMPT_FR = `ses consignes dans un fichier dont le chemin va dans son prompt (${REVIEW_RULE_FR})`
@@ -1909,10 +1936,6 @@ const linkedSecurityReview = (scope: string): string =>
 const securityMethodFr = (): string =>
   `le fichier de méthode de la revue de sécurité, ${securityMethod} (il le suit : la recherche part d'abord, sans relecture préalable du diff ; catégories, exclusions, une vérification par faille de gravité moyenne ou haute seulement, seuil 8/10, format du rapport ; son chemin va dans le prompt du relecteur, à côté du fichier de consignes)`
 
-/** La seconde passe de sécurité, en français pour le brief des sessions liées (même règle que SECURITY_FIXES_PASS). */
-const SECURITY_FIXES_PASS_FR =
-  'pas de seconde passe sur le diff de ses correctifs, sauf s\'il touche une zone coûteuse du fichier de méthode (sa section 1) ou dépasse 150 lignes modifiées hors tests ; alors une seule passe en effort high, sans sous-tâches de vérification'
-
 /** C5 a : la revue reste en lecture seule et rend des correctifs prêts, que la personne accepte en une ligne. */
 const SECURITY_FIXES_FR =
   "chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt (ce qu'il change, le choix qu'il implique s'il y en a un), la liste « à surveiller » à part ; une réponse comme « corrige F1 et F3 » suffit : la session applique ces correctifs, les teste, les commite, puis envoie \"fixed\" à l'outil flow ; \"findings\" ne compte que les failles gardées"
@@ -1924,39 +1947,8 @@ const SECURITY_FIXES_FR =
  */
 const decidedList = (path: string | null): string =>
   path
-    ? `le chemin du fichier des choix déjà déclarés du parcours, ${path} (tenu par l'outil flow, à relire au moment de la revue), et en plus les choix que la session a déclarés et qui n'y figurent pas encore (ils n'y arrivent qu'une fois lus par la discussion principale), à ne pas resignaler ni défaire`
-    : 'la liste des choix déjà déclarés dans {"decided": …} de l\'outil flow (ceux que tu connais, ceux de la session compris), à ne pas resignaler ni défaire'
-
-/** Commit avant la revue, en français pour le brief des sessions liées (même règle que COMMIT_BEFORE_REVIEW). */
-const COMMIT_BEFORE_REVIEW_FR =
-  "un ticket dit hors zone sensible (\"sensitive\": false) se commite dès ses contrôles passés, avant sa revue, pour que le ticket suivant démarre pendant qu'elle tourne : sa cible est alors <commit d'avant le ticket>..<commit du ticket>, jamais ..HEAD (HEAD et l'arbre portent déjà le ticket suivant) ; ses correctifs arrivent dans un commit à part, ses constats partent dans \"review\" sans \"step\", et le ticket ne passe « fait » dans le tracker qu'une fois sa revue revenue et ses correctifs commités ; un ticket qui touche une zone sensible, ou ne l'a pas dit, garde sa revue avant son commit, sur un instantané (refs/worktree/flow-board/<id du ticket>, ci-dessus)"
-
-/** L'instantané d'un ticket sensible avant sa passe « bogues », en français (même règle que TICKET_SNAPSHOT). */
-const TICKET_SNAPSHOT_FR =
-  "avant la passe « bogues » d'un ticket sensible (sa revue passe avant son commit), figer ce que relisent ses deux revues sur une référence de ce worktree, sans toucher à la branche, chaque commande seule et le hash affiché recopié dans la suivante : git add <les fichiers du ticket, par chemin>, puis git diff --cached --name-only doit lister les fichiers du ticket et rien d'autre (sortir d'abord de l'index ce qui n'en est pas), git write-tree (affiche <arbre>), git commit-tree <arbre> -p HEAD -m \"flow-board snapshot <id du ticket>\" (affiche <instantané>), git update-ref refs/worktree/flow-board/<id du ticket> <instantané> ; les deux revues lisent alors la plage refs/worktree/flow-board/<id du ticket>^..refs/worktree/flow-board/<id du ticket> (la passe « bogues » la prend pour cible, le fichier de consignes des deux axes donne cette commande de diff) et les fichiers à cette référence (git show refs/worktree/flow-board/<id du ticket>:<chemin>), jamais l'arbre de travail ; pendant ce temps, avancer ce qui ne touche aucun fichier du ticket (un ticket suivant sans fichier commun, le compte rendu, la livraison) : un ticket suivant qui touche les mêmes fichiers attend ; le vrai commit du ticket vient toujours après sa revue : git add de nouveau de chacun de ses fichiers (correctifs compris), le commit, puis git update-ref -d refs/worktree/flow-board/<id du ticket>"
-
-/**
- * La consigne que tout relecteur reçoit telle quelle : un relecteur avait rendu son rapport avant
- * le second axe (revue Spec lancée deux fois), et une passe `--fix` avait appliqué un correctif
- * laissé à un autre groupe. Le tri des constats suit celui de `REVIEWER_BRIEF`.
- */
-const REVIEWER_BRIEF_FR =
-  "la consigne des relecteurs, à leur donner telle quelle : si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu'une fois tous les axes revenus, sans relancer un axe déjà lancé ; ne relancer ni les tests ni les contrôles (la session les a lancés) ; classer à part les constats sur du code antérieur au lot (des lignes qu'il n'a pas changées) : ne pas les corriger, ils me sont proposés comme un groupe « durcissement » en fin de lot ; étiqueter chaque constat Important, Mineur ou Antérieur (le code antérieur au lot, juste avant) : seuls les Importants sont corrigés, les Mineurs (style, nommage, nettoyage qui ne change aucun comportement) ne sont pas corrigés et se rendent en un compte, sans détail, pour qu'un constat mineur ne coûte ni commit ni nouveau tour de revue ; pour un défaut, nommer sa classe (le motif, pas seulement la ligne) pour que toutes ses occurrences soient corrigées ; ne signaler comme défaut ni appliquer rien de ce que la spec, le ticket ou le fichier des choix laisse à un autre groupe ou exclut ; ne pas resignaler ni défaire les choix de ce fichier ; ne jamais écrire dans l'arbre de travail, même un instant (un test qui prouve un défaut reste à la session) : les seules écritures sont les correctifs que /code-review --fix applique dans une revue de groupe"
-
-/**
- * Le canal des consignes d'une revue dans une session liée : `/code-review` tourne en exécution
- * dérivée et ne reçoit que ses arguments (forme essayée avec Claude Code 2.1.310, voir
- * `reviewInstructions`), et un hash seul lui avait fait relire un commit au lieu du groupe.
- */
-const reviewInstructionsFr = (isRepo: boolean): string =>
-  `écrire ses consignes dans un fichier de son dossier temporaire (le périmètre, le chemin du fichier des choix, les points qui me sont réservés, ce qu'elle ne doit pas faire, et la consigne des relecteurs) et en passer le chemin après la cible, ${isRepo ? "/code-review <niveau> <base>..HEAD consignes : <chemin> (la cible est toujours une plage <base>..HEAD ou une branche, jamais un hash seul ; avant le commit du ticket, le périmètre nomme aussi les changements non commités ; quand d'autres parcours commitent sur la même branche, git log <base>..HEAD montre des commits qui ne sont pas du parcours : le périmètre se limite alors aux chemins du parcours, donnés dans le fichier comme un pathspec, git diff <base>..HEAD -- <chemins>)" : '/code-review <niveau> consignes : <chemin> (le fichier liste les copies et les fichiers à comparer)'}, et à un sous-agent relecteur dans son prompt (${REVIEW_RULE_FR})`
-
-/** Un seul relecteur pour les deux axes d'un ticket (`TICKET_REVIEWER`). */
-const TICKET_REVIEWER_FR =
-  'les deux axes dans un seul sous-agent relecteur (outil Agent, modèle opus, effort high, passés explicitement), quelle que soit la taille du diff ; il lit CODING_STANDARDS.md à la racine du projet quand il existe, en plus du CLAUDE.md, et rend ses Mineurs en un compte, sans détail'
-
-/** Un groupe d'un seul ticket sans logique ni zone sensible (`SINGLE_TICKET_GROUP`). */
-const SINGLE_TICKET_GROUP_FR = "un groupe d'un seul ticket ni sensible ni avec logique n'a pas de revue du groupe : la revue de son ticket est la seule, et la sécurité se juge une fois ce ticket commité"
+    ? `le chemin du fichier des choix déjà déclarés du parcours, ${path} (tenu par l'outil flow, à relire au moment de la revue), et en plus les choix que la session a déclarés et qui n'y figurent pas encore (ils n'y arrivent qu'une fois lus par la discussion principale), à ne pas défaire par préférence, en signalant tout cas où l'un d'eux produit un défaut, avec son scénario`
+    : 'la liste des choix déjà déclarés dans {"decided": …} de l\'outil flow (ceux que tu connais, ceux de la session compris), à ne pas défaire par préférence, en signalant tout cas où l\'un d\'eux produit un défaut, avec son scénario'
 
 /** Une revue de groupe en zone sensible n'applique rien seule : la session trie les constats. */
 const SENSITIVE_NO_FIX_FR = `si un ticket du groupe touche une zone sensible (${SENSITIVE_AREAS_FR}), sans --fix : la session applique elle-même les seuls constats qu'elle retient`
@@ -2015,6 +2007,14 @@ const OUTSIDE_WRITE =
 const SENSITIVE_FRAMING =
   'For a ticket in a sensitive area, settle with the user while framing, among the cases that apply: erasures that overlap, a resume after an interruption, the state after /reload-plugins, and what a failure message says. A ticket in the concurrency or deletion area also fixes with the user the one-sentence invariant of its persisted data, what it must never become whatever happens (crossed writes, a cut write, a failed read), for example « a totals file is never deleted nor rewritten empty »; the ticket carries it, and the instructions file of its bug pass copies it'
 
+/**
+ * Un champ ajouté à des données persistées est en zone sensible : trois tickets qui ajoutaient un
+ * champ au registre des agents ou au board partagé se disaient « Zone sensible : non », et son
+ * effacement oublié avait coûté trois revues et deux correctifs.
+ */
+const PERSISTED_FIELD =
+  'A ticket that adds a field to persisted data (a stored file or registry, a record shared between discussions or sessions, a key of the store) says « Zone sensible : oui » and is sent with "sensitive": true: such a field is in the deletion area (what erases its record must erase it too) or the concurrency area (several discussions write it); the ticket names every path that erases the field and every path that merges or rebuilds it, and carries the invariant of its persisted data (see the framing of a sensitive ticket)'
+
 /** Une spec qui s'appuyait sur un skill sans le nommer avait fait chercher son contenu par un `find /` de 49 s. */
 const SKILL_IN_SPEC =
   'A spec that relies on a skill (prices, an API, a method) says « charger le skill <name> » where it needs it, so that the session loads it instead of searching the disk'
@@ -2025,7 +2025,7 @@ const FRAMING_SKILLS = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-q
 /** Les consignes où une revue reçoit le fichier des choix déclarés. */
 const REVIEW_NOTES = new Set(['implement', 'implement-spec', 'final-review', 'code-review', 'branch-review'])
 
-const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, session?: string, decidedAt?: string | null, failedAgents = 0): string => {
+const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, session?: string, decidedAt?: string | null, failedAgents = 0, standards: string | null = null): string => {
   const def = SKILLS[id]!
   const lines = [
     '',
@@ -2055,6 +2055,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     lines.push('- Also check in the tracker whether a ticket depends on tasks outside this lot. Add the code tickets among them to the lot; send the others (decisions to make, work of someone else) as {"externals": [{"id": "<GID>", "name": "...", "kind": "decision|task", "status": "todo|done"}]} and keep their ids in the blocked tickets\' blockedBy. When one is done or decided, send it again with "status": "done".')
     lines.push('- Give each ticket the repo paths it touches, read from its acceptance criteria: {"tickets": [{"id": "...", "files": ["<pages, tables, shared files such as a model or a measures file>"]}]}. Name files, not a whole folder, unless the ticket creates files in it: a folder blocks every group that names a file inside it. README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files": almost every ticket cites them, their additions merge without trouble, and the dashboard ignores them anyway.')
     lines.push('- Each ticket says, on lines of its own, « Zone sensible : oui/non (pourquoi) » and « Logique : oui/non » (no logic: a visual asset, a document), and you send both: {"tickets": [{"id": "...", "sensitive": true|false, "logic": true|false}]}.')
+    lines.push(`- ${PERSISTED_FIELD}.`)
     lines.push('- A write to CLAUDE.md never goes into the done criteria of a group ticket: a linked session cannot make it. It is a gesture of the main discussion, done when the group is back.')
     lines.push(`- ${GROUP_SIZE}.`)
     lines.push(`- ${SENSITIVE_ORDER}.`)
@@ -2136,6 +2137,11 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     )
   }
   if (REVIEW_NOTES.has(id)) {
+    lines.push(
+      standards
+        ? `- Project judgement rules: ${standards}. Write this path in the instructions file of every review (both axes of a ticket, the bug pass, the group review), for the reviewer to read besides CLAUDE.md.`
+        : '- Project judgement rules: this project has no CODING_STANDARDS.md at its root; say so in the instructions file of every review, so that no reviewer looks for it.',
+    )
     lines.push(
       decidedAt
         ? `- Declared choices: the file ${decidedAt}, kept by the flow tool from every "decided" of this run (main discussion and linked sessions). Give its path to every reviewer instead of pasting the list, with this reviewer brief, word for word: ${REVIEWER_BRIEF}. To that end, ${reviewInstructions(isRepo)}.`
@@ -2220,7 +2226,8 @@ const suggestNext = async ($: any, answer: unknown, ask: string | null) => {
   const board: Board | null = await read($, boardAtom)
   const run = activeRun(board)
   if (!run || board?.delegate) return
-  const skill = nextCommandSkill(run, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false })
+  const sync = await read($, syncAtom)
+  const skill = nextCommandSkill(run, { hasPullRequests: sync.isGitHub !== false, isVersionSet: sync.isVersionSet })
   // La rétro d'un parcours à sessions liées part avec sa consigne (bouton), pas en commande seule.
   if (skill === null || (skill === 'retro' && linkedSessionsOf(run).count > 0)) return
   const args = commandArgsOf(run, skill)
@@ -2245,7 +2252,7 @@ const launchRetro = async ($: any): Promise<boolean> => {
   if (!run || !daughters || daughters.count === 0) return false
   const prefix = linkedPrefix(run).trim()
   const known = daughters.ids.length > 0 ? ` (ids relevés : ${daughters.ids.join(', ')})` : ''
-  const who = prefix ? `les sessions dont le titre commence par « ${prefix} »${known}` : `les sessions lancées pour ses groupes ou ses pistes${known}`
+  const who = prefix ? `les sessions dont le titre commence par « ${prefix} » (${OLD_SEPARATORS})${known}` : `les sessions lancées pour ses groupes ou ses pistes${known}`
   const text =
     `/${await commandFor($, 'retro')} Rétro globale du parcours « ${run.title} » : cette discussion (la session mère) et ses sessions filles, ${who}, à retrouver par ListAgents. ` +
     `1) D'abord, lance un sous-agent par session fille, tous en parallèle et en lecture seule (general-purpose, pas Haiku) : chacun lit le transcript de sa session, son fichier .jsonl sous ~/.claude/projects/ (pas claude logs, dont la sortie de terminal est illisible), et en fait la rétro selon les étapes et les sept axes de ce skill, que tu lui transmets tels que tu les lis ici ; il ne modifie rien et rend ses pistes par sévérité, une par ligne « axe : correction », chacune avec ce qui l'a révélée dans la session. ` +
@@ -2316,17 +2323,18 @@ const ticketList = (run: Run, ids: readonly string[]): string =>
 const PREFIX_MAX = 28
 
 /**
- * Le début du titre de toute session liée : le titre du parcours, raccourci, puis « › ». Dans la
+ * Le début du titre de toute session liée : le titre du parcours, raccourci, puis « > » (ASCII :
+ * l'app affichait « ' » à la place de « › »). Dans la
  * liste des discussions, les sessions filles d'une même discussion mère se reconnaissent ainsi. Sans
  * guillemets ni `$`, `\`, accent grave : le titre passe aussi entre guillemets dans `claude --bg -n`.
  */
 const linkedPrefix = (run: Run): string => {
-  const clean = run.title.replace(/["`$\\«»]/g, '').replace(/\s+/g, ' ').trim()
+  const clean = run.title.replace(/["`$\\«»]/g, '').replace(/[>›]/g, ' ').replace(/\s+/g, ' ').trim()
   if (!clean) return ''
-  if (clean.length <= PREFIX_MAX) return `${clean} › `
+  if (clean.length <= PREFIX_MAX) return `${clean} ${TITLE_SEPARATOR} `
   const cut = clean.slice(0, PREFIX_MAX)
   const at = cut.lastIndexOf(' ')
-  return `${(at > PREFIX_MAX / 2 ? cut.slice(0, at) : cut).replace(/[\s,;:·–-]+$/, '')}… › `
+  return `${(at > PREFIX_MAX / 2 ? cut.slice(0, at) : cut).replace(/[\s,;:·–-]+$/, '')}… ${TITLE_SEPARATOR} `
 }
 
 /**
@@ -2369,7 +2377,7 @@ const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; titl
   const desktopWhere = !o.ownFolder
     ? 'use_worktree false (elle reprend le parcours, qui vit dans ce dossier)'
     : o.isRepo
-      ? 'use_worktree true (un worktree à elle)'
+      ? `use_worktree true et branch_name "${o.worktree}" (un worktree à elle, à ce nom : sans branch_name, l'app en invente un que la fermeture du groupe ne reconnaît pas)`
       : 'use_worktree false (ce dossier n’a pas de git)'
   const cliWhere = !o.ownFolder
     ? ' (sans -w : elle reste dans ce dossier, où vit le parcours)'
@@ -2386,7 +2394,7 @@ const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; titl
     (o.ownFolder && o.isRepo
       ? "Si le projet déclare une installation de worktree (son CLAUDE.md ou son document pour les sessions déléguées : une commande à lancer dans un worktree neuf), écris-la en clair en tête du background : c'est la première commande de la session, avant toute lecture, car les documents du projet peuvent manquer tant qu'elle n'a pas tourné ; sinon, écris qu'aucune installation n'est déclarée. "
       : '') +
-    `Le prompt désigne cette discussion par sa référence entre crochets ([<ref>]), à passer aussi dans "main" de l'appel delegate, et donne en repli son nom du moment : son nom peut changer, sa référence aussi quand elle redémarre. Pour lui écrire, ${each} appelle ListAgents, trouve la ligne qui porte cette référence et envoie par SendMessage à « <nom du moment> [<ref>] » tel que la liste l'affiche ; la référence change quand cette discussion redémarre : l'outil flow de ${each} donne la référence du moment, que cette discussion lui transmet à la reprise ; si aucune ligne ne porte la référence, ${each} cherche la ligne qui porte le nom de cette discussion (le prompt le donne aussi, en repli), jamais une session dont le titre commence par « ${o.title.replace(/ › .*$/, '')} › » (ses sœurs), lui envoie son message, et le dit en tête de sa réponse finale. ` +
+    `Le prompt désigne cette discussion par sa référence entre crochets ([<ref>]), à passer aussi dans "main" de l'appel delegate, et donne en repli son nom du moment : son nom peut changer, sa référence aussi quand elle redémarre. Pour lui écrire, ${each} appelle ListAgents, trouve la ligne qui porte cette référence et envoie par SendMessage à « <nom du moment> [<ref>] » tel que la liste l'affiche ; la référence change quand cette discussion redémarre : l'outil flow de ${each} donne la référence du moment, que cette discussion lui transmet à la reprise ; si aucune ligne ne porte la référence, ${each} cherche la ligne qui porte le nom de cette discussion (le prompt le donne aussi, en repli), jamais une session dont le titre commence par « ${o.title.replace(/ > .*$/, '')} > » (ses sœurs), lui envoie son message, et le dit en tête de sa réponse finale. ` +
     `Le prompt demande à ${each} de finir par un message à cette discussion (il la réveille, même inactive) : son compte rendu, ou la ligne qui y renvoie quand il le fait déposer au relais. ` +
     `Pas de filet d'inactivité (un avis au premier arrêt de la session, souvent sans rien à faire) : le message final de ${each} réveille cette discussion ; pour un groupe, le relais rattrape un message perdu. `
   )
@@ -2408,14 +2416,6 @@ const BACKGROUND = (many: boolean): string =>
   "Rédige toi-même le background, sans y reprendre le texte des règles : les règles de travail de la session (écritures permises, gestes qui me sont réservés, dépôt public, contraintes du projet) sont dans le document du projet pour les sessions déléguées s'il en a un (son CLAUDE.md le nomme), sinon dans son CLAUDE.md, et le modèle et l'effort des revues dans mes règles communes (config/rules/agents.md quand elles sont installées) ; la session les charge d'elle-même, le background les cite par leur chemin : un texte repris se périme quand la règle change ; si le projet a un dossier config/rules (des règles communes versionnées avec lui), le background dit que leur version du dépôt fait foi sur celle installée sous ~/.claude tant que je n'ai pas poussé (des sessions avaient suivi une règle installée périmée). " +
   `Il ne garde que ce qui varie : le projet en une phrase, ${many ? 'le groupe de la session et ses tickets' : 'le groupe et ses tickets'}, la ressource à ne pas partager${many ? ', ce que font les autres sessions en même temps' : ''}, les décisions déjà prises par renvoi, sans les réécrire : le fichier de décisions du projet (DECISIONS.md, ou celui que nomme son CLAUDE.md) et les commentaires « mise à jour du porteur » des tickets font foi, et une décision que je viens de prendre ici s'y écrit AVANT d'être relayée, avec ma phrase exacte entre guillemets ; une décision qui remplace un geste humain (un accord, une validation, un ok de dépense) se confirme par moi directement dans la session liée, jamais par ton seul message ; `
 
-/**
- * Une commande sans délai maximal lancée en arrière-plan peut ne jamais finir : deux sessions ont
- * rendu la main sur « j'attends le résultat » pendant des heures. La notification de fin ne couvre
- * pas ce cas.
- */
-const LONG_COMMANDS =
-  "une commande longue (tests, build) se lance avec un délai maximal : au premier plan, le paramètre timeout de l'outil Bash ; en arrière-plan, un délai dans la commande elle-même (option de délai du lanceur de tests, ou timeout s'il existe) ; ne jamais rendre la main en attendant un processus d'arrière-plan qui n'a pas de délai : le surveiller (outil Monitor) ou l'arrêter"
-
 /** Comment la discussion principale suit une session liée : `claude logs` rend une sortie de terminal illisible. */
 const FOLLOW = (isRepo: boolean): string =>
   `pour savoir où en est une session, lire ${isRepo ? "l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status)" : 'les fichiers modifiés dans ce dossier'}, le tracker (statuts des tickets) et ListAgents (la session est-elle encore là), jamais claude logs, dont la sortie de terminal est illisible`
@@ -2426,34 +2426,25 @@ const atEnd = (whose: string): string => `À la note de fin de ${whose} (dans le
 /** Une faille corrigée après le retour d'un groupe : sans nouvel envoi, le tableau de bord gardait « 0 corrigé ». */
 const FIXED_LATER = "une faille corrigée après coup (avec mon accord) se renvoie aussi, avec \"fixed\" mis à jour, sinon le tableau de bord garde « 0 corrigé »"
 
-/**
- * Sans git, le point fixe des revues d'une session liée : la copie des fichiers prise avant chaque
- * ticket dans son dossier temporaire (sans elle, les revues relisaient des fichiers entiers).
- */
-const LINKED_NO_GIT_COPY =
-  "puis, ce dossier n'ayant pas de git, avant de toucher à son premier fichier, copier les fichiers qu'il va modifier dans son dossier temporaire (celui des règles de travail ci-dessous), un sous-dossier par ticket qui garde le chemin dans le projet (<dossier temporaire>/<id du ticket>/<chemin dans le projet>) : ces copies sont le point fixe des revues, qui lisent la différence entre la copie et le fichier actuel (diff unifié ; git diff --no-index <copie> <fichier> marche hors d'un dépôt) au lieu de relire les fichiers entiers ; un fichier que le ticket crée n'a pas de copie : il est nouveau et se lit en entier"
-
-const LINKED_NO_GIT_TICKET_POINT = 'point fixe : la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels'
-
 const LINKED_NO_GIT_GROUP_POINT =
   "point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe (un fichier touché seulement par un ticket suivant n'a pas de copie du premier), comparée au fichier actuel, les fichiers nouveaux en entier ; lui donner la liste des copies et des fichiers"
 
 /**
  * La demande à Claude pour confier des groupes à des sessions liées, une par groupe. Le parcours
- * reste ici (un seul écrivain) : chaque session se déclare (`delegate`), fait ses tickets avec
- * /implement selon le CLAUDE.md du projet, puis rend compte ; Claude rend les statuts ici.
+ * reste ici (un seul écrivain) : chaque session se déclare (`delegate`), suit la procédure de
+ * `reference/procedure-groupe.md` (citée par son chemin, jamais recopiée) selon le CLAUDE.md du
+ * projet, puis rend compte ; Claude rend les statuts ici. Le prompt ne porte que ce qui varie.
  */
 const delegationText = async ($: any, run: Run, views: readonly GroupView[], decidedAt: string | null = null): Promise<string> => {
-  noteSecurityMethod($)
+  noteReferences($)
   // Sans git, pas de worktree possible : les sessions travaillent dans ce dossier.
   const isRepo = await measureRepo($)
   const implement = `/${await commandFor($, 'implement')}`
   const tdd = `/${await commandFor($, 'tdd')}`
   const ticketReview = `/${await commandFor($, 'code-review')}`
-  const ticketPoint = isRepo ? "point fixe : le commit d'avant le ticket" : LINKED_NO_GIT_TICKET_POINT
+  const standards = await standardsPath($)
   const many = views.length > 1
   const delegate = `{"delegate": "${run.id}", "group": "${many ? '<id du groupe>' : views[0]!.group.id}", "main": "[<ref>]"}`
-  const decided = decidedList(decidedAt)
   const groups = views.map(v => `Groupe ${v.group.id} (${v.group.name}) : ${ticketList(run, v.open.map(t => t.id))}`).join(' ∥ ')
   const prefix = linkedPrefix(run)
   return (
@@ -2463,16 +2454,12 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     launchHow({ many, isRepo, ownFolder: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktree(run, '<id>'), effort: GROUP_EFFORT(many) }) +
     `${BACKGROUND(many)}${decidedAt ? `le fichier des choix déjà déclarés du parcours se cite par son chemin, ${decidedAt}` : 'les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste : leur fichier est hors d\'atteinte'}. ` +
     `Le prompt de ${many ? 'chaque session' : 'la session'} : 1) d'abord, appeler une seule fois l'outil flow de flow-board avec ${delegate} : le parcours reste ici, et l'avancement de la session (statuts Asana des tickets, commits, tests) est relayé tout seul au tableau de bord d'ici ; ` +
-    `2) avant le premier ticket, me poser en une fois les questions sensibles du groupe (un choix qui touche ${SENSITIVE_AREAS_FR}, que les tickets laissent ouvert) et attendre mes réponses ; puis faire les tickets du groupe, un par un et dans l'ordre, chacun ainsi : relire d'abord le fichier de décisions du projet et les commentaires « mise à jour du porteur » du ticket (ils priment sur ce prompt) ; le passer « en cours » dans le tracker en le commençant (le relais y reconnaît la passe « bogues » d'un ticket en cours) ; un geste de ma part que le groupe prévoit lui-même (un ok, une vérification à l'écran, une réponse sur un ticket du groupe) n'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) », jamais « blocked » au tableau de bord ; ${isRepo ? '' : `${LINKED_NO_GIT_COPY} ; ensuite `}${tdd} par l'outil Skill (sauter ${tdd} pour un ticket sans comportement testable : une ressource visuelle, un document), les contrôles du projet, ${ticketReview} par l'outil Skill sur les seuls changements du ticket (${ticketPoint}), ${TICKET_REVIEWER_FR} ; si le ticket touche une zone sensible (${SENSITIVE_AREAS_FR}), lancer dans le même message la passe « bogues » /${slashOf('final-review')} <niveau> (outil Skill « ${slashOf('final-review')} », arguments « <niveau> ${isRepo ? '<plage de l\'instantané> ' : ''}consignes : <chemin> »), <niveau> valant xhigh si le ticket supprime des données ou touche la concurrence, sinon high ou xhigh selon le critère d'effort du fichier de méthode de la revue de sécurité (l'enjeu, la taille), sur le même périmètre (${ticketPoint}), en lui donnant ${decided}, et dans son fichier de consignes l'invariant du ticket quand il en a un (la phrase de ce que ses données persistées ne doivent jamais devenir, fixée au cadrage) : le relecteur cherche d'abord ce qui le viole${isRepo ? ` ; ${TICKET_SNAPSHOT_FR}` : ''} ; à chaque revue, ${reviewInstructionsFr(isRepo)}, et y mettre ${REVIEWER_BRIEF_FR} ; après chaque revue (celle de chaque ticket comme celle du groupe), envoyer ses constats à l'outil flow, {"review": {"standards": <n>, "spec": <n>, "fixed": <corrigés>}}, et après la revue de sécurité {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>", "findings": <failles gardées>, "fixed": <corrigées>}} : ils partent au relais, et le tableau de bord d'ici les compte au retour du groupe ; puis le commit et le suivi du ticket${isRepo ? ` (${COMMIT_BEFORE_REVIEW_FR})` : ''} ; ne pas lancer ${implement} par l'outil Skill : il est réservé à l'utilisateur, et ces étapes sont les siennes ; ` +
-    `3) suivre le CLAUDE.md du projet (contrôles, commit, suivi des tickets), sans sous-agents qui écrivent (des sous-agents en parallèle seulement pour des recherches en lecture seule ; seule exception, une session qui ne tourne pas sur Opus et confie sa revue du groupe à un relecteur Opus, point 4) ; ` +
-    `et ces règles de travail : lire chaque document (spec, ticket, fichier de décisions, CLAUDE.md) par l'outil Read, jamais par une boucle cat ou head dans le shell, dont la sortie se coupe et se relit ; une modification unique passe par l'outil Edit ; au-delà de quelques remplacements liés, écrire un script par l'outil Write, puis le lancer par une commande simple ; son dossier temporaire se désigne par son chemin absolu, écrit en clair dans les commandes et les appels Write : le lire une fois au début (printenv CLAUDE_JOB_DIR, seule dans sa commande ; à défaut, le dossier temporaire que donnent ses instructions) ; ne jamais attendre par \`sleep\` : la fin d'un sous-agent ou d'une commande en arrière-plan est notifiée, et un sous-agent s'attend par cette notification, sans surveillance armée (pas de Monitor pour un sous-agent) ; pendant une revue qui tourne en arrière-plan, avancer ce qui ne dépend pas d'elle (le ticket suivant quand le commit avant la revue ou l'instantané le permet, la préparation du compte rendu ou de la livraison) et me poser tout de suite une question prête, sans attendre la fin de la revue (une session attendait à vide 14 à 56 % de son temps) ; un relecteur sans nouvelles depuis 10 à 15 minutes se relance par SendMessage, et s'il ne répond toujours pas, son axe se relance seul (seule exception à « sans relancer un axe déjà lancé » de la consigne des relecteurs) ; ${LONG_COMMANDS} ; un visuel à valider par moi (absent de la session) : produire une planche (les variantes côte à côte, dans un fichier), l'intégrer de façon réversible, déclarer le choix fait dans {"decided"} et me laisser la validation au retour du groupe ; si je change d'avis en cours de route sur un ticket, ajouter au ticket un commentaire daté « mise à jour du porteur » qui le dit, sans modifier son contenu ; citer un nombre de tests d'après la ligne de résumé de la sortie des tests, jamais de mémoire ; ` +
-    `4) une fois tous les tickets commités et relus, leurs correctifs commités (${SINGLE_TICKET_GROUP_FR}), lancer elle-même la revue du groupe, ${LINKED_GROUP_REVIEW} ; la revue est /${commandLineOf('final-review')} (la revue de Claude Code, outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} ${isRepo ? '<base>..HEAD ' : ''}consignes : <chemin> »)${isRepo ? ", avec pour cible <base>..HEAD (<base> : le commit d'où part sa branche)" : `, sur les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`}, en lui donnant ${decided} et ${REVIEWER_BRIEF_FR}, par le fichier de consignes du point 2, et en lui demandant de se concentrer sur les interactions entre les tickets (chacun a déjà eu sa revue) ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; à son retour, relire le diff de ses correctifs, relancer les contrôles et les commiter ; ` +
-    `5) dans le même message que la revue du point 4 (elle est en lecture seule et n'attend pas ses correctifs), juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_CRITERIA}) ; si oui, ${linkedSecurityReview(isRepo ? 'git diff <base>..HEAD (<base> : le commit d\'où part sa branche)' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; une fois les correctifs de la revue du groupe commités, ${SECURITY_FIXES_PASS_FR} ; ` +
-    `6) finir par un compte rendu : une ligne par ticket (fait, ou pas fait et pourquoi), les fichiers modifiés${isRepo ? ', sa branche' : ''}, les contrôles lancés et leur résultat, la revue du groupe (constats, corrigés, et à part les constats sur du code antérieur au lot), la revue de sécurité (lancée ou non, pourquoi, failles trouvées), et ce qui m'attend ; le déposer en entier par l'outil flow, {"report": "<le compte rendu entier>"} : il s'écrit dans le relais du parcours, un fichier fixe que cette discussion relit ; puis envoyer à cette discussion par SendMessage une seule ligne qui renvoie au relais (ce message la réveille), et finir la session sur cette même ligne. ` +
+    `2) puis lire la procédure d'une session liée de groupe, ${procedurePath}, et la suivre jusqu'au bout : questions sensibles d'abord, chaque ticket (TDD, contrôles, revue du ticket, passe « bogues » s'il est sensible, commit et suivi), règles de travail, revue du groupe, revue de sécurité, compte rendu déposé au relais puis une ligne à cette discussion ; ` +
+    `3) ce qui varie, que la procédure attend du prompt : les commandes de ce poste (TDD : ${tdd} ; revue du ticket : ${ticketReview} ; ${implement} est réservé à l'utilisateur), le fichier de méthode de la revue de sécurité, ${securityMethod}, ${decidedAt ? `le fichier des choix déjà déclarés du parcours, ${decidedAt}` : 'la liste des choix déjà déclarés (leur fichier est hors d\'atteinte : section 8 de la procédure)'}, ${standards ? 'que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)' : "que le projet n'a pas de CODING_STANDARDS.md à sa racine"}, et ${isRepo ? 'que son dossier est un dépôt git' : "que son dossier n'a pas de git (section 9 de la procédure)"}. ` +
     `Ici : garder le parcours (pas de nouveau parcours) et suivre ${many ? 'les sessions sans les ' : "la session sans l'"}attendre activement : ${FOLLOW(isRepo)}. ` +
     `Le compte rendu complet d'une session est dans le relais, son message n'en porte qu'une ligne : chaque réponse de l'outil flow ici cite ceux qu'ont déposés les sessions des groupes pas encore rendus, à la reprise comme ensuite. ` +
-    `Si l'app ou cette discussion redémarre, le parcours passe en pause et ne reçoit plus rien : à la reprise de cette discussion, le reprendre ici avant toute autre écriture, par l'appel flow {"resume": "${run.id}", "main": "[<ref>]"} (comme « ↻ Reprendre ici » ; "main" : ta référence du moment, lue par ListAgents, qui change au redémarrage : les sessions liées la relisent par leur outil flow), puis rendre les statuts des tickets faits pendant la pause d'après Asana ; dans ${many ? 'chaque session liée' : 'la session liée'}, si l'outil flow répond que le parcours est en pause, continuer les tickets (tracker, commits) et le dire dans le compte rendu. ` +
-    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail et, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; un groupe d'un seul ticket ni sensible ni avec logique n'en a pas : la revue de son ticket suffit)${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set", avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
+    `Si l'app ou cette discussion redémarre, le parcours passe en pause et ne reçoit plus rien : à la reprise de cette discussion, le reprendre ici avant toute autre écriture, par l'appel flow {"resume": "${run.id}", "main": "[<ref>]"} (comme « ↻ Reprendre ici » ; "main" : ta référence du moment, lue par ListAgents, qui change au redémarrage : les sessions liées la relisent par leur outil flow), puis rendre les statuts des tickets faits pendant la pause d'après Asana. ` +
+    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail ; avant d'appliquer ici un correctif que son compte rendu propose, lire ${isRepo ? 'sa branche (git log et git diff de son worktree)' : 'ses fichiers'} : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici ; vérifier aussi, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; un groupe d'un seul ticket ni sensible ni avec logique n'en a pas : la revue de son ticket suffit)${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set", avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
     `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction ; ${FIXED_LATER}.`
   )
 }
@@ -2505,7 +2492,7 @@ const delegateGroups = async ($: any, ids: readonly string[]) => {
  * session, sur les commits du groupe lus sur le code actuel, puis marque le groupe relu.
  */
 const reviewLinkedGroup = async ($: any, groupId: string) => {
-  noteSecurityMethod($)
+  noteReferences($)
   const run = activeRun(await read($, boardAtom))
   const group = run?.groups?.find(g => g.id === groupId)
   if (!run || !group?.delegated) return
@@ -2517,7 +2504,7 @@ const reviewLinkedGroup = async ($: any, groupId: string) => {
     `Sa session a un titre qui commence par ${linkedTitles(run, group.id)}${session} : retrouve-la par ListAgents. ` +
     `Envoie-lui par SendMessage : ` +
     (isRepo ? `1) remettre sa branche au niveau de ${main} par une avance rapide (git merge --ff-only ${main}), pour que les correctifs portent sur le code actuel ; ` : '1) travailler sur le code actuel ; ') +
-    `2) lancer elle-même la revue, ${LINKED_GROUP_REVIEW} ; la revue est /${commandLineOf('final-review')} (outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} ${isRepo ? '<plage> ' : ''}consignes : <chemin> ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel, avec pour cible leur plage <commit d'avant le premier du groupe>..<dernier commit du groupe> (une revue sans cible n'y verrait aucun changement, et un hash seul ne relirait qu'un commit)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et ${REVIEWER_BRIEF_FR}, par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; ` +
+    `2) lancer elle-même la revue, ${LINKED_GROUP_REVIEW} ; la revue est /${commandLineOf('final-review')} (outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} ${isRepo ? '<plage> ' : ''}consignes : <chemin> ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel, avec pour cible leur plage <commit d'avant le premier du groupe>..<dernier commit du groupe> (une revue sans cible n'y verrait aucun changement, et un hash seul ne relirait qu'un commit)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et la consigne des relecteurs (section 7 de la procédure des sessions liées de groupe, ${procedurePath}), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; ` +
     `3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ; ` +
     `4) juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_CRITERIA}) et, si oui, ${linkedSecurityReview(isRepo ? 'les commits du groupe' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; ` +
     `5) envoyer son compte rendu par SendMessage : constats et corrigés, commits, contrôles, avis et failles de sécurité. ` +
@@ -2552,7 +2539,7 @@ const securityReview = async ($: any, id: string) => {
         : `git diff <base>..HEAD (<base> : le commit d'avant le premier ticket du groupe ${group.id})`
   const what = group ? `du groupe ${group.id} (${group.name})` : 'de ce parcours'
   const send = group ? `{"security": {"group": "${group.id}", "findings": <failles gardées>, "fixed": <corrigées>}}` : '{"security": {"findings": <failles gardées>, "fixed": <corrigées>}}'
-  noteSecurityMethod($)
+  noteReferences($)
   const text =
     `Lance la revue de sécurité ${what} : confie-la à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode), en lecture seule, avec pour seul périmètre ${scope}, pour critères ${SECURITY_CRITERIA} et pour méthode ${securityMethodFr().replace('le fichier de méthode', 'le chemin du fichier de méthode')}, ${INSTRUCTIONS_IN_PROMPT_FR} ; ` +
     `pas /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes. Le sous-agent ne corrige rien : chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt (ce qu'il change, le choix qu'il implique s'il y en a un), je décide de leur correction ; une réponse comme « corrige F1 et F3 » suffit : applique-les, teste-les, commite-les. Puis envoie à l'outil flow ${send} (les failles gardées seulement, pas la liste « à surveiller »).`
@@ -2581,14 +2568,15 @@ const closeLinkedGroup = async ($: any, groupId: string) => {
   const session = group.delegated.session
   const who = session
     ? `id ${session}`
-    : `retrouve son id par claude agents, titre qui commence par ${linkedTitles(run, group.id)}`
-  // Une session de l'app a un id local_… : aucun outil connu ne l'arrête, la personne la ferme.
+    : `retrouve son id par claude agents ou list_sessions, titre qui commence par ${linkedTitles(run, group.id)}`
+  // Une session de l'app a un id local_… : stop_session n'interrompt qu'un tour en cours, la
+  // personne l'archive dans l'app (son worktree restait sinon en place).
   const stop = session?.startsWith('local_')
-    ? "c'est une session de l'app Desktop : demande-moi de la fermer dans l'app (à confirmer : aucun outil connu ne l'arrête), et attends que je te confirme qu'elle est fermée avant toute autre commande"
-    : `claude stop ${session ?? '<id>'} (sa conversation est gardée ; jamais claude rm, qui l'efface) ; si claude agents ne connaît pas cet id, c'est une session de l'app : demande-moi de la fermer dans l'app, et attends que je te confirme qu'elle est fermée avant toute autre commande`
+    ? "c'est une session de l'app Desktop : demande-moi de l'archiver dans l'app (stop_session n'interrompt qu'un tour en cours, il ne ferme pas une session inactive), et attends que je te confirme qu'elle est archivée avant toute autre commande"
+    : `claude stop ${session ?? '<id>'} (sa conversation est gardée ; jamais claude rm, qui l'efface) ; si claude agents ne connaît pas cet id, c'est une session de l'app : demande-moi de l'archiver dans l'app (stop_session ne ferme pas une session inactive), et attends que je te confirme qu'elle est archivée avant toute autre commande`
   const text = isRepo
     ? `Ferme la session liée et le worktree du groupe ${group.id} (${group.name}) du parcours « ${run.title} », rendu ici. Vérifie d'abord, n'arrête et ne retire qu'ensuite, par des commandes séparées lancées dans ce dossier : ` +
-      `1) le worktree du groupe s'appelle normalement ${groupWorktree(run, group.id)} (branche worktree-${groupWorktree(run, group.id)} ; groupe-${group.id} pour un groupe lancé avant la 0.59.0) : trouve sa ligne par git worktree list, et vérifie par git log <branche> --oneline -5 que ses commits sont ceux du groupe ; au moindre doute (nom différent, branche sans commit du groupe, un autre parcours), arrête-toi et demande-moi ; ` +
+      `1) prends la branche de la session dans la liste des sessions liées (list_sessions dans l'app Desktop) ou dans sa note de fin ; à défaut, elle s'appelle normalement worktree-${groupWorktree(run, group.id)} (lancée par le CLI), ${groupWorktree(run, group.id)} ou claude/${groupWorktree(run, group.id)}-<suffixe> (lancée par l'app, avec ou sans branch_name), groupe-${group.id} pour un groupe lancé avant la 0.59.0 : trouve sa ligne par git worktree list, et vérifie par git log <branche> --oneline -5 que ses commits sont ceux du groupe ; au moindre doute (nom différent, branche sans commit du groupe, un autre parcours), arrête-toi et demande-moi ; ` +
       `2) git branch --merged doit lister sa branche, et git -C <worktree> status --porcelain --ignored doit être vide ; s'il montre des fichiers ignorés (un .env, des sorties), liste-les-moi et attends mon accord ; si la branche n'est pas fusionnée ou si l'arbre n'est pas propre, n'arrête rien, ne retire rien, et dis-moi ce qui manque ; ` +
       `3) seulement si tout tient : arrêter la session (${who}) : ${stop} ; une fois la session arrêtée, relancer git -C <worktree> status --porcelain --ignored : s'il montre autre chose qu'au point 2, ne retire rien et dis-le-moi ; sinon git worktree remove <worktree>, sans rien forcer ; la branche reste : ne la supprime pas ; ` +
       `4) dis-moi ce qui a été fermé et ce qui reste.`
@@ -2603,7 +2591,10 @@ const closeLinkedGroup = async ($: any, groupId: string) => {
 }
 
 /** Le début du titre de la session liée d'un groupe, tel que la demande de lancement le fixe (ou sans préfixe, avant la 0.37.0). */
-const linkedTitles = (run: Run, groupId: string): string => `« ${linkedPrefix(run)}Groupe ${groupId} · » ou « Groupe ${groupId} · »`
+const linkedTitles = (run: Run, groupId: string): string => `« ${linkedPrefix(run)}Groupe ${groupId} · » (${OLD_SEPARATORS}) ou « Groupe ${groupId} · »`
+
+/** Les titres des sessions liées lancées avant le séparateur « > » : l'app y affichait « ' » à la place de « › ». */
+const OLD_SEPARATORS = "« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0"
 
 /** Annule l'envoi d'un groupe à une session liée qui n'a pas été lancée. */
 const cancelGroupLinked = async ($: any, groupId: string) => {
@@ -2995,10 +2986,41 @@ const worktreeOfFile = async ($: any, root: string, path: string): Promise<strin
 }
 
 /**
- * Le retard d'un dossier (racine de son worktree) sur le distant, d'après les références déjà
- * rapportées par le dernier fetch (communes à tous les worktrees du dépôt) : rien de lent ici.
+ * Les versions déjà posées face au distant (`base` : la branche suivie, sinon origin/main) : les
+ * fichiers changés depuis, les manifestes de version du dépôt (ceux que liste la marketplace quand le
+ * dépôt en a une : un plugin d'essai non publié ne compte pas) et ceux dont la ligne de version a changé.
  */
-const measureIn = async ($: any, dir: string, main: string): Promise<Pick<SyncState, 'behindMain' | 'behindUpstream' | 'aheadMain' | 'branch' | 'isOnMain' | 'remoteKey' | 'dir'>> => {
+const measureVersions = async ($: any, dir: string, base: string): Promise<boolean | null> => {
+  const changed = await runGit($, dir, ['diff', '--name-only', `${base}...HEAD`], 10_000)
+  if (changed.exitCode !== 0) return null
+  const listed = await runGit($, dir, ['ls-files', ...VERSION_MANIFESTS.flatMap(m => [m, `*/${m}`])], 10_000)
+  if (listed.exitCode !== 0) return null
+  let manifests = listed.stdout.split('\n').filter(Boolean)
+  const market = await runGit($, dir, ['show', 'HEAD:.claude-plugin/marketplace.json'], 5000)
+  if (market.exitCode === 0) {
+    try {
+      const sources = (JSON.parse(market.stdout).plugins ?? []).map((p: any) => String(p?.source ?? '').replace(/^\.\//, '').replace(/\/+$/, ''))
+      manifests = manifests.filter(m => sources.some((s: string) => m === `${s}/.claude-plugin/plugin.json`))
+    } catch {
+      // Marketplace illisible : tous les manifestes comptent.
+    }
+  }
+  const files = changed.stdout.split('\n').filter(Boolean)
+  const bumped: string[] = []
+  for (const m of manifests) {
+    if (!files.includes(m)) continue
+    const diff = await runGit($, dir, ['diff', '-U0', `${base}...HEAD`, '--', m], 5000)
+    if (/^\+\s*("version"\s*:|version\s*=)/m.test(diff.stdout)) bumped.push(m)
+  }
+  return versionSet(files, manifests, bumped)
+}
+
+/**
+ * Le retard d'un dossier (racine de son worktree) sur le distant, d'après les références déjà
+ * rapportées par le dernier fetch (communes à tous les worktrees du dépôt) : rien de lent ici, sinon
+ * quelques `git diff` locaux pour les versions.
+ */
+const measureIn = async ($: any, dir: string, main: string): Promise<Pick<SyncState, 'behindMain' | 'behindUpstream' | 'aheadMain' | 'branch' | 'isOnMain' | 'remoteKey' | 'dir' | 'isVersionSet'>> => {
   const branch = (await runGit($, dir, ['rev-parse', '--abbrev-ref', 'HEAD'], 5000)).stdout || null
   const count = async (range: string): Promise<number | null> => {
     const res = await runGit($, dir, ['rev-list', '--count', range], 5000)
@@ -3011,7 +3033,10 @@ const measureIn = async ($: any, dir: string, main: string): Promise<Pick<SyncSt
   const behindUpstream = upstream.exitCode === 0 && upstream.stdout ? await count('HEAD..@{u}') : null
   const mainSha = main ? (await runGit($, dir, ['rev-parse', `origin/${main}`], 5000)).stdout : ''
   const upSha = upstream.exitCode === 0 ? (await runGit($, dir, ['rev-parse', '@{u}'], 5000)).stdout : ''
+  const base = upstream.exitCode === 0 && upstream.stdout ? '@{u}' : main ? `origin/${main}` : ''
+  const isVersionSet = base ? await measureVersions($, dir, base) : null
   return {
+    isVersionSet,
     behindMain,
     behindUpstream,
     aheadMain,
@@ -3296,7 +3321,7 @@ export const register: Register = on => {
     for (let attempt = 0; attempt < 5; attempt++) {
       const { value, version } = await $.state.get(BOARD_REF)
       if (!value) break
-      const out = applyReport(value, input, now, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false, delegateTitle, relay, seenReports })
+      const out = applyReport(value, input, now, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false, isVersionSet: (await read($, syncAtom)).isVersionSet, delegateTitle, relay, seenReports })
       text = out.text
       const shown = activeRun(out.board)
       if (shown && !out.board.delegate && relay !== null && typeof relay === 'object' && (relay as Relay).run === shown.id) for (const key of relayedReportKeys(shown, relay as Relay)) seenReports.add(key)
@@ -3390,8 +3415,8 @@ export const register: Register = on => {
     // Les sous-agents de ce parcours en échec, d'après les registres (S1 : plus dans le parcours) :
     // celui de cette discussion et ceux de ses sessions liées (Q-c), pour le seul compte rendu.
     const failedAgents = run && noteId === 'compte-rendu' ? await failedOfRun($, run) : 0
-    noteSecurityMethod($)
-    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents)}` } : result
+    noteReferences($)
+    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null)}` } : result
   })
 
   // Ce qui se passe pendant un parcours : sous-agents, fichiers, commandes, Asana, questions.

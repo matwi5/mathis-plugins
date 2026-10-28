@@ -1,0 +1,7 @@
+# Termes retirés de flow-board, un par ligne : la version qui l'a retiré, une tabulation, le terme.
+# scripts/check.py les refuse dans le README, les consignes (hooks/, skills/, commands/) et les
+# entrées du CHANGELOG plus récentes que cette version ; les tests peuvent les citer (pour vérifier
+# qu'ils ont disparu).
+0.60.0	▶ Lancer
+0.60.0	Lancer le prêt
+0.60.0	vague suivante

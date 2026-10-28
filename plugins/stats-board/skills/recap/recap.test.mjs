@@ -169,6 +169,11 @@ test('le titre complet d’un parcours retrouve aussi les sessions liées au tit
   assert.match(out, /- \*\*17,00 \$\*\* · 2 sessions · /)
   assert.match(out, /\| Cloisonnement espace… › Groupe A · Saisie \|/)
   assert.doesNotMatch(renderParcours({ ...parcours, titles, prefix: 'Cloisonnement privé' }), /Groupe A/)
+  // Le séparateur « > » de flow-board 0.61.0, et « ' » tel que l'app affichait l'ancien « › ».
+  for (const sep of ['>', "'"]) {
+    const now = { ...titles, [LINKED]: `Cloisonnement espace… ${sep} Groupe A · Saisie` }
+    assert.match(renderParcours({ ...parcours, titles: now, prefix: long }), /- \*\*17,00 \$\*\* · 2 sessions · /)
+  }
 })
 
 test('une période bornée à la fin est rappelée', () => {

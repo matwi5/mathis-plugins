@@ -93,4 +93,36 @@ export const register = (on: any) => {
     await logClassic($, "classic.SubagentStart", e);
     return next(e);
   });
+  // L'ordre de `session.start` et de `classic.SessionStart` (démarrage, reprise, /clear).
+  on("session.start", async ($: any, e: any, next: any) => {
+    await log($, "session.start", { cwd: short(e.cwd), surface: e.surface });
+    return next(e);
+  });
+  on("classic.SessionStart", async ($: any, e: any, next: any) => {
+    await log($, "classic.SessionStart", { source: e.source, session_title: short(e.session_title) });
+    return titled($, "classic.SessionStart", await next(e));
+  });
+  // Mode titre (`sonde.py --titre`) : le titre du fichier `titre.txt` de la sonde part dans
+  // `sessionTitle` du prochain message ; `session_title` du hook suivant dit s'il a pris.
+  on("classic.UserPromptSubmit", async ($: any, e: any, next: any) => {
+    await log($, "classic.UserPromptSubmit", { session_title: short(e.session_title) });
+    return titled($, "classic.UserPromptSubmit", await next(e));
+  });
 };
+
+/** Le titre que la sonde doit renvoyer, lu une fois dans `titre.txt` (écrit par `sonde.py --titre`). */
+let pendingTitle: string | null | undefined;
+async function titled($: any, ev: string, result: any) {
+  if (pendingTitle === undefined) {
+    try {
+      pendingTitle = String(await $.fs.read(`${$.plugin.root}/titre.txt`)).trim() || null;
+    } catch {
+      pendingTitle = null;
+    }
+  }
+  if (!pendingTitle) return result;
+  const title = pendingTitle;
+  pendingTitle = null;
+  await log($, `${ev}:sessionTitle`, { title });
+  return { ...result, sessionTitle: title };
+}

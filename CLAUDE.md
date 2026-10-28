@@ -6,11 +6,12 @@ Marketplace de plugins Claude Code (`plugins/`), règles communes à importer da
 
 ```bash
 scripts/check.sh <plugin>...                # tous les contrôles d'un plugin, arrêtés au premier échec (scripts\check.cmd sous Windows)
+scripts/check.sh --fix <plugin>...          # réécrit l'arbre « Architecture » du README (hooks/ et tests/), commentaires gardés
 claude plugin validate .                    # la marketplace et ses entrées
 git config core.hooksPath scripts/hooks     # installe le hook pre-commit (validate et tests des plugins touchés)
 ```
 
-`check.sh` lance, chacun quand il s'applique : le refus des renvois aux tickets et à `travail/`, l'arbre « Architecture » du README (chaque fichier de `hooks/` et `tests/`), `tsc` par npx (TypeScript fixé dans `scripts/check.py`), `node --test` des skills, `claude plugin test` avec le Claude Code du terminal puis celui de l'app desktop (le plus récent, trouvé par le script), `claude plugin validate` du plugin puis du dépôt. `--no-desktop` pour un poste sans l'app.
+`check.sh` lance, chacun quand il s'applique : le refus des renvois aux tickets et à `travail/`, l'arbre « Architecture » du README (chaque fichier de `hooks/` et `tests/`), les termes retirés du plugin (`termes-retires.txt`), les règles du code (pas de liste étalée dans `Math.min`/`Math.max`, pas de bloc `/** */` détaché), `tsc` par npx (TypeScript fixé dans `scripts/check.py`), `node --test` des skills, `claude plugin test` avec le Claude Code du terminal puis celui de l'app desktop (le plus récent, trouvé par le script), `claude plugin validate` du plugin puis du dépôt. `--no-desktop` pour un poste sans l'app.
 
 ## Règles
 

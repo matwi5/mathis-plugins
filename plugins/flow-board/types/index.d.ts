@@ -671,6 +671,12 @@ export type SyncState = {
   isGitHub?: boolean | null
   /** Le projet est un dépôt git ; null tant que ce n'est pas mesuré. /implement-spec en a besoin. */
   isRepo?: boolean | null
+  /**
+   * Chaque plugin ou paquet changé face à la branche distante (suivie, sinon origin/main) a une
+   * nouvelle version dans son manifeste : la livraison ne repropose pas /project:version. Null sans
+   * manifeste de version dans le dépôt, ou tant que ce n'est pas mesuré.
+   */
+  isVersionSet?: boolean | null
 }
 
 export type Tab = 'flow' | 'agents' | 'activity' | 'history' | 'commands'

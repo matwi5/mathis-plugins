@@ -9,6 +9,7 @@
 //   desktop, le pied est trop étroit : les valeurs passent dans un bandeau au-dessus du prompt.
 // - Réécrire : le brouillon du champ de saisie, réécrit en prompt (option `model`, Opus par défaut,
 //   effort low) avec la consigne de `rewrite-system.ts`, remplace le brouillon sans être envoyé.
+//   Une commande slash en tête reste telle quelle : seul le texte qui la suit est réécrit.
 // - Effort auto : le même modèle choisit le niveau d'effort du brouillon avec la consigne de
 //   `effort-system.ts`, puis le mod le règle par `/effort` avant l'envoi.
 // - `/session-tools:start` : un premier message qui démarre les mods sans solliciter le modèle.
@@ -423,23 +424,40 @@ async function onDraft(
   }
 }
 
+// Une commande en tête du brouillon (`/nom`, `/plugin:nom`) : un chemin comme `/Users/x` n'en est
+// pas une (deuxième barre oblique). Claude Code ne la reconnaît qu'au début du message.
+const SLASH_COMMAND = /^(\/[A-Za-z][\w:.-]*)(?:\s+([\s\S]*))?$/;
+
 async function rewrite($: EngineInterface, draft: string) {
+  // La commande reste telle quelle, en tête : seul le texte qui la suit va au modèle.
+  const command = draft.trim().match(SLASH_COMMAND);
+  const name = command?.[1];
+  const args = command?.[2]?.trim() ?? "";
+  if (name && !args) {
+    await $.ui.toast("Réécrire : une commande seule, laissée telle quelle.");
+    return;
+  }
   const reply = await $.model.complete({
     ...REWRITE_REQUEST,
     model: buttonModel,
     // Marquée pour le cache : des clics rapprochés relisent la consigne au lieu de la repayer.
     system: [{ text: REWRITE_SYSTEM, cache: true }],
-    prompt: `<brouillon>\n${draft}\n</brouillon>`,
+    prompt: name
+      ? `<commande>${name}</commande>\n<brouillon>\n${args}\n</brouillon>`
+      : `<brouillon>\n${draft}\n</brouillon>`,
   });
   if (!reply.isAnswered) {
     await $.ui.toast(`Réécrire : pas de réponse (${reply.reason}).`);
     return;
   }
-  const text = reply.text.trim();
+  let text = reply.text.trim();
+  // Une réponse qui recopie la commande malgré la consigne ne la double pas.
+  if (name && text.startsWith(name) && /^(\s|$)/.test(text.slice(name.length))) text = text.slice(name.length).trim();
   if (!text) {
     await $.ui.toast("Réécrire : réponse vide, le brouillon est laissé tel quel.");
     return;
   }
+  if (name) text = `${name} ${text}`;
   // Ce qui a été tapé pendant la réécriture n'est pas écrasé (relu juste avant d'écrire).
   if ((await $.prompt.read()).text !== draft) {
     await $.ui.toast("Réécrire : le brouillon a changé pendant la réécriture, il est laissé tel quel.");

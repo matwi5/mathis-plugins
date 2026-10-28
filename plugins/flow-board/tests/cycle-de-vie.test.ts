@@ -155,10 +155,13 @@ test('un groupe rendu par sa session liée propose de fermer sa session et son w
   await ui.press({ key: 'close-linked-E' })
   await ui.unmount()
   const text = filled.at(-1)!
-  // Une session de l'app (id local_…) : aucun outil connu ne l'arrête, la personne la ferme.
-  expect(text).toContain("c'est une session de l'app Desktop : demande-moi de la fermer dans l'app")
+  // Une session de l'app (id local_…) : stop_session ne ferme pas une session inactive, la personne l'archive.
+  expect(text).toContain("c'est une session de l'app Desktop : demande-moi de l'archiver dans l'app (stop_session n'interrompt qu'un tour en cours, il ne ferme pas une session inactive), et attends que je te confirme qu'elle est archivée avant toute autre commande")
+  expect(text).not.toContain('à confirmer')
   expect(text).toContain('Vérifie d\'abord, n\'arrête et ne retire qu\'ensuite')
-  expect(text).toContain("s'appelle normalement groupe-boutique-E (branche worktree-groupe-boutique-E ; groupe-E pour un groupe lancé avant la 0.59.0)")
+  // La branche vient de la liste des sessions liées ; à défaut, le nom du CLI, de l'app (branch_name ou suffixe), ou d'avant la 0.59.0.
+  expect(text).toContain("1) prends la branche de la session dans la liste des sessions liées (list_sessions dans l'app Desktop) ou dans sa note de fin")
+  expect(text).toContain("elle s'appelle normalement worktree-groupe-boutique-E (lancée par le CLI), groupe-boutique-E ou claude/groupe-boutique-E-<suffixe> (lancée par l'app, avec ou sans branch_name), groupe-E pour un groupe lancé avant la 0.59.0")
   expect(text).toContain('git worktree list')
   expect(text).toContain('git -C <worktree> status --porcelain --ignored')
   expect(text).toContain('git branch --merged')

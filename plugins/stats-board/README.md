@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) ; les fichiers de relevé des requêtes (`~/.claude/stats-board/requetes/`, un par ouverture de session) et les totaux de durée (`~/.claude/stats-board/totaux/`, un par mois), sans aucun texte de message et jamais supprimés ; et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.10.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.10.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -191,7 +191,7 @@ Sur « récap du parcours », « combien a coûté le parcours », le skill tota
 
 | Option | Sessions retenues |
 |---|---|
-| `--parcours "<préfixe>"` | Celles dont le titre commence par le préfixe. Le titre est la dernière ligne `custom-title` de la transcription (après un renommage, c'est le nouveau), sinon la dernière `ai-title`, le titre automatique d'une session jamais renommée. Les sessions liées de flow-board portent « <titre du parcours, coupé au-delà de 28 signes>… › Groupe X · … » (`linkedPrefix` de flow-board) : une telle session est retenue aussi quand son début coupé commence le préfixe, si bien que le titre complet de la discussion principale suffit. Guillemets, `«`, `»`, `$`, `\` et accents graves sont ignorés de part et d'autre, comme flow-board les retire. |
+| `--parcours "<préfixe>"` | Celles dont le titre commence par le préfixe. Le titre est la dernière ligne `custom-title` de la transcription (après un renommage, c'est le nouveau), sinon la dernière `ai-title`, le titre automatique d'une session jamais renommée. Les sessions liées de flow-board portent « <titre du parcours, coupé au-delà de 28 signes>… > Groupe X · … » (`linkedPrefix` de flow-board ; « › » avant sa 0.61.0, affiché « ' » par l'app) : une telle session est retenue aussi quand son début coupé commence le préfixe, si bien que le titre complet de la discussion principale suffit. Guillemets, `«`, `»`, `$`, `\` et accents graves sont ignorés de part et d'autre, comme flow-board les retire. |
 | `--worktrees <dossier du projet>` | Celles des worktrees `groupe-*` du projet (dossiers `~/.claude/projects/<projet>--claude-worktrees-groupe-*`), plus la discussion principale si son identifiant est passé ; sinon le récap le signale. Lancé depuis un worktree, le dossier remonte au projet. |
 | `--since AAAA-MM-JJ`, `--until AAAA-MM-JJ` | La période : 60 jours jusqu'à aujourd'hui par défaut. Les worktrees `groupe-*` resservent d'un parcours à l'autre : avec `--worktrees`, donner les dates de début et de fin du parcours. |
 

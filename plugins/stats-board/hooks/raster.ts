@@ -4,7 +4,7 @@
 // feuille par graphique, au lieu d'un Text par série de cases. Fonctions pures : la vue
 // (view.tsx) les pose dans l'arbre, seulement quand la table de la surface a `Raster`.
 
-import { C } from './model.ts'
+import { C, maxOf } from './model.ts'
 import type { BarPart, HeatCell } from './svg.ts'
 
 /** La couleur par défaut du terminal (bit 24 seul). */
@@ -113,7 +113,7 @@ export const columnsCells = (
   highlight = -1,
   stacks: readonly (readonly BarPart[])[] | null = null,
 ): RasterCells => {
-  const max = Math.max(...values, 1e-9)
+  const max = maxOf(values, 1e-9)
   const tall = values.map((v) => (v > 0 ? Math.max(1, Math.round((v / max) * height * 8)) : 0))
   // La couleur du huitième `at8` (compté depuis le bas) de la colonne `i`.
   const colorAt = (i: number, at8: number): string => {

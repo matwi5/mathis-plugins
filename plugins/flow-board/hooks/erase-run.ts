@@ -180,10 +180,6 @@ const tracesRefusedText = (result: 'none' | 'retracted' | 'partial'): string =>
       ? 'Effacement annulé : les traces n’ont pas pu s’écrire ; une session ouverte a pu en effacer une partie entre-temps.'
       : 'Effacement partiel : les traces n’ont pas toutes pu s’écrire ni se retirer ; une partie de l’historique est masquée, rien d’autre n’a été effacé.'
 
-/**
- * Efface un fichier (S4) : réécrit vide, puis supprimé par `rm` (`del` sous Windows) ; sans
- * commande, le fichier vide reste. Faux quand il n'a pas pu être vidé.
- */
 /** Les comptes rendus entiers d'un parcours dans le dossier du relais : `<parcours>.<session>.report.md`. */
 async function reportFilesOf($: any, runId: string): Promise<string[]> {
   const sample = reportPath($, runId, 'x')
@@ -198,6 +194,10 @@ async function reportFilesOf($: any, runId: string): Promise<string[]> {
   }
 }
 
+/**
+ * Efface un fichier (S4) : réécrit vide, puis supprimé par `rm` (`del` sous Windows) ; sans
+ * commande, le fichier vide reste. Faux quand il n'a pas pu être vidé.
+ */
 async function eraseFile($: any, path: string | null): Promise<boolean> {
   if (!path) return true
   let isThere = false

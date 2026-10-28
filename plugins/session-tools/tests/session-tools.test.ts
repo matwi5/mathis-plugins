@@ -242,6 +242,56 @@ describe("session-tools", () => {
     expect(calls.toasts).toEqual(["Réécrire : le champ de saisie est vide."]);
   });
 
+  test("Réécrire : une commande slash reste en tête, seul le texte qui la suit est réécrit", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["/mattpocock-skills:grilling sur les notif\nhors ligne surtout"], "Les notifications, hors ligne surtout.");
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    expect(calls.requests[0].prompt).toBe(
+      "<commande>/mattpocock-skills:grilling</commande>\n<brouillon>\nsur les notif\nhors ligne surtout\n</brouillon>",
+    );
+    expect(calls.fills).toEqual([{ text: "/mattpocock-skills:grilling Les notifications, hors ligne surtout.", mode: "replace" }]);
+  });
+
+  test("Réécrire : une réponse qui recopie la commande ne la double pas", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["/implement le groupe A stp"], "/implement Le groupe A.");
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    expect(calls.fills).toEqual([{ text: "/implement Le groupe A.", mode: "replace" }]);
+  });
+
+  test("Réécrire : une commande seule ne lance pas le modèle", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["  /flow-board:compte-rendu  "]);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    expect(calls.requests).toEqual([]);
+    expect(calls.fills).toEqual([]);
+    expect(calls.toasts).toEqual(["Réécrire : une commande seule, laissée telle quelle."]);
+  });
+
+  test("Réécrire : un chemin en tête n'est pas une commande", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["/Users/moi/notes.md explique ce fichier"]);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "rewrite" });
+    expect(calls.requests[0].prompt).toBe("<brouillon>\n/Users/moi/notes.md explique ce fichier\n</brouillon>");
+    expect(calls.fills).toEqual([{ text: "Prompt réécrit.", mode: "replace" }]);
+  });
+
   // Sous le plugin : la commande /effort intégrée, qui ne renvoie aucun texte en interactif.
   const effortRuns = (on: any) => {
     const runs: string[] = [];

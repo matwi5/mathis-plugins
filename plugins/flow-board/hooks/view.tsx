@@ -693,10 +693,6 @@ const ordinal = (i: number): string => ORDINALS[i] ?? `${i + 1}.`
 
 const shortName = (name: string): string => (name.length > 22 ? `${name.slice(0, 21)}…` : name)
 
-/**
- * Une ligne de ticket : le choix (numéro d'ordre, ou cadenas tant qu'un bloqueur n'est ni fait ni
- * choisi avant), le titre, l'état, les dépendances et le lien vers Asana.
- */
 /** Un ticket tel que sa session liée le relaie, tant que le groupe n'est pas rendu. */
 const RELAYED: Record<TicketStatus, { glyph: string; color: string; label: string }> = {
   todo: TICKET.todo,
@@ -705,6 +701,10 @@ const RELAYED: Record<TicketStatus, { glyph: string; color: string; label: strin
   blocked: { glyph: '!', color: C.amber, label: 'bloqué ↗' },
 }
 
+/**
+ * Une ligne de ticket : le choix (numéro d'ordre, ou cadenas tant qu'un bloqueur n'est ni fait ni
+ * choisi avant), le titre, l'état, les dépendances et le lien vers Asana.
+ */
 const ticketRow = (k: Kit, run: Run, t: Ticket, view: View, act: Actions, relayed?: GroupRelay['tickets'][string]): unknown => {
   const { Box, Button, Link } = k
   const selection = view.ui.selection ?? []
@@ -842,7 +842,6 @@ const lotRow = (k: Kit, ids: readonly string[], at: number, act: Actions): unkno
   )
 }
 
-/** Les tickets rangés par vague puis par groupe, comme Claude les a regroupés. */
 /**
  * La revue de sécurité d'un groupe fini, ou du lot entier quand le parcours n'a pas de groupes,
  * facultative : l'avis de Claude une fois la revue faite (il la lance lui-même quand il la juge
@@ -880,6 +879,7 @@ const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Ac
   )
 }
 
+/** Les tickets rangés par vague puis par groupe, comme Claude les a regroupés. */
 const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actions): unknown => {
   const { Box, Button } = k
   const colorOf = (g: GroupView) => (g.isFallback ? C.gray : GROUP_COLORS[plan.groups.indexOf(g) % GROUP_COLORS.length]!)
@@ -2278,7 +2278,7 @@ const launchParts = (k: Kit, run: Run, rec: NextLaunch, view: View, act: Actions
 
 const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const { Box, Button } = k
-  const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false })
+  const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet })
   const rec = nextLaunchFor(run)
   const phase = currentPhase(run)
   if (rec === null && sug.primary === null && !sug.canFinish) return null
@@ -2302,6 +2302,7 @@ const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
       buttons.push(<Button key={`go-${skill}`} label={`${d.glyph} ${d.label}`} onPress={() => act.launch(skill)} />)
     }
     if (sug.canFinish) buttons.push(<Button key="finish" label="✓ Clore le parcours" onPress={() => act.finish()} />)
+    if (sug.versionNote) note = sug.versionNote
   }
   return (
     <Box key="next" flexDirection="column" borderStyle="round" borderDimColor={true} paddingX={1} marginTop={1}>

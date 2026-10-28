@@ -1,6 +1,6 @@
 {
   "name": "session-tools",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Outils autour du champ de saisie : boutons Fichiers (navigateur files-board) et Diff au terminal, boutons Réécrire (le brouillon réécrit en prompt par Opus, Sonnet ou Haiku au choix, sans envoi) et Effort auto (le niveau d'effort choisi pour le brouillon), chrono de la requête (jusqu'à la fin de ses tâches de fond, avec leur nombre en attendant), vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /session-tools:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
   "author": {
     "name": "Mathis"

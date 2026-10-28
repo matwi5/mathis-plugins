@@ -40,13 +40,29 @@ export const isSureLink = (how: LinkHow): boolean => how === 'run' || how === 'r
 /** Sans signe de vie depuis plus longtemps, une session liée sans fin connue est tenue pour fermée. */
 export const LINKED_STALE_MS = 30 * 60_000
 
-const norm = (title: string): string => title.toLowerCase().replace(/\s+/g, ' ').replace(/[·›»"']/g, '').trim()
+const norm = (title: string): string => title.toLowerCase().replace(/\s+/g, ' ').replace(/[·›»>"']/g, '').trim()
+
+/**
+ * Le séparateur entre le titre du parcours et celui de la session liée : « > », en ASCII, depuis
+ * que l'app affiche « ' » à la place de « › » (décision de la rétro du parcours « Frise, groupes et
+ * titres »). Les anciens titres se lisent encore : « › », sa forme déformée par une page de code
+ * (« â€º »), et « ' » entre deux espaces (une apostrophe n'en a pas).
+ */
+export const TITLE_SEPARATOR = '>'
+const SEPARATORS = /›|â€º| > | ' /g
+
+/** Vrai si le titre porte un séparateur de session liée, nouveau ou ancien. */
+export const hasSeparator = (title: string): boolean => new RegExp(SEPARATORS.source).test(title)
+
+/** La partie d'un titre de session liée après son dernier séparateur ; le titre entier sans séparateur. */
+export const ownPart = (title: string): string => {
+  let end = -1
+  for (const m of title.matchAll(SEPARATORS)) end = m.index! + m[0].length
+  return end >= 0 ? title.slice(end) : title
+}
 
 /** Le titre court d'une session : « Groupe A · … » plutôt que le nom du parcours qui le précède. */
-const shortTitle = (title: string): string => {
-  const cut = title.lastIndexOf('›')
-  return (cut >= 0 ? title.slice(cut + 1) : title).trim() || title.trim()
-}
+const shortTitle = (title: string): string => ownPart(title).trim() || title.trim()
 
 export type LinkInput = {
   /** Le registre de cette session (l'orchestrateur) : ses lancements dans `linked`. */
@@ -65,7 +81,7 @@ export type LinkInput = {
 /** Un id de lancement assez long pour reconnaître une session par le début de son id : pas moins de 8 caractères. */
 const ID_MIN = 8
 
-/** La lettre du groupe qu'un titre de lancement nomme (« … › Groupe B · … »). */
+/** La lettre du groupe qu'un titre de lancement nomme (« … > Groupe B · … »). */
 const groupOf = (title: string | undefined): string | undefined => /\bgroupe\s+([a-z0-9]+)\b/i.exec(title ?? '')?.[1]?.toUpperCase()
 
 /**
@@ -83,10 +99,10 @@ export const isSameProject = (root: string, other: string): boolean => {
 
 /**
  * Le titre d'une session reconnue par son parcours : la fin de son titre de discussion
- * (« … › Groupe A · Synchro ») ; sans elle, son groupe, car son titre de repli est celui du parcours.
+ * (« … > Groupe A · Synchro ») ; sans elle, son groupe, car son titre de repli est celui du parcours.
  */
 const runTitle = (o: SessionRegistry): string =>
-  o.title?.includes('›') ? shortTitle(o.title) : o.group ? `Groupe ${o.group}` : shortTitle(o.title ?? o.session.slice(0, 8))
+  o.title !== undefined && hasSeparator(o.title) ? shortTitle(o.title) : o.group ? `Groupe ${o.group}` : shortTitle(o.title ?? o.session.slice(0, 8))
 
 /**
  * Les sessions liées de l'orchestrateur, dans l'ordre de lancement : celles que son parcours

@@ -66,20 +66,20 @@ test('le brief : installation du worktree d’abord, discussion désignée par s
   expect(text).toContain('et donne en repli son nom du moment')
   expect(text).toContain('"main": "[<ref>]"')
   expect(text).not.toContain('« <nom> [<ref>] »')
-  // Un seul compte rendu complet : le relais ; SendMessage et la réponse finale n'en portent qu'une ligne.
-  expect(text).toContain('{"report": "<le compte rendu entier>"}')
-  expect(text).toContain('une seule ligne qui renvoie au relais')
+  // Un seul compte rendu complet : le relais ; SendMessage et la réponse finale n'en portent qu'une
+  // ligne (le détail est dans la procédure, tests/procedure-groupe.test.mjs).
+  expect(text).toContain('compte rendu déposé au relais puis une ligne à cette discussion')
 })
 
-test('le brief : questions sensibles d’abord, relecteur muet relancé, ni Monitor ni /tdd inutiles, visuel à valider', async ($, on) => {
+// La procédure (questions sensibles d'abord, relecteur muet relancé, ni Monitor ni /tdd inutiles,
+// visuel à valider) est dans reference/procedure-groupe.md : tests/procedure-groupe.test.mjs.
+test('le brief : la procédure par son chemin, ce qui varie en clair', async ($, on) => {
   const text = await brief($, on)
-  expect(text).toContain('avant le premier ticket, me poser en une fois les questions sensibles du groupe')
-  expect(text).toContain('sans nouvelles depuis 10 à 15 minutes')
-  expect(text).toContain('un sous-agent s\'attend par cette notification, sans surveillance armée (pas de Monitor pour un sous-agent)')
-  expect(text).toContain('sauter /mattpocock-skills:tdd pour un ticket sans comportement testable')
-  expect(text).toContain("une modification unique passe par l'outil Edit")
-  expect(text).toContain('un visuel à valider par moi')
-  expect(text).toContain('produire une planche (les variantes côte à côte, dans un fichier)')
+  expect(text).toMatch(/puis lire la procédure d'une session liée de groupe, \S*reference\/procedure-groupe\.md, et la suivre jusqu'au bout : questions sensibles d'abord/)
+  expect(text).toContain('TDD : /mattpocock-skills:tdd')
+  expect(text).not.toContain('sans nouvelles depuis 10 à 15 minutes')
+  // Recopiée, la procédure faisait passer le texte au-delà de 15 000 signes.
+  expect(text.length).toBeLessThan(9000)
   // Au retour : les failles corrigées après coup sont renvoyées à l'outil.
   expect(text).toContain('une faille corrigée après coup (avec mon accord) se renvoie aussi, avec "fixed" mis à jour')
 })

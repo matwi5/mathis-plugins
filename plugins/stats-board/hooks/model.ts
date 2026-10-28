@@ -231,7 +231,7 @@ export function keepSessions(fresh: SessionRow[], previous: readonly SessionRow[
   const mine = (previous ?? []).filter((s) => s.machine === machine)
   if (!mine.length) return fresh
   const ids = new Set(fresh.map((s) => s.id))
-  const first = fresh.length ? Math.min(...fresh.map((s) => s.first)) : Infinity
+  const first = minOf(fresh.map((s) => s.first))
   // À la minute près : une session reprise du fichier publié a sa fin arrondie à la minute d'après
   // (décision « Historique »).
   const limit = Number.isFinite(first) ? Math.ceil(first / 60_000) * 60_000 : first
@@ -291,6 +291,21 @@ export const floorMinute = (ms: number): number => Math.floor(ms / 60_000) * 60_
 const endMinute = (ms: number, tzOffset: number): number => {
   const up = Math.ceil(ms / 60_000) * 60_000
   return dayOf(up, tzOffset) === dayOf(ms, tzOffset) ? up : floorMinute(ms)
+}
+
+/**
+ * `Math.min(bound, ...values)` et `Math.max(bound, ...values)` par une boucle : au-delà de 100 000
+ * éléments, l'étalement lève une erreur (`scripts/check.py` le refuse).
+ */
+export const minOf = (values: Iterable<number>, bound = Infinity): number => {
+  let min = bound
+  for (const v of values) if (v < min) min = v
+  return min
+}
+export const maxOf = (values: Iterable<number>, bound = -Infinity): number => {
+  let max = bound
+  for (const v of values) if (v > max) max = v
+  return max
 }
 
 /** La plus petite date d'une liste ; null pour une liste vide. */

@@ -17,6 +17,7 @@ Les mots (requête, tâche de fond, durée réelle…) sont ceux de `GLOSSARY.md
 | 26/10/2026 | 2.1.310, terminal | tous ceux du tableau ci-dessous |
 | 26/10/2026 | 2.1.308, moteur embarqué par l'app desktop, lancé dans le terminal | tous, sauf le message envoyé pendant une tâche de fond |
 | 27/10/2026 | 2.1.311, terminal | un message simple (ordre `prompt.submit`, `turn.start`, `classic.Stop`, `turn.complete`) |
+| 28/10/2026 | 2.1.312, terminal | démarrage et reprise (`session.start`, `classic.SessionStart`), `sessionTitle` renvoyé par `classic.SessionStart` (sonde `--titre`, `--reprise`) |
 
 Le moteur est le même dans les deux binaires. L'interface graphique de l'app desktop n'a pas été pilotée : son dessin reste couvert par les tests des mods sur la surface `desktop`. Les deux versions se comportent pareil sur tous les points ci-dessous, sauf ceux qu'un seul essai montre (signalés).
 
@@ -43,7 +44,33 @@ Le moteur est le même dans les deux binaires. L'interface graphique de l'app de
 5. **Interruption (Échap)** : `turn.complete` arrive avec `reason: "aborted"` et `isAborted: true`, et **aucun `classic.Stop`** n'est émis. Une commande de fond lancée dans le tour interrompu n'apparaît donc dans aucune liste. Sa notification arrive plus tard (`task-notification`, au repos) et relance un tour normal (vu au terminal seulement). Pour une erreur d'API ou un refus, les types annoncent `StopFailure` à la place de `classic.Stop` : à confirmer.
 6. **Sous-agents** : `agent.spawn` (`background: true`, `parentAgentId` absent pour un agent lancé par le fil principal) arrive en même temps que le premier `turn.start` de l'agent (`agentId`). Ses `turn.step` et ses `turn.complete` portent son `agentId`. Un agent **réveillé** (il attendait ses propres tâches de fond et reçoit une notification) reçoit un **nouvel `agent.spawn`** et un nouveau `classic.SubagentStart`, avec le même `agentId`. `$.agent.list()` le donne `running`, puis `waiting` quand il attend ses tâches, puis `completed`.
 
+7. **Démarrage et reprise** : `session.start`, puis `classic.SessionStart` dans la même milliseconde (ou la suivante), au démarrage (`source: "startup"`) comme à la reprise par `--continue` (`source: "resume"`, qui porte alors `session_title`, le titre de la session reprise). Un hook de `classic.SessionStart` peut donc lire ce que `session.start` a chargé, sous réserve des `await` de la sonde (voir « Refaire l'essai ») : un mod qui en dépend garde un repli. Vu le 28/10/2026 avec 2.1.312 au terminal ; `/clear` et l'app desktop non mesurés.
+
 **Non vérifié** : l'`agentId` des agents de workflow, `parentAgentId` d'un sous-agent de sous-agent, le Monitor, `/loop` et les réveils planifiés, une notification livrée pendant un tour en cours, une interruption avec un sous-agent de fond. Pour ces cas, les règles ci-dessous suivent les types du moteur.
+
+## Titre de la session (`sessionTitle`)
+
+Un hook classique peut renommer la session : `hookSpecificOutput.sessionTitle` de `classic.UserPromptSubmit` ou de `classic.SessionStart` (dans un mod, le champ `sessionTitle` du résultat). Le hook suivant reçoit le titre en cours dans `session_title`.
+
+| Essai | Claude Code | Vu |
+|---|---|---|
+| `classic.UserPromptSubmit` renvoie un titre (mod d'essai dans tmux) | 2.1.311 et 2.1.308 (embarqué par l'app), terminal, 27/10/2026 | le titre s'affiche sur le bord du prompt et revient dans `session_title` du hook suivant |
+| Titre posé par un hook de projet | app desktop, 27/10/2026 (constaté par Mathis) | le titre de la discussion change dans l'app |
+| `classic.SessionStart` au démarrage renvoie un titre (sonde `--titre`) | 2.1.312, terminal, 28/10/2026 | appliqué : bord du prompt, puis `session_title` du premier `classic.UserPromptSubmit` |
+| `classic.SessionStart` à la reprise (`--continue`) renvoie un titre | 2.1.312, terminal, 28/10/2026 | appliqué : il remplace le titre de la session reprise |
+| Session lancée depuis le shell d'une autre session Claude Code (variables `CLAUDE_CODE_SESSION_ID`, `CLAUDECODE` héritées) | 2.1.312, terminal, 28/10/2026 | le `sessionTitle` du démarrage ne prend pas : la session porte le titre de la session parente. `scripts/sonde.py` retire ces variables |
+
+Ce que flow-board en tire : le titre qu'une discussion doit prendre part une fois, au prochain message ou à la reprise, et seulement s'il diffère de `session_title`.
+
+## Appels à l'advisor dans un transcript
+
+Relevé le 27/10/2026 et revérifié le 28/10/2026 (noms de champs seulement, jamais le contenu). Un appel à l'advisor laisse dans la réponse du modèle (lignes `assistant` qui partagent un `message.id`) :
+
+- un bloc `server_tool_use` nommé `advisor`, avec son `id` et un `input` vide ;
+- puis un bloc `advisor_tool_result`, avec `tool_use_id` (l'`id` du bloc précédent) et `content` de type `advisor_redacted_result`, dont le texte est chiffré (`encrypted_content`) : il ne se lit pas ;
+- dans `message.usage.iterations`, répété sur chaque ligne de la réponse, une entrée de type `advisor_message` par appel, dans l'ordre des blocs : `model`, `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` (et le détail `cache_creation`). Ces tokens ne sont pas dans l'`usage` de premier niveau de la réponse.
+
+Les mêmes blocs paraissent aussi dans des lignes `api-request-blob`. Le rattrapage de flow-board (`plugins/flow-board/hooks/transcript.ts`) apparie les blocs `server_tool_use` aux entrées `advisor_message`, dans l'ordre, et date la fin d'un appel par son `advisor_tool_result`.
 
 ## Filiation d'une requête
 
@@ -68,10 +95,12 @@ Les tests de `session-tools` (`realEngine`) et de `stats-board` (`requestEngine`
 ```bash
 python3 scripts/sonde.py              # Claude Code du terminal
 python3 scripts/sonde.py --desktop    # le Claude Code embarqué par l'app desktop, le plus récent
+python3 scripts/sonde.py --titre "Essai"            # la sonde renvoie ce titre dans sessionTitle, une fois
+python3 scripts/sonde.py --dir <dossier> --reprise  # reprend la dernière session du dossier (--continue)
 tmux attach -t sonde                  # jouer les scénarios, puis Ctrl-b d
 tmux kill-session -t sonde            # fermer
 ```
 
-Le script ouvre une session tmux détachée dans un dossier jetable, en Haiku et en effort low, avec la sonde (`scripts/sonde/`) chargée par `--plugin-dir`. Chaque session de Claude Code écrit son journal dans `scripts/sonde/journaux/<heure d'ouverture>.jsonl`, que git ignore : une ligne par événement, avec le temps écoulé depuis le premier (`t`, en ms), l'heure, et l'état du chrono de `session-tools` quand il est installé (`chrono`). La sonde fait elle-même des `await` dans ses hooks : deux événements à moins d'une milliseconde l'un de l'autre peuvent s'y noter dans un ordre différent de celui que verrait un plugin sans attente.
+Le script ouvre une session tmux détachée dans un dossier jetable, en Haiku et en effort low, avec la sonde (`scripts/sonde/`) chargée par `--plugin-dir`. Chaque session de Claude Code écrit son journal dans `scripts/sonde/journaux/<heure d'ouverture>.jsonl`, que git ignore : une ligne par événement, avec le temps écoulé depuis le premier (`t`, en ms), l'heure, et l'état du chrono de `session-tools` quand il est installé (`chrono`). La sonde note aussi `session.start`, `classic.SessionStart` (source, titre) et `classic.UserPromptSubmit` (titre en cours). Avec `--titre`, elle renvoie ce titre dans `sessionTitle` au premier de ces deux hooks, une fois par processus (fichier `scripts/sonde/titre.txt`, ignoré par git), et le journal le note (`…:sessionTitle`). Elle retire de son environnement les variables qui la lieraient à la session Claude Code qui la lance. La sonde fait elle-même des `await` dans ses hooks : deux événements à moins d'une milliseconde l'un de l'autre peuvent s'y noter dans un ordre différent de celui que verrait un plugin sans attente.
 
 Après l'essai, mettre à jour le tableau des versions, les points qui changent, et les faux moteurs des tests s'il le faut.

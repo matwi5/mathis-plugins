@@ -4,6 +4,17 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.23.0 — 2026-10-28
+
+### Changé
+- **Réécrire n'ajoute plus ce que la session fixe déjà.** La consigne (`hooks/rewrite-system.ts`) ne met plus dans le prompt de règle d'arrêt, de compte rendu, de fichier de suivi, de délégation à des sous-agents ni de contrôle générique : la consigne de Claude Code et les CLAUDE.md les portent déjà, et deux de ces blocs les contredisaient (« arrête-toi seulement si… », qui écartait les questions et accords que fixent les règles ; un ordre de compte rendu différent). Elle se limite à la demande : la rendre claire, sans rien perdre ni inventer, avec son état final, ses exclusions et la forme du livrable. Demande de Mathis : « Si c'est deja dans le claude.md alors il faut retirer les choses inutiles/en double dans la reecriture ».
+- **Une commande slash en tête du brouillon reste au début, inchangée, par le code** : seul le texte qui la suit part au modèle (dans une balise `<commande>`), puis la commande est remise devant sa réponse, sans doublon si le modèle l'a recopiée. Une commande seule ne lance pas le modèle (notification) ; un chemin comme `/Users/x` n'est pas une commande. Une réponse à une question de l'agent (« ok pour a », « Q3 : b ») n'est que corrigée, sans squelette. Pour que Réécrire marche avec les skills de flow-board et de mattpocock-skills, sans en dépendre.
+- **Une phrase ambiguë ne se tranche pas** : la réécriture la reprend ou nomme ses lectures possibles, sans en choisir une, et ne la change jamais en action plus forte, surtout une suppression (« on ne les garde pas ici » devenait « supprime-les »).
+- **Banc d'essai** sur 16 brouillons (les 7 de la 0.17.0 et 9 de parcours flow-board et mattpocock), notés à l'aveugle par Opus face au brouillon accompagné des règles de la session : note globale 8,0 contre 4,5 pour la consigne d'avant, préférée 31 fois sur 32 ; 2 inventions contre 70, aucune contradiction avec les règles contre 67 ; 38 mots médians contre 156 ; 0,066 $ par réécriture à froid contre 0,103 $. Ces chiffres suivent la règle sur les phrases ambiguës, ajoutée après une première série à cause de deux de ses brouillons, puis six brouillons notés de nouveau ; la première série, avant toute retouche, donnait déjà 7,9 contre 4,5, préférée 29 fois sur 32, 6 inventions contre 69. Un appel par brouillon, juges Opus.
+- Retirés aussi : les restes de l'entretien du skill d'origine (lignes « Salve », mode binôme, phrases à dire à l'utilisateur), le gabarit de relecture de code (qui ajoutait « problèmes bloquants seulement »), les modules Actions, Délégation et Suivi (Actions devient « Périmètre d'écriture », pris du brouillon seul). Exemples refaits sur ce modèle, dont une réponse en cours d'échange et une commande slash ; plafonds de longueur abaissés.
+
+---
+
 ## 0.22.0 — 2026-10-27
 
 ### Retiré

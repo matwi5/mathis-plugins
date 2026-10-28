@@ -39,7 +39,7 @@ Chaque tâche déléguée part au modèle le moins cher qui la fait bien. Les mo
 | `agents:explorer` | Cartographier le code, en lecture seule ; plusieurs en parallèle, un par domaine | Haiku | high |
 | `agents:researcher` | Chercher la documentation et répondre avec les sources | Sonnet | high |
 | `agents:worker` | Faire une modification délimitée et la vérifier | Opus | medium |
-| Revues de code et de sécurité | Dans un sous-agent dédié, petits diffs compris : modèle, effort, fichier de consignes et cible dans la section « Revues dans un sous-agent Opus, effort selon l'enjeu » de [`config/rules/agents.md`](config/rules/agents.md) | selon la règle | selon la règle |
+| Revues de code et de sécurité | Dans un sous-agent dédié, petits diffs compris : modèle, effort, fichier de consignes et cible dans la section « Revues dans un sous-agent Opus, effort selon l'enjeu » de [`config/rules/agents.md`](config/rules/agents.md) et son détail, [`config/reference/revues.md`](config/reference/revues.md) | selon la règle | selon la règle |
 
 Hors de l'explorateur, aucun sous-agent ne part sur Haiku. Une délégation doit valoir son coût : reconstituer le contexte et relire le rapport.
 
@@ -87,7 +87,7 @@ mathis-plugins/
 scripts/check.sh <plugin>
 ```
 
-`scripts/check.sh` (`scripts\check.cmd` sous Windows) enchaîne les contrôles d'un plugin et s'arrête au premier échec : types par `npx` (sans installation de TypeScript), tests avec le Claude Code du terminal puis celui de l'app desktop, `claude plugin validate`. `git config core.hooksPath scripts/hooks` installe le hook pre-commit, qui lance `validate` et les tests des plugins touchés à chaque commit.
+`scripts/check.sh` (`scripts\check.cmd` sous Windows) enchaîne les contrôles d'un plugin et s'arrête au premier échec, en montrant les tests en échec et le chemin de sa sortie entière : arbre « Architecture » du README (`--fix` le réécrit), termes retirés, règles du code, types par `npx` (sans installation de TypeScript), tests avec le Claude Code du terminal puis celui de l'app desktop, `claude plugin validate`. `git config core.hooksPath scripts/hooks` installe le hook pre-commit, qui lance `validate` et les tests des plugins touchés à chaque commit, sauf pour un plugin que `check.sh` vient de passer tel quel.
 
 Les conventions (version à deux endroits, CHANGELOG, tests avec le Claude Code du terminal et celui de l'app desktop) sont dans [`CLAUDE.md`](CLAUDE.md).
 

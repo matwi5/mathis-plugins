@@ -101,3 +101,65 @@ for (const file of FILES) {
     assert.deepEqual(bad, [])
   })
 }
+
+// Les teintes des attentes de la frise (gris, ambre, bleu, or) restent distinctes : l'or de l'advisor et
+// l'ambre de « attend ta réponse » se confondaient sur la planche (rétro du parcours « Frise, groupes
+// et titres »). Distance ΔE76 (CIE Lab, sRGB D65) : au moins 10 entre les teintes pleines, et au moins
+// 15 entre les motifs tels qu'ils se voient (hachures ou pointillés fondus sur le fond foncé du terminal
+// et sur un fond blanc). Un or ramené vers l'ambre (#DCAA28, ΔE 2) échoue.
+const TINT_MIN = 10
+const PATTERN_MIN = 15
+
+const lab = hex => {
+  const lin = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+  const f = t => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116)
+  const x = f((0.4124 * lin[0] + 0.3576 * lin[1] + 0.1805 * lin[2]) / 0.95047)
+  const y = f(0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2])
+  const z = f((0.0193 * lin[0] + 0.1192 * lin[1] + 0.9505 * lin[2]) / 1.08883)
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)]
+}
+const deltaE = (a, b) => Math.hypot(...lab(a).map((v, i) => v - lab(b)[i]))
+const blend = (hex, alpha, bg) =>
+  `#${[1, 3, 5].map(i => Math.round(alpha * parseInt(hex.slice(i, i + 2), 16) + (1 - alpha) * parseInt(bg.slice(i, i + 2), 16)).toString(16).padStart(2, '0')).join('')}`
+
+/** Les teintes des attentes dans svg.ts, et la couverture de leur motif (fond translucide plus trait ou point plein). */
+const waitLooks = () => {
+  const svg = read('hooks/svg.ts')
+  const tints = Object.fromEntries([...svg.match(/const WAIT_TINT[^=]*= \{([^}]*)\}/)[1].matchAll(/(\w+): '(#[0-9A-Fa-f]{6})'/g)].map(m => [m[1], m[2]]))
+  const dots = svg.match(/<rect width="4" height="4" fill="\$\{WAIT_TINT\[k\]\}" fill-opacity="([\d.]+)"\/><circle cx="2" cy="2" r="([\d.]+)"/)
+  const hatch = svg.match(/fill-opacity="([\d.]+)"\/><line x1="0" y1="0" x2="0" y2="4" stroke="\$\{WAIT_TINT\[k\]\}" stroke-width="([\d.]+)"/)
+  assert.ok(dots && hatch, 'motifs des attentes introuvables dans svg.ts')
+  const dotShare = (Math.PI * Number(dots[2]) ** 2) / 16
+  const lineShare = Number(hatch[2]) / 4
+  const cover = {
+    dots: dotShare + (1 - dotShare) * Number(dots[1]),
+    hatch: lineShare + (1 - lineShare) * Number(hatch[1]),
+  }
+  return { tints, cover }
+}
+
+test('teintes des attentes : distinctes deux à deux, pleines et en motifs (pointillés de l’advisor compris)', () => {
+  const { tints, cover } = waitLooks()
+  assert.deepEqual(Object.keys(tints).sort(), ['waitAdvisor', 'waitAgent', 'waitBg', 'waitPerson'])
+  // Le terminal (cells.ts) prend les mêmes teintes, par la palette.
+  const palette = Object.fromEntries([...read('hooks/catalog.ts').matchAll(/^\s+(\w+): '(#[0-9A-Fa-f]{6})'/gm)].map(m => [m[1], m[2]]))
+  const cells = Object.fromEntries([...read('hooks/cells.ts').match(/WAIT_COLOR[^=]*= \{([^}]*)\}/)[1].matchAll(/(\w+): C\.(\w+)/g)].map(m => [m[1], palette[m[2]]]))
+  assert.deepEqual(cells, tints)
+  const kinds = Object.keys(tints)
+  const close = []
+  for (let i = 0; i < kinds.length; i++) {
+    for (let j = i + 1; j < kinds.length; j++) {
+      const [a, b] = [kinds[i], kinds[j]]
+      const plain = deltaE(tints[a], tints[b])
+      if (plain < TINT_MIN) close.push(`${a}/${b} pleines : ${plain.toFixed(1)}`)
+      for (const bg of ['#17171C', '#FFFFFF']) {
+        const look = k => blend(tints[k], k === 'waitAdvisor' ? cover.dots : cover.hatch, bg)
+        const seen = deltaE(look(a), look(b))
+        if (seen < PATTERN_MIN) close.push(`${a}/${b} en motif sur ${bg} : ${seen.toFixed(1)}`)
+      }
+    }
+  }
+  assert.deepEqual(close, [])
+  // Le test voit un or ramené vers l'ambre.
+  assert.ok(deltaE('#DCAA28', tints.waitPerson) < TINT_MIN)
+})

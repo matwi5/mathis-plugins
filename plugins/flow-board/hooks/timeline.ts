@@ -17,6 +17,21 @@ import type { AgentLane, AgentMark, AgentsWindow, RegistryAgent, SegmentKind, To
  */
 export const WORKING_KINDS: ReadonlySet<SegmentKind> = new Set<SegmentKind>(['think', 'write', 'tool', 'waitAgent', 'waitBg', 'waitAdvisor'])
 
+/**
+ * `Math.min(bound, ...values)` et `Math.max(bound, ...values)` par une boucle : au-delà de 100 000
+ * éléments, l'étalement lève une erreur (`scripts/check.py` le refuse).
+ */
+export const minOf = (values: Iterable<number>, bound = Infinity): number => {
+  let min = bound
+  for (const v of values) if (v < min) min = v
+  return min
+}
+export const maxOf = (values: Iterable<number>, bound = -Infinity): number => {
+  let max = bound
+  for (const v of values) if (v > max) max = v
+  return max
+}
+
 /** Une pause plus longue, où personne ne travaille, est compressée. */
 export const PAUSE_MS = 60_000
 export const HOUR_MS = 3_600_000
@@ -225,7 +240,7 @@ export const laneMarks = (lane: AgentLane, axis: Axis): (AgentMark & { x: number
  */
 const periodOf = (a: RegistryAgent, now: number): Interval => {
   if (a.status === 'running') return { s: a.startedAt, e: now }
-  if (a.isEndUnseen === true) return { s: a.startedAt, e: Math.max(a.startedAt, ...(a.segments ?? []).map(s => s.e ?? a.startedAt)) }
+  if (a.isEndUnseen === true) return { s: a.startedAt, e: maxOf((a.segments ?? []).map(s => s.e ?? a.startedAt), a.startedAt) }
   return { s: a.startedAt, e: a.finishedAt ?? a.startedAt }
 }
 

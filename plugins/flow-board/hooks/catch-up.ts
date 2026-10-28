@@ -15,6 +15,7 @@ import { EMPTY_UI } from './model.ts'
 import { agentCalls, claudeHome, otherRegistries, refreshLinked } from './register.tsx'
 import { commitRegistry, lockRegistryDir, registryKey, registryPath } from './registry-file.ts'
 import { MAIN, catchUpAdvisor } from './registry.ts'
+import { minOf } from './timeline.ts'
 import { SUBAGENT_FILE, type TranscriptAgent, catchUp, drainWithin, isTranscriptPath, laneFromTranscript, metaFromText, readArgv, subagentsDirOf } from './transcript.ts'
 
 /** Les atomes lus ou mis à jour ici : le moteur veut leur déclaration dans le fichier qui les lit. */
@@ -187,7 +188,7 @@ export async function catchUpOwn($: any, isRebuild = false) {
       // La piste vécue ici depuis le démarrage reste ; le transcript rend ce qui la précède, et ses
       // chiffres font foi.
       const live = next.main?.segments ?? []
-      const since = live.length > 0 ? Math.min(...live.map(x => x.s)) : Infinity
+      const since = minOf(live.map(x => x.s))
       const before = (main.segments ?? []).filter(x => (x.e ?? x.s) <= since)
       next = {
         ...next,

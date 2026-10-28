@@ -10,6 +10,7 @@
 import type { AdvisorFigures, AgentLane, AgentSegment, Board, RegistryAgent, Run, SessionRegistry } from '../types'
 import { isSameProject } from './linked.ts'
 import { MAIN, catchUpAdvisor, cleanAdvisorFigures, cleanAdvisorList, cleanAgent, cleanLane, emptyRegistry, mergeRegistry } from './registry.ts'
+import { minOf } from './timeline.ts'
 import { catchUp, type TranscriptAgent } from './transcript.ts'
 
 /** Le fichier à part d'une session (ou d'un parcours) : ce que le rattrapage et la reprise ont reconstruit. */
@@ -72,7 +73,7 @@ export const applyRebuilt = (reg: SessionRegistry, rebuilt: Rebuilt | null, now:
   if ((rebuilt.main?.segments ?? []).length > 0) {
     // La piste vécue reste ; la reprise rend ce qui la précède.
     const live = next.main?.segments ?? []
-    const since = live.length > 0 ? Math.min(...live.map(x => x.s)) : Infinity
+    const since = minOf(live.map(x => x.s))
     const before = rebuilt.main!.segments!.filter(x => (x.e ?? x.s) <= since)
     const { advisor: _calls, ...lane } = rebuilt.main!
     next = { ...next, main: { ...lane, ...next.main, segments: [...before, ...live].sort((a, b) => a.s - b.s) } }

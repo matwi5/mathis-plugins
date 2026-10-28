@@ -55,9 +55,7 @@ export type PhaseSpec = { skill: string; alts?: string[]; isOptional?: boolean }
  * `flow` : ouvre un parcours quand il ne prolonge pas l'actif.
  * `detour` : greffé sur la phase en cours quand il n'est pas dans le parcours.
  * `event` : une simple ligne du journal.
- */
-/**
- * … `step` : une commande de livraison (plugin project) qui ne compte que dans un parcours en
+ * `step` : une commande de livraison (plugin project) qui ne compte que dans un parcours en
  * cours (phase, étape ou ligne du journal) et n'en ouvre jamais un.
  */
 export type SkillRole = 'flow' | 'detour' | 'event' | 'step'
@@ -130,7 +128,7 @@ export const SECURITY_FIXES_PASS =
 export const SENSITIVE_AREAS = 'privacy, data deletion, encryption, concurrency'
 
 /** Où vit la règle des revues (modèle, effort, consignes, cible, écritures), citée par les consignes des relecteurs. */
-export const REVIEW_RULE = 'review rule, config/rules/agents.md when installed'
+export const REVIEW_RULE = 'review rule, config/rules/agents.md and its detail config/reference/revues.md, once installed'
 
 /** Un relecteur lancé par l'outil Agent reçoit le chemin de son fichier de consignes dans son prompt. */
 export const INSTRUCTIONS_IN_PROMPT = `its instructions in a file whose path goes in its prompt (${REVIEW_RULE})`
@@ -139,7 +137,7 @@ export const INSTRUCTIONS_IN_PROMPT = `its instructions in a file whose path goe
  * Les choix déjà déclarés, que les revues ne doivent pas resignaler (lu par Claude) : un fichier
  * tenu par flow-board, cité par son chemin, plutôt qu'une liste recopiée dans chaque consigne.
  */
-export const DECIDED_HINT = 'the path of the file of the choices already declared in this run (under "Declared choices" below), not to be reported again nor undone, and the reviewer brief given there'
+export const DECIDED_HINT = 'the path of the file of the choices already declared in this run (under "Declared choices" below), not to be undone out of preference, but with any case where one produces a defect reported with its scenario, and the reviewer brief given there'
 
 /**
  * Ce que tout relecteur reçoit tel quel (lu par Claude) : un relecteur avait rendu son rapport
@@ -148,7 +146,7 @@ export const DECIDED_HINT = 'the path of the file of the choices already declare
  * de l'équipe Claude Code : pour un auteur agent, une remarque mineure coûte un commit et un tour de revue.
  */
 export const REVIEWER_BRIEF =
-  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot; tag every finding Important, Nit or Pre-existing (the code older than the lot just above): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not report again nor undo the declared choices; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review'
+  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot; tag every finding Important, Nit or Pre-existing (the code older than the lot just above): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review'
 
 /**
  * Le canal des consignes d'une revue (lu par Claude) : `/code-review` tourne en exécution dérivée
@@ -170,12 +168,19 @@ export const COMMIT_BEFORE_REVIEW =
   'a ticket sent with "sensitive": false is committed once its checks pass, before its review, so the next ticket starts while the review runs: the review target is then <commit before the ticket>..<the ticket\'s commit>, never ..HEAD (HEAD and the working tree already hold the next ticket); its fixes land in a commit of their own, and its findings go in "review" without "step" (the next ticket\'s steps stay where they are); the ticket turns done in the tracker only once its review is back and its fixes are committed; a ticket that touches a sensitive area, or did not say, keeps its review before its commit, on a snapshot ref (refs/worktree/flow-board/<ticket id>, see the review step)'
 
 /**
+ * Les critères du ticket cochés avant son commit, chacun avec le test qui le couvre : des constats
+ * « Spec » étaient des critères littéraux non faits, et un ticket fini gardait ses cases vides.
+ */
+export const TICK_CRITERIA =
+  'before the commit, tick each criterion of the ticket file (- [x]) and name next to it the test that covers it (or why none can)'
+
+/**
  * Un seul relecteur pour les deux axes d'un ticket, quelle que soit sa taille (rétro de l'onglet
  * Agents) : l'axe Standards seul avait rendu 1 Important en une douzaine de passes, sans lire
  * `CODING_STANDARDS.md`. Ses Mineurs se rendent en un compte : leur détail ne servait pas.
  */
 export const TICKET_REVIEWER =
-  'both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads CODING_STANDARDS.md at the root of the project when it exists, besides CLAUDE.md, and gives its Nits as a count, without detail'
+  'both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail'
 
 /**
  * Un groupe d'un seul ticket sans logique ni zone sensible : la revue du ticket est la seule, et la
@@ -196,7 +201,7 @@ export const TICKET_SNAPSHOT =
 
 /** La consigne de la revue d'un ticket, pour un point fixe donné ; sans git, la passe « bogues » n'a pas de plage. */
 const ticketReviewHint = (fixedPoint: string, isRepo: boolean): string =>
-  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}), its Standards and Spec axes, ${TICKET_REVIEWER}. Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the effort criterion of the security review method file decides (the stakes, the size), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
+  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}), its Standards and Spec axes, ${TICKET_REVIEWER}. Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the effort criterion of the security review method file decides (the stakes, the size), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
 
 /** Le point fixe d'une revue de ticket. */
 export const TICKET_FIXED_POINT = 'fixed point: the commit before the ticket'
@@ -227,9 +232,9 @@ const TICKET_STEPS = [
     noGitHint: ticketReviewHint(NO_GIT_TICKET_FIXED_POINT, false),
   },
   {
-    ...step('commit', 'Commit et suivi', `commit on the current branch (${COMMIT_BEFORE_REVIEW}), then the ticket in the tracker: done, with a comment citing the commit hash (and its review fixes commit)`),
+    ...step('commit', 'Commit et suivi', `${TICK_CRITERIA}; commit on the current branch (${COMMIT_BEFORE_REVIEW}), then the ticket in the tracker: done, with a comment citing the commit hash (and its review fixes commit)`),
     // Sans git, aucun commit ne marque le ticket : la revue reste avant le suivi.
-    noGitHint: 'commit on the current branch, then the ticket in the tracker: done, with a comment citing the commit hash',
+    noGitHint: `${TICK_CRITERIA}; commit on the current branch, then the ticket in the tracker: done, with a comment citing the commit hash`,
   },
 ]
 
@@ -701,7 +706,7 @@ export const SKILLS: Record<string, SkillDef> = {
     label: 'Version et push',
     gender: 'f',
     flowLabel: 'Livraison',
-    verb: 'Monte la version (SemVer), puis commite, contrôle et pousse : /project:version puis /project:push',
+    verb: 'Monte la version (SemVer) si le lot ne l’a pas déjà posée, puis commite, contrôle et pousse : /project:version et /project:push, au choix',
     glyph: '⬆',
     color: C.sky,
     role: 'step',

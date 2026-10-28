@@ -220,7 +220,7 @@ test('le panneau : choisir les pistes, tout sélectionner, confier à une sessio
   expect(text).toMatch(/une section par piste : le problème constaté \(une phrase\), la correction attendue, les fichiers touchés et un critère de fin vérifiable/)
   expect(text).toMatch(/sans sous-agents qui écrivent/)
   expect(text).toMatch(/les contrôles lancés et leur résultat, et ce qui m'attend/)
-  expect(text).toContain('claude --bg -n "Rétro du groupe A › Pistes · <sujet>" (sans -w : ce dossier n’a pas de git) "<prompt>"')
+  expect(text).toContain('claude --bg -n "Rétro du groupe A > Pistes · <sujet>" (sans -w : ce dossier n’a pas de git) "<prompt>"')
   expect(await ui.find({ type: 'Text', text: /Session\sliée\sà\slancer/ })).toBeDefined()
   expect(await ui.find({ key: 'linked-cancel' })).toBeDefined()
   // Sans id relevé, la session a pu partir quand même : la reprise reste proposée.
@@ -251,13 +251,13 @@ test('le panneau : choisir les pistes, tout sélectionner, confier à une sessio
   await ui.press({ key: 'linked-recover' })
   const lost = filled.at(-1)!
   expect(lost).toMatch(/^Aucune session n'a été relevée pour les pistes du parcours « Rétro du groupe A » : 1\) \[p1\]/)
-  expect(lost).toContain('un titre qui commence par « Rétro du groupe A › Pistes · »')
+  expect(lost).toContain('un titre qui commence par « Rétro du groupe A > Pistes · »')
   expect(lost).toMatch(/n'envoie aucun statut à l'outil flow et ne clos pas la phase/)
   expect(lost).not.toMatch(/lancée par le CLI|dropped/)
   // « Redemander » : vérifier d'abord qu'aucune session n'est partie, puis la même demande ; l'envoi redevient « à lancer ».
   await ui.press({ key: 'linked-retry' })
   const again = filled.at(-1)!
-  expect(again).toMatch(/^D'abord, vérifie qu'aucune session n'a déjà été lancée pour ces pistes : .*« Rétro du groupe A › Pistes · »\)\. Si tu en trouves une, ne lance rien/)
+  expect(again).toMatch(/^D'abord, vérifie qu'aucune session n'a déjà été lancée pour ces pistes : .*« Rétro du groupe A > Pistes · »\)\. Si tu en trouves une, ne lance rien/)
   expect(again).toMatch(/Sinon : Traite ces pistes de la phase Rétro du parcours « Rétro du groupe A » dans une session liée : 1\) \[p1\] Contrôles : tables chargées ; 2\) \[p3\]/)
   expect(await ui.find({ type: 'Text', text: /Session\sliée\sà\slancer/ })).toBeDefined()
   expect((await ui.find({ key: 'linked-retry' }))?.props).toMatchObject({ dimColor: true })

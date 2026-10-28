@@ -20,6 +20,7 @@ import {
   SEP,
   WEEKDAY_LONG,
   activeDates,
+  maxOf,
   blockRate,
   blocksOfDay,
   bucketMinutes,
@@ -287,7 +288,7 @@ const sampleLast = (values: readonly number[], cells: number): number[] => {
 /** Courbe d'une ligne en huitièmes de bloc (terminal). */
 const sparkText = (k: Kit, values: readonly number[], cells: number, color: string): unknown => {
   const vals = resample(values, Math.max(4, cells))
-  const max = Math.max(...vals, 1e-9)
+  const max = maxOf(vals, 1e-9)
   const text = vals.map((v) => (v <= 0 ? '▁' : EIGHTHS[Math.min(7, Math.max(0, Math.ceil((v / max) * 8) - 1))] ?? '▁')).join('')
   return T(k, text, { color })
 }
@@ -299,7 +300,7 @@ const sparkText = (k: Kit, values: readonly number[], cells: number, color: stri
  */
 const columnsText = (k: Kit, values: readonly number[], height: number, color: string, cell = 1, highlight = -1, stacks: readonly (readonly BarPart[])[] | null = null): unknown => {
   const { Box } = k
-  const max = Math.max(...values, 1e-9)
+  const max = maxOf(values, 1e-9)
   const tall = values.map((v) => (v > 0 ? Math.max(1, Math.round((v / max) * height * 8)) : 0))
   const colorAt = (i: number, at8: number): string => {
     const parts = stacks?.[i]
@@ -900,7 +901,7 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
         const stacks = buckets.map((b) => ranked.map(([m]) => ({ value: b.get(m) ?? 0, color: ctx.colors[m] ?? C.gray })))
         return (
           <Box flexDirection="column">
-            {T(k, `max${NB}${fmtMetric(Math.max(...values, 0), metric, true)}`, { dim: true })}
+            {T(k, `max${NB}${fmtMetric(maxOf(values, 0), metric, true)}`, { dim: true })}
             {columnsChart(k, 'discussion-chart', values, 6, MONEY, cell, -1, stacks)}
             {T(k, `${firstLabel}${NB.repeat(Math.max(1, n * cell - firstLabel.length - lastLabel.length))}${lastLabel}`, { dim: true })}
           </Box>
@@ -1421,7 +1422,7 @@ const overviewTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const acts = activityDays(ctx)
   const longest = ctx.sessions.reduce<SessionRow | null>((best, s) => (!best || s.last - s.first > best.last - best.first ? s : best), null)
   const hours = ctx.s.activity?.hours ?? []
-  const peakHour = hours.length ? hours.indexOf(Math.max(...hours)) : -1
+  const peakHour = hours.length ? hours.indexOf(maxOf(hours)) : -1
   // Les durées de la période, sur les seuls jours suivis.
   const activeDays = [...ctx.m.active].filter(([d, v]) => d >= ctx.from && d <= ctx.today && isTracked(ctx, d) && v > 0)
   const isMeasured = hasMeasure(ctx) && ctx.m.since! <= ctx.today
@@ -1620,7 +1621,7 @@ const durationTrend = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const total = [...sums.values()].reduce((n, v) => n + v, 0)
   const average = averageOf(whole, ctx.m.since)
   const middle = median(tracked)
-  const maxIndex = buckets.findIndex((b) => isWhole(b.key) && (whole.get(b.key) ?? 0) === Math.max(0, ...tracked) && tracked.length > 0)
+  const maxIndex = buckets.findIndex((b) => isWhole(b.key) && (whole.get(b.key) ?? 0) === maxOf(tracked, 0) && tracked.length > 0)
   const firstTracked = ctx.m.since !== null && ctx.m.since > ctx.from ? ctx.m.since : null
   const right = trendToggles(k, ctx, act)
   const isMeasured = hasMeasure(ctx)
@@ -1637,7 +1638,7 @@ const durationTrend = (k: Kit, ctx: Ctx, act: Actions): unknown => {
         const last = bucketLabel(buckets[buckets.length - 1]?.key ?? ctx.today, grain)
         return (
           <Box flexDirection="column">
-            {T(k, `max${NB}${fmtHours(Math.max(...values, 0))}`, { dim: true })}
+            {T(k, `max${NB}${fmtHours(maxOf(values, 0))}`, { dim: true })}
             {columnsChart(k, 'trend-duration', values, 7, color, cell)}
             {T(k, `${first}${NB.repeat(Math.max(1, width - first.length - last.length))}${last}`, { dim: true })}
           </Box>
@@ -1685,7 +1686,7 @@ const trendTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   let run = 0
   const cumulative = values.map((v) => (run += v))
   const total = valueOf(ctx.total, metric)
-  const maxIndex = values.indexOf(Math.max(...values))
+  const maxIndex = values.indexOf(maxOf(values))
   const active = values.filter((v) => v > 0)
   const sorted = [...active].sort((a, b) => a - b)
   const median = sorted.length ? sorted[Math.floor(sorted.length / 2)]! : 0
@@ -1714,7 +1715,7 @@ const trendTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
         const stacks = buckets.map((b) => models.map((m) => ({ value: valueOf(b.byModel.get(m.model) ?? zero(), metric), color: ctx.colors[m.model] ?? C.gray })))
         return (
           <Box flexDirection="column">
-            {T(k, `max${NB}${fmtMetric(Math.max(...values, 0), metric, true)}`, { dim: true })}
+            {T(k, `max${NB}${fmtMetric(maxOf(values, 0), metric, true)}`, { dim: true })}
             {columnsChart(k, 'trend', values, 7, color, cell, -1, stacks)}
             {T(k, `${first}${NB.repeat(Math.max(1, width - first.length - last.length))}${last}`, { dim: true })}
           </Box>
@@ -2071,7 +2072,7 @@ const sessionsTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   // Médiane et record sur le temps actif des seules sessions mesurées.
   const actives = list.map(activeOf).filter((v): v is number => v !== null && v > 0)
   const sessionMedian = median(actives)
-  const longest = actives.length ? Math.max(...actives) : null
+  const longest = actives.length ? maxOf(actives) : null
   const requestMedian = median(ctx.p.requestMs)
   const tiles: Tile[] = [
     { key: 's-count', label: 'Sessions', value: fmtInt(list.length), sub: 'sur la période', color: C.violet },
@@ -2153,8 +2154,8 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const color = toneOf(metric)
   const a = ctx.s.activity
   const weekdays = weekdaysOf(ctx.rows, metric)
-  const wTop = weekdays.indexOf(Math.max(...weekdays))
-  const wMax = Math.max(...weekdays, 1e-9)
+  const wTop = weekdays.indexOf(maxOf(weekdays))
+  const wMax = maxOf(weekdays, 1e-9)
   const dates = activeDates(ctx.rows)
   const span = daysBetween(ctx.from, ctx.today) + 1
   const streak = streaksOf(dates, ctx.today)
@@ -2163,7 +2164,7 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const hoursCard =
     a && isLocalView(ctx)
       ? (() => {
-          const peak = a.hours.indexOf(Math.max(...a.hours))
+          const peak = a.hours.indexOf(maxOf(a.hours))
           const labels = hourLabels(a.hours)
           const cell = ctx.inner >= 50 ? 2 : 1
           const axis = hourAxis(a.hours, cell)
@@ -2243,7 +2244,7 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
 
   // Le temps actif par heure de la journée, sur la période : les heures où l'on travaille vraiment.
   const activeHours = ctx.p.hours
-  const activePeak = activeHours.indexOf(Math.max(...activeHours))
+  const activePeak = activeHours.indexOf(maxOf(activeHours))
   const activeCard = card(k, 'active-hours', 'Temps actif par heure', C.lilac, T(k, ctx.f.machine !== 'all' ? ctx.f.machine.replace(/ /g, NB) : ctx.s.machines.length > 1 ? `tous${NB}les${NB}postes` : `ce${NB}poste`, { dim: true }), [
     !hasMeasure(ctx) || ctx.f.project !== null || !activeHours.some((v) => v > 0)
       ? say(

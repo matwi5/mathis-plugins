@@ -99,7 +99,7 @@ test('la spec fait trancher les cas sensibles et nomme le skill dont elle a beso
   expect(implement).toContain("and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it")
 })
 
-test('dans une session liée, les consignes de revue passent par un fichier et la revue du groupe vise une plage', async ($, on) => {
+test('dans une session liée, les consignes de revue sont celles de la procédure, citée par son chemin', async ($, on) => {
   mock.clock(on, { now: 96_500_000 })
   const filled = world(on)
   await start($)
@@ -109,26 +109,9 @@ test('dans une session liée, les consignes de revue passent par un fichier et l
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
   const text = filled.at(-1)!
-  expect(text).toContain('/code-review <niveau> <base>..HEAD consignes : <chemin>')
-  expect(text).toContain('jamais un hash seul')
-  expect(text).toContain("ne jamais écrire dans l'arbre de travail, même un instant")
-  expect(text).toContain('étiqueter chaque constat Important, Mineur ou Antérieur')
-  expect(text).toContain('les Mineurs (style, nommage, nettoyage qui ne change aucun comportement) ne sont pas corrigés et se rendent en un compte, sans détail')
-  expect(text).toContain('pour un défaut, nommer sa classe')
-  expect(text).toContain("sans --fix : la session applique elle-même les seuls constats qu'elle retient")
-  // Les arguments donnés au skill portent la cible et le chemin des consignes.
-  expect(text).toContain('arguments « high --fix <base>..HEAD consignes : <chemin> »')
-  expect(text).toContain("arguments « <niveau> <plage de l'instantané> consignes : <chemin> »")
-  // La revue du groupe a pour cible la plage de sa branche, sans « le nom de la branche » en repli.
-  expect(text).toContain("avec pour cible <base>..HEAD (<base> : le commit d'où part sa branche)")
+  // Les consignes de revue (fichier de consignes, cible en plage, instantané, invariant, consigne des
+  // relecteurs) sont dans la procédure des sessions de groupe : tests/procedure-groupe.test.mjs.
+  expect(text).toMatch(/puis lire la procédure d'une session liée de groupe, \S*reference\/procedure-groupe\.md/)
+  expect(text).not.toContain('jamais un hash seul')
   expect(text).not.toContain('lui donner le nom de la branche')
-  // L2 a : l'instantané du ticket sensible, la cible de ses revues, le ticket suivant dans un autre dossier.
-  expect(text).toContain('git update-ref refs/worktree/flow-board/<id du ticket> <instantané>')
-  expect(text).toContain('les deux revues lisent alors la plage refs/worktree/flow-board/<id du ticket>^..refs/worktree/flow-board/<id du ticket>')
-  expect(text).toContain('le vrai commit du ticket vient toujours après sa revue')
-  // p2 : la passe « bogues » reçoit l'invariant du ticket.
-  expect(text).toContain("et dans son fichier de consignes l'invariant du ticket quand il en a un")
-  // r6 : pendant une revue en arrière-plan, la session avance et pose ses questions prêtes.
-  expect(text).toContain("pendant une revue qui tourne en arrière-plan, avancer ce qui ne dépend pas d'elle")
-  expect(text).toContain('me poser tout de suite une question prête, sans attendre la fin de la revue')
 })
