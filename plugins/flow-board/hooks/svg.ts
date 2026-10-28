@@ -44,6 +44,8 @@ export type NodeState = 'done' | 'active' | 'next' | 'pending' | 'skipped'
 
 export type RoadNode = {
   label: string
+  /** Nom court, pour la frise du terminal. */
+  short?: string
   sub?: string
   color: string
   state: NodeState

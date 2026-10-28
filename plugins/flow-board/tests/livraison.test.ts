@@ -54,6 +54,7 @@ test('le parcours d’implémentation passe par le Compte rendu, puis Version et
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     const next = await ui.find({ key: 'go-project:version' })
     expect(next?.props).toMatchObject({ label: '▶ Version et push · /project:version' })
+    expect(await ui.find({ key: 'finish' })).toBeDefined()
     // La revue n'est pas une phase de la feuille de route.
     expect(await ui.find({ type: 'Text', text: /Revue finale|Revue du groupe/ })).toBeUndefined()
     await ui.unmount()
@@ -116,18 +117,75 @@ test('la fin de /project:version ne clôt pas « Version et push » : la suite e
   await $.tool.call({ tool: TOOL, step: 'tag' })
   const answer = await $.tool.call({ tool: TOOL, complete: true })
   expect(JSON.stringify(answer)).toMatch(/stays open until \/project:push/)
+  expect(JSON.stringify(answer)).toMatch(/Clore le parcours/)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect((await ui.find({ key: 'go-project:push' }))?.props).toMatchObject({ variant: 'primary' })
+  // /project:version reste à côté du push.
+  expect(await ui.find({ key: 'go-project:version' })).toBeDefined()
   expect(await ui.find({ key: 'go-project:pr' })).toBeUndefined()
   expect((await ui.find({ type: 'Text', text: /^Push : reste à commiter$/ }))?.props.strikethrough).not.toBe(true)
+  // Le push proposé, la clôture l'est aussi : la livraison peut s'arrêter là.
+  expect(await ui.find({ key: 'finish' })).toBeDefined()
   await ui.unmount()
-  // Le push fait, la phase se clôt et la pull request vient.
+  // Poussé, la phase pas encore close : la pull request vient, et la clôture reste proposée.
   await $.skill.prompt({ skill: 'project:push', text: 'p' })
   await $.tool.call({ tool: TOOL, step: 'pushed' })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pushed = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    expect(await pushed.find({ key: 'go-project:pr' })).toBeDefined()
+    expect(await pushed.find({ key: 'finish' })).toBeDefined()
+    await pushed.unmount()
+  }
+  // La phase close, la pull request et la clôture restent côte à côte.
   await $.tool.call({ tool: TOOL, complete: true })
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'go-project:pr' })).toBeDefined()
+  expect(await ui.find({ key: 'finish' })).toBeDefined()
   await ui.unmount()
+})
+
+/** La commande de /project:push vue dans une vraie session : fetch, merge-base, puis push, dans un seul Bash. */
+const PUSH_COMMAND = 'git fetch origin && (git merge-base --is-ancestor @{u} HEAD && echo ok-ancestor) && git log --oneline --decorate @{u}..HEAD | grep -c "tag:" ; git push --follow-tags 2>&1 | tail -3; git rev-list --count @{u}..HEAD'
+
+test('un push dans une commande composée clôt l’étape Push ; git merge-base n’est pas un merge', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 34_000_000 })
+  const mem = world(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok-ancestor\n0\n   5e00626..7bae0d9  main -> main\n0', stderr: '', interrupted: false } }))
+  const run = async (): Promise<Run> => {
+    for (let i = 0; i < 6; i++) await clock.advance(1000)
+    const key = Object.keys(mem).find(k => k.startsWith('board:'))!
+    return (mem[key] as { runs: Run[] }).runs[0]!
+  }
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await $.skill.prompt({ skill: 'project:push', text: 'p' })
+  // Contrôle positif : sans push, la phase attend /project:push.
+  const waiting = await $.tool.call({ tool: TOOL, complete: true })
+  expect(JSON.stringify(waiting)).toMatch(/stays open until \/project:push/)
+  // Un vrai merge compte toujours.
+  await $.tool.call({ tool: 'Bash', command: 'git merge feature' } as any)
+  expect((await run()).counters.merges).toBe(1)
+  await $.tool.call({ tool: 'Bash', command: PUSH_COMMAND } as any)
+  const pushed = await run()
+  expect(pushed.counters.merges).toBe(1)
+  expect(pushed.phases.find(p => p.skill === 'project:version')!.steps.find(s => s.id === 'pushed')!.status).toBe('active')
+  const answer = JSON.stringify(await $.tool.call({ tool: TOOL, complete: true }))
+  expect(answer).not.toMatch(/stays open until/)
+  expect(answer).not.toMatch(/Push : reste à commiter \(in progress\)/)
+  expect((await run()).phases.find(p => p.skill === 'project:version')!.status).toBe('done')
+})
+
+test('un commit puis un push dans la même commande : les deux comptent', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 35_000_000 })
+  const mem = world(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await $.skill.prompt({ skill: 'project:push', text: 'p' })
+  await $.tool.call({ tool: 'Bash', command: 'git add a.ts && git commit -m "fix: a" && git push' } as any)
+  for (let i = 0; i < 6; i++) await clock.advance(1000)
+  const key = Object.keys(mem).find(k => k.startsWith('board:'))!
+  const run = (mem[key] as { runs: Run[] }).runs[0]!
+  expect(run.counters.commits).toBe(1)
+  expect(run.phases.find(p => p.skill === 'project:version')!.steps.find(s => s.id === 'pushed')!.status).toBe('active')
 })
 
 test('une phase « Version et push » close sans push par une version antérieure est rouverte au chargement', () => {
@@ -148,4 +206,16 @@ test('une phase « Version et push » close sans push par une version antérieur
   expect(repaired.phases[at]!.status).toBe('active')
   expect(repaired.phases[at]!.steps.filter(s => s.status === 'pending').map(s => s.id)).toEqual(['push', 'checks', 'docs', 'pushed'])
   expect(upgradeRun(repaired)).toBe(repaired)
+})
+
+test('la frise du terminal donne aux phases leur nom court : Code, Rapport, Push, PR', { timeoutMs: 15000 }, async ($, on) => {
+  mock.clock(on, { now: 34_000_000 })
+  world(on)
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  for (const short of ['Code', 'Rapport', 'Push', 'PR']) expect(await ui.find({ type: 'Text', text: new RegExp(`^${short}\\s*$`) })).toBeDefined()
+  // Plus de noms entiers sous les stations, complétés d'espaces sauf le dernier (la carte de la phase garde « Implémentation »).
+  expect(await ui.find({ type: 'Text', text: /^(Implémenta|Compte ren|Version et)\D*\s$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Pull reque/ })).toBeUndefined()
+  await ui.unmount()
 })

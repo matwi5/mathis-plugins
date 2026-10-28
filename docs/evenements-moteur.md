@@ -105,6 +105,8 @@ Les règles que le chrono de `session-tools` et le suivi des requêtes de `stats
 
 Les tests de `session-tools` (`realEngine`) et de `stats-board` (`requestEngine`) simulent ce moteur. Ils émettent `prompt.submit`, attendent sa fin, puis émettent `turn.start` avec le même texte ; finissent un tour normal par `classic.Stop` (avec `background_tasks`) puis `turn.complete` ; et une interruption par `turn.complete` seul. Un faux moteur qui démarre le tour à l'intérieur de `prompt.submit` cache les défauts d'ordre : le chrono de `session-tools` passait ainsi ses tests alors qu'il repartait de zéro au retour d'une tâche de fond.
 
+**`$.session.compact` sans `messages` saute les hooks des plugins, sans erreur.** Dans `claude plugin test`, une compaction lancée sans conversation à résumer ne passe par aucun hook `session.compact` : le test continue et ses vérifications d'absence (« pas de consignes », « pas de repère ») passent à vide. Un premier essai de flow-board passait ainsi, et plusieurs tests « rien n'est proposé » étaient verts avant le code (constaté le 28/10/2026). Pour qu'un hook tourne : poser `mock.session(on)`, ajouter un message à la session par `$.session.append` avant la compaction, et passer au moins un message valide à l'appel, `$.session.compact({ trigger, messages: [{ role: 'user', text: 'x', toolUses: [] }] })`. Exemple : l'aide `summarizer` de `plugins/flow-board/tests/compaction.test.ts`. Un test d'absence vérifie aussi d'abord un effet du plugin (règle « contrôle positif » de `CODING_STANDARDS.md`).
+
 ## Refaire l'essai
 
 ```bash
@@ -112,9 +114,15 @@ python3 scripts/sonde.py              # Claude Code du terminal
 python3 scripts/sonde.py --desktop    # le Claude Code embarqué par l'app desktop, le plus récent
 python3 scripts/sonde.py --titre "Essai"            # la sonde renvoie ce titre dans sessionTitle, une fois
 python3 scripts/sonde.py --dir <dossier> --reprise  # reprend la dernière session du dossier (--continue)
+python3 scripts/sonde.py --env CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000  # variable passée à la session (répétable)
 tmux attach -t sonde                  # jouer les scénarios, puis Ctrl-b d
+python3 scripts/sonde.py --touches Down Enter      # sans s'attacher : des touches tmux (le dialogue de confiance d'un dossier neuf)
+python3 scripts/sonde.py --envoyer "/compact garde le mot banane" --attendre 30 --voir  # un texte puis Entrée, 30 s d'attente, la fin du volet
+python3 scripts/sonde.py --voir --lignes 60        # la fin du volet (40 lignes par défaut)
 tmux kill-session -t sonde            # fermer
 ```
+
+Claude peut ainsi mener un essai seul, depuis sa propre session : `--touches`, `--envoyer` et `--voir` agissent sur la sonde déjà lancée (`--name` si ce n'est pas « sonde ») et attendent eux-mêmes `--attendre` secondes, là où un `sleep` au premier plan est refusé dans une session Claude Code (donner au Bash un délai plus long que l'attente). Un dossier jetable neuf ouvre d'abord le dialogue de confiance, curseur sur « No, exit » : `--touches Down Enter` le passe. Essai du 28/10/2026 (Claude Code 2.1.312, terminal) : `--env SONDE_ESSAI=42`, puis un `echo $SONDE_ESSAI` demandé par `--envoyer` a rendu `42`, lu par `--voir`.
 
 Le script ouvre une session tmux détachée dans un dossier jetable, en Haiku et en effort low, avec la sonde (`scripts/sonde/`) chargée par `--plugin-dir`. Chaque session de Claude Code écrit son journal dans `scripts/sonde/journaux/<heure d'ouverture>.jsonl`, que git ignore : une ligne par événement, avec le temps écoulé depuis le premier (`t`, en ms), l'heure, et l'état du chrono de `session-tools` quand il est installé (`chrono`). La sonde note aussi `session.start`, `classic.SessionStart` (source, titre), `classic.UserPromptSubmit` (titre en cours) et `session.compact` (déclencheur, consignes, puis le résultat de `next(e)`). Avec `--titre`, elle renvoie ce titre dans `sessionTitle` au premier de ces deux hooks, une fois par processus (fichier `scripts/sonde/titre.txt`, ignoré par git), et le journal le note (`…:sessionTitle`). Elle retire de son environnement les variables qui la lieraient à la session Claude Code qui la lance. La sonde fait elle-même des `await` dans ses hooks : deux événements à moins d'une milliseconde l'un de l'autre peuvent s'y noter dans un ordre différent de celui que verrait un plugin sans attente.
 

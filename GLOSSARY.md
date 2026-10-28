@@ -88,3 +88,27 @@ _Avoid_: lot, paquet
 **Vague** :
 Un ensemble de groupes qui peuvent tourner en même temps, chacun dans sa session liée.
 _Avoid_: niveau, étape
+
+**Groupe rendu** :
+Un groupe dont la session liée a rendu son compte rendu, et dont l'orchestrateur a vérifié le travail et rendu les statuts au tableau de bord.
+_Avoid_: groupe fini, groupe revenu
+
+**Groupe clos** :
+Un groupe rendu dont la branche est fusionnée dans la branche de travail, la revue faite, la sécurité tranchée (jugée inutile, ou chaque faille gardée corrigée ou laissée par l'utilisateur), et qui n'a plus de question en attente de l'utilisateur.
+_Avoid_: groupe totalement fini, groupe terminé
+
+**Fermer un groupe** :
+Arrêter la session liée d'un groupe clos et retirer son worktree ; sa branche et sa conversation restent.
+_Avoid_: archiver le groupe, nettoyer le groupe
+
+**Tâche de jugement** :
+Une tâche dont la difficulté est de comprendre ou de définir, pas de produire le changement. Deux sortes : le *jugement sur un existant* (intervenir dans ce qui marche déjà, en tenant compte de ses contraintes implicites : ce dont d'autres dépendent, ce qui ne doit pas bouger, ce que la demande ne dit pas) et l'*objectif ouvert* (le but est donné sans le chemin, et le résultat ne se vérifie pas tout de suite).
+_Avoid_: tâche difficile, tâche large
+
+**Tâche d'exécution** :
+Une tâche à la consigne explicite, dont le résultat se vérifie tout de suite : on sait déjà quoi faire.
+_Avoid_: tâche simple
+
+**Session autonome** :
+Une session liée de groupe lancée à l'effort le plus haut (xhigh), qui tranche elle-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur. Elle sert aux tâches de jugement.
+_Avoid_: mode xhigh, session xhigh

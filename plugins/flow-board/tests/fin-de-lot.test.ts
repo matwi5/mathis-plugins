@@ -3,8 +3,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import { suggestionsFor, versionSet } from '../hooks/model.ts'
 import type { Board } from '../types'
 
-// En fin de lot, /project:version et /project:push se proposent côte à côte, au choix ; une version
-// déjà posée par le lot (0.60.0 posée par son dernier ticket) ne se repropose pas.
+// En fin de lot, /project:version et /project:push se proposent toujours côte à côte, au choix ; une
+// version déjà posée par le lot (0.60.0 posée par son dernier ticket) met le push en tête.
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -44,11 +44,12 @@ const reportValidated = async ($: any, on: any) => {
   return board.runs.find(r => r.id === board.activeId)!
 }
 
-test('version déjà posée : /project:push en tête, /project:version n’est pas reproposé, la carte le dit', { timeoutMs: 15000 }, async ($, on) => {
+test('version déjà posée : /project:push en tête, /project:version à côté, la carte le dit', { timeoutMs: 15000 }, async ($, on) => {
   const run = await reportValidated($, on)
   const sug = suggestionsFor(run, { isVersionSet: true })
   expect(sug.primary).toBe('project:push')
-  expect(sug.others).not.toContain('project:version')
+  expect(sug.others[0]).toBe('project:version')
+  expect(sug.canFinish).toBe(true)
   expect(sug.versionNote).toBe('version déjà posée : chaque plugin changé a une nouvelle version face au distant')
 })
 

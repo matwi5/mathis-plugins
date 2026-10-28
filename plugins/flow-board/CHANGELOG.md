@@ -4,6 +4,27 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.65.1 — 2026-10-28
+
+### Corrigé
+- **Étape Push close après un push** : un `git push` lancé dans la même commande qu'un `git fetch` et un `git merge-base` (la vérification de `/project:push`) n'était pas vu. Seul le premier segment git d'une commande comptait, et `git merge-base` passait pour un merge : la phase « Version et push » restait sur « Push : reste à commiter » et attendait encore `/project:push`. Chaque segment git d'une commande compte maintenant (un commit puis un push dans le même appel aussi), et `git merge-base` ne compte plus comme un merge.
+- **CHANGELOG** : les lignes `---` manquaient avant les entrées 0.53.0, 0.52.0 et 0.51.0.
+
+---
+
+## 0.65.0 — 2026-10-28
+
+La fin de parcours plus directe : clore à côté du push et de la PR, la version toujours à côté du push, une feuille de route lisible au terminal.
+
+### Ajouté
+- **« ✓ Clore le parcours » à côté du push et de la PR** : pendant la phase « Version et push », la carte « Ensuite » propose la clôture à côté de `/project:push`, puis de `/project:pr` une fois poussé. Avant, il fallait que la phase soit close. La réponse de l'outil qui attend le push le dit aussi à Claude.
+- **Noms courts sur la feuille de route du terminal** : Code, Rapport, Push, PR, Diag, Proto, Archi, Sécurité… à la place des noms tronqués (« Implémenta », « Compte ren », « Version et », « Pull reque »). Le desktop garde les noms entiers.
+
+### Modifié
+- **`/project:version` toujours à côté de `/project:push`** : il n'est plus retiré quand la version est déjà posée (le push passe en tête et la carte le dit encore), et il reste proposé pendant la phase, version faite et push à venir.
+
+---
+
 ## 0.64.1 — 2026-10-28
 
 ### Corrigé
@@ -273,12 +294,16 @@ Constaté le 22/10/2026 dans la rétro d'un parcours à quatre sessions liées :
 - **Choix sensible jamais déclaré** : la description de `decided`, la réponse donnée aux sessions liées et une consigne ajoutée aux skills de cadrage (`grilling`, `grill-with-docs`, `grill-me`, `to-questionnaire`, `to-spec`, `to-tickets`, `domain-modeling`) font d'un choix qui touche une zone sensible une question à la personne ; une entrée de décision recopie la question et la réponse acceptées au lieu de les résumer.
 - **Rétro et autres dépôts** : la consigne de `/retro`, la rétro globale et la demande de session liée des pistes gardent hors des items les pistes qui touchent un autre dépôt (plugins, config commune) et les rendent en une liste de corrections prête à confier à un agent de ce dépôt ; seules les pistes du dépôt courant vont à une session liée.
 
+---
+
 ## 0.53.0 — 2026-10-20
 
 Décidé le 20/10/2026 : les sessions liées d'un groupe prenaient l'effort de la discussion principale (high), alors que leurs tickets sont cadrés par une spec et que leurs revues tournent dans des sous-agents à l'effort explicite depuis la 0.52.0. L'outil `start_session` de l'app Desktop accepte un `effort` (sans jamais en donner un plus haut que celui de la discussion), et `claude --bg` accepte `--effort`.
 
 ### Modifié
 - **Effort des sessions de groupe** : la demande de lancement dit à Claude de choisir l'effort de chaque session, medium par défaut, high si le groupe a un ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), s'il reste des choix de conception ou s'il touche plusieurs modules, de le passer à `start_session` (`effort`) ou à `claude --bg` (`--effort`) et de te le dire en une ligne. Les sessions de diagnostic de bug et de pistes de rétro gardent l'effort de la discussion.
+
+---
 
 ## 0.52.0 — 2026-10-20
 
@@ -288,6 +313,8 @@ Décidé le 20/10/2026, après une recherche sur les forums et les comparaisons 
 - **Revue d'un groupe en effort `high`** : son sous-agent relecteur passe d'Opus `xhigh` à Opus `high`, dans la discussion comme dans le brief des sessions liées.
 - **Niveau de `/code-review` toujours passé** : `/code-review high --fix` pour la revue d'un groupe (bouton « ◆ Revue du groupe », brief des sessions liées, consignes) et `/code-review xhigh` pour la passe « bogues » d'un ticket qui touche une zone sensible. Ce niveau fixe le nombre de constats, pas l'effort de raisonnement.
 - La revue de sécurité reste confiée à un sous-agent Opus `xhigh`.
+
+---
 
 ## 0.51.0 — 2026-10-19
 

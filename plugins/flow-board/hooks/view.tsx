@@ -421,6 +421,7 @@ const roadNodes = (run: Run): RoadNode[] => {
       p.status === 'done' ? 'done' : p.status === 'active' ? 'active' : p.status === 'skipped' ? 'skipped' : i === nextAt ? 'next' : 'pending'
     return {
       label: def.label,
+      short: def.shortLabel,
       sub: phaseSub(run, i),
       color: def.color,
       state,
@@ -450,7 +451,7 @@ const textRoad = (k: Kit, nodes: readonly RoadNode[], cells: number): unknown =>
       marks.push(T(k, (isDone ? '━' : x.state === 'active' ? '╍' : '┄').repeat(slot - 1), { color: isDone ? x.color : C.gray, dim: !isDone }))
     }
     const showLabel = slot >= 6 || x.state === 'active'
-    const text = showLabel ? x.label.slice(0, Math.max(1, slot - 1)) : ''
+    const text = showLabel ? (x.short ?? x.label).slice(0, Math.max(1, slot - 1)) : ''
     labels.push(
       T(k, i < n - 1 ? text.padEnd(slot) : text, {
         color: x.state === 'active' || x.state === 'next' ? x.color : '',

@@ -133,7 +133,7 @@ export type Suggestions = {
   /** La suite logique : la prochaine phase du parcours, sinon la première suite du skill. */
   primary: string | null
   others: string[]
-  /** Toutes les phases requises sont faites : le parcours peut se clore. */
+  /** Toutes les phases requises sont faites (ou on en est à « Version et push ») : le parcours peut se clore. */
   canFinish: boolean
   /** À la livraison, ce que la mesure des versions dit de /project:version (déjà posée, ou à poser). */
   versionNote?: string
@@ -180,18 +180,20 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
       .filter(skill => skill !== 'final-review')
       .filter(skill => !(isReportOpen && DELIVERY.has(skill))),
   ]
-  // Version faite, push pas encore : la suite est /project:push, avant la pull request.
+  // Version faite, push pas encore : la suite est /project:push, avant la pull request, et
+  // /project:version reste à côté.
   if (phase.skill === 'project:version' && phase.status !== 'done' && !isPushed(phase)) {
     // La pull request attend le push : elle n'est même pas proposée en second.
-    kept.splice(0, kept.length, 'project:push', ...kept.filter(skill => skill !== 'project:push' && skill !== 'project:pr' && skill !== 'pr'))
+    const rest = kept.filter(skill => skill !== 'project:push' && skill !== 'project:version' && skill !== 'project:pr' && skill !== 'pr')
+    kept.splice(0, kept.length, 'project:push', 'project:version', ...rest)
   }
-  // Version et push côte à côte, au choix : une version déjà posée par le lot (chaque plugin ou
-  // paquet changé a une nouvelle version face au distant) ne se repropose pas, le push suffit.
+  // Version et push toujours côte à côte, au choix : une version déjà posée par le lot (chaque
+  // plugin ou paquet changé a une nouvelle version face au distant) met le push en tête.
   let versionNote: string | undefined
   if (kept[0] === 'project:version' && phase.skill !== 'project:version') {
     const rest = kept.slice(1).filter(skill => skill !== 'project:push' && skill !== 'project:version')
     if (opts.isVersionSet === true) {
-      kept.splice(0, kept.length, 'project:push', ...rest)
+      kept.splice(0, kept.length, 'project:push', 'project:version', ...rest)
       versionNote = 'version déjà posée : chaque plugin changé a une nouvelle version face au distant'
     } else {
       kept.splice(0, kept.length, 'project:version', 'project:push', ...rest)
@@ -202,8 +204,10 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
   if (opts.hasPullRequests === false) kept.splice(0, kept.length, ...kept.filter(skill => skill !== 'project:pr'))
   const others = kept.slice(1, 4).filter(skill => skill !== 'retro')
   if (phase.skill !== 'retro' && kept[0] !== 'retro') others.push('retro')
+  // Pendant « Version et push », la clôture se propose à côté du push et de la pull request.
   const canFinish =
-    phase.status === 'done' && !run.phases.slice(run.cursor + 1).some(p => p.status === 'pending' && !p.isOptional)
+    (phase.status === 'done' || phase.skill === 'project:version') &&
+    !run.phases.slice(run.cursor + 1).some(p => p.status === 'pending' && !p.isOptional)
   // Avec des groupes, une revue qui manque n'a pas de skill pour suite : elle se lance sur la ligne du groupe.
   const primary = isReviewDue && !isUnfinished && (run.groups ?? []).length > 0 ? null : (kept[0] ?? null)
   return { primary, others, canFinish, ...(versionNote ? { versionNote } : {}) }
@@ -2004,7 +2008,7 @@ const reportHere = (
     : isTicketGate
       ? ` · not finished: ${stillOpen.length} ticket(s) of the lot still open (${stillOpen.slice(0, 4).map(t => t.name).join('; ')}${stillOpen.length > 4 ? '…' : ''}). A finished group is not the end of the phase: tell the user to launch the next group from the dashboard, in its linked session (↗ Session liée), not /flow-board:compte-rendu nor the delivery`
       : isPushGate
-        ? ' · version done; the phase stays open until /project:push, which the user runs: tell them to run it'
+        ? ' · version done; the phase stays open until /project:push, which the user runs: tell them to run it, or to close the run from the dashboard (✓ Clore le parcours) if they deliver no further'
         : isLinkedGate
           ? inFlight.length === 0
             ? ` · not finished: ${backToChoice} item(s) just went back to the user's choice (todo). Do not complete: tell the user, who sends them again or decides to give them up`
@@ -2963,7 +2967,8 @@ const TARGETED = /\S+\.(?:py|[cm]?[jt]sx?|go|rs|rb|php)\b|::|\s(?:-k|-t|--grep|-
 
 const TEST_START = new RegExp(`^${TEST_RE.source}`, 'i')
 const CHECK_START = new RegExp(`^${CHECK_RE.source}`, 'i')
-const GIT_START = /^git(?:\s+-[Cc]\s+\S+)*\s+(commit|checkout\s+-b|switch\s+-c|worktree\s+(?:add|remove|prune)|merge|bisect|push)\b/
+// Le verbe finit au premier espace : `git merge-base` (une question, pas un merge) ne compte pas.
+const GIT_START = /^git(?:\s+-[Cc]\s+\S+)*\s+(commit|checkout\s+-b|switch\s+-c|worktree\s+(?:add|remove|prune)|merge|bisect|push)(?![\w-])/
 const GH_START = /^(gh|glab)\s+(issue|pr|mr)\s+(create|close|ready|merge)\b/
 const BG_START = /^claude(?:\.exe)?\s(?:[\s\S]*\s)?--(?:bg|background)\b/i
 // « backgrounded · 60481870 · Lot SC > Groupe A · Synchro » ; le point médian peut arriver déformé (page de code).
@@ -2989,9 +2994,8 @@ export const commandSignals = (command: string, ok: boolean, out: string): { com
   const testAt = heads.findIndex(h => TEST_START.test(h))
   const verdictAt = testAt >= 0 ? testAt : heads.findIndex(h => CHECK_START.test(h))
   const verdict = verdictAt >= 0 ? testVerdict(segments, verdictAt, ok, out) : null
-  const gitAt = heads.findIndex(h => GIT_START.test(h))
-  const git = gitAt >= 0 ? GIT_START.exec(heads[gitAt]!) : null
-  const isCommit = ok && git?.[1] === 'commit' && !/--dry-run/.test(heads[gitAt]!)
+  const gitAt = heads.findIndex(h => GIT_START.exec(h)?.[1] === 'commit')
+  const isCommit = ok && gitAt >= 0 && !/--dry-run/.test(heads[gitAt]!)
   return {
     ...(isCommit ? { commit: flag(heads[gitAt]!, ['-m', '--message']).split(/\r?\n/)[0] ?? '' } : {}),
     ...(verdict !== null ? { test: verdict } : {}),
@@ -3057,13 +3061,16 @@ export const applyCommand = (board: Board, command: string, ok: boolean, out: st
   const heads = segments.map(seg => head(seg.text))
   const testAt = heads.findIndex(h => TEST_START.test(h))
   const checkAt = testAt >= 0 ? -1 : heads.findIndex(h => CHECK_START.test(h))
-  const gitAt = heads.findIndex(h => GIT_START.test(h))
+  // Chaque segment git compte : `git commit … && git push`, ou un push après un fetch, dans un seul appel.
+  const gits = heads.flatMap(h => {
+    const git = GIT_START.exec(h)
+    return git ? [{ command: h, verb: git[1]! }] : []
+  })
   const ghAt = heads.findIndex(h => GH_START.test(h))
-  const git = gitAt >= 0 ? GIT_START.exec(heads[gitAt]!) : null
   const gh = ghAt >= 0 ? GH_START.exec(heads[ghAt]!) : null
   const verdictAt = testAt >= 0 ? testAt : checkAt
   const verdict = verdictAt >= 0 ? testVerdict(segments, verdictAt, ok, out) : null
-  if (verdict === null && !git && !gh) return null
+  if (verdict === null && gits.length === 0 && !gh) return null
 
   const b = clone(board)
   const run = activeRun(b)!
@@ -3074,9 +3081,7 @@ export const applyCommand = (board: Board, command: string, ok: boolean, out: st
   const isFullSuite = testAt >= 0 && !TARGETED.test(heads[testAt]!)
   if (verdict !== null) recordTest(run, verdict, testAt >= 0 ? 'test' : 'check', now, isFullSuite)
 
-  if (git && ok) {
-    const command = heads[gitAt]!
-    const verb = git[1]!
+  for (const { command, verb } of ok ? gits : []) {
     if (verb === 'commit' && !/--dry-run/.test(command)) {
       run.counters.commits += 1
       const message = flag(command, ['-m', '--message']).split(/\r?\n/)[0] ?? ''

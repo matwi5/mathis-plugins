@@ -64,6 +64,8 @@ export type SkillDef = {
   id: string
   /** Nom de la phase. */
   label: string
+  /** Nom court de la phase, pour la frise du terminal où chaque station n'a que quelques cases ; `label` sinon. */
+  shortLabel?: string
   /** Genre et nombre du libellé, pour accorder « terminée », « démarrés »… (masculin singulier par défaut). */
   gender?: 'f' | 'pl'
   /** Nom du parcours quand ce skill l'ouvre. */
@@ -355,6 +357,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'to-questionnaire': {
     id: 'to-questionnaire',
     label: 'Questionnaire',
+    shortLabel: 'Questions',
     flowLabel: 'Questionnaire',
     verb: 'Une décision qu’on ne tranche pas seul, mise en questionnaire',
     glyph: '≡',
@@ -440,6 +443,7 @@ export const SKILLS: Record<string, SkillDef> = {
   implement: {
     id: 'implement',
     label: 'Implémentation',
+    shortLabel: 'Code',
     gender: 'f',
     flowLabel: 'Implémentation',
     verb: 'Le travail décrit par la spec ou le ticket, en TDD, revu puis commité',
@@ -478,6 +482,7 @@ export const SKILLS: Record<string, SkillDef> = {
   prototype: {
     id: 'prototype',
     label: 'Prototype',
+    shortLabel: 'Proto',
     flowLabel: 'Prototype',
     verb: 'Un prototype jetable pour trancher une question de design',
     glyph: '✦',
@@ -498,6 +503,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'diagnosing-bugs': {
     id: 'diagnosing-bugs',
     label: 'Diagnostic',
+    shortLabel: 'Diag',
     flowLabel: 'Chasse au bug',
     verb: 'Boucle de feedback, hypothèses, correctif et test de régression',
     glyph: '◎',
@@ -523,6 +529,7 @@ export const SKILLS: Record<string, SkillDef> = {
   wizard: {
     id: 'wizard',
     label: 'Assistant guidé',
+    shortLabel: 'Guide',
     flowLabel: 'Procédure guidée',
     verb: 'Un script bash interactif pour les gestes que seul un humain peut faire',
     glyph: '⌘',
@@ -562,6 +569,7 @@ export const SKILLS: Record<string, SkillDef> = {
   pr: {
     id: 'pr',
     label: 'Corps de PR',
+    shortLabel: 'Corps PR',
     flowLabel: 'Corps de PR',
     verb: 'Le corps de la PR : résumé visuel, preuves, danger de merge',
     glyph: '¶',
@@ -581,6 +589,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'project:sync': {
     id: 'project:sync',
     label: 'Synchronisation',
+    shortLabel: 'Sync',
     gender: 'f',
     flowLabel: 'Synchronisation',
     verb: 'Met la branche à jour avec le distant (fetch, rebase, autostash)',
@@ -596,6 +605,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'final-review': {
     id: 'final-review',
     label: 'Revue du groupe',
+    shortLabel: 'Revue',
     gender: 'f',
     flowLabel: 'Revue du groupe',
     verb: 'Le groupe relu par /code-review high --fix de Claude Code (sans --fix pour un groupe sensible), une fois ses tickets commités et relus, lancé par la session elle-même, sans sous-agent qui l’enveloppe : les bugs entre ses tickets, y compris avec les groupes déjà livrés ; un conflit entre la spec et une consigne n’est pas tranché, il remonte',
@@ -614,6 +624,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'branch-review': {
     id: 'branch-review',
     label: 'Relecture',
+    shortLabel: 'Relire',
     gender: 'f',
     flowLabel: 'Relecture de branche',
     verb: 'Une branche ou une PR relue par /code-review de Claude Code : les bugs du diff, corrigés avec --fix ou commentés sur la PR avec --comment',
@@ -631,6 +642,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'security-review': {
     id: 'security-review',
     label: 'Revue de sécurité',
+    shortLabel: 'Sécurité',
     gender: 'f',
     flowLabel: 'Revue de sécurité',
     verb: 'Après la revue du groupe, quand Claude la juge utile : un sous-agent relecteur qu’il lance lui-même, limité au diff du groupe, selon une méthode fixe ; chaque faille te revient avec un correctif prêt, tu décides de sa correction (« corrige F1 et F3 »)',
@@ -646,6 +658,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'compte-rendu': {
     id: 'compte-rendu',
     label: 'Compte rendu',
+    shortLabel: 'Rapport',
     flowLabel: 'Compte rendu',
     verb: 'Le rapport du travail, à lire et valider avant de livrer : fait, décidé sans toi, mal passé, bloqué, trouvé, documentation',
     glyph: '◧',
@@ -664,6 +677,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'project:version': {
     id: 'project:version',
     label: 'Version et push',
+    shortLabel: 'Push',
     gender: 'f',
     flowLabel: 'Livraison',
     verb: 'Monte la version (SemVer) si le lot ne l’a pas déjà posée, puis commite, contrôle et pousse : /project:version et /project:push, au choix',
@@ -700,6 +714,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'project:pr': {
     id: 'project:pr',
     label: 'Pull request',
+    shortLabel: 'PR',
     gender: 'f',
     flowLabel: 'Pull request',
     verb: 'Ouvre la PR GitHub, titre et corps rédigés depuis les commits',
@@ -747,6 +762,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'improve-codebase-architecture': {
     id: 'improve-codebase-architecture',
     label: 'Architecture',
+    shortLabel: 'Archi',
     gender: 'f',
     flowLabel: 'Santé du code',
     verb: 'Repérer les modules à approfondir, rapport HTML puis grilling',
@@ -779,6 +795,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'codebase-design': {
     id: 'codebase-design',
     label: 'Design de module',
+    shortLabel: 'Design',
     flowLabel: 'Design',
     verb: 'Modules profonds : interfaces, seams et alternatives',
     glyph: '▣',
@@ -851,6 +868,7 @@ export const SKILLS: Record<string, SkillDef> = {
   teach: {
     id: 'teach',
     label: 'Apprentissage',
+    shortLabel: 'Apprendre',
     flowLabel: 'Apprentissage',
     verb: 'Une leçon dans l’espace de travail, au bon niveau',
     glyph: '✎',
@@ -870,6 +888,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'writing-for-agents': {
     id: 'writing-for-agents',
     label: 'Écriture pour agents',
+    shortLabel: 'Écriture',
     gender: 'f',
     flowLabel: 'Écriture pour agents',
     verb: 'Skills, AGENTS.md et CLAUDE.md écrits pour un agent',
@@ -886,6 +905,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'setup-matt-pocock-skills': {
     id: 'setup-matt-pocock-skills',
     label: 'Configuration',
+    shortLabel: 'Config',
     gender: 'f',
     flowLabel: 'Mise en place',
     verb: 'Tracker, labels de triage et docs de domaine du dépôt',
@@ -907,6 +927,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'ask-matt': {
     id: 'ask-matt',
     label: 'Orientation',
+    shortLabel: 'Orienter',
     gender: 'f',
     flowLabel: 'Orientation',
     verb: 'Quel skill pour quelle situation',
@@ -919,6 +940,7 @@ export const SKILLS: Record<string, SkillDef> = {
   'wait-what': {
     id: 'wait-what',
     label: 'Reformulation',
+    shortLabel: 'Reformuler',
     gender: 'f',
     flowLabel: 'Reformulation',
     verb: 'Le dernier message reformulé, plus simplement',

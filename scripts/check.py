@@ -6,6 +6,7 @@
     scripts/check.sh <plugin> --no-desktop sans le Claude Code de l'app desktop (poste sans l'app)
     scripts/check.sh --staged              le hook pre-commit : les plugins dont un fichier est indexé
     scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README, sans rien contrôler
+    scripts/check.sh --test <fichier> <plugin>  ce seul fichier de test (nom nu ou chemin), terminal seulement
 
 Les contrôles d'un plugin, chacun seulement s'il s'applique :
 1. pas de renvoi aux tickets ni aux dossiers de travail (`travail/`, absent de la version publique) ;
@@ -17,6 +18,9 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    le code (hors `tests/`) n'étale pas une liste dans `Math.min` ou `Math.max` (au-delà de 100 000
    éléments, l'étalement lève une erreur) et n'a pas de bloc `/** */` suivi directement d'un autre
    (le premier ne documente plus rien) ;
+   la forme du CHANGELOG : chaque entrée (`## <version> — <date>`) précédée d'une ligne `---`, versions
+   uniques, de la plus récente à la plus ancienne, la première égale à la version de `plugin.json`
+   (un séparateur perdu au déplacement d'une entrée n'avait été vu qu'au compte rendu) ;
 3. types : `tsc` d'une version fixée de TypeScript, par npx (aucune installation globale). Les types
    du moteur (`.claude-plugin/types/`, ignorés par git) manquent dans un worktree : ils sont copiés
    depuis le clone principal ;
@@ -26,8 +30,9 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    l'app desktop, trouvé ici (Mac et Windows) ;
 6. `claude plugin validate` du plugin, puis du dépôt.
 
---staged (hook pre-commit, décision « Hook ») : rien pour un commit de documentation seule ; sinon
-`validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
+--staged (hook pre-commit, décision « Hook ») : d'abord la forme du CHANGELOG de chaque plugin dont le
+CHANGELOG ou le `plugin.json` est indexé, même pour un commit de documentation seule ; puis rien de
+plus pour un commit de documentation seule ; sinon `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
 (terminal seulement) des plugins touchés : 39 erreurs de types étaient passées inaperçues sur trois
 groupes quand le hook ne lançait que `validate` et les tests. Le test avec l'app desktop reste à
 `check.sh <plugin>`, avant le push. Un plugin dont tous les contrôles viennent de passer garde
@@ -42,6 +47,7 @@ Sans dépendance hors de la bibliothèque standard ; Python 3.9 ou plus récent.
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -81,6 +87,9 @@ RETIRED_FILE = "termes-retires.txt"
 # Les dossiers des consignes d'un plugin (le texte que Claude lit), où un terme retiré ne revient pas.
 INSTRUCTION_DIRS = ("hooks", "skills", "commands")
 MINMAX_CALL = re.compile(r"\bMath\.(min|max)\(")
+# Le titre d'une entrée de CHANGELOG. `-mathis.<n>` (mattpocock-skills) est un écart local sur la
+# version de l'amont, rangé après elle (README de ce plugin), au contraire d'une pré-version SemVer.
+CHANGELOG_ENTRY = re.compile(r"^## (\d+)\.(\d+)\.(\d+)(?:-mathis\.(\d+))?(?=\s|$)")
 
 
 class Failed(Exception):
@@ -381,6 +390,66 @@ def code_rules(plugin):
     return problems
 
 
+def changelog_shape(plugin):
+    """Les défauts de forme du CHANGELOG d'un plugin (fichier, ligne, défaut) ; None sans CHANGELOG."""
+    path = plugin / "CHANGELOG.md"
+    if not path.is_file():
+        return None
+    rel = f"plugins/{plugin.name}/CHANGELOG.md"
+    try:
+        manifest = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError):
+        manifest = None
+    problems = []
+    seen = {}
+    previous = None
+    is_separated = False
+    in_fence = False
+    for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        if line.startswith("```"):
+            in_fence = not in_fence
+        if in_fence:
+            continue
+        if re.fullmatch(r"---\s*", line):
+            is_separated = True
+            continue
+        if not line.startswith("## "):
+            continue
+        m = CHANGELOG_ENTRY.match(line)
+        if not m:
+            problems.append(f"{rel}:{n} : titre d'entrée sans version X.Y.Z en tête : « {line.strip()} »")
+            is_separated = False
+            continue
+        version = line[3:m.end()]
+        key = (int(m[1]), int(m[2]), int(m[3]), 0 if m[4] is None else 1, int(m[4] or 0))
+        if not is_separated:
+            problems.append(f"{rel}:{n} : pas de ligne « --- » avant l'entrée {version}")
+        if previous is None and manifest is not None and version != manifest:
+            problems.append(f"{rel}:{n} : première entrée {version}, mais plugin.json dit {manifest}")
+        if key in seen:
+            problems.append(f"{rel}:{n} : version {version} en double (déjà ligne {seen[key]})")
+        elif previous is not None and key > previous[0]:
+            problems.append(f"{rel}:{n} : {version} après {previous[1]} : les versions vont de la plus récente à la plus ancienne")
+        seen.setdefault(key, n)
+        previous = (key, version)
+        is_separated = False
+    if previous is None:
+        problems.append(f"{rel} : aucune entrée « ## <version> — <date> »")
+    return problems
+
+
+def check_changelog(plugin):
+    log("→ forme du CHANGELOG")
+    problems = changelog_shape(plugin)
+    if problems is None:
+        log("  pas de CHANGELOG : contrôle sans objet")
+    elif problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{plugin.name} : {len(problems)} défaut(s) de forme du CHANGELOG")
+    else:
+        log("  ok")
+
+
 def static_checks(plugin):
     pending = PENDING.get(plugin.name)
     log("→ renvois aux tickets et aux dossiers de travail")
@@ -407,6 +476,7 @@ def static_checks(plugin):
         log("\n".join(f"  {p}" for p in rules))
         raise Failed(f"{plugin.name} : {len(rules)} terme(s) retiré(s) ou entorse(s) aux règles du code")
     log("  ok")
+    check_changelog(plugin)
 
 
 # --- types --------------------------------------------------------------------
@@ -471,6 +541,48 @@ def node_tests(plugin):
 def plugin_tests(plugin, claude, label):
     if (plugin / "tests").is_dir():
         step(f"claude plugin test plugins/{plugin.name} ({label})", [claude, "plugin", "test", plugin], 900, r"\d+ pass")
+
+
+def test_file(plugin, name):
+    """Le fichier de test que nomme `name` : un chemin depuis le dépôt ou le plugin, ou un nom nu
+    cherché dans `tests/` et `skills/` du plugin."""
+    for candidate in (REPO / name, plugin / name):
+        if candidate.is_file() and ".test." in candidate.name:
+            return candidate.resolve()
+    found = sorted(t for folder in ("tests", "skills") if (plugin / folder).is_dir()
+                   for t in (plugin / folder).rglob(Path(name).name) if t.is_file() and ".test." in t.name)
+    if len(found) != 1:
+        where = ", ".join(t.relative_to(REPO).as_posix() for t in found) or "aucun"
+        raise Failed(f"fichier de test « {name} » dans plugins/{plugin.name} : {len(found)} trouvé(s) ({where})")
+    return found[0]
+
+
+def single_test(plugin, name):
+    """Un seul fichier de test, avec le Claude Code du terminal : un `.test.mjs` par `node --test` en
+    place ; un `.test.ts`/`.test.tsx` par `claude plugin test` sur une copie temporaire du plugin qui
+    n'a que ce fichier de test (les aides de `tests/` sans `.test.` restent), faute de filtre."""
+    path = test_file(plugin, name)
+    rel = path.relative_to(REPO).as_posix()
+    if path.name.endswith(".test.mjs"):
+        step(f"node --test {rel}", [tool("node"), "--test", path], 600, r"pass \d+")
+        return
+    claude = tool("claude")
+    target = path.relative_to(plugin)
+    tmp = Path(tempfile.mkdtemp(prefix="check-test-"))
+    try:
+        copy = tmp / plugin.name
+        # Les types du moteur (`.claude-plugin/types/`) ne servent qu'à `tsc` ; le `types/` du plugin reste.
+        engine_types = (plugin / ".claude-plugin").resolve()
+        shutil.copytree(plugin, copy, ignore=lambda folder, names: [
+            n for n in names if n == "node_modules" or (n == "types" and Path(folder).resolve() == engine_types)])
+        for other in copy.rglob("*.test.*"):
+            if other.relative_to(copy) != target:
+                other.unlink()
+        code, out = run([claude, "--version"], 60)
+        version = out.strip().split(" ")[0] if code == 0 else "?"
+        step(f"claude plugin test {rel} (terminal {version})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def validate(target, claude):
@@ -560,6 +672,12 @@ def staged():
     if code != 0:
         raise Failed(f"git diff --cached : {out.strip()}")
     paths = [p for p in out.split("\0") if p]
+    # Une édition du CHANGELOG seul est de la documentation : sa forme se contrôle quand même.
+    shaped = sorted({p.split("/")[1] for p in paths if re.fullmatch(r"plugins/[^/]+/(?:CHANGELOG\.md|\.claude-plugin/plugin\.json)", p)})
+    for name in shaped:
+        if (PLUGINS / name / ".claude-plugin" / "plugin.json").is_file():
+            log(f"pre-commit : plugins/{name}")
+            check_changelog(PLUGINS / name)
     code_paths = [p for p in paths if not is_doc(p)]
     if not code_paths:
         log("pre-commit : documentation seule, pas de contrôle")
@@ -587,6 +705,7 @@ def main():
     parser.add_argument("--no-desktop", action="store_true", help="sans le Claude Code de l'app desktop")
     parser.add_argument("--staged", action="store_true", help="hook pre-commit : les plugins dont un fichier est indexé")
     parser.add_argument("--fix", action="store_true", help="réécrit l'arbre « Architecture » du README des plugins, sans rien contrôler")
+    parser.add_argument("--test", metavar="FICHIER", help="lance ce seul fichier de test du plugin nommé (terminal), sans les autres contrôles")
     args = parser.parse_args()
     try:
         if args.staged:
@@ -598,6 +717,12 @@ def main():
         unknown = [n for n in names if not (PLUGINS / n / ".claude-plugin" / "plugin.json").is_file()]
         if unknown:
             raise Failed(f"plugin inconnu : {', '.join(unknown)}")
+        if args.test:
+            if len(names) != 1:
+                parser.error("--test : nommer un seul plugin")
+            single_test(PLUGINS / names[0], args.test)
+            log("\nLe test est passé.")
+            return
         if args.fix:
             for name in names:
                 fix_architecture(PLUGINS / name)

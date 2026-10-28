@@ -7,7 +7,7 @@ Tableau de bord en direct du workflow [mattpocock-skills](https://github.com/mat
 - **Il garde les parcours par projet.** Plusieurs discussions peuvent travailler sur le même projet sans se marcher dessus.
 - **Il suit les conventions de livraison du plugin `project`** : `/project:sync`, `/project:version`, `/project:push`, `/project:pr`.
 
-Version actuelle : **0.64.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.65.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -135,7 +135,7 @@ En bas de l'onglet Parcours, qu'un parcours soit en cours ou non, un cadre « À
 | **Historique** | Les parcours du projet, avec « Reprendre », « Reprendre ici », « ◆ Agents » (ouvre l'onglet Agents sur ce parcours, archivés compris) et « ▣ Archiver ». Les archivés sont cachés par défaut, sous « ▸ Archivés (N) », avec « ▢ Désarchiver » et « ✗ Supprimer ». La suppression demande une confirmation (« Supprimer définitivement ce parcours ? ») et ne se défait pas : depuis la 0.58.0, elle efface aussi ses agents, ses sessions liées, son relais et ses choix ; les autres discussions du projet l'oublient aussi. |
 | **Commandes** | Les points de départ, les 18 autres skills groupés par famille, les commandes de livraison et les commandes `/flow`. |
 
-Les dessins (feuille de route, anneaux, barres) sont en SVG sur le desktop, VS Code et le mobile, et en glyphes sur le terminal.
+Les dessins (feuille de route, anneaux, barres) sont en SVG sur le desktop, VS Code et le mobile, et en glyphes sur le terminal. Sur la feuille de route du terminal, chaque phase a un nom court (depuis la 0.65.0) : « Code » pour Implémentation, « Rapport » pour Compte rendu, « Push » pour Version et push, « PR » pour Pull request, etc. ; le desktop garde les noms entiers.
 
 ---
 
@@ -219,7 +219,7 @@ La carte suit l'envoi :
 | Chargement d'un skill mattpocock | Démarrage, avancée ou détour du parcours ; une note ajoutée au texte du skill donne à Claude les identifiants d'étapes à signaler. |
 | Outil `mcp__flow-board__flow` | Comptes rendus de Claude : titre, étape, éléments suivis (hypothèses, décisions, variantes…), tickets, dépendances, note, fin de phase. Depuis la 0.47.0, chaque appel tient dans la conversation sur une ligne grisée qui dit ce qu'il enregistre (« flow-board · étape review · 2 tickets faits »), sans son JSON ni sa réponse ; un appel en erreur ou interrompu garde le dessin de Claude Code. |
 | Sous-agents (`Agent`, `agent.spawn`, `turn.step`, appels d'outils portant un `agentId`, `SubagentStop`, `turn.complete`), sessions liées (`start_session`, `claude --bg`) | Registre des agents de la session et onglet Agents, avec ou sans parcours : chaque sous-agent (type, modèle, effort, prompt, tokens, outils, lignes, durée, réveils), ses segments et repères datés, la piste de la session elle-même, les sessions liées lancées. Les transcripts de Claude Code rattrapent ce qui a été manqué. Pendant un parcours, le lancement d'un `Agent` fait aussi avancer ses étapes (implementers, relecteurs…). |
-| Commandes shell | Tests (rouge ou vert, cycles TDD), contrôles, commits, branches, worktrees, merges, `git push`, `gh issue` et `gh pr`. Les commandes sont lues segment par segment : `grep "git commit"` ne compte pas comme un commit. |
+| Commandes shell | Tests (rouge ou vert, cycles TDD), contrôles, commits, branches, worktrees, merges, `git push`, `gh issue` et `gh pr`. Les commandes sont lues segment par segment : `grep "git commit"` ne compte pas comme un commit, chaque segment git compte (`git commit … && git push` donne un commit et un push), et `git merge-base` n'est pas un merge. |
 | Fichiers écrits | Livrables du workflow : glossaire, ADR, spec et tickets `.scratch/`, plans de `docs/plans/` (avec le ticket que le plan cite en tête), rapport d'architecture, questionnaire, leçons, configuration. Les fichiers hors du projet sont ignorés. |
 | Asana (`update_tasks`) | Ticket coché ou ligne « Statut : » (en cours, en attente, à trancher), et levée des dépendances externes. Pour un blocage, le texte de la ligne devient sa raison. |
 | Asana (`create_tasks`), `gh issue create` | Hors des skills qui publient le lot (`/to-tickets`, `/to-spec`, `/triage`), la tâche créée va dans « Trouvé en route », avec le statut de sa ligne « Statut : ». |
@@ -386,7 +386,8 @@ La revue de sécurité ne bloque jamais la livraison et n'est jamais la suite pr
 
 **Livraison**
 - Avant la pull request, la phase **Version et push** combine `/project:version` puis `/project:push`. Lancer directement `/project:push` ouvre la phase à l'étape push, avec les étapes de version marquées sautées.
-- **Version et push côte à côte** (depuis la 0.61.0) : une fois le compte rendu validé, la carte propose `/project:version` et `/project:push`, au choix. Le mod compare la branche à la branche distante (la branche suivie, sinon `origin/main`) : quand chaque plugin ou paquet changé a déjà une nouvelle version dans son manifeste (`.claude-plugin/plugin.json`, `package.json`, `pyproject.toml`, `Cargo.toml` ; dans un dépôt de marketplace, ceux de ses seuls plugins publiés), `/project:push` passe en tête, `/project:version` n'est plus proposé et la carte dit « version déjà posée ». Un lot dont le dernier ticket a posé la version se pousse ainsi sans en poser une autre.
+- **Version et push côte à côte** (depuis la 0.61.0) : une fois le compte rendu validé, la carte propose `/project:version` et `/project:push`, au choix. Le mod compare la branche à la branche distante (la branche suivie, sinon `origin/main`) : quand chaque plugin ou paquet changé a déjà une nouvelle version dans son manifeste (`.claude-plugin/plugin.json`, `package.json`, `pyproject.toml`, `Cargo.toml` ; dans un dépôt de marketplace, ceux de ses seuls plugins publiés), `/project:push` passe en tête et la carte dit « version déjà posée ». Depuis la 0.65.0, `/project:version` reste toujours proposé à côté de `/project:push`, y compris pendant la phase, version faite et push à venir.
+- **Clore le parcours à côté du push et de la PR** (depuis la 0.65.0) : pendant la phase « Version et push », la carte propose « ✓ Clore le parcours » à côté de `/project:push` puis de `/project:pr`, et plus seulement une fois la phase close.
 - Un push fait avant l'implémentation (les documents du découpage, par exemple) enjambe la phase Implémentation, qui passe sautée. Depuis la 0.35.1, elle n'est pas perdue : lancer `/implement` ou confier un groupe à une session liée y ramène le même parcours, et la livraison redevient à faire.
 - La phase **Pull request** suit `/project:pr`. `/mattpocock-skills:pr` reste disponible pour rédiger le corps.
 - **Sans GitHub**, la phase « Pull request » disparaît de l'affichage et n'est plus proposée : le mod lit l'adresse de `origin`, et seule une adresse github.com garde la PR. Après « Version et push », le parcours peut alors être clos. Le parcours stocké garde la phase, qui revient si le projet passe sur GitHub.
