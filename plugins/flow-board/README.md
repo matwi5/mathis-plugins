@@ -2,12 +2,12 @@
 
 Tableau de bord en direct du workflow [mattpocock-skills](https://github.com/mattpocock/skills) dans Claude Code. Il suit chaque travail sous la forme d'un **parcours**, de l'idée jusqu'à la pull request, et l'affiche dans un panneau et dans un bandeau au-dessus du prompt.
 
-- **Il s'adapte au skill de départ.** `/grill-with-docs`, `/to-spec`, `/diagnosing-bugs`, `/wayfinder` ou `/implement` n'ouvrent pas le même parcours.
+- **Il s'adapte au skill de départ.** `/grill-with-docs`, `/to-spec`, `/diagnosing-bugs`, `/triage` ou `/implement` n'ouvrent pas le même parcours.
 - **Il se remplit tout seul.** Il suit les skills chargés, les tickets Asana, les sous-agents, les tests, les commits et les livrables.
 - **Il garde les parcours par projet.** Plusieurs discussions peuvent travailler sur le même projet sans se marcher dessus.
 - **Il suit les conventions de livraison du plugin `project`** : `/project:sync`, `/project:version`, `/project:push`, `/project:pr`.
 
-Version actuelle : **0.62.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.64.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -103,6 +103,11 @@ Le bandeau s'ouvre sur l'étiquette « ▍ Flow », comme ceux de git-board et d
 
    **Suggestion grisée de la suite** (depuis la 0.47.0). À la fin de chaque tour de la discussion principale, la commande du bouton principal de la carte (par exemple `/mattpocock-skills:to-tickets`, ou `/flow-board:compte-rendu` une fois tous les tickets faits et relus) se propose en gris dans le prompt vide : Tab (ou la flèche droite) la prend, rien ne part sans toi. Rien n'est proposé quand une question t'attend (question du grilling, réponse qui finit par « ? »), dans une session liée, quand la suite n'est pas une commande (lancer un groupe, attendre une session liée, revue sur la ligne d'un groupe) ni pour la rétro d'un parcours à sessions liées, qui part avec sa consigne. Tant qu'un parcours est actif, la suggestion `/project:push` de git-board est écartée (pas de push en cours de parcours) ; elle revient hors parcours.
 
+   **Compaction** (depuis la 0.64.0). La compaction remplace l'histoire de la discussion, dans son contexte, par un résumé ; le transcript (le fichier `.jsonl` de la discussion sous `~/.claude/projects/`) garde tout.
+   - **Quand compacter** : une fois `/to-tickets` fini dans un parcours à groupes, tant qu'aucun groupe n'est lancé et que la discussion ne s'est pas compactée depuis, `/compact` se propose en gris à la fin de chaque tour, et la carte « Ensuite » offre « ⇣ Compacter d'abord ». L'orchestrateur ne fera plus que lancer et suivre des sessions liées : le cadrage, la spec et le découpage, déjà écrits dans les fichiers, n'ont plus à peser sur chaque tour. Rien n'est proposé pour un lot fait dans la discussion, ni dans une session liée.
+   - **Consignes de compaction** : à chaque compaction de la discussion (tapée, automatique au seuil, ou calculée à l'avance), flow-board ajoute après ton texte ce que le résumé doit garder, selon le rôle de la discussion. L'orchestrateur garde des renvois : le parcours et sa phase, ses groupes et leurs sessions liées, les chemins des décisions, de la spec et des plans, les questions encore ouvertes, et le chemin de son transcript pour la rétro. Une session liée de groupe garde de quoi reprendre son ticket (tâche en cours, étape de revue, commits, fichiers, contrôles, branche et worktree) et joindre l'orchestrateur. La compaction automatique reste permise partout. La compaction d'un sous-agent, et une discussion sans parcours, ne reçoivent rien.
+   - **Repère ⇣** : sur la piste de l'orchestrateur, il ne se pose que pour une compaction de la discussion qui a eu lieu : ni pour un résumé calculé à l'avance, ni pour celle d'un sous-agent, ni pour une compaction refusée.
+
 ### La barre « À tout moment »
 
 En bas de l'onglet Parcours, qu'un parcours soit en cours ou non, un cadre « À tout moment » réunit neuf outils dans l'ordre où on s'en sert, et un dixième pendant les phases de code et de revue. Chaque bouton met la commande dans le prompt sans la lancer, et aucun ne clôt la phase en cours (ce sont des détours ou des événements).
@@ -116,7 +121,7 @@ En bas de l'onglet Parcours, qu'un parcours soit en cours ou non, un cadre « À
 | S'orienter | ✱ Et maintenant ? | `/ask-matt` | Quelle suite, quand on est perdu. Pendant un parcours, la question est préremplie avec le parcours, la phase, l'étape et le détour en cours ; sans parcours : « par où commencer ? ». Part telle quelle, ou complétée |
 | S'orienter | ◇ Challenger | `/grilling` | Une décision ou un plan mis à l'épreuve par des questions, sans quitter la phase ; ajouter le sujet |
 | S'orienter | § Préciser un terme | `/domain-modeling` | Un terme flou ou une règle métier précisés par des questions (écarts avec le glossaire, cas limites, contradictions avec le code), puis écrits dans le glossaire ou, pour une décision difficile à défaire, dans les décisions du projet. Le cadrage l'appelle déjà : le bouton sert surtout en implémentation ; ajouter le sujet |
-| Contexte | ⇣ Compact | `/compact` | Commande de Claude Code qui allège le contexte ; consignes facultatives |
+| Contexte | ⇣ Compact | `/compact` | Commande de Claude Code qui allège le contexte ; tes consignes sont facultatives, flow-board ajoute les siennes pendant un parcours (voir « Compaction ») |
 | Contexte | ➜ Passation | `/handoff` | La discussion résumée en document de passation pour une autre session ; ajouter son but |
 | Déléguer | 🐞 Bug · session liée | `/diagnosing-bugs` | Depuis la 0.26.0, seulement pendant Implémentation, Implémentation de spec, TDD, Revue ou Compte rendu. Met dans le prompt une demande à Claude, à compléter après « Bug : ». Claude lance une session liée dans ce dossier (pas de worktree : elle doit lire le même fichier de parcours), qui reprend le parcours (`resume`), diagnostique le bug en détour de la phase en cours, le corrige selon le `CLAUDE.md` du projet, puis clôt le détour (`complete`). Depuis la 0.55.0, la session est lancée en effort high, et xhigh pour une deuxième tentative sur un bug toujours là après la première ; pas de troisième session : on replanifie. À sa note de fin, Claude vérifie son travail ; si le bug est toujours là, il le dit et propose la deuxième tentative, sinon il reprend le parcours |
 
@@ -141,18 +146,19 @@ Les dessins (feuille de route, anneaux, barres) sont en SVG sur le desktop, VS C
 | `/grill-with-docs` | Nouvelle fonctionnalité | Cadrage → Spec¹ → Tickets¹ → Implémentation → Compte rendu → Version et push¹ → Pull request¹ |
 | `/to-spec` | De la spec au code | Spec → Tickets → Implémentation → Compte rendu → Version et push¹ → Pull request¹ |
 | `/to-tickets` | Des tickets au code | Tickets → Implémentation → Compte rendu → Version et push¹ → Pull request¹ |
-| `/implement`, `/implement-spec` | Implémentation | Implémentation → Compte rendu → Version et push¹ → Pull request¹ |
+| `/implement` | Implémentation | Implémentation → Compte rendu → Version et push¹ → Pull request¹ |
 | `/diagnosing-bugs` | Chasse au bug | Diagnostic → Revue¹ → Compte rendu → Version et push¹ → Pull request¹ |
 | `/tdd` | TDD | TDD → Revue¹ → Compte rendu → Version et push¹ → Pull request¹ |
 | `/triage` | Triage | Triage → Implémentation¹ → Compte rendu² → Version et push¹ → Pull request¹ |
-| `/wayfinder` | Grand chantier | Wayfinder → Spec¹ → Tickets¹ → Implémentation¹ → Compte rendu² → Version et push¹ → Pull request¹ |
 | `/improve-codebase-architecture` | Santé du code | Architecture → Cadrage¹ → Spec¹ → Tickets¹ → Implémentation¹ → Compte rendu² → Version et push¹ → Pull request¹ |
 | `/code-review` (Claude Code), sans parcours en cours | Relecture de branche | Relecture → Compte rendu → Version et push¹ → Pull request¹ |
 | `/mattpocock-skills:code-review` | Revue de code | Revue → Compte rendu → Version et push¹ → Pull request¹ |
 | `/grill-me`, `/prototype`, `/research`, `/teach`, `/wizard`… | Un parcours d'une phase | Les étapes du skill |
 
 ¹ Phase facultative.
-² Facultatif tant qu'on n'a pas codé, obligatoire dès que l'Implémentation démarre (depuis la 0.30.0) : un triage ou une carte sans code se clôt sans compte rendu.
+² Facultatif tant qu'on n'a pas codé, obligatoire dès que l'Implémentation démarre (depuis la 0.30.0) : un triage ou un examen de l'architecture sans code se clôt sans compte rendu.
+
+Depuis la 0.63.0, `/implement-spec` et `/wayfinder` ne sont plus suivis : ils ont quitté la copie `mattpocock-skills` (1.3.1-mathis.1), sans jamais avoir été lancés. Au chargement, un parcours enregistré avant change de skill : une phase ou un départ `/implement-spec` devient `/implement` (mêmes tickets, étapes d'`/implement`), une phase ou un départ `/wayfinder` devient `/grill-with-docs` (ses éléments restent des décisions, ses étapes sont faites si la phase l'était), et l'ancienne alternative `implement-spec` de la phase Implémentation disparaît. Aucun parcours n'est supprimé, le journal reste tel quel.
 
 **Compte rendu.** Avant toute livraison, la phase « Compte rendu » (`/flow-board:compte-rendu`, lancé par toi) fait écrire à Claude un rapport à lire et à valider :
 - sections fixes : En bref, Fait, Décidé sans toi, Ce qui s'est mal passé, Bloqué par moi, Trouvé, Documentation, Ce que la livraison enverra ; une section vide dit « Rien. » ;
@@ -169,11 +175,13 @@ La rétro (`/retro`) n'est pas une phase : elle reste proposée à tout moment d
 
 **Rétro d'un parcours à sessions liées** (depuis la 0.43.0). Quand le parcours a eu des sessions filles (un groupe confié ou rendu, des pistes confiées), le bouton Rétro, dans la carte « Ensuite » comme dans « Autres commandes », met dans le prompt `/retro` suivi d'une demande à Claude, dans la discussion principale (la session mère) :
 - retrouver les sessions filles par ListAgents, d'après le début de leur titre (« <parcours> > », « › » avant la 0.61.0) et les ids relevés à leur lancement ;
-- lancer un sous-agent par session fille, en parallèle et en lecture seule : chacun lit le transcript de sa session et en fait la rétro selon les étapes et les sept axes de `/retro`, que la mère lui transmet, puis rend ses pistes par sévérité. Le transcript se lit même quand la session fille est fermée ou compactée, et la discussion principale ne se charge pas de sa lecture ;
+- lancer un sous-agent par session fille, en parallèle et en lecture seule : chacun lit le transcript de sa session et en fait la rétro selon les étapes et les sept axes de `/retro`, que la mère lui transmet, puis rend ses pistes par sévérité. Le transcript se lit même quand la session fille est fermée ou compactée, en entier ; s'il commence par une compaction, il continue un autre fichier, que le lecteur retrouve par le `logicalParentUuid` de la marque (depuis la 0.64.0). La discussion principale ne se charge pas de sa lecture ;
 - faire en même temps la rétro de la discussion principale ;
 - une fois tous les comptes rendus reçus, faire le compte rendu global : pistes fusionnées et sans doublon, par sévérité, chacune avec ses sessions d'origine. Cette liste devient les pistes de la rétro au tableau de bord.
 
 Sans session fille, le bouton met `/retro` seul. Une session de diagnostic de bug ne laisse pas de trace dans le parcours : elle n'est retrouvée que par son titre, si le parcours a aussi eu une autre session fille.
+
+**Rétro d'une discussion compactée** (depuis la 0.64.0). Quand `/retro` se lance, tapé ou par le bouton, avec ou sans parcours, flow-board ajoute au skill une consigne de transcript : un sous-agent en lecture seule relit le transcript de la discussion du début jusqu'à la dernière compaction (la marque `compact_boundary`) et en fait la rétro ; la discussion fait la partie qui suit, puis fusionne. Quand flow-board a vu la compaction (repère ⇣), la consigne est directe ; sinon Claude vérifie d'abord par grep si le transcript porte une marque, car une discussion reprise après une compaction, dans un nouveau fichier, n'a pas de repère. Un transcript qui continue un autre fichier est suivi jusqu'à lui. Le skill `/retro` lui-même ne change pas.
 
 **Pistes de la rétro en session liée** (depuis la 0.33.0). Une fois les pistes présentées, chacune a sa case (○ / ●) dans la carte de la phase, avec « Tout sélectionner » au-dessus de la liste. Avec au moins une piste choisie, « ↗ Traiter N pistes · session liée » :
 - met dans le prompt une demande à Claude (depuis la 0.51.0, les pistes ne passent « en cours » et l'étape « Modifications en cours », la dernière de la rétro, ne s'ouvre qu'au lancement de la session, pas au clic), qui rédige lui-même le brief, puisque les pistes n'ont qu'un libellé et que lui connaît la session étudiée :
@@ -214,7 +222,7 @@ La carte suit l'envoi :
 | Commandes shell | Tests (rouge ou vert, cycles TDD), contrôles, commits, branches, worktrees, merges, `git push`, `gh issue` et `gh pr`. Les commandes sont lues segment par segment : `grep "git commit"` ne compte pas comme un commit. |
 | Fichiers écrits | Livrables du workflow : glossaire, ADR, spec et tickets `.scratch/`, plans de `docs/plans/` (avec le ticket que le plan cite en tête), rapport d'architecture, questionnaire, leçons, configuration. Les fichiers hors du projet sont ignorés. |
 | Asana (`update_tasks`) | Ticket coché ou ligne « Statut : » (en cours, en attente, à trancher), et levée des dépendances externes. Pour un blocage, le texte de la ligne devient sa raison. |
-| Asana (`create_tasks`), `gh issue create` | Hors des skills qui publient le lot (`/to-tickets`, `/to-spec`, `/triage`, `/wayfinder`), la tâche créée va dans « Trouvé en route », avec le statut de sa ligne « Statut : ». |
+| Asana (`create_tasks`), `gh issue create` | Hors des skills qui publient le lot (`/to-tickets`, `/to-spec`, `/triage`), la tâche créée va dans « Trouvé en route », avec le statut de sa ligne « Statut : ». |
 | Réponses de Claude | Questions du grilling (`❓ **Qn**`) ; une synthèse de revue (`## Standards`) fait avancer l'étape. Les chiffres de revue viennent du champ `review` de l'outil, que Claude remplit après chaque revue : la carte affiche le nombre de revues, les constats (Standards, Spec) et les corrigés, cumulés sur la phase. |
 
 ---
@@ -222,7 +230,7 @@ La carte suit l'envoi :
 ## Tickets, dépendances et lancement
 
 **Tickets**
-- Les tickets sont identifiés par leur GID Asana, avec un lien « Asana ↗ ».
+- Les tickets sont identifiés par leur GID Asana, avec un lien « Asana ↗ » ; au terminal, qui écrivait l'adresse entière, un bouton « ⧉ Asana » la copie à la place (un toast le confirme).
 - Une liste envoyée par Claude **ajoute ou met à jour** des tickets, sans jamais en retirer.
 - Un ticket envoyé par erreur se retire explicitement (`remove`) : il quitte aussi les groupes, la file et les dépendances des autres tickets.
 - Une discussion sans parcours actif n'enregistre rien tant que le projet a un parcours en pause ou suivi ailleurs : l'outil renvoie à Claude la liste de ces parcours, et `/flow` les nomme, pour qu'on reprenne le bon avec « ↻ Reprendre ici » au lieu d'ouvrir un autre lot.
@@ -245,7 +253,7 @@ La carte suit l'envoi :
 - Un rapport de l'outil sans parcours actif n'écrit rien dessus : Claude reçoit sa liste avec l'état « set aside by the user » et te demande lequel reprendre.
 
 **Tickets en cours en parallèle (depuis la 0.32.0)**
-- Plusieurs tickets peuvent être « en cours » à la fois : les sous-agents de `/implement-spec`, ou un ticket laissé en cours par une autre discussion. Depuis la 0.40.0, ils se lisent dans leur groupe (« ◉ en cours »), et un ticket porté par une autre discussion le dit sur sa ligne (« ⇆ autre discussion »). Pendant l'Implémentation, la carte de la phase ne les répète plus à part, et le bandeau ne les nomme plus.
+- Plusieurs tickets peuvent être « en cours » à la fois : ceux des sessions liées des groupes, ou un ticket laissé en cours par une autre discussion. Depuis la 0.40.0, ils se lisent dans leur groupe (« ◉ en cours »), et un ticket porté par une autre discussion le dit sur sa ligne (« ⇆ autre discussion »). Pendant l'Implémentation, la carte de la phase ne les répète plus à part, et le bandeau ne les nomme plus.
 - Le ticket retient la discussion qui l'a passé « en cours » (champ `by`), et l'oublie quand il en sort. Un ticket qui rejoint d'autres tickets déjà en cours ne remet pas les étapes à zéro ; un ticket qui en suit un autre, si.
 
 **Dépendances**
@@ -261,7 +269,7 @@ La carte suit l'envoi :
 - « ✓ Relu » marque tout comme relu : les choix relus se replient en une ligne (« 17 relus »), que « ▸ voir » déplie ; le journal de l'onglet Activité les garde.
 
 **Trouvé en route**
-- Les tâches créées pendant le parcours (constats de revue hors du ticket, anomalies, actions pour la personne) s'affichent sous les tickets, dans « Trouvé en route » : l'état en glyphe de tête, la raison d'un blocage, « pour toi » quand la tâche est assignée, le lien Asana. Celles qui t'attendent (bloquées, ou assignées à toi) viennent en tête et restent toujours visibles ; les autres s'affichent jusqu'à 4, le reste derrière « ▸ N de plus ». « × masquer » réduit toute la liste à son titre et ses comptes ; « ▸ afficher » la rouvre.
+- Les tâches créées pendant le parcours (constats de revue hors du ticket, anomalies, actions pour la personne) s'affichent sous les tickets, dans « Trouvé en route » : l'état en glyphe de tête, la raison d'un blocage, « pour toi » quand la tâche est assignée, le lien Asana (au terminal, le bouton qui le copie). Celles qui t'attendent (bloquées, ou assignées à toi) viennent en tête et restent toujours visibles ; les autres s'affichent jusqu'à 4, le reste derrière « ▸ N de plus ». « × masquer » réduit toute la liste à son titre et ses comptes ; « ▸ afficher » la rouvre.
 - Elles ne comptent pas dans la barre des tickets et ne retiennent pas la livraison.
 - Claude fait entrer dans le lot celles dont le lot dépend, en les envoyant dans `tickets` avec leurs `blockedBy` ; elles quittent alors « Trouvé en route ». `remove` en retire une.
 - Les règles des statuts et des trouvailles sont dans la description de l'outil : Claude les a même quand aucun skill n'a apporté sa consigne (par exemple `/mattpocock-skills:implement` écrit au milieu d'un message, qui n'est pas lancé).
@@ -270,7 +278,7 @@ La carte suit l'envoi :
 1. Historique, puis « Reprendre » sur le parcours.
 2. Dans l'onglet Parcours, choisir les tickets avec ○, dans l'ordre voulu (①, ②, ③…). Un ticket bloqué n'est sélectionnable que si ses bloqueurs sont faits, ou choisis avant lui.
 3. « ▶ Implémenter N tickets » met `/mattpocock-skills:implement` dans le prompt, avec la liste ordonnée. La file est enregistrée dans le parcours, et Claude la reçoit au chargement du skill.
-4. Le bouton « ⇉ En parallèle · /implement-spec » est proposé quand les phases Spec et Tickets du parcours sont faites, ou dès que deux groupes prêts peuvent avancer en parallèle (voir plus bas), et seulement dans un dépôt git. Sans spec, le prompt précise à `/implement-spec` que les tickets et leurs dépendances suffisent.
+4. Pour faire avancer des tickets en parallèle, passer par les groupes et leurs sessions liées (« Groupes et vagues » ci-dessous). Le bouton « ⇉ En parallèle » d'une sélection, qui lançait `/implement-spec`, a disparu en 0.63.0.
 
 **Groupes et vagues**
 
@@ -280,7 +288,7 @@ La carte suit l'envoi :
 - un autre contexte fait un autre groupe, et un groupe d'un seul ticket convient quand son contexte lui est propre ;
 - **pas de groupe seul** (depuis la 0.60.0) : un lot qui n'aurait qu'un groupe n'en a pas. La consigne de `/to-tickets` dit à Claude de ne pas envoyer de groupes dans ce cas, et le mod ignore quand même un plan reçu qui, une fois ses tickets rangés, ne compte qu'un groupe (un groupe plus des tickets restés hors de lui compte aussi pour un seul) ; la réponse de l'outil le dit à Claude en une ligne. Un plan déjà en place n'est jamais remplacé ni vidé par cette règle. Un lot sans groupe qui a des tickets ouverts se lance d'un geste par « ▶ Tout implémenter ici · /implement » (pas pendant `/to-tickets`, où les groupes peuvent encore venir) : `/implement` sur tous ses tickets ouverts, dans l'ordre du lot.
 
-Avant la 0.60.0, un groupe pouvait aussi se lancer dans la discussion courante (par un bouton sur sa ligne, ou pour ses seuls tickets prêts), un lot de groupes par `/implement-spec` (un sous-agent par groupe), et un groupe marqué `continuesHere` se gardait pour la discussion du découpage (« ↩ cette discussion »). Ces lancements et ce champ ont disparu : un `continuesHere` reçu est ignoré, celui des anciens fichiers reste sans effet. Un groupe déjà commencé ici avant ce changement garde son suivi (« Un groupe à la fois » ci-dessous). Les tickets choisis à la main, hors groupes, gardent `/implement` et `/implement-spec` (« Lancer une sélection de tickets »).
+Avant la 0.60.0, un groupe pouvait aussi se lancer dans la discussion courante (par un bouton sur sa ligne, ou pour ses seuls tickets prêts), un lot de groupes par `/implement-spec` (un sous-agent par groupe), et un groupe marqué `continuesHere` se gardait pour la discussion du découpage (« ↩ cette discussion »). Ces lancements et ce champ ont disparu : un `continuesHere` reçu est ignoré, celui des anciens fichiers reste sans effet. Un groupe déjà commencé ici avant ce changement garde son suivi (« Un groupe à la fois » ci-dessous). Les tickets choisis à la main, hors groupes, gardent `/implement` (« Lancer une sélection de tickets »).
 
 Pour chaque groupe, Claude donne la raison du regroupement, les fichiers touchés (`files`) et, depuis la 0.34.0, ses **ressources** (`resources`) : ce qu'il ne peut pas partager avec un autre groupe qui travaille en même temps, comme une application pilotée à l'écran (« PowerBI Desktop »), une base, un appareil ou un compte uniques. Chaque ticket peut aussi porter ses propres fichiers (`files`), lus dans ses critères d'acceptation : ils s'ajoutent à ceux de son groupe tant qu'il est ouvert. Quand un groupe déclare un dossier qui contient un fichier nommé par un autre groupe, la réponse de l'outil le signale à Claude : un dossier bloque tous ceux qui touchent un fichier dedans. Une nouvelle liste de groupes remplace la précédente, en gardant les revues et les sessions liées de chaque groupe ; des tickets envoyés sans groupes ne la touchent pas.
 
@@ -405,7 +413,7 @@ La revue de sécurité ne bloque jamais la livraison et n'est jamais la suite pr
 - Le stockage est partagé : chaque discussion fusionne sa copie au lieu de l'écraser. Pour chaque parcours, la version la plus récente l'emporte, et une suppression est mémorisée.
 - Les parcours enregistrés par les autres discussions sont relus toutes les 5 secondes.
 - Chaque discussion a son propre parcours en cours. Celui d'une autre discussion apparaît « ⇆ autre discussion », et « Reprendre ici » le récupère.
-- **Un parcours n'est suivi que par une discussion à la fois.** « Reprendre ici » le retire à l'autre discussion, qui n'enregistre plus rien sur lui. Pour faire avancer plusieurs groupes en même temps, passer par « ⇉ … en parallèle » : des sessions liées qui travaillent pour la discussion principale sans écrire sur le parcours (`/implement-spec` dans un dépôt git ne sert plus qu'à une sélection de tickets, depuis la 0.60.0). Un ticket qu'une autre discussion a laissé « en cours » s'affiche « ⇆ autre discussion ».
+- **Un parcours n'est suivi que par une discussion à la fois.** « Reprendre ici » le retire à l'autre discussion, qui n'enregistre plus rien sur lui. Pour faire avancer plusieurs groupes en même temps, passer par « ⇉ … en parallèle » : des sessions liées qui travaillent pour la discussion principale sans écrire sur le parcours. Un ticket qu'une autre discussion a laissé « en cours » s'affiche « ⇆ autre discussion ».
 - Une discussion sans parcours actif n'enregistre rien tant que le projet a un parcours en pause ou suivi ailleurs : l'outil et `/flow` nomment ces parcours, pour reprendre le bon.
 - À la fin d'une discussion, son parcours passe en pause, sauf après un `/clear`. Au chargement, un parcours abandonné depuis plus de 30 minutes passe aussi en pause.
 
@@ -481,13 +489,14 @@ flow-board/
 │   ├── linked.ts                sessions liées : reconnaissance et état (pur)
 │   ├── transcript.ts            rattrapage par les transcripts de Claude Code (pur)
 │   ├── history.ts               historique : sélecteur, fichiers à part, vue d'un parcours passé (pur)
-│   └── erase.ts                 effacement : traces, sessions fermées, confirmation (pur)
+│   ├── erase.ts                 effacement : traces, sessions fermées, confirmation (pur)
+│   └── compaction.ts            consignes de compaction selon le rôle de la discussion (pur)
 ├── reference/revue-securite.md  méthode fixe de la revue de sécurité, citée par son chemin
 ├── reference/procedure-groupe.md procédure d'une session liée de groupe, citée par son chemin
 ├── termes-retires.txt           termes retirés, refusés par scripts/check.py hors de l'historique
 ├── skills/compte-rendu/SKILL.md /flow-board:compte-rendu, le rapport à valider avant la livraison
 ├── types/index.d.ts             contrat de l'état (`PluginState`)
-└── tests/                       513 tests `claude plugin test` et 32 tests `node --test` (0.61.0)
+└── tests/                       538 tests `claude plugin test` et 32 tests `node --test` (0.64.0)
     ├── a-tout-moment.test.ts
     ├── accueil.test.ts
     ├── advisor.test.ts
@@ -496,6 +505,7 @@ flow-board/
     ├── cadrage-zone-sensible.test.ts
     ├── champs-persistes.test.mjs
     ├── chantier.test.ts
+    ├── compaction.test.ts
     ├── compte-rendu.test.ts
     ├── consignes-revue.test.ts
     ├── cout.test.ts
@@ -531,6 +541,7 @@ flow-board/
     ├── pas-de-groupe-seul.test.ts
     ├── pistes-session-liee.test.ts
     ├── procedure-groupe.test.mjs
+    ├── questions-a-boutons.test.ts
     ├── rattrapage.test.ts
     ├── registre-agents.test.ts
     ├── registre-session.test.ts
@@ -547,6 +558,7 @@ flow-board/
     ├── selection.test.ts
     ├── sessions-liees-agents.test.ts
     ├── sessions-liees-onglet.test.ts
+    ├── skills-retires.test.ts
     ├── suggestions.test.ts
     ├── suites-groupe-b.test.ts
     ├── suites-groupe-c.test.ts

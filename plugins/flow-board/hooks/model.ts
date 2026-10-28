@@ -341,7 +341,39 @@ const AFTER_TICKETS = new Set([...DELIVERY, 'compte-rendu'])
  * fait ou en cours : la rétro à venir disparaît des étapes, et un « Corps de PR » à venir laisse la
  * place à « Version et push » puis « Pull request » (/project:pr).
  */
-export const upgradeRun = (run: Run): Run => repairRun(upgradePhases(run))
+export const upgradeRun = (run: Run): Run => repairRun(upgradePhases(retireSkills(run)))
+
+/**
+ * Les skills retirés de la copie mattpocock-skills (1.3.1-mathis.1), et celui qui les remplace dans
+ * un parcours enregistré avant : /implement-spec par /implement (mêmes tickets), /wayfinder par
+ * /grill-with-docs (même suite ; ses éléments restent des décisions).
+ */
+const RETIRED = new Map([
+  ['implement-spec', 'implement'],
+  ['wayfinder', 'grill-with-docs'],
+])
+
+/**
+ * Une phase d'un skill retiré prend son remplaçant, avec ses étapes : toutes faites si la phase
+ * l'est, la première en cours si elle l'est.
+ */
+const retiredPhase = (p: FlowPhase): FlowPhase => {
+  const skill = RETIRED.get(p.skill) ?? p.skill
+  const alts = p.alts.filter(a => !RETIRED.has(a) && a !== skill)
+  const detours = p.detours.filter(d => !RETIRED.has(d.skill))
+  if (skill === p.skill && alts.length === p.alts.length && detours.length === p.detours.length) return p
+  const fresh = stepsFor(skill, p.status === 'active' ? (p.startedAt ?? 0) : undefined)
+  const steps = skill === p.skill ? p.steps : p.status === 'done' ? fresh.map(s => ({ ...s, status: 'done' as const })) : fresh
+  return { ...p, skill, alts, detours, steps }
+}
+
+/** Un parcours ouvert par un skill retiré, ou qui en a une phase : sans lui, le panneau ne le dessinerait pas. */
+const retireSkills = (run: Run): Run => {
+  const phases = run.phases.map(retiredPhase)
+  const entry = RETIRED.get(run.entry) ?? run.entry
+  if (entry === run.entry && phases.every((p, i) => p === run.phases[i])) return run
+  return { ...run, entry, phases }
+}
 
 /** Les étapes de /project:push dans la phase « Version et push ». */
 const PUSH_STEPS = new Set(['push', 'checks', 'docs', 'pushed'])
@@ -362,7 +394,7 @@ const repairRun = (run: Run): Run => {
   const isClosedTooSoon =
     run.status !== 'done' &&
     current !== undefined &&
-    (current.skill === 'implement' || current.skill === 'implement-spec') &&
+    current.skill === 'implement' &&
     current.status === 'done' &&
     run.tickets.some(t => t.status !== 'done')
   const hasGuessedReview = run.phases.some(p => p.stats.reviews === undefined && p.stats.standards >= 0)
@@ -791,8 +823,8 @@ const moveTo = (run: Run, at: number, id: string, now: number, fx: Effects) => {
     log(run, now, def.glyph, `${def.label} ${agree(def, 'démarré')}`, 'accent')
     fx.toasts.push(`${left ? `${left.glyph} ${left.label} → ` : ''}${def.glyph} ${def.label}`)
   }
-  // Du code s'écrit : le compte rendu qui suit n'est plus facultatif (Triage, Grand chantier, Santé du code).
-  if (id === 'implement' || id === 'implement-spec') {
+  // Du code s'écrit : le compte rendu qui suit n'est plus facultatif (Triage, Santé du code).
+  if (id === 'implement') {
     for (const p of run.phases.slice(at + 1)) if (p.skill === 'compte-rendu') p.isOptional = false
   }
   run.status = 'active'
@@ -833,7 +865,7 @@ const reopenSkipped = (run: Run, id: string, now: number, fx: Effects): boolean 
   phase.steps = stepsFor(id, now)
   run.cursor = at
   // Du code s'écrit : le compte rendu qui suit n'est plus facultatif, comme dans moveTo.
-  if (id === 'implement' || id === 'implement-spec') {
+  if (id === 'implement') {
     for (const p of run.phases.slice(at + 1)) if (p.skill === 'compte-rendu') p.isOptional = false
   }
   run.status = 'active'
@@ -849,7 +881,7 @@ const reopenSkipped = (run: Run, id: string, now: number, fx: Effects): boolean 
  * Implémentation devient la phase en cours, si le parcours n'y est pas déjà.
  */
 const enterImplementation = (run: Run, now: number, fx: Effects) => {
-  const at = run.phases.findIndex(p => p.skill === 'implement' || p.skill === 'implement-spec')
+  const at = run.phases.findIndex(p => p.skill === 'implement')
   if (at < 0) return
   const phase = run.phases[at]!
   if (at > run.cursor || (at === run.cursor && phase.status === 'pending')) moveTo(run, at, phase.skill, now, fx)
@@ -871,8 +903,8 @@ const namedInArgs = (run: Run, args: string): string[] => {
  * groupe d'un parcours en phase compte rendu, il en ouvrait un second. Faux quand rien ne s'applique.
  */
 const backToImplementation = (run: Run, id: string, args: string, now: number, fx: Effects): boolean => {
-  if (id !== 'implement' && id !== 'implement-spec') return false
-  const at = run.phases.findIndex(p => p.skill === 'implement' || p.skill === 'implement-spec' || p.alts.includes(id))
+  if (id !== 'implement') return false
+  const at = run.phases.findIndex(p => p.skill === 'implement')
   if (at < 0 || at >= run.cursor) return false
   const named = namedInArgs(run, args)
   if (named.length === 0) return false
@@ -1938,7 +1970,7 @@ const reportHere = (
   const isReportGate = input.complete === true && !detour && phase.skill === 'compte-rendu'
   // Un groupe fini n'est pas la fin de la phase : elle reste ouverte tant que des tickets du lot le sont.
   const stillOpen = run.tickets.filter(t => t.status !== 'done')
-  const isTicketGate = input.complete === true && !detour && (phase.skill === 'implement' || phase.skill === 'implement-spec') && stillOpen.length > 0
+  const isTicketGate = input.complete === true && !detour && phase.skill === 'implement' && stillOpen.length > 0
   // « Version et push » est une seule phase : la fin de /project:version n'en est que la moitié.
   const isPushGate = input.complete === true && !detour && phase.skill === 'project:version' && !isPushed(phase)
   // Des pistes confiées à une session liée et pas encore rendues : la phase attend sa note de fin.
@@ -2263,7 +2295,7 @@ const returnGroups = (run: Run, value: unknown, now: number, stored?: unknown): 
     keepDecisions(run, decided)
     for (const d of decided) log(run, now, '⚑', `Décidé sans toi (groupe ${d.relayedFrom}) : ${d.what}`, 'warn')
     const reviewedThere: string[] = []
-    const impl = run.phases.find(p => p.skill === 'implement' || p.skill === 'implement-spec')
+    const impl = run.phases.find(p => p.skill === 'implement')
     run.groups = run.groups!.map(g => {
       if (!back.includes(g.id)) return g
       const relayed = relayForGroup(relay, g)
@@ -2998,11 +3030,6 @@ const addArtifact = (run: Run, artifact: Artifact) => {
   run.artifacts = [artifact, ...run.artifacts.filter(a => a.path !== artifact.path)].slice(0, LIMITS.artifacts)
 }
 
-const addItem = (target: { items: FlowItem[] }, item: FlowItem) => {
-  if (target.items.some(i => i.id === item.id)) return
-  target.items = [...target.items, item].slice(0, LIMITS.items)
-}
-
 const recordTest = (run: Run, ok: boolean, kind: 'test' | 'check', now: number, isFullSuite = false) => {
   const previous = [...run.tests].reverse().find(t => t.kind === kind)
   run.tests = [...run.tests, { at: now, ok, kind }].slice(-LIMITS.tests)
@@ -3058,17 +3085,12 @@ export const applyCommand = (board: Board, command: string, ok: boolean, out: st
     } else if (verb.startsWith('checkout') || verb.startsWith('switch')) {
       const name = /\b(?:checkout\s+-b|switch\s+-c)\s+(\S+)/.exec(command)?.[1] ?? ''
       log(run, now, '⎇', `Branche ${name}`, 'info')
-      if (target.skill === 'implement-spec') reachStep(target, 'branch', now)
     } else if (verb.startsWith('worktree')) {
       if (/worktree\s+add/.test(command)) run.counters.worktrees += 1
-      else {
-        run.counters.worktrees = Math.max(0, run.counters.worktrees - 1)
-        if (target.skill === 'implement-spec') reachStep(target, 'cleanup', now)
-      }
+      else run.counters.worktrees = Math.max(0, run.counters.worktrees - 1)
     } else if (verb === 'merge') {
       run.counters.merges += 1
       log(run, now, '⤞', 'Merge', 'ok')
-      if (target.skill === 'implement-spec') reachStep(target, 'merge', now)
     } else if (verb === 'bisect') {
       log(run, now, '⌁', 'git bisect', 'info')
     } else if (verb === 'push') {
@@ -3089,8 +3111,6 @@ export const applyCommand = (board: Board, command: string, ok: boolean, out: st
         addArtifact(run, { path: url || `spec:${id}`, kind: 'spec', label: number ? `Spec #${number}` : 'Spec publiée', detail: title || undefined, at: now })
         log(run, now, '▤', `Spec publiée${number ? ` (#${number})` : ''}`, 'ok')
         reachStep(phase, 'publish', now)
-      } else if (target.skill === 'wayfinder') {
-        addItem(target, { id: id || `w${target.items.length + 1}`, label: clip(title || id, TEXT_MAX), status: 'todo' })
       } else if (id && isFindingTime(run)) {
         // Hors des skills qui publient le lot : une trouvaille, pas un ticket du lot.
         addFound(run, { id, name: clip(title || id, TEXT_MAX), status: 'todo', ...(url ? { url } : {}) }, now)
@@ -3118,7 +3138,6 @@ export const applyCommand = (board: Board, command: string, ok: boolean, out: st
       }
     } else if ((noun === 'pr' || noun === 'mr') && (verb === 'ready' || verb === 'merge')) {
       log(run, now, '⇄', verb === 'ready' ? 'PR prête à relire' : 'PR fusionnée', 'ok')
-      if (target.skill === 'implement-spec') reachStep(target, 'close', now)
     }
   }
 
@@ -3219,27 +3238,17 @@ export const applyFileChange = (board: Board, change: FileChange, now: number): 
     const id = m[2]!
     const heading = /^#\s+(.+)$/m.exec(change.content ?? '')?.[1]?.trim()
     const status = statusFromFile(text)
-    if (focus === 'wayfinder') {
-      const was = target.items.find(i => sameTicket(i.id, id))
-      const itemStatus: ItemStatus = status === 'done' ? 'done' : status === 'doing' ? 'doing' : 'todo'
-      if (was) target.items = target.items.map(i => (i === was ? { ...i, status: itemStatus } : i))
-      else addItem(target, { id, label: clip(heading ?? words(m[3]!), TEXT_MAX), status: itemStatus })
-    } else {
-      const was = run.tickets.find(t => sameTicket(t.id, id))
-      if (!was) {
-        run.tickets = [...run.tickets, { id, name: clip(heading ?? words(m[3]!), TEXT_MAX), status: status ?? 'todo' }].slice(0, LIMITS.tickets)
-        if (phase.skill === 'to-tickets') reachStep(phase, 'publish', now)
-      } else if (status && status !== was.status) {
-        setTickets(run, [{ id: was.id, status }], now, b.session)
-      }
+    const was = run.tickets.find(t => sameTicket(t.id, id))
+    if (!was) {
+      run.tickets = [...run.tickets, { id, name: clip(heading ?? words(m[3]!), TEXT_MAX), status: status ?? 'todo' }].slice(0, LIMITS.tickets)
+      if (phase.skill === 'to-tickets') reachStep(phase, 'publish', now)
+    } else if (status && status !== was.status) {
+      setTickets(run, [{ id: was.id, status }], now, b.session)
     }
   } else if ((m = /(?:^|\/)\.scratch\/([^/]+)\/spec\.md$/i.exec(norm))) {
     if (!known) log(run, now, '▤', `Spec écrite : ${words(m[1]!)}`, 'ok')
     add('spec', `Spec · ${words(m[1]!)}`, shown)
     if (phase.skill === 'to-spec') reachStep(phase, 'publish', now)
-  } else if ((m = /(?:^|\/)\.scratch\/([^/]+)\/map\.md$/i.exec(norm))) {
-    add('map', `Carte · ${words(m[1]!)}`, shown)
-    if (focus === 'wayfinder') reachStep(target, 'map', now)
   } else if (/architecture-review-[^/]*\.html$/i.test(norm)) {
     if (!known) log(run, now, '▲', 'Rapport d’architecture écrit', 'ok')
     add('report', 'Rapport d’architecture', norm.split('/').pop())
@@ -3329,7 +3338,7 @@ const setFound = (run: Run, changes: StatusChange[], now: number) => {
  * Les skills qui publient le lot lui-même : ce qu'ils créent dans le tracker, ce sont les tickets,
  * pas des trouvailles.
  */
-const LOT_SKILLS = new Set(['to-tickets', 'to-spec', 'triage', 'wayfinder'])
+const LOT_SKILLS = new Set(['to-tickets', 'to-spec', 'triage'])
 
 const isFindingTime = (run: Run): boolean => {
   const { phase, detour } = focusOf(run)
@@ -3451,39 +3460,26 @@ export const applyAsana = (board: Board, tasks: unknown, now: number): Outcome =
 
 // ─── Sous-agents ──────────────────────────────────────────────────────────
 
-const roleOf = (text: string): string | undefined => {
-  if (/merg/i.test(text)) return 'merger'
-  if (/review|relect|relis|revue|standards/i.test(text)) return 'relecteur'
-  if (/research|recherch|sources?/i.test(text)) return 'recherche'
-  if (/explor|cartograph|carte|map\b/i.test(text)) return 'exploration'
-  if (/design|interface|alternativ/i.test(text)) return 'design'
-  if (/fix|correct/i.test(text)) return 'correctif'
-  if (/implement|ticket|#\d+/i.test(text)) return 'implementer'
-  return undefined
-}
-
 export type AgentStart = {
   key: string
   name: string
   model?: string
-  /** `subagent_type` de l'appel : le rôle à défaut d'en lire un dans la description. */
+  /** `subagent_type` de l'appel. */
   type?: string
   isBackground: boolean
 }
 
 /**
- * Un appel Agent part pendant le parcours actif : ses étapes avancent (implementers, relecteurs,
- * alternatives…). Le sous-agent lui-même vit dans le registre de la session, plus dans le parcours (S1).
+ * Un appel Agent part pendant le parcours actif : ses étapes avancent (relecteurs, alternatives,
+ * exploration, sources). Le sous-agent lui-même vit dans le registre de la session, plus dans le parcours (S1).
  */
 export const applyAgentStart = (board: Board, start: AgentStart, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
   const run = activeRun(b)!
-  const role = roleOf(start.name) ?? (start.type && start.type !== 'general-purpose' ? start.type : undefined)
   const { phase, detour } = focusOf(run)
   const target = detour ?? phase
   const focus = target.skill
-  if (focus === 'implement-spec') reachStep(target, role === 'merger' ? 'merge' : 'implementers', now)
   if (focus === 'code-review') reachStep(target, 'reviewers', now)
   if (focus === 'codebase-design') reachStep(target, 'alternatives', now)
   if (focus === 'improve-codebase-architecture') reachStep(target, 'explore', now)
@@ -3945,10 +3941,6 @@ export const togglePick = (run: Run, selection: readonly string[], id: string): 
   return kept
 }
 
-/** Spec puis tickets faits dans ce parcours : /implement-spec peut prendre le relais. */
-export const hasSpecAndTickets = (run: Run): boolean =>
-  run.phases.some(p => p.skill === 'to-spec' && p.status === 'done') && run.phases.some(p => p.skill === 'to-tickets' && p.status === 'done')
-
 // ─── Groupes, vagues et parallélisme ──────────────────────────────────────
 
 /** Un chemin de dépôt comparable : barres obliques, sans `./` ni barre finale, en minuscules. */
@@ -4266,7 +4258,7 @@ export const groupPlan = (run: Run): GroupPlan | null => {
 
 /**
  * Les tickets en cours, avec le groupe de chacun (null hors des groupes déclarés) et sa place dans
- * le plan, pour la couleur. Plusieurs à la fois : sous-agents de /implement-spec, ticket laissé en
+ * le plan, pour la couleur. Plusieurs à la fois : sessions liées des groupes, ticket laissé en
  * cours par une autre discussion.
  */
 export const doingOf = (run: Run): { ticket: Ticket; group: TicketGroup | null; groupAt: number }[] => {

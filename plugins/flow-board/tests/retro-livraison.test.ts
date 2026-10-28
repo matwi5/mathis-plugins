@@ -52,7 +52,7 @@ test('la mise à niveau ne touche ni à une rétro faite, ni à un corps de PR d
 })
 
 test('les nouveaux parcours n’ont plus de phase Rétro', () => {
-  for (const entry of ['grill-with-docs', 'to-spec', 'to-tickets', 'implement', 'implement-spec', 'pr']) {
+  for (const entry of ['grill-with-docs', 'to-spec', 'to-tickets', 'implement', 'pr']) {
     expect(newRun(entry, 1).phases.some(p => p.skill === 'retro')).toBe(false)
   }
 })

@@ -22,7 +22,7 @@ const engine = (on: any) => {
   return filled
 }
 
-/** Un dépôt git : c'est là que /implement-spec se proposait pour un lot de groupes. */
+/** Un dépôt git : c'est là qu'un lancement en parallèle dans cette discussion se proposait. */
 const inRepo = (on: any) => on('session.repo', () => ({ value: { root: 'C:/proj', remote: null, internal: false, name: null } }))
 
 // A ∥ B prêts ; C attend A, mais c0 n'attend rien (un « prêt » dans un groupe qui attend).
@@ -94,7 +94,7 @@ test('« Ensuite » propose la session liée du prochain groupe, jamais un lance
   }
 })
 
-test('les tickets choisis à la main gardent /implement et /implement-spec', async ($, on) => {
+test('les tickets choisis à la main gardent /implement, sans lancement en parallèle', async ($, on) => {
   mock.clock(on, { now: 72_000_000 })
   mock.store(on)
   const filled = engine(on)
@@ -105,8 +105,7 @@ test('les tickets choisis à la main gardent /implement et /implement-spec', asy
   await ui.press({ key: 'launch-picks' })
   expect(filled.at(-1)).toMatch(/^\/mattpocock-skills:implement Tickets à traiter, un par un et dans cet ordre : 1\) b1 — Deux$/)
   await ui.press({ key: 'pick-b1' })
-  await ui.press({ key: 'launch-picks-parallel' })
-  expect(filled.at(-1)).toMatch(/^\/mattpocock-skills:implement-spec Tickets à traiter : 1\) b1 — Deux/)
+  expect(await ui.find({ key: 'launch-picks-parallel' })).toBeUndefined()
   await ui.unmount()
 })
 

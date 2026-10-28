@@ -21,7 +21,7 @@ const engine = (on: any) => {
   return filled
 }
 
-/** Un dépôt git : /implement-spec n'est lancé que là. */
+/** Un dépôt git : les sessions liées y ont chacune leur worktree. */
 const inRepo = (on: any) => on('session.repo', () => ({ value: { root: 'C:/proj', remote: null, internal: false, name: null } }))
 
 // Un lot proche de celui de polepredict : une chaîne côté worker, un nettoyage d'app indépendant,
@@ -250,13 +250,13 @@ test('un fichier commun empêche le parallèle, même sans dépendance', async (
   expect(await ui.find({ type: 'Text', text: /∥/ })).toBeUndefined()
   // Chacun reste lançable seul, en session liée.
   expect(await ui.find({ key: 'launch-linked-B' })).toBeDefined()
-  // Sans spec ni groupes ∥, la sélection ne propose pas /implement-spec.
+  // La sélection ne propose que /implement.
   await ui.press({ key: `pick-${N}` })
   expect(await ui.find({ key: 'launch-picks-parallel' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('avec deux groupes ∥ prêts, la sélection propose aussi /implement-spec, sans spec', async ($, on) => {
+test('avec deux groupes ∥ prêts, la sélection ne propose que /implement', async ($, on) => {
   mock.clock(on, { now: 63_000_000 })
   mock.store(on)
   const filled = engine(on)
@@ -265,11 +265,10 @@ test('avec deux groupes ∥ prêts, la sélection propose aussi /implement-spec,
 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: `pick-${N}` })
-  await ui.press({ key: 'launch-picks-parallel' })
+  expect(await ui.find({ key: 'launch-picks-parallel' })).toBeUndefined()
+  await ui.press({ key: 'launch-picks' })
   await ui.unmount()
-  expect(filled.at(-1)).toBe(
-    `/mattpocock-skills:implement-spec Tickets à traiter : 1) ${N} — Nettoyages revue. Pas de spec : les tickets et leurs dépendances (dans le tracker) suffisent.`,
-  )
+  expect(filled.at(-1)).toBe(`/mattpocock-skills:implement Tickets à traiter, un par un et dans cet ordre : 1) ${N} — Nettoyages revue`)
 })
 
 test('les groupes se recalculent quand les tickets avancent', async ($, on) => {

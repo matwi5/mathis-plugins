@@ -83,10 +83,10 @@ test('sans aucun parcours dans le projet, la barre suit le lanceur', async ($, o
   await ui.press({ key: 'any-ask-matt' })
   expect(filled.at(-1)).toBe('/mattpocock-skills:ask-matt Aucun parcours en cours : par où commencer ?')
   // Le lanceur suit le flux, puis les autres points d'entrée ; TDD, Apprendre et Orientation n'y sont plus.
-  for (const skill of ['grill-with-docs', 'to-spec', 'to-tickets', 'implement', 'diagnosing-bugs', 'branch-review', 'triage', 'wayfinder', 'improve-codebase-architecture']) {
+  for (const skill of ['grill-with-docs', 'to-spec', 'to-tickets', 'implement', 'diagnosing-bugs', 'branch-review', 'triage', 'improve-codebase-architecture']) {
     expect(await ui.find({ key: `new-${skill}` })).toBeDefined()
   }
-  for (const skill of ['tdd', 'teach', 'ask-matt']) expect(await ui.find({ key: `new-${skill}` })).toBeUndefined()
+  for (const skill of ['tdd', 'teach', 'ask-matt', 'wayfinder']) expect(await ui.find({ key: `new-${skill}` })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -97,7 +97,9 @@ test('l’onglet Commandes garde chaque skill une seule fois, lanceur compris', 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'tab-commands' })
   // Le /code-review de Matt reste dans Qualité ; le lanceur relit une branche avec celui de Claude Code.
-  for (const skill of ['tdd', 'teach', 'ask-matt', 'implement-spec', 'prototype', 'code-review']) expect(await ui.find({ key: `cmd-${skill}` })).toBeDefined()
+  for (const skill of ['tdd', 'teach', 'ask-matt', 'prototype', 'code-review']) expect(await ui.find({ key: `cmd-${skill}` })).toBeDefined()
+  // Retirés de la copie mattpocock-skills : plus de commande.
+  for (const skill of ['implement-spec', 'wayfinder']) expect(await ui.find({ key: `cmd-${skill}` })).toBeUndefined()
   for (const skill of ['to-spec', 'to-tickets', 'branch-review']) {
     expect(await ui.find({ key: `cmd-${skill}` })).toBeUndefined()
     expect(await ui.find({ key: `new-${skill}` })).toBeDefined()

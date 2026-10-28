@@ -31,7 +31,6 @@ import {
   resumable,
   type GroupPlan,
   type GroupView,
-  hasSpecAndTickets,
   isPickable,
   isGroupReviewed,
   isTicketReviewEnough,
@@ -54,6 +53,7 @@ import { MAIN, runningOf } from './registry.ts'
 import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
+import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
 import { advisorCostOf, costOf, costText, familyOf, pricesFor, type UnitPrices } from './cost.ts'
 import { HOUR_MS, TOOL_FAMILIES, WORKING_KINDS, activityOf, buildAxis, laneMarks, laneParts, laneTree, rulerTicks, sliceAxis, summaryOf, unionOf, windowBounds, zoomWindow, type Axis, type AxisPiece, type LanePart } from './timeline.ts'
@@ -160,6 +160,8 @@ export type Actions = {
   prepare: (skill: string, args?: string) => unknown
   /** Met une commande de Claude Code (`compact`) dans le prompt, sans passer par le catalogue. */
   fillCommand: (command: string) => unknown
+  /** Met `/compact` dans le prompt après `/to-tickets` (carte « Ensuite ») ; le toast dit que flow-board ajoute ses consignes. */
+  compactFirst: () => unknown
   /** Met dans le prompt une demande à Claude : mettre à jour le dossier `dir` par `git pull --ff-only`. */
   askFastForward: (dir: string | null) => unknown
   finish: () => unknown
@@ -177,8 +179,8 @@ export type Actions = {
   /** Ajoute un ticket à la sélection, ou l'en retire. */
   pick: (id: string) => unknown
   clearPicks: () => unknown
-  /** Lance la sélection : /implement dans l'ordre, ou /implement-spec en parallèle. */
-  launchPicks: (isParallel: boolean) => unknown
+  /** Lance la sélection : /implement, dans l'ordre choisi. */
+  launchPicks: () => unknown
   /** Lot sans groupe : /implement sur tous ses tickets ouverts, dans l'ordre du lot. */
   launchAll: () => unknown
   /** Confie un groupe prêt à une session liée ; le parcours reste dans cette discussion. */
@@ -231,6 +233,8 @@ export type Actions = {
   redoReport: () => unknown
   hideBand: () => unknown
   openPane: () => unknown
+  /** Copie l'adresse d'un ticket (`what` : Asana, Issue) dans le presse-papiers de la surface pressée. */
+  copyLink: (url: string, what: string, surface?: string) => unknown
   /** Onglet Agents : la fenêtre de vue de la frise (zoom, déplacement) ; null, tout. */
   setAgentsWindow: (win: AgentsWindow | null) => unknown
   /** Onglet Agents : montre la frise d'une session liée (sa clé), ou celle de l'orchestrateur (null). */
@@ -710,11 +714,21 @@ const RELAYED: Record<TicketStatus, { glyph: string; color: string; label: strin
 }
 
 /**
+ * Le lien d'un ticket : `Link` sur les surfaces riches ; au terminal, qui écrivait l'adresse
+ * entière sur la ligne, un bouton qui la copie.
+ */
+const urlCell = (k: Kit, key: string, href: string, what: string, act: Actions): unknown => {
+  const { Button, Link } = k
+  if (!k.isRich) return <Button key={key} plain={true} dimColor={true} label={`⧉${NB}${what}`} onPress={(press?: { surface?: string }) => act.copyLink(href, what, press?.surface)} />
+  return Link ? <Link href={href} label={`${what} ↗`} /> : null
+}
+
+/**
  * Une ligne de ticket : le choix (numéro d'ordre, ou cadenas tant qu'un bloqueur n'est ni fait ni
  * choisi avant), le titre, l'état, les dépendances et le lien vers Asana.
  */
 const ticketRow = (k: Kit, run: Run, t: Ticket, view: View, act: Actions, relayed?: GroupRelay['tickets'][string]): unknown => {
-  const { Box, Button, Link } = k
+  const { Box, Button } = k
   const selection = view.ui.selection ?? []
   const picked = selection.findIndex(s => s === t.id)
   const queued = (run.queue ?? []).indexOf(t.id)
@@ -758,7 +772,7 @@ const ticketRow = (k: Kit, run: Run, t: Ticket, view: View, act: Actions, relaye
         {t.status !== 'done' && <Box marginLeft={1} flexShrink={0}>{T(k, `${look.glyph}${NB}${look.label}`, { color: look.color })}</Box>}
         {t.status === 'doing' && t.by !== undefined && t.by !== view.board?.session && <Box marginLeft={1} flexShrink={0}>{T(k, `⇆${NB}autre discussion`, { color: C.blue })}</Box>}
         {t.startedAt !== undefined && <Box marginLeft={1} flexShrink={0}>{T(k, dur((t.finishedAt ?? view.now) - t.startedAt), { dim: true })}</Box>}
-        {url !== null && Link && <Box marginLeft={1} flexShrink={0}><Link href={url} label="Asana ↗" /></Box>}
+        {url !== null && <Box marginLeft={1} flexShrink={0}>{urlCell(k, `copy-${t.id}`, url, 'Asana', act)}</Box>}
       </Box>
       {(t.blockedBy ?? []).length > 0 && t.status !== 'done' && (
         <Box paddingLeft={4}>
@@ -779,7 +793,7 @@ const ticketRow = (k: Kit, run: Run, t: Ticket, view: View, act: Actions, relaye
           return (
             <Box key={`d-${t.id}-${d.id}`} flexDirection="row" paddingLeft={4}>
               <Box flexShrink={1}>{T(k, `⚖${NB}Décision à prendre : ${d.name}`, { color: C.amber, bold: true, wrap: 'wrap' })}</Box>
-              {href !== null && Link && <Box marginLeft={1} flexShrink={0}><Link href={href} label="Asana ↗" /></Box>}
+              {href !== null && <Box marginLeft={1} flexShrink={0}>{urlCell(k, `copy-${t.id}-${d.id}`, href, 'Asana', act)}</Box>}
             </Box>
           )
         })}
@@ -1058,7 +1072,7 @@ const FOUND_SHOWN = 4
  * tête ; seuls un blocage et « pour toi » se disent en toutes lettres.
  */
 const foundBlock = (k: Kit, run: Run, view: View, act: Actions): unknown => {
-  const { Box, Button, Link } = k
+  const { Box, Button } = k
   const found = run.found ?? []
   if (found.length === 0) return null
   const ordered = [...found].sort((a, b) => foundRank(a) - foundRank(b))
@@ -1100,11 +1114,7 @@ const foundBlock = (k: Kit, run: Run, view: View, act: Actions): unknown => {
               {/* Les noms Asana sont longs : ils passent à la ligne, sans pousser le lien hors du panneau. */}
               <Box flexShrink={1}>{T(k, f.name.replace(/^\[[^\]]{1,12}\]\s*/, ''), { wrap: 'wrap', dim: f.status === 'done' })}</Box>
               {f.isForUser === true && <Box marginLeft={1} flexShrink={0}>{T(k, 'pour toi', { color: C.violet })}</Box>}
-              {href !== null && Link && (
-                <Box marginLeft={1} flexShrink={0}>
-                  <Link href={href} label={f.url ? 'Issue ↗' : 'Asana ↗'} />
-                </Box>
-              )}
+              {href !== null && <Box marginLeft={1} flexShrink={0}>{urlCell(k, `copy-f-${f.id}`, href, f.url ? 'Issue' : 'Asana', act)}</Box>}
             </Box>
             {f.status === 'blocked' && (
               <Box paddingLeft={4}>{T(k, `!${NB}attend${f.why ? ` : ${f.why}` : ' : raison non précisée'}`, { color: C.amber, wrap: 'wrap' })}</Box>
@@ -1132,9 +1142,6 @@ const ticketsBlock = (k: Kit, run: Run, view: View, act: Actions, cells: number)
   const hidden = run.tickets.length - shown.length
   const selection = (view.ui.selection ?? []).filter(id => run.tickets.some(x => x.id === id))
   const plan = groupPlan(run)
-  // /implement-spec : après la spec et les tickets, ou dès que deux groupes prêts peuvent avancer
-  // ensemble ; jamais hors d'un dépôt git (ses worktrees et sa branche d'intégration en ont besoin).
-  const canParallel = view.sync.isRepo !== false && (hasSpecAndTickets(run) || (plan?.parallelBatch.length ?? 0) >= 2)
   const hint = plan ? 'Lance un groupe en session liée (↗), ou choisis les tickets (○) dans l’ordre voulu.' : 'Choisis les tickets à traiter (○), dans l’ordre voulu.'
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -1160,13 +1167,8 @@ const ticketsBlock = (k: Kit, run: Run, view: View, act: Actions, cells: number)
       {selection.length > 0 && (
         <Box key="picks" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
           <Box marginRight={1}>
-            <Button key="launch-picks" variant="primary" label={`▶ Implémenter ${plural(selection.length, 'ticket')} · /implement`} onPress={() => act.launchPicks(false)} />
+            <Button key="launch-picks" variant="primary" label={`▶ Implémenter ${plural(selection.length, 'ticket')} · /implement`} onPress={() => act.launchPicks()} />
           </Box>
-          {canParallel && (
-            <Box marginRight={1}>
-              <Button key="launch-picks-parallel" label="⇉ En parallèle · /implement-spec" onPress={() => act.launchPicks(true)} />
-            </Box>
-          )}
           <Button key="clear-picks" plain={true} dimColor={true} label="Effacer" onPress={() => act.clearPicks()} />
         </Box>
       )}
@@ -1374,7 +1376,7 @@ const doingBlock = (k: Kit, run: Run, view: View, color: string): unknown => {
 /**
  * L'ordre des choses pendant l'Implémentation : les étapes d'un ticket, puis ce qui suit pour
  * chaque groupe une fois ses tickets commités. Une ligne fixe, sans l'étape en cours : plusieurs
- * tickets peuvent avancer en même temps (sessions liées, /implement-spec).
+ * tickets peuvent avancer en même temps (sessions liées).
  */
 const orderBlock = (k: Kit, def: SkillDef): unknown => {
   const { Box } = k
@@ -1401,7 +1403,7 @@ const phaseCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const showTests = def.hasTests === true || (detour !== null && SKILLS[detour.skill]?.hasTests === true)
   // Implémentation : les groupes partent en parallèle ou en sessions liées, le suivi ticket par
   // ticket (ticket en cours, étapes) n'a plus de sens ici ; les vagues et les groupes le disent.
-  const isImplement = phase.skill === 'implement' || phase.skill === 'implement-spec'
+  const isImplement = phase.skill === 'implement'
   return (
     <Box key="phase" flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} marginTop={1}>
       <Box flexDirection="row" justifyContent="space-between" alignItems="center">
@@ -2298,6 +2300,8 @@ const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
     const parts = launchParts(k, run, rec, view, act)
     buttons.push(...parts.buttons)
     note = parts.buttons.length > 0 ? `${parts.note} · la demande va dans le prompt, la phase continue` : parts.note
+    // Après /to-tickets, avant les groupes : alléger l'orchestrateur d'abord (bouton secondaire).
+    if (view.live.ask === null && suggestsCompaction(view.board, view.agents)) buttons.push(<Button key="next-compact" label={`⇣${NB}Compacter d’abord`} onPress={() => act.compactFirst()} />)
     if (phase.skill !== 'retro') buttons.push(<Button key="go-retro" label={`${SKILLS.retro!.glyph} ${SKILLS.retro!.label}`} onPress={() => act.launch('retro')} />)
   } else {
     if (sug.primary !== null) {

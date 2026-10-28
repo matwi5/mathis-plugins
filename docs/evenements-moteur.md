@@ -18,6 +18,7 @@ Les mots (requête, tâche de fond, durée réelle…) sont ceux de `GLOSSARY.md
 | 26/10/2026 | 2.1.308, moteur embarqué par l'app desktop, lancé dans le terminal | tous, sauf le message envoyé pendant une tâche de fond |
 | 27/10/2026 | 2.1.311, terminal | un message simple (ordre `prompt.submit`, `turn.start`, `classic.Stop`, `turn.complete`) |
 | 28/10/2026 | 2.1.312, terminal | démarrage et reprise (`session.start`, `classic.SessionStart`), `sessionTitle` renvoyé par `classic.SessionStart` (sonde `--titre`, `--reprise`) |
+| 28/10/2026 | 2.1.312, terminal | compaction tapée et automatique (`session.compact`), fenêtre réduite par `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000` |
 
 Le moteur est le même dans les deux binaires. L'interface graphique de l'app desktop n'a pas été pilotée : son dessin reste couvert par les tests des mods sur la surface `desktop`. Les deux versions se comportent pareil sur tous les points ci-dessous, sauf ceux qu'un seul essai montre (signalés).
 
@@ -62,6 +63,20 @@ Un hook classique peut renommer la session : `hookSpecificOutput.sessionTitle` d
 
 Ce que flow-board en tire : le titre qu'une discussion doit prendre part une fois, au prochain message ou à la reprise, et seulement s'il diffère de `session_title`.
 
+## Compaction (`session.compact`)
+
+Toute compaction vue dans cet essai (tapée, automatique) passe par `session.compact` ; le cas d'un résumé calculé à l'avance reste à confirmer (voir le tableau). Un hook peut y réécrire `instructions` (ce que le résumé doit garder) avant `next(e)`. Essai du 28/10/2026, Claude Code 2.1.312, terminal, Haiku, avec `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000` pour atteindre le seuil vite (l'invite système seule pèse près de 78 000 tokens avec les plugins de Mathis).
+
+| Essai | Vu |
+|---|---|
+| `/compact garde le mot banane` | `trigger: "manual"`, `instructions` = le texte tapé ; `next(e)` rend `{ messages, tokensBefore, tokensAfter, usage }` (78 041 → 21 472 tokens) |
+| Seuil atteint à l'envoi d'un message | `trigger: "auto"`, sans `instructions`, après `prompt.submit`, à la même milliseconde que `turn.start` (ordre entre les deux non tranché par la sonde), avant le premier appel du modèle |
+| Seuil atteint en plein tour (lectures de gros fichiers) | dans le même tour, une compaction `auto` à l'envoi puis deux entre deux appels du modèle ; le tour finit en `reason: "error"` après la troisième |
+| Compaction automatique sans résultat | deux `session.compact` (`auto`) sans retour de `next(e)` (rejet ou abandon : la sonde ne note pas l'erreur) |
+| Résumé calculé à l'avance (`precompute`) | jamais vu dans cet essai (`idleCompaction: false` dans les réglages de Mathis) : on ne sait pas encore si une compaction automatique qui réutilise un résumé calculé à l'avance repasse par l'événement (à confirmer) |
+
+Ce que flow-board en tire : il ajoute ses consignes de compaction sur tous les déclencheurs, `precompute` compris, et ne pose le repère ⇣ qu'une fois que `next(e)` a rendu des `messages` (une compaction rejetée ou refusée n'en pose pas).
+
 ## Appels à l'advisor dans un transcript
 
 Relevé le 27/10/2026 et revérifié le 28/10/2026 (noms de champs seulement, jamais le contenu). Un appel à l'advisor laisse dans la réponse du modèle (lignes `assistant` qui partagent un `message.id`) :
@@ -101,6 +116,6 @@ tmux attach -t sonde                  # jouer les scénarios, puis Ctrl-b d
 tmux kill-session -t sonde            # fermer
 ```
 
-Le script ouvre une session tmux détachée dans un dossier jetable, en Haiku et en effort low, avec la sonde (`scripts/sonde/`) chargée par `--plugin-dir`. Chaque session de Claude Code écrit son journal dans `scripts/sonde/journaux/<heure d'ouverture>.jsonl`, que git ignore : une ligne par événement, avec le temps écoulé depuis le premier (`t`, en ms), l'heure, et l'état du chrono de `session-tools` quand il est installé (`chrono`). La sonde note aussi `session.start`, `classic.SessionStart` (source, titre) et `classic.UserPromptSubmit` (titre en cours). Avec `--titre`, elle renvoie ce titre dans `sessionTitle` au premier de ces deux hooks, une fois par processus (fichier `scripts/sonde/titre.txt`, ignoré par git), et le journal le note (`…:sessionTitle`). Elle retire de son environnement les variables qui la lieraient à la session Claude Code qui la lance. La sonde fait elle-même des `await` dans ses hooks : deux événements à moins d'une milliseconde l'un de l'autre peuvent s'y noter dans un ordre différent de celui que verrait un plugin sans attente.
+Le script ouvre une session tmux détachée dans un dossier jetable, en Haiku et en effort low, avec la sonde (`scripts/sonde/`) chargée par `--plugin-dir`. Chaque session de Claude Code écrit son journal dans `scripts/sonde/journaux/<heure d'ouverture>.jsonl`, que git ignore : une ligne par événement, avec le temps écoulé depuis le premier (`t`, en ms), l'heure, et l'état du chrono de `session-tools` quand il est installé (`chrono`). La sonde note aussi `session.start`, `classic.SessionStart` (source, titre), `classic.UserPromptSubmit` (titre en cours) et `session.compact` (déclencheur, consignes, puis le résultat de `next(e)`). Avec `--titre`, elle renvoie ce titre dans `sessionTitle` au premier de ces deux hooks, une fois par processus (fichier `scripts/sonde/titre.txt`, ignoré par git), et le journal le note (`…:sessionTitle`). Elle retire de son environnement les variables qui la lieraient à la session Claude Code qui la lance. La sonde fait elle-même des `await` dans ses hooks : deux événements à moins d'une milliseconde l'un de l'autre peuvent s'y noter dans un ordre différent de celui que verrait un plugin sans attente.
 
 Après l'essai, mettre à jour le tableau des versions, les points qui changent, et les faux moteurs des tests s'il le faut.

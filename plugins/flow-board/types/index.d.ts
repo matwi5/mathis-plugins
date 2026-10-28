@@ -156,7 +156,7 @@ export type Detour = {
 }
 
 export type FlowPhase = {
-  /** Skill qui mène la phase (peut basculer sur une alternative : implement-spec). */
+  /** Skill qui mène la phase (peut basculer sur une alternative de `alts`). */
   skill: string
   /** Autres skills qui peuvent tenir cette phase. */
   alts: string[]
@@ -192,7 +192,7 @@ export type Ticket = {
   logic?: boolean
   /**
    * Id de la discussion qui a passé le ticket « en cours » ; effacé quand il en sort. Plusieurs
-   * tickets peuvent être en cours à la fois (sous-agents de /implement-spec, autre discussion).
+   * tickets peuvent être en cours à la fois (sessions liées des groupes, autre discussion).
    */
   by?: string
   startedAt?: number
@@ -669,8 +669,6 @@ export type SyncState = {
   hasRemote?: boolean | null
   /** `origin` pointe vers GitHub : la phase « Pull request » (/project:pr) n'a de sens que là. */
   isGitHub?: boolean | null
-  /** Le projet est un dépôt git ; null tant que ce n'est pas mesuré. /implement-spec en a besoin. */
-  isRepo?: boolean | null
   /**
    * Chaque plugin ou paquet changé face à la branche distante (suivie, sinon origin/main) a une
    * nouvelle version dans son manifeste : la livraison ne repropose pas /project:version. Null sans

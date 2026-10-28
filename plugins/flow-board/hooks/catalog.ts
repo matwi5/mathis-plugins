@@ -1,5 +1,5 @@
-// Catalogue du plugin mattpocock-skills (écrit sur la 1.2.3 ; les 27 noms valent pour la 1.3.1,
-// copie figée dans plugins/mattpocock-skills) : pour chaque skill, ses étapes,
+// Catalogue du plugin mattpocock-skills (écrit sur la 1.2.3 ; les 25 noms valent pour la 1.3.1-mathis.1,
+// copie figée dans plugins/mattpocock-skills, sans implement-spec ni wayfinder) : pour chaque skill, ses étapes,
 // sa couleur, le parcours qu'il ouvre et ses suites naturelles.
 //
 // Sources : les SKILL.md du plugin et la carte de routage d'ask-matt. Les libellés sont
@@ -278,22 +278,29 @@ const SENSITIVE_STEP = step(
   `list what the change, or a removal, leaves behind in a sensitive area (${SENSITIVE_AREAS}): files left in clear, logs that depend on a mode, data kept once a feature is gone; each one becomes a question to the user`,
 )
 
+/**
+ * Une validation d'un clic dans le chat (lu par Claude) : l'encadré peut cacher le texte écrit juste
+ * avant, d'où la phrase qui dit quoi valider et où le lire.
+ */
+const BUTTON_QUESTION =
+  'a button question (AskUserQuestion): one sentence on what is validated and where to read it, then « Valider (Recommandé) » and « À reprendre » (none in a linked session: there the validation goes up to the main discussion)'
+
 const GRILL_STEPS = [
   step('tree', 'Arbre des décisions', 'map the design tree of decisions'),
   step('rounds', 'Tours de questions', 'ask the frontier, round after round'),
   SENSITIVE_STEP,
-  step('agree', 'Accord partagé', 'confirm the shared understanding'),
+  step('agree', 'Accord partagé', `confirm the shared understanding with ${BUTTON_QUESTION}; the rounds before it stay in text`),
 ]
 
 const DECISIONS = { label: 'Décisions', hint: 'the decisions of the design tree (done = settled, dropped = out of scope)' }
 
-const IMPL = phase('implement', false, ['implement-spec'])
-const IMPL_OPT = phase('implement', true, ['implement-spec'])
+const IMPL = phase('implement')
+const IMPL_OPT = phase('implement', true)
 /** Le compte rendu à valider avant toute livraison : jamais facultatif. */
 const REPORT = phase('compte-rendu')
 /**
  * Le compte rendu d'un parcours dont l'Implémentation est facultative : facultatif tant qu'on n'a
- * pas codé (le parcours peut s'arrêter à la carte ou au triage), obligatoire dès que l'Implémentation
+ * pas codé (le parcours peut s'arrêter au triage ou à l'examen de l'architecture), obligatoire dès que l'Implémentation
  * démarre (moveTo, dans model.ts).
  */
 const REPORT_IF_CODE = phase('compte-rendu', true)
@@ -380,7 +387,7 @@ export const SKILLS: Record<string, SkillDef> = {
       step('seams', 'Seams validés', 'sketch the seams and get them confirmed'),
       SENSITIVE_STEP,
       step('write', 'Rédiger la spec', 'write the spec from the template; before showing or publishing it, consult the advisor (advisor tool), not a reviewer subagent; without that tool, reread it yourself in this discussion'),
-      step('publish', 'Publier', 'publish it to the tracker (ready-for-agent)'),
+      step('publish', 'Publier', `once the user validates it with ${BUTTON_QUESTION}, publish it to the tracker (ready-for-agent)`),
     ],
     flow: [phase('to-spec'), phase('to-tickets'), IMPL, REPORT, phase('project:version', true), phase('project:pr', true)],
     next: ['to-tickets'],
@@ -400,11 +407,11 @@ export const SKILLS: Record<string, SkillDef> = {
       step('context', 'Contexte', 'gather the spec or conversation'),
       step('explore', 'Explorer le code', 'look for prefactoring'),
       step('slice', 'Tranches verticales', 'draft tracer-bullet slices with blocking edges'),
-      step('approve', 'Découpage validé', 'iterate until the user approves'),
+      step('approve', 'Découpage validé', `iterate until the user approves the breakdown with ${BUTTON_QUESTION}`),
       step('publish', 'Publier les tickets', 'publish them, blockers first'),
     ],
     flow: [phase('to-tickets'), IMPL, REPORT, phase('project:version', true), phase('project:pr', true)],
-    next: ['implement', 'implement-spec'],
+    next: ['implement'],
   },
   triage: {
     id: 'triage',
@@ -428,27 +435,6 @@ export const SKILLS: Record<string, SkillDef> = {
     flow: [phase('triage'), IMPL_OPT, REPORT_IF_CODE, phase('project:version', true), phase('project:pr', true)],
     next: ['implement'],
   },
-  wayfinder: {
-    id: 'wayfinder',
-    label: 'Wayfinder',
-    flowLabel: 'Grand chantier',
-    verb: 'Carte de tickets de décision, résolus un à la fois',
-    glyph: '⚑',
-    color: C.indigo,
-    role: 'flow',
-    isUserOnly: true,
-    steps: [
-      step('destination', 'Destination', 'name the destination'),
-      step('frontier', 'Frontière', 'map the frontier breadth-first'),
-      step('map', 'Carte et tickets', 'create the map and its decision tickets'),
-      step('resolve', 'Résoudre un ticket', 'claim and resolve one ticket'),
-      step('record', 'Décision consignée', 'record the decision and update the map'),
-    ],
-    items: { label: 'Tickets de décision', hint: 'the decision tickets of the map (done = resolved)' },
-    uses: { grilling: null, 'domain-modeling': null, research: null, prototype: null },
-    flow: [phase('wayfinder'), phase('to-spec', true), phase('to-tickets', true), IMPL_OPT, REPORT_IF_CODE, phase('project:version', true), phase('project:pr', true)],
-    next: ['to-spec', 'wayfinder'],
-  },
 
   // ─── Construction ───────────────────────────────────────────────────────
   implement: {
@@ -466,34 +452,8 @@ export const SKILLS: Record<string, SkillDef> = {
     steps: TICKET_STEPS,
     groupSteps: GROUP_STEPS,
     uses: { tdd: 'tdd', 'code-review': 'review', 'codebase-design': null },
-    flow: [phase('implement', false, ['implement-spec']), REPORT, phase('project:version', true), phase('project:pr', true)],
+    flow: [IMPL, REPORT, phase('project:version', true), phase('project:pr', true)],
     next: ['compte-rendu', 'implement', 'retro'],
-  },
-  'implement-spec': {
-    id: 'implement-spec',
-    label: 'Implémentation',
-    gender: 'f',
-    flowLabel: 'Implémentation de spec',
-    verb: 'Graphe de tickets : implementers en parallèle sur la frontière',
-    glyph: '⚙',
-    color: C.tangerine,
-    role: 'flow',
-    isUserOnly: true,
-    hasTickets: true,
-    hasTests: true,
-    steps: [
-      step('graph', 'Lire le graphe', 'read the spec and the tickets as a task graph'),
-      step('explore', 'Exploration', 'optional exploration notes outside the repo'),
-      step('branch', 'Branche d’intégration', 'create the integration branch'),
-      step('implementers', 'Implementers', 'run implementers on the ready frontier'),
-      step('merge', 'Merges', 'merge each finished ticket'),
-      step('review', 'Revue globale', `code-review the integration branch, giving it ${DECIDED_HINT}`),
-      step('close', 'Clôture', 'mark the PR ready or resolve the tickets'),
-      step('cleanup', 'Nettoyage', 'remove the worktrees'),
-    ],
-    uses: { tdd: null, 'code-review': 'review' },
-    flow: [phase('implement-spec', false, ['implement']), REPORT, phase('project:version', true), phase('project:pr', true)],
-    next: ['compte-rendu', 'retro'],
   },
   tdd: {
     id: 'tdd',
@@ -557,7 +517,7 @@ export const SKILLS: Record<string, SkillDef> = {
     flow: [phase('diagnosing-bugs'), phase('code-review', true), REPORT, phase('project:version', true), phase('project:pr', true)],
     // Un bug trouvé en codant ou en relisant reste dans le lot qui l'a fait apparaître ; ailleurs
     // (cadrage, spec…), il ouvre sa « Chasse au bug ». Le bouton « 🐞 Bug · session liée » suit cette liste.
-    detourIn: ['implement', 'implement-spec', 'tdd', 'code-review', 'compte-rendu'],
+    detourIn: ['implement', 'tdd', 'code-review', 'compte-rendu'],
     next: ['code-review', 'compte-rendu', 'improve-codebase-architecture'],
   },
   wizard: {
@@ -697,7 +657,7 @@ export const SKILLS: Record<string, SkillDef> = {
     steps: [
       step('facts', 'Rassembler les faits', 'collect the facts: git log since the run started, git status, the tracking file, the tracker'),
       step('write', 'Rédiger le rapport', 'write the report in the fixed sections, short and plain'),
-      step('validate', 'Ta validation', 'wait for the user to validate the report from the dashboard'),
+      step('validate', 'Ta validation', 'in one line of text, tell the user to click « ✓ Valider le rapport » in the dashboard, never with a button question; then wait for the user to validate the report from the dashboard'),
     ],
     next: ['project:version'],
   },
@@ -942,7 +902,7 @@ export const SKILLS: Record<string, SkillDef> = {
       step('write', 'Config écrite', 'write docs/agents and the Agent skills block'),
     ],
     flow: [phase('setup-matt-pocock-skills')],
-    next: ['grill-with-docs', 'triage', 'wayfinder'],
+    next: ['grill-with-docs', 'triage'],
   },
   'ask-matt': {
     id: 'ask-matt',
@@ -977,9 +937,7 @@ const DISTINCT = new Set([
   'grilling',
   'to-spec',
   'to-tickets',
-  'implement-spec',
   'triage',
-  'wayfinder',
   'ask-matt',
   'setup-matt-pocock-skills',
   'diagnosing-bugs',
@@ -1030,14 +988,13 @@ export const LAUNCHERS: { skill: string; title: string; hint: string }[] = [
   { skill: 'diagnosing-bugs', title: 'Diagnostiquer un bug', hint: 'boucle de feedback et hypothèses' },
   { skill: 'branch-review', title: 'Relire une branche ou une PR', hint: 'les bugs du diff ; ajoute la cible, --fix ou --comment' },
   { skill: 'triage', title: 'Trier les issues', hint: 'machine à états du triage' },
-  { skill: 'wayfinder', title: 'Explorer un grand chantier', hint: 'carte de tickets de décision' },
   { skill: 'improve-codebase-architecture', title: 'Santé de l’architecture', hint: 'modules à approfondir' },
 ]
 
-/** Les autres skills, par famille : avec LAUNCHERS, les 27 skills mattpocock et les commandes de livraison du plugin project. */
+/** Les autres skills, par famille : avec LAUNCHERS, les 25 skills mattpocock et les commandes de livraison du plugin project. */
 export const COMMAND_GROUPS: { title: string; skills: string[] }[] = [
   { title: 'Cadrer et planifier', skills: ['grill-me', 'to-questionnaire', 'ask-matt', 'setup-matt-pocock-skills'] },
-  { title: 'Construire', skills: ['implement-spec', 'tdd', 'prototype', 'research', 'wizard'] },
+  { title: 'Construire', skills: ['tdd', 'prototype', 'research', 'wizard'] },
   // La revue de sécurité n'a plus de commande : Claude la lance lui-même (sous-agent relecteur).
   { title: 'Qualité', skills: ['code-review', 'compte-rendu', 'retro'] },
   { title: 'Livrer (plugin project)', skills: ['project:sync', 'project:version', 'project:push', 'project:pr'] },
@@ -1104,4 +1061,4 @@ export const FLOW_COMMANDS: { args: string; hint: string }[] = [
 ]
 
 /** Les skills dont la phase modifie le code : /project:sync est demandé avant la première modification. */
-export const CODE_SKILLS = new Set(['implement', 'implement-spec', 'tdd', 'diagnosing-bugs', 'prototype'])
+export const CODE_SKILLS = new Set(['implement', 'tdd', 'diagnosing-bugs', 'prototype'])

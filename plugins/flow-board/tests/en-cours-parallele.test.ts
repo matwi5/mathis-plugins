@@ -69,7 +69,7 @@ test('les tickets en cours se lisent dans leur groupe ; ni le panneau ni le band
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
-  await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'x' })
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Lot parallèle', tickets: LOT, groups: GROUPS } as any)
   await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'doing' }, { id: 'b1', status: 'doing' }] } as any)
   for (const surface of ['terminal', 'desktop'] as const) {

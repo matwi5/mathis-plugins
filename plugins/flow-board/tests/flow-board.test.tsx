@@ -272,7 +272,7 @@ test('les sous-agents apparaissent dans l’onglet Agents pendant leur travail, 
     result: { agentId: 'agent-7', content: [], totalToolUseCount: 0, totalDurationMs: 0, totalTokens: 0, usage: {} },
   }))
 
-  await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'x' })
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: 'Agent', description: 'Implement ticket #12', prompt: 'p', model: 'haiku', run_in_background: true } as any)
   for (const surface of ALL) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
@@ -303,7 +303,7 @@ test('un sous-agent rendu « completed » est fini, même sans run_in_background
   mock.store(on)
   engine(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'completed', agentId: 'agent-8', content: [], totalToolUseCount: 0, totalDurationMs: 0, totalTokens: 0, usage: {} } }))
-  await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'x' })
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: 'Agent', description: 'Inventaire des règles', prompt: 'p' } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'tab-agents' })
@@ -323,7 +323,7 @@ test('les fins de sous-agents manquées sont rattrapées par la liste des sous-a
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: `agent-${++n}`, description: 'd', prompt: 'p', outputFile: 'o' } }))
   let live: unknown[] = []
   on('agent.list', () => ({ value: live as any }))
-  await $.skill.prompt({ skill: 'mattpocock-skills:implement-spec', text: 'x' })
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: 'Agent', description: 'Fini sans signal', prompt: 'p', run_in_background: true } as any)
   await $.tool.call({ tool: 'Agent', description: 'Disparu', prompt: 'p', run_in_background: true } as any)
   await $.tool.call({ tool: 'Agent', description: 'Toujours au travail', prompt: 'p', run_in_background: true } as any)

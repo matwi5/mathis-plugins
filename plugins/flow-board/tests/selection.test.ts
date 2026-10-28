@@ -66,8 +66,6 @@ test('un ticket bloqué ne se choisit qu’après ses bloqueurs ; l’ordre de s
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: `pick-${A}` })
   await ui.press({ key: `pick-${D}` })
-  // Sans spec faite, pas de lancement en parallèle.
-  expect(await ui.find({ key: 'launch-picks-parallel' })).toBeUndefined()
   await ui.press({ key: 'launch-picks' })
   expect(await ui.find({ type: 'Text', text: /^#1$/ })).toBeDefined()
   await ui.unmount()
@@ -80,7 +78,7 @@ test('un ticket bloqué ne se choisit qu’après ses bloqueurs ; l’ordre de s
   expect(note.text).toMatch(/Ticket queue chosen by the user, in order: 1\) Règle SC unique/)
 })
 
-test('/implement-spec n’est proposé qu’après la spec et les tickets ; lien Asana sur les GID', async ($, on) => {
+test('après la spec et les tickets, la sélection ne propose que /implement ; lien Asana sur les GID', async ($, on) => {
   mock.clock(on, { now: 51_000_000 })
   mock.store(on)
   const filled = engine(on)
@@ -95,8 +93,39 @@ test('/implement-spec n’est proposé qu’après la spec et les tickets ; lien
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ type: 'Link' })).toBeDefined()
   await ui.press({ key: `pick-${D}` })
-  expect(await ui.find({ key: 'launch-picks-parallel' })).toBeDefined()
-  await ui.press({ key: 'launch-picks-parallel' })
+  expect(await ui.find({ key: 'launch-picks-parallel' })).toBeUndefined()
+  await ui.press({ key: 'launch-picks' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^\/mattpocock-skills:implement-spec Tickets à traiter : 1\) /)
+  expect(filled.at(-1)).toMatch(/^\/mattpocock-skills:implement Tickets à traiter, un par un et dans cet ordre : 1\) /)
+})
+
+test('au terminal, le lien Asana devient un bouton qui copie son adresse ; ailleurs, il reste un lien', async ($, on) => {
+  mock.clock(on, { now: 52_000_000 })
+  mock.store(on)
+  engine(on)
+  const copies: { text: string; surface?: string }[] = []
+  on('ui.copy', (_$: unknown, e: { text: string; surface?: string }) => {
+    copies.push(e)
+    return { value: { isCopied: true } }
+  })
+  const toasts: string[] = []
+  on('ui.toast', (_$: unknown, e: { text: string }) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Lot SC', tickets: LOT } as any)
+
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Link' })).toBeUndefined()
+  expect((await ui.find({ key: `copy-${A}` }))?.props).toMatchObject({ label: '⧉\u00a0Asana' })
+  await ui.press({ key: `copy-${A}` })
+  await ui.unmount()
+  expect(copies).toEqual([expect.objectContaining({ text: `https://app.asana.com/0/0/${A}` })])
+  expect(toasts.at(-1)).toBe('Lien Asana copié')
+
+  const desktop = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await desktop.find({ type: 'Link' })).toBeDefined()
+  expect(await desktop.find({ key: `copy-${A}` })).toBeUndefined()
+  await desktop.unmount()
 })

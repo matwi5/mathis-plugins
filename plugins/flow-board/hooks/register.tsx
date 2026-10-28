@@ -97,7 +97,6 @@ import {
   focusOf,
   clampFuture,
   groupPlan,
-  hasSpecAndTickets,
   noActiveFrench,
   withoutPullRequest,
   isBoard,
@@ -144,6 +143,7 @@ import {
   withHeader,
   MAIN,
   addMark as addRegistryMark,
+  lastCompactionAt,
   closeSegment,
   closeToolCall,
   closeOpen,
@@ -158,6 +158,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { TITLE_SEPARATOR, isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
+import { COMPACT_FIRST_TOAST, ORIGIN_FILE_RULE, compactionInstructions, compactionRoleOf, retroTranscriptNote, suggestsCompaction, withCompactionInstructions, type CompactionRole } from './compaction.ts'
 import { applyTraces } from './erase.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
 import { minOf, shortArg, toolFamily } from './timeline.ts'
@@ -2025,7 +2026,7 @@ const SKILL_IN_SPEC =
 const FRAMING_SKILLS = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-questionnaire', 'to-spec', 'to-tickets', 'domain-modeling'])
 
 /** Les consignes où une revue reçoit le fichier des choix déclarés. */
-const REVIEW_NOTES = new Set(['implement', 'implement-spec', 'final-review', 'code-review', 'branch-review'])
+const REVIEW_NOTES = new Set(['implement', 'final-review', 'code-review', 'branch-review'])
 
 const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, session?: string, decidedAt?: string | null, failedAgents = 0, standards: string | null = null): string => {
   const def = SKILLS[id]!
@@ -2075,7 +2076,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   if (id === 'implement') lines.push(securityAdvice(isRepo))
   // Sans git, la méthode des copies : le point fixe de chaque revue.
   if (!isRepo && (id === 'implement' || id === 'final-review')) lines.push(`- ${NO_GIT_COPIES}.`)
-  if (run.queue && run.queue.length > 0 && (id === 'implement' || id === 'implement-spec')) {
+  if (run.queue && run.queue.length > 0 && id === 'implement') {
     // L'état de chaque ticket : après une discussion interrompue, Claude ne refait pas ce qui est
     // commité et retrouve le travail commencé.
     const names = run.queue
@@ -2086,7 +2087,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
       .join('; ')
     lines.push(`- Ticket queue chosen by the user, in order: ${names}. Set each one to doing when you start it and to done when it is finished.`)
   }
-  if (id === 'implement' || id === 'implement-spec') {
+  if (id === 'implement') {
     const started = run.tickets.filter(t => t.status === 'doing')
     if (started.length > 0) {
       lines.push(
@@ -2094,7 +2095,6 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
       )
     }
   }
-  if (id === 'implement-spec') lines.push(securityAdvice(isRepo))
   const hasGroups = (run.groups ?? []).length > 0
   if (id === 'final-review') {
     if (isBugPass(run, session)) lines.push(bugPassNote(isRepo))
@@ -2150,7 +2150,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
         : `- Declared choices: their file is out of reach; give every reviewer the list of the choices sent in "decided" of the flow tool, with this reviewer brief, word for word: ${REVIEWER_BRIEF}. To that end, ${reviewInstructions(isRepo)}.`,
     )
   }
-  if (id === 'implement' || id === 'implement-spec') {
+  if (id === 'implement') {
     lines.push('- When every ticket of the lot is done: {"complete": true}. If reviews kept apart findings on code older than the lot, propose them to the user as a « durcissement » group (one ticket per finding), without creating it before they agree. A finished group is not the end: while tickets of the lot remain open, the next step is the next group, which the user launches from the dashboard, in its linked session (↗ Session liée). Do not suggest /flow-board:compte-rendu or the delivery before every ticket is done. Add {"note": "<one short line>"} for a decision worth keeping.')
   } else if (id !== 'compte-rendu' && def.role !== 'event') {
     lines.push(`- When the work of ${id} is finished: {"complete": true}. Add {"note": "<one short line>"} for a decision worth keeping.`)
@@ -2184,13 +2184,13 @@ const prepare = async ($: any, skill: string, given = '') => {
 }
 
 /** Une commande de Claude Code (`/compact`) dans le prompt : la personne ajoute ses consignes si elle veut, puis Entrée. */
-const fillCommand = async ($: any, command: string) => {
+const fillCommand = async ($: any, command: string, toast?: string) => {
   const text = `/${command} `
   let isFilled = false
   await quietly(async () => {
     isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
   })
-  await quietly(() => $.ui.toast(isFilled ? `${text.trim()} est dans le prompt : ajoute des consignes si tu veux, puis Entrée` : `Tape ${text.trim()} dans le prompt`))
+  await quietly(() => $.ui.toast(isFilled ? (toast ?? `${text.trim()} est dans le prompt : ajoute des consignes si tu veux, puis Entrée`) : `Tape ${text.trim()} dans le prompt`))
 }
 
 /** L'avance rapide d'un dossier en retard sur origin : une demande à Claude dans le prompt, Entrée la lance. */
@@ -2228,12 +2228,18 @@ const suggestNext = async ($: any, answer: unknown, ask: string | null) => {
   const board: Board | null = await read($, boardAtom)
   const run = activeRun(board)
   if (!run || board?.delegate) return
+  // Après /to-tickets, avant les groupes : alléger l'orchestrateur (la suite n'est pas une commande).
+  if (suggestsCompaction(board, await read($, registryAtom))) return showSuggestion($, '/compact')
   const sync = await read($, syncAtom)
   const skill = nextCommandSkill(run, { hasPullRequests: sync.isGitHub !== false, isVersionSet: sync.isVersionSet })
   // La rétro d'un parcours à sessions liées part avec sa consigne (bouton), pas en commande seule.
   if (skill === null || (skill === 'retro' && linkedSessionsOf(run).count > 0)) return
   const args = commandArgsOf(run, skill)
-  const text = `/${await commandFor($, skill)}${args ? ` ${args}` : ''}`
+  await showSuggestion($, `/${await commandFor($, skill)}${args ? ` ${args}` : ''}`)
+}
+
+/** Une commande grisée dans le prompt vide. */
+const showSuggestion = async ($: any, text: string) => {
   let isShown = false
   await quietly(async () => {
     isShown = (await $.prompt.suggest({ text })).isShown === true
@@ -2241,6 +2247,26 @@ const suggestNext = async ($: any, answer: unknown, ask: string | null) => {
   // Le tour n'est peut-être pas encore tout à fait fini : un second essai, juste après.
   if (!isShown) $.clock.after(SUGGEST_RETRY_MS, () => void quietly(() => $.prompt.suggest({ text })))
 }
+
+/**
+ * La consigne de transcript de `/retro` : affirmative quand le registre porte une compaction, sinon
+ * une vérification d'abord (une discussion reprise après une compaction n'a pas de repère ici).
+ */
+const retroTail = async ($: any): Promise<string> => {
+  let reg: SessionRegistry | null = null
+  await quietly(async () => {
+    reg = await read($, registryAtom)
+  })
+  const self = reg as SessionRegistry | null
+  let session: string | undefined = self?.session
+  if (session === undefined) await quietly(async () => {
+    session = (await read($, boardAtom))?.session
+  })
+  return retroTranscriptNote(self?.transcript, session, lastCompactionAt(self) !== null)
+}
+
+/** Le texte d'un skill, suivi d'une consigne (vide : tel quel). */
+const withTail = <R extends { text: string }>(result: R, tail: string): R => (tail === '' ? result : { ...result, text: `${result.text}${tail}` })
 
 /**
  * La rétro d'un parcours qui a eu des sessions liées : la discussion principale (la session mère)
@@ -2257,7 +2283,7 @@ const launchRetro = async ($: any): Promise<boolean> => {
   const who = prefix ? `les sessions dont le titre commence par « ${prefix} » (${OLD_SEPARATORS})${known}` : `les sessions lancées pour ses groupes ou ses pistes${known}`
   const text =
     `/${await commandFor($, 'retro')} Rétro globale du parcours « ${run.title} » : cette discussion (la session mère) et ses sessions filles, ${who}, à retrouver par ListAgents. ` +
-    `1) D'abord, lance un sous-agent par session fille, tous en parallèle et en lecture seule (general-purpose, pas Haiku) : chacun lit le transcript de sa session, son fichier .jsonl sous ~/.claude/projects/ (pas claude logs, dont la sortie de terminal est illisible), et en fait la rétro selon les étapes et les sept axes de ce skill, que tu lui transmets tels que tu les lis ici ; il ne modifie rien et rend ses pistes par sévérité, une par ligne « axe : correction », chacune avec ce qui l'a révélée dans la session. ` +
+    `1) D'abord, lance un sous-agent par session fille, tous en parallèle et en lecture seule (general-purpose, pas Haiku) : chacun lit le transcript de sa session, son fichier .jsonl sous ~/.claude/projects/ (pas claude logs, dont la sortie de terminal est illisible), en entier, compactions comprises, avec cette règle du fichier d'origine : « ${ORIGIN_FILE_RULE} », et en fait la rétro selon les étapes et les sept axes de ce skill, que tu lui transmets tels que tu les lis ici ; il ne modifie rien et rend ses pistes par sévérité, une par ligne « axe : correction », chacune avec ce qui l'a révélée dans la session. ` +
     `2) Pendant ce temps, fais la rétro de cette discussion. ` +
     `3) Une fois tous les sous-agents revenus, fais le compte rendu global : les pistes de toutes les sessions, fusionnées et sans doublon, par sévérité, chacune avec la ou les sessions où elle est apparue ; seules les pistes de ce dépôt vont dans les items de l'outil flow (donc, au choix, à une session liée) ; celles qui touchent un autre dépôt (plugins, config commune, autre projet) n'y vont pas : rends-les à part, en une liste de corrections prête à confier à un agent de ce dépôt, un point par piste, le constat puis la correction attendue.`
   let isFilled = false
@@ -2279,31 +2305,21 @@ const launchRetro = async ($: any): Promise<boolean> => {
  * Lance la sélection : la file est enregistrée dans le parcours (visible des autres discussions),
  * et la commande va dans le prompt avec les tickets dans l'ordre choisi ; Entrée la lance.
  */
-const launchPicks = async ($: any, isParallel: boolean) => {
+const launchPicks = async ($: any) => {
   const run = activeRun(await read($, boardAtom))
   const selection = (await read($, uiAtom)).selection ?? []
   if (!run || selection.length === 0) return
-  if (isParallel) {
-    let isRepo = false
-    await quietly(async () => {
-      isRepo = (await $.session.repo()) !== null
-    })
-    if (!isRepo) {
-      await quietly(() => $.ui.toast('Pas de dépôt git ici : /implement-spec a besoin de worktrees.'))
-      return
-    }
-  }
-  await launchQueue($, run, selection, isParallel)
+  await launchQueue($, run, selection)
 }
 
-/** Enregistre la file, vide la sélection et met /implement (ou /implement-spec) dans le prompt, tickets dans l'ordre. */
-const launchQueue = async ($: any, run: Run, ids: readonly string[], isParallel = false) => {
+/** Enregistre la file, vide la sélection et met /implement dans le prompt, tickets dans l'ordre. */
+const launchQueue = async ($: any, run: Run, ids: readonly string[]) => {
   const now = await $.clock.now()
   await commit($, b => setQueue(b, ids, now))
   const list = ticketList(run, ids)
-  const args = isParallel ? `Tickets à traiter : ${list}${noSpecClause(run)}` : `Tickets à traiter, un par un et dans cet ordre : ${list}`
+  const args = `Tickets à traiter, un par un et dans cet ordre : ${list}`
   await update($, uiAtom, ui => ({ ...ui, selection: [] }))
-  await prepare($, isParallel ? 'implement-spec' : 'implement', args)
+  await prepare($, 'implement', args)
 }
 
 /** « ▶ Tout implémenter ici » : un lot sans groupe se fait dans cette discussion, tickets ouverts dans l'ordre du lot. */
@@ -2313,10 +2329,6 @@ const launchAll = async ($: any) => {
   if (!run || ids.length === 0) return
   await launchQueue($, run, ids)
 }
-
-/** /implement-spec attend une spec : sans elle, le graphe des tickets lui suffit, et on le lui dit. */
-const noSpecClause = (run: Run): string =>
-  hasSpecAndTickets(run) ? '' : '. Pas de spec : les tickets et leurs dépendances (dans le tracker) suffisent.'
 
 const ticketList = (run: Run, ids: readonly string[]): string =>
   ids.map((id, i) => `${i + 1}) ${id} — ${run.tickets.find(t => t.id === id)?.name ?? id}`).join(' ; ')
@@ -2814,6 +2826,7 @@ const actionsFor = ($: any): Actions => ({
   launch: (skill: string, args?: string) => launch($, skill, args),
   prepare: (skill: string, args?: string) => prepare($, skill, args),
   fillCommand: (command: string) => fillCommand($, command),
+  compactFirst: () => fillCommand($, 'compact', COMPACT_FIRST_TOAST),
   askFastForward: (dir: string | null) => askFastForward($, dir),
   finish: async () => {
     const now = await $.clock.now()
@@ -2854,7 +2867,7 @@ const actionsFor = ($: any): Actions => ({
     if (run) await update($, uiAtom, ui => ({ ...ui, selection: togglePick(run, ui.selection ?? [], id) }))
   },
   clearPicks: () => update($, uiAtom, ui => ({ ...ui, selection: [] })),
-  launchPicks: (isParallel: boolean) => launchPicks($, isParallel),
+  launchPicks: () => launchPicks($),
   launchAll: () => launchAll($),
   launchGroupLinked: (id: string) => launchGroupLinked($, id),
   cancelGroupLinked: (id: string) => cancelGroupLinked($, id),
@@ -2930,6 +2943,15 @@ const actionsFor = ($: any): Actions => ({
   openPane: async () => {
     await update($, uiAtom, ui => ({ ...ui, isPaneDismissed: false, agentsWindow: undefined }))
     await quietly(() => $.ui.open({ id: PANE, title: PANE_TITLE }))
+  },
+  copyLink: async (url: string, what: string, surface?: string) => {
+    let done: { isCopied?: boolean } | null = null
+    try {
+      done = await $.ui.copy({ text: url, ...(surface ? { surface } : {}) })
+    } catch {
+      // Le toast donne alors l'adresse à recopier.
+    }
+    await quietly(() => $.ui.toast(done?.isCopied ? `Lien ${what} copié` : `Copie impossible : ${url}`))
   },
 })
 
@@ -3281,11 +3303,6 @@ export const register: Register = on => {
     await quietly(() => ensureRegistry($))
     // S1 : les anciens sous-agents des parcours rejoignent le registre, puis quittent le board.
     await quietly(() => migrateRunAgents($))
-    // /implement-spec a besoin d'un dépôt git (worktrees, branche d'intégration) : le panneau ne le propose pas ailleurs.
-    await quietly(async () => {
-      const repo = await $.session.repo()
-      await update($, syncAtom, s => ({ ...s, isRepo: repo !== null }))
-    })
     $.clock.every(1000, () => void tick($))
     scheduleCheck($, true)
     // Les prix des modèles, hors du démarrage : ccusage prend quelques secondes.
@@ -3400,15 +3417,17 @@ export const register: Register = on => {
     const args =
       call?.args ?? (lastCommand !== null && lastCommand.id === id && now - lastCommand.at < 60_000 ? lastCommand.args : undefined)
     if (id === 'project:sync' && isMain) isRecheckAfterTurn = true
+    // La rétro relit le transcript de la discussion si elle a été compactée, avec ou sans parcours.
+    const tail = id === 'retro' && isMain ? await retroTail($) : ''
     // Une session liée lance elle-même les revues de son groupe : le tableau de bord d'ici l'apprend par le relais.
     if ((await read($, boardAtom))?.delegate) {
       if (id === 'final-review') await relaySignal($, { kind: 'review' })
       if (id === 'security-review') await relaySignal($, { kind: 'security' })
-      return result
+      return withTail(result, tail)
     }
     const fx = await commit($, board => applySkill(board, e.skill, { now, isMain, args }))
     // Les revues du groupe et de sécurité ne changent pas de phase, mais leurs consignes comptent.
-    if (!fx || (fx.note === 'none' && id !== 'final-review' && id !== 'security-review')) return result
+    if (!fx || (fx.note === 'none' && id !== 'final-review' && id !== 'security-review')) return withTail(result, tail)
     const run = activeRun(await read($, boardAtom))
     // Une phase qui touche au code commence : on regarde tout de suite si le distant a avancé.
     if (run && CODE_SKILLS.has(currentPhase(run).skill)) scheduleCheck($, true)
@@ -3418,7 +3437,7 @@ export const register: Register = on => {
     // celui de cette discussion et ceux de ses sessions liées (Q-c), pour le seul compte rendu.
     const failedAgents = run && noteId === 'compte-rendu' ? await failedOfRun($, run) : 0
     noteReferences($)
-    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null)}` } : result
+    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null)}${tail}` } : withTail(result, tail)
   })
 
   // Ce qui se passe pendant un parcours : sous-agents, fichiers, commandes, Asana, questions.
@@ -3625,10 +3644,27 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // La compaction se voit en direct (essai, point 9) : un repère sur l'orchestrateur.
+  // La compaction se voit en direct (essai, point 9) : un repère sur l'orchestrateur, pour une
+  // compaction de la discussion elle-même ; un calcul à l'avance n'installe rien, et celle d'un
+  // sous-agent n'est pas la sienne.
+  // Les consignes de compaction (selon le rôle de la discussion) suivent le texte reçu, pour toute
+  // compaction de la discussion, calcul à l'avance compris : la compaction suivante le réutilise.
+  // Le repère suit le résultat : une compaction refusée (`skip`) ou ratée n'en pose pas.
   on('session.compact', async ($, e, next) => {
-    await markLane($, MAIN, { k: 'compact', at: await $.clock.now() })
-    return next(e)
+    if (e.agentId !== undefined) return next(e)
+    // Chaque lecture à part : un registre illisible ne retire que le chemin du transcript.
+    let board: Board | null = null
+    let reg: SessionRegistry | null = null
+    await quietly(async () => {
+      board = await read($, boardAtom)
+    })
+    await quietly(async () => {
+      reg = await read($, registryAtom)
+    })
+    const role: CompactionRole | null = compactionRoleOf(board, reg)
+    const result = await next(role ? { ...e, instructions: withCompactionInstructions(e.instructions, compactionInstructions(role)) } : e)
+    if (e.trigger !== 'precompute' && result.messages !== undefined) await markLane($, MAIN, { k: 'compact', at: await $.clock.now() })
+    return result
   })
   on('classic.UserPromptSubmit', async ($, e, next) => {
     await noteTranscript($, e)

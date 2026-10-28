@@ -57,6 +57,28 @@ _Avoid_: blocage
 Un moment où personne ne travaille : ni l'orchestrateur, ni ses sous-agents, ni ses sessions liées ; seuls attendent l'utilisateur, sa réponse ou son prochain message.
 _Avoid_: inactivité, trou
 
+**Transcript** :
+Le fichier qui garde toute l'histoire d'une discussion ou d'un sous-agent, message par message, compactions comprises : ce que la compaction retire du contexte y reste.
+_Avoid_: log, journal, historique
+
+**Compaction** :
+Le remplacement de l'histoire d'une discussion, dans son contexte, par un résumé ; tapée (`/compact`), automatique au seuil, ou calculée à l'avance. Le transcript, lui, garde tout.
+_Avoid_: compactage, résumé, compression
+
+**Consignes de compaction** :
+Ce qu'on demande au résumé de garder lors d'une compaction, selon le rôle de la discussion (orchestrateur, session liée de groupe).
+_Avoid_: consignes de /compact, instructions de résumé
+
+## Échanges avec l'utilisateur
+
+**Question à boutons** :
+L'encadré que Claude ouvre dans le chat pour poser une question avec des réponses à cliquer, plus une réponse libre.
+_Avoid_: encadré de suggestions, bouton dans le chat
+
+**Bouton du tableau de bord** :
+Un bouton du panneau d'un mod (flow-board, git-board) qui prépare ou lance une action. Ce qu'il porte n'est jamais redemandé par une question à boutons.
+_Avoid_: bouton du panneau, bouton flow
+
 ## Lots de tickets
 
 **Groupe** :

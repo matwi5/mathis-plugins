@@ -11,8 +11,7 @@ const boardWith = (entry: string): Board => {
 
 const shape = (board: Board) => activeRun(board)!.phases.map(p => `${p.skill}${p.isOptional ? '?' : ''}`)
 
-test('Grand chantier et Santé du code finissent comme les autres : compte rendu, version, pull request', () => {
-  expect(shape(boardWith('wayfinder'))).toEqual(['wayfinder', 'to-spec?', 'to-tickets?', 'implement?', 'compte-rendu?', 'project:version?', 'project:pr?'])
+test('Santé du code et Triage finissent comme les autres : compte rendu, version, pull request', () => {
   expect(shape(boardWith('improve-codebase-architecture'))).toEqual([
     'improve-codebase-architecture',
     'grill-with-docs?',
@@ -26,9 +25,9 @@ test('Grand chantier et Santé du code finissent comme les autres : compte rendu
   expect(shape(boardWith('triage'))).toEqual(['triage', 'implement?', 'compte-rendu?', 'project:version?', 'project:pr?'])
 })
 
-test('sans code, le parcours se clôt à la carte ; dès que l’Implémentation démarre, le compte rendu devient obligatoire', () => {
-  const board = boardWith('wayfinder')
-  // La carte est faite, rien n'a été codé : le parcours peut se clore.
+test('sans code, le parcours se clôt au triage ; dès que l’Implémentation démarre, le compte rendu devient obligatoire', () => {
+  const board = boardWith('triage')
+  // Le triage est fait, rien n'a été codé : le parcours peut se clore.
   const mapped = structuredClone(board)
   const run = activeRun(mapped)!
   run.phases[0]!.status = 'done'

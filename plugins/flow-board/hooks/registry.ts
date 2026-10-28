@@ -919,6 +919,15 @@ export const addAdvisorCalls = (reg: SessionRegistry, lane: string, uses: readon
   return withLane(next, lane, { segments: calls.reduce<AgentSegment[]>((segs, c) => cutForAdvisor(segs, c), [...(l.segments ?? [])]) }, stepEnd)
 }
 
+/**
+ * L'heure de la dernière compaction de la discussion : le plus récent repère ⇣ de la piste de
+ * l'orchestrateur, que seule une vraie compaction pose ; null sans repère ni registre.
+ */
+export const lastCompactionAt = (reg: SessionRegistry | null | undefined): number | null => {
+  const ats = (reg?.main?.marks ?? []).filter(m => m.k === 'compact').map(m => m.at)
+  return ats.length > 0 ? ats.reduce((a, b) => (b > a ? b : a)) : null
+}
+
 /** Pose un repère sur la piste. */
 export const addMark = (reg: SessionRegistry, lane: string, mark: AgentMark, now: number): SessionRegistry | null => {
   const l = laneOf(reg, lane)

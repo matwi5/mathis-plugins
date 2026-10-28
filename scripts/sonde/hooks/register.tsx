@@ -1,5 +1,5 @@
 // Sonde des événements du moteur : journalise ceux qui servent à suivre une requête (prompt,
-// tours, appels, agents, arrêts et leurs tâches de fond) dans `journaux/<heure d'ouverture>.jsonl`,
+// tours, appels, agents, arrêts et leurs tâches de fond, compactions) dans `journaux/<heure d'ouverture>.jsonl`,
 // sous le dossier de la sonde, un fichier par session. Jamais livrée : chargée par `--plugin-dir`
 // (scripts/sonde.py). Mode d'emploi et résultats : docs/evenements-moteur.md.
 //
@@ -107,6 +107,14 @@ export const register = (on: any) => {
   on("classic.UserPromptSubmit", async ($: any, e: any, next: any) => {
     await log($, "classic.UserPromptSubmit", { session_title: short(e.session_title) });
     return titled($, "classic.UserPromptSubmit", await next(e));
+  });
+  // La compaction : son déclencheur (tapée, au seuil, calculée à l'avance), et si une compaction
+  // automatique qui réutilise un résumé calculé à l'avance repasse par l'événement.
+  on("session.compact", async ($: any, e: any, next: any) => {
+    await log($, "session.compact", { trigger: e.trigger, agentId: e.agentId, instructions: short(e.instructions), messages: e.messages?.length });
+    const r = await next(e);
+    await log($, "session.compact:after", { trigger: e.trigger, skip: r?.skip, messages: r?.messages?.length, tokensBefore: r?.tokensBefore, tokensAfter: r?.tokensAfter, usage: r?.usage ? true : false });
+    return r;
   });
 };
 

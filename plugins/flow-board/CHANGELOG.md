@@ -4,6 +4,39 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.64.0 — 2026-10-28
+
+La compaction pendant un parcours : quand compacter, quoi garder, et une rétro qui relit le transcript.
+
+### Ajouté
+- **`/compact` proposé après `/to-tickets`** dans un parcours à groupes : en gris à la fin de chaque tour, et par « ⇣ Compacter d'abord » dans la carte « Ensuite », tant qu'aucun groupe n'est lancé et que la discussion ne s'est pas compactée depuis. Rien pour un lot fait dans la discussion, ni dans une session liée.
+- **Consignes de compaction** : à chaque compaction de la discussion (tapée, automatique, ou calculée à l'avance), flow-board ajoute après le texte tapé ce que le résumé doit garder. L'orchestrateur garde des renvois (parcours, phase, groupes, sessions liées, chemins des décisions et de la spec, questions ouvertes, transcript pour la rétro) ; une session liée de groupe garde de quoi reprendre son ticket et joindre l'orchestrateur. Rien pour la compaction d'un sous-agent ni pour une discussion sans parcours.
+- **Questions à boutons pour valider** : les étapes « Accord partagé » des grillings, « Publier » de `/to-spec` et « Découpage validé » de `/to-tickets` demandent une validation par question à boutons (`AskUserQuestion`), avec une phrase sur ce qui est à valider et où le lire, puis « Valider (Recommandé) » et « À reprendre » ; aucune dans une session liée, dont la validation remonte à la discussion principale. L'étape « Ta validation » du compte rendu renvoie au bouton « ✓ Valider le rapport », jamais à une question à boutons. Règles communes associées dans `config/rules/` (`general.md`, `flow-board.md`, `project.md`).
+- **Rétro d'une discussion compactée** : `/retro` reçoit une consigne de transcript ; un sous-agent en lecture seule relit le transcript jusqu'à la dernière compaction, la discussion fait la suite. Sans compaction vue par flow-board, Claude vérifie d'abord par grep si le transcript porte une marque `compact_boundary` (une discussion reprise après une compaction n'a pas de repère). Un transcript qui continue un autre fichier est suivi jusqu'à lui, règle aussi transmise aux lecteurs des sessions liées par le bouton Rétro. Le skill `/retro` (copie de l'amont) ne change pas.
+
+### Changé
+- **Liens Asana au terminal** : le lien « Asana ↗ » d'un ticket, d'une décision attendue ou d'une trouvaille (« Issue ↗ » pour une issue GitHub) écrivait son adresse entière sur la ligne. Au terminal, il devient un bouton « ⧉ Asana » (ou « ⧉ Issue ») qui copie l'adresse, avec un toast « Lien Asana copié », ou l'adresse elle-même si la copie échoue. Desktop, VS Code et mobile gardent le lien.
+
+### Corrigé
+- **Repère ⇣ de compaction** : il ne se pose plus pour un résumé calculé à l'avance (qui n'installe rien), pour la compaction d'un sous-agent, ni pour une compaction refusée par un autre hook.
+
+---
+
+## 0.63.0 — 2026-10-28
+
+`/implement-spec` et `/wayfinder` quittent la copie `mattpocock-skills` (1.3.1-mathis.1) : jamais lancés (aucune commande, aucune phase dans les parcours enregistrés), le premier couvert par les groupes en sessions liées, le second sans place pour un tracker Asana.
+
+### Retiré
+- **`/implement-spec`** : le bouton « ⇉ En parallèle · /implement-spec » d'une sélection de tickets (qui reste « ▶ Implémenter N tickets · /implement »), sa commande dans « Construire », son parcours « Implémentation de spec » et ses étapes, son suivi (branche, worktree, merge, `gh pr ready`, sous-agents implementers et merger), sa consigne de sécurité, l'alternative de la phase Implémentation, et la mesure `isRepo` qui ne servait qu'à lui.
+- **`/wayfinder`** : le lanceur « Explorer un grand chantier », son parcours « Grand chantier » et ses étapes, le suivi de ses tickets de décision (`gh issue create`, fichiers `.scratch/<chantier>/issues/`) et de sa carte (`map.md`), sa place parmi les suites de `/setup-matt-pocock-skills` et les skills qui publient le lot.
+
+### Modifié
+- **Anciens parcours** : au chargement, une phase ou un départ `/implement-spec` devient `/implement`, une phase ou un départ `/wayfinder` devient `/grill-with-docs` (éléments gardés, étapes faites si la phase l'était), et l'ancienne alternative `implement-spec` disparaît. Sans cela, le panneau ne dessinait plus un parcours qui les citait.
+
+---
+
+---
+
 ## 0.62.0 — 2026-10-28
 
 ### Modifié
