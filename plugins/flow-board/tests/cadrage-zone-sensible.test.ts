@@ -89,3 +89,20 @@ test('/to-spec et le grilling cherchent les conséquences sensibles et vérifien
     expect(text).toContain('"à confirmer"')
   }
 })
+
+// Un ticket sensible s'écrit d'après le code, et une commande ou un chemin construit d'une valeur
+// lue ailleurs est une zone sensible (le ticket « ↺ Rouvrir », dit non sensible, était passé sans
+// passe « bogues »).
+test('/to-spec et /to-tickets font lire le code avant un ticket sensible, et listent la zone des commandes construites', async ($, on) => {
+  mock.clock(on, { now: 52_000_000 })
+  mock.store(on)
+  world(on)
+  for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('read the function it names before writing a done criterion or an option offered to the user')
+    expect(text).toContain('by a search quoted in the ticket (the command and its result)')
+    expect(text).toContain('the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated')
+    expect(text).toContain('leave no « à confirmer » in a ticket: it is a question at framing')
+    expect(text).toContain('concurrency, a command or path built from a value read elsewhere: a shared file, another session, a report)')
+  }
+})

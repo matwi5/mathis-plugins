@@ -23,7 +23,7 @@ const boardWith = (input: Record<string, unknown>, entry = 'implement'): Board =
   return applyReport(board, input, 2_000).board
 }
 
-test('r18 : un relecteur et ses deux chercheurs, coût et tokens sommés ; un lien qui boucle ne compte qu’une fois', () => {
+test('un relecteur et ses deux chercheurs, coût et tokens sommés ; un lien qui boucle ne compte qu’une fois', () => {
   const tok = (n: number) => ({ input: n, output: n * 2, cacheRead: n * 10, cacheWrite: n * 3 })
   const reviewer = { agentId: 'r', tokens: tok(100), price: 1 }
   const c1 = { agentId: 'c1', parent: 'r', tokens: tok(10), price: 0.5 }
@@ -46,7 +46,7 @@ test('r18 : un relecteur et ses deux chercheurs, coût et tokens sommés ; un li
   expect(familyOf(loopA, [loopA, loopB], () => 1)).toMatchObject({ descendants: 1, cost: 2 })
 })
 
-test('r20 : la rétro lancée pendant le parcours de cette discussion porte son titre et ne reprend pas un autre parcours en pause', () => {
+test('la rétro lancée pendant le parcours de cette discussion porte son titre et ne reprend pas un autre parcours en pause', () => {
   // Un autre parcours, en pause, qui a une phase Rétro : celui d'une autre discussion du projet.
   const other = { ...newRun('retro', 500, 'Durée des requêtes'), owner: 'autre', status: 'paused' as const }
   const here = { ...newRun('implement', 1_000, 'Onglet Agents flow-board'), owner: 's' }

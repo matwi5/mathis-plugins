@@ -136,8 +136,16 @@ export const SECURITY_CRITERIA =
 export const SECURITY_FIXES_PASS =
   "no second pass on the diff of the group review's fixes, unless it touches a costly area of the method file (its section 1) or exceeds 150 changed lines outside tests; then a single pass at high effort, without verification subtasks"
 
+/**
+ * La confiance d'un dossier, lue sans rien afficher d'autre de `~/.claude.json`, qui peut porter des
+ * jetons (une session avait écrit le geste fait sans le vérifier). La procédure d'une session liée
+ * de groupe recopie la même commande (procedure-groupe.test.mjs les compare) ; le texte de
+ * lancement (`launchHow` de register.tsx) la cite.
+ */
+export const TRUST_COMMAND = `python3 -c 'import json, os, sys; p = json.load(open(os.path.expanduser("~/.claude.json"))).get("projects", {}); r = os.path.realpath(sys.argv[1]); print((p.get(r) or p.get(r.replace(os.sep, "/")) or {}).get("hasTrustDialogAccepted"))' '<dossier>'`
+
 /** Les zones où un ticket passe aussi par la passe « bogues » (lu par Claude). */
-export const SENSITIVE_AREAS = 'privacy, data deletion, encryption, concurrency'
+export const SENSITIVE_AREAS = "privacy, data deletion, encryption, concurrency, a command or path built from a value read elsewhere: a shared file, another session, a report"
 
 /** Où vit la règle des revues (modèle, effort, consignes, cible, écritures), citée par les consignes des relecteurs. */
 export const REVIEW_RULE = 'review rule, config/rules/agents.md and its detail config/reference/revues.md, once installed'
@@ -158,7 +166,7 @@ export const DECIDED_HINT = 'the path of the file of the choices already declare
  * de l'équipe Claude Code : pour un auteur agent, une remarque mineure coûte un commit et un tour de revue.
  */
 export const REVIEWER_BRIEF =
-  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot; tag every finding Important, Nit or Pre-existing (the code older than the lot just above): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review'
+  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, they go to the user as a « durcissement » group proposed at the end of the lot, except a finding on older code that breaks the invariant of the ticket: it is Important and gets fixed (in a « durcissement » group, the code it targets is not older than the lot); tag every finding Important, Nit or Pre-existing (the code older than the lot just above): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; a description, a comment or a documentation text that the diff makes wrong is Important; a choice made in session and missing from the decisions file is not a finding; the review of a ticket also looks for the neighbouring tests that read the same observable (a test that pins the old behaviour elsewhere); for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review'
 
 /**
  * Le canal des consignes d'une revue (lu par Claude) : `/code-review` tourne en exécution dérivée

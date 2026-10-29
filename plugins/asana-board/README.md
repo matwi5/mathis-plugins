@@ -6,7 +6,7 @@ Les tâches Asana du projet dans Claude Code, en **panneau** et en **bandeau** a
 - **Il permet d'agir.** Créer, cocher, changer le statut, assigner, commenter, modifier, abandonner ou supprimer une tâche, sans quitter Claude Code.
 - **Il suit Claude.** Quand Claude écrit dans Asana pendant la discussion, le panneau se relit, et la ligne de l'appel dit l'écriture avec le nom des tâches (« Asana · coche « Corriger le bandeau » ») au lieu des GID et du JSON.
 
-Version actuelle : **0.9.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.10.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

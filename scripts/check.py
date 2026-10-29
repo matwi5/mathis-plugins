@@ -39,10 +39,11 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
 7. les versions des plugins contrôlés citées dans la liste « État » d'ETAT_DU_PROJET.md (fichier
    personnel, lu seulement ; contrôle sans objet sans lui) égales à celles de leur `plugin.json`.
 
---staged (hook pre-commit, décision « Hook ») : d'abord la forme du CHANGELOG, la version (lue dans
-l'index) et la liste « État » de chaque plugin dont le CHANGELOG ou le `plugin.json` est indexé, même
+--staged (hook pre-commit, décision « Hook »), tout sur une copie de l'index : d'abord la forme du CHANGELOG, la version et
+la liste « État » de chaque plugin dont le CHANGELOG ou le `plugin.json` est indexé, même
 pour un commit de documentation seule ; puis rien de
-plus pour un commit de documentation seule ; sinon `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
+plus pour un commit de documentation seule ; sinon, sur une copie de l'index (`git checkout-index`, le
+contenu qui part, pas l'arbre de travail), `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
 (terminal seulement) des plugins touchés : 39 erreurs de types étaient passées inaperçues sur trois
 groupes quand le hook ne lançait que `validate` et les tests. Le test avec l'app desktop reste à
 `check.sh <plugin>`, avant le push. Un plugin dont tous les contrôles viennent de passer garde
@@ -82,6 +83,11 @@ DESKTOP_DIRS = {
 # Renvois au suivi d'un parcours (tickets numérotés, questions de revue, dossiers de travail) : ils
 # pointent vers `travail/`, qui ne part pas dans la version publique. Nommer la décision à la place.
 TICKET_REFS = re.compile(r"\btickets?\s+(?:n°\s*)?\d{2}\b|\bQ\d+ de la revue\b|\btravail/(?!tasks/)[\w-]+/", re.I)
+# Renvois aux décisions d'un parcours (« Q3 », « S15 », « série 19 ») : leur fichier de décisions est
+# dans `travail/` aussi. Ceux relevés le 29/10/2026 restent admis, fichier par fichier, à leur nombre
+# de ce jour (`scripts/renvois-admis.json`), jusqu'à ce qu'on les nettoie : un renvoi de plus échoue.
+DECISION_REFS = re.compile(r"(?<![\w-])(?:Q\d+(?:\.\d+)?|S\d{1,3})(?![\w-])|\b[Ss]éries?\s+\d+\b")
+ADMITTED_REFS = Path(__file__).resolve().parent / "renvois-admis.json"
 CODE_SUFFIXES = {".ts", ".tsx", ".js", ".mjs", ".cjs", ".py", ".sh"}
 # Contrôles 1 et 2 pas encore tenus par un plugin : signalés sans échec, jusqu'à leur reprise.
 PENDING = {}
@@ -242,15 +248,38 @@ def comment_of(line, suffix):
     return line[m.start():] if m else ""
 
 
+def admitted_refs():
+    """Les renvois aux décisions admis, par fichier (`<plugin>/<chemin>` → nombre)."""
+    if not ADMITTED_REFS.is_file():
+        return {}
+    try:
+        data = json.loads(ADMITTED_REFS.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as err:
+        raise Failed(f"{ADMITTED_REFS.name} illisible : {err}")
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, dict):
+        raise Failed(f"{ADMITTED_REFS.name} : pas d'objet « files »")
+    return {k: v for k, v in files.items() if isinstance(v, int)}
+
+
 def ticket_refs(plugin):
     problems = []
+    admitted = admitted_refs()
     for path, rel in files_of(plugin):
         if path.suffix not in CODE_SUFFIXES | {".md"}:
             continue
+        found = []
         for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            m = TICKET_REFS.search(comment_of(line, path.suffix))
+            text = comment_of(line, path.suffix)
+            m = TICKET_REFS.search(text)
             if m:
                 problems.append(f"{plugin.name}/{rel}:{n} : « {m.group(0)} »")
+            found += [f"{n} « {d.group(0)} »" for d in DECISION_REFS.finditer(text)]
+        allowed = admitted.get(f"{plugin.name}/{rel}", 0)
+        if len(found) > allowed:
+            problems.append(f"{plugin.name}/{rel} : {len(found)} renvois aux décisions d'un parcours (« Q3 », « S15 », « série N »), "
+                            f"{allowed} admis ({ADMITTED_REFS.name}) ; nommer la décision à la place : lignes {', '.join(found[:8])}"
+                            f"{' …' if len(found) > 8 else ''}")
     return problems
 
 
@@ -545,9 +574,12 @@ def version_advance(plugin, rev=None):
     """Une version posée par la branche (différente de celle du point où elle part de la référence)
     doit être strictement plus grande que celle de `main` et de `origin/main` : sinon une autre
     discussion a publié ce numéro, ou un plus grand, entre-temps. Une branche qui n'a pas touché
-    à la version ne demande rien, même en retard sur la référence."""
+    à la version ne demande rien, même en retard sur la référence ; pendant une fusion, une version
+    qui est celle de la branche fusionnée (`MERGE_HEAD`) vient d'elle, pas de cette branche."""
     current = manifest_version(plugin, rev)
     if current is None:
+        return []
+    if git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None and manifest_version(plugin, "MERGE_HEAD") == current:
         return []
     problems = []
     for ref in VERSION_REFS:
@@ -600,10 +632,11 @@ def check_versions(plugin, rev=None):
     log("  ok")
 
 
-def state_mismatches(names):
+def state_mismatches(names, root=REPO):
     """Les versions de la liste « État » d'ETAT_DU_PROJET.md qui diffèrent de celle de `plugin.json`,
-    pour les plugins nommés ; rien sans ce fichier (version publique)."""
-    path = REPO / STATE_FILE
+    pour les plugins nommés, dans le dépôt ou dans une copie de son index (`root`) ; rien sans ce
+    fichier (version publique)."""
+    path = root / STATE_FILE
     if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -613,15 +646,15 @@ def state_mismatches(names):
         name, cited = m.group(1), m.group(2)
         if name not in names:
             continue
-        actual = manifest_version(PLUGINS / name)
+        actual = manifest_version(root / "plugins" / name)
         if actual is not None and actual != cited:
             problems.append(f"{STATE_FILE}, section « État » : `{name}` {cited}, mais plugin.json dit {actual}")
     return problems
 
 
-def check_state(names):
+def check_state(names, root=REPO):
     log(f"→ versions de la liste « État » de {STATE_FILE}")
-    problems = state_mismatches(names)
+    problems = state_mismatches(names, root)
     if problems is None:
         log(f"  pas de {STATE_FILE} : contrôle sans objet")
     elif problems:
@@ -830,8 +863,8 @@ def single_test(plugin, name):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def validate(target, claude):
-    name = "." if target == REPO else f"plugins/{target.name}"
+def validate(target, claude, label=None):
+    name = label or ("." if target == REPO else f"plugins/{target.name}")
     step(f"claude plugin validate {name}", [claude, "plugin", "validate", target], 300)
 
 
@@ -913,6 +946,26 @@ def is_doc(path):
     return path.endswith(".md") and not component
 
 
+def export_index():
+    """Le contenu de l'index, ce que le commit enregistrera, écrit dans un dossier temporaire : le hook
+    contrôle ce qui part, pas l'arbre de travail, où le test inachevé d'une autre discussion avait
+    bloqué un commit, et où un fichier indexé cassé passait si sa version de l'arbre était bonne."""
+    tmp = Path(tempfile.mkdtemp(prefix="check-staged-"))
+    code, out = run(["git", "checkout-index", "--all", f"--prefix={tmp.as_posix()}/"], 300)
+    if code != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise Failed(f"git checkout-index : {out.strip()}")
+    return tmp
+
+
+def staged_types(plugin, copy):
+    """Les types du moteur de la copie d'un plugin (ignorés par git, donc absents de l'index) : ceux
+    du plugin dans l'arbre de travail ; à défaut, `typecheck` les cherche dans le clone principal."""
+    own = plugin / ".claude-plugin" / "types"
+    if (own / "tsconfig.json").is_file():
+        shutil.copytree(own, copy / ".claude-plugin" / "types")
+
+
 def staged():
     code, out = run(["git", "diff", "--cached", "--name-only", "-z"], 60)
     if code != 0:
@@ -920,31 +973,40 @@ def staged():
     paths = [p for p in out.split("\0") if p]
     # Une édition du CHANGELOG seul est de la documentation : sa forme se contrôle quand même.
     shaped = sorted({p.split("/")[1] for p in paths if re.fullmatch(r"plugins/[^/]+/(?:CHANGELOG\.md|\.claude-plugin/plugin\.json)", p)})
-    for name in shaped:
-        if (PLUGINS / name / ".claude-plugin" / "plugin.json").is_file():
-            log(f"pre-commit : plugins/{name}")
-            check_changelog(PLUGINS / name)
-            check_versions(PLUGINS / name, rev="")
-    if shaped:
-        check_state(shaped)
     code_paths = [p for p in paths if not is_doc(p)]
-    if not code_paths:
+    if not shaped and not code_paths:
         log("pre-commit : documentation seule, pas de contrôle")
         return
-    claude = tool("claude")
-    log("pre-commit : contrôles des fichiers indexés (Claude Code du terminal)")
-    validate(REPO, claude)
-    touched = sorted({p.split("/")[1] for p in code_paths if p.startswith("plugins/") and p.count("/") >= 2})
-    for name in touched:
-        plugin = PLUGINS / name
-        if not (plugin / ".claude-plugin" / "plugin.json").is_file():
-            continue
-        if passed_already(plugin):
-            log(f"→ plugins/{name} : identique au dernier check.sh vert, contrôles sautés")
-        else:
-            validate(plugin, claude)
-            typecheck(plugin)
-            plugin_tests(plugin, claude, "terminal")
+    # Tous les contrôles lisent la copie de l'index : ce qui part, jamais l'arbre de travail.
+    tree = export_index()
+    try:
+        for name in shaped:
+            if (tree / "plugins" / name / ".claude-plugin" / "plugin.json").is_file():
+                log(f"pre-commit : plugins/{name}")
+                check_changelog(tree / "plugins" / name)
+                check_versions(PLUGINS / name, rev="")
+        if shaped:
+            check_state(shaped, tree)
+        if not code_paths:
+            log("pre-commit : documentation seule, pas d'autre contrôle")
+            return
+        claude = tool("claude")
+        log("pre-commit : contrôles du contenu indexé, sur une copie de l'index (Claude Code du terminal)")
+        validate(tree, claude, ".")
+        touched = sorted({p.split("/")[1] for p in code_paths if p.startswith("plugins/") and p.count("/") >= 2})
+        for name in touched:
+            plugin, copy = PLUGINS / name, tree / "plugins" / name
+            if not (copy / ".claude-plugin" / "plugin.json").is_file():
+                continue
+            if passed_already(plugin):
+                log(f"→ plugins/{name} : identique au dernier check.sh vert, contrôles sautés")
+            else:
+                staged_types(plugin, copy)
+                validate(copy, claude)
+                typecheck(copy)
+                plugin_tests(copy, claude, "terminal")
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
 
 
 def main():

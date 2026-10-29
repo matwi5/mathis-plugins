@@ -35,6 +35,13 @@ const CONSIGNES = [
     keywords: ['Lecteur', 'relecture-fond-forme.md', 'fond et de la forme'],
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md', 'hooks/register.tsx'],
   },
+  {
+    // La liste des zones sensibles : la commande ou le chemin construit d'une valeur lue ailleurs y est partout
+    // (en anglais, SENSITIVE_AREAS de catalog.ts, que model.ts reprend : test cadrage-zone-sensible et rappels-outil).
+    name: 'la liste des zones sensibles',
+    keywords: ["concurrence, commande ou chemin construit à partir d'une valeur lue ailleurs"],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md', 'hooks/register.tsx'],
+  },
 ]
 
 for (const consigne of CONSIGNES) {

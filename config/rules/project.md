@@ -15,8 +15,8 @@ Les skills `/project:sync`, `/project:push`, `/project:pr`, `/project:version`, 
 
 ## Protocole de session
 
-**Au démarrage** d'une session : lire `~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/demarrage.md` et le suivre (état du projet, journal, travail restant).
+**Au démarrage** d'une session : lire `~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/demarrage.md` et le suivre (état du projet, journal, travail restant). Une session liée de groupe en est exemptée, comme du compte rendu de fin d'exécution ci-dessous : elle suit la procédure que son brief lui donne.
 
 ## Compte rendu de fin d'exécution
 
-**Fin d'une exécution longue** (plusieurs fichiers, ou plus de 30 minutes de travail) : terminer par le compte rendu décrit dans `~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/compte-rendu.md` (Résultat, À faire par toi, Décidé sans toi, Modifié, Trouvé).
+**Fin d'une exécution longue** (plusieurs fichiers, ou plus de 30 minutes de travail) : terminer par le compte rendu décrit dans `~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/compte-rendu.md` (Résultat, À faire par toi, Décidé sans toi, Modifié, Trouvé). Une session liée de groupe rend à la place le compte rendu de sa procédure.

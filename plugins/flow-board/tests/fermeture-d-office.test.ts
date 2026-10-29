@@ -69,7 +69,7 @@ test('un groupe rendu, relu, à la sécurité tranchée est listé « à fermer 
 test('un groupe rendu pas encore clos : une ligne dit ce qui lui manque', () => {
   let b = closable()
   const text = (board: Board) => applyReport(board, { note: 'point' }, 9_000, REPO).text
-  expect(text(b)).toContain('Not closed yet: group B (Bêta) lacks: its group review; the security advice.')
+  expect(text(b)).toContain('Not closed yet: group B (Bêta) lacks: its group review (if its linked session ran it, send {"reviewed": ["B"]}); the security advice.')
   b = applyReport(b, { reviewed: ['B'] }, 6_000, REPO).board
   expect(text(b)).toContain('Not closed yet: group B (Bêta) lacks: the security advice.')
   b = applyReport(b, { security: { group: 'B', advised: true, why: 'chemins' } }, 6_100, REPO).board

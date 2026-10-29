@@ -4,6 +4,16 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.4 — 2026-10-29
+
+### Modifié
+- **`to-tickets` et `to-spec`** : un ticket en zone sensible s'écrit d'après le code (la fonction nommée lue, les chemins qui écrivent ou effacent ses données énumérés par une recherche citée, la question du cycle de vie), sans « à confirmer ».
+- **`to-spec`** : finit par « tape /mattpocock-skills:to-tickets », sans promettre de le lancer.
+- **`grilling`** : quand l'utilisateur impose un mécanisme, la première question porte sur lui, ses réglages viennent au tour suivant.
+- **`tdd`** : en session liée, les seams fixés par la spec, le ticket ou le dépôt valent confirmés.
+
+---
+
 ## 1.3.1-mathis.3 — 2026-10-28
 
 ### Ajouté

@@ -4,6 +4,31 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.71.0 — 2026-10-29
+
+Les pistes de la rétro du parcours « Fermeture auto des sessions liées » : une procédure de groupe qui n'attend plus, des revues mieux cadrées, et des outils qui évitent les scripts jetables.
+
+### Ajouté
+- **Nouvelle zone sensible** : une commande ou un chemin construit à partir d'une valeur lue ailleurs (fichier partagé, autre session, compte rendu). Le ticket qui en construit une passe par la passe « bogues ».
+- **Gabarit du prompt du relecteur unique** (`reference/prompt-relecteur.md`), cité par la procédure : les axes Standards et Spec dans un seul sous-agent, sans recomposer le prompt à chaque ticket.
+- **Instantané d'un ticket sensible en une commande** (`scripts/snapshot.mjs`), au lieu de cinq appels : la liste des fichiers vérifiée, le hash imprimé.
+- **Rappels de l'outil** : chaque réponse rappelle les tickets bloqués et leur raison, un ticket passé « fait » sans revue, et un `reviewed` encore à envoyer ; champs `bugs` et `group` dans `review` (au journal du parcours).
+- **Rétro d'un parcours à sessions liées** : chaque session fille se retrouve d'abord par son fichier de relais, puis par ListAgents, qui ne liste plus une session fermée.
+- **Tests** : un corpus hostile commun à tous les gardes de forme (sosies, caractères de contrôle, séparateurs de ligne, signe Kelvin…), chaque champ du lien d'un groupe sur chaque chemin qui le réécrit ou le fusionne, et l'exécution réelle des commandes de « ↺ Rouvrir » dans un dépôt git temporaire (POSIX ; PowerShell seulement si `pwsh` est là).
+
+### Modifié
+- **Procédure d'une session de groupe** : les questions sensibles se posent en une passe « ce qui viole l'invariant » avant le premier ticket, et la session avance pendant l'attente ; une question née en cours de ticket part tout de suite à la discussion principale ; un choix qui change qui écrit, fusionne ou efface une donnée est une question ; un constat de passe « bogues » qui ne viole pas l'invariant va aux pistes, sans question ; du code écrit après la passe « bogues » repasse en revue ; décisions citées par le titre de leur entrée ; fusion d'une branche de travail qui a bougé par un commit de fusion ; pas d'appel final à l'advisor ; réglages du poste relevés à un essai ; « relancer un relecteur après 10 à 15 min » et « par l'outil Edit, sans script » retirés.
+- **Consigne des relecteurs** : un constat sur du code antérieur qui viole l'invariant est Important ; l'absence d'un choix dans `DECISIONS.md` n'est pas un constat ; une description rendue fausse par le diff est Important ; chercher les tests voisins du même observable.
+- **Revue de sécurité** : vérifications en `high`, `xhigh` pour la recherche seulement ; périmètre figé au commit du lancement ; scénario décrit par garde, trou, source et effet.
+- **Texte de lancement** : la confiance d'un dossier se lit par une commande qui n'affiche qu'elle, jamais le reste de `~/.claude.json` ; le paragraphe ListAgents n'est plus que dans la réponse à `delegate`.
+- **Compte rendu de fin de parcours** : 60 lignes au plus, « Trouvé » regroupé par thème.
+- **README** : le paragraphe « Cycle de vie » découpé en sous-sections.
+
+### Corrigé
+- **Neutralisation des textes relayés** : les tabulations verticales et sauts de page sont retirés aussi.
+
+---
+
 ## 0.70.1 — 2026-10-29
 
 La suppression des branches à la validation du compte rendu, durcie après ses revues : « ↺ Rouvrir » ne disparaît plus que pour une session dont la consigne est vraiment partie, et la consigne ne laisse plus de place au doute.

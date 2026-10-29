@@ -20,6 +20,8 @@ Work from whatever is already in the conversation context. If the user passes a 
 
 If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
 
+**A ticket in a sensitive area is written from the code, not from memory.** Before writing one of its acceptance criteria, or an option you offer the user about it, read the function it names. List every path that writes, merges or erases its data by a search, and quote that search in the ticket: the command and its result. Ask the lifecycle question (the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated). A ticket never keeps an « à confirmer »: that is a question for the user now, while framing.
+
 Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
 
 ### 3. Draft vertical slices

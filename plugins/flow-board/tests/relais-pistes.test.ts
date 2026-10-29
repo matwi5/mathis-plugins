@@ -69,7 +69,7 @@ const writeRef = (mem: Record<string, unknown>, files: Record<string, string>, r
   else mem[`relay-main:${runId}`] = ref
 }
 
-test('r10 : la reprise écrit la référence du moment ; la session liée la retrouve après le redémarrage', async ($, on) => {
+test('la reprise écrit la référence du moment ; la session liée la retrouve après le redémarrage', async ($, on) => {
   const clock = mock.clock(on, { now: 80_000_000 })
   const { mem, files } = world(on)
   await start($)
@@ -91,14 +91,14 @@ test('r10 : la reprise écrit la référence du moment ; la session liée la ret
   writeRef(mem, files, runId, '[d4e5f6]', 80_061_000)
   const told = (await $.tool.call({ tool: TOOL, note: 'avance' } as any)).result as string
   expect(told).toContain('The main discussion restarted: its reference is now "[d4e5f6]"')
-  expect(told).toContain('Reach the main discussion, "[d4e5f6]" (its reference of the moment, newer than your brief\'s)')
+  expect(told).toContain('The main discussion: "[d4e5f6]" (its reference of the moment, newer than your brief\'s), reached by its [ref] in ListAgents')
   // Une fois suivie, elle ne se redit pas.
   const again = (await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result as string
   expect(again).not.toContain('restarted')
   expect(again).toContain('"[d4e5f6]"')
 })
 
-test('r10 : une référence plus ancienne que la déclaration, d’un autre parcours ou abîmée ne change rien', () => {
+test('une référence plus ancienne que la déclaration, d’un autre parcours ou abîmée ne change rien', () => {
   const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [], activeId: null, delegate: { run: 'r1', at: 5_000, main: '[old]' } }
   expect(updateDelegateMain(board, { v: 1, run: 'r1', main: '[new]', at: 4_000 })).toBeNull()
   expect(updateDelegateMain(board, { v: 1, run: 'r2', main: '[new]', at: 6_000 })).toBeNull()
@@ -109,7 +109,7 @@ test('r10 : une référence plus ancienne que la déclaration, d’un autre parc
   expect(parseMainRef({ run: 'r1', main: 42, at: 1 }, 'r1')).toBeNull()
 })
 
-test('r11 : un compte rendu de 20 000 caractères se relit entier, et sa coupe dans le relais est dite', async ($, on) => {
+test('un compte rendu de 20 000 caractères se relit entier, et sa coupe dans le relais est dite', async ($, on) => {
   const clock = mock.clock(on, { now: 81_000_000 })
   const { mem, files } = world(on)
   await start($)
@@ -135,7 +135,7 @@ test('r11 : un compte rendu de 20 000 caractères se relit entier, et sa coupe d
   }
 })
 
-test('r11 : la discussion principale cite le fichier du compte rendu entier, ou dit qu’il manque', () => {
+test('la discussion principale cite le fichier du compte rendu entier, ou dit qu’il manque', () => {
   const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
   const run = activeRun(sent)!
   let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
@@ -150,7 +150,7 @@ test('r11 : la discussion principale cite le fichier du compte rendu entier, ou 
   expect(applyReport(sent, { note: 'point' }, 7_000, { relay: short }).text).not.toContain('[cut at')
 })
 
-test('r12 : la session liée envoie ses constats et sa revue de sécurité ; le retour du groupe les compte', () => {
+test('la session liée envoie ses constats et sa revue de sécurité ; le retour du groupe les compte', () => {
   const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
   const run = activeRun(sent)!
   const delegated = applyReport(sent, { delegate: run.id, group: 'A' }, 5_100)

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Hook pre-commit du dépôt, installé par scripts/sync.py (core.hooksPath = scripts/hooks) :
-# validate du dépôt et tests des plugins dont un fichier est indexé, avec le Claude Code du
-# terminal ; rien pour un commit de documentation seule, ni pour un plugin dont l'index est
+# validate du dépôt et tests des plugins dont un fichier est indexé, sur une copie de l'index (pas
+# l'arbre de travail), avec le Claude Code du terminal ; rien pour un commit de documentation seule, ni pour un plugin dont l'index est
 # exactement celui que scripts/check.sh vient de passer (scripts/check.py --staged).
 # Git for Windows lance aussi ce script, par son sh.
 root=$(git rev-parse --show-toplevel) || exit 1

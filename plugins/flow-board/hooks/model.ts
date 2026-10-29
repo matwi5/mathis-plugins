@@ -32,7 +32,7 @@ import type {
   VersionCommit,
   VersionUnit,
 } from '../types'
-import { SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
+import { SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
 import { branchFate, closedHint, closingProcedure, isSafeBranch, isSafeId, isSessionId, isWorktreePath, sendNumber, type CloseTarget } from './closing.ts'
 import { ownPart } from './linked.ts'
 import { maxOf, minOf } from './timeline.ts'
@@ -1613,7 +1613,39 @@ export const applyReport = (
   const reports = run ? relayedReportsText(run, relay, opts.seenReports) : ''
   // Puis les groupes rendus à fermer, et ce qui manque aux autres.
   const closing = run ? closingText(run, relay, opts.isRepo !== false) : ''
-  return reports || closing ? { ...out, text: `${out.text}${reports}${closing}` } : out
+  // Enfin les rappels : un ticket fait ici sans revue envoyée, et les tickets bloqués.
+  const reminders = run ? `${unreviewedDoneText(activeRun(board), run, input)}${blockedText(run)}` : ''
+  return reports || closing || reminders ? { ...out, text: `${out.text}${reports}${closing}${reminders}` } : out
+}
+
+/**
+ * Les tickets bloqués, rappelés à chaque réponse dans la discussion du parcours : un ticket était
+ * resté « bloqué » au tableau de bord après la décision qui le débloquait.
+ */
+const blockedText = (run: Run): string => {
+  if (run.status !== 'active') return ''
+  const blocked = run.tickets.filter(t => t.status === 'blocked')
+  if (blocked.length === 0) return ''
+  const list = blocked.map(t => `${neutralRelayed(t.name)} [${neutralRelayed(t.id)}]${t.why ? ` (${neutralRelayed(t.why)})` : ''}`).join('; ')
+  return ` · Still blocked: ${list}. Once what blocks one is settled, send its new status in "set".`
+}
+
+/** Un ticket fait par une session liée : sa revue est relayée par elle, pas envoyée ici. */
+const isLinkedTicket = (run: Run, id: string): boolean => (run.groups ?? []).some(g => g.tickets.some(x => sameTicket(x, id)) && (g.linked !== undefined || g.delegated !== undefined))
+
+/**
+ * Un ticket passé « fait » ici par cet appel, sans `review` dans le même appel : un ticket était
+ * passé « fait » sans revue envoyée, sans aucun rappel. Le rappel ne compte rien (le compteur de
+ * revues de la phase mêle revues relayées, passes « bogues » et revues de groupe) : il se dit à
+ * chaque ticket fait ici sans revue dans l'appel, et une revue envoyée plus tôt le rend sans objet.
+ */
+const unreviewedDoneText = (before: Run | null, run: Run, input: Readonly<Record<string, unknown>>): string => {
+  if (input.review !== undefined && input.review !== null) return ''
+  const was = new Map((before?.id === run.id ? before.tickets : []).map(t => [t.id, t.status]))
+  const fresh = run.tickets.filter(t => t.status === 'done' && was.has(t.id) && was.get(t.id) !== 'done' && !isLinkedTicket(run, t.id))
+  if (fresh.length === 0) return ''
+  const ids = fresh.map(t => `${neutralRelayed(t.name)} [${neutralRelayed(t.id)}]`).join(', ')
+  return ` · Done here without a review in this call: ${ids}. If its review was sent earlier, nothing to do; otherwise send its findings in "review", or run it before the next ticket.`
 }
 
 const reportOnce = (
@@ -1664,7 +1696,8 @@ const reportCutText = (run: Run, report: NonNullable<RelayEntry['report']>, sess
 /**
  * Un texte relayé par une session liée, neutralisé : chaque section de la réponse commence par
  * « · », montré « • » (ses sosies aussi, après NFKC), ses crochets doubles ne peuvent pas fermer
- * une citation, ni ses « ∥ » séparer deux comptes rendus, et ses sauts de ligne se montrent « ⏎ » :
+ * une citation, ni ses « ∥ » séparer deux comptes rendus, et ses fins de ligne (tabulation verticale
+ * et saut de page compris) se montrent « ⏎ » :
  * un texte relayé ne produit jamais une section de la réponse.
  */
 const neutralRelayed = (text: string): string =>
@@ -1673,7 +1706,7 @@ const neutralRelayed = (text: string): string =>
     .replace(/[\u27e6\u27e7\u301a\u301b]/g, '')
     .replace(/[\u00b7\u0387\u2027\u2219\u22c5\u30fb\uff65]/g, '•')
     .replace(/[\u2016\u2225\u2af4]/g, '‖')
-    .replace(/\r?\n|\r|[\u2028\u2029\u0085]/g, ' ⏎ ')
+    .replace(/\r?\n|[\r\v\f\u2028\u2029\u0085]/g, ' ⏎ ')
 
 /** Un compte rendu relayé, cité tel quel entre ⟦ et ⟧, neutralisé. */
 const quoteRelayed = (text: string): string => `⟦${neutralRelayed(text)}⟧`
@@ -1765,13 +1798,24 @@ const reachText = (board: Board): string => {
     : `Reach the main discussion by the [ref] your brief gives: ${how}`
 }
 
+/** Le rappel court de l'adresse, aux relais : le paragraphe entier n'est que dans la réponse à `delegate`. */
+const reachLine = (board: Board): string => {
+  const main = board.delegate?.main
+  const isFollowed = board.delegate?.mainAt !== undefined
+  return main
+    ? `The main discussion: "${main}"${isFollowed ? " (its reference of the moment, newer than your brief's)" : ''}, reached by its [ref] in ListAgents, as the delegate answer says.`
+    : 'The main discussion: reached by the [ref] your brief gives, in ListAgents, as the delegate answer says.'
+}
+
 const delegateText = (board: Board): string => {
   const title = delegatedTitle(board)
   return (
     `This discussion works for the workflow "${title}", which stays in the main discussion: nothing is recorded on it from here (skills, steps, phases). ` +
     'Your progress is relayed to the main discussion\'s dashboard on its own: ticket statuses from your Asana updates (« Statut : » line, completion), your commits and your test runs. ' +
     'Only if a ticket\'s status changes without an Asana update, send it here with {"set": [{"id": "<ticket id>", "status": "doing|done|blocked", "why": "<if blocked>"}]}. ' +
-    'Each choice you make that the user neither asked for nor approved goes here at once, in {"decided": [{"what": "<the choice>", "why": "<why>"}]}: the main dashboard shows it for review right away; a choice that touches a sensitive area (privacy, data deletion, encryption, concurrency) is never declared: ask the user. ' +
+    'Each choice you make that the user neither asked for nor approved goes here at once, in {"decided": [{"what": "<the choice>", "why": "<why>"}]}: the main dashboard shows it for review right away; a choice that touches a sensitive area (' +
+    SENSITIVE_AREAS +
+    ') is never declared: ask the user. ' +
     'End with your report, one line per ticket (done, or not done and why): leave your whole report here, {"report": "<the whole report>"}: it is kept in the run\'s relay file, which the main discussion reads; then send the main discussion one line that points to it with SendMessage (that message wakes it up), and end on that same line. The main discussion checks your work and records the statuses. Nothing else is accepted. ' +
     reachText(board)
   )
@@ -1799,7 +1843,7 @@ const delegatedReportText = (board: Board, input: Readonly<Record<string, unknow
   ]
     .filter(Boolean)
     .join(' and ')
-  return `Relayed to the main discussion's dashboard: ${parts}. Nothing else of this call was recorded. ${reachText(board)}${refusedText}`
+  return `Relayed to the main discussion's dashboard: ${parts}. Nothing else of this call was recorded. ${reachLine(board)}${refusedText}`
 }
 
 /**
@@ -2114,13 +2158,17 @@ const reportHere = (
   if (review) {
     const st = count(review.standards)
     const sp = count(review.spec)
+    const bugs = review.bugs === undefined ? null : count(review.bugs)
+    const reviewGroup = typeof review.group === 'string' ? str(review.group) : typeof review.group === 'number' ? String(review.group) : ''
     const fixed = count(review.fixed)
     const stats = phase.stats
     stats.reviews = (stats.reviews ?? 0) + 1
     stats.standards = Math.max(0, stats.standards) + st
     stats.spec = Math.max(0, stats.spec) + sp
     stats.fixed = (stats.fixed ?? 0) + fixed
-    log(run, now, '◈', `Revue : ${st} Standards · ${sp} Spec${fixed > 0 ? ` · ${fixed} corrigé${fixed > 1 ? 's' : ''}` : ''}`, st + sp > fixed ? 'warn' : 'ok')
+    const what = reviewGroup !== '' && recordedGroup(run, reviewGroup) ? `Revue du groupe ${recordedGroup(run, reviewGroup)!.id}` : 'Revue'
+    const bugText = bugs === null ? '' : ` · ${bugs} bogue${bugs > 1 ? 's' : ''} (passe « bogues »)`
+    log(run, now, '◈', `${what} : ${st} Standards · ${sp} Spec${bugText}${fixed > 0 ? ` · ${fixed} corrigé${fixed > 1 ? 's' : ''}` : ''}`, st + sp + (bugs ?? 0) > fixed ? 'warn' : 'ok')
     reachStep(phase, 'review', now)
   }
 
@@ -2731,7 +2779,10 @@ const isRetriedSince = (closing: Closing | undefined, touchedAt: unknown, closeA
 /** Ce qui manque à un groupe rendu pour être clos, du côté que le tableau de bord voit : vide s'il l'est. */
 const closeMissing = (run: Run, g: TicketGroup): string[] => {
   const missing: string[] = []
-  if (!isGroupReviewed(run, g)) missing.push('its group review')
+  if (!isGroupReviewed(run, g)) {
+    // Un `reviewed` refusé tant qu'un ticket était ouvert : rappelé une fois le groupe fini.
+    missing.push(isAllDone(run, g.tickets) ? `its group review (if its linked session ran it, send {"reviewed": [${JSON.stringify(g.id)}]})` : 'its group review, once its tickets are done')
+  }
   const sec = g.security
   if (sec && typeof sec === 'object' && hasUnreadableCounts(sec)) {
     missing.push(

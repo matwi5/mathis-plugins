@@ -16,7 +16,9 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
+For a change in a sensitive area, the spec is written from the code too: read each function it names before writing a decision or an option offered to the user, quote the search that lists the paths writing, merging or erasing its data (the command and its result), ask the lifecycle question (the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated), and leave no « à confirmer »: it is a question for the user now.
+
+3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage. Then tell the user the next step is theirs: « tape /mattpocock-skills:to-tickets » (a skill only the user launches: never offer to launch it yourself, nor a button that promises it).
 
 <spec-template>
 

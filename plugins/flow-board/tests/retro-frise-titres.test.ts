@@ -63,43 +63,43 @@ const texts = async ($: any, on: any, standards: boolean): Promise<{ brief: stri
   return { brief: filled.at(-1)!, implement, tickets }
 }
 
-test('r6 : avec CODING_STANDARDS.md, les consignes des revues en écrivent le chemin ; sans, elles le disent absent', async ($, on) => {
+test('avec CODING_STANDARDS.md, les consignes des revues en écrivent le chemin ; sans, elles le disent absent', async ($, on) => {
   const { brief, implement } = await texts($, on, true)
   expect(implement).toContain('- Project judgement rules: C:/proj/CODING_STANDARDS.md. Write this path in the instructions file of every review')
   expect(brief).toContain('que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)')
 })
 
-test('r6 : sans CODING_STANDARDS.md, aucun relecteur ne le cherche', async ($, on) => {
+test('sans CODING_STANDARDS.md, aucun relecteur ne le cherche', async ($, on) => {
   const { brief, implement } = await texts($, on, false)
   expect(implement).toContain('- Project judgement rules: this project has no CODING_STANDARDS.md at its root')
   expect(brief).toContain("que le projet n'a pas de CODING_STANDARDS.md à sa racine")
 })
 
-test('r11 et r22 : critères cochés avant le commit, critères des tickets faits du groupe dans les consignes de la revue', async ($, on) => {
+test('critères cochés avant le commit, critères des tickets faits du groupe dans les consignes de la revue', async ($, on) => {
   const { implement } = await texts($, on, false)
   expect(implement).toContain('commit (before the commit, tick each criterion of the ticket file (- [x]) and name next to it the test that covers it (or why none can); commit on the current branch')
   expect(implement).toContain("The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files")
 })
 
-test('r5 : un choix déclaré ne se défait pas par préférence, mais un défaut qu’il produit se signale', async ($, on) => {
+test('un choix déclaré ne se défait pas par préférence, mais un défaut qu’il produit se signale', async ($, on) => {
   const { implement } = await texts($, on, false)
   expect(implement).toContain('do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario')
   expect(implement).not.toContain('do not report again nor undo')
 })
 
-test('r2 : un ticket qui ajoute un champ persisté est en zone sensible, nomme ses chemins d’effacement et de fusion', async ($, on) => {
+test('un ticket qui ajoute un champ persisté est en zone sensible, nomme ses chemins d’effacement et de fusion', async ($, on) => {
   const { tickets } = await texts($, on, false)
   expect(tickets).toContain('A ticket that adds a field to persisted data (a stored file or registry, a record shared between discussions or sessions, a key of the store) says « Zone sensible : oui »')
   expect(tickets).toContain('names every path that erases the field and every path that merges or rebuilds it, and carries the invariant of its persisted data')
 })
 
-test('r3 et r14 : branch_name au lancement depuis l’app ; au retour, la branche lue avant d’appliquer un correctif proposé', async ($, on) => {
+test('branch_name au lancement depuis l’app ; au retour, la branche lue avant d’appliquer un correctif proposé', async ($, on) => {
   const { brief } = await texts($, on, false)
   expect(brief).toContain('use_worktree true et branch_name "groupe-boutique-<id>" (un worktree à elle, à ce nom')
   expect(brief).toContain("avant d'appliquer ici un correctif que son compte rendu propose, lire sa branche (git log et git diff de son worktree) : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici")
 })
 
-test('r16 : le titre d’une session liée sépare le parcours par « > » ; les anciens titres se relient encore', async ($, on) => {
+test('le titre d’une session liée sépare le parcours par « > » ; les anciens titres se relient encore', async ($, on) => {
   const { brief } = await texts($, on, false)
   expect(brief).toContain('avec un titre qui commence par « Boutique > Groupe <id> · »')
   expect(brief).toContain('jamais une session dont le titre commence par « Boutique > » (ses sœurs)')

@@ -45,7 +45,8 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 - <décision, accès ou action qui t'attend> : pourquoi ça bloque. Tâche Asana <lien ou GID>.
 
 ## Trouvé
-- <anomalie ou piste hors périmètre> : gravité en un mot. Tâche Asana <lien ou GID>.
+- **<thème>** : <anomalie ou piste hors périmètre> : gravité en un mot. Tâche Asana <lien ou GID>.
+(Rangé par thème : un thème par point, ses pistes à la suite sur la même ligne quand elles sont petites.)
 
 ## Documentation
 - <document> : à jour (commit <hash>), complété avant ce rapport (commit <hash>), rien à changer (pourquoi, en quelques mots), ou à faire (par qui, pourquoi).
@@ -61,7 +62,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 Règles d'écriture :
 
 - **Simple d'abord.** Chaque point dit d'abord ce qui change ou ce qui compte pour la personne, puis le détail technique utile. Un terme technique est expliqué la première fois en quelques mots.
-- **Court.** Une ligne par point, deux au plus. Pas de bloc de code sauf nécessité. Regroupe les petits points de même nature.
+- **Court.** Une ligne par point, deux au plus. Pas de bloc de code sauf nécessité. Regroupe les petits points de même nature. Le rapport entier tient en 60 lignes au plus, titres compris : au-delà, regroupe davantage (par thème, par groupe) plutôt que de couper, car un rapport trop long se coupe à l'affichage et doit être redonné.
 - **Complet.** Tous les choix signalés au tableau de bord vont dans « Décidé sans toi », plus ceux qui manquent : ticket traité hors de la file, approche choisie parmi plusieurs, travail reporté ou abandonné, périmètre changé, correctif au-delà du ticket. « Ce qui s'est mal passé » couvre aussi les tests rouges, les retours en arrière, les revues qui ont trouvé des défauts, les interruptions et les contournements.
 - **Honnête.** Ne minimise rien. Un risque ou un doute se dit en clair.
 - **Rangé par importance** dans chaque section : ce qui demande une action de la personne en premier.

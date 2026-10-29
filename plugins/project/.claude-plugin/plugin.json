@@ -1,7 +1,7 @@
 {
   "name": "project",
   "description": "Project conventions for Claude Code: set up a new project or audit an existing one against the convention, plus generic git commands (commit, sync, push, pr, version)",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": { "name": "Mathis" },
   "license": "MIT",
   "keywords": ["project", "conventions", "claude-md", "git", "versioning"]

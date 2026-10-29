@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.10.0 — 2026-10-29
+
+### Modifié
+- **`suivi-asana`** : un changement de statut ne touche que la ligne « Statut : » de la description ; au cochage, « Bloqué par : rien ».
+
+---
+
 ## 0.9.0 — 2026-10-29
 
 ### Modifié

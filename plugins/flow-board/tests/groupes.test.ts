@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { TRUST_COMMAND } from '../hooks/catalog.ts'
+
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
 const PANE = {
@@ -114,7 +116,7 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(text).toContain(`${N} — Nettoyages revue.`)
   expect(text).toMatch(/Puis lance la session, avec un titre qui commence par « Lot SC > Groupe <id> · »/)
   // L'effort de la session : medium par défaut, high pour un groupe délicat, dit en une ligne.
-  expect(text).toContain("Effort de la session (<effort>) : medium par défaut ; high si le groupe a un ticket qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), s'il reste des choix de conception à faire ou s'il touche plusieurs modules à la fois. Dis-moi en une ligne l'effort choisi et pourquoi.")
+  expect(text).toContain("Effort de la session (<effort>) : medium par défaut ; high si le groupe a un ticket qui touche une zone sensible, s'il reste des choix de conception à faire ou s'il touche plusieurs modules à la fois. Dis-moi en une ligne l'effort choisi et pourquoi.")
   // Dans l'app Desktop : start_session ; dans le CLI : claude --bg, le compte rendu revient par SendMessage.
   expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(ce dossier n’a pas de git\)\./)
   expect(text).toMatch(/Dans le CLI \(pas de start_session\) : appelle d'abord ListAgents pour lire le nom de cette discussion et sa référence entre crochets/)
@@ -135,6 +137,14 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   // Les décisions se relaient par renvoi au fichier de décisions, écrites avant d'être relayées ;
   // un geste humain remplacé se confirme par le porteur dans la session liée.
   expect(text).toContain("les décisions déjà prises par renvoi, sans les réécrire")
+  // Une décision se cite par le titre de son entrée ; la confiance du dossier se lit, par une
+  // commande qui n'affiche qu'elle, avant d'écrire que le geste est fait. La fusion d'une branche de
+  // travail qui a bougé se teste dans un dépôt : lots-sessions-liees.test.ts.
+  expect(text).toContain('chacune par le titre de son entrée, jamais par une date')
+  expect(text).toContain(`avant de dire que c'est fait, lis cette seule valeur par ${TRUST_COMMAND} (python sous Windows), jamais le fichier entier, qui peut porter des jetons`)
+  // Seule la valeur s'imprime ; sous Windows, la clé peut être écrite avec des « / ».
+  expect(TRUST_COMMAND).toContain('print((p.get(r) or p.get(r.replace(os.sep, "/")) or {}).get("hasTrustDialogAccepted"))')
+  expect(text).toContain('un essai : dans un dépôt déjà de confiance')
   expect(text).toContain("sans y reprendre le texte des règles")
   expect(text).toContain("s'y écrit AVANT d'être relayée, avec ma phrase exacte entre guillemets")
   expect(text).toContain("se confirme par moi directement dans la session liée")

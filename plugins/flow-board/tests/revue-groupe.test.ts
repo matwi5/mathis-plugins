@@ -183,7 +183,7 @@ test('avec git, les revues partent du commit d’avant le ticket ou de la base d
   expect(group).toContain("its exact command is /code-review high --fix <group base>..HEAD consignes : <path> (high without --fix for a sensitive group; <group base>: the commit before the group's first ticket; when launched without a target, review that range)")
   expect(group).toContain('the scope is then limited to this run\'s paths, given in the file as a pathspec, git diff <base>..HEAD -- <paths>')
   expect(group).toContain('Then read the diff of its fixes, rerun the checks and commit them.')
-  expect(group).toContain('git diff <group base>..HEAD')
+  expect(group).toContain('git diff <group base>..<launch>')
   for (const text of [implement, bug, group]) expect(text).not.toMatch(/Without git|copy/)
 })
 
@@ -202,6 +202,6 @@ test('sans git, chaque revue compare la copie prise avant le ticket (ou le group
   expect(group).toContain('- Without git:')
   for (const text of [implement, bug, group]) {
     expect(text).not.toContain('the commit before the ticket')
-    expect(text).not.toContain('git diff <group base>..HEAD')
+    expect(text).not.toContain('git diff <group base>..')
   }
 })

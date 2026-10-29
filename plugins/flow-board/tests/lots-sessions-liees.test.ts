@@ -223,7 +223,9 @@ test('une session déléguée garde l’adresse de la discussion principale et l
   expect(out.text).toMatch(/call ListAgents, find the row whose \[ref\] is that one, and send to that row's "<name> \[ref\]" exactly as listed/)
   const relayed = applyReport(out.board, { set: [{ id: 'p1', status: 'done' }] }, 3_200)
   expect(relayed.board).toBe(out.board)
-  expect(relayed.text).toMatch(/Nothing else of this call was recorded\. Reach the main discussion, "Lot SC \[05e2f6\]"/)
+  // Aux relais, une seule ligne : le paragraphe ListAgents n'est que dans la réponse à delegate.
+  expect(relayed.text).toContain('Nothing else of this call was recorded. The main discussion: "Lot SC [05e2f6]", reached by its [ref] in ListAgents, as the delegate answer says.')
+  expect(relayed.text).not.toContain('call ListAgents, find the row')
 })
 
 // ─── Panneau ──────────────────────────────────────────────────────────────
@@ -783,7 +785,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   // La consigne des relecteurs : celle de la procédure des sessions de groupe, citée par son chemin.
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des sessions liées de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
-  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode\), en lecture seule, avec pour seul périmètre les commits du groupe/)
+  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode pour sa recherche, ses vérifications en high\), en lecture seule, avec pour seul périmètre les commits du groupe/)
   expect(text).not.toMatch(/sécurité[^;]*effort xhigh\)/)
   expect(text).toContain('{"reviewed": ["E"]}')
   expect(text).not.toMatch(/copie/)
@@ -867,6 +869,8 @@ test('la rétro d’un parcours à sessions liées : la mère fait la sienne, un
   expect(text).toContain("« Boutique > » (« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0) (ids relevés : local_E42)")
   expect(text).toContain('lance un sous-agent par session fille, tous en parallèle et en lecture seule')
   expect(text).toContain('lit le transcript de sa session')
+  // Une session fermée d'office n'est plus dans ListAgents ; son relais reste, au nom de son transcript.
+  expect(text).toMatch(/à retrouver d'abord par leurs fichiers de relais, \S*flow-board\/relais\/[a-z0-9-]+\.<id>\.report\.md \(un par session qui a déposé son compte rendu ; <id> est celui de son transcript, <id>\.jsonl sous ~\/\.claude\/projects\/\), puis par ListAgents, qui ne liste plus une session archivée ou retirée par claude rm/)
   expect(text).not.toContain('SendMessage')
   expect(text).toContain('fais le compte rendu global')
 })
@@ -976,6 +980,8 @@ test('le brief des sessions de groupe : plus de renommage à la main, background
   // Le suivi passe par le worktree, le tracker et ListAgents.
   expect(first).toContain("l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status), le tracker (statuts des tickets) et ListAgents")
   expect(first).toContain('jamais claude logs')
+  // Une branche de travail qui a bougé depuis le départ du groupe se fusionne par un commit de fusion.
+  expect(first).toContain('fusionner sa branche (si la branche de travail a bougé : git merge --no-ff, conflits résolus en gardant les deux côtés, contrôles relancés)')
   // Un groupe déjà confié : la discussion a déjà son nom, pas de nouvelle demande.
   await ui.press({ key: 'launch-linked-A' })
   await ui.unmount()

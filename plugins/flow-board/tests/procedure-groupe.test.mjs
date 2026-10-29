@@ -96,8 +96,16 @@ test('relecture du fond et de la forme : la revue d’un ticket « Lecteur » la
   assert.match(register, /le fichier de méthode de la relecture du fond et de la forme, \$\{cite\(readingMethod, READING_METHOD_FILE\)\}/)
 })
 
-test('avant le premier ticket : les questions sensibles en une fois', () => {
-  has(section(1), 'Me poser en une fois les questions sensibles du groupe', 'et attendre mes réponses')
+test('avant le premier ticket : les questions sensibles en une fois, trouvées par une passe en lecture seule, sans attendre à vide', () => {
+  has(
+    section(1),
+    'Me poser en une fois les questions sensibles du groupe',
+    'une passe en lecture seule « ce qui viole l\'invariant » sur chaque ticket sensible et le code qu\'il touche',
+    'remonte toutes ses questions d\'un coup',
+    'En attendant mes réponses, avancer les tickets qui n\'en dépendent pas',
+    'Un choix qui change qui écrit, fusionne ou efface une donnée est une question, jamais un choix déclaré',
+  )
+  assert.ok(!section(1).includes('et attendre mes réponses'), 'la session attend encore à vide')
 })
 
 test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un relecteur, passe « bogues », instantané, commit', () => {
@@ -117,6 +125,7 @@ test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un r
     'le vrai commit du ticket vient toujours après sa revue',
     '`/code-review <niveau> <base>..HEAD consignes : <chemin>`',
     'jamais un hash seul',
+    'dont le prompt se remplit d\'après le gabarit `prompt-relecteur.md` (dans le dossier de ce fichier)',
     'envoyer ses constats à l\'outil flow, `{"review": {"standards": <n>, "spec": <n>, "fixed": <corrigés>}}`',
     '`{"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>", "findings": <failles gardées>, "fixed": <corrigées>}}`',
     'sa cible est alors `<commit d\'avant le ticket>..<commit du ticket>`, jamais `..HEAD`',
@@ -134,7 +143,6 @@ test('règles de travail : sous-agents en lecture seule, dossier temporaire, att
     'pas de Monitor pour un sous-agent',
     'avancer ce qui ne dépend pas d\'elle',
     'me poser tout de suite une question prête, sans attendre la fin de la revue',
-    'sans nouvelles depuis 10 à 15 minutes',
     'Une commande longue (tests, build) se lance avec un délai maximal',
     'ne jamais rendre la main en attendant un processus d\'arrière-plan qui n\'a pas de délai',
     'produire une planche (les variantes côte à côte, dans un fichier)',
@@ -163,7 +171,9 @@ test('revue de sécurité : relecteur en lecture seule sur le diff du groupe, ja
     section(5),
     'Dans le même message que la revue du groupe',
     'type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode',
-    'avec pour seul périmètre `git diff <base>..HEAD`',
+    'avec pour seul périmètre `git diff <base>..<lancement>`',
+    '<lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes',
+    'pour sa recherche ; ses vérifications tournent en high',
     'Ne pas lancer `/security-review`',
     'Ne pas corriger ce qu\'il trouve : les failles vont dans le compte rendu',
     'chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt',
@@ -207,7 +217,7 @@ test('sans git : copies avant chaque ticket, points fixes et périmètres par ce
 
 // Les pistes de la rétro du parcours « Frise, groupes et titres ».
 
-test('r20 : une lecture d’une décision hors zone sensible se code, se déclare et la session continue', () => {
+test('une lecture d’une décision hors zone sensible se code, se déclare et la session continue', () => {
   has(
     section(1),
     'Seules les questions sensibles et les choix de conception attendent ma réponse',
@@ -215,7 +225,7 @@ test('r20 : une lecture d’une décision hors zone sensible se code, se déclar
   )
 })
 
-test('r6 et r22 : le fichier de consignes donne CODING_STANDARDS.md et, pour un ticket, les critères des tickets faits du groupe', () => {
+test('le fichier de consignes donne CODING_STANDARDS.md et, pour un ticket, les critères des tickets faits du groupe', () => {
   has(procedure, '- si le projet a un `CODING_STANDARDS.md` à sa racine')
   has(section(2), 'il lit le `CODING_STANDARDS.md` dont le fichier de consignes donne le chemin (point 7)')
   has(
@@ -254,7 +264,6 @@ test('statut : la ligne Status: dit « fait » sans hash, jamais dans un commit 
     section(2),
     'Un ticket local (un fichier) dit « fait » dans sa ligne `Status:` sans hash',
     'jamais à un commit de statut seul',
-    'Critères et ligne `Status:` se cochent par l\'outil Edit, sans script',
   )
 })
 
@@ -267,11 +276,11 @@ test('version : une session liée ne touche ni aux versions ni aux CHANGELOG, et
   has(section(6), 'ce que le CHANGELOG devra dire, plugin ou paquet par plugin ou paquet')
 })
 
-test('r11 : les critères du ticket cochés avant son commit, chacun avec son test', () => {
+test('les critères du ticket cochés avant son commit, chacun avec son test', () => {
   has(section(2), 'avant le commit, cocher chaque critère du fichier de ticket (`- [x]`) et nommer à côté le test qui le couvre')
 })
 
-test('r21 : les règles de travail disent ce que le garde-fou refuse vraiment, sans cd ni enveloppe timeout inutile', () => {
+test('les règles de travail disent ce que le garde-fou refuse vraiment, sans cd ni enveloppe timeout inutile', () => {
   const s = section(3)
   has(
     s,
@@ -283,7 +292,7 @@ test('r21 : les règles de travail disent ce que le garde-fou refuse vraiment, s
   assert.ok(!s.includes('jamais par une boucle cat ou head'), 'l\'ancienne consigne de lecture est restée')
 })
 
-test('r3 : après le compte rendu, un correctif suit la procédure du ticket, une question se tranche dans la discussion principale', () => {
+test('après le compte rendu, un correctif suit la procédure du ticket, une question se tranche dans la discussion principale', () => {
   has(
     section(6),
     'Après le compte rendu, un correctif appliqué par la session',
@@ -292,7 +301,7 @@ test('r3 : après le compte rendu, un correctif suit la procédure du ticket, un
   )
 })
 
-test('r5 : un choix déclaré ne se défait pas par préférence, mais un défaut qu’il produit se signale ; plus de copie de l’ancienne consigne', () => {
+test('un choix déclaré ne se défait pas par préférence, mais un défaut qu’il produit se signale ; plus de copie de l’ancienne consigne', () => {
   has(section(7), 'ne pas défaire par préférence un choix de ce fichier, ni le resignaler comme tel, mais signaler tout cas où il produit un défaut, avec son scénario')
   has(section(8), 'signale tout cas où l\'un d\'eux produit un défaut, avec son scénario')
   const sources = { procedure, register, catalog: read('hooks/catalog.ts'), model: read('hooks/model.ts') }
@@ -301,4 +310,78 @@ test('r5 : un choix déclaré ne se défait pas par préférence, mais un défau
       assert.ok(!text.includes(old), `${name} garde l'ancienne consigne « ${old} »`)
     }
   }
+})
+
+// Les pistes de la rétro du parcours « Fermeture auto des sessions liées ».
+
+test('un constat de passe « bogues » qui ne viole pas l’invariant va aux pistes, sans question', () => {
+  has(
+    section(2),
+    'un constat de la passe « bogues » qui ne le viole pas n\'ouvre pas de question : il va au compte rendu, sous « Pistes » (section 6)',
+    'seul ce qui viole l\'invariant se corrige ou devient une question',
+  )
+  has(section(6), 'les pistes (les constats des passes « bogues » qui ne violent pas l\'invariant')
+  has(template, 'un constat qui ne le viole pas se range sous « Pistes », sans question ni correctif')
+})
+
+test('une question sensible née en cours de ticket part tout de suite, le commit attend la réponse', () => {
+  has(
+    section(3),
+    'Une question sensible née en cours de ticket part tout de suite à la discussion principale par SendMessage (ses options, la recommandée en tête), sans attendre le compte rendu',
+    'le commit du ticket attend la réponse, et la session avance ce qui n\'en dépend pas',
+  )
+})
+
+test('du code écrit après la passe « bogues » repasse en revue, la ligne « Zone sensible » du ticket qui reçoit une garde se relit', () => {
+  has(
+    section(2),
+    'Du code écrit après la passe « bogues » (un ajout demandé ensuite, un correctif venu d\'une autre revue) repasse en revue avant son commit',
+    'la ligne « Zone sensible » du ticket qui la reçoit se relit',
+  )
+})
+
+test('décisions lues par leur entrée, réglages du poste relevés à un essai, confiance du dossier lue sans afficher le fichier', () => {
+  has(section(2), 'un fichier de décisions long se lit par la série ou l\'entrée que citent le ticket ou le prompt')
+  has(
+    section(3),
+    'relève d\'abord les réglages du poste qui jouent (`worktree.baseRef`, la version de Claude Code, la confiance du dossier)',
+    'Un essai qui lance `claude --bg` se fait de préférence dans un dépôt déjà de confiance',
+    'jamais le reste de `~/.claude.json` (ni Read, ni `cat`), qui peut porter des jetons',
+  )
+  // La commande est celle du texte de lancement (TRUST_COMMAND de catalog.ts), mot pour mot.
+  const command = read('hooks/catalog.ts').match(/export const TRUST_COMMAND = `([^`]*)`/)
+  assert.ok(command, 'TRUST_COMMAND absent de catalog.ts')
+  has(section(3), `par cette commande qui n'affiche que sa valeur (\`python\` sous Windows) : \`${command[1]}\``)
+})
+
+test('pas d’appel final à l’advisor quand les revues du groupe ont tourné', () => {
+  has(section(6), 'Pas d\'appel final à l\'advisor quand les revues du groupe ont tourné : elles en tiennent lieu')
+})
+
+test('les phrases jamais suivies sont retirées', () => {
+  for (const old of ['se cochent par l\'outil Edit, sans script', 'sans nouvelles depuis 10 à 15 minutes']) assert.ok(!procedure.includes(old), `reste : « ${old} »`)
+})
+
+test('la consigne des relecteurs classe l’antérieur qui viole l’invariant, le texte rendu faux, les tests voisins', () => {
+  has(
+    section(7),
+    'sauf un constat sur du code antérieur qui viole l\'invariant du ticket : il est Important et se corrige',
+    'dans un groupe « durcissement », le code qu\'il vise n\'est pas antérieur au lot',
+    'une description, un commentaire ou un texte de documentation que le diff rend faux est Important',
+    'l\'absence dans le fichier de décisions d\'un choix pris en session n\'est pas un constat',
+    'la revue d\'un ticket cherche aussi les tests voisins qui lisent le même observable',
+  )
+})
+
+test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer le skill', () => {
+  const prompt = read('reference/prompt-relecteur.md')
+  has(
+    prompt,
+    'N\'invoque pas le skill code-review et ne lance aucun sous-agent : fais toi-même les deux axes',
+    '`<chemin du fichier de consignes>`',
+    '**Axe Standards**',
+    '**Axe Spec**',
+    'les Mineurs en un compte par axe, sans détail',
+  )
+  has(read('README.md'), '├── reference/prompt-relecteur.md')
 })

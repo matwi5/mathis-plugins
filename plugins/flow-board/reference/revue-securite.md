@@ -4,7 +4,7 @@ Ce fichier est la méthode fixe que suit le sous-agent relecteur d'une revue de 
 
 Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de consignes (périmètre, fichier des choix déclarés, points réservés à la personne). Lis les deux, puis lance tout de suite la recherche (section 5) : ne relis pas le diff toi-même avant, c'est la sous-tâche de recherche qui le lit avec son contexte (une relecture préalable avait coûté 7 minutes sans rien changer à la suite).
 
-## 1. Choisir l'effort de la revue de sécurité (et de ses vérifications)
+## 1. Choisir l'effort de la revue de sécurité (et de sa recherche)
 
 `xhigh` prend nettement plus de temps que `high` : ne le prendre que si l'un de ces cas est vrai.
 - **Enjeu** : le diff touche une zone où une faille coûte cher : authentification, permissions ou règles d'accès, secrets ou jetons, commande système ou chemin construit à partir d'une entrée, suppression de données, données personnelles ou contenu de messages enregistré sur disque.
@@ -12,11 +12,11 @@ Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de 
 
 Sinon `high` : petit diff, affichage, lecture de fichiers propres au plugin, réorganisation sans nouvelle entrée venue de l'extérieur. Dans le doute entre les deux, `xhigh`. Le relecteur écrit en tête de son rapport l'effort choisi et le cas qui l'a décidé.
 
-Celui qui lance le relecteur lui passe cet effort (`model: "opus"`, `effort` choisi) ; le relecteur passe le même à sa sous-tâche de recherche et à chacune de ses sous-tâches de vérification. Pour juger l'enjeu et la taille, la liste des fichiers du diff et `git diff --numstat` suffisent : pas de lecture du diff.
+Celui qui lance le relecteur lui passe cet effort (`model: "opus"`, `effort` choisi) ; le relecteur passe le même à sa sous-tâche de recherche ; ses sous-tâches de vérification tournent en `high`, même quand la recherche est en `xhigh` : `xhigh` sert à trouver, pas à confirmer (une revue de 51 minutes n'avait gardé aucune faille). Pour juger l'enjeu et la taille, la liste des fichiers du diff et `git diff --numstat` suffisent : pas de lecture du diff.
 
 ## 2. Périmètre et contexte
 
-- **Le seul diff donné** : la plage exacte du fichier de consignes (`git diff <base>..HEAD` d'un groupe, ou les changements du parcours). Jamais `git diff origin/HEAD...` ni la branche face à la branche par défaut : elle contiendrait d'autres groupes.
+- **Le seul diff donné** : la plage exacte du fichier de consignes (`git diff <base>..<lancement>` d'un groupe, où <lancement> est le hash de HEAD que celui qui lance la revue y a écrit, jamais `HEAD` : les correctifs de la revue du groupe se commitent pendant que tu tournes ; ou les changements du parcours). Jamais `git diff origin/HEAD...` ni la branche face à la branche par défaut : elle contiendrait d'autres groupes.
 - **Le contexte du projet** : lis le `CLAUDE.md` du projet, les fichiers que le diff touche en entier, et ce qu'ils appellent, pour connaître ses gardes existantes (validation, échappement, droits) et ce qui vient de l'extérieur (fichiers d'autres sessions, sortie de commandes, réseau, saisie de la personne).
 - **Le code déjà livré** : signale aussi ce que ce diff rend exploitable dans le code des groupes déjà livrés (une garde qu'il contourne, une entrée qu'il fait arriver jusqu'à un ancien chemin dangereux).
 - **Les choix déclarés** : ceux du fichier des choix, et ceux que le fichier de consignes ajoute, ne se resignalent pas comme failles. Un choix qui ouvre une vraie faille se dit comme question à la personne, sans être défait.
@@ -67,12 +67,12 @@ Précédents :
 12. Une injection de commande dans un script shell ne compte que si une entrée non fiable l'atteint par un chemin précis.
 13. Propre à flow-board (contexte du projet) : un fichier écrit par une autre session de Claude Code (registre, relais, transcript) n'est **pas** de confiance : il peut être abîmé ou forgé.
 
-Pour chaque faille qui reste, juge la qualité du signal : un chemin d'attaque concret et exploitable ; un vrai risque plutôt qu'une bonne pratique théorique ; des lignes précises et des étapes pour la reproduire ; un constat sur lequel on peut agir.
+Pour chaque faille qui reste, juge la qualité du signal : un chemin d'attaque concret et exploitable ; un vrai risque plutôt qu'une bonne pratique théorique ; des lignes précises, la garde contournée et la source de l'entrée (section 6), sans étapes prêtes à l'emploi ; un constat sur lequel on peut agir.
 
 ## 5. Méthode en trois étapes
 
-1. **Recherche** : la première chose que fait le relecteur, sans relecture préalable du diff : une sous-tâche (outil Agent, `model: "opus"` et l'effort choisi, passés explicitement, description « Sécurité : recherche ») cherche les failles du diff avec tout ce fichier et le fichier de consignes. Elle rend chaque faille avec son `fichier:ligne`, sa catégorie, sa gravité et son scénario d'attaque.
-2. **Vérification** : pour chaque faille trouvée de gravité **moyenne ou haute**, une sous-tâche de vérification (outil Agent, `model: "opus"` et le même effort, passés explicitement, description « Sécurité : vérification <n> », <n> le rang de la faille), toutes lancées en parallèle dans un seul message. Une faille de gravité basse n'est pas vérifiée : elle va droit dans la liste « à surveiller » (vérifier des candidats déjà jugés bas coûtait des passes xhigh sans rien garder). Chaque sous-tâche essaie d'en faire un faux positif en relisant le code (exclusions, précédents, gardes existantes) et rend une note de confiance de 1 à 10 :
+1. **Recherche** : la première chose que fait le relecteur, sans relecture préalable du diff : une sous-tâche (outil Agent, `model: "opus"` et l'effort choisi, passés explicitement, description « Sécurité : recherche ») cherche les failles du diff avec tout ce fichier et le fichier de consignes. Elle rend chaque faille avec son `fichier:ligne`, sa catégorie, sa gravité et son scénario (garde, trou, source, effet : section 6).
+2. **Vérification** : pour chaque faille trouvée de gravité **moyenne ou haute**, une sous-tâche de vérification (outil Agent, `model: "opus"` et l'effort `high`, passés explicitement, description « Sécurité : vérification <n> », <n> le rang de la faille), toutes lancées en parallèle dans un seul message. Une faille de gravité basse n'est pas vérifiée : elle va droit dans la liste « à surveiller » (vérifier des candidats déjà jugés bas coûtait des passes xhigh sans rien garder). Chaque sous-tâche essaie d'en faire un faux positif en relisant le code (exclusions, précédents, gardes existantes) et rend une note de confiance de 1 à 10 :
    - 1 à 3 : probablement un faux positif ;
    - 4 à 6 : à creuser ;
    - 7 à 10 : probablement une vraie faille.
@@ -94,7 +94,7 @@ Puis chaque faille gardée, numérotée F1, F2… :
 - Gravité : haute | moyenne
 - Confiance : 8 à 10
 - Description : ce qui ne va pas, et d'où vient l'entrée.
-- Scénario d'attaque : comment un attaquant s'en sert, pas à pas.
+- Scénario : la garde en place, le trou qui la contourne, la source de l'entrée, l'effet. Une description, jamais une chaîne d'attaque prête à l'emploi (ni commande ni charge complètes : un filtre avait coupé une recherche qui écrivait un scénario pas à pas).
 - Recommandation : le correctif proposé, prêt à appliquer : ce qu'il change, fichier par fichier, et le choix qu'il implique s'il y en a un (à trancher par la personne).
 ```
 
