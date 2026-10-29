@@ -4,6 +4,16 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.5.0 — 2026-10-29
+
+### Modifié
+- **Liens copiés au terminal** : un lien qu'un terminal ne sait pas rendre cliquable s'y écrivait avec son adresse entière après le libellé. Sur le terminal, le lien de la pull request (ligne de la PR en tête, tiroir Pull request) devient un bouton « ⧉ PR » et le lien de chaque commit de l'Historique un bouton « ⧉ », qui copient l'adresse dans le presse-papiers ; un toast le confirme (« Lien PR copié », « Lien du commit copié »), ou donne l'adresse à recopier quand la copie est impossible. Le desktop, VS Code et le mobile gardent leurs liens « Ouvrir ↗ », « Ouvrir sur GitHub ↗ » et « ↗ ».
+
+### Développement
+- Le contrôle de types (`tsc`) passe sur le plugin : `tsconfig.json` et tests ajustés.
+
+---
+
 ## 0.4.5 — 2026-10-26
 
 ### Corrigé

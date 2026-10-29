@@ -83,6 +83,14 @@ _Avoid_: encadré de suggestions, bouton dans le chat
 Un bouton du panneau d'un mod (flow-board, git-board) qui prépare ou lance une action. Ce qu'il porte n'est jamais redemandé par une question à boutons.
 _Avoid_: bouton du panneau, bouton flow
 
+**Bandeau** :
+La ligne qu'un mod garde au-dessus du prompt, toujours visible, qui résume son état et ouvre son panneau.
+_Avoid_: bandeau du haut, barre
+
+**Bouton de l'étape suivante** :
+Le bouton qui propose la prochaine action à faire, le même dans le panneau d'un mod et dans son bandeau.
+_Avoid_: bouton Ensuite, bouton suivant
+
 ## Lots de tickets
 
 **Groupe** :
@@ -102,7 +110,7 @@ Un groupe rendu dont la branche est fusionnée dans la branche de travail, la re
 _Avoid_: groupe totalement fini, groupe terminé
 
 **Fermer un groupe** :
-Arrêter la session liée d'un groupe clos et retirer son worktree ; sa branche et sa conversation restent. La session liée des pistes d'une rétro se ferme de même.
+Arrêter la session liée d'un groupe clos et retirer son worktree ; sa conversation reste, et sa branche jusqu'à la validation du compte rendu du parcours, qui la supprime par `git branch -d` si elle est notée et contenue dans la branche de travail. La session liée des pistes d'une rétro se ferme de même.
 _Avoid_: archiver le groupe, nettoyer le groupe
 
 **Tâche de jugement** :

@@ -4,6 +4,16 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.8.0 — 2026-10-29
+
+### Modifié
+- **Lien Asana copié au terminal** : le lien « Asana ↗ » d'une tâche dépliée s'écrivait, sur un terminal qui ne sait pas rendre un lien cliquable, avec son adresse entière. Sur le terminal, il devient un bouton « ⧉ Asana » qui copie l'adresse dans le presse-papiers ; un toast le confirme (« Lien Asana copié »), ou donne l'adresse à recopier quand la copie est impossible. Le desktop, VS Code et le mobile gardent le lien. Les liens écrits dans la description d'une tâche ne changent pas.
+
+### Développement
+- Le contrôle de types (`tsc`) passe sur le plugin : `tsconfig.json` comme celui de git-board, appels de commande typés dans les tests.
+
+---
+
 ## 0.7.3 — 2026-10-27
 
 ### Documentation

@@ -7,7 +7,7 @@ Panneau Git et bandeau au-dessus du prompt, dans Claude Code. Il montre la branc
 - **Il suit le dépôt tout seul.** Une relecture suit chaque outil d'écriture de Claude, et un coup d'œil léger repère toutes les 10 s les changements faits ailleurs. Après un push, il suit la CI jusqu'à la fin de ses checks.
 - **Il propose le push.** À la fin d'un tour, des commits à pousser sur un arbre propre : `/project:push` apparaît grisé dans le prompt, Tab pour le prendre.
 
-Version actuelle : **0.4.5**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.5.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
