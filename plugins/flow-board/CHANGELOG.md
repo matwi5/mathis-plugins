@@ -4,6 +4,22 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.70.0 — 2026-10-29
+
+Les boutons disent ce qu'ils font, sans la commande ; le bandeau porte le bouton de l'étape suivante ; les branches des sessions liées fermées partent à la validation du compte rendu.
+
+### Ajouté
+- **Bouton de l'étape suivante au bandeau** : le même que le premier bouton de la carte « Ensuite », tiré du même calcul (lancement d'un groupe, suite principale une fois l'étape en cours finie, « ✓ Clore le parcours »), juste avant « ▸ Ouvrir ». Il tient plus longtemps que la feuille de route et le titre quand la largeur manque, et prend le style « principal » sur l'ordinateur.
+- **Suppression des branches à la validation du compte rendu** : dans un dépôt git, le message de « ✓ Valider le rapport » porte une consigne écrite par `branchCleanupText` (`closing.ts`). Elle ne vise que les branches notées sur une fermeture `closed` du parcours (groupes, envois précédents, pistes d'une rétro), sous un nom que flow-board donne à cette session, chacune vérifiée sortie par aucun worktree et contenue dans la branche de travail, puis supprimée par `git branch -d` sans autre option. Toute autre branche est gardée, et nommée avec sa raison. « ↺ Rouvrir » disparaît pour les sessions fermées avant la validation.
+
+### Modifié
+- **Boutons sans commande** : le bouton principal de la carte « Ensuite » dit seulement l'étape (« ▶ Implémentation », « ▶ Compte rendu »), comme « ◆ Revue du groupe », « ▶ Tout implémenter ici », « ▶ Implémenter N tickets » et le bouton de synchro (« Préparer la synchro », « Préparer la synchro avec la base », « Préparer l'avance rapide ») ; le bouton d'ouverture du bandeau devient « ▸ Ouvrir ». Ce que le bouton met dans le prompt ne change pas ; le texte gris et la carte de phase gardent la commande.
+
+### Corrigé
+- **Place du bandeau** : les pastilles (tickets, sessions liées, agents, choix à relire) ne rétrécissent plus pour le bouton de l'étape suivante, qui n'apparaît qu'une fois leur place gardée ; la feuille de route et le titre ne prennent plus la place d'un bouton qui ne tient pas encore.
+
+---
+
 ## 0.69.0 — 2026-10-29
 
 Une session liée close se ferme d'office : session arrêtée, worktree retiré, branche et conversation gardées, sans rien forcer.
