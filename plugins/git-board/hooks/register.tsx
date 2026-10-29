@@ -9,7 +9,9 @@
 // - Commit, pull, push et PR passent par les commandes du plugin project
 //   (/project:commit, /project:sync, /project:push, /project:pr) : le bouton les lance
 //   comme si on les tapait ; si le moteur refuse, la commande est mise dans le prompt.
-// - Le bandeau résume la branche dans un dépôt ; masqué, la ligne d'état prend le relais.
+// - Le bandeau résume la branche dans un dépôt ; masqué, la ligne d'état prend le relais. Son
+//   bouton de l'étape suivante lance l'étape suggérée ; pendant un parcours flow-board (lu
+//   dans la valeur `board` de flow-board), ni Push ni PR.
 // - `/git-board:git` (commands/git.md) est connue dès le premier message ; `/git`, déclarée
 //   au démarrage, sort du menu mais reste utilisable tapée en entier.
 // - Après un push, la CI du commit poussé est suivie jusqu'à ce que ses checks soient finis.
@@ -19,7 +21,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Action, CiWatch, Expanded, Form, GitFile, GitRepo, Meta, Notice, PrChecks, PrState, Running, Switching, Tab } from '../types'
+import type { Action, CiWatch, Expanded, FlowBoardSeen, Form, GitFile, GitRepo, Meta, Notice, PrChecks, PrState, Running, Switching, Tab } from '../types'
 import {
   CI_EVERY_MS,
   LOG_FORMAT,
@@ -46,8 +48,10 @@ import {
   prOf,
   sameDir,
   isFreshReflog,
+  isFlowActive,
   isRunDone,
   slash,
+  SYNC_BASE,
   VERSION_COMMAND,
   statusText,
   tabOfArg,
@@ -66,7 +70,7 @@ const ARG_HINT = '[changes|branches|history|hide|show|dossier du dépôt]'
 const TAB_LABEL: Record<Tab, string> = { changes: 'Modifications', branches: 'Branches', history: 'Historique' }
 
 const EMPTY_META: Meta = { folder: null, sessionRoot: null, loading: null, error: null, fetchedAt: null, fetchError: null }
-const EMPTY_FORM: Form = { hint: '', pullFrom: 'upstream', prBase: '', prDraft: false, prAuto: false, filter: '', newBranch: '' }
+const EMPTY_FORM: Form = { hint: '', prBase: '', prDraft: false, prAuto: false, filter: '', newBranch: '' }
 const EMPTY_EXPANDED: Expanded = { files: false, branches: false, remotes: false, commits: false }
 
 // Gardés par l'hôte : survivent au rechargement à chaud du module.
@@ -85,6 +89,9 @@ const showRemotes = atom({ plugin: 'git-board', key: 'showRemotes' } as const, f
 const isBandHidden = atom({ plugin: 'git-board', key: 'isBandHidden' } as const, false)
 const expanded = atom({ plugin: 'git-board', key: 'expanded' } as const, EMPTY_EXPANDED)
 const ci = atom({ plugin: 'git-board', key: 'ci' } as const, null as CiWatch)
+// La valeur `board` de flow-board, lue seulement (seul son propriétaire l'écrit) : un parcours
+// actif retire Push et PR du bandeau. Absente sans flow-board.
+const FLOW_BOARD = { plugin: 'flow-board', key: 'board' } as const
 
 // Les éléments que chaque surface dessine, d'après le contrat `Elements` du moteur : pas de
 // `Svg` sur le terminal, ni `Input` ni `Select` sur le mobile. La table de `$.ui.resolve`
@@ -258,7 +265,18 @@ async function readView($: any): Promise<View> {
     expanded: await read($, expanded),
     isBandHidden: await read($, isBandHidden),
     ci: await read($, ci),
+    isFlowActive: isFlowActive(await readFlowBoard($)),
     now: await $.clock.now(),
+  }
+}
+
+/** La valeur `board` de flow-board ; null sans flow-board ou si la lecture échoue. */
+async function readFlowBoard($: any): Promise<FlowBoardSeen> {
+  try {
+    const { value } = await $.state.get(FLOW_BOARD)
+    return value ?? null
+  } catch {
+    return null
   }
 }
 
@@ -274,6 +292,7 @@ function actionsFor($: any): Actions {
       await refresh($, { fetch: true, pr: true, say: true })
     },
     launch: (a) => launch($, a),
+    launchBase: () => launch($, 'pull', true),
     launchVersion: () => launchVersion($),
     openFolder: (value) => openFolder($, value),
     backToSession: () => openFolder($, ''),
@@ -736,38 +755,69 @@ async function createBranch($: any, value: string) {
 }
 
 // Le bouton lance la commande comme si on la tapait : elle part dès que la session est
-// libre. Introuvable ou refusée, elle est mise dans le prompt, prête à envoyer.
-async function launch($: any, a: Action) {
+// libre. Introuvable ou refusée, elle est mise dans le prompt, prête à envoyer. `isBase` :
+// le pull intègre la branche par défaut (`/project:sync base`) au lieu de la branche distante.
+// Une seule commande à la fois, quel que soit le bouton (tiroir ou bandeau) : la place est prise
+// avant tout le reste, deux appuis rapprochés ne lancent qu'une commande.
+async function launch($: any, a: Action, isBase = false) {
   const now = await $.clock.now()
   const r = await read($, repo)
   const f = await read($, form)
   if (!r) return
-  const c = commandFor(a, r, f)
+  const c = isBase && a === 'pull' ? SYNC_BASE : commandFor(a, r, f)
   const text = slash(c)
+  const run: Running = { command: text, isStarted: false, action: a, head: r.head, startedAt: now }
+  if (!(await claimRun($, run))) return
   await update($, action, () => null)
   if (a === 'commit') await update($, form, (x) => ({ ...x, hint: '' }))
   const list: { name: string; plugin?: string }[] = await $.command.list().catch(() => [])
   const hit = list.find((x) => x.name === `project:${c.name}`)
-  if (!hit) return toPrompt($, text, 'commande introuvable : le plugin project est-il activé ?')
-  await update($, running, () => ({ command: text, isStarted: false, action: a, head: r.head, startedAt: now }))
+  if (!hit) {
+    await releaseRun($, run)
+    return toPrompt($, text, 'commande introuvable : le plugin project est-il activé ?')
+  }
   await quietly(() => $.ui.toast(`${text} lancée : elle part dès que Claude est libre`))
   $.command.run({ command: hit.name, args: c.args }).catch(async (err: any) => {
-    await update($, running, () => null)
+    await releaseRun($, run)
     await toPrompt($, text, String(err?.message ?? err))
   })
+}
+
+/**
+ * Prend la place de la commande en file, d'un seul coup (`update` relit et réécrit à la
+ * version lue) : false, et un mot, quand une commande est déjà en file ou en cours.
+ */
+async function claimRun($: any, run: NonNullable<Running>): Promise<boolean> {
+  let held: Running = null
+  await update($, running, (x) => {
+    held = x
+    return x ?? run
+  })
+  if (held === null) return true
+  await say($, 'info', `${(held as NonNullable<Running>).command} est déjà en file ou en cours : attends sa fin (↻ oublie une commande restée en file).`)
+  return false
+}
+
+/** Rend la place prise par `run`, sans effacer une commande lancée depuis. */
+async function releaseRun($: any, run: NonNullable<Running>) {
+  await update($, running, (x) => (x && x.command === run.command && x.startedAt === run.startedAt ? null : x))
 }
 
 // /project:version, suggérée dans le tiroir Push : lancée comme les autres, mais sans repère
 // dans le dépôt, elle n'est finie qu'avec le tour de Claude.
 async function launchVersion($: any) {
   const now = await $.clock.now()
+  const run: NonNullable<Running> = { command: VERSION_COMMAND, isStarted: false, startedAt: now }
+  if (!(await claimRun($, run))) return
   const list: { name: string; plugin?: string }[] = await $.command.list().catch(() => [])
   const hit = list.find((x) => x.name === 'project:version')
-  if (!hit) return toPrompt($, VERSION_COMMAND, 'commande introuvable : le plugin project est-il activé ?')
-  await update($, running, () => ({ command: VERSION_COMMAND, isStarted: false, startedAt: now }))
+  if (!hit) {
+    await releaseRun($, run)
+    return toPrompt($, VERSION_COMMAND, 'commande introuvable : le plugin project est-il activé ?')
+  }
   await quietly(() => $.ui.toast(`${VERSION_COMMAND} lancée : elle part dès que Claude est libre`))
   $.command.run({ command: hit.name, args: '' }).catch(async (err: any) => {
-    await update($, running, () => null)
+    await releaseRun($, run)
     await toPrompt($, VERSION_COMMAND, String(err?.message ?? err))
   })
 }

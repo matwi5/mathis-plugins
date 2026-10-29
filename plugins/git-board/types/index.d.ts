@@ -148,10 +148,12 @@ export type Action = 'commit' | 'pull' | 'push' | 'pr'
 
 export type Notice = { text: string; tone: 'ok' | 'error' | 'info' } | null
 
-/** Champs du panneau gardés pendant la saisie. */
+/**
+ * Champs du panneau gardés pendant la saisie. Une version précédente gardait aussi `pullFrom`
+ * (source du pull) : un formulaire qui le porte encore se lit tel quel, et le champ est ignoré.
+ */
 export type Form = {
   hint: string
-  pullFrom: 'upstream' | 'base'
   prBase: string
   prDraft: boolean
   prAuto: boolean
@@ -170,8 +172,19 @@ export type Running = { command: string; isStarted: boolean; action?: Action; he
 /** Listes du panneau dépliées au-delà de leur plafond (« ▸ tout voir (N) »). */
 export type Expanded = { files: boolean; branches: boolean; remotes: boolean; commits: boolean }
 
+/**
+ * Ce que git-board lit de la valeur `board` de flow-board, sans dépendre de flow-board : la
+ * forme minimale qui dit si un parcours est actif dans la discussion (`activeId` désigne un
+ * parcours au statut `active`). Absente quand flow-board n'est pas installé.
+ */
+export type FlowBoardSeen = { activeId: string | null; runs: { id: string; status: string }[] } | null
+
 declare module 'claude-code' {
   interface PluginState {
+    /** Lue seulement : seul flow-board l'écrit. */
+    'flow-board': {
+      board: FlowBoardSeen
+    }
     'git-board': {
       repo: GitRepo | null
       pr: PrState

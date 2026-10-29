@@ -47,8 +47,8 @@ import {
   unseenDecisions,
   inForce,
   isDelegable,
-  commandArgsOf,
   groupReviewArgs,
+  type SyncStep,
 } from './model.ts'
 import { MAIN, reviewForkName, runningOf } from './registry.ts'
 import type { LinkedSession, LinkedState } from './linked.ts'
@@ -879,11 +879,20 @@ const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, ac
   )
 }
 
+/** Un bouton avant son dessin : la carte « Ensuite » le dessine, le bandeau reprend tel quel le bouton de l'étape suivante. */
+type NextButton = { key: string; label: string; onPress: (press?: { surface?: string }) => unknown; isPrimary?: true; isQuiet?: true }
+
+const nextButton = (k: Kit, b: NextButton): unknown =>
+  b.isQuiet ? <k.Button key={b.key} plain={true} dimColor={true} label={b.label} onPress={b.onPress} /> : <k.Button key={b.key} {...(b.isPrimary ? { variant: 'primary' } : {})} label={b.label} onPress={b.onPress} />
+
 /** « ↗ xhigh », discret après « ↗ Session liée » : le même groupe, en xhigh imposé ; l'appui donne sa surface. */
-const xhighButton = (k: Kit, key: string, id: string, act: Actions): unknown => {
-  const { Button } = k
-  return <Button key={key} plain={true} dimColor={true} label={`↗${NB}xhigh`} onPress={(press?: { surface?: string }) => act.launchGroupLinkedXhigh(id, press?.surface)} />
-}
+const xhighOf = (key: string, id: string, act: Actions): NextButton => ({
+  key,
+  isQuiet: true,
+  label: `↗${NB}xhigh`,
+  onPress: press => act.launchGroupLinkedXhigh(id, press?.surface),
+})
+const xhighButton = (k: Kit, key: string, id: string, act: Actions): unknown => nextButton(k, xhighOf(key, id, act))
 
 /** Un lot parallèle : une session liée par groupe. */
 const lotRow = (k: Kit, ids: readonly string[], at: number, act: Actions): unknown => {
@@ -1022,7 +1031,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
               // Fait par une session liée : ici la branche est fusionnée, la revue se fait là-bas.
               <Button key={`review-linked-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · session liée`} onPress={() => act.reviewLinkedGroup(g.group.id)} />
             ) : (
-              <Button key={`review-group-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · /${slashOf('final-review')} ${groupReviewArgs(run, g.group)}`} onPress={() => act.launch('final-review', groupReviewArgs(run, g.group))} />
+              <Button key={`review-group-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe`} onPress={() => act.launch('final-review', groupReviewArgs(run, g.group))} />
             ))}
         </Box>
         {/* Pas avant sa revue : elle se fait dans la session et son worktree. */}
@@ -1225,7 +1234,7 @@ const ticketsBlock = (k: Kit, run: Run, view: View, act: Actions, cells: number)
       {/* Pendant le découpage, les groupes peuvent encore venir : pas de lancement du lot entier. */}
       {!plan && open.length > 0 && selection.length === 0 && currentPhase(run).skill !== 'to-tickets' && (
         <Box key="launch-all-row" marginTop={1}>
-          <Button key="launch-all" label={`▶${NB}Tout implémenter ici · /implement`} onPress={() => act.launchAll()} />
+          <Button key="launch-all" label={`▶${NB}Tout implémenter ici`} onPress={() => act.launchAll()} />
         </Box>
       )}
       {open.length === 0 && T(k, `✓${NB}Tous les tickets sont faits`, { color: C.green })}
@@ -1241,7 +1250,7 @@ const ticketsBlock = (k: Kit, run: Run, view: View, act: Actions, cells: number)
       {selection.length > 0 && (
         <Box key="picks" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
           <Box marginRight={1}>
-            <Button key="launch-picks" variant="primary" label={`▶ Implémenter ${plural(selection.length, 'ticket')} · /implement`} onPress={() => act.launchPicks()} />
+            <Button key="launch-picks" variant="primary" label={`▶ Implémenter ${plural(selection.length, 'ticket')}`} onPress={() => act.launchPicks()} />
           </Box>
           <Button key="clear-picks" plain={true} dimColor={true} label="Effacer" onPress={() => act.clearPicks()} />
         </Box>
@@ -1320,6 +1329,9 @@ const whereMeasured = (view: View): string => {
   return ` dans ${dir.toLowerCase().startsWith(`${root.toLowerCase()}/`) ? dir.slice(root.length + 1) : dir}`
 }
 
+/** Le bouton dit ce qu'il prépare, sans la commande : le texte gris au-dessus la donne. */
+const syncButtonLabel = (c: SyncStep): string => ('shell' in c ? 'Préparer l’avance rapide' : c.args === 'base' ? 'Préparer la synchro avec la base' : 'Préparer la synchro')
+
 /** Phase qui modifie le code : le distant a-t-il avancé depuis le dernier sync ? */
 const syncCallout = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const { Box, Button } = k
@@ -1341,7 +1353,7 @@ const syncCallout = (k: Kit, run: Run, view: View, act: Actions): unknown => {
       <Box flexShrink={0}>
         <Button
           key="sync-now"
-          label={`Préparer ${commandText(first)}`}
+          label={syncButtonLabel(first)}
           onPress={() => ('shell' in first ? act.askFastForward(first.dir) : act.prepare(first.skill, first.args))}
         />
       </Box>
@@ -2381,13 +2393,12 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
 // ─── Prochaine étape ──────────────────────────────────────────────────────
 
 /** Les boutons et la ligne de la suite recommandée pendant l'Implémentation d'un parcours à groupes. */
-const launchParts = (k: Kit, run: Run, rec: NextLaunch, view: View, act: Actions): { buttons: unknown[]; note: string } => {
-  const { Button } = k
+const launchParts = (rec: NextLaunch, act: Actions): { buttons: NextButton[]; note: string } => {
   const and = (ids: readonly string[]) => ids.join(', ')
   if (rec.kind === 'parallel') {
     const lot = rec.groups.join(' ∥ ')
     return {
-      buttons: [<Button key="next-parallel-linked" variant="primary" label={`⇉${NB}${lot} en parallèle · sessions liées`} onPress={() => act.launchParallelLinked(0)} />],
+      buttons: [{ key: 'next-parallel-linked', isPrimary: true, label: `⇉${NB}${lot} en parallèle · sessions liées`, onPress: () => act.launchParallelLinked(0) }],
       note: 'groupes indépendants : ils partent ensemble',
     }
   }
@@ -2396,7 +2407,10 @@ const launchParts = (k: Kit, run: Run, rec: NextLaunch, view: View, act: Actions
     const id = rec.group
     return {
       buttons: rec.isDelegable
-        ? [<Button key={`next-linked-${id}`} variant="primary" label={`↗${NB}Groupe ${id} · session liée`} onPress={() => act.launchGroupLinked(id)} />, xhighButton(k, `next-xhigh-${id}`, id, act)]
+        ? [
+            { key: `next-linked-${id}`, isPrimary: true, label: `↗${NB}Groupe ${id} · session liée`, onPress: () => act.launchGroupLinked(id) },
+            xhighOf(`next-xhigh-${id}`, id, act),
+          ]
         : [],
       note: 'le prochain groupe prêt',
     }
@@ -2406,49 +2420,67 @@ const launchParts = (k: Kit, run: Run, rec: NextLaunch, view: View, act: Actions
   return { buttons: [], note: `tickets faits ; le compte rendu attend la revue de ${and(rec.groups)} (bouton sur la ligne du groupe)` }
 }
 
-const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
-  const { Box, Button } = k
+/**
+ * La carte « Ensuite » avant son dessin : son titre, sa note, ses boutons, et le bouton de l'étape
+ * suivante (`lead`, l'un d'eux) que le bandeau reprend. C'est le lancement de groupes quand il y en
+ * a un ; sinon, l'étape finie, la suite principale, ou « Clore le parcours » quand elle n'est que la
+ * rétro ou qu'il n'y en a pas. Jamais la compaction, la rétro ni « xhigh » ; rien en pleine étape.
+ */
+const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: string; buttons: NextButton[]; lead: NextButton | null; preview: string[] } | null => {
   const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet, versionUnits: view.sync.versionUnits })
   const rec = nextLaunchFor(run)
   const phase = currentPhase(run)
   if (rec === null && sug.primary === null && !sug.canFinish) return null
   const title = sug.canFinish && sug.primary === null ? 'Parcours bouclé' : phase.status === 'done' ? 'Prochaine étape' : 'Ensuite'
-  const buttons: unknown[] = []
+  const buttons: NextButton[] = []
+  let lead: NextButton | null = null
   let note = phase.status !== 'done' ? 'la commande va dans le prompt ; la lancer clôt la phase en cours' : 'la commande va dans le prompt'
   if (rec !== null) {
     // Les groupes d'abord : relancer /implement ou proposer la livraison n'y ajouterait rien.
-    const parts = launchParts(k, run, rec, view, act)
+    const parts = launchParts(rec, act)
     buttons.push(...parts.buttons)
+    lead = parts.buttons[0] ?? null
     note = parts.buttons.length > 0 ? `${parts.note} · la demande va dans le prompt, la phase continue` : parts.note
     // Après /to-tickets, avant les groupes : alléger l'orchestrateur d'abord (bouton secondaire).
-    if (view.live.ask === null && suggestsCompaction(view.board, view.agents)) buttons.push(<Button key="next-compact" label={`⇣${NB}Compacter d’abord`} onPress={() => act.compactFirst()} />)
-    if (phase.skill !== 'retro') buttons.push(<Button key="go-retro" label={`${SKILLS.retro!.glyph} ${SKILLS.retro!.label}`} onPress={() => act.launch('retro')} />)
-  } else {
-    if (sug.primary !== null) {
-      const skill = sug.primary
-      const d = SKILLS[skill]!
-      buttons.push(<Button key={`go-${skill}`} variant="primary" label={`▶ ${d.label} · /${[slashOf(skill), commandArgsOf(run, skill)].filter(Boolean).join(' ')}`} onPress={() => act.launch(skill)} />)
-    }
-    for (const skill of sug.others) {
-      const d = SKILLS[skill]!
-      buttons.push(<Button key={`go-${skill}`} label={`${d.glyph} ${d.label}`} onPress={() => act.launch(skill)} />)
-    }
-    if (sug.canFinish) buttons.push(<Button key="finish" label="✓ Clore le parcours" onPress={() => act.finish()} />)
-    if (sug.versionNote) note = sug.versionNote
+    if (view.live.ask === null && suggestsCompaction(view.board, view.agents)) buttons.push({ key: 'next-compact', label: `⇣${NB}Compacter d’abord`, onPress: () => act.compactFirst() })
+    if (phase.skill !== 'retro') buttons.push({ key: 'go-retro', label: `${SKILLS.retro!.glyph} ${SKILLS.retro!.label}`, onPress: () => act.launch('retro') })
+    return { title, note, buttons, lead, preview: [] }
   }
+  if (sug.primary !== null) {
+    const skill = sug.primary
+    const d = SKILLS[skill]!
+    buttons.push({ key: `go-${skill}`, isPrimary: true, label: `▶ ${d.label}`, onPress: () => act.launch(skill) })
+    if (phase.status === 'done' && skill !== 'retro') lead = buttons[0]!
+  }
+  for (const skill of sug.others) {
+    const d = SKILLS[skill]!
+    buttons.push({ key: `go-${skill}`, label: `${d.glyph} ${d.label}`, onPress: () => act.launch(skill) })
+  }
+  if (sug.canFinish) {
+    buttons.push({ key: 'finish', label: '✓ Clore le parcours', onPress: () => act.finish() })
+    if (phase.status === 'done' && lead === null) lead = buttons.at(-1)!
+  }
+  if (sug.versionNote) note = sug.versionNote
+  return { title, note, buttons, lead, preview: sug.versionPreview ?? [] }
+}
+
+const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
+  const { Box } = k
+  const next = nextStepOf(run, view, act)
+  if (next === null) return null
   return (
     <Box key="next" flexDirection="column" borderStyle="round" borderDimColor={true} paddingX={1} marginTop={1}>
-      {line(k, [T(k, title, { bold: true }), T(k, note, { dim: true })])}
-      {buttons.length > 0 && (
+      {line(k, [T(k, next.title, { bold: true }), T(k, next.note, { dim: true })])}
+      {next.buttons.length > 0 && (
         <Box flexDirection="row" flexWrap="wrap" marginTop={1}>
-          {buttons.map(b => (
-            <Box marginRight={1}>{b}</Box>
+          {next.buttons.map(b => (
+            <Box marginRight={1}>{nextButton(k, b)}</Box>
           ))}
         </Box>
       )}
-      {rec === null && sug.versionPreview && (
+      {next.preview.length > 0 && (
         <Box key="version-preview" flexDirection="column" marginTop={1}>
-          {sug.versionPreview.map(l => T(k, l, { dim: true, wrap: 'wrap' }))}
+          {next.preview.map(l => T(k, l, { dim: true, wrap: 'wrap' }))}
         </Box>
       )}
     </Box>
@@ -2921,7 +2953,7 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
       </Box>
       <Box flexDirection="row" flexShrink={0} marginLeft={1}>
         <Box marginRight={1}>
-          <Button key="band-open" plain={true} dimColor={true} label="▸ /flow" onPress={() => act.openPane()} />
+          <Button key="band-open" plain={true} dimColor={true} label="▸ Ouvrir" onPress={() => act.openPane()} />
         </Box>
         <Button key="band-hide" plain={true} dimColor={true} role="dismiss" label="x" onPress={() => act.hideBand()} />
       </Box>
@@ -2929,16 +2961,44 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
   )
 }
 
+/** Une pastille du bandeau, avant son dessin : elle ne se coupe pas. */
+type BandPill = Style & { text: string }
+
 /** Dans le bandeau, l'avancement relayé de chaque groupe confié : « ↗A 2/4 ». */
-const relayPills = (k: Kit, run: Run, view: View): unknown[] =>
+const relayPills = (run: Run, view: View): BandPill[] =>
   (run.groups ?? [])
     .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g) : null }))
     // En cours dès que l'id de sa session est relevé, avant le premier signal relayé.
     .filter(x => x.relay !== null || x.g.linked?.session !== undefined)
     .map(({ g, relay }) => {
       const { done, total } = relay ?? groupDone(run, g)
-      return T(k, `↗${g.id}${NB}${done}/${total}`, { color: relay?.endedAt !== undefined && done < total ? C.amber : C.blue, bold: true })
+      return { text: `↗${g.id}${NB}${done}/${total}`, color: relay?.endedAt !== undefined && done < total ? C.amber : C.blue, bold: true }
     })
+
+/** Les pastilles du bandeau après la phase : les tickets, les groupes en sessions liées, les agents au travail, les choix à relire. */
+const bandPills = (run: Run, view: View): BandPill[] => {
+  const t = countTickets(run.tickets)
+  const running = agentsAtWork(view)
+  const unseen = unseenDecisions(run, view.relay)
+  return [
+    ...(t.total > 0 ? [{ text: `${t.done}/${t.total}`, bold: true }] : []),
+    ...relayPills(run, view),
+    ...(running > 0 ? [{ text: `${spinFrame(view.now)}${NB}${plural(running, 'agent')}`, color: C.blue }] : []),
+    ...(unseen > 0 ? [{ text: `⚑${NB}${unseen}${NB}à${NB}relire`, color: C.amber, bold: true }] : []),
+  ]
+}
+
+/**
+ * Ce que le bandeau garde au moins : l'étiquette, le glyphe et la phase à gauche, « ▸ Ouvrir » et
+ * « x » à droite. Le bouton de l'étape suivante ne vient qu'au-delà, et après les pastilles.
+ */
+const BAND_KEEP = 40
+
+/** Largeur estimée d'un texte du bandeau, en cellules : « ⚑ » en prend deux sur certains terminaux. */
+const bandCells = (text: string): number => [...text].reduce((n, ch) => n + (ch === '⚑' ? 2 : 1), 0)
+
+/** La place du bouton de l'étape suivante au bandeau : son libellé, ses crochets de bouton principal au terminal, sa marge. */
+const leadCells = (b: NextButton): number => bandCells(b.label) + 4 + 1
 
 export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
   const stored = activeRun(view.board)
@@ -2948,10 +3008,17 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
   const width = k.width
   const def = SKILLS[run.entry]!
   const { skill } = focusOf(run)
-  const t = countTickets(run.tickets)
   const nodes = roadNodes(run)
+  const pills = bandPills(run, view)
+  // Le bouton de l'étape suivante, celui de la carte « Ensuite » : la frise et le titre tombent avant
+  // lui ; lui ne vient que si les pastilles, qui ne se coupent pas, gardent leur place. La place se
+  // compte dès qu'il y a un bouton, même trop large pour venir : la frise ne passe jamais devant lui.
+  const found = nextStepOf(run, view, act)?.lead ?? null
+  const pillCells = pills.reduce((n, p) => n + bandCells(p.text) + 1, 0)
+  const room = found === null ? 0 : leadCells(found) + pillCells
+  const lead = found !== null && width >= BAND_KEEP + room ? found : null
   const mini =
-    width < 64
+    width < 64 + room
       ? null
       : k.isRich
         ? svgOf(k, miniRoadSvg(nodes), nodes.map(x => `${x.label} : ${STATE_WORD[x.state]}`).join(', '), true)
@@ -2962,7 +3029,6 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
               bold: x.state === 'active',
             })),
           )
-  const running = agentsAtWork(view)
   // Une seule ligne, l'essentiel : le parcours, sa phase, les tickets, les groupes en sessions
   // liées, ce qui attend la personne. L'état de la session et le détail des tickets sont dans /flow.
   return (
@@ -2971,18 +3037,16 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
         {line(k, [
           bandTag(k, 'Flow', C.violet),
           T(k, def.glyph, { color: def.color, bold: true }),
-          width >= 90 && <Box flexShrink={1}>{T(k, run.title, { bold: true, wrap: 'truncate-end' })}</Box>,
+          width >= 90 + room && <Box flexShrink={1}>{T(k, run.title, { bold: true, wrap: 'truncate-end' })}</Box>,
           mini,
           <Box flexShrink={1}>{T(k, `${skill.glyph}${NB}${skill.label}`, { color: skill.color, bold: true, wrap: 'truncate-end' })}</Box>,
-          t.total > 0 && T(k, `${t.done}/${t.total}`, { bold: true }),
-          ...relayPills(k, run, view),
-          running > 0 && T(k, `${spinFrame(view.now)}${NB}${plural(running, 'agent')}`, { color: C.blue }),
-          unseenDecisions(run, view.relay) > 0 && T(k, `⚑${NB}${unseenDecisions(run, view.relay)}${NB}à${NB}relire`, { color: C.amber, bold: true }),
+          ...pills.map(p => T(k, p.text, p)),
         ])}
       </Box>
       <Box flexDirection="row" flexShrink={0} marginLeft={1}>
+        {lead !== null && <Box marginRight={1}>{nextButton(k, { ...lead, isPrimary: true })}</Box>}
         <Box marginRight={1}>
-          <Button key="band-open" plain={true} dimColor={true} label="▸ /flow" onPress={() => act.openPane()} />
+          <Button key="band-open" plain={true} dimColor={true} label="▸ Ouvrir" onPress={() => act.openPane()} />
         </Box>
         <Button key="band-hide" plain={true} dimColor={true} role="dismiss" label="x" onPress={() => act.hideBand()} />
       </Box>

@@ -101,6 +101,10 @@ _Avoid_: lot, paquet
 Un ensemble de groupes qui peuvent tourner en même temps, chacun dans sa session liée.
 _Avoid_: niveau, étape
 
+**Piste** :
+Une amélioration qu'une rétro propose pour les prochaines sessions. Une fois choisie, elle entre dans un ticket, seule ou avec des pistes voisines, et se traite comme lui.
+_Avoid_: amélioration, correction de rétro
+
 **Groupe rendu** :
 Un groupe dont la session liée a rendu son compte rendu, et dont l'orchestrateur a vérifié le travail et rendu les statuts au tableau de bord.
 _Avoid_: groupe fini, groupe revenu
@@ -110,7 +114,7 @@ Un groupe rendu dont la branche est fusionnée dans la branche de travail, la re
 _Avoid_: groupe totalement fini, groupe terminé
 
 **Fermer un groupe** :
-Arrêter la session liée d'un groupe clos et retirer son worktree ; sa conversation reste, et sa branche jusqu'à la validation du compte rendu du parcours, qui la supprime par `git branch -d` si elle est notée et contenue dans la branche de travail. La session liée des pistes d'une rétro se ferme de même.
+Arrêter la session liée d'un groupe clos et retirer son worktree ; sa conversation reste, et sa branche jusqu'à la validation du compte rendu du parcours, qui la supprime par `git branch -d` si elle est notée sous un nom de sa session et contenue dans la branche de travail. La session liée des pistes d'une rétro se ferme de même.
 _Avoid_: archiver le groupe, nettoyer le groupe
 
 **Tâche de jugement** :

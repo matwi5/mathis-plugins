@@ -172,6 +172,8 @@ function engine(on: any, fake: ReturnType<typeof fakeRepo>, cwd = ROOT, band: 'e
   const toasts: string[] = []
   const opened: string[] = []
   const suggested: string[] = []
+  // Les commandes du plugin project connues du moteur ; vidée, le plugin est absent.
+  const commands = ['commit', 'sync', 'push', 'pr', 'version']
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: cwd }))
   on('command.register', () => ({ value: {} }))
@@ -197,7 +199,7 @@ function engine(on: any, fake: ReturnType<typeof fakeRepo>, cwd = ROOT, band: 'e
     return { isShown: true }
   })
   on('command.list', () => ({
-    value: ['commit', 'sync', 'push', 'pr', 'version'].map((n) => ({ name: `project:${n}`, description: '', source: 'plugin', plugin: 'project' })),
+    value: commands.map((n) => ({ name: `project:${n}`, description: '', source: 'plugin', plugin: 'project' })),
   }))
   on('command.run', ($: any, e: any) => {
     ran.push({ command: e.command, args: e.args })
@@ -210,7 +212,7 @@ function engine(on: any, fake: ReturnType<typeof fakeRepo>, cwd = ROOT, band: 'e
   on('turn.start', ($: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('ui.render', { component: 'AbovePrompt' }, () => (band === 'other' ? ({ type: 'Text', props: {}, children: ['AUTRE BANDEAU'] } as any) : ({ type: 'engine', ref: 0 } as const)))
-  return { ran, statuses, filled, toasts, opened, suggested }
+  return { ran, statuses, filled, toasts, opened, suggested, commands }
 }
 
 async function start($: any, clock: any, surface: Surface = 'terminal', cwd = ROOT, folder = '') {
@@ -344,15 +346,107 @@ describe('git-board', () => {
       await pane.press({ key: 'launch' })
       expect(seen.ran.at(-1)).toEqual({ command: 'project:pr', args: '--draft --auto' })
 
-      await pane.press({ key: 'act-pull' })
-      await pane.select({ key: 'pull-from', value: 'base' })
-      await pane.press({ key: 'launch' })
-      expect(seen.ran.at(-1)).toEqual({ command: 'project:sync', args: 'base' })
-
+      // ↻ oublie la PR restée en file : une seule commande à la fois.
+      await pane.press({ key: 'refresh' })
       await pane.press({ key: 'act-push' })
       await pane.press({ key: 'launch' })
       expect(seen.ran.at(-1)).toEqual({ command: 'project:push', args: '' })
     })
+
+    test(`les boutons de lancement ne disent pas la commande qu'ils lancent (${surface})`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      engine(on, fakeRepo({ pr: 'none' }))
+      const pane = await openPane($, clock, surface)
+      for (const a of ['commit', 'pull', 'push', 'pr']) {
+        await pane.press({ key: `act-${a}` })
+        expect((await pane.find({ type: 'Button', key: 'launch' }))?.text).toMatch(/^▶\sLancer$/)
+      }
+      await pane.press({ key: 'act-push' })
+      expect((await pane.find({ type: 'Button', key: 'launch-version' }))?.text).toMatch(/^▶\sD'abord\sla\sversion$/)
+      // Hors des boutons, la commande reste écrite.
+      expect(await pane.find({ type: 'Text', text: /Avant de pousser : \/project:version/ })).toBeDefined()
+      const band = await mountBand($, surface)
+      expect((await band.find({ type: 'Button', key: 'git-band-open' }))?.text).toMatch(/^▸\sOuvrir$/)
+      await band.unmount()
+    })
+
+    test(`tiroir Pull : « ▶ Lancer » depuis la branche distante, « ▶ Intégrer main » depuis la base (${surface})`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const seen = engine(on, fakeRepo())
+      const pane = await openPane($, clock, surface)
+      await pane.press({ key: 'act-pull' })
+      expect(await pane.find({ type: 'Select', key: 'pull-from' })).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: /Choix de la source/ })).toBeUndefined()
+      expect((await pane.find({ type: 'Button', key: 'launch-base' }))?.text).toMatch(/^▶\sIntégrer\smain$/)
+      await pane.press({ key: 'launch' })
+      expect(seen.ran.at(-1)).toEqual({ command: 'project:sync', args: '' })
+      expect(await pane.find({ type: 'Text', text: /\/project:sync en file/ })).toBeDefined()
+      await pane.press({ key: 'refresh' })
+      await pane.press({ key: 'act-pull' })
+      await pane.press({ key: 'launch-base' })
+      expect(seen.ran.at(-1)).toEqual({ command: 'project:sync', args: 'base' })
+      expect(await pane.find({ type: 'Text', text: /\/project:sync base en file/ })).toBeDefined()
+    })
+  }
+
+  test('tiroir Pull sur la branche par défaut : pas de « ▶ Intégrer »', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const fake = fakeRepo()
+    fake.repo.branch = 'main'
+    engine(on, fake)
+    const pane = await openPane($, clock, 'terminal')
+    await pane.press({ key: 'act-pull' })
+    expect(await pane.find({ type: 'Button', key: 'launch' })).toBeDefined()
+    expect(await pane.find({ type: 'Button', key: 'launch-base' })).toBeUndefined()
+  })
+
+  test('tiroir Pull d’une branche non publiée : « ▶ Intégrer main » sans « ▶ Lancer »', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const fake = fakeRepo({ local: { toMerge: 3 } })
+    const seen = engine(on, fake)
+    const pane = await openPane($, clock, 'terminal')
+    await pane.press({ key: 'act-pull' })
+    expect(await pane.find({ type: 'Button', key: 'launch' })).toBeUndefined()
+    await pane.press({ key: 'launch-base' })
+    expect(seen.ran).toEqual([{ command: 'project:sync', args: 'base' }])
+  })
+
+  test('tiroir Pull hors du dépôt de la session : aucun bouton de lancement', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    engine(on, fakeRepo({ outside: '/elsewhere' }), '/elsewhere')
+    const pane = await openPane($, clock, 'terminal', '/elsewhere', ROOT)
+    await pane.press({ key: 'act-pull' })
+    expect(await pane.find({ type: 'Text', text: /agissent sur le dossier de la session/ })).toBeDefined()
+    expect(await pane.find({ type: 'Button', key: 'launch' })).toBeUndefined()
+    expect(await pane.find({ type: 'Button', key: 'launch-base' })).toBeUndefined()
+  })
+
+  test('un formulaire gardé avec l’ancien choix « depuis la base » se lit, et le choix est ignoré', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = engine(on, fakeRepo())
+    const old = { hint: 'sujet gardé', pullFrom: 'base', prBase: '', prDraft: false, prAuto: false, filter: '', newBranch: '' }
+    // Ce qu'une version précédente a gardé pour la session, lu jusqu'à la première écriture.
+    let isSeeded = true
+    on('state.set', (_$: any, e: any, next: any) => {
+      if (e.plugin === PLUGIN && e.key === 'form') isSeeded = false
+      return next(e)
+    })
+    on('state.get', (_$: any, e: any, next: any) => (isSeeded && e.plugin === PLUGIN && e.key === 'form' ? { value: { value: old, version: 0 } } : next(e)))
+    const pane = await openPane($, clock, 'terminal')
+    await pane.press({ key: 'act-pull' })
+    await pane.press({ key: 'launch' })
+    expect(seen.ran).toEqual([{ command: 'project:sync', args: '' }])
+    await $.turn.start({ text: '', turnId: 't1' })
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+    // Le pull a bien lu le formulaire gardé : rien ne l'a réécrit depuis, et son indice part
+    // avec le commit.
+    expect(isSeeded).toBe(true)
+    await pane.press({ key: 'act-commit' })
+    await pane.press({ key: 'launch' })
+    expect(seen.ran.at(-1)).toEqual({ command: 'project:commit', args: 'sujet gardé' })
+  })
+
+  for (const surface of BANDS) {
 
     test(`hors dépôt : le panneau le dit et la ligne d'état s'efface (${surface})`, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
@@ -447,7 +541,7 @@ describe('git-board', () => {
       expect(await band.find({ type: 'Text', text: 'feat/export' })).toBeDefined()
       expect(seen.statuses.at(-1)).toBeUndefined()
 
-      // ▸ /git ouvre le panneau.
+      // « ▸ Ouvrir » ouvre le panneau.
       seen.opened.length = 0
       await band.press({ key: 'git-band-open' })
       expect(seen.opened).toEqual(['git'])
@@ -652,6 +746,258 @@ describe('git-board', () => {
     expect(await band.find({ type: 'Text', text: /●\s3/ })).toBeUndefined()
     await band.unmount()
   })
+
+  // Le bouton de l'étape suivante du bandeau : l'action mise en avant, lancée d'un clic.
+  const NEXT_CASES = [
+    { name: 'des modifications : Commit', label: /^▶\sCommit$/, ran: { command: 'project:commit', args: '' }, setup: (_f: ReturnType<typeof fakeRepo>) => {} },
+    {
+      name: 'en retard sur la distante : Pull depuis la branche distante',
+      label: /^▶\sPull$/,
+      ran: { command: 'project:sync', args: '' },
+      setup: (f: ReturnType<typeof fakeRepo>) => {
+        f.repo.isDirty = false
+      },
+    },
+    {
+      name: 'en avance : Push',
+      label: /^▶\sPush$/,
+      ran: { command: 'project:push', args: '' },
+      setup: (f: ReturnType<typeof fakeRepo>) => {
+        f.repo.isDirty = false
+        f.repo.behind = 0
+      },
+    },
+    {
+      name: 'tout poussé, pas de PR : PR',
+      label: /^▶\sPR$/,
+      ran: { command: 'project:pr', args: '' },
+      setup: (f: ReturnType<typeof fakeRepo>) => {
+        f.repo.isDirty = false
+        f.repo.behind = 0
+        f.repo.ahead = 0
+      },
+    },
+  ] as const
+  for (const c of NEXT_CASES) {
+    for (const surface of BANDS) {
+      test(`bandeau, bouton de l'étape suivante : ${c.name} (${surface})`, async ($, on) => {
+        const clock = mock.clock(on, { now: NOW })
+        const fake = fakeRepo({ pr: 'none' })
+        c.setup(fake)
+        const seen = engine(on, fake)
+        await start($, clock, surface)
+        const band = await mountBand($, surface)
+        const next = await band.find({ type: 'Button', key: 'git-band-next' })
+        expect(next?.text).toMatch(c.label)
+        expect(JSON.stringify(next)).toMatch(/"variant":"primary"/)
+        // Juste avant « ▸ Ouvrir ».
+        const keys = (JSON.stringify(await band.drawn()).match(/"key":"git-band-[a-z]+"/g) ?? []).map((k) => k.slice(7, -1))
+        expect(keys).toEqual(['git-band-next', 'git-band-open', 'git-band-hide'])
+        await band.press({ key: 'git-band-next' })
+        expect(seen.ran).toEqual([c.ran])
+        // La commande part par le même lancement que le tiroir : en file, puis plus de bouton.
+        expect(await band.find({ type: 'Text', text: new RegExp(`/${c.ran.command}${c.ran.args ? ` ${c.ran.args}` : ''} en file`) })).toBeDefined()
+        expect(await band.find({ type: 'Button', key: 'git-band-next' })).toBeUndefined()
+        await band.unmount()
+      })
+    }
+  }
+
+  test('bandeau : le bouton lance avec les réglages du tiroir (indice du commit, options de la PR)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const fake = fakeRepo({ pr: 'none' })
+    const seen = engine(on, fake)
+    const pane = await openPane($, clock, 'desktop')
+    await pane.press({ key: 'act-commit' })
+    await pane.input({ key: 'hint', text: 'export CSV', kind: 'change' })
+    const band = await mountBand($, 'desktop')
+    await band.press({ key: 'git-band-next' })
+    expect(seen.ran.at(-1)).toEqual({ command: 'project:commit', args: 'export CSV' })
+    await $.turn.start({ text: '', turnId: 't1' })
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+
+    fake.repo.isDirty = false
+    fake.repo.behind = 0
+    fake.repo.ahead = 0
+    await pane.press({ key: 'refresh' })
+    await pane.press({ key: 'act-pr' })
+    await pane.select({ key: 'pr-draft', value: 'draft' })
+    await pane.select({ key: 'pr-auto', value: 'auto' })
+    expect((await band.find({ type: 'Button', key: 'git-band-next' }))?.text).toMatch(/^▶\sPR$/)
+    await band.press({ key: 'git-band-next' })
+    expect(seen.ran.at(-1)).toEqual({ command: 'project:pr', args: '--draft --auto' })
+    await band.unmount()
+  })
+
+  // Pendant un parcours flow-board, un seul envoi en fin de parcours : ni Push ni PR au bandeau.
+  // La valeur `board` de flow-board se lit par `state.get`, que le test remplace.
+  const FLOW_CASES = [
+    { name: 'parcours actif', board: { activeId: 'r1', runs: [{ id: 'r1', status: 'active' }] }, isHidden: true },
+    { name: 'parcours désigné mais fini', board: { activeId: 'r1', runs: [{ id: 'r1', status: 'done' }] }, isHidden: false },
+    { name: 'aucun parcours désigné', board: { activeId: null, runs: [{ id: 'r1', status: 'active' }] }, isHidden: false },
+    { name: 'valeur d’une autre forme', board: { activeId: 'r1', runs: 'r1' }, isHidden: false },
+    { name: 'sans flow-board (pas de valeur)', board: undefined, isHidden: false },
+  ] as const
+  for (const c of FLOW_CASES) {
+    test(`bandeau, ${c.name} : ${c.isHidden ? 'Commit et Pull, ni Push ni PR' : 'Push et PR reviennent'}`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const fake = fakeRepo({ pr: 'none' })
+      engine(on, fake)
+      let reads = 0
+      if (c.board !== undefined) {
+        on('state.get', (_$: any, e: any, next: any) => {
+          if (e.plugin !== 'flow-board' || e.key !== 'board') return next(e)
+          reads += 1
+          return { value: { value: c.board, version: 1 } }
+        })
+      }
+      const pane = await openPane($, clock, 'terminal')
+      const band = await mountBand($, 'terminal')
+      const nextText = async () => (await band.find({ type: 'Button', key: 'git-band-next' }))?.text
+      // Commit et Pull restent, parcours ou non.
+      expect(await nextText()).toMatch(/^▶\sCommit$/)
+      fake.repo.isDirty = false
+      await pane.press({ key: 'refresh' })
+      expect(await nextText()).toMatch(/^▶\sPull$/)
+      if (c.board !== undefined) expect(reads).toBeGreaterThan(0)
+      fake.repo.behind = 0
+      await pane.press({ key: 'refresh' })
+      if (c.isHidden) expect(await nextText()).toBeUndefined()
+      else expect(await nextText()).toMatch(/^▶\sPush$/)
+      fake.repo.ahead = 0
+      await pane.press({ key: 'refresh' })
+      if (c.isHidden) expect(await nextText()).toBeUndefined()
+      else expect(await nextText()).toMatch(/^▶\sPR$/)
+      // Les tiroirs du panneau ne changent pas : Push et PR s'y lancent toujours.
+      await pane.press({ key: 'act-pr' })
+      expect(await pane.find({ type: 'Button', key: 'launch' })).toBeDefined()
+      await band.unmount()
+    })
+  }
+
+  test('bandeau : le bouton ne paraît que si la branche garde sa place à côté de ce que la ligne 1 garde toujours', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    // Non publiée, des modifications, fetch en échec : à gauche 8 (étiquette) + 2 (« ⎇ ») +
+    // 14 (« ◌ non publiée ») + 8 (« ● 3 + 1 ») + 15 (« fetch en échec »), à droite 24, et les
+    // 11 cases de « feat/export » : 82 colonnes.
+    engine(on, fakeRepo({ local: { toMerge: 3 }, fetch: 'fail' }))
+    await start($, clock, 'terminal')
+    for (const [columns, isShown] of [[81, false], [82, true]] as const) {
+      const band = await mountBand($, 'terminal', columns)
+      expect(await band.find({ type: 'Text', text: /fetch\sen\séchec/ })).toBeDefined()
+      expect(await band.find({ type: 'Text', text: /◌\snon\spubliée/ })).toBeDefined()
+      expect(Boolean(await band.find({ type: 'Button', key: 'git-band-next' }))).toBe(isShown)
+      await band.unmount()
+    }
+  })
+
+  test('bandeau : deux appuis rapprochés ne lancent la commande qu’une fois', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = engine(on, fakeRepo())
+    await start($, clock, 'terminal')
+    const band = await mountBand($, 'terminal')
+    await Promise.all([band.press({ key: 'git-band-next' }), band.press({ key: 'git-band-next' })])
+    expect(seen.ran).toEqual([{ command: 'project:commit', args: '' }])
+    await band.unmount()
+  })
+
+  test('bandeau et tiroir : une commande en file n’est pas relancée par l’autre bouton', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = engine(on, fakeRepo())
+    const pane = await openPane($, clock, 'terminal')
+    const band = await mountBand($, 'terminal')
+    // Le bandeau d'abord, puis « ▶ Lancer » du tiroir resté ouvert ailleurs.
+    await pane.press({ key: 'act-commit' })
+    await band.press({ key: 'git-band-next' })
+    await pane.press({ key: 'act-commit' })
+    await pane.press({ key: 'launch' })
+    expect(seen.ran).toEqual([{ command: 'project:commit', args: '' }])
+    expect(await pane.find({ type: 'Text', text: /\/project:commit est déjà en file/ })).toBeDefined()
+    await $.turn.start({ text: '', turnId: 't1' })
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+    // Le tiroir (resté ouvert : l'appui refusé ne l'a pas fermé) et le bandeau au même moment :
+    // une seule commande part.
+    expect(await pane.find({ type: 'Button', key: 'launch' })).toBeDefined()
+    await Promise.all([pane.press({ key: 'launch' }), band.press({ key: 'git-band-next' })])
+    expect(seen.ran).toHaveLength(2)
+    await band.unmount()
+  })
+
+  test('bandeau : un lancement refusé met la commande dans le prompt', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = engine(on, fakeRepo())
+    seen.commands.length = 0
+    await start($, clock, 'terminal')
+    const band = await mountBand($, 'terminal')
+    await band.press({ key: 'git-band-next' })
+    expect(seen.ran).toEqual([])
+    expect(seen.filled).toEqual(['/project:commit'])
+  })
+
+  test('bandeau : pas de bouton de l’étape suivante sans rien à faire, pendant une opération ou hors du dépôt de la session', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const fake = fakeRepo()
+    engine(on, fake)
+    let isMerging = false
+    on('fs.stat', ($: any, e: any) => {
+      if (isMerging && String(e.path).endsWith('MERGE_HEAD')) return { value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false } }
+      return Promise.reject(new Error('ENOENT'))
+    })
+    const pane = await openPane($, clock, 'terminal')
+    const band = await mountBand($, 'terminal')
+    // D'abord l'effet : des modifications, le bouton est là.
+    expect(await band.find({ type: 'Button', key: 'git-band-next' })).toBeDefined()
+    isMerging = true
+    await pane.press({ key: 'refresh' })
+    expect(await band.find({ type: 'Text', text: /Merge en cours/ })).toBeDefined()
+    expect(await band.find({ type: 'Button', key: 'git-band-next' })).toBeUndefined()
+    isMerging = false
+    fake.repo.isDirty = false
+    fake.repo.behind = 0
+    fake.repo.ahead = 0
+    await pane.press({ key: 'refresh' })
+    // PR ouverte, tout poussé : rien à faire.
+    expect(await band.find({ type: 'Text', text: /✓\sà\sjour/ })).toBeDefined()
+    expect(await band.find({ type: 'Button', key: 'git-band-next' })).toBeUndefined()
+    await band.unmount()
+  })
+
+  test('bandeau : pas de bouton de l’étape suivante sur un dépôt suivi hors de la session', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = engine(on, fakeRepo({ outside: '/elsewhere' }), '/elsewhere')
+    await start($, clock, 'terminal', '/elsewhere', ROOT)
+    const band = await mountBand($, 'terminal')
+    expect(await band.find({ type: 'Text', text: 'feat/export' })).toBeDefined()
+    expect(await band.find({ type: 'Button', key: 'git-band-next' })).toBeUndefined()
+    expect(seen.ran).toEqual([])
+    await band.unmount()
+  })
+
+  for (const surface of BANDS) {
+    test(`bandeau : le bouton de l'étape suivante passe avant les éléments secondaires (${surface})`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      engine(on, fakeRepo())
+      await start($, clock, surface)
+      for (const columns of [30, 56, 58, 59, 72, 84, 85, 102, 103, 160]) {
+        const band = await mountBand($, surface, columns)
+        await band.drawn()
+        const has = async (text: RegExp) => Boolean(await band.find({ type: 'Text', text }))
+        const isNext = Boolean(await band.find({ type: 'Button', key: 'git-band-next' }))
+        expect(await has(/feat\/export/)).toBe(true)
+        expect(await band.find({ type: 'Button', key: 'git-band-open' })).toBeDefined()
+        // Le bouton dès 59 colonnes : à droite « [ ▶ Commit ] », « ▸ Ouvrir », « x » et leurs
+        // marges (24), à gauche l'étiquette, « ⎇ », « ↑2 ↓1 » et « ● 3 + 1 » avec leurs marges
+        // (24), et les 11 cases de « feat/export ». « +13 » et la PR demandent alors 72 colonnes
+        // plus la largeur du bouton (« ▶ Commit », 8 cases, plus ses crochets et sa marge : 13),
+        // l'âge du fetch 90 plus 13.
+        expect(isNext).toBe(columns >= 59)
+        expect(await has(/^\+13$/)).toBe(columns >= 85)
+        expect(await has(/#7/)).toBe(columns >= 85)
+        expect(await has(/fetch\sà\sl'instant/)).toBe(columns >= 103)
+        await band.unmount()
+      }
+    })
+  }
 
   test('opération en cours : carte rouge dans le panneau, ligne 2 du bandeau', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -949,7 +1295,7 @@ describe('git-board', () => {
   })
 
   // Une branche sans distante qui ne se pousse pas : le tiroir le dit, sans /project:version
-  // ni « ▶ Lancer · /project:push ».
+  // ni « ▶ Lancer ».
   const NO_PUSH_CASES = [
     { name: 'fusionnée', local: { toMerge: 0 }, say: /✓ Fusionnée dans main : rien à pousser d'ici/ },
     { name: 'à fusionner', local: { toMerge: 3, linked: true }, say: /⤞ À fusionner dans main d'abord/ },

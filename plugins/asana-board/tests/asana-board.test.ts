@@ -322,7 +322,8 @@ describe('asana-board', () => {
       expect(await band.find({ type: 'Text', text: '▍' })).toBeDefined()
       expect(await band.find({ type: 'Text', text: /^\sAsana\s*$/ })).toBeDefined()
       expect(await band.find({ type: 'Text', text: /1\sà trancher/ })).toBeDefined()
-      expect(await band.find({ key: 'asana-band-open' })).toBeDefined()
+      // Sans commande dans le libellé : l'étiquette « Asana » nomme déjà le plugin.
+      expect((await band.find({ key: 'asana-band-open' }))?.props.label).toBe('▸ Ouvrir')
       const hide = await band.find({ key: 'asana-band-hide' })
       // Pas de fermeture native : plusieurs bandeaux empilés la placeraient au même endroit.
       expect(hide?.props.role).toBeUndefined()

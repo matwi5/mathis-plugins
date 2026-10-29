@@ -37,7 +37,7 @@ test('le parcours d’implémentation passe par le Compte rendu, puis Version et
   await $.tool.call({ tool: TOOL, complete: true })
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect((await ui.find({ key: 'go-compte-rendu' }))?.props).toMatchObject({ label: '▶ Compte rendu · /flow-board:compte-rendu' })
+    expect((await ui.find({ key: 'go-compte-rendu' }))?.props).toMatchObject({ label: '▶ Compte rendu' })
     expect(await ui.find({ key: 'go-project:version' })).toBeUndefined()
     await ui.unmount()
   }
@@ -54,7 +54,7 @@ test('le parcours d’implémentation passe par le Compte rendu, puis Version et
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     const next = await ui.find({ key: 'go-project:version' })
-    expect(next?.props).toMatchObject({ label: '▶ Version et push · /project:version' })
+    expect(next?.props).toMatchObject({ label: '▶ Version et push' })
     expect(await ui.find({ key: 'finish' })).toBeDefined()
     // La revue n'est pas une phase de la feuille de route.
     expect(await ui.find({ type: 'Text', text: /Revue finale|Revue du groupe/ })).toBeUndefined()

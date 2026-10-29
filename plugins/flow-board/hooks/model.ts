@@ -2882,7 +2882,9 @@ const closingOf = (e: Record<string, unknown>, state: Closing['state'], was: Clo
       if (was?.[key] !== undefined) fields[key] = was[key]
     }
   }
-  return { state, at: now, ...why, ...fields }
+  // Une fermeture déjà « closed » renvoyée garde sa date : « ↺ Rouvrir » la compare à la validation du compte rendu (série 19).
+  const at = state === 'closed' && was?.state === 'closed' && isTime(was.at) ? was.at : now
+  return { state, at, ...why, ...fields }
 }
 
 /** Les entrées `closed` : notées sur le lien du groupe rendu ; « closed » ne recule jamais (T2). */

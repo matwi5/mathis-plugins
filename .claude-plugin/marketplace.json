@@ -50,13 +50,13 @@
       "name": "asana-board",
       "source": "./plugins/asana-board",
       "description": "Tâches Asana du projet en panneau (/asana, ou /asana-board:asana dès le premier message) et en bandeau au-dessus du prompt : les tâches non terminées de la section, rangées par statut, à créer, modifier, cocher, commenter ou supprimer.",
-      "version": "0.8.0"
+      "version": "0.9.0"
     },
     {
       "name": "git-board",
       "source": "./plugins/git-board",
       "description": "Panneau Git (/git) et bandeau au-dessus du prompt : branche, écarts avec le distant, modifications, branches (bascule, création), historique et pull request ; commit, pull, push et PR via les commandes du plugin project. /git-board:git dès le premier message.",
-      "version": "0.5.0"
+      "version": "0.6.0"
     },
     {
       "name": "files-board",
@@ -68,7 +68,7 @@
       "name": "stats-board",
       "source": "./plugins/stats-board",
       "description": "Panneau de statistiques Claude Code (/ccstats) et bandeau au-dessus du prompt : discussion ouverte (coût, contexte, rythme horaire), récap de la journée, coût équivalent API (ccusage), tokens, modèles, projets, sessions, blocs de 5 h, calendrier d'activité et rythme, pour tous les postes (Portable, Mac, Serveur) partagés par le dépôt claude-usage. /stats-board:ccstats dès le premier message ; /stats-board:recap fait le récap de la discussion et de la journée, ou d'un parcours entier, dans le chat.",
-      "version": "0.11.0"
+      "version": "0.12.0"
     }
   ]
 }

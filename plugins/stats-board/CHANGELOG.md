@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.12.0 — 2026-10-29
+
+### Changé
+- **« ▸ Ouvrir » dans le bandeau**, au lieu de « ▸ /ccstats » : l'étiquette du bandeau nomme déjà le plugin, et un bouton ne dit plus la commande. Il ouvre toujours le panneau ; `/ccstats` reste. La notification « Bandeau Stats masqué : /ccstats show pour le réafficher » ne change pas.
+
+---
+
 ## 0.11.0 — 2026-10-28
 
 ### Ajouté

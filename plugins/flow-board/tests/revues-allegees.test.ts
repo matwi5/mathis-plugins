@@ -140,7 +140,7 @@ test('le bouton de revue d’un groupe sensible met /code-review high sans --fix
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: TOOL, set: [{ id: 'p1', status: 'done' }, { id: 'c1', status: 'done' }] } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Button', text: /^◆.Revue du groupe · \/code-review high$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /^◆.Revue du groupe$/ })).toBeDefined()
   await ui.press({ key: 'review-group-P' })
   expect(filled.at(-1)).toBe('/code-review high')
   await ui.press({ key: 'review-group-C' })

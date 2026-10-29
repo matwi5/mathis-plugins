@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.9.0 — 2026-10-29
+
+### Modifié
+- **« ▸ Ouvrir » dans le bandeau**, au lieu de « ▸ /asana » : l'étiquette du bandeau nomme déjà le plugin, et un bouton ne dit plus la commande. Il ouvre toujours le panneau ; `/asana` reste. La notification « Bandeau Asana masqué : /asana show pour le réafficher » ne change pas.
+
+---
+
 ## 0.8.0 — 2026-10-29
 
 ### Modifié

@@ -1,7 +1,7 @@
 // Données pures du panneau Git : palette, analyse des sorties git et gh, étape suggérée,
 // libellés. Aucun appel au moteur ici : tout ce qui touche `$` vit dans register.tsx.
 
-import type { Action, CiWatch, Form, GitBranch, GitCommit, GitFile, GitRemoteBranch, GitRepo, Meta, PrChecks, PrState, PullRequest, Running } from '../types'
+import type { Action, CiWatch, FlowBoardSeen, Form, GitBranch, GitCommit, GitFile, GitRemoteBranch, GitRepo, Meta, PrChecks, PrState, PullRequest, Running } from '../types'
 
 // Couleurs brutes (hex) mi-tons, copiées de flow-board (hooks/catalog.ts) : lisibles en thème
 // clair comme sombre, sur le terminal comme sur le desktop.
@@ -279,11 +279,20 @@ export function prOf(branch: string, stdout: string): PrState {
 
 export function commandFor(a: Action, r: GitRepo, f: Form) {
   if (a === 'commit') return { name: 'commit', args: f.hint.trim() }
-  if (a === 'pull') return { name: 'sync', args: f.pullFrom === 'base' && r.defaultBranch && r.branch && r.branch !== r.defaultBranch ? 'base' : '' }
+  // Le pull suit la branche distante ; l'intégration de la base a son propre bouton (SYNC_BASE).
+  if (a === 'pull') return { name: 'sync', args: '' }
   if (a === 'push') return { name: 'push', args: '' }
   // La base choisie, si elle existe encore ; la branche par défaut se passe d'argument.
   const base = f.prBase && f.prBase !== r.defaultBranch && f.prBase !== r.branch && r.branches.some((b) => b.name === f.prBase) ? f.prBase : ''
   return { name: 'pr', args: [base, f.prDraft ? '--draft' : '', f.prAuto ? '--auto' : ''].filter(Boolean).join(' ') }
+}
+
+/** « ▶ Intégrer <branche par défaut> » du tiroir Pull : intègre origin/<défaut> dans la branche. */
+export const SYNC_BASE = { name: 'sync', args: 'base' }
+
+/** Une base à intégrer : sur une branche autre que la branche par défaut. */
+export function canSyncBase(r: GitRepo) {
+  return Boolean(r.defaultBranch && r.branch && r.branch !== r.defaultBranch)
 }
 
 /** Suggérée avant le push : le numéro de version et le CHANGELOG partent avec les commits. */
@@ -327,6 +336,31 @@ export function suggest(r: GitRepo, p: PrState): Action | null {
   if (r.webUrl && r.branch && r.branch !== r.defaultBranch && r.upstream && p && p.branch === r.branch && !p.error && !prOfBranch(r, p)) return 'pr'
   return null
 }
+
+/**
+ * Le bouton de l'étape suivante du bandeau : l'étape suggérée, que le bandeau lance comme
+ * « ▶ Lancer » du tiroir. Rien quand une commande /project est en file ou en cours (pas de
+ * double lancement), ni hors du dossier de la session, où les commandes /project n'agissent pas.
+ * Pendant un parcours flow-board, ni Push ni PR : un seul envoi, en fin de parcours.
+ */
+export function bandNext(r: GitRepo, p: PrState, m: Meta, run: Running, isFlowActive: boolean): Action | null {
+  if (run || m.sessionRoot === null || !sameDir(m.sessionRoot, r.root)) return null
+  const lead = suggest(r, p)
+  return isFlowActive && (lead === 'push' || lead === 'pr') ? null : lead
+}
+
+/**
+ * Un parcours flow-board est actif dans la discussion : même règle que flow-board (un parcours
+ * de ce board, désigné actif, au statut actif). La valeur appartient à un autre plugin : sa
+ * forme est vérifiée avant usage.
+ */
+export function isFlowActive(board: FlowBoardSeen | undefined): boolean {
+  if (!board || typeof board.activeId !== 'string' || !Array.isArray(board.runs)) return false
+  return board.runs.some((run) => run?.id === board.activeId && run?.status === 'active')
+}
+
+/** Libellé du bouton de l'étape suivante du bandeau, sans la commande. */
+export const NEXT_LABEL: Record<Action, string> = { commit: 'Commit', pull: 'Pull', push: 'Push', pr: 'PR' }
 
 /** La ligne d'état (relais du bandeau masqué). */
 export function statusText(r: GitRepo) {

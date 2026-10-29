@@ -108,7 +108,7 @@ test('« ▶ Tout implémenter ici » lance /implement sur les tickets ouverts, 
   await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }] } as any)
   for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(String((await ui.find({ key: 'launch-all' }))?.props.label)).toMatch(/^▶.Tout implémenter ici · \/implement$/)
+    expect(String((await ui.find({ key: 'launch-all' }))?.props.label)).toMatch(/^▶.Tout implémenter ici$/)
     expect(await ui.find({ key: 'launch-linked-A' })).toBeUndefined()
     await ui.unmount()
   }

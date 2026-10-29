@@ -7,7 +7,7 @@ Panneau Git et bandeau au-dessus du prompt, dans Claude Code. Il montre la branc
 - **Il suit le dépôt tout seul.** Une relecture suit chaque outil d'écriture de Claude, et un coup d'œil léger repère toutes les 10 s les changements faits ailleurs. Après un push, il suit la CI jusqu'à la fin de ses checks.
 - **Il propose le push.** À la fin d'un tour, des commits à pousser sur un arbre propre : `/project:push` apparaît grisé dans le prompt, Tab pour le prendre.
 
-Version actuelle : **0.5.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.6.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -58,7 +58,7 @@ Une mise à jour s'applique aux discussions démarrées après elle, ou après `
 - `/git-board:git` (ou `/git`) ouvre le **panneau**. L'ouverture relit tout : `git fetch`, puis le dépôt, puis la PR.
 - `/git <dossier>` suit un autre dépôt que celui de la session. Le bouton « ↩ session » de l'en-tête ramène au dossier de la session.
 
-Le panneau ne s'ouvre jamais seul : seulement par une commande ou par « ▸ /git » dans le bandeau.
+Le panneau ne s'ouvre jamais seul : seulement par une commande ou par « ▸ Ouvrir » dans le bandeau.
 
 ---
 
@@ -74,7 +74,7 @@ De haut en bas :
    - La route de livraison : Commit → Push → PR → Checks → Fusion (SVG, ou glyphes reliés sur le terminal). Elle se parcourt dans l'ordre : dès qu'une étape n'est pas faite, les suivantes sont « à venir » (un commit à pousser rend caducs la PR, les checks et la fusion d'avant ; seul le numéro d'une PR encore ouverte reste). Sans distante, Push dit le même état que les pastilles et compte comme fait pour une branche fusionnée ; pour une branche vide, il reste l'étape en cours. Le tiroir Push d'une branche vide, fusionnée ou à fusionner le dit (« rien à pousser d'ici », « à fusionner dans main d'abord ») sans proposer `/project:version` ni `/project:push`. Sur le terminal étroit, les libellés qui ne tiennent pas prennent une forme courte (« Com. », « CI », « Fus. »).
 2. **La zone d'activité**, toujours sous l'en-tête : lecture en cours, bascule, commande `/project` en file ou en cours, dernier message. C'est le seul endroit où une lecture s'affiche. Une erreur reste jusqu'à son « x ». Une commande `/project` est finie dès que le dépôt relu montre son effet (« … : fait d'après le dépôt. ») : commit, HEAD a bougé ; sync, un fetch depuis le lancement et plus rien à récupérer ; push, plus rien à pousser ; PR, une PR existe. Sinon, la fin du tour de Claude la clôt, sans « ✓ » (« tour terminé » ou « interrompue »).
 3. **La carte d'opération** (rebase, merge…), en rouge, quand il y en a une.
-4. **La barre d'actions** : ✓ Commit, ↓ Pull, ↑ Push, ⇄ Pull request, sans comptes (l'en-tête les dit). Seule l'étape suggérée est mise en avant, tant que son tiroir est fermé. Chacune ouvre un tiroir sobre avec « ▶ Lancer · /project:… » ; son « ✕ » ne ferme que le tiroir. Quand il y a quelque chose à pousser, le tiroir Push suggère de lancer d'abord `/project:version` (numéro de version et CHANGELOG), avec un bouton « ▶ D'abord · /project:version » ; sans repère dans le dépôt, cette commande n'est finie qu'avec le tour de Claude. En HEAD détachée, les tiroirs Pull, Push et PR disent seulement de basculer sur une branche. Le tiroir d'une PR ouverte a son lien « Ouvrir sur GitHub ↗ », « ⧉ PR » sur le terminal. Sans copie possible, le toast donne l'adresse à recopier.
+4. **La barre d'actions** : ✓ Commit, ↓ Pull, ↑ Push, ⇄ Pull request, sans comptes (l'en-tête les dit). Seule l'étape suggérée est mise en avant, tant que son tiroir est fermé. Chacune ouvre un tiroir sobre avec « ▶ Lancer », qui lance la commande `/project` de l'action (`/project:commit` avec l'indice, `/project:sync`, `/project:push`, `/project:pr` avec la base et les options choisies) sans l'écrire sur le bouton ; son « ✕ » ne ferme que le tiroir. Le tiroir Pull a deux boutons : « ▶ Lancer » fait le pull depuis la branche distante (`/project:sync`), seulement si la branche est publiée ; « ▶ Intégrer main » (au nom de la vraie branche par défaut) intègre la branche par défaut (`/project:sync base`), seulement hors de celle-ci. Une seule commande `/project` à la fois, quel que soit le bouton (tiroir ou bandeau) : un appui pendant qu'une autre est en file ou en cours ne lance rien et le dit ; deux appuis rapprochés n'en lancent qu'une. Quand il y a quelque chose à pousser, le tiroir Push suggère de lancer d'abord `/project:version` (numéro de version et CHANGELOG), avec un bouton « ▶ D'abord la version » ; sans repère dans le dépôt, cette commande n'est finie qu'avec le tour de Claude. En HEAD détachée, les tiroirs Pull, Push et PR disent seulement de basculer sur une branche. Le tiroir d'une PR ouverte a son lien « Ouvrir sur GitHub ↗ », « ⧉ PR » sur le terminal. Sans copie possible, le toast donne l'adresse à recopier.
 5. **Les onglets**, avec leurs comptes :
    - **Modifications** : total `+a −r lignes` et barre de diff, puis les fichiers groupés (En conflit, Indexés, Modifiés, Nouveaux).
    - **Branches** : création, filtre, branches locales en lignes compactes, branches seulement distantes repliées. Chaque liste a sa bascule « tout voir ».
@@ -93,7 +93,7 @@ Le retour des actions passe par un toast et par la zone d'activité.
 Une ligne, deux au plus, dans un dépôt git seulement.
 
 ```
-⎇ feat/export  ↑2 ↓1  ● 3 + 1 · +13 −1  ⇄ #7 Ouverte ✓ 1 ◌ 1  fetch il y a 4 min      ▸ /git  x
+⎇ feat/export  ↑2 ↓1  ● 3 + 1 · +13 −1  ⇄ #7 Ouverte ✓ 1 ◌ 1  fetch il y a 4 min      [ ▶ Commit ]  ▸ Ouvrir  x
   ▶ /project:commit en file
 ```
 
@@ -103,7 +103,8 @@ Une ligne, deux au plus, dans un dépôt git seulement.
   - Un fetch en échec s'affiche dès 64 colonnes.
 - Ligne 2 (à partir de 56 colonnes, seulement s'il y a quelque chose) : opération en cours en rouge, sinon commande `/project` en file (« ▶ ») ou en cours (spinner), sinon bascule en cours.
 - Pendant le suivi de la CI, son état court remplace les checks de la PR (`◌ CI`, `◌ CI 1/3`, `✓ CI`, `✗ CI <check>`) ; sans PR, il prend sa place, à partir de 72 colonnes.
-- « ▸ /git » ouvre le panneau. « x » masque le bandeau pour la session ; la ligne d'état sous le prompt prend alors le relais. `/git show` le réaffiche.
+- Le **bouton de l'étape suivante**, juste avant « ▸ Ouvrir » : « ▶ Commit », « ▶ Pull », « ▶ Push » ou « ▶ PR », l'étape que la barre d'actions du panneau met en avant, en style principal (« [ ▶ Commit ] » sur le terminal). Un clic la lance tout de suite, comme « ▶ Lancer » de son tiroir et avec ses réglages (indice du commit, base et options de la PR) : vérification de la commande, file, toast, et la commande mise dans le prompt si le moteur la refuse. « ▶ Pull » fait le pull depuis la branche distante ; « ▶ Push » part sans passer par le rappel de `/project:version` du tiroir. Pas de bouton quand il n'y a rien à faire, pendant une opération (rebase, merge…) ou un conflit, quand une commande `/project` lancée par git-board est en file ou en cours, ni quand le dépôt suivi n'est pas celui de la session. Pendant un parcours flow-board actif dans la discussion, ni « ▶ Push » ni « ▶ PR » : la règle veut un seul envoi, en fin de parcours ; « ▶ Commit » et « ▶ Pull » restent, et les tiroirs du panneau ne changent pas. git-board le sait en lisant la valeur `board` de flow-board (`$.state`), par la même règle que flow-board (un parcours désigné actif, au statut actif), sans dépendre de flow-board : sans lui, la valeur manque et rien n'est retiré. Il ne paraît que si la ligne 1 le tient en laissant au nom de la branche 12 cases (ou son nom entier, s'il est plus court), à côté de ce qu'elle garde toujours : étiquette, état face au distant, fichiers et fetch en échec ; avec les comptes du dessin ci-dessus, à partir de 59 colonnes. Avec lui, le total `+a −r`, la PR, la CI et l'âge du fetch demandent sa largeur (13 colonnes pour « ▶ Commit ») en plus de leur palier : ils tombent avant lui.
+- « ▸ Ouvrir » ouvre le panneau. « x » masque le bandeau pour la session ; la ligne d'état sous le prompt prend alors le relais. `/git show` le réaffiche.
 
 Le bandeau s'empile avec ceux des autres mods (flow-board, asana-board…) : il ne les efface jamais. Les sources du moteur ne fixent pas l'ordre vertical entre plugins. En tête, une barre « ▍ » et le nom du mod, de sa couleur, alignés avec ceux des autres bandeaux.
 
@@ -176,7 +177,7 @@ git-board/
 │   └── svg.ts                   SVG copiés de flow-board, plus la jauge ↑/↓
 ├── types/index.d.ts             contrat de l'état (`PluginState`)
 ├── tsconfig.json
-└── tests/git-board.test.tsx     60 tests `claude plugin test`
+└── tests/git-board.test.tsx     104 tests `claude plugin test`
 ```
 
 Tous les appels au moteur (`$`) restent dans `register.tsx` : `claude plugin validate` lit les clés d'état et les appels d'après ce fichier.

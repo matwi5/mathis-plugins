@@ -6,7 +6,7 @@ Les tâches Asana du projet dans Claude Code, en **panneau** et en **bandeau** a
 - **Il permet d'agir.** Créer, cocher, changer le statut, assigner, commenter, modifier, abandonner ou supprimer une tâche, sans quitter Claude Code.
 - **Il suit Claude.** Quand Claude écrit dans Asana pendant la discussion, le panneau se relit, et la ligne de l'appel dit l'écriture avec le nom des tâches (« Asana · coche « Corriger le bandeau » ») au lieu des GID et du JSON.
 
-Version actuelle : **0.8.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.9.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -66,7 +66,7 @@ Une mise à jour s'applique aux discussions démarrées après elle, ou après `
 ## Utilisation
 
 1. **Ouvrir une discussion** dans un dossier dont le `CLAUDE.md` nomme une section Asana. Le bandeau apparaît après la première lecture réussie.
-2. **Ouvrir le panneau** : `▸ /asana` dans le bandeau, `/asana`, ou `/asana-board:asana` en tout premier message.
+2. **Ouvrir le panneau** : « ▸ Ouvrir » dans le bandeau (depuis la 0.9.0 ; avant, « ▸ /asana »), `/asana`, ou `/asana-board:asana` en tout premier message.
 3. **Agir sur une tâche** : `▸` la déplie. « ▶ Travailler dessus » met la demande dans le prompt, sans l'envoyer : Entrée la lance.
 
 ---
@@ -97,7 +97,7 @@ De haut en bas :
 
 Une ligne, deux au plus, sous les bandeaux des autres mods (flow-board, git-board…) :
 
-- **Ligne 1** : barre « ▍ » et nom « Asana » en rose (même colonne que Git et Flow), nom de la section (à partir de 90 colonnes), petite barre de répartition (64), comptes par groupe (à trancher, en cours, à faire, sans statut, puis en attente, atténué), « ⚠ N en retard », « pour toi : N » (72). À droite : `▸ /asana` ouvre le panneau, `x` masque le bandeau.
+- **Ligne 1** : barre « ▍ » et nom « Asana » en rose (même colonne que Git et Flow), nom de la section (à partir de 90 colonnes), petite barre de répartition (64), comptes par groupe (à trancher, en cours, à faire, sans statut, puis en attente, atténué), « ⚠ N en retard », « pour toi : N » (72). À droite : « ▸ Ouvrir » ouvre le panneau, `x` masque le bandeau.
 - **Ligne 2** (à partir de 56 colonnes, seulement s'il y a quelque chose) : la lecture en cours, l'erreur d'une relecture demandée, rien d'autre : ni échéance ni retard détaillés, les retards sont comptés en ligne 1. En tête, une barre « ▍ » et le nom du mod, de sa couleur, alignés avec ceux des autres bandeaux.
 - **La ligne 1 tient toujours sur sa largeur.** Les paliers disent le plus riche ; si ça ne tient pas, le nom de section part, puis les comptes passent en glyphes (`⚖1 ◉1 ○2 ⏸1`), puis s'en vont, dans cet ordre, « pour toi », la barre, le compte « en attente » ; le retard s'abrège en `⚠1`, et le nom part en dernier recours, la barre reste. Sur 80 colonnes, les comptes sont en glyphes.
 

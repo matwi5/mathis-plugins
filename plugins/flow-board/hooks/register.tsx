@@ -163,7 +163,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { OLD_SEPARATORS, closedHint, closingProcedure, groupTitle, groupWorktree, itemsWorktree, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
+import { OLD_SEPARATORS, branchCleanupText, closedHint, closingProcedure, groupTitle, groupWorktree, itemsWorktree, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
 import { COMPACT_FIRST_TOAST, ORIGIN_FILE_RULE, compactionInstructions, compactionRoleOf, retroTranscriptNote, suggestsCompaction, withCompactionInstructions, type CompactionRole } from './compaction.ts'
 import { applyTraces } from './erase.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
@@ -2836,9 +2836,16 @@ const itemsRequest = async ($: any, run: Run, phase: FlowPhase, ids: readonly st
   )
 }
 
-/** Le message que « ✓ Valider le rapport » envoie à Claude : la validation, et la suite qu'elle ouvre. */
-const reportValidatedText = (title: string | undefined): string =>
-  `J'ai validé le compte rendu${title ? ` du parcours « ${title} »` : ''} depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas ; dis-moi la suite en une ligne, d'après la réponse de l'outil flow.`
+/**
+ * Le message que « ✓ Valider le rapport » envoie à Claude : la validation, la suite qu'elle ouvre,
+ * et, dans un dépôt git, la suppression des branches des sessions liées fermées (`branchCleanupText`).
+ */
+const reportValidatedText = (run: Run | undefined, isRepo: boolean): string => {
+  const cleanup = run ? branchCleanupText({ run, isRepo }) : null
+  const validated = `J'ai validé le compte rendu${run?.title ? ` du parcours « ${run.title} »` : ''} depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas ; `
+  // La suite en une ligne, mais après le bilan des branches quand il y en a un : une branche gardée doit être dite.
+  return cleanup ? `${validated}${cleanup} Puis dis-moi la suite en une ligne, d'après la réponse de l'outil flow.` : `${validated}dis-moi la suite en une ligne, d'après la réponse de l'outil flow.`
+}
 
 /** Met une demande dans le prompt ; le toast dit si elle y est ou s'il faut la taper. */
 const fillRequest = async ($: any, text: string, filled: string, typed: string) => {
@@ -3050,11 +3057,18 @@ const actionsFor = ($: any): Actions => ({
   toggleHideFound: () => update($, uiAtom, ui => ({ ...ui, hideFound: !ui.hideFound })),
   validateReport: async () => {
     const now = await $.clock.now()
-    const title = activeRun(await read($, boardAtom))?.title
-    if (!(await commit($, board => validateReport(board, now)))) return
+    const isRepo = await measureRepo($)
+    // La consigne part du parcours tel que la transition l'a validé (l'écriture rejouée comprise), pas d'une copie lue avant.
+    let run: Run | undefined
+    const fx = await commit($, board => {
+      const out = validateReport(board, now)
+      run = out ? (activeRun(out.board) ?? undefined) : undefined
+      return out
+    })
+    if (!fx) return
     // Le clic vaut réponse : sans message, Claude attendait sans savoir que le rapport était validé.
     // Il part au nom du mod (jamais `asUser`), et ne retient pas le bouton pendant le tour qu'il ouvre.
-    void quietly(() => $.prompt.submit({ text: reportValidatedText(title) }))
+    void quietly(() => $.prompt.submit({ text: reportValidatedText(run, isRepo) }))
   },
   redoReport: async () => {
     let isFilled = false

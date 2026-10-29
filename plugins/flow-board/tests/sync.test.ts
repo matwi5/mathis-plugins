@@ -6,6 +6,10 @@ const PANE = {
   requestId: 'flow-board',
   props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
+const BAND = {
+  component: 'AbovePrompt',
+  props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
+} as const
 
 /** Ce que git répond : la branche, la branche principale distante, et le retard de chacune. */
 type Remote = {
@@ -104,7 +108,7 @@ test('main a avancé : /project:sync base demandé une fois, puis à nouveau à 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: /Main a 3 nouveaux commits/ })).toBeDefined()
-    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer /project:sync base' })
+    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer la synchro avec la base' })
     await ui.unmount()
   }
 
@@ -132,7 +136,7 @@ test('après le sync, le retard est remesuré et plus rien n’est demandé', as
   await clock.advance(10)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   // Les deux retards : /project:sync seul d'abord (la branche distante a souvent été remise sur main).
-  expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer /project:sync' })
+  expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer la synchro' })
   expect(await ui.find({ type: 'Text', text: /Ta branche distante a 1 nouveau commit et main a 2 nouveaux commits/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /sync puis/ })).toBeUndefined()
   await ui.unmount()
@@ -246,7 +250,7 @@ test('worktree dev en retard sur origin/main : avis et refus comme aujourd’hui
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: /Main a 2 nouveaux commits/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Avant de modifier le code dans \.claude\/worktrees\/dev : \/project:sync base/ })).toBeDefined()
-    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer /project:sync base' })
+    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer la synchro avec la base' })
     await ui.unmount()
   }
   expect((await edit($, `${DEV}/src/a.py`)).deny).toMatch(/lancer \/project:sync base/)
@@ -284,7 +288,7 @@ test('dossier principal sur main en retard sans commit en avance : avance rapide
     expect(await ui.find({ type: 'Text', text: /Main a 2 nouveaux commits/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Avant de modifier le code : git pull --ff-only/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /project:sync/ })).toBeUndefined()
-    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer git pull --ff-only' })
+    expect((await ui.find({ key: 'sync-now' }))?.props).toMatchObject({ label: 'Préparer l’avance rapide' })
     await ui.unmount()
   }
   // Le bouton met dans le prompt une demande à Claude, pas une commande réservée.
@@ -329,11 +333,32 @@ test('origin ailleurs que sur GitHub : ni phase ni suggestion « Pull request »
   }
 })
 
-test('origin sur GitHub : la suite reste « Pull request · /project:pr »', async ($, on) => {
+test('le parcours bouclé : le bandeau propose « ✓ Clore le parcours », jamais la rétro', async ($, on) => {
+  const clock = mock.clock(on, { now: 46_500_000 })
+  world(on, { branch: 'main', mainSha: 'm1', behindMain: 0, upSha: 'u1', behindUp: 0, hasUpstream: true, url: 'git@gitlab.com:me/proj.git' })
+  await delivered($, clock)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    expect(await pane.find({ type: 'Text', text: 'Parcours bouclé' })).toBeDefined()
+    // La rétro vient en tête de la carte ; le bandeau, lui, propose la clôture.
+    expect(await pane.find({ key: 'go-retro' })).toBeDefined()
+    const inCard = (await pane.find({ key: 'finish' }))?.props.label
+    expect(inCard).toBe('✓ Clore le parcours')
+    await pane.unmount()
+    const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
+    const finish = await band.find({ key: 'finish' })
+    expect(finish?.props.label).toBe(inCard)
+    if (surface === 'desktop') expect(finish?.props.variant).toBe('primary')
+    expect(await band.find({ key: 'go-retro' })).toBeUndefined()
+    await band.unmount()
+  }
+})
+
+test('origin sur GitHub : la suite reste « Pull request »', async ($, on) => {
   const clock = mock.clock(on, { now: 47_000_000 })
   world(on, { branch: 'main', mainSha: 'm1', behindMain: 0, upSha: 'u1', behindUp: 0, hasUpstream: true, url: 'https://github.com/me/proj.git' })
   await delivered($, clock)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect((await ui.find({ key: 'go-project:pr' }))?.props).toMatchObject({ label: '▶ Pull request · /project:pr --auto' })
+  expect((await ui.find({ key: 'go-project:pr' }))?.props).toMatchObject({ label: '▶ Pull request' })
   await ui.unmount()
 })

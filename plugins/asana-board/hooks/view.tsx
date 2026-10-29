@@ -687,10 +687,12 @@ export const drawPane = (k: Kit, view: View, act: Actions): unknown => {
 
 /** Glyphes comptés pour deux cellules, par prudence : certains terminaux les dessinent larges. */
 const WIDE = new Set([...'⚖◉⏸○⚠◆✓'])
+/** Le bouton du bandeau qui ouvre le panneau, sans la commande : l'étiquette « Asana » nomme déjà le plugin. */
+const OPEN_LABEL = '▸ Ouvrir'
 /** Largeur estimée d'un texte, en cellules. */
 const cellsOf = (text: string): number => [...text].reduce((n, ch) => n + (WIDE.has(ch) ? 2 : 1), 0)
-/** À droite de la ligne 1 : marge, « ▸ /asana », marge, « x ». */
-const BAND_RIGHT = 1 + cellsOf('▸ /asana') + 1 + 1
+/** À droite de la ligne 1 : marge, « ▸ Ouvrir », marge, « x ». */
+const BAND_RIGHT = 1 + cellsOf(OPEN_LABEL) + 1 + 1
 /** Ce que le nom de section garde au moins quand il est montré ; au-delà il se tronque. */
 const SECTION_MIN = 20
 /** La mini-barre : 60 px en SVG, 8 blocs sur le terminal. */
@@ -763,7 +765,7 @@ const bandTag = (k: Kit, label: string | null, color: string): unknown => (
 /**
  * Une ligne, deux au plus. Ligne 1 : étiquette ▍ Asana, [section ≥ 90], [répartition ≥ 64], comptes par
  * groupe (à trancher, en cours, à faire, sans statut ; en attente atténué en dernier),
- * retards, [pour toi ≥ 72] ; à droite ▸ /asana et x. Les paliers fixent le plus riche ; si
+ * retards, [pour toi ≥ 72] ; à droite ▸ Ouvrir et x. Les paliers fixent le plus riche ; si
  * ça ne tient pas, la section s'en va, puis les comptes passent en glyphes (⚖1 ◉1 ○2), puis
  * « pour toi », la répartition, l'attente, la forme longue du retard et l'étiquette s'en vont.
  * Ligne 2 (≥ 56) : seulement la lecture en cours ou l'erreur d'une relecture demandée. Ni
@@ -796,7 +798,7 @@ export const drawBand = (k: Kit, view: BandView, act: Actions): unknown => {
         <Box flexShrink={1}>{line(k, first.items)}</Box>
         <Box flexDirection="row" flexShrink={0} marginLeft={1}>
           <Box marginRight={1}>
-            <Button key="asana-band-open" plain={true} dimColor={true} label="▸ /asana" onPress={() => act.openPane()} />
+            <Button key="asana-band-open" plain={true} dimColor={true} label={OPEN_LABEL} onPress={() => act.openPane()} />
           </Box>
           {/* Pas de role="dismiss" : plusieurs bandeaux empilés auraient leur fermeture native au même endroit. */}
           <Button key="asana-band-hide" plain={true} dimColor={true} label="x" onPress={() => act.hideBand()} />

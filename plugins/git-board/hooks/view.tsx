@@ -14,14 +14,16 @@ import {
   C,
   MAX_FILES,
   NB,
+  NEXT_LABEL,
   OPERATION,
   SEP,
   ago,
+  bandNext,
   branchLabel,
   checksText,
   ciOf,
   ciText,
-  commandFor,
+  canSyncBase,
   countsOf,
   fetchedText,
   glyphOf,
@@ -32,7 +34,6 @@ import {
   prOfBranch,
   reviewOf,
   sameDir,
-  slash,
   VERSION_COMMAND,
   localState,
   suggest,
@@ -100,6 +101,8 @@ export type View = {
   isBandHidden: boolean
   /** Suivi de la CI après un push ; affiché seulement pour la branche et le commit en tête. */
   ci: CiWatch
+  /** Un parcours flow-board est actif dans la discussion (pas d'envoi en cours de parcours). */
+  isFlowActive: boolean
   now: number
 }
 
@@ -112,6 +115,8 @@ export type Actions = {
   /** ↻ : oublie une commande restée en file, puis relit tout (fetch et PR compris). */
   refresh: () => unknown
   launch: (a: Action) => unknown
+  /** Tiroir Pull : intègre la branche par défaut (`/project:sync base`). */
+  launchBase: () => unknown
   /** Lance /project:version, suggérée avant le push. */
   launchVersion: () => unknown
   openFolder: (value: string) => unknown
@@ -598,7 +603,8 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
   // Les commandes /project agissent sur le dossier de la session, pas sur celui du panneau.
   const isHere = m.sessionRoot !== null && sameDir(m.sessionRoot, r.root)
   const say = (text: string, color = '') => <Box marginTop={1}>{T(k, text, color ? { color, wrap: 'wrap' } : { dim: true, wrap: 'wrap' })}</Box>
-  const card = (a: Action, title: string, body: unknown[], command: string | null) => (
+  // `canLaunch` : « ▶ Lancer » est proposé ; `more` : un second bouton de lancement à côté.
+  const card = (a: Action, title: string, body: unknown[], canLaunch: boolean, more: unknown = null) => (
     <Box key={`drawer-${a}`} flexDirection="column" borderStyle="round" borderColor={ACTION_COLOR[a]} paddingX={1} marginTop={1}>
       <Box flexDirection="row" justifyContent="space-between" alignItems="center">
         {T(k, title, { color: ACTION_COLOR[a], bold: true })}
@@ -606,18 +612,18 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
         <Button key="drawer-close" plain={true} dimColor={true} label="✕" onPress={() => act.closeAction()} />
       </Box>
       {body.filter(isShown)}
-      {command && !isHere && say(`Les commandes /project agissent sur le dossier de la session${m.sessionRoot ? ` (${m.sessionRoot})` : ''} : ouvre une session dans ${r.root} pour les lancer d'ici.`, C.amber)}
-      {command && isHere && (
+      {(canLaunch || isShown(more)) && !isHere && say(`Les commandes /project agissent sur le dossier de la session${m.sessionRoot ? ` (${m.sessionRoot})` : ''} : ouvre une session dans ${r.root} pour les lancer d'ici.`, C.amber)}
+      {(canLaunch || isShown(more)) && isHere && (
         <Box flexDirection="row" alignItems="center" marginTop={1}>
-          {line(k, [<Button key="launch" variant="primary" label={`▶${NB}Lancer${NB}·${NB}${command}`} onPress={() => act.launch(a)} />, T(k, 'part dès que Claude est libre', { dim: true })])}
+          {line(k, [canLaunch && <Button key="launch" variant="primary" label={`▶${NB}Lancer`} onPress={() => act.launch(a)} />, more, T(k, 'part dès que Claude est libre', { dim: true })], true)}
         </Box>
       )}
     </Box>
   )
 
   if (open === 'commit') {
-    if (!r.files.length) return card('commit', '✓ Commit', [say("Rien à commiter : l'arbre de travail est propre.")], null)
-    if (n.conflicts) return card('commit', '✓ Commit', [say('Résous d’abord les fichiers en conflit.', C.red)], null)
+    if (!r.files.length) return card('commit', '✓ Commit', [say("Rien à commiter : l'arbre de travail est propre.")], false)
+    if (n.conflicts) return card('commit', '✓ Commit', [say('Résous d’abord les fichiers en conflit.', C.red)], false)
     return card(
       'commit',
       '✓ Commit',
@@ -642,40 +648,26 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
           unavailable(k, "Indice indisponible ici : la commande part sans indice.")
         ),
       ],
-      slash(commandFor('commit', r, f)),
+      true,
     )
   }
   // HEAD détachée (aussi pendant un rebase) : ni pull, ni push, ni PR n'ont de branche.
   if (!r.branch) {
     const title = open === 'pull' ? '↓ Pull' : open === 'push' ? '↑ Push' : '⇄ Pull request'
-    return card(open, title, [say('HEAD détachée : bascule sur une branche (onglet Branches) avant pull, push ou PR.', C.amber)], null)
+    return card(open, title, [say('HEAD détachée : bascule sur une branche (onglet Branches) avant pull, push ou PR.', C.amber)], false)
   }
   if (open === 'pull') {
-    const canBase = Boolean(r.defaultBranch && r.branch && r.branch !== r.defaultBranch)
-    const fromBase = f.pullFrom === 'base' && canBase
-    const options = [
-      { value: 'upstream', label: r.upstream ? `${r.upstream} (sa branche distante)` : 'sa branche distante' },
-      ...(canBase ? [{ value: 'base', label: `${r.defaultBranch} (branche par défaut)` }] : []),
-    ]
+    // Deux boutons : « ▶ Lancer » depuis la branche distante, « ▶ Intégrer <défaut> » depuis la base.
+    const canBase = canSyncBase(r)
     return card(
       'pull',
       '↓ Pull',
       [
-        canBase &&
-          (Select ? (
-            <Box marginTop={1}>
-              <Select key="pull-from" label="Depuis" options={options} value={fromBase ? 'base' : 'upstream'} onSelect={(v: string) => act.setForm({ pullFrom: v === 'base' ? 'base' : 'upstream' })} />
-            </Box>
-          ) : (
-            unavailable(k, 'Choix de la source indisponible ici : le pull suit la branche distante.')
-          )),
-        fromBase
-          ? say(`Intègre origin/${r.defaultBranch} : merge si la branche est publiée, rebase sinon.`)
-          : r.upstream
-            ? say(`pull --rebase --autostash depuis ${r.upstream}.`)
-            : say("Branche pas encore publiée : rien à récupérer de son côté.", C.amber),
+        r.upstream ? say(`▶ Lancer : pull --rebase --autostash depuis ${r.upstream}.`) : say("Branche pas encore publiée : rien à récupérer de son côté.", C.amber),
+        canBase && say(`▶ Intégrer ${r.defaultBranch} : intègre origin/${r.defaultBranch}, par merge si la branche est publiée, par rebase sinon.`),
       ],
-      fromBase || r.upstream ? slash(commandFor('pull', r, f)) : null,
+      Boolean(r.upstream),
+      canBase && <Button key="launch-base" label={`▶${NB}Intégrer${NB}${r.defaultBranch}`} onPress={() => act.launchBase()} />,
     )
   }
   if (open === 'push') {
@@ -689,7 +681,7 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
           : s === 'merged'
             ? say(`✓ Fusionnée dans ${base} : rien à pousser d'ici.`, C.green)
             : say(`⤞ À fusionner dans ${base} d'abord : la branche d'un worktree se fusionne en local, elle ne se pousse pas.`, C.slate)
-      return card('push', '↑ Push', [why], null)
+      return card('push', '↑ Push', [why], false)
     }
     const nothing = !r.files.length && !r.ahead && Boolean(r.upstream)
     return card(
@@ -704,15 +696,15 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
         r.hasRemote && !nothing && say(`Avant de pousser : ${VERSION_COMMAND} monte le numéro de version et le CHANGELOG d'après les commits.`, C.amber),
         r.hasRemote && !nothing && isHere && (
           <Box flexDirection="row" alignItems="center" marginTop={1}>
-            {line(k, [<Button key="launch-version" label={`▶${NB}D'abord${NB}·${NB}${VERSION_COMMAND}`} onPress={() => act.launchVersion()} />])}
+            {line(k, [<Button key="launch-version" label={`▶${NB}D'abord${NB}la${NB}version`} onPress={() => act.launchVersion()} />])}
           </Box>
         ),
       ],
-      r.hasRemote && !nothing ? slash(commandFor('push', r, f)) : null,
+      r.hasRemote && !nothing,
     )
   }
   // Pull request.
-  if (!r.webUrl) return card('pr', '⇄ Pull request', [say("Pas de distant GitHub : pas de pull request possible.", C.amber)], null)
+  if (!r.webUrl) return card('pr', '⇄ Pull request', [say("Pas de distant GitHub : pas de pull request possible.", C.amber)], false)
   if (pr && pr.state === 'OPEN') {
     return card(
       'pr',
@@ -723,11 +715,11 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
           {line(k, [T(k, `${prLabel(pr)} vers ${pr.base}`, { color: prColor(pr) }), pr.url && urlCell(k, 'pr-card-link', pr.url, { label: 'Ouvrir sur GitHub ↗', ...PR_LINK }, act)])}
         </Box>,
       ],
-      null,
+      false,
     )
   }
   if (r.branch === r.defaultBranch) {
-    return card('pr', '⇄ Pull request', [say("Branche par défaut : crée d'abord une branche de travail (onglet Branches).", C.amber)], null)
+    return card('pr', '⇄ Pull request', [say("Branche par défaut : crée d'abord une branche de travail (onglet Branches).", C.amber)], false)
   }
   const bases = unique([r.defaultBranch, ...r.branches.map((b) => b.name)].filter((b): b is string => Boolean(b) && b !== r.branch)).slice(0, 30)
   const base = f.prBase && bases.includes(f.prBase) ? f.prBase : (bases[0] ?? '')
@@ -773,7 +765,7 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
         unavailable(k, 'Base, brouillon et fusion auto indisponibles ici : PR prête à relire vers la branche par défaut.')
       ),
     ],
-    slash(commandFor('pr', r, f)),
+    true,
   )
 }
 
@@ -1076,6 +1068,12 @@ const commitRow = (k: Kit, view: View, r: GitRepo, c: GitCommit, act: Actions): 
 const LABEL_CELLS = 5
 /** La colonne d'étiquette : la barre, une espace, le nom calé sur LABEL_CELLS. */
 export const TAG_CELLS = 2 + LABEL_CELLS
+/**
+ * Le bouton de l'étape suivante du bandeau ne paraît que s'il laisse au nom de la branche au
+ * moins ces cases (ou son nom entier, s'il est plus court), à côté de ce que la ligne 1 garde
+ * toujours : étiquette, état face au distant, fichiers, fetch en échec.
+ */
+const BRANCH_MIN = 12
 /** La couleur de Git dans les bandeaux (mandarine, comme son logo) ; le violet reste celui de Flow. */
 const TAG_COLOR = C.tangerine
 
@@ -1109,26 +1107,46 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
   const isElsewhere = m.sessionRoot === null || !sameDir(m.sessionRoot, r.root)
   const fetched = fetchedText(m, view.now, r.hasRemote)
 
+  // Ce que la ligne 1 garde toujours, en textes : leur largeur dit si le bouton de l'étape suivante tient.
   const [localText, localColor] = unpublishedText(r)
-  const remote = r.upstream
+  const remoteParts: [string, Style][] = r.upstream
     ? r.ahead || r.behind
-      ? line(k, [r.ahead > 0 && T(k, `↑${r.ahead}`, { color: C.green, bold: true }), r.behind > 0 && T(k, `↓${r.behind}`, { color: C.amber, bold: true })])
-      : T(k, `✓${NB}à${NB}jour`, { color: C.green })
+      ? [r.ahead > 0 && ([`↑${r.ahead}`, { color: C.green, bold: true }] as [string, Style]), r.behind > 0 && ([`↓${r.behind}`, { color: C.amber, bold: true }] as [string, Style])].filter(
+          (x): x is [string, Style] => x !== false,
+        )
+      : [[`✓${NB}à${NB}jour`, { color: C.green }]]
     : r.branch && r.hasRemote
-      ? T(k, localText, { color: localColor })
-      : null
-  const files = line(k, [
-    n.conflicts > 0 && T(k, `✖${NB}${n.conflicts}`, { color: C.red, bold: true }),
-    n.changed > 0 && T(k, `●${NB}${n.changed}`, { color: C.amber }),
-    n.fresh > 0 && T(k, `+${NB}${n.fresh}`, { color: C.teal }),
-  ])
+      ? [[localText, { color: localColor }]]
+      : []
+  const fileParts: [string, Style][] = [
+    n.conflicts > 0 && ([`✖${NB}${n.conflicts}`, { color: C.red, bold: true }] as [string, Style]),
+    n.changed > 0 && ([`●${NB}${n.changed}`, { color: C.amber }] as [string, Style]),
+    n.fresh > 0 && ([`+${NB}${n.fresh}`, { color: C.teal }] as [string, Style]),
+  ].filter((x): x is [string, Style] => x !== false)
+  const fetchError = fetched && fetched.isError && width >= 64 ? fetched.text : ''
+  const remote = remoteParts.length ? line(k, remoteParts.map(([text, style]) => T(k, text, style))) : null
+  const files = line(k, fileParts.map(([text, style]) => T(k, text, style)))
+
+  // Le bouton de l'étape suivante passe avant les éléments secondaires : avec lui, ceux-ci
+  // demandent sa largeur en plus de leur palier (« [ ▶ Commit ] » au terminal et sa marge).
+  // Il ne paraît que si la ligne 1 le tient sans couper la branche sous BRANCH_MIN : à droite
+  // le bouton, « ▸ Ouvrir » et « x » avec leurs marges ; à gauche l'étiquette, « ⎇ » et ce
+  // qu'elle garde toujours, chacun suivi d'une marge.
+  const candidate = bandNext(r, view.pr, m, view.running, view.isFlowActive)
+  const nextLabel = candidate ? `▶${NB}${NEXT_LABEL[candidate]}` : ''
+  const nextCells = nextLabel.length + 5
+  const kept = [...remoteParts.map(([text]) => text), fileParts.map(([text]) => text).join(NB), fetchError].filter(Boolean)
+  const leftCells = TAG_CELLS + 1 + 2 + kept.reduce((sum, text) => sum + text.length + 1, 0)
+  const rightCells = nextCells + `▸${NB}Ouvrir`.length + 1 + 1 + 1
+  const lead = candidate && width - rightCells - leftCells >= Math.min(BRANCH_MIN, branchLabel(r).length) ? candidate : null
+  const room = lead ? width - nextCells : width
   // Un « · » sépare les fichiers (« + 1 » nouveau) du total des lignes (« +13 »).
   const diff =
-    width >= 72 &&
+    room >= 72 &&
     n.added + n.removed > 0 &&
     line(k, [r.files.length > 0 && T(k, '·', { dim: true }), n.added > 0 && T(k, `+${n.added}`, { color: C.green, dim: true }), n.removed > 0 && T(k, `−${n.removed}`, { color: C.red, dim: true })])
   const prBit =
-    width >= 72 &&
+    room >= 72 &&
     pr &&
     line(k, [
       T(k, `⇄${NB}#${pr.number}`, { color: C.violet, bold: true }),
@@ -1136,8 +1154,9 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
       ...(watch ? [ciText(watch, true)] : checksText(pr.checks)).map(([text, c]) => T(k, text, { color: c })),
     ])
   // Sans PR, la CI suivie après un push, à la place de la PR.
-  const ciBit = width >= 72 && !pr && watch && T(k, ciText(watch, true)[0], { color: ciText(watch, true)[1] })
-  const fetchBit = fetched && (fetched.isError ? width >= 64 && T(k, fetched.text, { color: C.red }) : width >= 90 && T(k, fetched.text, { dim: true }))
+  const ciBit = room >= 72 && !pr && watch && T(k, ciText(watch, true)[0], { color: ciText(watch, true)[1] })
+  // Un fetch en échec n'est pas secondaire : il garde son palier.
+  const fetchBit = fetched && (fetched.isError ? fetchError && T(k, fetchError, { color: C.red }) : room >= 90 && T(k, fetched.text, { dim: true }))
 
   const run = view.running
   const second =
@@ -1173,8 +1192,13 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
           ])}
         </Box>
         <Box flexDirection="row" flexShrink={0} marginLeft={1}>
+          {lead && (
+            <Box marginRight={1}>
+              <Button key="git-band-next" variant="primary" label={nextLabel} onPress={() => act.launch(lead)} />
+            </Box>
+          )}
           <Box marginRight={1}>
-            <Button key="git-band-open" plain={true} dimColor={true} label={`▸${NB}/git`} onPress={() => act.openPane()} />
+            <Button key="git-band-open" plain={true} dimColor={true} label={`▸${NB}Ouvrir`} onPress={() => act.openPane()} />
           </Box>
           {/* Pas de role="dismiss" : plusieurs bandeaux empilés auraient chacun leur fermeture native au même endroit. */}
           <Button key="git-band-hide" plain={true} dimColor={true} label="x" onPress={() => act.hideBand()} />

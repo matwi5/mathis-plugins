@@ -4,6 +4,20 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.6.0 — 2026-10-29
+
+### Ajouté
+- **Bouton de l'étape suivante dans le bandeau** : « ▶ Commit », « ▶ Pull », « ▶ Push » ou « ▶ PR », l'étape que la barre d'actions du panneau met en avant, juste avant « ▸ Ouvrir », en style principal. Un clic la lance tout de suite, comme « ▶ Lancer » de son tiroir et avec ses réglages (indice du commit, base et options de la PR) ; « ▶ Pull » fait le pull depuis la branche distante, « ▶ Push » part sans le rappel de `/project:version` du tiroir. Pas de bouton sans rien à faire, pendant une opération (rebase, merge…), avec une commande `/project` en file ou en cours, ni hors du dépôt de la session. Il ne paraît que si la ligne 1 le tient ; le total `+a −r`, la PR, la CI et l'âge du fetch lui cèdent la place.
+- **Ni Push ni PR au bandeau pendant un parcours flow-board** : la règle veut un seul envoi, en fin de parcours ; « ▶ Commit » et « ▶ Pull » restent, les tiroirs ne changent pas. git-board lit la valeur `board` de flow-board, sans en dépendre : sans flow-board, rien n'est retiré.
+- **« ▶ Intégrer main » dans le tiroir Pull** (au nom de la vraie branche par défaut) : il lance `/project:sync base`, hors de la branche par défaut. « ▶ Lancer » fait toujours le pull depuis la branche distante.
+
+### Modifié
+- **Boutons sans commande** : « ▶ Lancer » dans chaque tiroir, « ▶ D'abord la version » dans le tiroir Push, « ▸ Ouvrir » au bandeau ; la commande lancée ne s'écrit plus sur le bouton.
+- **Tiroir Pull** : la liste « Depuis » est retirée, remplacée par les deux boutons. Un formulaire gardé par la version précédente se lit, et son ancien choix de source est ignoré.
+- **Une seule commande `/project` à la fois**, quel que soit le bouton (tiroir ou bandeau) : un appui pendant qu'une autre est en file ou en cours ne lance rien et le dit ; deux appuis rapprochés n'en lancent qu'une. Choix de Mathis : « Tous les boutons ».
+
+---
+
 ## 0.5.0 — 2026-10-29
 
 ### Modifié

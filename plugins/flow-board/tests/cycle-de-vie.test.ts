@@ -128,6 +128,7 @@ test('un groupe confié est « en cours » dès que l’id de sa session est rel
   await ui.unmount()
   const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND })
   expect(await band.find({ type: 'Text', text: /↗E.0\/1/ })).toBeDefined()
+  expect((await band.find({ key: 'band-open' }))?.props).toMatchObject({ label: '▸ Ouvrir' })
   await band.unmount()
 })
 

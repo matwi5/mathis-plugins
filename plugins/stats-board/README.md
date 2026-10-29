@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) ; les fichiers de relevé des requêtes (`~/.claude/stats-board/requetes/`, un par ouverture de session) et les totaux de durée (`~/.claude/stats-board/totaux/`, un par mois), sans aucun texte de message et jamais supprimés ; et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.11.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.12.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -53,11 +53,11 @@ Une mise à jour s'applique aux discussions démarrées après elle, ou après `
 
 ## Utilisation
 
-- Le **bandeau** apparaît au-dessus du prompt dès le démarrage de la session. « ▸ /ccstats » ouvre le panneau.
+- Le **bandeau** apparaît au-dessus du prompt dès le démarrage de la session. « ▸ Ouvrir » ouvre le panneau (depuis la 0.12.0 ; avant, « ▸ /ccstats »).
 - `/stats-board:ccstats` (ou `/ccstats`) ouvre le **panneau**.
 - « ↻ Actualiser » dans le panneau relance ccusage.
 
-Le panneau ne s'ouvre jamais seul : seulement par une commande ou par « ▸ /ccstats » dans le bandeau.
+Le panneau ne s'ouvre jamais seul : seulement par une commande ou par « ▸ Ouvrir » dans le bandeau.
 
 - `/stats-board:recap` (ou une demande comme « combien m'a coûté cette discussion », « récap de la journée », « récap du parcours ») fait le **récap dans le chat** : voir [Le skill recap](#le-skill-recap).
 
@@ -115,14 +115,14 @@ Une ligne, deux pendant un relevé.
 Sur le terminal, compact (un émoji par libellé, « tok ») :
 
 ```
-▍ Stats  ▰▰▰▰ 🔥 44 $/h · 💬 47,12 $ 101 M tok · 🌞 134 $ 210 M tok · 📅 1 179 $ 2,3 Md tok     ▸ /ccstats  x
+▍ Stats  ▰▰▰▰ 🔥 44 $/h · 💬 47,12 $ 101 M tok · 🌞 134 $ 210 M tok · 📅 1 179 $ 2,3 Md tok      ▸ Ouvrir  x
           ⠋ Relevé ccusage : sessions et blocs de 5 h…
 ```
 
 Sur le desktop, en mots :
 
 ```
-▍ Stats  🔥 44 $/h · discussion 47,12 $ 101 M · aujourd'hui 134 $ 210 M · oct. 1 179 $ 2,3 Md     ▸ /ccstats  x
+▍ Stats  🔥 44 $/h · discussion 47,12 $ 101 M · aujourd'hui 134 $ 210 M · oct. 1 179 $ 2,3 Md      ▸ Ouvrir  x
 ```
 
 Dans l'ordre :
@@ -145,7 +145,7 @@ Les niveaux du rythme viennent des 45 blocs de 5 h du 9 septembre au 7 octobre 2
 | intense | 22 à 32 $/h | grande flamme rouge-orangé, 3 crans |
 | en feu | ≥ 32 $/h | trois flammes et un halo, 4 crans et 🔥 |
 
-- « ▸ /ccstats » ouvre le panneau. « x » masque le bandeau pour la session ; la ligne d'état sous le prompt prend alors le relais. `/ccstats show` le réaffiche.
+- « ▸ Ouvrir » ouvre le panneau. « x » masque le bandeau pour la session ; la ligne d'état sous le prompt prend alors le relais. `/ccstats show` le réaffiche.
 
 Le bandeau s'empile avec ceux des autres mods (git-board, flow-board, asana-board) sans les effacer. En tête, une barre « ▍ » et le nom du mod en bleu ciel, alignés avec ceux des autres bandeaux.
 

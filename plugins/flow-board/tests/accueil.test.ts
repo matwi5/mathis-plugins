@@ -40,14 +40,14 @@ const paused = (mem: Record<string, unknown>, title: string, updatedAt: number) 
   return run
 }
 
-test('sans parcours dans le projet : « Aucun workflow sélectionné » et ▸ /flow, sans reprise', async ($, on) => {
+test('sans parcours dans le projet : « Aucun workflow sélectionné » et ▸ Ouvrir, sans reprise', async ($, on) => {
   mock.clock(on, { now: 100_000_000 })
   world(on)
   await start($)
   for (const surface of BANDS) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: WELCOME })).toBeDefined()
-    expect(await ui.find({ key: 'band-open' })).toBeDefined()
+    expect((await ui.find({ key: 'band-open' }))?.props).toMatchObject({ label: '▸ Ouvrir' })
     expect(await ui.find({ key: 'band-hide' })).toBeDefined()
     expect(await ui.find({ key: 'band-resume' })).toBeUndefined()
     // L'étiquette d'outil ouvre la ligne : la barre, puis « Flow ».

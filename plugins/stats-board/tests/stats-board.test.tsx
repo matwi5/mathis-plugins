@@ -468,6 +468,8 @@ describe('stats-board', () => {
       await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as any)
       expect(await drawn(await mountBand($, surface, 160))).toContain(`199${NB}k${NB}${tok}`)
       seen.opened.length = 0
+      // Sans commande dans le libellé : l'étiquette « Stats » nomme déjà le plugin.
+      expect(String((await band.find({ key: 'stats-band-open' }))?.props.label)).toMatch(/^▸.Ouvrir$/)
       await band.press({ key: 'stats-band-open' })
       expect(seen.opened).toEqual(['ccstats'])
       // Étroit : le rythme et la discussion seulement.

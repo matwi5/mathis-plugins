@@ -95,6 +95,7 @@ test('pendant /implement, le ticket en cours se lit dans son groupe, avec sa pla
   let ui = await $.ui.mount({ plugin: 'flow-board', surface: 'desktop', ...PANE })
   await ui.press({ key: 'pick-A1' })
   await ui.press({ key: 'pick-A2' })
+  expect(String((await ui.find({ key: 'launch-picks' }))?.props.label)).toMatch(/^▶ Implémenter 2.tickets$/)
   await ui.press({ key: 'launch-picks' })
   await ui.unmount()
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'y' })

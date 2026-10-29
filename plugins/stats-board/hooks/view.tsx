@@ -2404,7 +2404,7 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
         <Box flexShrink={1}>{line(k, [bandTag(k, 'Stats', TAG_COLOR), ...shown])}</Box>
         <Box flexDirection="row" flexShrink={0} marginLeft={1}>
           <Box marginRight={1}>
-            <Button key="stats-band-open" plain={true} dimColor={true} label={`▸${NB}/ccstats`} onPress={() => act.openPane()} />
+            <Button key="stats-band-open" plain={true} dimColor={true} label={`▸${NB}Ouvrir`} onPress={() => act.openPane()} />
           </Box>
           {/* Pas de role="dismiss" : plusieurs bandeaux empilés auraient chacun leur fermeture native au même endroit. */}
           <Button key="stats-band-hide" plain={true} dimColor={true} label="x" onPress={() => act.hideBand()} />
