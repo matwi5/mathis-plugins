@@ -61,6 +61,7 @@ import {
   markDecisionsSeen,
   reportFacts,
   validateReport,
+  markCleanupSent,
   applyFileChange,
   applyReport,
   applySkill,
@@ -163,7 +164,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { OLD_SEPARATORS, branchCleanupText, closedHint, closingProcedure, groupTitle, groupWorktree, itemsWorktree, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
+import { OLD_SEPARATORS, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, itemsWorktree, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
 import { COMPACT_FIRST_TOAST, ORIGIN_FILE_RULE, compactionInstructions, compactionRoleOf, retroTranscriptNote, suggestsCompaction, withCompactionInstructions, type CompactionRole } from './compaction.ts'
 import { applyTraces } from './erase.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
@@ -2838,13 +2839,24 @@ const itemsRequest = async ($: any, run: Run, phase: FlowPhase, ids: readonly st
 
 /**
  * Le message que « ✓ Valider le rapport » envoie à Claude : la validation, la suite qu'elle ouvre,
- * et, dans un dépôt git, la suppression des branches des sessions liées fermées (`branchCleanupText`).
+ * et, dans un dépôt git, ce qu'elle fait des branches des sessions liées (`branchCleanup`), avec les
+ * branches que vise sa consigne. Avec elles, le titre du parcours, du texte libre, n'y entre pas : il
+ * ne peut pas se glisser parmi les commandes.
  */
-const reportValidatedText = (run: Run | undefined, isRepo: boolean): string => {
-  const cleanup = run ? branchCleanupText({ run, isRepo }) : null
-  const validated = `J'ai validé le compte rendu${run?.title ? ` du parcours « ${run.title} »` : ''} depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas ; `
-  // La suite en une ligne, mais après le bilan des branches quand il y en a un : une branche gardée doit être dite.
-  return cleanup ? `${validated}${cleanup} Puis dis-moi la suite en une ligne, d'après la réponse de l'outil flow.` : `${validated}dis-moi la suite en une ligne, d'après la réponse de l'outil flow.`
+const reportValidated = (run: Run | undefined, isRepo: boolean, root: unknown): { text: string; branches: string[] } => {
+  let cleanup: { text: string; branches: string[] } | null = null
+  let isBroken = false
+  // Une consigne qui ne s'écrit pas (un tableau de bord mal formé) ne fait perdre ni la validation, ni le dire.
+  try {
+    cleanup = run ? branchCleanup({ run, isRepo, root }) : null
+  } catch {
+    isBroken = true
+  }
+  const suite = "dis-moi la suite en une ligne, d'après la réponse de l'outil flow."
+  if (cleanup) return { text: `J'ai validé le compte rendu depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas. ${cleanup.text} Puis ${suite}`, branches: cleanup.branches }
+  const head = `J'ai validé le compte rendu${run?.title ? ` du parcours « ${run.title} »` : ''} depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas`
+  const text = isBroken ? `${head}. La consigne des branches des sessions liées n’a pas pu s’écrire : aucune n’est supprimée ; dis-le-moi. Puis ${suite}` : `${head} ; ${suite}`
+  return { text, branches: [] }
 }
 
 /** Met une demande dans le prompt ; le toast dit si elle y est ou s'il faut la taper. */
@@ -3060,15 +3072,27 @@ const actionsFor = ($: any): Actions => ({
     const isRepo = await measureRepo($)
     // La consigne part du parcours tel que la transition l'a validé (l'écriture rejouée comprise), pas d'une copie lue avant.
     let run: Run | undefined
+    let root: unknown
     const fx = await commit($, board => {
       const out = validateReport(board, now)
       run = out ? (activeRun(out.board) ?? undefined) : undefined
+      root = out?.board.root
       return out
     })
     if (!fx) return
     // Le clic vaut réponse : sans message, Claude attendait sans savoir que le rapport était validé.
     // Il part au nom du mod (jamais `asUser`), et ne retient pas le bouton pendant le tour qu'il ouvre.
-    void quietly(() => $.prompt.submit({ text: reportValidatedText(run, isRepo) }))
+    const { text, branches } = reportValidated(run, isRepo, root)
+    const runId = run?.id
+    void quietly(async () => {
+      const result = await $.prompt.submit({ text })
+      // Le message entré dans la session (ni refusé, ni retiré : pas de `drop`), chaque fermeture visée
+      // se marque (série 24) : un envoi raté ne marque rien. L'heure se relit : l'envoi a pu attendre.
+      const isEntered = result !== null && typeof result === 'object' && typeof result.text === 'string' && !('drop' in result)
+      if (!isEntered || runId === undefined || branches.length === 0) return
+      const at = await $.clock.now()
+      await commit($, board => markCleanupSent(board, runId, branches, at))
+    })
   },
   redoReport: async () => {
     let isFilled = false

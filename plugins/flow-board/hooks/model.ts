@@ -33,7 +33,7 @@ import type {
   VersionUnit,
 } from '../types'
 import { SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
-import { closedHint, closingProcedure, isSafeBranch, isSafeId, isSessionId, isWorktreePath, sendNumber } from './closing.ts'
+import { branchFate, closedHint, closingProcedure, isSafeBranch, isSafeId, isSessionId, isWorktreePath, sendNumber, type CloseTarget } from './closing.ts'
 import { ownPart } from './linked.ts'
 import { maxOf, minOf } from './timeline.ts'
 
@@ -2882,9 +2882,9 @@ const closingOf = (e: Record<string, unknown>, state: Closing['state'], was: Clo
       if (was?.[key] !== undefined) fields[key] = was[key]
     }
   }
-  // Une fermeture déjà « closed » renvoyée garde sa date : « ↺ Rouvrir » la compare à la validation du compte rendu (série 19).
-  const at = state === 'closed' && was?.state === 'closed' && isTime(was.at) ? was.at : now
-  return { state, at, ...why, ...fields }
+  // Une fermeture « closed » renvoyée garde sa marque de suppression tant que sa branche notée ne change pas (série 24).
+  const isMarked = state === 'closed' && was?.state === 'closed' && was.cleanupAt !== undefined && fields.branch === was.branch
+  return { state, at: now, ...why, ...fields, ...(isMarked ? { cleanupAt: was.cleanupAt } : {}) }
 }
 
 /** Les entrées `closed` : notées sur le lien du groupe rendu ; « closed » ne recule jamais (T2). */
@@ -2969,8 +2969,14 @@ const sameLinkClosing = (ours: { at: number; session?: string } | undefined, the
   return earlier.find(l => isSame(l) && l.closing)?.closing
 }
 
-/** Une fermeture plus avancée : présente quand la nôtre manque, ou « closed » quand la nôtre ne l'est pas. */
-const isAhead = (ours: Closing | undefined, theirs: Closing): boolean => !ours || (theirs.state === 'closed' && ours.state !== 'closed')
+/**
+ * Une fermeture plus avancée : présente quand la nôtre manque, « closed » quand la nôtre ne l'est pas,
+ * ou marquée par la consigne de suppression (série 24) quand la nôtre, sur la même branche, ne l'est pas.
+ */
+const isAhead = (ours: Closing | undefined, theirs: Closing): boolean =>
+  !ours ||
+  (theirs.state === 'closed' && ours.state !== 'closed') ||
+  (theirs.state === 'closed' && ours.state === 'closed' && theirs.cleanupAt !== undefined && ours.cleanupAt === undefined && theirs.branch === ours.branch)
 
 /**
  * La fusion de deux copies d'un même parcours garde la plus récente ; l'état de fermeture d'une
@@ -3000,6 +3006,9 @@ const keepClosings = (kept: Run, other: Run | undefined): Run => {
     const same = other.phases[i]?.skill === p.skill ? other.phases[i]! : undefined
     let next = p
     if (same?.linkedEarlier && !p.linkedEarlier) next = { ...next, linkedEarlier: same.linkedEarlier }
+    // La même session gardée à côté du lien dans les deux copies : sa fermeture la plus avancée, marque comprise (série 24).
+    else if (same?.linkedEarlier?.closing && p.linkedEarlier && same.linkedEarlier.at === p.linkedEarlier.at && same.linkedEarlier.session === p.linkedEarlier.session && isAhead(p.linkedEarlier.closing, same.linkedEarlier.closing))
+      next = { ...next, linkedEarlier: { ...p.linkedEarlier, closing: same.linkedEarlier.closing } }
     const theirs = sameLinkClosing(p.linked, same?.linked, same?.linkedEarlier ? [same.linkedEarlier] : [])
     if (theirs && p.linked && isAhead(p.linked.closing, theirs)) next = { ...next, linked: { ...p.linked, closing: theirs } }
     if (next !== p) changed = true
@@ -4398,6 +4407,46 @@ export const markDecisionsSeen = (board: Board, now: number, stored?: unknown): 
   run.decided = (run.decided ?? []).map(d => (d.seenAt === undefined ? { ...d, seenAt: now } : d))
   keepDecisions(run, relayed, now)
   run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * La consigne de suppression est partie (série 24) : chaque fermeture « closed » du parcours dont la
+ * branche notée est l'une de celles qu'elle visait, et qu'une consigne écrite maintenant viserait
+ * encore, reçoit sa marque (`cleanupAt`) ; une fermeture déjà marquée la garde.
+ */
+export const markCleanupSent = (board: Board, runId: string, branches: readonly string[], now: number): Outcome => {
+  const b = clone(board)
+  const run = b.runs.find(r => r.id === runId)
+  if (!run) return null
+  const sent = new Set(branches)
+  let changed = false
+  const mark = (target: CloseTarget, seq: unknown, closing: Closing | undefined) => {
+    if (!closing || closing.state !== 'closed' || closing.cleanupAt !== undefined || !sent.has(closing.branch ?? '')) return
+    const fate = branchFate(run, target, seq, closing)
+    if ('branch' in fate && fate.branch === closing.branch) {
+      closing.cleanupAt = now
+      changed = true
+    }
+  }
+  // Les mêmes gardes que le plan de la consigne : une entrée relue qui n'est pas un objet est ignorée.
+  const isEntry = <T,>(x: T | null | undefined): x is T => x !== null && typeof x === 'object'
+  const asClosing = (x: unknown): Closing | undefined => (x !== null && typeof x === 'object' ? (x as Closing) : undefined)
+  for (const g of (Array.isArray(run.groups) ? run.groups : []).filter(isEntry)) {
+    const target = { kind: 'group', id: g.id, name: g.name } as const
+    const link = isEntry(g.delegated) ? g.delegated : undefined
+    for (const prev of earlierOf(link)) mark(target, prev.seq, asClosing(prev.closing))
+    if (link) mark(target, link.seq, asClosing(link.closing))
+  }
+  for (const phase of (Array.isArray(run.phases) ? run.phases : []).filter(isEntry)) {
+    if (!SKILLS[phase.skill]?.items) continue
+    const target = { kind: 'items', skill: phase.skill } as const
+    if (isEntry(phase.linkedEarlier)) mark(target, phase.linkedEarlier.seq, asClosing(phase.linkedEarlier.closing))
+    if (isEntry(phase.linked) && phase.linked.session) mark(target, phase.linked.seq, asClosing(phase.linked.closing))
+  }
+  if (!changed) return null
+  // Lue après l'envoi, l'heure ne fait jamais reculer le parcours face à une écriture faite entre-temps.
+  run.updatedAt = Math.max(run.updatedAt, now)
   return { board: b, fx: noFx() }
 }
 

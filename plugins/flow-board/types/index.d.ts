@@ -107,6 +107,12 @@ export type Closing = {
   sessionId?: string
   branch?: string
   worktree?: string
+  /**
+   * Quand la consigne de suppression des branches, qui visait la branche notée, est partie (après
+   * l'envoi réussi du message de « ✓ Valider le rapport », série 24) : « ↺ Rouvrir » disparaît. Ne
+   * recule jamais (la fusion garde la fermeture marquée) ; part si la branche notée change.
+   */
+  cleanupAt?: number
 }
 
 /**

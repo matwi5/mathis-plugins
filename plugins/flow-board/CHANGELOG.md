@@ -4,6 +4,20 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.70.1 — 2026-10-29
+
+La suppression des branches à la validation du compte rendu, durcie après ses revues : « ↺ Rouvrir » ne disparaît plus que pour une session dont la consigne est vraiment partie, et la consigne ne laisse plus de place au doute.
+
+### Modifié
+- **« ↺ Rouvrir » suit une marque par fermeture** : chaque fermeture dont la consigne visait la branche reçoit une marque (`cleanupAt`), posée seulement une fois le message de « ✓ Valider le rapport » entré dans la session (un message refusé par un hook, `{ drop }`, ne marque rien). Le bouton ne disparaît que pour elle, plus d'après le statut du compte rendu : un retour en arrière de phase ou un renommage du parcours ne le fait plus revenir, un parcours validé en 0.70.0 garde ses boutons. La marque tient à la fusion de deux copies et part si la fermeture est renvoyée avec une autre branche notée.
+- **Bilan des branches gardées** : sans branche à supprimer, le message dit quand même quelles branches restent et pourquoi, sans aucune commande.
+- **Consigne** : chaque commande passe par `git -C '<dossier du parcours>'`, quel que soit le dossier courant de Claude, et s'écrit entre « » ; le titre du parcours n'est plus dans un message qui porte des commandes ; `show-ref` distingue une branche absente (code 1, déjà supprimée) d'une erreur de git (branche gardée) ; une commande que le garde-fou refuse ne se réécrit pas. La consigne et la liste des branches à marquer sortent d'un même calcul.
+
+### Corrigé
+- **Formes refusées** : un dossier du parcours avec guillemets « » ou leurs sosies, chevrons ou un « \\ » hors d'un chemin Windows ne fait rien supprimer, et le bilan le dit ; un suffixe de branche d'app fait seulement de chiffres n'est plus admis ; une entrée du tableau de bord qui n'est pas un objet est ignorée ; une consigne qui ne s'écrit pas laisse partir la validation, avec une phrase qui le dit.
+
+---
+
 ## 0.70.0 — 2026-10-29
 
 Les boutons disent ce qu'ils font, sans la commande ; le bandeau porte le bouton de l'étape suivante ; les branches des sessions liées fermées partent à la validation du compte rendu.

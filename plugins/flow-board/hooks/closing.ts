@@ -251,20 +251,6 @@ export const closedHint = (target: CloseTarget, link?: number): string => {
   )
 }
 
-/**
- * Quand le compte rendu du parcours a été validé (« ✓ Valider le rapport »), le plus tard s'il l'a été
- * plusieurs fois ; rien s'il ne l'a pas été (un compte rendu sauté ne compte pas). Une phase faite sans
- * date compte comme validée à l'infini : toute session est alors fermée avant.
- */
-export const reportValidatedAt = (run: Run): number | undefined =>
-  run.phases
-    .filter(p => p.skill === 'compte-rendu' && p.status === 'done')
-    .reduce<number | undefined>((last, p) => {
-      // Relue d'un fichier partagé : une date non finie, ou d'avant le début du parcours, compte comme absente.
-      const at = typeof p.finishedAt === 'number' && Number.isFinite(p.finishedAt) && !(p.finishedAt < run.startedAt) ? p.finishedAt : Infinity
-      return last === undefined || at > last ? at : last
-    }, undefined)
-
 /** Ce que copie « ↺ Rouvrir », et les toasts qui le disent (copié, ou à recopier à la main). */
 export type ReopenText = { text: string; isApp: boolean; copied: string; uncopied: string }
 
@@ -286,10 +272,9 @@ const NEW_WORKTREE = 'Le worktree recréé n’a pas les copies (.worktreeinclud
  * (un fichier partagé, peut-être d'avant leur validation), se revérifie ici avant d'entrer dans la commande.
  */
 export const reopenText = ({ run, target, closing, session, seq, root }: { run: Run; target: CloseTarget; closing: Closing | undefined; session?: string | undefined; seq?: number | undefined; root: string }): ReopenText | null => {
-  // Fermée avant la validation du compte rendu, sa branche a été visée par la suppression (série 18) :
-  // plus rien à rouvrir. Fermée après, elle garde sa branche et le bouton (série 19).
-  const validatedAt = reportValidatedAt(run)
-  if (validatedAt !== undefined && !(typeof closing?.at === 'number' && closing.at > validatedAt)) return null
+  // Marquée, sa branche était dans une consigne de suppression partie (séries 18 et 24) : plus rien à
+  // rouvrir. Toute marque relue compte, même hors forme : la branche a pu partir.
+  if (closing?.state === 'closed' && closing.cleanupAt !== undefined) return null
   if (closing?.state !== 'closed' || !isSessionId(closing.sessionId)) return null
   const id = closing.sessionId
   const isApp = session?.startsWith('local_') === true || id.startsWith('local_')
@@ -344,9 +329,9 @@ const isGroupKey = (value: unknown): value is string => typeof value === 'string
 const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
- * La branche notée porte l'un des noms que flow-board donne à la session de cette cible (série 19) :
- * `worktree-<worktree>` (CLI), `<worktree>` ou `claude/<worktree>-<suffixe>` (app ; un suffixe qui
- * commence par « <chiffres>- » serait celui d'un envoi suivant), et `groupe-<id>` pour le premier
+ * La branche notée porte l'un des noms que flow-board donne à la session de cette cible (série 22) :
+ * `worktree-<worktree>` (CLI), `<worktree>` ou `claude/<worktree>-<suffixe>` (app, un suffixe sans
+ * « - »), et `groupe-<id>` pour le premier
  * envoi d'un groupe lancé avant la 0.59.0. La session des pistes gardée à côté du lien n'a pas noté
  * son numéro d'envoi : sans lui, tout numéro de ce parcours est admis, ou le libellé seul (envoi d'avant la numérotation).
  */
@@ -366,11 +351,13 @@ const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch: string
     app = n !== undefined ? escapeRe(itemsWorktree(run, label, n)) : `${escapeRe(itemsWorktree(run, label))}-${slug ? `${escapeRe(slug)}-` : ''}[0-9]{1,5}`
     cli = n !== undefined ? app : `${escapeRe(itemsWorktree(run, label))}(?:-${slug ? `${escapeRe(slug)}-` : ''}[0-9]{1,5})?`
   }
-  return new RegExp(`^(?:(?:worktree-)?${cli}|claude/${app}-(?![0-9]+-)[A-Za-z0-9._-]+${legacy})$`).test(branch)
+  // Le suffixe de l'app sans « - » ni seulement des chiffres : il ne prolonge ni le nom d'un envoi
+  // suivant (`-2`, `-2-…`), ni celui d'un autre groupe ou parcours.
+  return new RegExp(`^(?:(?:worktree-)?${cli}|claude/${app}-(?![0-9]+$)[A-Za-z0-9._]+${legacy})$`).test(branch)
 }
 
 /** Ce que devient la branche d'une session liée à la validation du compte rendu : supprimée par -d si notée sur une fermeture « closed » sous un nom de la cible, gardée sinon, avec la raison. */
-const branchFate = (run: Run, target: CloseTarget, seq: unknown, closing: Closing | undefined): { branch: string } | { kept: string } => {
+export const branchFate = (run: Run, target: CloseTarget, seq: unknown, closing: Closing | undefined): { branch: string } | { kept: string } => {
   if (closing?.state === 'closed') {
     if (target.kind === 'group' && !isGroupKey(target.id)) return { kept: 'fermé, id de groupe hors forme, branche gardée' }
     if (closing.branch === undefined) return { kept: 'fermé, branche inconnue, gardée' }
@@ -385,60 +372,102 @@ const branchFate = (run: Run, target: CloseTarget, seq: unknown, closing: Closin
 }
 
 /**
- * La consigne de suppression des branches, ajoutée au message de « ✓ Valider le rapport » (série 18) :
- * seulement les branches notées des sessions liées fermées du parcours (groupes, leurs envois
- * précédents, sessions des pistes), sous un nom de leur session (série 19), chacune vérifiée sortie par aucun worktree et contenue dans la
- * branche de travail, puis supprimée par `git branch -d`, jamais `-D` ni `--force`. Rien sans git, ni
- * sans branche à supprimer. Invariant : une validation du compte rendu ne supprime jamais une branche
- * qui n'est pas entièrement contenue dans la branche de travail, ni une branche qui n'est pas celle
- * notée pour une session fermée du parcours ; une branche refusée par git reste, et elle est dite.
+ * Le dossier du parcours (la racine du tableau de bord), tel qu'il entre dans `git -C` : absolu, sans
+ * apostrophe (droite ou typographique), guillemet « » et leurs sosies (ils encadrent les commandes de la
+ * consigne), chevron < > (il imiterait le marqueur <branche de travail>),
+ * caractère de contrôle ni segment `.` ou `..` ; un « \\ » seulement dans un chemin Windows (ailleurs,
+ * c'est un caractère du nom : le convertir viserait un autre dossier) ; sinon rien.
  */
-export const branchCleanupText = ({ run, isRepo }: { run: Run; isRepo: boolean }): string | null => {
-  if (!isRepo) return null
+const runFolder = (root: unknown): string | undefined => {
+  if (typeof root !== 'string' || root.length > 400 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029'\u2018-\u201b«»‹›<>≪≫《》〈〉❮❯]/.test(root)) return undefined
+  if (root.includes('\\') && !/^[A-Za-z]:\\/.test(root)) return undefined
+  const path = root.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!/^(?:\/|[A-Za-z]:\/)./.test(path) || path.split('/').some(part => part === '.' || part === '..')) return undefined
+  return path
+}
+
+type CleanupInput = { run: Run; isRepo: boolean; root: unknown }
+
+/**
+ * Ce que la validation du compte rendu fait des branches des sessions liées du parcours (groupes, leurs
+ * envois précédents, sessions des pistes) : à supprimer, une branche notée sur une fermeture « closed »
+ * sous un nom de sa session (séries 18 et 22), le dossier du parcours connu ; gardées, les autres, avec la raison.
+ */
+const cleanupPlan = ({ run, isRepo, root }: CleanupInput): { folder: string | undefined; toDelete: Map<string, string[]>; kept: string[] } => {
+  const folder = runFolder(root)
   const toDelete = new Map<string, string[]>()
   const kept: string[] = []
+  if (!isRepo) return { folder, toDelete, kept }
   const note = (who: string, target: CloseTarget, seq: unknown, closing: unknown) => {
     const fate = branchFate(run, target, seq, closingOf(closing))
     if ('kept' in fate) kept.push(`${who} : ${fate.kept}`)
+    else if (folder === undefined) kept.push(`${who} : fermé, dossier du parcours hors forme, branche gardée`)
     else toDelete.set(fate.branch, [...(toDelete.get(fate.branch) ?? []), who])
   }
   const sent = (seq: unknown) => {
     const n = sendNumber(seq)
     return n !== undefined && n > 1 ? `, envoi ${n}` : ''
   }
-  for (const g of run.groups ?? []) {
-    const link = g.delegated
+  // Relus d'un fichier partagé : une entrée qui n'est pas un objet est ignorée, sans rien faire tomber.
+  const isEntry = <T,>(x: T | null | undefined): x is T => x !== null && typeof x === 'object'
+  for (const g of (Array.isArray(run.groups) ? run.groups : []).filter(isEntry)) {
+    const link = isEntry(g.delegated) ? g.delegated : undefined
     // Ni le nom du groupe ni un id hors forme, du texte libre relu du tableau de bord, n'entrent entre les commandes.
     const who = (seq: unknown) => `groupe ${isGroupKey(g.id) ? g.id : '(id hors forme)'}${sent(seq)}`
     const target = { kind: 'group', id: g.id, name: g.name } as const
     for (const prev of earlierLinks(link?.earlier)) note(who(prev.seq), target, prev.seq, prev.closing)
     if (link) note(who(link.seq), target, link.seq, link.closing)
-    if (g.linked) note(who(g.linked.seq), target, g.linked.seq, undefined)
+    if (isEntry(g.linked)) note(who(g.linked.seq), target, g.linked.seq, undefined)
   }
-  for (const phase of run.phases) {
+  for (const phase of (Array.isArray(run.phases) ? run.phases : []).filter(isEntry)) {
     const label = SKILLS[phase.skill]?.items?.label
     if (!label) continue
     const who = (seq: unknown) => `${label.toLowerCase()} de la phase ${SKILLS[phase.skill]!.label}${sent(seq)}`
     const target = { kind: 'items', skill: phase.skill } as const
-    if (phase.linkedEarlier) note(who(phase.linkedEarlier.seq), target, phase.linkedEarlier.seq, phase.linkedEarlier.closing)
-    if (phase.linked?.session) note(who(phase.linked.seq), target, phase.linked.seq, phase.linked.closing)
+    if (isEntry(phase.linkedEarlier)) note(who(phase.linkedEarlier.seq), target, phase.linkedEarlier.seq, phase.linkedEarlier.closing)
+    if (isEntry(phase.linked) && phase.linked.session) note(who(phase.linked.seq), target, phase.linked.seq, phase.linked.closing)
   }
-  if (toDelete.size === 0) return null
-  // Chaque branche a ses trois commandes écrites en entier, citées, par refs/heads (un tag du même nom
-  // ne répond pas à sa place), lancées une à une : -d ne part que si les deux premières ont rendu 0.
-  const chains = [...toDelete].map(([branch, whos]) => {
+  return { folder, toDelete, kept }
+}
+
+
+/**
+ * Ce que le message de « ✓ Valider le rapport » dit des branches. Avec une branche à supprimer, la
+ * consigne : chaque branche vérifiée sortie par aucun worktree et contenue dans la branche de travail,
+ * puis supprimée par `git branch -d`, jamais `-D` ni `--force`, chaque commande écrite en entier, par
+ * `git -C '<dossier du parcours>'`. Sans branche à supprimer mais avec des branches gardées, leur seul
+ * bilan, sans commande (série 23). Rien sans git, ni sans session liée. Invariant : une validation du
+ * compte rendu ne supprime jamais une branche qui n'est pas entièrement contenue dans la branche de
+ * travail, ni une branche qui n'est pas celle notée pour une session fermée du parcours ; une branche
+ * refusée par git reste, et elle est dite.
+ */
+export const branchCleanupText = (input: CleanupInput): string | null => branchCleanup(input)?.text ?? null
+
+/**
+ * Le texte de `branchCleanupText` et les branches que sa consigne vise, tirés d'un même plan : leurs
+ * fermetures se marquent une fois le message entré dans la session (série 24) ; un bilan sans consigne n'en vise aucune.
+ */
+export const branchCleanup = (input: CleanupInput): { text: string; branches: string[] } | null => {
+  const { folder, toDelete, kept } = cleanupPlan(input)
+  const keptList = `${kept.join(' ; ')}.`
+  if (toDelete.size === 0 || folder === undefined)
+    return kept.length > 0 ? { text: `Aucune branche de session liée à supprimer pour ce parcours. Gardées, sans aucune commande : ${keptList} Redis-les-moi en une liste, avant la suite.`, branches: [] } : null
+  const git = `git -C ${shellQuote(folder)}`
+  // Chaque commande entre « », écrite en entier, citée, par refs/heads (un tag du même nom ne répond
+  // pas à sa place) : aucune ne se lit comme une suite de commandes du shell.
+  const lines = [...toDelete].map(([branch, whos]) => {
     const ref = shellQuote(`refs/heads/${branch}`)
-    return `${shellQuote(branch)} (${whos.join(' ; ')}) : a) git show-ref --verify --quiet ${ref} ; b) git merge-base --is-ancestor ${ref} 'refs/heads/<branche de travail>' ; c) git branch -d ${shellQuote(branch)}`
+    return `${shellQuote(branch)} (${whos.join(' ; ')}) : a) « ${git} show-ref --verify --quiet ${ref} », puis b) « ${git} merge-base --is-ancestor ${ref} 'refs/heads/<branche de travail>' », puis c) « ${git} branch -d ${shellQuote(branch)} »`
   })
-  return (
+  const text =
     `Le compte rendu validé, supprime les branches des sessions liées fermées de ce parcours, et elles seules, celles de la liste ci-dessous, jamais une autre. ` +
-    `Dans ce dossier (celui du parcours), une commande à la fois, jamais enchaînées : 1) git branch --show-current donne <branche de travail> ; rien (HEAD détachée), ou un nom qui n’a pas que [A-Za-z0-9._/-] ou commence par - : ne supprime rien et dis-le-moi ; ` +
-    `2) git worktree list --porcelain, lu une fois : une branche de la liste qu’une ligne branch refs/heads/<branche> porte (un worktree l’a sortie, ce dossier compris) est gardée, sans autre commande ; ` +
-    `3) pour chaque autre branche, ses commandes a, b, c telles qu’écrites, <branche de travail> mis à sa place, chacune seulement si la précédente a rendu 0 : a) rend autre chose que 0 : elle n’existe plus, déjà supprimée, passe à la suivante ; b) rend autre chose que 0 : ses commits ne sont pas tous dans <branche de travail>, garde-la ; c) git branch -d, sans aucune autre option : si git refuse, la branche reste, ne la force d’aucune façon, et garde son message. ` +
-    `Branches : ${chains.join(' ; ')}. ` +
-    (kept.length > 0 ? `Gardées, sans aucune commande : ${kept.join(' ; ')}. ` : '') +
+    `Une commande à la fois, jamais enchaînées, toutes par ${git} (le dossier du parcours, quel que soit ton dossier courant) : 1) « ${git} branch --show-current » donne <branche de travail> ; rien (HEAD détachée), ou un nom qui n’a pas que [A-Za-z0-9._/-] ou commence par - : ne supprime rien et dis-le-moi ; ` +
+    `2) « ${git} worktree list --porcelain », lue une fois : une branche de la liste qu’une ligne branch refs/heads/<branche> porte (un worktree l’a sortie, le dossier du parcours compris) est gardée, sans autre commande ; ` +
+    `3) pour chaque autre branche, ses commandes a, b, c telles qu’écrites, <branche de travail> mis à sa place, chacune seulement si la précédente a rendu 0 : a) rend 1 : elle n’existe plus, déjà supprimée, passe à la suivante ; un autre code (une erreur de git) : garde-la, inconnue ; b) rend autre chose que 0 : ses commits ne sont pas tous dans <branche de travail>, garde-la ; c) la suppression par -d, sans aucune autre option : si git refuse, la branche reste, ne la force d’aucune façon, et garde son message. Une commande que ton garde-fou refuse, ou qui ne tourne pas : ne la réécris pas (ni sans -C, ni autrement), ne supprime rien de plus et dis-le-moi. ` +
+    `Branches : ${lines.join(' — ')}. ` +
+    (kept.length > 0 ? `Gardées, sans aucune commande : ${keptList} ` : '') +
     `Puis dis-moi en une liste, avant la suite, ce qui est supprimé, déjà supprimé, gardé (avec la raison, le message de git quand il refuse) et inconnu.`
-  )
+  return { text, branches: [...toDelete.keys()] }
 }
 
 /**
