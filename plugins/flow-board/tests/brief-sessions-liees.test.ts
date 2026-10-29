@@ -43,10 +43,12 @@ const world = (on: any) => {
   return filled
 }
 
-/** Le brief d'une session liée pour le groupe E. */
-const brief = async ($: any, on: any): Promise<string> => {
+/** Le brief d'une session liée pour le groupe E ; `isSource` : le projet contient la source de flow-board. */
+const brief = async ($: any, on: any, isSource = false): Promise<string> => {
   mock.clock(on, { now: 80_000_000 })
   const filled = world(on)
+  on('session.root', () => ({ value: 'C:/proj' }))
+  on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: isSource && e.path.endsWith('/plugins/flow-board/reference/procedure-groupe.md') }) as any)
   await $.session.start({ cwd: '', surface: null, isInteractive: true })
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
@@ -78,8 +80,11 @@ test('le brief : la procédure par son chemin, ce qui varie en clair', async ($,
   expect(text).toMatch(/puis lire la procédure d'une session liée de groupe, \S*reference\/procedure-groupe\.md, et la suivre jusqu'au bout : questions sensibles d'abord/)
   expect(text).toContain('TDD : /mattpocock-skills:tdd')
   expect(text).not.toContain('sans nouvelles depuis 10 à 15 minutes')
-  // Recopiée, la procédure faisait passer le texte au-delà de 15 000 signes.
-  expect(text.length).toBeLessThan(9000)
+  // Base de ce plafond : ne jamais recopier la procédure dans le brief. Recopiée, elle faisait passer
+  // le texte au-delà de 15 000 signes ; la règle d'effort, avec la suggestion de xhigh et ses
+  // exemples, en porte environ 3 000, d'où 9 000 portés à 12 000. Au-delà, raccourcir une consigne
+  // du brief (ou la renvoyer à la procédure) plutôt que relever le plafond.
+  expect(text.length).toBeLessThan(12000)
   // Au retour : les failles corrigées après coup sont renvoyées à l'outil.
   expect(text).toContain('une faille corrigée après coup (avec mon accord) se renvoie aussi, avec "fixed" mis à jour')
 })
@@ -94,4 +99,27 @@ test('la réponse de l’outil à une session liée : compte rendu complet au re
   expect(out.text).toContain('then send the main discussion one line that points to it')
   expect(out.text).toContain('call ListAgents, find the row whose [ref] is')
   expect(out.text).not.toContain('send to its bare name')
+})
+
+// Le groupe B du parcours xhigh avait lu la procédure installée (0.64.0), sans la section que le
+// groupe A venait d'ajouter dans le dépôt.
+test('le brief : dans le dépôt de flow-board, la procédure et les méthodes du dépôt d’abord, le chemin installé à défaut', async ($, on) => {
+  const text = await brief($, on, true)
+  expect(text).toMatch(/puis lire la procédure d'une session liée de groupe, plugins\/flow-board\/reference\/procedure-groupe\.md du dossier de travail \(source du dépôt, qui fait foi ; sinon \S*reference\/procedure-groupe\.md\), et la suivre/)
+  expect(text).toContain('revue de sécurité, plugins/flow-board/reference/revue-securite.md (dossier de travail, sinon à côté de la procédure installée)')
+  expect(text).toContain('fond et de la forme, plugins/flow-board/reference/relecture-fond-forme.md (dossier de travail, sinon à côté de la procédure installée)')
+  expect(text.length).toBeLessThan(12000)
+})
+
+test('le brief : ailleurs, les seuls chemins installés', async ($, on) => {
+  const text = await brief($, on)
+  expect(text).not.toContain('du dossier de travail (source du dépôt')
+  expect(text).not.toContain('sinon à côté de la procédure installée')
+  expect(text).toMatch(/puis lire la procédure d'une session liée de groupe, \S*reference\/procedure-groupe\.md, et la suivre/)
+})
+
+// Au démarrage, le groupe A avait lu d'un bloc la spec, les décisions et les choix (45 Ko).
+test('le brief : chaque fichier lu à part, et de la spec les seules sections que cite le ticket', async ($, on) => {
+  const text = await brief($, on)
+  expect(text).toContain('chaque fichier lu à part, et de la spec les seules sections que cite le ticket')
 })

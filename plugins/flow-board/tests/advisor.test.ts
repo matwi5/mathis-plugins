@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { advisorCostOf } from '../hooks/cost.ts'
 import { applyRebuilt, cleanRebuilt, runRegistry, unionRebuilt, withRun } from '../hooks/history.ts'
-import { ADVISOR_CALLS_MAX, MAIN, addAdvisorCalls, cleanRegistry, emptyRegistry, mergeRegistry, openSegment, closeSegment, spawnAgent, startCall } from '../hooks/registry.ts'
+import { ADVISOR_CALLS_MAX, MAIN, addAdvisorCalls, catchUpAdvisor, cleanRegistry, emptyRegistry, mergeRegistry, openSegment, closeSegment, spawnAgent, startCall } from '../hooks/registry.ts'
 import { catchUp, laneFromTranscript } from '../hooks/transcript.ts'
 import type { SessionRegistry } from '../types'
 
@@ -319,5 +319,76 @@ test('l’orchestrateur seul a consulté l’advisor : le résumé montre quand 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'tab-agents' })
   expect(await ui.find({ type: 'Text', text: /advisor\s≈\s1,89\s\$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('un appel posé après des outils de la session, sans résultat ni entrée d’usage, n’a pas eu de réponse : ni coût, ni « coût inconnu »', () => {
+  // Une réponse : un appel qui répond (srv-1), puis un second posé après un outil Write, jamais parti (srv-2).
+  const text = [
+    ...advisedTranscript(FABLE, false).split('\n'),
+    JSON.stringify({ type: 'assistant', isSidechain: false, timestamp: at(9_600), message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'w1', name: 'Write', input: {} }], usage: advisedUsage(FABLE) } }),
+    JSON.stringify({ type: 'assistant', isSidechain: false, timestamp: at(9_700), message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'server_tool_use', id: 'srv-2', name: 'advisor', input: {} }], usage: advisedUsage(FABLE) } }),
+  ]
+  // Dernière ligne du transcript : la réponse s'écrit peut-être encore, l'appel n'est pas rendu.
+  expect(laneFromTranscript(text.join('\n'), true).advisor!.map(c => c.id)).toEqual(['srv-1'])
+  // Une ligne écrite après (le résultat de Write) : la réponse est close, l'appel n'en aura jamais.
+  const lane = laneFromTranscript([...text, JSON.stringify({ type: 'user', isSidechain: false, timestamp: at(9_800), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'w1', content: 'x' }] } })].join('\n'), true)
+  expect(lane.advisor).toEqual([
+    { id: 'srv-1', s: T1 + 1_000, e: T1 + 9_000, model: 'claude-fable-5-1', tokens: { input: 156_265, output: 6_473, cacheRead: 0, cacheWrite: 0 } },
+    { id: 'srv-2', s: T1 + 9_700, e: T1 + 9_700, isVoid: true },
+  ])
+  // Vu en direct, puis relu : la marque se garde, sur le disque comme à la fusion.
+  let reg = addAdvisorCalls(emptyRegistry('s', '/p', T1), MAIN, [{ id: 'srv-2', name: 'advisor', startedAt: T1 + 9_700, endedAt: T1 + 9_725 }], T1 + 9_800)!
+  reg = applyRebuilt(reg, { v: 1, session: 's', agents: [], main: { advisor: lane.advisor! } }, T1 + 20_000)
+  const kept = cleanRegistry(JSON.parse(JSON.stringify(reg)))!
+  expect(kept.advisor!.calls.map(c => [c.id, c.isVoid === true])).toEqual([['srv-1', false], ['srv-2', true]])
+  const prices = { 'claude-fable-5-1': { input: 10e-6, output: 50e-6, cacheRead: 1e-6, cacheWrite: 12.5e-6 } }
+  expect(advisorCostOf(kept.advisor!.calls, prices)).toMatchObject({ isUnknown: false, unread: 0 })
+  expect(Math.round(advisorCostOf(kept.advisor!.calls, prices).cost! * 1000)).toBe(1886)
+  // Des chiffres arrivés ensuite pour le même appel lèvent la marque.
+  const answered = catchUpAdvisor(kept, MAIN, [{ id: 'srv-2', s: T1 + 9_700, model: 'claude-fable-5-1', tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } }], T1 + 30_000)!
+  expect(answered.advisor!.calls.find(c => c.id === 'srv-2')).toMatchObject({ model: 'claude-fable-5-1', isRead: true })
+  expect(answered.advisor!.calls.find(c => c.id === 'srv-2')!.isVoid).toBeUndefined()
+  // Une réponse interrompue pendant l'advisor, sans outil de la session : l'appel a pu coûter, il reste sans prix.
+  const stopped = [
+    JSON.stringify({ type: 'assistant', isSidechain: false, timestamp: at(1_000), message: { id: 'm3', model: 'claude-opus-5-5', content: [{ type: 'server_tool_use', id: 'srv-3', name: 'advisor', input: {} }] } }),
+    JSON.stringify({ type: 'user', isSidechain: false, timestamp: at(2_000), message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } }),
+  ].join('\n')
+  expect(laneFromTranscript(stopped, true).advisor).toEqual([{ id: 'srv-3', s: T1 + 1_000, e: T1 + 1_000 }])
+  // Une réponse coupée qui a son entrée d'usage reste un appel chiffré, pas un appel sans réponse.
+  const cut = advisedTranscript(FABLE).split('\n').filter(l => !l.includes('advisor_tool_result')).join('\n')
+  expect(laneFromTranscript(cut).advisor![0]!.isVoid).toBeUndefined()
+})
+
+test('un appel sans réponse ne se montre pas sur la ligne advisor, et le résumé garde le coût des autres', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T1 + 60_000 })
+  const mem = world(on)
+  mem['agents:s-adv'] = {
+    v: 1,
+    session: 's-adv',
+    root: '/p',
+    updatedAt: T1 + 60_000,
+    agents: [],
+    main: { segments: [{ k: 'write', s: T1, e: T1 + 500 }, { k: 'waitAdvisor', s: T1 + 500, e: T1 + 525, t: 'advisor' }, { k: 'write', s: T1 + 525, e: T1 + 20_000 }] },
+    advisor: {
+      calls: [
+        { id: 'srv-0', s: T1 + 500, e: T1 + 525, by: 'main', isRead: true, isVoid: true },
+        { id: 'srv-1', s: T1 + 1_000, e: T1 + 9_000, by: 'main', model: 'claude-fable-5-1', tokens: { input: 156_265, output: 6_473, cacheRead: 0, cacheWrite: 0 }, isRead: true },
+      ],
+    },
+  }
+  mem.agentPrices = { at: T1 + 60_000, triedAt: T1 + 60_000, prices: { 'claude-fable-5-1': { input: 10e-6, output: 50e-6, cacheRead: 1e-6, cacheWrite: 12.5e-6 } } }
+  on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('command.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
+  await clock.advance(2_000)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await ui.press({ key: 'tab-agents' })
+  expect(await ui.find({ type: 'Text', text: /advisor\s≈\s1,89\s\$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /coût\sinconnu/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^1\sappel$/ })).toBeDefined()
+  // L'attente posée en direct pour l'appel sans réponse ne reste pas sur la piste de l'appelant.
+  const alts = (await ui.findAll({ type: 'Svg' })).map(svg => String(svg.props.alt).replace(/ /g, ' '))
+  expect(alts.find(alt => alt.startsWith('Orchestrateur :'))).toBe('Orchestrateur : rédaction')
   await ui.unmount()
 })

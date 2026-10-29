@@ -33,21 +33,33 @@ const advisorTokens = (it: Record<string, unknown>): AgentTokens | undefined => 
 /**
  * Les appels à l'advisor d'une réponse : ses blocs `server_tool_use` nommés `advisor`, dans l'ordre,
  * appariés aux entrées `advisor_message` de son `usage.iterations` ; une entrée sans bloc garde un id
- * tiré de la réponse.
+ * tiré de la réponse. Quand les entrées ne dépassent pas les blocs qui ont eu leur résultat, un
+ * bloc sans résultat ni entrée n'a pas de réponse : les entrées vont aux appels qui ont répondu.
+ * Dans une réponse qui appelle aussi des outils de la session (`hasClientTool`), il n'en aura
+ * jamais (`isVoid`) dès qu'une ligne est écrite après lui ; sans elle, le transcript s'écrit encore
+ * (`isLast`) : l'appel est peut-être en vol, il n'est pas rendu et se relira plus tard. Sans outil
+ * de la session (réponse interrompue pendant l'advisor), il reste un appel sans prix : il a pu coûter.
  */
-const advisorCallsOf = (messageId: string, ids: readonly { id: string; at: number }[], entries: readonly Record<string, unknown>[], ended: ReadonlyMap<string, number>, at: number): AdvisorFigures[] =>
-  Array.from({ length: Math.max(ids.length, entries.length) }, (_, i) => {
+const advisorCallsOf = (messageId: string, ids: readonly { id: string; at: number; isLast: boolean }[], entries: readonly Record<string, unknown>[], ended: ReadonlyMap<string, number>, at: number, hasClientTool: boolean): AdvisorFigures[] => {
+  const answered = ids.filter(b => ended.has(b.id))
+  const isSplit = hasClientTool && answered.length < ids.length && entries.length <= answered.length
+  const entryOf = new Map((isSplit ? answered : ids).map((b, i) => [b.id, entries[i]]))
+  return Array.from({ length: Math.max(ids.length, entries.length) }, (_, i): AdvisorFigures[] => {
     const block = ids[i]
-    const it = entries[i]
+    const isUnanswered = isSplit && block !== undefined && !ended.has(block.id)
+    if (isUnanswered && block.isLast) return []
+    const it = block ? entryOf.get(block.id) : entries[i]
     const s = block?.at ?? at
     const call: AdvisorFigures = { id: block?.id ?? `${messageId}#advisor${i}`, s }
     // Sans son résultat (réponse coupée), l'appel finit avec la réponse : jamais de barre ouverte.
     call.e = Math.max(s, (block ? ended.get(block.id) : undefined) ?? at)
+    if (isUnanswered) call.isVoid = true
     if (it && typeof it.model === 'string' && it.model !== '') call.model = it.model
     const tokens = it ? advisorTokens(it) : undefined
     if (tokens) call.tokens = tokens
-    return call
-  })
+    return [call]
+  }).flat()
+}
 
 /** Le `.meta.json` d'un sous-agent. */
 export type TranscriptMeta = { agentType?: string; description?: string; toolUseId?: string; isFinished?: boolean; parentAgentId?: string }
@@ -111,10 +123,14 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
   let hasTokens = false
   let toolCount = 0
   // Les appels à l'advisor, par réponse : leurs blocs, leurs entrées d'usage (relevées une fois), la fin de chacun.
-  const advisorIds = new Map<string, { id: string; at: number }[]>()
+  const advisorIds = new Map<string, { id: string; at: number; line: number }[]>()
   const advisorEntries = new Map<string, Record<string, unknown>[]>()
   const advisorEnded = new Map<string, number>()
   const messageAt = new Map<string, number>()
+  // Les réponses qui appellent des outils de la session : un appel à l'advisor y peut ne jamais partir.
+  const withClientTool = new Set<string>()
+  // Le rang de chaque ligne de réponse ou de résultat : un appel sur la dernière n'a peut-être pas fini.
+  let lineNo = 0
   for (const line of linesIn(text)) {
     if (isMain && line.isSidechain === true) continue
     const at = timeOf(line)
@@ -125,6 +141,7 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
       continue
     }
     if (line.type !== 'assistant' && line.type !== 'user') continue
+    lineNo += 1
     startedAt ??= at
     endedAt = Math.max(endedAt ?? at, at)
     const message = (line.message ?? {}) as { id?: unknown; model?: unknown; content?: unknown; usage?: Record<string, unknown> }
@@ -150,8 +167,9 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
           if (entries.length > 0) advisorEntries.set(id, entries)
         }
         for (const b of blocks) {
-          if (b.type === 'server_tool_use' && b.name === 'advisor' && typeof b.id === 'string') advisorIds.set(id, [...(advisorIds.get(id) ?? []), { id: b.id, at }])
+          if (b.type === 'server_tool_use' && b.name === 'advisor' && typeof b.id === 'string') advisorIds.set(id, [...(advisorIds.get(id) ?? []), { id: b.id, at, line: lineNo }])
           else if (b.type === 'advisor_tool_result' && typeof b.tool_use_id === 'string') advisorEnded.set(b.tool_use_id, at)
+          else if (b.type === 'tool_use') withClientTool.add(id)
         }
       }
       const from = prevEnd ?? at
@@ -191,7 +209,7 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
   if (lines.added > 0 || lines.removed > 0) lane.lines = lines
   if (startedAt !== undefined) lane.startedAt = startedAt
   if (endedAt !== undefined) lane.endedAt = endedAt
-  const advisor = [...new Set([...advisorIds.keys(), ...advisorEntries.keys()])].flatMap(id => advisorCallsOf(id, advisorIds.get(id) ?? [], advisorEntries.get(id) ?? [], advisorEnded, messageAt.get(id) ?? 0))
+  const advisor = [...new Set([...advisorIds.keys(), ...advisorEntries.keys()])].flatMap(id => advisorCallsOf(id, (advisorIds.get(id) ?? []).map(b => ({ id: b.id, at: b.at, isLast: b.line === lineNo })), advisorEntries.get(id) ?? [], advisorEnded, messageAt.get(id) ?? 0, withClientTool.has(id)))
   if (advisor.length > 0) lane.advisor = advisor.sort((a, b) => a.s - b.s)
   return lane
 }

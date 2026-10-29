@@ -18,7 +18,7 @@
       "name": "project",
       "source": "./plugins/project",
       "description": "Project conventions for Claude Code: set up a new project or audit an existing one against the convention, plus generic git commands (commit, sync, push, pr, version)",
-      "version": "1.3.0"
+      "version": "1.4.0"
     },
     {
       "name": "agents",
@@ -36,13 +36,13 @@
       "name": "flow-board",
       "source": "./plugins/flow-board",
       "description": "Tableau de bord du workflow mattpocock-skills : un parcours adapté au skill de départ (phases, étapes, tickets, sous-agents, tests, livrables) en panneau et en bandeau ; /flow (onglet Commandes : toutes les commandes).",
-      "version": "0.65.1"
+      "version": "0.69.0"
     },
     {
       "name": "mattpocock-skills",
       "source": "./plugins/mattpocock-skills",
       "description": "Frozen copy of Matt Pocock's mattpocock-skills (MIT): grilling, spec and ticket flows, TDD, code review, domain modelling. Pinned to the version flow-board knows.",
-      "version": "1.3.1-mathis.1",
+      "version": "1.3.1-mathis.3",
       "author": { "name": "Matt Pocock", "url": "https://www.aihero.dev" },
       "license": "MIT"
     },
@@ -68,7 +68,7 @@
       "name": "stats-board",
       "source": "./plugins/stats-board",
       "description": "Panneau de statistiques Claude Code (/ccstats) et bandeau au-dessus du prompt : discussion ouverte (coût, contexte, rythme horaire), récap de la journée, coût équivalent API (ccusage), tokens, modèles, projets, sessions, blocs de 5 h, calendrier d'activité et rythme, pour tous les postes (Portable, Mac, Serveur) partagés par le dépôt claude-usage. /stats-board:ccstats dès le premier message ; /stats-board:recap fait le récap de la discussion et de la journée, ou d'un parcours entier, dans le chat.",
-      "version": "0.10.1"
+      "version": "0.11.0"
     }
   ]
 }

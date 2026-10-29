@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { closingProcedure } from '../hooks/closing.ts'
 import { applyReport, emptyBoard, newRun, restoreDelegate } from '../hooks/model.ts'
 import type { Board } from '../types'
 
@@ -132,7 +133,7 @@ test('un groupe confié est « en cours » dès que l’id de sa session est rel
 
 test('un groupe rendu par sa session liée propose de fermer sa session et son worktree, sans rien forcer', async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
-  const { filled } = world(on)
+  const { mem, filled } = world(on)
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
@@ -147,34 +148,33 @@ test('un groupe rendu par sa session liée propose de fermer sa session et son w
   expect(await ui.find({ key: 'review-linked-E' })).toBeDefined()
   expect(await ui.find({ key: 'close-linked-E' })).toBeUndefined()
   await ui.unmount()
-  await $.tool.call({ tool: TOOL, reviewed: ['E'] } as any)
+  await $.tool.call({ tool: TOOL, reviewed: ['E'], security: { group: 'E', advised: false, why: 'requêtes seules' } } as any)
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  // Le groupe fait ici n'a pas de session à fermer.
+  // Le groupe fait ici n'a pas de session à fermer ; E ne montre aucun bouton tant que rien n'est tenté.
   expect(await ui.find({ key: 'close-linked-A' })).toBeUndefined()
+  expect(await ui.find({ key: 'close-linked-E' })).toBeUndefined()
+  await ui.unmount()
+  // La fermeture s'arrête : le bouton de repli la relance.
+  await $.tool.call({ tool: TOOL, closed: [{ group: 'E', state: 'stopped', why: '.env ignoré' }] } as any)
+  for (let i = 0; i < 6; i++) await clock.advance(1000)
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'close-linked-E' })
   await ui.unmount()
   const text = filled.at(-1)!
-  // Une session de l'app (id local_…) : stop_session ne ferme pas une session inactive, la personne l'archive.
-  expect(text).toContain("c'est une session de l'app Desktop : demande-moi de l'archiver dans l'app (stop_session n'interrompt qu'un tour en cours, il ne ferme pas une session inactive), et attends que je te confirme qu'elle est archivée avant toute autre commande")
-  expect(text).not.toContain('à confirmer')
-  expect(text).toContain('Vérifie d\'abord, n\'arrête et ne retire qu\'ensuite')
-  // La branche vient de la liste des sessions liées ; à défaut, le nom du CLI, de l'app (branch_name ou suffixe), ou d'avant la 0.59.0.
-  expect(text).toContain("1) prends la branche de la session dans la liste des sessions liées (list_sessions dans l'app Desktop) ou dans sa note de fin")
-  expect(text).toContain("elle s'appelle normalement worktree-groupe-boutique-E (lancée par le CLI), groupe-boutique-E ou claude/groupe-boutique-E-<suffixe> (lancée par l'app, avec ou sans branch_name), groupe-E pour un groupe lancé avant la 0.59.0")
-  expect(text).toContain('git worktree list')
-  expect(text).toContain('git -C <worktree> status --porcelain --ignored')
-  expect(text).toContain('git branch --merged')
-  expect(text).toContain('git worktree remove <worktree>')
-  expect(text).toContain('la branche reste')
+  // Le texte vient de la procédure partagée (celle de la réponse de l'outil), pour la session relevée.
+  const run = (mem['board:'] as Board).runs.find(r => r.title === 'Boutique')!
+  expect(text.startsWith(closingProcedure({ run, target: { kind: 'group', id: 'E', name: 'Enquêtes' }, isRepo: true, session: 'local_E42' }))).toBe(true)
+  expect(text).toContain('Then send {"closed": [{"group": "E", "state": "closed"')
+  expect(text).toContain('Vérifie d’abord, n’arrête et ne retire qu’ensuite')
+  // Une session de l'app (id local_…) : archivée par l'outil de l'app, sinon le geste écrit à la personne.
+  expect(text).toContain('c’est une session de l’app Desktop : archive-la par l’outil de session de l’app')
+  expect(text).toContain('à défaut, l’un des noms connus : worktree-groupe-boutique-E (lancée par le CLI), groupe-boutique-E ou claude/groupe-boutique-E-<suffixe> (lancée par l’app, avec ou sans branch_name), groupe-E pour un groupe lancé avant la 0.59.0')
+  // Plus le texte d'avant, qui disait « jamais claude rm, qui l'efface ».
+  expect(text).not.toContain("qui l'efface")
   expect(text).not.toContain('--force')
-  expect(text).not.toContain('claude rm')
-  // Demandé une fois : le bouton laisse place à une mention.
-  for (let i = 0; i < 6; i++) await clock.advance(1000)
-  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ key: 'close-linked-E' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /fermeture demandée/ })).toBeDefined()
-  await ui.unmount()
+  // Relancée : la réponse suivante de l'outil la repropose.
+  expect(JSON.stringify(await $.tool.call({ tool: TOOL, note: 'point' } as any))).toContain('Close now: group E')
 })
 
 test('la délégation gardée ne revient pas sur un board qui en a déjà une', () => {

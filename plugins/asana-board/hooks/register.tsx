@@ -620,7 +620,19 @@ const actionsFor = ($: any): Actions => ({
     await toast($, 'Bandeau Asana masqué : /asana show pour le réafficher')
   },
   openPane: () => openPane($),
+  copyLink: (url, surface) => copyLink($, url, surface),
 })
+
+/** Copie l'adresse d'une tâche dans le presse-papiers de la surface pressée et le dit ; sans copie, le toast donne l'adresse à recopier. */
+const copyLink = async ($: any, url: string, surface?: string) => {
+  let done: { isCopied?: boolean } | null = null
+  try {
+    done = await $.ui.copy({ text: url, ...(surface ? { surface } : {}) })
+  } catch {
+    // Le toast donne alors l'adresse à recopier.
+  }
+  await toast($, done?.isCopied ? 'Lien Asana copié' : `Copie impossible : ${url}`)
+}
 
 /** Redessine pour faire avancer les âges et le spinner : 5 s pendant une activité, 30 s au repos. */
 const tick = async ($: any) => {

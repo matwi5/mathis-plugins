@@ -8,7 +8,7 @@
 
 import type { ActiveRow, ApiRow, CallStats, Durations, HourRow, PeerDurations, ProjectInfo, RequestLog, RequestRecord, SessionDayRow, TimesRow } from '../types'
 import { dayOf, earliest, groupOf, maxOf, UNKNOWN } from './model.ts'
-import { REQUEST_SCHEMA, activeMs, mergeSpeeds, weightedSpeed } from './requests.ts'
+import { REQUEST_SCHEMA, activeMs, mergeSpeeds, netSpans, weightedSpeed } from './requests.ts'
 
 export { weightedSpeed }
 
@@ -76,8 +76,8 @@ const has = (r: unknown, texts: string[], counts: string[]): r is Record<string,
 /** Chaque sorte de ligne, avec ce qu'il lui faut pour être lue sans faire planter un calcul. */
 const ROW_CHECKS = {
   api: (r: unknown) => has(r, ['project', 'machine', 'model'], ['apiMs', 'genMs', 'output', 'calls']) && typeof r.speeds === 'object' && r.speeds !== null,
-  active: (r: unknown) => has(r, ['project', 'machine'], ['activeMs', 'requests']),
-  hours: (r: unknown) => has(r, ['machine'], []) && isCounts(r.hours, 24),
+  active: (r: unknown) => has(r, ['project', 'machine'], ['activeMs', 'requests']) && (r.cumulMs === undefined || isCount(r.cumulMs)),
+  hours: (r: unknown) => has(r, ['machine'], []) && isCounts(r.hours, 24) && (r.cumul === undefined || isCounts(r.cumul, 24)),
   sessions: (r: unknown) => has(r, ['session', 'project', 'machine'], ['activeMs', 'apiMs', 'requests']),
   times: (r: unknown) => has(r, ['project', 'machine'], []) && isCounts(r.seconds),
 } as const
@@ -99,6 +99,9 @@ export function monthOfJson(v: unknown): MonthTotals | null {
     files[name] = { mtimeMs: entry.mtimeMs, days: entry.days as string[] }
   }
   for (const key of Object.keys(ROW_CHECKS) as (keyof typeof ROW_CHECKS)[]) if (!Array.isArray(m[key]) || !(m[key] as unknown[]).every(ROW_CHECKS[key])) return null
+  // Des lignes d'avant la 0.11.0, sans temps cumulé (ou réécrites par une session pas encore à jour) :
+  // tous les fichiers du mois sont à relire (`mtimeMs` -1), leurs jours se refont avec lui.
+  if (m.active!.some((r) => r.cumulMs === undefined) || m.hours!.some((h) => h.cumul === undefined)) for (const name of Object.keys(files)) files[name] = { ...files[name]!, mtimeMs: -1 }
   return { v: 1, month: m.month, files, api: m.api!, active: m.active!, hours: m.hours!, sessions: m.sessions!, times: m.times! }
 }
 
@@ -141,6 +144,9 @@ type Span = readonly [number, number]
 /** L'intervalle [envoi, fin] d'une requête relevée : jusqu'à la fin de son dernier tour connu. */
 const spanOfRecord = (r: RequestRecord): Span => [r.sentAt, r.sentAt + Math.max(r.realMs, (r.endedAt ?? r.sentAt) - r.sentAt)]
 
+/** Les morceaux actifs d'une requête relevée : son intervalle sans ses attentes de l'utilisateur (`netSpans`). */
+const activeSpansOf = (r: RequestRecord): Span[] => netSpans(r, spanOfRecord(r)[1])
+
 /** L'heure locale d'un instant, de 0 à 23. */
 const hourOf = (ms: number, tz: number): number => new Date(ms - tz * 60_000).getUTCHours()
 
@@ -175,6 +181,8 @@ const projectOf = (log: RequestLog): string => log.project ?? UNKNOWN
 function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: number, machine: string): Required<Pick<Durations, 'api' | 'active' | 'hours' | 'sessions' | 'times'>> {
   const times = new Map<string, TimesRow>()
   const byHour = new Map<string, Span[]>()
+  // Le temps cumulé d'une heure : la somme des temps actifs de chaque discussion dans cette heure.
+  const bySessionHour = new Map<string, Span[]>()
   const byProject = new Map<string, { spans: Span[]; requests: number }>()
   const bySession = new Map<string, { project: string; spans: Span[]; apiMs: number; requests: number }>()
   const api = new Map<string, ApiRow>()
@@ -188,9 +196,10 @@ function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: numb
     const project = projectOf(log)
     const group = groupOf(project, {})
     for (const r of log.requests) {
-      for (const [day, hour, a, b] of piecesOf(spanOfRecord(r), tz)) {
+      for (const [day, hour, a, b] of activeSpansOf(r).flatMap((span) => piecesOf(span, tz))) {
         if (!days.has(day)) continue
         slot(byHour, `${day}|${hour}`, () => []).push([a, b])
+        slot(bySessionHour, `${day}|${hour}|${log.session}`, () => []).push([a, b])
         slot(byProject, `${day}|${group}`, () => ({ spans: [], requests: 0 })).spans.push([a, b])
         slot(bySession, `${day}|${log.session}`, () => ({ project, spans: [], apiMs: 0, requests: 0 })).spans.push([a, b])
       }
@@ -201,7 +210,7 @@ function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: numb
       const s = slot(bySession, `${sent}|${log.session}`, () => ({ project, spans: [], apiMs: 0, requests: 0 }))
       s.requests += 1
       s.apiMs += r.apiMs
-      slot(times, `${sent}|${group}`, () => ({ date: sent, project: group, machine, seconds: [] })).seconds.push(Math.round((spanOfRecord(r)[1] - r.sentAt) / 1000))
+      slot(times, `${sent}|${group}`, () => ({ date: sent, project: group, machine, seconds: [] })).seconds.push(Math.round(activeSpansOf(r).reduce((n, [a, b]) => n + b - a, 0) / 1000))
       for (const [model, m] of Object.entries(r.models)) {
         const row = slot(api, `${sent}|${project}|${model}`, () => ({ date: sent, project, machine, model, apiMs: 0, genMs: 0, output: 0, calls: 0, speeds: {} }))
         row.apiMs += m.apiMs
@@ -213,17 +222,25 @@ function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: numb
     }
   }
   const hours = new Map<string, HourRow>()
+  const hourOfDate = (date: string) => slot(hours, date, () => ({ date, machine, hours: Array.from({ length: 24 }, () => 0), cumul: Array.from({ length: 24 }, () => 0) }))
   for (const [key, spans] of byHour) {
     const [date, hour] = key.split('|') as [string, string]
-    slot(hours, date, () => ({ date, machine, hours: Array.from({ length: 24 }, () => 0) })).hours[Number(hour)] = activeMs(spans)
+    hourOfDate(date).hours[Number(hour)] = activeMs(spans)
   }
-  const active: ActiveRow[] = [...byProject].map(([key, x]) => {
-    const [date, project] = key.split('|') as [string, string]
-    return { date, project, machine, activeMs: activeMs(x.spans), requests: x.requests }
-  })
+  for (const [key, spans] of bySessionHour) {
+    const [date, hour] = key.split('|') as [string, string]
+    hourOfDate(date).cumul![Number(hour)]! += activeMs(spans)
+  }
   const sessions: SessionDayRow[] = [...bySession].map(([key, x]) => {
     const [date, session] = key.split('|') as [string, string]
     return { date, session, project: x.project, machine, activeMs: activeMs(x.spans), apiMs: x.apiMs, requests: x.requests }
+  })
+  // Le temps cumulé d'un projet : la somme des temps actifs de ses discussions ce jour-là.
+  const cumul = new Map<string, number>()
+  for (const s of sessions) cumul.set(`${s.date}|${groupOf(s.project, {})}`, (cumul.get(`${s.date}|${groupOf(s.project, {})}`) ?? 0) + s.activeMs)
+  const active: ActiveRow[] = [...byProject].map(([key, x]) => {
+    const [date, project] = key.split('|') as [string, string]
+    return { date, project, machine, activeMs: activeMs(x.spans), requests: x.requests, cumulMs: cumul.get(key) ?? 0 }
   })
   return { api: [...api.values()], active, hours: [...hours.values()], sessions, times: [...times.values()] }
 }
@@ -355,7 +372,26 @@ function parseRecord(v: unknown): RequestRecord | null {
     apiMs: r.apiMs,
     agents: finiteOrZero(r.agents),
     models: parseModels(r.models),
+    ...waitsOf(r, r.sentAt),
   }
+}
+
+/**
+ * Les attentes et les appels pendant les attentes d'une requête lue sur le disque, bornés à ses 30
+ * jours : un intervalle impossible est écarté ; une attente restée ouverte (un redémarrage pendant
+ * la question) garde sa fin null, et va jusqu'à la fin de la requête (`netSpans`), jamais jusqu'à
+ * maintenant.
+ */
+function waitsOf(r: Record<string, unknown>, sentAt: number): Pick<RequestRecord, 'waits' | 'busy'> {
+  const isIn = (v: unknown): v is number => isFiniteIn(v, sentAt, sentAt + MAX_REQUEST_MS)
+  const pairs = (v: unknown): unknown[][] => (Array.isArray(v) ? v.filter((p): p is unknown[] => Array.isArray(p) && p.length === 2) : [])
+  const waits = pairs(r.waits)
+    .filter(([a, b]) => isIn(a) && (b === null || (isIn(b) && b >= a)))
+    .map(([a, b]) => [a, b] as [number, number | null])
+  const busy = pairs(r.busy)
+    .filter(([a, b]) => isIn(a) && isIn(b) && b > a)
+    .map(([a, b]) => [a, b] as [number, number])
+  return { ...(waits.length ? { waits } : {}), ...(busy.length ? { busy } : {}) }
 }
 
 /**
@@ -412,6 +448,13 @@ export type Measures = {
   requests: Map<string, number>
   /** Temps actif par jour et par projet affiché. */
   projects: Map<string, Map<string, number>>
+  /**
+   * Temps cumulé par jour (la somme des temps actifs des discussions), et par jour et projet affiché.
+   * Un jour où un poste ne le publie pas encore (d'avant la 0.11.0) est dans `cumulGaps` : « — », jamais 0.
+   */
+  cumul: Map<string, number>
+  projectsCumul: Map<string, Map<string, number>>
+  cumulGaps: Set<string>
   /** Temps actif par jour et par discussion. */
   sessions: Map<string, Map<string, number>>
 }
@@ -423,7 +466,8 @@ export type Measures = {
  */
 export function measuresOf(d: AllDurations, f: { machine: string; project: string | null; model: string | null }, projects: Record<string, ProjectInfo>): Measures {
   const since = earliest(f.machine === 'all' ? Object.values(d.sinceBy) : d.sinceBy[f.machine] ? [d.sinceBy[f.machine]!] : [])
-  const out: Measures = { since, sinceBy: d.sinceBy, hasActive: f.model === null, active: new Map(), api: new Map(), requests: new Map(), projects: new Map(), sessions: new Map() }
+  const out: Measures = { since, sinceBy: d.sinceBy, hasActive: f.model === null, active: new Map(), api: new Map(), requests: new Map(), projects: new Map(), sessions: new Map(), cumul: new Map(), projectsCumul: new Map(), cumulGaps: new Set() }
+  const gaps = new Set<string>()
   const add = (map: Map<string, number>, key: string, v: number) => map.set(key, (map.get(key) ?? 0) + v)
   const inner = (map: Map<string, Map<string, number>>, date: string) => map.get(date) ?? map.set(date, new Map()).get(date)!
   const isKept = (r: { project: string; machine: string }) => (f.machine === 'all' || r.machine === f.machine) && (f.project === null || groupOf(r.project, projects) === f.project)
@@ -432,11 +476,23 @@ export function measuresOf(d: AllDurations, f: { machine: string; project: strin
     if (!isKept(r)) continue
     add(inner(out.projects, r.date), groupOf(r.project, projects), r.activeMs)
     add(out.requests, r.date, r.requests)
+    if (r.cumulMs === undefined) gaps.add(`${r.date}|${groupOf(r.project, projects)}`)
+    else add(inner(out.projectsCumul, r.date), groupOf(r.project, projects), r.cumulMs)
     if (f.project !== null) add(out.active, r.date, r.activeMs)
   }
   if (f.project === null) for (const h of d.hours) if (f.machine === 'all' || h.machine === f.machine) add(out.active, h.date, h.hours.reduce((n, ms) => n + ms, 0))
   for (const s of d.sessions) if (isKept(s)) add(inner(out.sessions, s.date), s.session, s.activeMs)
-  if (!out.hasActive) out.active.clear()
+  for (const key of gaps) {
+    const [date, group] = key.split('|') as [string, string]
+    out.projectsCumul.get(date)?.delete(group)
+  }
+  for (const key of gaps) out.cumulGaps.add(key.slice(0, key.indexOf('|')))
+  for (const [date, byProject] of out.projectsCumul) if (!out.cumulGaps.has(date)) out.cumul.set(date, [...byProject.values()].reduce((n, v) => n + v, 0))
+  if (!out.hasActive) {
+    out.active.clear()
+    out.cumul.clear()
+    out.projectsCumul.clear()
+  }
   return out
 }
 
@@ -463,15 +519,19 @@ export const costPerActiveHour = (cost: number, activeMs: number): number | null
 export type PeriodMeasures = {
   models: Map<string, Pick<ApiRow, 'apiMs' | 'genMs' | 'output' | 'calls'> & { speeds: Record<string, number> }>
   projects: Map<string, number>
+  /** Temps cumulé par projet ; null pour un projet dont un poste ne le publie pas encore sur la période. */
+  projectsCumul: Map<string, number | null>
   sessions: Map<string, number>
   hours: number[]
+  /** Temps cumulé par heure ; null quand un poste ne le publie pas encore sur la période. */
+  hoursCumul: number[] | null
   /** Durées réelles des requêtes de la période, en ms (ce poste seulement : les autres ne publient que des totaux). */
   requestMs: number[]
 }
 
 /** `from` : premier jour de la période ; null pour « tout ». */
 export function periodOf(d: AllDurations, f: { machine: string; project: string | null; model: string | null }, from: string | null, to: string, projects: Record<string, ProjectInfo>): PeriodMeasures {
-  const out: PeriodMeasures = { models: new Map(), projects: new Map(), sessions: new Map(), hours: Array.from({ length: 24 }, () => 0), requestMs: [] }
+  const out: PeriodMeasures = { models: new Map(), projects: new Map(), projectsCumul: new Map(), sessions: new Map(), hours: Array.from({ length: 24 }, () => 0), hoursCumul: Array.from({ length: 24 }, () => 0), requestMs: [] }
   const isIn = (date: string) => (from === null || date >= from) && date <= to
   const isMachine = (machine: string) => f.machine === 'all' || machine === f.machine
   const isKept = (r: { project: string; machine: string }) => isMachine(r.machine) && (f.project === null || groupOf(r.project, projects) === f.project)
@@ -487,11 +547,22 @@ export function periodOf(d: AllDurations, f: { machine: string; project: string 
   }
   // Pas de temps actif par modèle : sous un filtre de modèle, projets, discussions et heures restent vides.
   if (f.model !== null) return out
-  for (const r of d.active) if (isIn(r.date) && isKept(r)) out.projects.set(groupOf(r.project, projects), (out.projects.get(groupOf(r.project, projects)) ?? 0) + r.activeMs)
+  for (const r of d.active) {
+    if (!isIn(r.date) || !isKept(r)) continue
+    const group = groupOf(r.project, projects)
+    out.projects.set(group, (out.projects.get(group) ?? 0) + r.activeMs)
+    const known = out.projectsCumul.has(group) ? out.projectsCumul.get(group)! : 0
+    out.projectsCumul.set(group, known === null || r.cumulMs === undefined ? null : known + r.cumulMs)
+  }
   for (const s of d.sessions) if (isIn(s.date) && isKept(s)) out.sessions.set(s.session, (out.sessions.get(s.session) ?? 0) + s.activeMs)
   for (const t of d.times ?? []) if (isIn(t.date) && isKept(t)) out.requestMs.push(...t.seconds.map((s) => s * 1000))
   // Les heures ne disent pas leur projet : seulement sans filtre de projet.
   if (f.project !== null) return out
-  for (const h of d.hours) if (isIn(h.date) && isMachine(h.machine)) h.hours.forEach((ms, i) => (out.hours[i]! += ms))
+  for (const h of d.hours) {
+    if (!isIn(h.date) || !isMachine(h.machine)) continue
+    h.hours.forEach((ms, i) => (out.hours[i]! += ms))
+    if (!h.cumul) out.hoursCumul = null
+    else if (out.hoursCumul) h.cumul.forEach((ms, i) => (out.hoursCumul![i]! += ms))
+  }
   return out
 }

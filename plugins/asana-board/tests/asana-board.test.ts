@@ -568,6 +568,35 @@ describe('asana-board', () => {
     await pane.unmount()
   })
 
+  test('au terminal, le lien Asana d’une tâche devient un bouton qui copie son adresse ; ailleurs, il reste un lien', async ($, on) => {
+    const URL = 'https://app.asana.com/0/0/t1'
+    const { log } = world(on, { sectionTasks: () => SAMPLE().map(t => (t.gid === 't1' ? { ...t, permalink_url: URL } : t)) })
+    const copies: { text: string; surface?: string }[] = []
+    let isCopied = true
+    on('ui.copy', (_$: unknown, e: { text: string; surface?: string }) => {
+      copies.push(e)
+      return { value: { isCopied } } as any
+    })
+    await $.command.run({ command: 'asana', args: '/projet', ...TYPED })
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE() })
+    await pane.press({ key: 'x-t1' })
+    expect(await pane.find({ type: 'Link' })).toBeUndefined()
+    expect((await pane.find({ key: 'copy-t1' }))?.props).toMatchObject({ label: '⧉ Asana' })
+    await pane.press({ key: 'copy-t1' })
+    expect(copies).toEqual([expect.objectContaining({ text: URL })])
+    expect(log.toasts.at(-1)).toBe('Lien Asana copié')
+    // Sans copie possible, le toast donne l'adresse à recopier.
+    isCopied = false
+    await pane.press({ key: 'copy-t1' })
+    expect(log.toasts.at(-1)).toBe(`Copie impossible : ${URL}`)
+    await pane.unmount()
+
+    const desktop = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE() })
+    expect((await desktop.find({ type: 'Link' }))?.props).toMatchObject({ href: URL, label: 'Asana ↗' })
+    expect(await desktop.find({ key: 'copy-t1' })).toBeUndefined()
+    await desktop.unmount()
+  })
+
   test('une écriture en cours bloque le second appui ; la suppression n’est pas l’action principale', async ($, on) => {
     // Asana lent à répondre aux écritures.
     const { clock, log } = world(on, { writeDelay: 2_000 })

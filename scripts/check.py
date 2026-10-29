@@ -21,6 +21,13 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    la forme du CHANGELOG : chaque entrée (`## <version> — <date>`) précédée d'une ligne `---`, versions
    uniques, de la plus récente à la plus ancienne, la première égale à la version de `plugin.json`
    (un séparateur perdu au déplacement d'une entrée n'avait été vu qu'au compte rendu) ;
+   la version : une version que la branche a changée (face au point où elle part de `main`, puis
+   de `origin/main`) est strictement plus grande que celle de cette référence (une autre discussion
+   avait publié le même numéro) ; aucun marqueur « 0.xx.0 » du README écrit avant la dernière montée
+   de version (`scripts/bump-version.py` les remplace) ;
+   les appels `$.<espace>.<membre>` des hooks existent dans le Claude Code de l'app (les types qu'il
+   embarque, décompressés par `zstd`) : une API qu'il ne connaît pas efface le mod dans l'app, et le
+   faux moteur des tests ne la voit pas ; sauté avec un avertissement sans l'app ou sans `zstd` ;
 3. types : `tsc` d'une version fixée de TypeScript, par npx (aucune installation globale). Les types
    du moteur (`.claude-plugin/types/`, ignorés par git) manquent dans un worktree : ils sont copiés
    depuis le clone principal ;
@@ -28,10 +35,13 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    ceux qui lisent les sources, ce que `claude plugin test` ne permet pas) ;
 5. `claude plugin test` avec le Claude Code du terminal, puis avec le binaire le plus récent de
    l'app desktop, trouvé ici (Mac et Windows) ;
-6. `claude plugin validate` du plugin, puis du dépôt.
+6. `claude plugin validate` du plugin, puis du dépôt ;
+7. les versions des plugins contrôlés citées dans la liste « État » d'ETAT_DU_PROJET.md (fichier
+   personnel, lu seulement ; contrôle sans objet sans lui) égales à celles de leur `plugin.json`.
 
---staged (hook pre-commit, décision « Hook ») : d'abord la forme du CHANGELOG de chaque plugin dont le
-CHANGELOG ou le `plugin.json` est indexé, même pour un commit de documentation seule ; puis rien de
+--staged (hook pre-commit, décision « Hook ») : d'abord la forme du CHANGELOG, la version (lue dans
+l'index) et la liste « État » de chaque plugin dont le CHANGELOG ou le `plugin.json` est indexé, même
+pour un commit de documentation seule ; puis rien de
 plus pour un commit de documentation seule ; sinon `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
 (terminal seulement) des plugins touchés : 39 erreurs de types étaient passées inaperçues sur trois
 groupes quand le hook ne lançait que `validate` et les tests. Le test avec l'app desktop reste à
@@ -90,6 +100,22 @@ MINMAX_CALL = re.compile(r"\bMath\.(min|max)\(")
 # Le titre d'une entrée de CHANGELOG. `-mathis.<n>` (mattpocock-skills) est un écart local sur la
 # version de l'amont, rangé après elle (README de ce plugin), au contraire d'une pré-version SemVer.
 CHANGELOG_ENTRY = re.compile(r"^## (\d+)\.(\d+)\.(\d+)(?:-mathis\.(\d+))?(?=\s|$)")
+VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-mathis\.(\d+))?")
+# Les références face auxquelles une version posée doit avancer : une autre discussion avait publié
+# sur `main` la même 0.66.0 qu'un groupe, vue seulement au conflit de la fusion.
+VERSION_REFS = ("main", "origin/main")
+# Le marqueur d'une version pas encore connue (« depuis la 0.xx.0 ») dans un README, que
+# `scripts/bump-version.py` remplace par la version posée.
+PLACEHOLDER = "0.xx.0"
+# Les plugins d'une liste « `nom` X.Y.Z » de la section « État » d'ETAT_DU_PROJET.md (fichier personnel,
+# absent de la version publique : lu seulement).
+STATE_FILE = "ETAT_DU_PROJET.md"
+STATE_ENTRY = re.compile(r"`([\w-]+)` (\d+\.\d+\.\d+(?:-mathis\.\d+)?)(?![\w.-])")
+# Les appels de l'API du moteur dans les hooks d'un mod, et le début d'un bloc zstd (les types que le
+# Claude Code de l'app embarque y sont compressés).
+API_CALL = re.compile(r"\$\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)")
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+ENGINE_INTERFACE = "export interface CoreEngineInterface {"
 
 
 class Failed(Exception):
@@ -167,6 +193,18 @@ def tool(name):
 def version_of(text):
     m = re.search(r"\d+(?:\.\d+)+", text)
     return tuple(int(n) for n in m.group(0).split(".")) if m else None
+
+
+def version_key(version):
+    """La clé de tri d'une version X.Y.Z, `-mathis.<n>` rangé après X.Y.Z ; None hors de cette forme."""
+    m = VERSION.fullmatch(version or "")
+    return (int(m[1]), int(m[2]), int(m[3]), 0 if m[4] is None else 1, int(m[4] or 0)) if m else None
+
+
+def git(args, timeout=30):
+    """La sortie d'une commande git, sans blancs autour ; None en échec."""
+    code, out = run(["git", *args], timeout)
+    return out.strip() if code == 0 else None
 
 
 def desktop_claude():
@@ -421,7 +459,7 @@ def changelog_shape(plugin):
             is_separated = False
             continue
         version = line[3:m.end()]
-        key = (int(m[1]), int(m[2]), int(m[3]), 0 if m[4] is None else 1, int(m[4] or 0))
+        key = version_key(version)
         if not is_separated:
             problems.append(f"{rel}:{n} : pas de ligne « --- » avant l'entrée {version}")
         if previous is None and manifest is not None and version != manifest:
@@ -477,6 +515,213 @@ def static_checks(plugin):
         raise Failed(f"{plugin.name} : {len(rules)} terme(s) retiré(s) ou entorse(s) aux règles du code")
     log("  ok")
     check_changelog(plugin)
+    check_versions(plugin)
+
+
+# --- versions -----------------------------------------------------------------
+
+
+def manifest_rel(plugin):
+    return f"plugins/{plugin.name}/.claude-plugin/plugin.json"
+
+
+def manifest_version(plugin, rev=None):
+    """La version de `plugin.json` : dans l'arbre de travail (`rev` None), dans l'index (`rev` vide)
+    ou à une révision ; None si le fichier y manque ou ne se lit pas."""
+    try:
+        if rev is None:
+            text = (plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        else:
+            text = git(["show", f"{rev}:{manifest_rel(plugin)}"])
+            if text is None:
+                return None
+        version = json.loads(text).get("version")
+    except (OSError, ValueError):
+        return None
+    return version if isinstance(version, str) else None
+
+
+def version_advance(plugin, rev=None):
+    """Une version posée par la branche (différente de celle du point où elle part de la référence)
+    doit être strictement plus grande que celle de `main` et de `origin/main` : sinon une autre
+    discussion a publié ce numéro, ou un plus grand, entre-temps. Une branche qui n'a pas touché
+    à la version ne demande rien, même en retard sur la référence."""
+    current = manifest_version(plugin, rev)
+    if current is None:
+        return []
+    problems = []
+    for ref in VERSION_REFS:
+        if git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]) is None:
+            continue
+        base = git(["merge-base", "HEAD", ref])
+        before = manifest_version(plugin, base) if base else None
+        there = manifest_version(plugin, ref)
+        if before is None or there is None or before == current:
+            continue
+        if version_key(current) is None or version_key(there) is None or version_key(current) <= version_key(there):
+            problems.append(f"{manifest_rel(plugin)} : version {current}, qui n'avance pas sur {ref} ({there}) : "
+                            "une autre discussion l'a publiée entre-temps ; prendre la suivante (/project:version)")
+    return problems
+
+
+def leftover_placeholders(plugin, rev=None):
+    """Les marqueurs « 0.xx.0 » du README restés après la dernière montée de version : une ligne écrite
+    avant elle (git blame), ou toute ligne quand la version change dans l'arbre ou l'index (`rev`).
+    Un marqueur écrit après la dernière montée attend la prochaine : il passe."""
+    readme = plugin / "README.md"
+    if not readme.is_file():
+        return []
+    marked = [n for n, line in enumerate(readme.read_text(encoding="utf-8", errors="replace").splitlines(), 1) if PLACEHOLDER in line]
+    if not marked:
+        return []
+    current = manifest_version(plugin, rev)
+    rel = f"plugins/{plugin.name}/README.md"
+    fix = f"scripts/bump-version.py {plugin.name} {current} le remplace"
+    if current != manifest_version(plugin, "HEAD"):
+        return [f"{rel}:{n} : marqueur « {PLACEHOLDER} » alors que la version passe à {current} : {fix}" for n in marked]
+    last = git(["log", "-1", "--format=%H", "-G", '"version"[[:space:]]*:', "--", manifest_rel(plugin)], 60)
+    if not last:
+        return []
+    problems = []
+    for n in marked:
+        blame = git(["blame", "--porcelain", "-L", f"{n},{n}", "--", rel], 60)
+        sha = blame.split(" ", 1)[0] if blame else ""
+        if sha and set(sha) != {"0"} and git(["merge-base", "--is-ancestor", sha, last]) is not None:
+            problems.append(f"{rel}:{n} : marqueur « {PLACEHOLDER} » resté après la montée en {current} : {fix}")
+    return problems
+
+
+def check_versions(plugin, rev=None):
+    log("→ version face à main et origin/main, marqueurs « 0.xx.0 »")
+    problems = version_advance(plugin, rev) + leftover_placeholders(plugin, rev)
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{plugin.name} : {len(problems)} défaut(s) de version")
+    log("  ok")
+
+
+def state_mismatches(names):
+    """Les versions de la liste « État » d'ETAT_DU_PROJET.md qui diffèrent de celle de `plugin.json`,
+    pour les plugins nommés ; rien sans ce fichier (version publique)."""
+    path = REPO / STATE_FILE
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    section = re.search(r"^## État\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+    problems = []
+    for m in STATE_ENTRY.finditer(section.group(1) if section else ""):
+        name, cited = m.group(1), m.group(2)
+        if name not in names:
+            continue
+        actual = manifest_version(PLUGINS / name)
+        if actual is not None and actual != cited:
+            problems.append(f"{STATE_FILE}, section « État » : `{name}` {cited}, mais plugin.json dit {actual}")
+    return problems
+
+
+def check_state(names):
+    log(f"→ versions de la liste « État » de {STATE_FILE}")
+    problems = state_mismatches(names)
+    if problems is None:
+        log(f"  pas de {STATE_FILE} : contrôle sans objet")
+    elif problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} version(s) de la liste « État » à mettre à jour")
+    else:
+        log("  ok")
+
+
+# --- API du moteur dans le Claude Code de l'app -------------------------------
+
+
+def engine_declarations(binary):
+    """Les types de l'API des mods que le Claude Code de l'app embarque (compressés en zstd dans son
+    binaire), gardés en cache par binaire ; (texte, None), ou (None, raison) s'ils ne se lisent pas."""
+    try:
+        stat = binary.stat()
+    except OSError as err:
+        return None, str(err)
+    tag = hashlib.sha256(f"{binary}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")).hexdigest()[:16]
+    cache = Path(tempfile.gettempdir()) / f"check-engine-{tag}.d.ts"
+    if cache.is_file():
+        return cache.read_text(encoding="utf-8"), None
+    zstd = shutil.which("zstd")
+    if not zstd:
+        return None, "zstd introuvable (il décompresse les types embarqués)"
+    data = binary.read_bytes()
+    marker = ENGINE_INTERFACE.encode("utf-8")
+    at = data.find(ZSTD_MAGIC)
+    while at >= 0:
+        try:
+            res = subprocess.run([zstd, "-dc", "-q"], input=data[at:at + 8_000_000], capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            res = None
+        if res is not None and marker in res.stdout:
+            text = res.stdout.decode("utf-8", errors="replace")
+            try:
+                cache.write_text(text, encoding="utf-8")
+            except OSError:
+                pass
+            return text, None
+        at = data.find(ZSTD_MAGIC, at + 1)
+    return None, "types de l'API absents du binaire"
+
+
+def engine_api(text):
+    """{espace: membres} de l'interface du moteur (`$.<espace>.<membre>`), lus à l'indentation des
+    types que le moteur écrit : un espace à 6 espaces, ses membres à 10."""
+    api = {}
+    space = None
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == ENGINE_INTERFACE), None)
+    for line in lines[start + 1:] if start is not None else []:
+        if line.startswith("  }"):
+            break
+        top = re.match(r"^      (?:readonly )?(\w+)\??:\s*(\{)?", line)
+        if top:
+            space = top.group(1)
+            api.setdefault(space, set())
+            continue
+        member = re.match(r"^          (?:readonly )?(\w+)\??\s*[:(<]", line)
+        if member and space is not None:
+            api[space].add(member.group(1))
+    return api
+
+
+def engine_calls(plugin):
+    """Les appels `$.<espace>.<membre>` du code des hooks : [(fichier:ligne, espace, membre)]."""
+    calls = []
+    for path, rel in files_of(plugin):
+        if not rel.startswith("hooks/") or path.suffix not in {".ts", ".tsx", ".js", ".mjs", ".cjs"}:
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            for m in API_CALL.finditer(code_of(line)):
+                calls.append((f"{plugin.name}/{rel}:{n}", m.group(1), m.group(2)))
+    return calls
+
+
+def check_engine_api(plugin, desktop):
+    """Chaque appel de l'API du moteur existe dans le Claude Code de l'app : une API qu'il ne connaît
+    pas encore efface le mod dans l'app, alors que le faux moteur des tests ne la voit pas."""
+    calls = engine_calls(plugin)
+    if not calls:
+        return
+    log("→ API du moteur dans le Claude Code de l'app")
+    if desktop is None:
+        log("  avertissement : contrôle sauté, sans le Claude Code de l'app")
+        return
+    binary, version = desktop
+    text, reason = engine_declarations(Path(binary))
+    if text is None:
+        log(f"  avertissement : contrôle sauté, {reason}")
+        return
+    api = engine_api(text)
+    missing = [f"{where} : $.{space}.{member} inconnu du Claude Code de l'app {version}"
+               for where, space, member in calls if member not in api.get(space, ())]
+    if missing:
+        log("\n".join(f"  {p}" for p in missing))
+        raise Failed(f"{plugin.name} : {len(missing)} appel(s) d'une API que l'app ne connaît pas encore")
+    log(f"  ok ({len({(s, m) for _, s, m in calls})} appels, app {version})")
 
 
 # --- types --------------------------------------------------------------------
@@ -594,6 +839,7 @@ def check_plugin(plugin, desktop):
     log(f"\n=== {plugin.name}")
     claude = tool("claude")
     static_checks(plugin)
+    check_engine_api(plugin, desktop)
     typecheck(plugin)
     node_tests(plugin)
     code, out = run([claude, "--version"], 60)
@@ -678,6 +924,9 @@ def staged():
         if (PLUGINS / name / ".claude-plugin" / "plugin.json").is_file():
             log(f"pre-commit : plugins/{name}")
             check_changelog(PLUGINS / name)
+            check_versions(PLUGINS / name, rev="")
+    if shaped:
+        check_state(shaped)
     code_paths = [p for p in paths if not is_doc(p)]
     if not code_paths:
         log("pre-commit : documentation seule, pas de contrôle")
@@ -736,6 +985,7 @@ def main():
         for name in names:
             check_plugin(PLUGINS / name, desktop)
         validate(REPO, tool("claude"))
+        check_state(names)
     except Failed as err:
         log(f"\nÉCHEC : {err}")
         sys.exit(1)

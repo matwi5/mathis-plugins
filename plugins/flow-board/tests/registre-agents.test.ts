@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { emptyRegistry, endCall, mergeRegistry, parseRegistry, reconcileAgents, runningOf, spawnAgent, startCall, stopAgent } from '../hooks/registry.ts'
+import { emptyRegistry, endCall, mergeRegistry, parseRegistry, reconcileAgents, reviewForkName, runningOf, spawnAgent, startCall, stopAgent } from '../hooks/registry.ts'
 
 const call = (key: string, name = `Agent ${key}`) => ({ key, name, isBackground: true })
 
@@ -85,4 +85,16 @@ test('le rattrapage par la liste ne touche que les sous-agents de ce processus, 
   const real = stopAgent(endCall(out, 't3', { agentId: 'a3', isFailed: false, isFinished: false }, 10)!, 'a3', 12)!
   expect(real.agents.find(a => a.key === 't3')).toMatchObject({ status: 'done', finishedAt: 12 })
   expect(real.agents.find(a => a.key === 't3')?.isEndUnseen).toBeUndefined()
+})
+
+test('une exécution de /code-review prend un nom standard d’après sa cible ; un autre nom reste le sien', () => {
+  const tagOf = (id: string) => (id === '1200000000000042' ? 'E2' : undefined)
+  expect(reviewForkName('/code-review xhigh refs/worktree/flow-board/1200000000000042^..refs/worktree/flow-board/1200000000000042 consignes : /tmp/c.md', tagOf, 'E')).toBe('Passe bogues · E2')
+  expect(reviewForkName('/code-review high refs/worktree/flow-board/120000…', tagOf)).toBe('Passe bogues')
+  expect(reviewForkName('/code-review high --fix', tagOf, 'A')).toBe('Revue du groupe A')
+  expect(reviewForkName('/code-review high dc096d8..HEAD consignes : /User…', tagOf)).toBe('Revue du groupe')
+  expect(reviewForkName('/code-review high dc096d8a..ac00508f consignes : /tmp/c.md', tagOf)).toBe('Revue · dc096d8..ac00508')
+  expect(reviewForkName('/code-review', tagOf)).toBe('Revue de code')
+  expect(reviewForkName('Revue Standards+Spec E1', tagOf)).toBeNull()
+  expect(reviewForkName('/code-reviewer', tagOf)).toBeNull()
 })

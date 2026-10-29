@@ -48,7 +48,7 @@ test('confier des pistes : rien ne passe « en cours » avant le lancement de la
   expect(phase.items.map(i => i.status)).toEqual(['todo', 'todo', 'todo'])
   expect(activeRun(sent)!.log[0]!.text).toBe('Session liée demandée pour 2 pistes : la demande est dans le prompt')
   // Dans l'ordre de la liste, pas dans l'ordre du clic.
-  expect(phase.linked).toEqual({ items: ['p1', 'p3'], at: 2_000 })
+  expect(phase.linked).toEqual({ items: ['p1', 'p3'], at: 2_000, seq: 1 })
   // Déjà confiées : pas une deuxième fois.
   expect(startLinkedItems(sent, ['p1'], 2_100)).toBeNull()
 
@@ -77,14 +77,15 @@ test('confier des pistes : rien ne passe « en cours » avant le lancement de la
   expect(activeRun(early.board)?.status).toBe('active')
 
   // La note de fin rendue : la phase se clôt.
-  const back = applyReport(linked, { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], { ...PISTES[2], status: 'dropped' }], complete: true }, 4_000)
+  // La session fermée (sa fermeture rendue dans le même appel) : la phase se clôt.
+  const back = applyReport(linked, { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], { ...PISTES[2], status: 'dropped' }], closed: [{ items: 'retro', state: 'closed' }], complete: true }, 4_000)
   expect(back.board.runs[0]!.status).toBe('done')
 })
 
 test('un ajout à un envoi sans session le rejoint ; une session au travail n’en prend pas d’autres', () => {
   const sent = startLinkedItems(retro(), ['p1'], 2_000)!.board
   const more = startLinkedItems(sent, ['p3'], 2_100)!.board
-  expect(currentPhase(activeRun(more)!).linked).toEqual({ items: ['p1', 'p3'], at: 2_100 })
+  expect(currentPhase(activeRun(more)!).linked).toEqual({ items: ['p1', 'p3'], at: 2_100, seq: 1 })
   const running = linkSession(more, 'local_abc', 2_200)!.board
   expect(startLinkedItems(running, ['p2'], 2_300)).toBeNull()
   // Claude, qui ne voit pas les pistes passer « en cours », le lit dans chaque réponse.
@@ -106,9 +107,11 @@ test('une piste que la session n’a pas faite revient au choix, sans être éca
   expect(phase.linked?.items).toEqual(['p1'])
   expect(phase.items.map(i => i.status)).toEqual(['done', 'todo', 'todo'])
   expect(activeRun(back)!.log[0]!.text).toBe('À choisir de nouveau, pas fait par la session liée : Outils : clé Jira dans le titre')
-  // Rien n'est plus chez la session : la rétro peut se clore, et la piste se renvoyer.
-  expect(startLinkedItems(back, ['p3'], 4_100)).not.toBeNull()
-  expect(applyReport(back, { complete: true }, 4_200).board.runs[0]!.status).toBe('done')
+  // Rien n'est plus chez la session : la rétro peut se clore ; la piste se renvoie une fois la session fermée.
+  expect(startLinkedItems(back, ['p3'], 4_100)).toBeNull()
+  const closed = applyReport(back, { closed: [{ items: 'retro', state: 'closed' }] }, 4_150).board
+  expect(startLinkedItems(closed, ['p3'], 4_160)).not.toBeNull()
+  expect(applyReport(back, { closed: [{ items: 'retro', state: 'closed' }], complete: true }, 4_200).board.runs[0]!.status).toBe('done')
 })
 
 test('aucune session après un tour de Claude : le panneau le marque, la relance ou le lancement l’effacent', () => {
@@ -116,19 +119,19 @@ test('aucune session après un tour de Claude : le panneau le marque, la relance
   // Un tour commencé avant l'envoi ne le concerne pas.
   expect(noteUnlaunched(sent, 1_900, 2_500)).toBeNull()
   const missed = noteUnlaunched(sent, 2_100, 2_500)!.board
-  expect(currentPhase(activeRun(missed)!).linked).toEqual({ items: ['p1', 'p2'], at: 2_000, missedAt: 2_500 })
+  expect(currentPhase(activeRun(missed)!).linked).toEqual({ items: ['p1', 'p2'], at: 2_000, missedAt: 2_500, seq: 1 })
   expect(activeRun(missed)!.log[0]).toMatchObject({ text: 'Aucune session liée lancée pour 2 pistes : Claude a rendu la main sans la lancer', tone: 'warn' })
   // Marqué une seule fois.
   expect(noteUnlaunched(missed, 2_600, 2_700)).toBeNull()
 
   // « Redemander » : la demande repart, la marque s'efface ; un tour d'avant la relance ne compte plus.
   const retried = retryLinked(missed, 3_000)!.board
-  expect(currentPhase(activeRun(retried)!).linked).toEqual({ items: ['p1', 'p2'], at: 3_000 })
+  expect(currentPhase(activeRun(retried)!).linked).toEqual({ items: ['p1', 'p2'], at: 3_000, seq: 1 })
   expect(noteUnlaunched(retried, 2_600, 3_100)).toBeNull()
 
   // Lancée plus tard (après une question de Claude) : la marque s'efface, les pistes passent en cours.
   const late = linkSession(missed, 'local_late', 3_500)!.board
-  expect(currentPhase(activeRun(late)!).linked).toEqual({ items: ['p1', 'p2'], at: 2_000, session: 'local_late' })
+  expect(currentPhase(activeRun(late)!).linked).toEqual({ items: ['p1', 'p2'], at: 2_000, session: 'local_late', seq: 1 })
   expect(noteUnlaunched(late, 3_600, 3_700)).toBeNull()
   expect(retryLinked(late, 3_800)).toBeNull()
 })
@@ -220,7 +223,7 @@ test('le panneau : choisir les pistes, tout sélectionner, confier à une sessio
   expect(text).toMatch(/une section par piste : le problème constaté \(une phrase\), la correction attendue, les fichiers touchés et un critère de fin vérifiable/)
   expect(text).toMatch(/sans sous-agents qui écrivent/)
   expect(text).toMatch(/les contrôles lancés et leur résultat, et ce qui m'attend/)
-  expect(text).toContain('claude --bg -n "Rétro du groupe A > Pistes · <sujet>" (sans -w : ce dossier n’a pas de git) "<prompt>"')
+  expect(text).toContain(`claude --bg -n 'Rétro du groupe A > Pistes · <sujet>' (sans -w : ce dossier n’a pas de git) "<prompt>"`)
   expect(await ui.find({ type: 'Text', text: /Session\sliée\sà\slancer/ })).toBeDefined()
   expect(await ui.find({ key: 'linked-cancel' })).toBeDefined()
   // Sans id relevé, la session a pu partir quand même : la reprise reste proposée.
@@ -283,8 +286,10 @@ test('le panneau : choisir les pistes, tout sélectionner, confier à une sessio
   expect(check).toMatch(/todo si elle n'a pas été faite/)
   expect(check).toMatch(/\{"complete": true\} seulement si aucune n'est revenue à todo/)
 
-  // La note de fin rendue par Claude : 2/2, et la rétro se clôt.
+  // La note de fin rendue par Claude : la session est terminée, à fermer avant un nouvel envoi ; puis 2/2.
   await $.tool.call({ tool: TOOL, items: [{ ...PISTES[0], status: 'done' }, PISTES[1], { ...PISTES[2], status: 'dropped' }] } as any)
+  expect(await ui.find({ type: 'Text', text: /fermer d.abord la session précédente/ })).toBeDefined()
+  await $.tool.call({ tool: TOOL, closed: [{ items: 'retro', state: 'closed' }] } as any)
   expect(await ui.find({ type: 'Text', text: /^pistes\s:\s2\/2$/ })).toBeDefined()
   await ui.unmount()
 })

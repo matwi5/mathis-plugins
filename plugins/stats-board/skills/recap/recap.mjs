@@ -9,10 +9,11 @@
 // - Les durées (temps actif, temps API, requêtes) viennent des fichiers de relevé des requêtes de ce
 //   poste (`~/.claude/stats-board/requetes/*.json`, écrits par le mod depuis la 0.10.0). Le temps
 //   actif est l'union des intervalles des requêtes, sans double compte, comme `activeMs` de
-//   `hooks/requests.ts`. Un fichier illisible (en cours d'écriture par sa session) est omis et signalé.
+//   `hooks/requests.ts`, sans leurs attentes de l'utilisateur (`netSpans`) ; le temps cumulé, la
+//   somme des temps actifs de chaque discussion. Un fichier illisible (en cours d'écriture par sa session) est omis et signalé.
 // - Script autonome, sans dépendance : les formats français, les niveaux de rythme et la lecture des noms
 //   d'affichage reprennent ceux de `hooks/model.ts` (fmtCost, fmtTokens, fmtSeconds, RATE_LEVELS, parseLabels et
-//   LABEL_MAX), et les durées ceux de `hooks/durations.ts` (spanOfRecord) et de `hooks/requests.ts` (activeMs),
+//   LABEL_MAX), et les durées ceux de `hooks/durations.ts` (spanOfRecord) et de `hooks/requests.ts` (activeMs, netSpans),
 //   à garder alignés à la main.
 
 import { execFile } from 'node:child_process'
@@ -147,6 +148,22 @@ const noTimes = (why) => `- Temps actif — · temps API — (${why})`
 /** L'intervalle [envoi, fin] d'une requête relevée (comme `spanOfRecord` de `hooks/durations.ts`). */
 const spanOf = (r) => [num(r.sentAt), num(r.sentAt) + Math.max(num(r.realMs), num(r.endedAt ?? r.sentAt) - num(r.sentAt))]
 
+/**
+ * Les morceaux actifs d'une requête relevée : son intervalle sans ses attentes de l'utilisateur, sauf
+ * les appels de ses sous-agents pendant ces attentes (`netSpans` de `hooks/requests.ts`).
+ */
+function activeSpansOf(r) {
+  const [start, end] = spanOf(r)
+  let pieces = end > start ? [[start, end]] : []
+  for (const [from, to] of r.waits ?? []) {
+    const [a, b] = [from, to ?? end]
+    if (b <= a) continue
+    pieces = pieces.flatMap(([x, y]) => (b <= x || a >= y ? [[x, y]] : [[x, a], [b, y]].filter(([p, q]) => q > p)))
+  }
+  const kept = (r.busy ?? []).map(([a, b]) => [Math.max(a, start), Math.min(b, end)]).filter(([a, b]) => b > a)
+  return [...pieces, ...kept]
+}
+
 /** La durée de l'union des intervalles : les chevauchements comptés une fois (`activeMs` de `hooks/requests.ts`). */
 export function unionMs(spans) {
   let total = 0
@@ -175,11 +192,17 @@ function piecesOfDay(spans, day, tz) {
 const requestCost = (r) => Object.values(r.models ?? {}).reduce((n, m) => n + num(m.cost), 0)
 const isEstimated = (r) => Object.values(r.models ?? {}).some((m) => m.isEstimated)
 
-/** Les durées d'une liste de relevés : temps actif sans double compte, temps API, requêtes, la plus chère. */
+/**
+ * Les durées d'une liste de relevés : temps actif sans double compte, temps cumulé (la somme des temps
+ * actifs de chaque discussion), temps API, requêtes, la plus chère.
+ */
 function durationsOf(logs) {
   const requests = logs.flatMap((l) => l.requests ?? [])
   const top = requests.reduce((best, r) => (!best || requestCost(r) > requestCost(best) ? r : best), null)
-  return { activeMs: unionMs(requests.map(spanOf)), apiMs: sum(requests, (r) => num(r.apiMs)), requests: requests.length, top }
+  const bySession = new Map()
+  for (const l of logs) bySession.set(l.session, [...(bySession.get(l.session) ?? []), ...(l.requests ?? []).flatMap(activeSpansOf)])
+  const cumulMs = sum([...bySession.values()], (spans) => unionMs(spans))
+  return { activeMs: unionMs(requests.flatMap(activeSpansOf)), cumulMs, apiMs: sum(requests, (r) => num(r.apiMs)), requests: requests.length, top }
 }
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n > 1 ? many : one}`
@@ -236,9 +259,11 @@ export function render(data) {
   // Les durées du jour : les morceaux de requêtes de ce jour-là ; temps API et requêtes au jour de l'envoi.
   const dayLogs = logs.filter((l) => (l.requests ?? []).some((r) => piecesOfDay([spanOf(r)], today, tz).length || localDay(new Date(num(r.sentAt)), tz) === today))
   const sentToday = dayLogs.flatMap((l) => (l.requests ?? []).filter((r) => localDay(new Date(num(r.sentAt)), tz) === today))
-  const dayActiveOf = (list) => unionMs(piecesOfDay(list.flatMap((l) => (l.requests ?? []).map(spanOf)), today, tz))
+  const dayActiveOf = (list) => unionMs(piecesOfDay(list.flatMap((l) => (l.requests ?? []).flatMap(activeSpansOf)), today, tz))
+  // Le temps cumulé : la somme des temps actifs du jour de chaque discussion.
+  const dayCumulOf = (list) => sum([...new Set(list.map((l) => l.session))], (session) => dayActiveOf(list.filter((l) => l.session === session)))
   const dayTimes = dayLogs.length
-    ? `- Temps actif ${fmtSeconds(dayActiveOf(dayLogs))} · temps API ${fmtSeconds(sum(sentToday, (r) => num(r.apiMs)))} · ${plural(sentToday.length, 'requête')}`
+    ? `- Temps actif ${fmtSeconds(dayActiveOf(dayLogs))} · temps cumulé ${fmtSeconds(dayCumulOf(dayLogs))} · temps API ${fmtSeconds(sum(sentToday, (r) => num(r.apiMs)))} · ${plural(sentToday.length, 'requête')}`
     : noTimes("aucune requête relevée aujourd'hui")
   out.push('', `### Aujourd'hui${data.machine ? ` sur ${data.machine}` : ''}`, '')
   if (!day.length) out.push('- Aucun usage enregistré aujourd\'hui.')
@@ -246,7 +271,7 @@ export function render(data) {
     out.push(`- **${fmtCost(dayCost)}** · ${fmtTokens(dayTokens)} tokens`)
     out.push(dayTimes)
     out.push(`- Modèles : ${modelLine(byModel(day.flatMap((r) => (r.modelBreakdowns ?? []).map((b) => ({ model: String(b.modelName), cost: num(b.cost) })))), dayCost)}`)
-    out.push('', '| Projet | Coût | Part | Tokens | Temps actif |', '|---|---:|---:|---:|---:|')
+    out.push('', '| Projet | Coût | Part | Tokens | Temps actif | Temps cumulé |', '|---|---:|---:|---:|---:|---:|')
     const projects = new Map()
     for (const r of day) {
       const p = projects.get(r.project) ?? { cost: 0, tokens: 0 }
@@ -256,7 +281,7 @@ export function render(data) {
     }
     for (const [key, p] of [...projects].sort((a, b) => b[1].cost - a[1].cost)) {
       const projectLogs = dayLogs.filter((l) => l.project === key)
-      out.push(`| ${nameOf(key)} | ${fmtCost(p.cost)} | ${dayCost > 0 ? fmtPct(p.cost / dayCost) : '—'} | ${fmtTokens(p.tokens)} | ${projectLogs.length ? fmtSeconds(dayActiveOf(projectLogs)) : '—'} |`)
+      out.push(`| ${nameOf(key)} | ${fmtCost(p.cost)} | ${dayCost > 0 ? fmtPct(p.cost / dayCost) : '—'} | ${fmtTokens(p.tokens)} | ${projectLogs.length ? fmtSeconds(dayActiveOf(projectLogs)) : '—'} | ${projectLogs.length ? fmtSeconds(dayCumulOf(projectLogs)) : '—'} |`)
     }
   }
 
@@ -302,8 +327,10 @@ export function render(data) {
 function discussionTimes(logs, tz) {
   if (!logs.length) return noTimes("pas de relevé : discussion d'avant la 0.10.0")
   const d = durationsOf(logs)
+  // L'attente de la réponse de l'utilisateur (questions, plans), hors temps actif.
+  const waited = sum(logs.flatMap((l) => l.requests ?? []), (r) => spanOf(r)[1] - spanOf(r)[0] - unionMs(activeSpansOf(r)))
   const top = d.top ? ` · la plus chère : ${clock(num(d.top.sentAt), tz)}, ${isEstimated(d.top) ? '≈' : ''}${fmtCost(requestCost(d.top))}` : ''
-  return `- Temps actif ${fmtSeconds(d.activeMs)} · temps API ${fmtSeconds(d.apiMs)} · ${plural(d.requests, 'requête')}${top}`
+  return `- Temps actif ${fmtSeconds(d.activeMs)}${waited > 0 ? ` · attente de ta réponse ${fmtSeconds(waited)}` : ''} · temps API ${fmtSeconds(d.apiMs)} · ${plural(d.requests, 'requête')}${top}`
 }
 
 // ─── Récap d'un parcours ────────────────────────────────────────────────────
@@ -393,7 +420,7 @@ export function renderParcours(data) {
   // Des sessions sans relevé (d'avant la 0.10.0) : le total ne les compte pas, et le dit.
   const missing = picked.filter((r) => !logs.some((l) => l.session === r.id)).length
   const partial = missing && logs.length ? `, sans ${plural(missing, 'session')} non relevée${missing > 1 ? 's' : ''}` : ''
-  out.push(logs.length ? `- Temps actif ${fmtSeconds(times.activeMs)} (sans double compte entre sessions${partial}) · temps API ${fmtSeconds(times.apiMs)} · ${plural(times.requests, 'requête')}` : noTimes("pas de relevé : sessions d'avant la 0.10.0"))
+  out.push(logs.length ? `- Temps actif ${fmtSeconds(times.activeMs)} (sans double compte entre sessions${partial}) · temps cumulé ${fmtSeconds(times.cumulMs)} · temps API ${fmtSeconds(times.apiMs)} · ${plural(times.requests, 'requête')}` : noTimes("pas de relevé : sessions d'avant la 0.10.0"))
   // Seuls les fichiers des sessions du parcours comptent.
   const warning = unreadableLine(data.unreadable, (name) => ids.has(sessionOfFile(name)))
   if (warning) out.push(`- ${warning}`)
@@ -587,7 +614,12 @@ export function plausibleRequest(r) {
   if (r.endedAt !== null && r.endedAt !== undefined && !isFiniteIn(r.endedAt, r.sentAt, r.sentAt + MAX_REQUEST_MS)) return null
   const models = {}
   for (const [k, m] of Object.entries(r.models && typeof r.models === 'object' ? r.models : {})) if (m && typeof m === 'object' && !Array.isArray(m)) models[k] = m
-  return { ...r, models }
+  // Les attentes et les appels pendant les attentes (`waitsOf` de durations.ts) : un intervalle impossible est écarté.
+  const isIn = (v) => isFiniteIn(v, r.sentAt, r.sentAt + MAX_REQUEST_MS)
+  const pairs = (v) => (Array.isArray(v) ? v.filter((p) => Array.isArray(p) && p.length === 2) : [])
+  const waits = pairs(r.waits).filter(([a, b]) => isIn(a) && (b === null || (isIn(b) && b >= a)))
+  const busy = pairs(r.busy).filter(([a, b]) => isIn(a) && isIn(b) && b > a)
+  return { ...r, models, waits, busy }
 }
 
 /** Un fichier de relevé illisible et inchangé depuis une heure n'est plus en cours d'écriture (`ABANDONED_MS` de durations.ts). */

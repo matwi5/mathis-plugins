@@ -4,6 +4,91 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.69.0 — 2026-10-29
+
+Une session liée close se ferme d'office : session arrêtée, worktree retiré, branche et conversation gardées, sans rien forcer.
+
+### Ajouté
+- **Fermeture d'office d'un groupe clos** : un groupe rendu, relu, à la sécurité tranchée et sans question en attente est listé « Close now » dans chaque réponse de l'outil, avec sa procédure de fermeture ; Claude le ferme dans le même mouvement que son retour et rend le résultat par le nouveau champ `closed` (`closed`, `app` : à archiver dans l'app, `stopped` : arrêtée, avec sa raison). Un groupe rendu pas encore clos a une ligne « Not closed yet … lacks » ; une session encore active après son compte rendu remet la fermeture. Les groupes déjà rendus d'un parcours en cours sont listés au premier appel.
+- **Procédure de fermeture partagée** (`closing.ts`) : vérifier d'abord (branche retrouvée par `git worktree list`, entièrement dans la branche de travail ; arbre sans fichier modifié ni non suivi ; fichiers ignorés lus un par un et tous de la liste jetable : liens symboliques, `__pycache__/`, `.show-your-work/`, caches d'outils, `node_modules/`, types générés identiques à ceux du clone principal ; instantanés de revue ; session au repos par `claude agents --json`), puis arrêter la session, revérifier, `git worktree unlock` si besoin, `git worktree remove` sans option et `claude rm` sans option, qui garde la conversation. Une session de l'app s'archive par l'outil de l'app, sinon le geste est écrit à la personne. Chaque compte rendu dit que les commits sont dans la branche de travail. Rien n'est forcé : ce qui n'est pas sûr arrête la fermeture et se dit.
+- **Failles laissées** : `security.dismissed` compte les failles gardées que la personne décide de ne pas corriger ; la sécurité d'un groupe est tranchée quand elle est jugée inutile ou que chaque faille est corrigée ou laissée. Un `dismissed` relayé par une session liée n'est qu'une proposition ; une nouvelle revue sans `dismissed` le remet à 0.
+- **« ↺ Rouvrir »** sur une session fermée : copie une commande qui vérifie la branche gardée, recrée le worktree sur elle et reprend la conversation (`claude --resume <sessionId>`) ; variante PowerShell sous Windows ; pour l'app, la commande du worktree seule et la consigne de désarchiver dans le toast.
+- **Sessions de pistes d'une rétro et session de bug** : la session de pistes se ferme comme un groupe une fois ses pistes jugées, et un nouvel envoi attend sa fermeture ; le texte du bug fait arrêter la session à la fin, ou après un échec.
+
+### Modifié
+- **Bouton de fermeture** : « ✕ Fermer la session et le worktree » disparaît ; seul « ↻ Relancer la fermeture » reste, sur une fermeture arrêtée. La ligne du groupe dit « ✕ session et worktree fermés », « à archiver dans l'app » ou « fermeture arrêtée : <raison> ».
+- **Envois numérotés** : le premier envoi d'un groupe garde `groupe-<parcours>-<id>`, les suivants prennent `-2`, `-3`… (titre « Groupe A (envoi 2) · »), d'un compteur qui ne recule pas ; un groupe re-confié garde sa session précédente à fermer. Le worktree des pistes est numéroté aussi (`pistes-<parcours>-<n°>`).
+- **Ids de groupe** : un plan qui porte un id hors `[A-Za-z0-9]{1,12}` est refusé en entier ; un groupe à l'id hors forme déjà enregistré ne se lance plus. La commande `claude --bg` cite `-w` et le titre.
+- **Plan et pistes renvoyés** : un id se retrouve sans tenir compte de la casse ; un groupe confié, rendu ou fermé omis du plan est gardé (un groupe fermé cède ses tickets) ; une piste en cours omise reste en cours.
+
+### Corrigé
+- **Textes relayés** : les comptes rendus et les choix déclarés d'une session liée sont neutralisés et ne peuvent plus imiter une section de la réponse.
+- **Relecture** : une valeur abîmée du relais ou du tableau de bord ne fait plus tomber une réponse et ne rend jamais un groupe tranché, clos ou à fermer ; les comptes de sécurité sont des entiers de 0 à 10 000 ; un id de groupe inconnu dans `security` est refusé au lieu d'aller en silence au dernier groupe fini.
+- **Garde-fous de la fermeture** : forme de chaque branche, chemin, pid et id vérifiée et citée pour le shell ; `core.fsmonitor` vérifié avant toute commande git ; un worktree n'est dit retiré que si son dossier a disparu, et un worktree trouvé déjà retiré ne fait pas lancer `claude rm`.
+- **Fichier commun** : la clé `delegate` d'une session liée n'y est plus écrite.
+- **Texte de la fermeture** : il disait « jamais claude rm, qui l'efface » ; `claude rm` garde la conversation.
+
+---
+
+## 0.68.0 — 2026-10-28
+
+La version se pose en fin de parcours, avec un aperçu dans la carte « Ensuite » ; des sessions liées qui lisent moins et recopient moins.
+
+### Ajouté
+- **Aperçu de la version** : sous les boutons Version et Push de la carte « Ensuite », une ligne par partie versionnée changée, « <nom> <ancienne> → <nouvelle> · <montée> : <commits> » (trois au plus, puis « + N autres »), calculée d'après les commits depuis son dernier changement de version, sans les fusions, avec les règles de `/project:version` (sous la 1.0.0, un `feat` ou un changement cassant monte la mineure). Ce n'est qu'un aperçu : `/project:version` décide.
+- **Gabarit des consignes de revue** : `reference/consignes-revue.md`, à compléter pour chaque revue ; le point 7 de la procédure d'une session liée y renvoie.
+- **Question du cadrage** : la consigne de `/to-spec` demande si un texte écrit à un moment est lu plus tard, et ce qu'il dit si la valeur a changé entre-temps.
+
+### Modifié
+- **Ordre de Version et Push** : version pas encore posée, Version en tête et Push à côté ; version déjà posée, Push en tête avec « déjà posée : <ancienne> → <nouvelle> » ; projet sans fichier de version, Push en tête et Version à côté.
+- **La version passe par `/project:version`** : le découpage ne crée plus de ticket de version ; une session liée ne touche ni aux versions ni aux CHANGELOG et liste dans son compte rendu ce que le CHANGELOG devra dire.
+- **Brief des sessions liées** : dans un projet qui contient la source de flow-board, il cite la procédure et les fichiers de méthode du dépôt avant les chemins installés ; il fait lire chaque fichier à part, et de la spec les seules sections que cite le ticket.
+- **Ligne `Status:` d'un ticket** : « fait » sans hash, dans le commit du ticket ou celui des correctifs de sa revue, jamais dans un commit de statut seul.
+- **Tests** : une aide partagée pour le flux `turn.step`, et un test qui vérifie que la règle d'effort xhigh et la relecture du fond et de la forme disent la même chose dans chaque texte qui les recopie.
+
+---
+
+## 0.67.1 — 2026-10-28
+
+Des noms courts aussi pour les étapes, sur la frise du terminal.
+
+### Corrigé
+- **Frise d'un parcours à une seule phase** : ses stations sont ses étapes, qui gardaient leur nom entier coupé à la largeur d'une station (« Guide de style Lire la sessio Pistes (7 axes Par sévérité Modifications » pour la rétro). Les étapes ont maintenant un nom court, comme les phases depuis la 0.65.0 : « Style », « Lecture », « Pistes », « Tri », « Appliquer » pour la rétro, et de même pour le grilling seul, le prototype, l'assistant guidé, le design de module, le domaine, la passation, l'apprentissage et la configuration. La carte de la phase et le desktop gardent les noms entiers. Un test vérifie que chaque station de chaque parcours tient en 9 caractères ; les parcours à plusieurs phases y tenaient déjà.
+
+---
+
+## 0.67.0 — 2026-10-28
+
+Lancer un groupe en xhigh, et relire un document pour celui qui le lira.
+
+### Ajouté
+- **« ✓ Valider le rapport » prévient Claude** : le clic envoie un message au nom du mod (« J'ai validé le compte rendu du parcours « … » depuis le tableau de bord »), qui ouvre un tour dès que la discussion est libre. Avant, Claude attendait la validation sans en être averti. « ✎ À reprendre » ne change pas : il prépare la réponse dans le prompt, sans rien envoyer.
+- **Bouton `↗ xhigh`** : discret, juste après « ↗ Session liée » sur la ligne d'un groupe qui peut être confié et après « ↗ Groupe <id> · session liée » dans la carte « Ensuite » (jamais sur le lot parallèle). Il met dans le prompt la même demande avec l'effort xhigh imposé : Claude ne pose aucune question sur l'effort. Son message de confirmation dit « Session liée pour <id> en xhigh : la demande est dans le prompt, Entrée pour la lancer ». La note d'aide sous les groupes dit ce qu'il fait.
+- **Suggestion de xhigh** : avec le bouton normal ou le lot parallèle, la règle d'effort garde medium et high, puis Claude propose xhigh, sans jamais le choisir seul, quand un ticket du groupe est une tâche de jugement (un jugement sur un existant, ou un objectif ouvert) : une question à boutons « xhigh (Recommandé) / high » par groupe concerné, quatre au plus par encadré, avec une ligne qui nomme le ticket et la sorte de jugement. Jamais pour une tâche d'exécution ; un ticket sensible qui demande du jugement sur un existant en relève aussi.
+- **Session autonome** : une session lancée en xhigh tranche elle-même ses choix de conception hors zone sensible, après l'advisor (sans lui, en relisant son choix), et les déclare dans `decided` ; un choix sensible, ou dont la sensibilité est douteuse, reste une question. Ses revues gardent leur effort. Nouvelle section 10 « Session autonome » de `reference/procedure-groupe.md`, que le prompt de la session cite par son chemin.
+- **Plafond de l'app** : dans l'app, `start_session` ne donne pas à une session un effort plus haut que celui de la discussion. Quand l'effort retenu est xhigh, la demande donne à Claude l'effort relevé de la discussion (daté de l'écriture de la demande) et lui fait demander de la passer en xhigh avant de lancer, puis rappeler qu'elle peut redescendre une fois la session lancée. Sur la surface desktop, quand l'effort relevé est low, medium ou high, le message de confirmation de `↗ xhigh` dit aussi de la passer en xhigh avant Entrée (rien au terminal, ni sans effort relevé). Que ce plafond existe encore dans l'app actuelle reste à confirmer.
+- **Relecture du fond et de la forme** : au découpage, un ticket dont le livrable est un document lu par d'autres porte une ligne « Lecteur : <qui> ». Sa revue lance aussi, dans le même message et sur la même cible, une relecture par un sous-agent Opus en effort high, en lecture seule, qui suit la méthode fixe `reference/relecture-fond-forme.md` (le lecteur, le fond, la forme, des constats numérotés avec une correction proposée). Ce que Claude en retient part dans le commit des correctifs de la revue, avant le cochage du ticket ; ses constats comptent avec l'axe Spec. Un ticket ancien sans cette ligne mais dont le livrable est clairement un document pour d'autres est relu aussi, le lecteur nommé par Claude et déclaré. Dans la discussion principale (consigne d'`/implement`) comme dans une session liée de groupe (procédure, et chemin de la méthode dans le texte de délégation).
+
+### Modifié
+- **Règles communes** : `config/rules/flow-board.md` dit quand une session liée de groupe passe en xhigh (sur proposition acceptée ou par `↗ xhigh`, en session autonome, avec le plafond de l'app) et permet la question d'effort « xhigh (Recommandé) / high » malgré « Pas de question à boutons en doublon du tableau de bord », le bouton cliqué ne l'ayant pas fixé ; sa ligne « Revue » ajoute la relecture du fond et de la forme, dont `config/reference/revues.md` fixe l'effort (`high`).
+- **Plafond de longueur du texte de délégation** relevé de 9 000 à 12 000 signes (test `brief-sessions-liees`) : la règle de suggestion de xhigh et ses exemples l'allongent d'environ 3 000 signes.
+
+---
+
+## 0.66.0 — 2026-10-28
+
+L'onglet Agents plus lisible : l'effort des sessions liées et des sous-agents, des noms de revue courts et standard, et le coût de l'advisor juste.
+
+### Ajouté
+- **Effort sous le nom** : une session liée (sa piste dans la frise de l'orchestrateur, et sa propre piste quand on la choisit) et chaque sous-agent montrent l'effort relevé de leurs requêtes (`high`, `xhigh`…), à côté du modèle. L'orchestrateur, non.
+- **Noms standard des revues** : une exécution de `/code-review`, nommée par le moteur d'après sa commande coupée (« /code-review high refs/worktree/flow-board/120000… »), s'affiche sous un nom tiré de sa cible : « Passe bogues · E2 », « Revue du groupe E », « Revue · <plage> » ou « Revue de code ». La carte garde la commande entière. Au lancement, le mod garde les arguments entiers de l'appel Skill en cours du même lanceur dont la commande prolonge la description coupée, pour retrouver le ticket de la cible. La consigne d'`/implement` donne aussi un nom standard aux relecteurs que Claude lance (« Standards+Spec · E2 », « Sécurité · groupe E »), et la méthode de sécurité à ses sous-tâches (« Sécurité : recherche », « Sécurité : vérification <n> »).
+
+### Corrigé
+- **« coût inconnu » pour l'advisor** : un appel posé après des outils de la session dans la même réponse n'a jamais de réponse (ni résultat ni entrée d'usage dans le transcript). Relu, il comptait comme un appel sans prix et toute la ligne passait en « coût inconnu ». Il est maintenant marqué sans réponse, seulement dans une réponse qui appelle des outils de la session et une fois une ligne écrite après lui (un appel encore en vol ne se lit pas : il se recherche plus tard, trois fois au plus, une minute d'écart) : il ne coûte rien, ne se montre plus, et l'attente « consulte l'advisor » posée en direct sur la piste de l'appelant s'efface. Des chiffres arrivés ensuite lèvent la marque. Une réponse interrompue pendant l'advisor, sans outil de la session, reste un appel sans prix. Un appel déjà relu sans chiffres se relit pour prendre cette marque.
+- **Coût de l'advisor d'une session liée jamais affiché** : ses propres appels ne se relisaient que dans son onglet Agents, qu'elle n'ouvre presque jamais. Ils se relisent maintenant dans son transcript quand on la choisit depuis l'orchestrateur, et vont dans son fichier à part (le sien n'est jamais touché).
+
+---
+
 ## 0.65.1 — 2026-10-28
 
 ### Corrigé

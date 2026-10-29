@@ -81,7 +81,7 @@ import {
   type Totals,
 } from './model.ts'
 import { EMPTY_DURATIONS, averageOf, combine, costPerActiveHour, measuresOf, periodOf, speedMedian, weightedSpeed, type Measures, type PeriodMeasures } from './durations.ts'
-import { activeMs, costed, isEstimated, mainModel, median, realMsOf, requestCost, requestTokens, spanOf } from './requests.ts'
+import { activeMs, costed, isEstimated, mainModel, median, realMsOf, requestCost, requestTokens, spansOf, waitMsOf } from './requests.ts'
 import { DEFAULT, columnsCells, heatCells, heatLegendCells, pack, type RasterCells } from './raster.ts'
 import { barSvg, blockSvg, columnsSvg, donutSvg, flameSvg, heatGaugeSvg, heatmapSvg, heroSvg, ringSvg, sparkSvg, spinnerSvg, stackSvg, type BarPart, type HeatCell } from './svg.ts'
 
@@ -414,6 +414,18 @@ const isTracked = (ctx: Ctx, date: string): boolean => ctx.m.since !== null && d
 
 /** Une durée, « — » quand elle n'est pas mesurée (null), jamais 0. */
 const durationText = (ms: number | null | undefined): string => (ms === null || ms === undefined ? '—' : fmtSeconds(ms))
+
+/**
+ * Le temps cumulé d'un jour (la somme des temps actifs de ses discussions), ou d'un de ses projets ;
+ * null quand il n'est pas mesuré : jour d'avant le suivi, filtre de modèle, ou un poste qui ne le
+ * publie pas encore (d'avant la 0.11.0).
+ */
+function cumulOf(ctx: Ctx, day: string, project?: string): number | null {
+  if (!isTracked(ctx, day) || !ctx.m.hasActive) return null
+  if (project === undefined) return ctx.m.cumulGaps.has(day) ? null : (ctx.m.cumul.get(day) ?? 0)
+  const v = ctx.m.projectsCumul.get(day)?.get(project)
+  return v ?? (ctx.m.cumulGaps.has(day) ? null : 0)
+}
 
 /** La mention de l'en-tête : depuis quand les durées sont suivies ; `glue` relie ses mots (insécables dans l'en-tête). */
 const trackedText = (ctx: Ctx, glue = NB): string => (ctx.m.since !== null ? ['durée', 'suivie', 'depuis', 'le', fmtDayMonth(ctx.m.since)] : ['durée', 'pas', 'encore', 'suivie']).join(glue)
@@ -989,15 +1001,21 @@ const REQUEST_SORTS: [RequestSort, string][] = [
 /** Le coût d'une requête, « ≈ » devant quand un de ses modèles n'a pas de tarif. */
 const requestCostText = (r: RequestRecord): string => `${isEstimated(r) ? '≈' : ''}${fmtCost(requestCost(r))}`
 
-/** Les tuiles de durée de la discussion : temps actif, temps API, coût par heure active. */
+/**
+ * Les tuiles de durée de la discussion : temps actif, attente de l'utilisateur, temps API, coût par
+ * heure active. Pas de temps cumulé : pour une seule discussion, il vaut son temps actif.
+ */
 function requestTiles(view: View, tracked: RequestLog | null): Tile[] {
   const list = tracked?.requests ?? []
   if (!list.length) return []
-  const active = activeMs(list.map((r) => spanOf(r, view.now)))
+  const active = activeMs(list.flatMap((r) => spansOf(r, view.now)))
+  const waited = list.reduce((n, r) => n + waitMsOf(r, view.now), 0)
+  const asked = list.reduce((n, r) => n + (r.waits?.length ?? 0), 0)
   const api = list.reduce((n, r) => n + r.apiMs, 0)
   const cost = list.reduce((n, r) => n + requestCost(r), 0)
   return [
     { key: 'd-active', label: 'Temps actif', value: fmtSeconds(active), sub: `${plural(list.length, 'requête')}, pauses exclues`, color: C.lilac },
+    { key: 'd-wait', label: 'Attente de ta réponse', value: fmtSeconds(waited), sub: asked ? `${plural(asked, 'question')} ou plans, hors temps actif` : 'questions et plans, hors temps actif', color: C.lilac },
     { key: 'd-api', label: 'Temps API', value: fmtSeconds(api), sub: active > 0 ? `${fmtPct(api / active)} du temps actif` : 'appels au modèle', color: C.indigo },
     { key: 'd-rate', label: 'Coût / h active', value: hourlyCostText(costPerActiveHour(cost, active)), sub: 'au tarif de chaque modèle', color: MONEY },
   ]
@@ -1036,6 +1054,7 @@ const requestsCard = (k: Kit, view: View, ctx: Ctx, act: Actions, tracked: Reque
       const detail = [
         fmtTokens(requestTokens(r)),
         `réelle${NB}${fmtSeconds(realMsOf(r, view.now))}`,
+        r.waits?.length ? `attente${NB}${fmtSeconds(waitMsOf(r, view.now))}` : null,
         `API${NB}${fmtSeconds(r.apiMs)}`,
         r.agents ? plural(r.agents, 'sous-agent') : null,
         model ? modelName(model) : null,
@@ -1182,8 +1201,11 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
   const acts = s.activity && isLocalView(ctx) && !ctx.f.project && !ctx.f.model ? (s.activity.days.find((d) => d.date === day) ?? null) : null
   const dayActive = isTracked(ctx, day) && ctx.m.hasActive ? (ctx.m.active.get(day) ?? 0) : null
   const dayApi = isTracked(ctx, day) ? (ctx.m.api.get(day) ?? 0) : null
+  const dayCumul = cumulOf(ctx, day)
+  const dayDiscussions = ctx.m.sessions.get(day)?.size ?? 0
   const tiles: Tile[] = ([
     { key: 'day-active', label: 'Temps actif', value: durationText(dayActive), sub: dayActive !== null ? plural(ctx.m.requests.get(day) ?? 0, 'requête') : ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
+    { key: 'day-cumul', label: 'Temps cumulé', value: durationText(dayCumul), sub: dayCumul !== null ? `somme de ${plural(dayDiscussions, 'discussion')}` : dayActive !== null ? 'un poste ne le publie pas encore' : ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
     { key: 'day-api', label: 'Temps API', value: durationText(dayApi), sub: dayApi !== null && dayActive ? `${fmtPct(dayApi / dayActive)} du temps actif` : 'appels au modèle', color: C.indigo },
     { key: 'day-tokens', label: 'Tokens', value: fmtTokens(t.tokens), sub: `entrée ${fmtTokens(t.input)} · sortie ${fmtTokens(t.output)}`, color: BRAND },
     { key: 'day-cache', label: 'Lu en cache', value: fmtPct(cacheRatio(t)), sub: `lu ${fmtTokens(t.cacheRead)} · écrit ${fmtTokens(t.cacheWrite)}`, color: C.teal },
@@ -1229,7 +1251,7 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
       const isHere = p.key === ctx.here
       const count = discussions.filter((d) => groupOf(d.project, s.projects) === p.key).length
       const active = dayActive !== null ? (ctx.m.projects.get(day)?.get(p.key) ?? 0) : null
-      const detail = [count ? plural(count, 'discussion') : null, `actif${NB}${durationText(active)}`, elsewhere(ctx, p.byMachine, metric)].filter(Boolean).join(SEP)
+      const detail = [count ? plural(count, 'discussion') : null, `actif${NB}${durationText(active)}`, `cumulé${NB}${durationText(cumulOf(ctx, day, p.key))}`, elsewhere(ctx, p.byMachine, metric)].filter(Boolean).join(SEP)
       return shareRow(k, {
         key: `day-project-${p.key}`,
         mark: T(k, isHere ? '●' : '○', { color: isHere ? BRAND : C.gray, bold: isHere }),
@@ -1429,8 +1451,14 @@ const overviewTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const activeTotal = activeDays.reduce((n, [, v]) => n + v, 0)
   const activeAverage = averageOf(new Map(activeDays), ctx.m.since)
   const activeRecord = activeDays.reduce<[string, number] | null>((best, x) => (!best || x[1] > best[1] ? x : best), null)
+  // Le temps cumulé de la période : ses jours mesurés, les autres (un poste pas encore à jour) comptés à part.
+  const cumulDays = [...ctx.m.cumul].filter(([d, v]) => d >= ctx.from && d <= ctx.today && isTracked(ctx, d) && v > 0)
+  const cumulGaps = [...ctx.m.cumulGaps].filter((d) => d >= ctx.from && d <= ctx.today && isTracked(ctx, d)).length
+  const cumulTotal = cumulDays.reduce((n, [, v]) => n + v, 0)
+  const cumulSub = !ctx.m.hasActive ? 'pas par modèle' : cumulGaps ? `${plural(cumulGaps, 'jour')} sans mesure (poste pas à jour)` : cumulDays.length ? `moyenne ${fmtSeconds(cumulTotal / cumulDays.length)} par jour actif` : trackedText(ctx, ' ')
   const tiles: Tile[] = [
     { key: 'active', label: 'Temps actif', value: durationText(isMeasured ? activeTotal : null), sub: ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
+    { key: 'cumul', label: 'Temps cumulé', value: durationText(isMeasured && (cumulDays.length || !cumulGaps) ? cumulTotal : null), sub: cumulSub, color: C.lilac },
     { key: 'active-average', label: 'Moyenne par jour actif', value: durationText(activeAverage), sub: isMeasured ? `sur ${plural(activeDays.length, 'jour suivi', 'jours suivis')}` : 'jours suivis seulement', color: C.lilac },
     { key: 'active-record', label: 'Jour record (temps)', value: activeRecord ? fmtDay(activeRecord[0]) : '—', sub: activeRecord ? fmtSeconds(activeRecord[1]) : 'jours suivis seulement', color: C.lilac },
     { key: 'tokens', label: 'Tokens', value: fmtTokens(t.tokens), sub: `entrée ${fmtTokens(t.input)} · sortie ${fmtTokens(t.output)}`, color: BRAND },
@@ -1602,17 +1630,33 @@ const trendToggles = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   )
 }
 
-/** L'Évolution en durée : le temps actif par jour, semaine ou mois ; moyennes sur les seuls jours suivis. */
+/** Le choix de la durée des graphiques (Évolution, Rythme) : le temps actif ou le temps cumulé. */
+const durationKindToggle = (k: Kit, ctx: Ctx, act: Actions): unknown =>
+  line(k, [
+    toggle(k, 'duration-active', `temps${NB}actif`, ctx.ui.durationKind !== 'cumul', () => act.setUi({ durationKind: 'active' })),
+    toggle(k, 'duration-cumul', `temps${NB}cumulé`, ctx.ui.durationKind === 'cumul', () => act.setUi({ durationKind: 'cumul' })),
+  ])
+
+/** Ce que dit chaque durée des graphiques, sous leur bascule. */
+const DURATION_HELP = {
+  active: 'Temps actif : le temps où au moins une discussion travaillait, chevauchements comptés une fois.',
+  cumul: 'Temps cumulé : la somme des temps actifs de chaque discussion ; deux discussions en même temps comptent deux fois.',
+} as const
+
+/** L'Évolution en durée : le temps actif (ou cumulé) par jour, semaine ou mois ; moyennes sur les seuls jours suivis. */
 const durationTrend = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const { Box } = k
   const color = C.lilac
+  const isCumul = ctx.ui.durationKind === 'cumul'
+  const what = isCumul ? 'Temps cumulé' : 'Temps actif'
+  const gaps = isCumul ? [...ctx.m.cumulGaps].filter((d) => d >= ctx.from && d <= ctx.today && isTracked(ctx, d)).length : 0
   const slots = k.isRich ? Math.floor(px(ctx.inner) / 5) : Math.max(8, ctx.inner - 2)
   const grain = fitGrain(ctx.ui.grain, ctx.from, ctx.today, slots)
-  // Les mêmes seaux que le coût, remplis du temps actif de chaque jour.
+  // Les mêmes seaux que le coût, remplis du temps actif (ou cumulé) de chaque jour.
   const buckets = seriesOf([], grain, ctx.from, ctx.today)
   const keyOf = (date: string) => (grain === 'day' ? date : grain === 'week' ? weekOf(date) : monthOf(date))
   const sums = new Map<string, number>()
-  for (const [d, v] of ctx.m.active) if (d >= ctx.from && d <= ctx.today && isTracked(ctx, d)) sums.set(keyOf(d), (sums.get(keyOf(d)) ?? 0) + v)
+  for (const [d, v] of isCumul ? ctx.m.cumul : ctx.m.active) if (d >= ctx.from && d <= ctx.today && isTracked(ctx, d)) sums.set(keyOf(d), (sums.get(keyOf(d)) ?? 0) + v)
   const values = buckets.map((b) => sums.get(b.key) ?? 0)
   // Un seau commencé avant le suivi n'est mesuré qu'en partie : il n'entre ni dans les moyennes, ni dans la médiane, ni dans le record.
   const isWhole = (key: string) => ctx.m.since !== null && key >= ctx.m.since
@@ -1629,7 +1673,7 @@ const durationTrend = (k: Kit, ctx: Ctx, act: Actions): unknown => {
     ? svgOf(
         k,
         stackSvg({ buckets: buckets.map((b, i) => ({ label: bucketLabel(b.key, grain), parts: [{ value: values[i] ?? 0, color }] })), width: px(ctx.inner), fmt: (v) => fmtHours(v), cumulative: null }),
-        `Temps actif par ${GRAIN_WORD[grain]}, du ${fmtDate(ctx.from)} au ${fmtDate(ctx.today)} ; ${fmtSeconds(total)} en tout`,
+        `${what} par ${GRAIN_WORD[grain]}, du ${fmtDate(ctx.from)} au ${fmtDate(ctx.today)} ; ${fmtSeconds(total)} en tout`,
       )
     : (() => {
         const cell = buckets.length * 2 <= ctx.inner - 2 ? 2 : 1
@@ -1646,12 +1690,15 @@ const durationTrend = (k: Kit, ctx: Ctx, act: Actions): unknown => {
       })()
   return (
     <Box key="trend" flexDirection="column">
-      {card(k, 'chart', `Temps actif par ${GRAIN_WORD[grain]}`, color, right, [
+      {card(k, 'chart', `${what} par ${GRAIN_WORD[grain]}`, color, right, [
+        <Box marginTop={1}>{durationKindToggle(k, ctx, act)}</Box>,
         !isMeasured
           ? say(k, ctx.m.hasActive ? 'Durée pas encore suivie : le temps actif se remplit à chaque requête, depuis la 0.10.0.' : 'Le temps actif ne se découpe pas par modèle : retirer le filtre de modèle.')
           : <Box marginTop={1}>{chart}</Box>,
         isMeasured && grain !== ctx.ui.grain && say(k, `Par ${GRAIN_WORD[grain]} : trop de ${GRAIN_PLURAL[ctx.ui.grain]} pour la largeur.`),
         isMeasured && firstTracked && say(k, `Avant le ${fmtDate(firstTracked)}, la durée n’est pas suivie : ses barres sont vides, et les moyennes ne les comptent pas.`),
+        isMeasured && gaps > 0 && say(k, `${plural(gaps, 'jour')} sans temps cumulé : un poste ne le publie pas encore (d’avant la 0.11.0) ; ses barres en sont vides.`),
+        isMeasured && say(k, DURATION_HELP[isCumul ? 'cumul' : 'active']),
         isMeasured && (
           <Box marginTop={1}>
             {T(
@@ -1989,10 +2036,13 @@ const projectsTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
           // Sans ligne de temps actif sur la période (activité d'avant le suivi, ou d'un autre poste) : « — ».
           const active = hasMeasure(ctx) ? (ctx.p.projects.get(p.key) ?? null) : null
           const rate = active !== null ? costPerActiveHour(trackedDaysCost(ctx, ctx.rows.filter((r) => groupOf(r.project, ctx.s.projects) === p.key)), active) : null
+          // Le temps cumulé : null quand un poste ne le publie pas encore sur la période.
+          const cumul = active !== null ? (ctx.p.projectsCumul.get(p.key) ?? null) : null
           const detail = [
             p.key === DRAFTS ? plural(p.members, 'dossier') : null,
             p.sessions ? plural(p.sessions, 'session') : null,
             `actif${NB}${active !== null ? fmtSeconds(active) : '—'}`,
+            `cumulé${NB}${durationText(cumul)}`,
             `${hourlyCostText(rate)}${NB}actif`,
             elsewhere(ctx, p.byMachine, metric),
             `dernier jour ${fmtDate(p.last)}`,
@@ -2242,22 +2292,29 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
     </Box>,
   ])
 
-  // Le temps actif par heure de la journée, sur la période : les heures où l'on travaille vraiment.
-  const activeHours = ctx.p.hours
+  // Le temps actif (ou cumulé) par heure de la journée, sur la période : les heures où l'on travaille vraiment.
+  const isCumul = ctx.ui.durationKind === 'cumul'
+  const what = isCumul ? 'Temps cumulé' : 'Temps actif'
+  // Sans temps cumulé d'un poste pas encore à jour (d'avant la 0.11.0) : pas de graphique plutôt qu'un faux.
+  const isMissing = isCumul && ctx.p.hoursCumul === null
+  const activeHours = (isCumul ? ctx.p.hoursCumul : ctx.p.hours) ?? Array.from({ length: 24 }, () => 0)
   const activePeak = activeHours.indexOf(maxOf(activeHours))
-  const activeCard = card(k, 'active-hours', 'Temps actif par heure', C.lilac, T(k, ctx.f.machine !== 'all' ? ctx.f.machine.replace(/ /g, NB) : ctx.s.machines.length > 1 ? `tous${NB}les${NB}postes` : `ce${NB}poste`, { dim: true }), [
-    !hasMeasure(ctx) || ctx.f.project !== null || !activeHours.some((v) => v > 0)
+  const activeCard = card(k, 'active-hours', `${what} par heure`, C.lilac, T(k, ctx.f.machine !== 'all' ? ctx.f.machine.replace(/ /g, NB) : ctx.s.machines.length > 1 ? `tous${NB}les${NB}postes` : `ce${NB}poste`, { dim: true }), [
+    <Box marginTop={1}>{durationKindToggle(k, ctx, act)}</Box>,
+    !hasMeasure(ctx) || ctx.f.project !== null || isMissing || !activeHours.some((v) => v > 0)
       ? say(
           k,
           !ctx.m.hasActive
             ? 'Le temps actif ne se découpe pas par modèle : retirer le filtre de modèle.'
             : ctx.f.project !== null
-              ? 'Le temps actif par heure ne se découpe pas par projet : retirer le filtre de projet.'
-              : `Pas encore de temps actif sur la période (${trackedText(ctx, ' ')}).`,
+              ? `Le ${what.toLowerCase()} par heure ne se découpe pas par projet : retirer le filtre de projet.`
+              : isMissing
+                ? 'Un poste ne publie pas encore son temps cumulé (d’avant la 0.11.0) : filtrer sur un poste à jour, ou attendre sa mise à jour.'
+                : `Pas encore de ${what.toLowerCase()} sur la période (${trackedText(ctx, ' ')}).`,
         )
       : <Box marginTop={1}>
           {k.isRich ? (
-            svgOf(k, columnsSvg({ values: activeHours, labels: hourLabels(activeHours), color: C.lilac, width: px(Math.min(ctx.inner, 90)), fmt: (v) => fmtHours(v), highlight: activePeak }), `Temps actif par heure ; le plus à ${activePeak} h`)
+            svgOf(k, columnsSvg({ values: activeHours, labels: hourLabels(activeHours), color: C.lilac, width: px(Math.min(ctx.inner, 90)), fmt: (v) => fmtHours(v), highlight: activePeak }), `${what} par heure ; le plus à ${activePeak} h`)
           ) : (
             <Box flexDirection="column">
               {columnsChart(k, 'active-hours', activeHours, 5, C.lilac, ctx.inner >= 50 ? 2 : 1, activePeak)}
@@ -2265,7 +2322,8 @@ const rhythmTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
             </Box>
           )}
         </Box>,
-    ctx.m.hasActive && activeHours.some((v) => v > 0) && say(k, `Le plus à ${activePeak}${NB}h (${fmtSeconds(activeHours[activePeak] ?? 0)} sur la période)${SEP}${trackedText(ctx, ' ')}.`),
+    ctx.m.hasActive && !isMissing && activeHours.some((v) => v > 0) && say(k, `Le plus à ${activePeak}${NB}h (${fmtSeconds(activeHours[activePeak] ?? 0)} sur la période)${SEP}${trackedText(ctx, ' ')}.`),
+    ctx.m.hasActive && say(k, DURATION_HELP[isCumul ? 'cumul' : 'active']),
   ])
 
   return (

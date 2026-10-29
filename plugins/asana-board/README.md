@@ -82,7 +82,7 @@ De haut en bas :
 | **État** | À la même place : lecture en cours (spinner et progression), carte d'erreur avec « ↻ Réessayer », ou avertissement. |
 | **Formulaire** | Titre (focus d'entrée), statut, pour qui, emplacement, contexte, critère de fin, échéance. « Annuler » vide le brouillon. |
 | **Groupes** | ⚖ À trancher, ◉ En cours, ⏸ En attente d'autres (replié d'office), ○ À faire, · Sans statut, puis ✓ Terminées (cochées depuis la dernière lecture, pour pouvoir décocher). Dans un groupe, l'échéance la plus proche d'abord, puis le titre. Douze tâches au plus, puis « ▸ tout voir (N) ». |
-| **Tâche** | Une ligne : case, titre tronqué, personne (sous l'onglet « Tous » seulement), échéance colorée (rouge si dépassée ou sous 2 jours, ambre sous 7). Dépliée, une carte bordée de la couleur du groupe : statut, description, actions, commentaire. |
+| **Tâche** | Une ligne : case, titre tronqué, personne (sous l'onglet « Tous » seulement), échéance colorée (rouge si dépassée ou sous 2 jours, ambre sous 7). Dépliée, une carte bordée de la couleur du groupe : statut, description, actions (dont le lien « Asana ↗ » ; sur le terminal, qui écrivait l'adresse entière, un bouton « ⧉ Asana » la copie et un toast le confirme, ou donne l'adresse sans copie possible), commentaire. |
 
 - Le retour d'une action passe par un toast, puisque la tâche peut changer de groupe. Une erreur garde un toast court ; son détail complet reste sous la tâche, dépliée pour qu'il se voie.
 - Pendant une écriture, la case de la tâche devient un spinner : un second appui ne relance rien, et un toast dit qu'une écriture est en cours.

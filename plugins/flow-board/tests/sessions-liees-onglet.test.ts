@@ -137,3 +137,69 @@ test('une session liée enregistre ses sous-agents avec son parcours et son grou
   await ui.press({ key: 'tab-flow' })
   await ui.unmount()
 })
+
+test('la frise montre l’effort d’une session liée et de ses sous-agents, et les exécutions de /code-review sous un nom standard', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 62_000_000 })
+  const mem = world(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'backgrounded · 9f3e21aa · Explorer le cache\n' } }))
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'claude --bg -n "Explorer le cache" "$(cat /tmp/brief.txt)"' } as any)
+  const base = linkedRegistry(LINKED, 62_000_000, { group: 'E' })
+  const fork = (agentId: string, name: string, effort: string) => ({ key: `agent:${agentId}`, agentId, name, isBackground: true, status: 'done' as const, startedAt: 62_000_000 - 30_000, finishedAt: 62_000_000 - 20_000, source: 'live' as const, model: 'claude-opus-5-5', effort, type: 'review' as const })
+  mem[`agents:${LINKED}`] = {
+    ...base,
+    main: { ...base.main, effort: 'xhigh' },
+    agents: [
+      { ...base.agents[0]!, effort: 'high' },
+      fork('f1', '/code-review xhigh refs/worktree/flow-board/03^..refs/worktree/flow-board/03 consignes : /tmp/c.md', 'xhigh'),
+      fork('f2', '/code-review high --fix', 'high'),
+      fork('f3', '/code-review high refs/worktree/flow-board/120000…', 'high'),
+    ],
+  }
+  await settle(clock, 6)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    await ui.press({ key: 'tab-agents' })
+    // La piste de la session liée dit son effort ; l'orchestrateur, non.
+    expect(await ui.find({ type: 'Text', text: /^xhigh$/ })).toBeDefined()
+    await ui.press({ key: 'agents-session-9f3e21aa' })
+    expect(await ui.find({ type: 'Button', text: /Passe bogues · 03$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', text: /Revue du groupe E$/ })).toBeDefined()
+    // Un id coupé par le moteur ne se devine pas.
+    expect(await ui.find({ type: 'Button', text: /Passe bogues$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', text: /\/code-review/ })).toBeUndefined()
+    expect((await ui.findAll({ type: 'Text', text: /^high$/ })).length).toBe(3)
+    expect((await ui.findAll({ type: 'Text', text: /^xhigh$/ })).length).toBe(2)
+    // La carte garde la commande entière.
+    await ui.press({ key: 'lane-agent:f1' })
+    expect(await ui.find({ type: 'Text', text: /refs\/worktree\/flow-board\/03\^/ })).toBeDefined()
+    await ui.press({ key: 'lane-agent:f1' })
+    await ui.press({ key: 'agents-session-main' })
+    await ui.press({ key: 'tab-flow' })
+    await ui.unmount()
+  }
+})
+
+test('une exécution de /code-review lancée par l’outil Skill garde les arguments entiers de son appel, pas la description coupée du moteur', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 63_000_000 })
+  const mem = world(on)
+  const full = 'high refs/worktree/flow-board/1200000000000042^..refs/worktree/flow-board/1200000000000042 consignes : /tmp/c.md'
+  let n = 0
+  on('agent.spawn', () => ({ agentId: `f${++n}`, model: 'claude-opus-5-5' }))
+  // L'appel Skill reste en vol pendant que le moteur lance le fork, avec sa commande coupée vers 50 caractères.
+  let release = () => {}
+  on('tool.call', { tool: 'Skill' }, () => new Promise(done => (release = () => done({ result: 'ok' }))))
+  await start($)
+  const call = $.tool.call({ tool: 'Skill', skill: 'code-review', args: full } as any)
+  await clock.advance(10)
+  await ($ as any).agent.spawn({ prompt: 'p', description: `/code-review ${full}`.slice(0, 49) + '…', subagentType: 'general-purpose', background: true })
+  // Une description qui ne prolonge pas l'appel en cours (un autre /code-review) ne prend pas ses arguments.
+  await ($ as any).agent.spawn({ prompt: 'p', description: '/code-review xhigh dc096d8..HEAD consig…', subagentType: 'general-purpose', background: true })
+  release()
+  await call
+  await clock.advance(1_000)
+  const names = (mem['agents:s-orch'] as SessionRegistry).agents.map(a => a.name)
+  // Le nom garde l'id entier du ticket de la cible (coupé au-delà de 120 caractères seulement).
+  expect(names[0]!.startsWith('/code-review high refs/worktree/flow-board/1200000000000042^..refs/worktree/flow-board/1200000000000042 ')).toBe(true)
+  expect(names[1]).toBe('/code-review xhigh dc096d8..HEAD consig…')
+})

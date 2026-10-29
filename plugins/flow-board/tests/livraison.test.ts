@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { SKILLS } from '../hooks/catalog.ts'
 import { newRun, upgradeRun } from '../hooks/model.ts'
 import type { Run } from '../types'
 
@@ -218,4 +219,30 @@ test('la frise du terminal donne aux phases leur nom court : Code, Rapport, Push
   expect(await ui.find({ type: 'Text', text: /^(Implémenta|Compte ren|Version et)\D*\s$/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /^Pull reque/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('la frise du terminal d’un parcours à une phase donne aux étapes leur nom court : la rétro', { timeoutMs: 15000 }, async ($, on) => {
+  mock.clock(on, { now: 34_000_000 })
+  world(on)
+  await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
+  // Un panneau étroit, où les noms entiers des étapes étaient coupés (« Lire la sessio »).
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 70 } })
+  for (const short of ['Style', 'Lecture', 'Pistes', 'Tri', 'Appliquer']) expect(await ui.find({ type: 'Text', text: new RegExp(`^${short}\\s*$`) })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^(Guide de s|Lire la se|Pistes \(|Par sévéri|Modificati).*\s$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('chaque station de la frise du terminal tient en 9 caractères, dans tous les parcours', () => {
+  const long: string[] = []
+  for (const def of Object.values(SKILLS)) {
+    // Seuls les skills qui ouvrent un parcours ont une frise ; un parcours à une phase montre ses étapes.
+    if (def.role !== 'flow' && def.role !== 'detour') continue
+    const flow = def.flow ?? [{ skill: def.id }]
+    const stations =
+      flow.length === 1
+        ? def.steps.map(s => s.shortLabel ?? s.label)
+        : flow.map(p => SKILLS[p.skill]!.shortLabel ?? SKILLS[p.skill]!.label)
+    for (const name of stations) if (name.length > 9) long.push(`${def.id} : ${name}`)
+  }
+  expect(long).toEqual([])
 })

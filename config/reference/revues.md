@@ -10,6 +10,7 @@ Toute revue de code (`/code-review`, `/mattpocock-skills:code-review`, passe « 
 | Revue d'un groupe, et toute autre `/code-review` (relecture de branche ou de PR) | `high` | `high` |
 | Passe « bogues » d'un ticket qui touche une zone sensible | `xhigh` s'il supprime des données ou touche la concurrence ; sinon `high` ou `xhigh` selon le critère d'effort de la revue de sécurité (l'enjeu, la taille) | le même |
 | Revue de sécurité | `high` ou `xhigh` selon l'enjeu et la taille | — |
+| Relecture du fond et de la forme d'un ticket qui a une ligne « Lecteur » (sous-agent relecteur en lecture seule, méthode `reference/relecture-fond-forme.md` de flow-board) | `high` | — |
 
 Le niveau de `/code-review` de Claude Code (`low` à `max`) fixe à la fois l'effort de la revue (le niveau tapé, pour Opus comme pour Sonnet, sauf `low` qui devient `medium` sur Sonnet) et sa recette (nombre de chercheurs et de constats) : il se passe toujours en argument (`/code-review high --fix`), sinon le skill reprend le dernier niveau tapé (vérifié le 26/10/2026 dans le code de Claude Code 2.1.310 et 2.1.308, et par un essai).
 

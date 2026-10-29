@@ -65,14 +65,48 @@ export type TicketGroup = {
   reviewedAt?: number
   /** La revue de sécurité du groupe : l'avis de Claude, puis `/security-review` s'il a été lancé. */
   security?: SecurityCheck
+  /** Les envois du groupe à une session liée, annulés compris : le suivant prend le numéro d'après (jamais un numéro déjà donné). */
+  sends?: number
 }
 
 /** Un groupe confié à une session liée : quand, et l'id `local_…` de la session une fois lancée. */
 export type GroupLink = {
   at: number
   session?: string
-  /** Groupe rendu : quand la personne a demandé de fermer sa session et son worktree (« ✕ Fermer… »). */
+  /** Groupe rendu : quand la personne a demandé de fermer sa session et son worktree (« ✕ Fermer… », puis « ↻ Relancer la fermeture »). */
   closeAskedAt?: number
+  /**
+   * Le numéro de l'envoi du groupe, à partir du deuxième (absent : le premier) : il nomme son worktree
+   * (`groupe-<parcours>-<id>-2`), la branche gardée d'un envoi précédent restant prise.
+   */
+  seq?: number
+  /**
+   * Groupe rendu : où en est la fermeture de sa session et de son worktree, rapportée par Claude
+   * (`closed`). « closed » ne recule jamais : seul un nouvel envoi `closed` le change.
+   */
+  closing?: Closing
+  /** Quand un appel de l'outil a touché le groupe (statuts, revue, sécurité, retour) : une fermeture arrêtée avant redevient à faire. */
+  touchedAt?: number
+  /**
+   * Groupe confié de nouveau puis rendu : les sessions précédentes, avec leur fermeture ; une
+   * fermée ne se refait pas, une autre reste à fermer (aucune session oubliée).
+   */
+  earlier?: ClosedLink[]
+}
+
+/** Une session liée dont un nouvel envoi a pris la place : son lien (envoi, id) et sa fermeture, si elle en a une. */
+export type ClosedLink = { at: number; session?: string; seq?: number; closing?: Closing }
+
+/** La fermeture d'une session liée rendue (un groupe, ou la session des pistes d'une phase). */
+export type Closing = {
+  /** `closed` : session et worktree fermés ; `app` : la personne doit l'archiver dans l'app ; `stopped` : arrêtée, avec sa raison. */
+  state: 'closed' | 'app' | 'stopped'
+  why?: string
+  at: number
+  /** Pour `closed`, quand ils sont connus : de quoi rouvrir la session sur sa branche gardée. */
+  sessionId?: string
+  branch?: string
+  worktree?: string
 }
 
 /**
@@ -89,6 +123,17 @@ export type SecurityCheck = {
   /** Ce qu'il a trouvé de réel, et combien ont été corrigés. */
   findings?: number
   fixed?: number
+  /**
+   * Les failles gardées que la personne décide de laisser, sur sa confirmation : avec `fixed`, elles
+   * rendent la sécurité tranchée. Un envoi de `dismissed` le change ; un envoi qui change `findings`
+   * sans lui le remet à 0 ; seul un envoi de la discussion du parcours le pose.
+   */
+  dismissed?: number
+  /**
+   * Les failles laissées qu'une session liée a relayées : une proposition, affichée, qui ne tranche
+   * rien ; seul un envoi de `dismissed` par la discussion du parcours compte.
+   */
+  proposedDismissed?: number
 }
 
 /** `cancelled` : lancement refusé (par la personne ou un hook), ou interrompu. */
@@ -125,6 +170,17 @@ export type LinkedWork = {
    * éléments attendent encore. Effacé par le lancement ou par une relance de la demande.
    */
   missedAt?: number
+  /**
+   * Où en est la fermeture de la session, une fois ses éléments jugés (`closed` avec `items`).
+   * « closed » ne recule jamais ; tant qu'elle n'est pas fermée, aucun nouvel envoi ne remplace le lien.
+   */
+  closing?: Closing
+  /** Un envoi des éléments de la phase après une fermeture arrêtée : elle redevient à faire. */
+  touchedAt?: number
+  /** « ↻ Relancer la fermeture » sur une fermeture arrêtée. */
+  closeAskedAt?: number
+  /** Le numéro de l'envoi dans la phase (1, 2…) : il nomme le worktree de la session (`pistes-2`). */
+  seq?: number
 }
 
 /** Chiffres d'une phase relevés automatiquement. */
@@ -173,6 +229,13 @@ export type FlowPhase = {
   stats: PhaseStats
   /** Éléments confiés à une session liée, tant que la phase les suit. */
   linked?: LinkedWork
+  /**
+   * La fermeture de la dernière session des éléments, gardée quand un nouvel envoi prend sa place :
+   * à côté du lien, qu'un ajout avant le lancement ou une annulation réécrivent.
+   */
+  linkedEarlier?: ClosedLink
+  /** Les envois d'éléments faits dans la phase : le suivant prend le numéro d'après. */
+  linkedSends?: number
 }
 
 export type Ticket = {
@@ -369,14 +432,16 @@ export type CarrySpan = { from: number; to: number }
  * Un appel à l'advisor tel qu'un transcript le donne : l'id de l'appel (celui du bloc
  * `server_tool_use`), ses heures (la fin manque quand la réponse s'est coupée avant son résultat),
  * et, d'après l'entrée `advisor_message` de `usage.iterations`, son modèle et ses tokens (absents
- * quand l'entrée ne les a pas). Aucun contenu de sa réponse.
+ * quand l'entrée ne les a pas). Aucun contenu de sa réponse. `isVoid` : l'appel n'a jamais eu de
+ * réponse (ni résultat ni entrée d'usage : posé après des outils de la session dans la même
+ * réponse, relevé le 28/10/2026) ; il ne coûte rien et ne se montre pas.
  */
-export type AdvisorFigures = { id: string; s: number; e?: number; model?: string; tokens?: AgentTokens }
+export type AdvisorFigures = { id: string; s: number; e?: number; model?: string; tokens?: AgentTokens; isVoid?: boolean }
 
 /**
  * Un appel de la ligne advisor : ses chiffres, l'appelant (`main` pour l'orchestrateur, sinon l'id
  * du sous-agent), et `isRead` une fois relu dans un transcript : sans tokens, il compte alors sans
- * prix, au lieu d'attendre un rattrapage qui n'en dira pas plus.
+ * prix, au lieu d'attendre un rattrapage qui n'en dira pas plus (sauf `isVoid` : sans réponse, il ne compte pas).
  */
 export type AdvisorCall = AdvisorFigures & { by: string; isRead?: boolean }
 
@@ -621,7 +686,7 @@ export type RelayEntry = {
   /** Les constats des revues que la session a envoyés (`review`), cumulés : comptés au retour du groupe. */
   reviews?: { count: number; standards: number; spec: number; fixed: number }
   /** La revue de sécurité que la session a envoyée (`security`) : reprise au retour du groupe. */
-  security?: { advised?: boolean; why?: string; findings?: number; fixed?: number; at: number }
+  security?: { advised?: boolean; why?: string; findings?: number; fixed?: number; dismissed?: number; at: number }
   /** Le dernier signal reçu : un ticket, un commit, des tests, une note, une revue, le compte rendu. */
   last?: { kind: 'ticket' | 'commit' | 'test' | 'note' | 'review' | 'decided' | 'report'; text: string; at: number; ticket?: string }
   startedAt: number
@@ -675,7 +740,20 @@ export type SyncState = {
    * manifeste de version dans le dépôt, ou tant que ce n'est pas mesuré.
    */
   isVersionSet?: boolean | null
+  /**
+   * Les parties versionnées (plugins, paquets) changées face à la même branche distante : leur
+   * version, et soit la version d'où elles partent quand elle est déjà posée, soit les commits faits
+   * depuis leur dernier changement de version. L'aperçu de la carte « Ensuite » en est tiré ; null
+   * ou absent tant que ce n'est pas mesuré.
+   */
+  versionUnits?: VersionUnit[] | null
 }
+
+/** Un commit compté par l'aperçu de version : son titre, et s'il se dit cassant (`BREAKING CHANGE` dans son corps). */
+export type VersionCommit = { subject: string; isBreaking: boolean }
+
+/** Une partie versionnée changée face au distant : son nom, sa version, et d'où elle part ou ce qui l'attend. */
+export type VersionUnit = { name: string; version: string; from?: string; commits?: VersionCommit[] }
 
 export type Tab = 'flow' | 'agents' | 'activity' | 'history' | 'commands'
 

@@ -130,6 +130,8 @@ export type Actions = {
   remove: (t: AsanaTask) => unknown
   hideBand: () => unknown
   openPane: () => unknown
+  /** Copie l'adresse d'une tâche dans le presse-papiers de la surface pressée. */
+  copyLink: (url: string, surface?: string) => unknown
 }
 
 // ─── Petits outils (copiés de flow-board, hooks/view.tsx:104-183) ─────────
@@ -499,6 +501,13 @@ const editForm = (k: Kit, t: AsanaTask, act: Actions): unknown => {
 const taskCard = (k: Kit, view: View, t: AsanaTask, g: Group, act: Actions): unknown => {
   const { Box, Button, Link, Markdown, Select, Input } = k
   const isBusy = view.busy.includes(t.gid)
+  // Au terminal, qui écrit l'adresse entière derrière le libellé quand il ne sait pas faire de lien, un bouton qui la copie.
+  const url = t.url
+  const urlCell = !url
+    ? null
+    : !k.isRich
+      ? <Button key={`copy-${t.gid}`} plain={true} dimColor={true} label={`⧉${NB}Asana`} onPress={(press?: { surface?: string }) => act.copyLink(url, press?.surface)} />
+      : Link && <Link key={`link-${t.gid}`} href={url} label="Asana ↗" />
   const isEditing = view.editing === t.gid && Input !== null
   const due = dueOf(t, view.now)
   const statut = statutChoices(t)
@@ -517,7 +526,7 @@ const taskCard = (k: Kit, view: View, t: AsanaTask, g: Group, act: Actions): unk
     Input !== null && !isEditing && <Button key={`m-${t.gid}`} label="Modifier" onPress={() => act.startEdit(t.gid)} />,
     !t.completed && <Button key={`ab-${t.gid}`} label="Abandonner" onPress={() => act.abandon(t)} />,
     <Button key={`del-${t.gid}`} plain={true} dimColor={true} label="Supprimer…" onPress={() => act.askDelete(t.gid)} />,
-    t.url && Link && <Link href={t.url} label="Asana ↗" />,
+    urlCell,
   ]
   return (
     <Box key={`d-${t.gid}`} flexDirection="column" borderStyle="round" borderColor={t.completed ? C.green : g.color} paddingX={1} marginLeft={4}>

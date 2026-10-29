@@ -231,3 +231,51 @@ test('S13 : pour une session liée affichée, le rattrapage écrit son fichier �
   await ui.press({ key: 'tab-flow' })
   await ui.unmount()
 })
+
+test('pour une session liée affichée, ses propres appels à l’advisor se relisent dans son transcript, même sans sous-agent : leur coût s’affiche', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 + 60_000 })
+  const LINKED = '9f3e21aa-1111-2222-3333-444455556666'
+  const advised = { ...usage(300), iterations: [{ type: 'message', ...usage(300) }, { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 156_265, output_tokens: 6_473, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }] }
+  const said = (ms: number, content: Record<string, unknown>) => ({ type: 'assistant', isSidechain: false, timestamp: iso(ms), message: { id: 'mL', model: 'claude-opus-5-5', role: 'assistant', content: [content], usage: advised } })
+  const transcript = lines(req(0), said(1_000, { type: 'server_tool_use', id: 'srv-L', name: 'advisor', input: {} }), said(9_000, { type: 'advisor_tool_result', tool_use_id: 'srv-L', content: {} }), said(9_500, { type: 'text', text: '' }))
+  // Vu en direct par la session liée, jamais relu : elle n'a pas ouvert son onglet Agents.
+  const linkedReg = { ...emptyRegistry(LINKED, '/p', T0), title: 'Explorer le cache', transcript: '/t/projects/-p/lie.jsonl', main: { segments: [{ k: 'write', s: T0, e: T0 + 10_000 }] }, advisor: { calls: [{ id: 'srv-L', s: T0 + 1_000, e: T0 + 9_000, by: 'main' }] }, updatedAt: T0 + 59_000 }
+  const mem = world(on, { [`agents:${LINKED}`]: linkedReg }, { '/t/projects/-p/lie.jsonl': transcript })
+  mem.agentPrices = { at: T0 + 60_000, triedAt: T0 + 60_000, prices: { 'claude-fable-5-1': { input: 10e-6, output: 50e-6, cacheRead: 1e-6, cacheWrite: 12.5e-6 } } }
+  on('store.keys', () => ({ value: Object.keys(mem) }))
+  on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('command.list', () => ({ value: [] }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'backgrounded · 9f3e21aa · Explorer le cache\n' } }))
+  await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
+  const before = JSON.stringify(mem[`agents:${LINKED}`])
+  await $.tool.call({ tool: 'Bash', command: 'claude --bg -n "Explorer le cache" "go"' } as any)
+  for (let i = 0; i < 6; i++) await clock.advance(1_000)
+  const ui = await $.ui.mount({ plugin: 'flow-board', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'tab-agents' })
+  await ui.press({ key: 'agents-session-9f3e21aa' })
+  await clock.advance(200)
+  // Le fichier à part porte les appels relus ; celui de la session liée n'a pas bougé (Q7).
+  expect((mem[`agents:${LINKED}:rebuilt`] as { main?: { advisor?: { id: string; model?: string }[] } }).main?.advisor?.map(c => [c.id, c.model])).toEqual([['srv-L', 'claude-fable-5-1']])
+  expect(JSON.stringify(mem[`agents:${LINKED}`])).toBe(before)
+  await clock.advance(1_000)
+  expect(await ui.find({ type: 'Text', text: /advisor\s≈\s1,89\s\$/ })).toBeDefined()
+  await ui.press({ key: 'tab-flow' })
+  await ui.unmount()
+})
+
+test('un appel à l’advisor relu sans chiffres avant la marque « sans réponse » se relit une fois et la prend', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 + 60_000 })
+  const transcript = lines(req(0), { ...block(800, 'mV', { type: 'tool_use', id: 'w1', name: 'Write', input: {} }), isSidechain: false }, { ...block(900, 'mV', { type: 'server_tool_use', id: 'srv-V', name: 'advisor', input: {} }), isSidechain: false }, { ...result(1_000, 'w1'), isSidechain: false })
+  const seed = { ...emptyRegistry('s-rat', '/p', T0), transcript: '/t/projects/-p/s-rat.jsonl', advisor: { calls: [{ id: 'srv-V', s: T0 + 900, e: T0 + 925, by: 'main', isRead: true }] }, updatedAt: T0 + 59_000 }
+  const mem = world(on, { 'agents:s-rat': seed }, { '/t/projects/-p/s-rat.jsonl': transcript })
+  await prompt($)
+  const ui = await $.ui.mount({ plugin: 'flow-board', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'tab-agents' })
+  await clock.advance(1_000)
+  expect(parseRegistry(mem['agents:s-rat'])!.advisor!.calls.map(c => [c.id, c.isVoid])).toEqual([['srv-V', true]])
+  // Sans réponse, il ne se montre pas : plus de ligne advisor.
+  expect(await ui.find({ type: 'Button', text: /advisor\s·\srelecteur/ })).toBeUndefined()
+  await ui.press({ key: 'tab-flow' })
+  await ui.unmount()
+})

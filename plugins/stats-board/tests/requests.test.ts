@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { canonicalModel, estimateUnknown, priceOf } from '../hooks/pricing.ts'
-import { OUTSIDE, activeMs, costed, endTurn, median, noteTasks, openRequest, recordCall, relaunchOwner, requestFile } from '../hooks/requests.ts'
+import { OUTSIDE, activeMs, costed, endTurn, endWait, median, netSpans, noteTasks, openRequest, recordCall, relaunchOwner, requestFile, startWait, waitMsOf } from '../hooks/requests.ts'
 import type { Tracker } from '../types'
 
 const usage = (input: number, output: number, cacheWrite: number, cacheRead: number) => ({ input_tokens: input, output_tokens: output, cache_creation_input_tokens: cacheWrite, cache_read_input_tokens: cacheRead })
@@ -61,6 +61,33 @@ describe('requêtes', () => {
     // [0, 10] et [5, 20] se chevauchent ; [30, 40] est à part : 20 + 10.
     expect(activeMs([[0, 10], [30, 40], [5, 20]])).toBe(30)
     expect(activeMs([])).toBe(0)
+  })
+
+  test('les attentes de l’utilisateur sortent des morceaux actifs, sauf les appels pendant ce temps', async () => {
+    // [0, 100], une question de 20 à 60, un sous-agent appelé de 30 à 35 : 20 + 5 + 40.
+    expect(netSpans({ sentAt: 0, waits: [[20, 60]], busy: [[30, 35]] }, 100)).toEqual([[0, 20], [30, 35], [60, 100]])
+    // Une attente restée ouverte va jusqu'à la fin donnée, jamais au-delà ; un appel hors de la requête ne compte pas.
+    expect(netSpans({ sentAt: 0, waits: [[80, null]], busy: [[150, 160]] }, 100)).toEqual([[0, 80]])
+    expect(netSpans({ sentAt: 0 }, 100)).toEqual([[0, 100]])
+    expect(netSpans({ sentAt: 0, waits: [[0, 100]] }, 100)).toEqual([])
+  })
+
+  test('une attente se pose sur sa requête, et les appels faits pendant elle restent actifs', async () => {
+    let t = openRequest(empty, { session: 's1', project: null, at: T0, now: T0 })
+    t = startWait(t, 1, T0 + 10_000)
+    // Un appel de sous-agent de T0+12 s à T0+16 s, pendant la question.
+    t = recordCall(t, 1, { ...call('claude-opus-5-5'), span: [T0 + 12_000, T0 + 16_000] })
+    // Un appel d'avant la question ne devient pas « pendant ».
+    t = recordCall(t, 1, { ...call('claude-opus-5-5'), span: [T0, T0 + 4000] })
+    t = endWait(t, 1, T0 + 10_000, T0 + 70_000)
+    // Hors requête ou sans requête : rien ne change.
+    expect(startWait(t, OUTSIDE, T0)).toBe(t)
+    expect(startWait(t, undefined, T0)).toBe(t)
+    const r = t.log!.requests[0]!
+    expect(r.waits).toEqual([[T0 + 10_000, T0 + 70_000]])
+    expect(r.busy).toEqual([[T0 + 12_000, T0 + 16_000]])
+    // Encore en cours à T0+80 s : 80 s réelles, dont 60 s d'attente moins 4 s d'appel.
+    expect(waitMsOf(r, T0 + 80_000)).toBe(56_000)
   })
 
   test('un nom de fichier de relevé par session et par ouverture', async () => {

@@ -354,9 +354,9 @@ export function publishedOf(o: { machine: string; tzOffset: number; rows: readon
     return t ? { ...s, activeMs: toMinute(t.activeMs), apiMs: toMinute(t.apiMs), requests: t.requests } : s
   })
   const active = (d?.active ?? [])
-    .map((r) => ({ date: r.date, project: r.project, activeMs: toMinute(r.activeMs), requests: r.requests }))
+    .map((r) => ({ date: r.date, project: r.project, activeMs: toMinute(r.activeMs), requests: r.requests, ...(r.cumulMs !== undefined ? { cumulMs: toMinute(r.cumulMs) } : {}) }))
     .sort((x, y) => x.date.localeCompare(y.date) || x.project.localeCompare(y.project))
-  const hours = (d?.hours ?? []).map((h) => ({ date: h.date, hours: h.hours.map(toMinute) })).sort((x, y) => x.date.localeCompare(y.date))
+  const hours = (d?.hours ?? []).map((h) => ({ date: h.date, hours: h.hours.map(toMinute), ...(h.cumul ? { cumul: h.cumul.map(toMinute) } : {}) })).sort((x, y) => x.date.localeCompare(y.date))
   const keys = new Set([...rows.map((r) => r.project), ...sessions.map((s) => s.project), ...apiOnly.map((a) => a.project)])
   const projects: Record<string, ProjectInfo> = {}
   for (const k of [...keys].sort()) if (o.projects[k]) projects[k] = { name: o.projects[k]!.name, path: o.projects[k]!.path }
@@ -395,8 +395,12 @@ export function parsePublished(json: Json): Published | null {
   }
   const out: Published = { schema: PUBLISH_SCHEMA, machine, updatedAt: num(json.updatedAt), tzOffset: num(json.tzOffset), rows, sessions, projects }
   // Un poste d'avant la 0.10.0 ne publie pas de durée : elles valent « non mesuré ».
-  if (Array.isArray(json.active)) out.active = (json.active as Json[]).filter((r) => r && isDate(str(r.date)) && typeof r.project === 'string').map((r) => ({ date: r.date, project: r.project, activeMs: num(r.activeMs), requests: num(r.requests) }))
-  if (Array.isArray(json.hours)) out.hours = (json.hours as Json[]).filter((h) => h && isDate(str(h.date)) && Array.isArray(h.hours)).map((h) => ({ date: h.date, hours: Array.from({ length: 24 }, (_, i) => num(h.hours[i])) }))
+  // Le temps cumulé, depuis la 0.11.0 : absent d'un poste pas encore à jour (« — »).
+  if (Array.isArray(json.active)) out.active = (json.active as Json[]).filter((r) => r && isDate(str(r.date)) && typeof r.project === 'string').map((r) => ({ date: r.date, project: r.project, activeMs: num(r.activeMs), requests: num(r.requests), ...durationFieldsOf(r, ['cumulMs'] as const) }))
+  if (Array.isArray(json.hours))
+    out.hours = (json.hours as Json[])
+      .filter((h) => h && isDate(str(h.date)) && Array.isArray(h.hours))
+      .map((h) => ({ date: h.date, hours: Array.from({ length: 24 }, (_, i) => num(h.hours[i])), ...(Array.isArray(h.cumul) ? { cumul: Array.from({ length: 24 }, (_, i) => num(h.cumul[i])) } : {}) }))
   if (Array.isArray(json.apiOnly))
     out.apiOnly = (json.apiOnly as Json[])
       .filter((a) => a && isDate(str(a.date)) && typeof a.project === 'string' && typeof a.model === 'string')
@@ -480,8 +484,8 @@ function addPeer(peers: PeerDurations, o: Published, target: (key: string) => st
   const calls = [...o.rows.filter((r) => r.apiMs !== undefined), ...(o.apiOnly ?? [])]
   // La vitesse : les tokens de sortie des seuls appels relevés (Q5), jamais la sortie de ccusage.
   for (const r of calls) if (!isCopy(r.project)) peers.api.push({ date: r.date, project: target(r.project), machine: o.machine, model: r.model, apiMs: r.apiMs ?? 0, genMs: r.genMs ?? 0, output: r.genOutput ?? 0, calls: r.calls ?? 0 })
-  for (const r of o.active ?? []) peers.active.push({ date: r.date, project: target(r.project), machine: o.machine, activeMs: r.activeMs, requests: r.requests })
-  for (const h of o.hours ?? []) peers.hours.push({ date: h.date, machine: o.machine, hours: h.hours })
+  for (const r of o.active ?? []) peers.active.push({ date: r.date, project: target(r.project), machine: o.machine, activeMs: r.activeMs, requests: r.requests, ...(r.cumulMs !== undefined ? { cumulMs: r.cumulMs } : {}) })
+  for (const h of o.hours ?? []) peers.hours.push({ date: h.date, machine: o.machine, hours: h.hours, ...(h.cumul ? { cumul: h.cumul } : {}) })
   for (const s of o.sessions) if (s.activeMs !== undefined && !isCopy(s.project)) peers.sessions.push({ date: dayOf(s.last, o.tzOffset), session: s.id, project: target(s.project), machine: o.machine, activeMs: s.activeMs, apiMs: s.apiMs ?? 0, requests: s.requests ?? 0 })
   if (peers.active.length + peers.api.length === before) return
   const first = earliest([...(o.active ?? []), ...calls].map((r) => r.date))

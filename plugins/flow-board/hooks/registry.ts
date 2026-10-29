@@ -129,6 +129,7 @@ export const cleanAdvisorFigures = (x: unknown): AdvisorFigures | null => {
   if (isText(x.model) && x.model !== '') call.model = x.model.slice(0, 100)
   const t = x.tokens
   if (isObject(t) && isCount(t.input) && isCount(t.output) && isCount(t.cacheRead) && isCount(t.cacheWrite)) call.tokens = { input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite }
+  if (x.isVoid === true) call.isVoid = true
   return call
 }
 
@@ -612,7 +613,8 @@ const mergeLane = (mine: AgentLane | undefined, theirs: AgentLane | undefined): 
 
 /**
  * Un appel connu complété par un autre relevé du même appel : la fin quand elle manquait, le
- * modèle et les tokens quand ils manquaient, la marque « relu ». null quand l'autre n'apporte rien.
+ * modèle et les tokens quand ils manquaient, les marques « relu » et « sans réponse ». null quand
+ * l'autre n'apporte rien.
  */
 const fillCall = (own: AdvisorCall, other: AdvisorCall): AdvisorCall | null => {
   const next: AdvisorCall = { ...own }
@@ -620,7 +622,10 @@ const fillCall = (own: AdvisorCall, other: AdvisorCall): AdvisorCall | null => {
   if (own.model === undefined && other.model !== undefined) next.model = other.model
   if (own.tokens === undefined && other.tokens !== undefined) next.tokens = other.tokens
   if (own.isRead !== true && other.isRead === true) next.isRead = true
-  return next.e !== own.e || next.model !== own.model || next.tokens !== own.tokens || next.isRead !== own.isRead ? next : null
+  // Des chiffres prouvent une réponse : « sans réponse » ne tient plus.
+  if (next.tokens !== undefined || next.model !== undefined) delete next.isVoid
+  else if (own.isVoid !== true && other.isVoid === true) next.isVoid = true
+  return next.e !== own.e || next.model !== own.model || next.tokens !== own.tokens || next.isRead !== own.isRead || next.isVoid !== own.isVoid ? next : null
 }
 
 /**
@@ -640,6 +645,12 @@ const withCalls = (lane: AdvisorLane | undefined, calls: readonly AdvisorCall[])
   }
   return isChanged ? { calls: [...byId.values()].sort((a, b) => a.s - b.s).slice(-ADVISOR_CALLS_MAX) } : lane
 }
+
+/**
+ * Un appel à relire dans le transcript de son appelant : jamais relu, ou relu sans chiffres ni
+ * marque « sans réponse » (relu avant que cette marque existe, il passait pour un appel sans prix).
+ */
+export const isAdvisorUnsettled = (c: AdvisorCall): boolean => c.isRead !== true || (c.tokens === undefined && c.model === undefined && c.isVoid !== true)
 
 /** La ligne advisor de deux processus de la même session : union des appels par id, chacun complété par l'autre. */
 const mergeAdvisor = (mine: AdvisorLane | undefined, theirs: AdvisorLane | undefined): AdvisorLane | undefined =>
@@ -1002,6 +1013,28 @@ export const agentTypeOf = (subagentType: string | undefined, asked: AgentType |
   if (/\bplan\b|design|alternativ|maquette/.test(d)) return 'plan'
   if (/implement|ticket|#\d|corrig|\bfix/.test(d)) return 'implement'
   return 'other'
+}
+
+/**
+ * Le nom standard d'une exécution de `/code-review` (Claude Code), que le moteur nomme d'après sa
+ * commande, coupée (« /code-review high refs/worktree/flow-board/120000… ») : la sorte de revue
+ * d'après sa cible, puis sa portée. Instantané d'un ticket : « Passe bogues · E2 » ; `--fix` ou
+ * plage jusqu'à HEAD : « Revue du groupe E » ; autre plage : « Revue · a1b2c3d..e4f5a6b ». Le niveau
+ * n'y est pas : la frise montre l'effort de la piste. `tagOf` rend le repère court d'un ticket ;
+ * null pour un autre nom.
+ */
+export const reviewForkName = (name: string, tagOf: (ticket: string) => string | undefined, group?: string): string | null => {
+  const m = /^\/code-review(?:\s|$)(.*)$/s.exec(name.trim())
+  if (!m) return null
+  const rest = m[1]!
+  const snapshot = /refs\/worktree\/flow-board\/([^\s^.…]+)(…)?/.exec(rest)
+  if (snapshot) {
+    const tag = snapshot[2] === undefined ? tagOf(snapshot[1]!) : undefined
+    return `Passe bogues${tag !== undefined ? ` · ${tag}` : ''}`
+  }
+  if (/(?:^|\s)--fix\b|\.\.HEAD\b/.test(rest)) return `Revue du groupe${group !== undefined ? ` ${group}` : ''}`
+  const range = /\b([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})\b/.exec(rest)
+  return range ? `Revue · ${range[1]!.slice(0, 7)}..${range[2]!.slice(0, 7)}` : 'Revue de code'
 }
 
 /** Les tokens d'une réponse du modèle, tels que l'API les rend (usage de `turn.step`). */

@@ -118,7 +118,7 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   // Dans l'app Desktop : start_session ; dans le CLI : claude --bg, le compte rendu revient par SendMessage.
   expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(ce dossier n’a pas de git\)\./)
   expect(text).toMatch(/Dans le CLI \(pas de start_session\) : appelle d'abord ListAgents pour lire le nom de cette discussion et sa référence entre crochets/)
-  expect(text).toContain('claude --bg -n "Lot SC > Groupe <id> · <thème>" --effort <effort> (sans -w : ce dossier n’a pas de git) "<prompt>"')
+  expect(text).toContain("claude --bg -n 'Lot SC > Groupe <id> · <thème>' --effort <effort> (sans -w : ce dossier n’a pas de git) \"<prompt>\"")
   expect(text).toMatch(/de finir par un message à cette discussion \(il la réveille, même inactive\)/)
   // Le nom peut changer (renommage) : la session retrouve la discussion par sa référence, lue dans ListAgents.
   expect(text).toMatch(/Pour lui écrire, la session appelle ListAgents, trouve la ligne qui porte cette référence et envoie par SendMessage à « <nom du moment> \[<ref>\] »/)
@@ -207,11 +207,11 @@ test('« 🐞 Bug · session liée » : seulement en code ou revue ; le diagnost
   expect(text).toMatch(/^Lance un diagnostic de bug dans une session liée, pour le parcours « Lot SC » \(phase Implémentation\), avec un titre qui commence par « Lot SC > Bug · »\./)
   // Elle reprend le parcours : elle reste dans ce dossier, qui a le fichier du parcours, sans worktree.
   expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(elle reprend le parcours, qui vit dans ce dossier\)/)
-  expect(text).toContain('claude --bg -n "Lot SC > Bug · <sujet>" --effort <effort> (sans -w : elle reste dans ce dossier, où vit le parcours) "<prompt>"')
+  expect(text).toContain(`claude --bg -n 'Lot SC > Bug · <sujet>' --effort <effort> (sans -w : elle reste dans ce dossier, où vit le parcours) "<prompt>"`)
   // L'effort : high à la première tentative, xhigh à la deuxième, pas de troisième session.
   expect(text).toContain("Effort de la session (<effort>) : high pour une première tentative ; xhigh pour une deuxième, quand une session de bug de ce parcours a déjà essayé de corriger ce même bug et qu'il est toujours là")
   expect(text).toContain('Pas de troisième session après un second échec : on replanifie ensemble ici.')
-  expect(text).toContain("si le bug est toujours là, me le dire et me proposer la deuxième tentative (règle d'effort ci-dessus) ; sinon, reprendre le parcours ici")
+  expect(text).toContain("si le bug est toujours là, arrêter la session (ci-dessous), puis me le dire et me proposer la deuxième tentative (règle d'effort ci-dessus) ; sinon, reprendre le parcours ici")
   expect(text).toMatch(/\{"resume": "[^"]+"\}/)
   expect(text).toContain('2) puis lancer /mattpocock-skills:diagnosing-bugs avec la description du bug')
   expect(text).toContain('4) à la fin, envoyer {"complete": true} pour clore le détour.')

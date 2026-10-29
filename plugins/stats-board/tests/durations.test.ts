@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { BROKEN, EMPTY_DURATIONS, averageOf, combine, costPerActiveHour, joinMonths, monthsOf, parseRequestLog, periodOf, refreshDurations, speedMedian, weightedSpeed } from '../hooks/durations.ts'
+import { BROKEN, EMPTY_DURATIONS, averageOf, combine, costPerActiveHour, joinMonths, monthOfJson, monthsOf, parseRequestLog, periodOf, refreshDurations, speedMedian, weightedSpeed } from '../hooks/durations.ts'
 import { median, speedClass } from '../hooks/requests.ts'
 import type { RequestLog, RequestRecord } from '../types'
 
@@ -53,6 +53,57 @@ describe('durées', () => {
       { date: '2026-10-07', project: '-p-api', machine: 'Mac', seconds: [1200] },
     ])
     expect(d.since).toBe('2026-10-07')
+  })
+
+  test('temps cumulé : la somme des temps actifs des discussions, par projet et par heure', async () => {
+    // Deux discussions sur la démo, 10:00–10:40 et 10:20–11:00 ; une sur l'API, 10:30–10:50.
+    const files = {
+      'a.json': log('a', '-p-demo', [request(1, at(10), 40 * MIN)]),
+      'b.json': log('b', '-p-demo', [request(1, at(10, 20), 40 * MIN)]),
+      'c.json': log('c', '-p-api', [request(1, at(10, 30), 20 * MIN)]),
+    }
+    const d = await refreshDurations(EMPTY_DURATIONS, Object.keys(files).map((name) => ({ name, mtimeMs: 1 })), disk(files).read, TZ, 'Mac')
+    expect(d.active.map((r) => [r.project, r.activeMs / MIN, r.cumulMs! / MIN]).sort()).toEqual([
+      ['-p-api', 20, 20],
+      ['-p-demo', 60, 80],
+    ])
+    const day = d.hours.find((h) => h.date === '2026-10-07')!
+    // 10 h : 60 min actives, 40 + 40 + 20 cumulées ; rien à 11 h.
+    expect(day.hours[10]! / MIN).toBe(60)
+    expect(day.cumul![10]! / MIN).toBe(100)
+    expect(day.cumul![11]).toBe(0)
+    const m = combine(d, 'Mac')
+    expect(periodOf(m, { machine: 'all', project: null, model: null }, null, '2026-10-07', {}).hoursCumul![10]! / MIN).toBe(100)
+  })
+
+  test('une attente de l’utilisateur sort du temps actif, de l’heure et de la durée de la requête', async () => {
+    // 10:00–11:00, une question de 10:10 à 10:50, un sous-agent appelé de 10:20 à 10:25 : 10 + 5 + 10 = 25 min.
+    const r = { ...request(1, at(10), 60 * MIN), waits: [[at(10, 10), at(10, 50)]] as [number, number | null][], busy: [[at(10, 20), at(10, 25)]] as [number, number][] }
+    const files = { 'a.json': log('a', '-p-demo', [r]) }
+    const d = await refreshDurations(EMPTY_DURATIONS, [{ name: 'a.json', mtimeMs: 1 }], disk(files).read, TZ, 'Mac')
+    expect(d.active[0]).toMatchObject({ activeMs: 25 * MIN, cumulMs: 25 * MIN })
+    expect(d.hours[0]!.hours[10]! / MIN).toBe(25)
+    expect(d.times![0]!.seconds).toEqual([25 * 60])
+    // Relue sur le disque : l'attente et l'appel restent ; un intervalle impossible ou hors de la requête est écarté.
+    const read = parseRequestLog(JSON.parse(JSON.stringify(log('a', '-p-demo', [{ ...r, waits: [...r.waits, [at(10, 30), null], [at(10, 40), at(10, 35)], ['x', 1]] as any, busy: [...r.busy, [0, 1]] }])))) as RequestLog
+    expect(read.requests[0]!.waits).toEqual([...r.waits, [at(10, 30), null]])
+    expect(read.requests[0]!.busy).toEqual(r.busy)
+  })
+
+  test('des totaux d’avant le temps cumulé font relire leurs fichiers de relevé', async () => {
+    const files = { 'a.json': log('a', '-p-demo', [request(1, at(10), 40 * MIN)]) }
+    const d = await refreshDurations(EMPTY_DURATIONS, [{ name: 'a.json', mtimeMs: 1 }], disk(files).read, TZ, 'Mac')
+    const [october] = [...monthsOf(d).values()].map((m) => JSON.parse(JSON.stringify(m)))
+    expect(joinMonths([october])!.files['a.json']!.mtimeMs).toBe(1)
+    // Écrit par une version d'avant la 0.11.0 : ni `cumulMs` ni `cumul`.
+    const old = { ...october, active: october.active.map(({ cumulMs: _, ...r }: any) => r), hours: october.hours.map(({ cumul: _, ...h }: any) => h) }
+    expect(monthOfJson(old)!.files['a.json']!.mtimeMs).toBe(-1)
+    const joined = joinMonths([old])!
+    const { reads, read } = disk(files)
+    const again = await refreshDurations(joined, [{ name: 'a.json', mtimeMs: 1 }], read, TZ, 'Mac')
+    expect(reads).toEqual(['a.json'])
+    expect(again.active[0]!.cumulMs).toBe(40 * MIN)
+    expect(again.files['a.json']!.mtimeMs).toBe(1)
   })
 
   test('une requête qui passe minuit compte pour les deux jours', async () => {

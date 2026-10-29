@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { addUsage, agentTypeOf, emptyRegistry, linesOf, spawnAgent, startCall } from '../hooks/registry.ts'
+import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 
 const PLUGIN = 'flow-board'
 const PANE = {
@@ -66,17 +67,11 @@ test('le bouton d’une piste ouvre sa carte de détail, puis la referme ; la ca
     return { result: {} }
   })
   on('tool.call', { tool: 'Grep' as any }, () => ({ isError: true, result: 'boom', text: 'boom' }))
-  on('turn.step', async function* (_$: unknown, e: any) {
-    const usage = { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 45_000, cache_creation_input_tokens: 800, model: 'claude-haiku-5-5' }
-    yield { kind: 'stop', stopReason: 'end_turn', usage }
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage }
-  })
+  on('turn.step', stoppedStep(stepUsage('claude-haiku-5-5', { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 45_000, cache_creation_input_tokens: 800 })))
   const prompt = ['Relis le diff du ticket 02.', 'Ligne deux.', 'Ligne trois.', 'Ligne quatre, cachée au départ.'].join('\n')
   await $.tool.call({ tool: 'Agent', description: 'Revue 02 axe Standards', subagent_type: 'general-purpose', prompt, run_in_background: true, tool_use_id: 'call-1' } as any)
   await ($ as any).agent.spawn({ prompt, description: 'Revue 02 axe Standards', background: true, tool_use_id: 'call-1' })
-  for await (const _ of $.turn.step({ turnId: 'ta', index: 0, model: 'claude-haiku-5-5', messageCount: 1, agentId: 'a1', effort: 'high' } as any)) {
-    // la réponse
-  }
+  await playStep($, { turnId: 'ta', model: 'claude-haiku-5-5', agentId: 'a1', effort: 'high' })
   await $.tool.call({ tool: 'Edit', file_path: '/p/hooks/view.tsx', old_string: 'a', new_string: 'a\nb', tool_use_id: 'e1', agentId: 'a1' } as any)
   await $.tool.call({ tool: 'Grep', pattern: 'agentCard', tool_use_id: 'g1', agentId: 'a1' } as any)
 

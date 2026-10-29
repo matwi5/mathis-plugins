@@ -34,8 +34,9 @@ export const OUTSIDE = 0
 
 export const EMPTY_TRACKER: Tracker = { log: null, current: null, turns: {}, agents: {}, tasks: {}, running: [], interrupted: [] }
 
-/** Un appel au modèle tel que `turn.step` le donne : le modèle qui a répondu, ses tokens, ses durées. */
-export type Call = { model: string; usage: CallUsage; apiMs: number; genMs: number }
+/** Un appel au modèle tel que `turn.step` le donne : le modèle qui a répondu, ses tokens, ses durées, et son [début, fin] en ms. */
+export type Call = { model: string; usage: CallUsage; apiMs: number; genMs: number; span?: [number, number] }
+
 
 /**
  * Ce qui relance un tour du fil principal sans message de l'utilisateur : la notification d'une
@@ -197,7 +198,30 @@ export function finishTask(t: Tracker, id: string | null): Tracker {
 export function recordCall(t: Tracker, id: number | undefined, call: Call): Tracker {
   if (id === undefined || !t.log) return t
   if (id === OUTSIDE) return { ...t, log: { ...t.log, outside: { ...t.log.outside, [call.model]: addCall(t.log.outside[call.model] ?? emptyStats(), call) } } }
-  return changeRequest(t, id, (r) => ({ ...r, apiMs: r.apiMs + call.apiMs, models: { ...r.models, [call.model]: addCall(r.models[call.model] ?? emptyStats(), call) } }))
+  return changeRequest(t, id, (r) => withBusy({ ...r, apiMs: r.apiMs + call.apiMs, models: { ...r.models, [call.model]: addCall(r.models[call.model] ?? emptyStats(), call) } }, call.span))
+}
+
+/** Un appel fait pendant une attente de sa requête (un sous-agent qui travaille pendant la question) : sa part dans l'attente reste active. */
+function withBusy(r: RequestRecord, span: [number, number] | undefined): RequestRecord {
+  if (!span || !r.waits?.length) return r
+  const inside = r.waits.map(([from, to]) => [Math.max(span[0], from), Math.min(span[1], to ?? Infinity)] as [number, number]).filter(([a, b]) => b > a)
+  return inside.length ? { ...r, busy: union([...(r.busy ?? []), ...inside]) } : r
+}
+
+/**
+ * L'attente de la réponse de l'utilisateur commence à `at` pour la requête `id` : une question à boutons
+ * (`AskUserQuestion`) ou un plan à valider (`ExitPlanMode`, à confirmer par un essai :
+ * docs/evenements-moteur.md, « Attentes »), dont tout l'appel attend.
+ */
+export function startWait(t: Tracker, id: number | undefined, at: number): Tracker {
+  if (id === undefined || id === OUTSIDE) return t
+  return changeRequest(t, id, (r) => ({ ...r, waits: [...(r.waits ?? []), [at, null]] }))
+}
+
+/** L'attente commencée à `from` pour la requête `id` finit à `at` : l'utilisateur a répondu (ou l'appel a échoué). */
+export function endWait(t: Tracker, id: number | undefined, from: number, at: number): Tracker {
+  if (id === undefined || id === OUTSIDE) return t
+  return changeRequest(t, id, (r) => (r.waits?.some((w) => w[0] === from && w[1] === null) ? { ...r, waits: r.waits.map((w) => (w[0] === from && w[1] === null ? [from, Math.max(from, at)] : w)) } : r))
 }
 
 const addCall = (s: CallStats, c: Call): CallStats => {
@@ -277,7 +301,40 @@ export const realMsOf = (r: RequestRecord, now: number): number => (r.isOpen ? M
 /** L'intervalle [envoi, fin] d'une requête ; encore en cours, jusqu'à `now`. */
 export const spanOf = (r: RequestRecord, now: number): [number, number] => [r.sentAt, r.sentAt + realMsOf(r, now)]
 
+/**
+ * Les morceaux actifs d'une requête qui finit à `end` : de l'envoi à la fin, sans ses attentes de
+ * l'utilisateur (une attente encore ouverte va jusqu'à `end`), sauf les appels de ses sous-agents
+ * pendant ces attentes. Triés, sans chevauchement.
+ */
+export function netSpans(r: Pick<RequestRecord, 'sentAt' | 'waits' | 'busy'>, end: number): [number, number][] {
+  let pieces: [number, number][] = end > r.sentAt ? [[r.sentAt, end]] : []
+  for (const [from, to] of r.waits ?? []) {
+    const [a, b] = [from, to ?? end]
+    if (b <= a) continue
+    pieces = pieces.flatMap(([x, y]): [number, number][] => (b <= x || a >= y ? [[x, y]] : ([[x, a], [b, y]] as [number, number][]).filter(([p, q]) => q > p)))
+  }
+  const kept = (r.busy ?? []).map(([a, b]) => [Math.max(a, r.sentAt), Math.min(b, end)] as [number, number]).filter(([a, b]) => b > a)
+  return union([...pieces, ...kept])
+}
+
+/** Les morceaux actifs d'une requête ; encore en cours, jusqu'à `now` (`netSpans`). */
+export const spansOf = (r: RequestRecord, now: number): [number, number][] => netSpans(r, r.sentAt + realMsOf(r, now))
+
+/** Le temps passé par une requête à attendre l'utilisateur ; encore en cours, jusqu'à `now`. */
+export const waitMsOf = (r: RequestRecord, now: number): number => realMsOf(r, now) - spansOf(r, now).reduce((n, [a, b]) => n + b - a, 0)
+
 // ─── Calculs ────────────────────────────────────────────────────────────────
+
+/** Des intervalles fusionnés : triés, ceux qui se touchent ou se chevauchent réunis. */
+export function union(spans: readonly (readonly [number, number])[]): [number, number][] {
+  const out: [number, number][] = []
+  for (const [a, b] of spans.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1]
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b)
+    else out.push([a, b])
+  }
+  return out
+}
 
 /** La médiane ; null pour une liste vide. */
 export function median(values: readonly number[]): number | null {

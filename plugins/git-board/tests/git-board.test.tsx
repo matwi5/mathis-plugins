@@ -848,6 +848,50 @@ describe('git-board', () => {
     expect(await pane.find({ type: 'Text', text: /Fusionnée/ })).toBeDefined()
   })
 
+  test('au terminal, les liens de PR et de commit deviennent des boutons qui copient leur adresse ; ailleurs, des liens', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const seen = engine(on, fakeRepo())
+    const copies: { text: string; surface?: string }[] = []
+    let isCopied = true
+    on('ui.copy', ($: any, e: { text: string; surface?: string }) => {
+      copies.push(e)
+      return { value: isCopied ? { isCopied: true as const } : { isCopied: false as const, reason: 'no-clipboard' as const } }
+    })
+    const PR_URL = 'https://github.com/matwi5/demo/pull/7'
+    const pane = await openPane($, clock, 'terminal')
+    expect(await pane.find({ type: 'Link' })).toBeUndefined()
+    // La ligne de la PR, en tête.
+    expect((await pane.find({ key: 'pr-link' }))?.props).toMatchObject({ label: '⧉ PR' })
+    await pane.press({ key: 'pr-link' })
+    expect(copies.at(-1)?.text).toBe(PR_URL)
+    expect(seen.toasts.at(-1)).toBe('Lien PR copié')
+    // Le tiroir Pull request.
+    await pane.press({ key: 'act-pr' })
+    await pane.press({ key: 'pr-card-link' })
+    expect(copies.at(-1)?.text).toBe(PR_URL)
+    // Chaque commit de l'historique.
+    await pane.press({ key: 'tab-history' })
+    expect(await pane.find({ type: 'Link' })).toBeUndefined()
+    expect((await pane.find({ key: 'commit-link-h1full' }))?.props).toMatchObject({ label: '⧉' })
+    await pane.press({ key: 'commit-link-h1full' })
+    expect(copies.at(-1)?.text).toBe('https://github.com/matwi5/demo/commit/h1full')
+    expect(seen.toasts.at(-1)).toBe('Lien du commit copié')
+    // Sans copie possible, le toast donne l'adresse à recopier.
+    isCopied = false
+    await pane.press({ key: 'commit-link-h2full' })
+    expect(seen.toasts.at(-1)).toBe('Copie impossible : https://github.com/matwi5/demo/commit/h2full')
+    await pane.unmount()
+
+    const desktop = await mountPane($, 'desktop')
+    const links = async () => (await desktop.findAll({ type: 'Link' })).map((l: any) => [l.props.label, l.props.href])
+    // Le tiroir Pull request et l'onglet Historique restent ouverts d'une surface à l'autre.
+    expect(await links()).toContainEqual(['Ouvrir ↗', PR_URL])
+    expect(await links()).toContainEqual(['Ouvrir sur GitHub ↗', PR_URL])
+    expect(await links()).toContainEqual(['↗', 'https://github.com/matwi5/demo/commit/h1full'])
+    expect(await desktop.find({ key: 'commit-link-h1full' })).toBeUndefined()
+    await desktop.unmount()
+  })
+
   test('une commande dont le dépôt montre l’effet n’est plus « en cours », même si le tour continue', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const fake = fakeRepo()

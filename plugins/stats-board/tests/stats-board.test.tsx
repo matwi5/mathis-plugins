@@ -694,6 +694,48 @@ describe('stats-board', () => {
     })
   }
 
+  for (const surface of SURFACES) {
+    test(`requêtes : une question à boutons sort du temps actif, sauf les appels d'un sous-agent pendant ce temps (${surface})`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const seen = world(on)
+      const engine = requestEngine(on, clock)(surface, $)
+      // Sous le plugin : la question attend la réponse de l'utilisateur, ici 10 min, pendant lesquelles un sous-agent appelle le modèle.
+      let during: () => Promise<void> = async () => {}
+      on('tool.call', { tool: 'AskUserQuestion' }, async () => {
+        await clock.advance(2 * 60_000)
+        await during()
+        await clock.advance(8 * 60_000 - 4000)
+        return { result: { questions: [], answers: {} } }
+      })
+      await start($, clock, surface)
+      const sentAt = clock.now()
+      const t1 = await engine.send('Pose-moi la question puis continue')
+      await engine.step(t1, OPUS(1000, 3000))
+      await engine.spawn('a1')
+      during = () => engine.agentStep('a1', OPUS(1000, 3000))
+      const asked = clock.now()
+      await $.tool.call({ tool: 'AskUserQuestion', questions: [] } as any)
+      const answered = clock.now()
+      await engine.step(t1, OPUS(1000, 3000))
+      await engine.finish(t1)
+      await clock.advance(6000)
+      // Le relevé garde l'attente et l'appel du sous-agent pendant l'attente.
+      const log = Object.values(logsOf(seen))[0]
+      const r = log.requests[0]
+      expect(r.waits).toEqual([[asked, answered]])
+      expect(r.busy).toEqual([[asked + 2 * 60_000, asked + 2 * 60_000 + 4000]])
+      expect(r.realMs).toBe(answered + 4000 - sentAt)
+      const pane = await mountPane($, surface, 100)
+      await pane.press({ key: 'tab-discussion' })
+      const all = await drawn(pane)
+      // 4 s avant la question, 4 s d'appel du sous-agent, 4 s après : 12 s actives ; 10 min moins 4 s d'attente.
+      expect(all).toMatch(new RegExp(`"Temps actif".{0,300}12${NB}s`))
+      expect(all).toContain('Attente de ta réponse')
+      expect(all).toMatch(new RegExp(`"Attente de ta réponse".{0,300}9${NB}min${NB}56`))
+      expect(all).toContain(`attente${NB}9${NB}min${NB}56`)
+    })
+  }
+
   test('requêtes : un caractère de contrôle en tête de message ne passe pas dans le dessin', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     world(on)
@@ -1263,6 +1305,8 @@ describe('stats-board', () => {
       let all = await drawn(pane)
       expect(all).toContain(`actif${NB}1${NB}h${NB}30`)
       expect(all).toContain(`14${NB}$/h${NB}actif`)
+      // Une seule discussion par jour sur la démo : son temps cumulé vaut son temps actif.
+      expect(all).toContain(`cumulé${NB}1${NB}h${NB}30`)
       // Modèles : 17 min d'API, 40 tok/s en moyenne pondérée, médiane des appels vers 45.
       await pane.press({ key: 'tab-models' })
       all = await drawn(pane)
@@ -1281,6 +1325,18 @@ describe('stats-board', () => {
       expect(all).toContain('Temps actif par heure')
       expect(all).toContain(`Le plus à 14${NB}h (1${NB}h${NB}00 sur la période)`)
       expect(all).toContain('Heures de début des sessions (ce poste)')
+      // En temps cumulé, 10 h compte les deux discussions qui se chevauchent : 30 + 30 min, à égalité avec 14 h.
+      await pane.press({ key: 'duration-cumul' })
+      all = await drawn(pane)
+      expect(all).toContain('Temps cumulé par heure')
+      expect(all).toContain(`Le plus à 10${NB}h (1${NB}h${NB}00 sur la période)`)
+      // Le choix vaut aussi pour l'Évolution en durée.
+      await pane.press({ key: 'tab-trend' })
+      await pane.press({ key: 'metric-duration' })
+      all = await drawn(pane)
+      expect(all).toContain('Temps cumulé par')
+      await pane.press({ key: 'duration-active' })
+      expect(await drawn(pane)).toContain('Temps actif par')
     })
   }
 
@@ -1302,13 +1358,17 @@ describe('stats-board', () => {
       const text = Object.entries(seen.written).find(([p]) => p.endsWith('/claude-usage/machines/Portable.json'))![1]
       const published = JSON.parse(text)
       expect(published.schema).toBe(1)
-      expect(published.active).toContainEqual({ date: '2026-10-07', project: HERE_KEY, activeMs: 30 * 60_000, requests: 1 })
+      expect(published.active).toContainEqual({ date: '2026-10-07', project: HERE_KEY, activeMs: 30 * 60_000, requests: 1, cumulMs: 30 * 60_000 })
       expect(published.hours.find((h: any) => h.date === '2026-10-07').hours[10]).toBe(45 * 60_000)
+      expect(published.hours.find((h: any) => h.date === '2026-10-07').cumul[10]).toBe(60 * 60_000)
       for (const key of ['"times"', '"seconds"', '"sentAt"', '"speeds"', '"files"', '.json"']) expect(text).not.toContain(key)
       const pane = await mountPane($, surface, 120)
       // Tous les postes : 45 + 20 min le 7, 1 h le 6.
       let all = await drawn(pane)
       expect(all).toMatch(new RegExp(`"Temps actif".{0,300}2${NB}h${NB}05`))
+      // Le Mac ne publie pas encore de temps cumulé (d'avant la 0.11.0) : le 7 n'est pas mesuré, et c'est dit.
+      expect(all).toMatch(new RegExp(`"Temps cumulé".{0,300}1${NB}h${NB}00`))
+      expect(all).toMatch(/1.jour sans mesure \(poste pas à jour\)/)
       await pane.press({ key: 'tab-rhythm' })
       all = await drawn(pane)
       expect(all).toContain(`tous${NB}les${NB}postes`)
@@ -1318,6 +1378,7 @@ describe('stats-board', () => {
       all = await drawn(pane)
       expect(all).toContain(`durée${NB}suivie${NB}depuis${NB}le${NB}07/10`)
       expect(all).toMatch(new RegExp(`"Temps actif".{0,300}20${NB}min${NB}00`))
+      expect(all).toMatch(/"Temps cumulé".{0,300}"—"/)
       // Le Serveur ne publie pas de durée : elles ne sont pas mesurées.
       await pane.press({ key: 'machine-Serveur' })
       all = await drawn(pane)

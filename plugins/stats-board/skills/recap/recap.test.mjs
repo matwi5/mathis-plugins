@@ -222,17 +222,36 @@ test('la discussion : temps actif sans double compte, temps API, requêtes, la p
   assert.match(out, /- Temps actif 50 min 00 · temps API 7 min 00 · 2 requêtes · la plus chère : 14:20, 4,25 \$/)
 })
 
-test('la journée : temps actif et temps API du jour, par projet', () => {
+test('la journée : temps actif, temps cumulé et temps API du jour, par projet', () => {
   const out = render({ ...base, requestLogs: LOGS, projectNames: { ...base.projectNames, '-Users-m-api': 'api' } })
-  assert.match(out, /- Temps actif 1 h 10 · temps API 8 min 00 · 3 requêtes/)
-  assert.match(out, /\| Projet \| Coût \| Part \| Tokens \| Temps actif \|/)
-  assert.match(out, /\| app \| 30,00 \$ \| 100 % \| 50 M \| 50 min 00 \|/)
+  assert.match(out, /- Temps actif 1 h 10 · temps cumulé 1 h 10 · temps API 8 min 00 · 3 requêtes/)
+  assert.match(out, /\| Projet \| Coût \| Part \| Tokens \| Temps actif \| Temps cumulé \|/)
+  assert.match(out, /\| app \| 30,00 \$ \| 100 % \| 50 M \| 50 min 00 \| 50 min 00 \|/)
+  // Une discussion de plus en même temps (14:10–14:40) : le temps actif ne bouge pas, le temps cumulé l'ajoute.
+  const busy = [...LOGS, requestLog('lie', '-Users-m-app', [['2026-10-14T12:10:00Z', 30, 60, 1]])]
+  const both = render({ ...base, requestLogs: busy })
+  assert.match(both, /- Temps actif 1 h 10 · temps cumulé 1 h 40 · temps API 9 min 00 · 4 requêtes/)
+  assert.match(both, /\| app \| 30,00 \$ \| 100 % \| 50 M \| 50 min 00 \| 1 h 20 \|/)
+})
+
+test('une question à boutons : son attente sort du temps actif, sauf les appels des sous-agents pendant ce temps', () => {
+  // 14:00–14:30, une question de 14:05 à 14:25, un sous-agent appelé de 14:10 à 14:12 : 5 + 2 + 5 = 12 min actives.
+  const at = (hhmm) => Date.parse(`2026-10-14T${hhmm}:00Z`)
+  const log = requestLog(ID, '-Users-m-app', [['2026-10-14T12:00:00Z', 30, 120, 1.5]])
+  log.requests[0].waits = [[at('12:05'), at('12:25')]]
+  log.requests[0].busy = [[at('12:10'), at('12:12')]]
+  const out = render({ ...base, requestLogs: [log] })
+  assert.match(out, /- Temps actif 12 min 00 · attente de ta réponse 18 min 00 · temps API 2 min 00 · 1 requête/)
+  // Une attente restée ouverte (redémarrage pendant la question) va jusqu'à la fin de la requête, jamais au-delà.
+  log.requests[0].waits = [[at('12:20'), null]]
+  log.requests[0].busy = []
+  assert.match(render({ ...base, requestLogs: [log] }), /- Temps actif 20 min 00 · attente de ta réponse 10 min 00/)
 })
 
 test('sans fichier de relevé (avant la 0.10.0), les durées sont « — »', () => {
   const out = render({ ...base, requestLogs: [] })
   assert.match(out, /- Temps actif — · temps API — \(pas de relevé : discussion d'avant la 0\.10\.0\)/)
-  assert.match(out, /\| app \| 30,00 \$ \| 100 % \| 50 M \| — \|/)
+  assert.match(out, /\| app \| 30,00 \$ \| 100 % \| 50 M \| — \| — \|/)
 })
 
 test('fichiers de relevé lus sur le disque : récents ou de la discussion ; un JSON coupé est omis et signalé', () => {
@@ -267,8 +286,8 @@ test('le parcours : temps actif sans double compte entre sessions qui tournent e
   const sessions = [session(ID, '-Users-m-app', '2026-10-14T12:00:00Z', '2026-10-14T12:50:00Z', 10), session('lie', '-Users-m-app--claude-worktrees-groupe-A', '2026-10-14T12:40:00Z', '2026-10-14T13:10:00Z', 4)]
   const logs = [LOGS[0], requestLog('lie', '-Users-m-app--claude-worktrees-groupe-A', [['2026-10-14T12:40:00Z', 30, 240, 2]])]
   const out = renderParcours({ tz, since: '2026-10-01', worktreesKey: '-Users-m-app', sessionId: ID, sessions, titles: {}, projectNames: {}, requestLogs: logs })
-  // 14:00–14:50 et 14:40–15:10 : 1 h 10, pas 1 h 20 ; 2 + 5 + 4 min d'API.
-  assert.match(out, /- Temps actif 1 h 10 \(sans double compte entre sessions\) · temps API 11 min 00 · 3 requêtes/)
+  // 14:00–14:50 et 14:40–15:10 : 1 h 10 actives, 1 h 20 cumulées ; 2 + 5 + 4 min d'API.
+  assert.match(out, /- Temps actif 1 h 10 \(sans double compte entre sessions\) · temps cumulé 1 h 20 · temps API 11 min 00 · 3 requêtes/)
   assert.match(out, /\| Session \| Projet \| Heures \| Durée \| Actif \| Coût \|/)
   assert.match(out, /\| 30 min 00 \| 4,00 \$ \|/)
   // Une session du parcours sans relevé : le total le dit ; un fichier illisible d'une autre session ne compte pas.

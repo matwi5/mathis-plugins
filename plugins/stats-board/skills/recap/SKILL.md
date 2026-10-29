@@ -1,12 +1,12 @@
 ---
 name: recap
-description: Récap de l'usage Claude Code en chat, d'après ccusage et les relevés de requêtes de stats-board — la discussion en cours (coût, tokens, cache, durée, temps actif, temps API, requêtes et la plus chère, modèles, sous-agents) et la journée (coût, tokens, temps actif et temps API de ce poste, par projet et par modèle, discussions actives, bloc de 5 h et son rythme, autres postes publiés dans claude-usage), ou un parcours entier (discussion principale, sessions liées et sous-agents, retrouvés par le début de leur titre ou par les worktrees groupe-* d'un projet, avec leur temps actif sans double compte). À utiliser sur « /stats-board:recap », « récap de l'usage », « combien m'a coûté cette discussion », « combien j'ai consommé aujourd'hui », « coût de la journée », « récap du parcours », « combien a coûté le parcours ». Pas pour ouvrir le panneau de statistiques, qui passe par /ccstats.
+description: Récap de l'usage Claude Code en chat, d'après ccusage et les relevés de requêtes de stats-board — la discussion en cours (coût, tokens, cache, durée, temps actif, attente de ta réponse, temps API, requêtes et la plus chère, modèles, sous-agents) et la journée (coût, tokens, temps actif, temps cumulé et temps API de ce poste, par projet et par modèle, discussions actives, bloc de 5 h et son rythme, autres postes publiés dans claude-usage), ou un parcours entier (discussion principale, sessions liées et sous-agents, retrouvés par le début de leur titre ou par les worktrees groupe-* d'un projet, avec leur temps actif sans double compte et leur temps cumulé). À utiliser sur « /stats-board:recap », « récap de l'usage », « combien m'a coûté cette discussion », « combien j'ai consommé aujourd'hui », « coût de la journée », « récap du parcours », « combien a coûté le parcours ». Pas pour ouvrir le panneau de statistiques, qui passe par /ccstats.
 allowed-tools: Bash(node "${CLAUDE_SKILL_DIR}/recap.mjs" *)
 ---
 
 # Récap d'usage : discussion et journée, ou parcours
 
-Tous les chiffres viennent du script, qui interroge ccusage et lit les fichiers de relevé des requêtes de stats-board (temps actif, temps API, requêtes ; « — » pour une discussion d'avant la 0.10.0). N'en calcule ni n'en arrondis aucun toi-même.
+Tous les chiffres viennent du script, qui interroge ccusage et lit les fichiers de relevé des requêtes de stats-board (temps actif, temps cumulé, attente de ta réponse, temps API, requêtes ; « — » pour une discussion d'avant la 0.10.0). N'en calcule ni n'en arrondis aucun toi-même.
 
 1. Lance, avec un délai de 300 000 ms (le premier appel de la journée peut télécharger ccusage), selon la demande :
 

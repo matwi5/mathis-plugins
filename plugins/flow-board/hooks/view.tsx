@@ -8,7 +8,7 @@
 // `tests/dessin.test.mjs` refuse deux espaces ordinaires de suite dans un texte, `gap` et une
 // prop à `undefined`, ici comme dans `cells.ts` et `svg.ts`.
 
-import type { SyncState, AgentStatus, AgentsWindow, AdvisorCall, AdvisorLane, Artifact, ArtifactKind, Board, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, AgentLane, AgentMark, AgentType, RegistryAgent, SegmentKind, SessionRegistry, Ticket, ToolFamily, TicketGroup, TicketStatus, Tone, UiState } from '../types'
+import type { SyncState, AgentStatus, AgentsWindow, AdvisorCall, AdvisorLane, Artifact, ArtifactKind, Board, Closing, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, AgentLane, AgentMark, AgentType, RegistryAgent, SegmentKind, SessionRegistry, Ticket, ToolFamily, TicketGroup, TicketStatus, Tone, UiState } from '../types'
 import { ANYTIME_GROUPS, C, CODE_SKILLS, COMMAND_GROUPS, FLOW_COMMANDS, LAUNCHERS, SKILLS, commandLineOf, slashOf, type AnytimeTool, type SkillDef, type StepDef } from './catalog.ts'
 import {
   relayForGroup,
@@ -32,7 +32,8 @@ import {
   type GroupPlan,
   type GroupView,
   isPickable,
-  isGroupReviewed,
+  hasUnreadableCounts,
+  isSecuritySettled,
   isTicketReviewEnough,
   groupDone,
   isWaitingTicket,
@@ -49,12 +50,13 @@ import {
   commandArgsOf,
   groupReviewArgs,
 } from './model.ts'
-import { MAIN, runningOf } from './registry.ts'
+import { MAIN, reviewForkName, runningOf } from './registry.ts'
 import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
 import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
+import { reopenText, type ReopenText } from './closing.ts'
 import { advisorCostOf, costOf, costText, familyOf, pricesFor, type UnitPrices } from './cost.ts'
 import { HOUR_MS, TOOL_FAMILIES, WORKING_KINDS, activityOf, buildAxis, laneMarks, laneParts, laneTree, rulerTicks, sliceAxis, summaryOf, unionOf, windowBounds, zoomWindow, type Axis, type AxisPiece, type LanePart } from './timeline.ts'
 import { DEFAULT, FAMILY_CELL, WAIT_COLOR, WAIT_GLYPH, laneCells, laneRaster, markLook, pack, rulerCells, textColorOf, type LaneCell } from './cells.ts'
@@ -185,12 +187,15 @@ export type Actions = {
   launchAll: () => unknown
   /** Confie un groupe prêt à une session liée ; le parcours reste dans cette discussion. */
   launchGroupLinked: (id: string) => unknown
+  /** La même session liée, en xhigh imposé ; `surface` : celle de l'appui (l'app y plafonne l'effort). */
+  launchGroupLinkedXhigh: (id: string, surface?: string) => unknown
   /** Annule l'envoi d'un groupe à une session liée qui n'a pas été lancée. */
   cancelGroupLinked: (id: string) => unknown
   /** Fait faire par sa session liée la revue d'un groupe rendu sans revue. */
   reviewLinkedGroup: (id: string) => unknown
   /** Demande à Claude de fermer la session liée et le worktree d'un groupe rendu. */
   closeLinkedGroup: (id: string) => unknown
+  closeLinkedItems: () => unknown
   /** Demande à Claude la revue de sécurité d'un groupe (ou du lot, `lot`) par un sous-agent relecteur. */
   securityReview: (id: string) => unknown
   /** Demande à Claude un diagnostic de bug dans une session liée, en détour de la phase en cours. */
@@ -235,6 +240,8 @@ export type Actions = {
   openPane: () => unknown
   /** Copie l'adresse d'un ticket (`what` : Asana, Issue) dans le presse-papiers de la surface pressée. */
   copyLink: (url: string, what: string, surface?: string) => unknown
+  /** « ↺ Rouvrir » : copie la commande qui rouvre une session fermée (pour l'app, qui recrée son worktree) ; ne change rien d'enregistré. */
+  reopenSession: (reopen: ReopenText, surface?: string) => unknown
   /** Onglet Agents : la fenêtre de vue de la frise (zoom, déplacement) ; null, tout. */
   setAgentsWindow: (win: AgentsWindow | null) => unknown
   /** Onglet Agents : montre la frise d'une session liée (sa clé), ou celle de l'orchestrateur (null). */
@@ -407,11 +414,15 @@ const roadNodes = (run: Run): RoadNode[] => {
   if (run.phases.length === 1) {
     const only = run.phases[0]!
     const def = SKILLS[only.skill]!
-    return only.steps.map(s => ({
-      label: def.steps.find(x => x.id === s.id)?.label ?? s.id,
-      color: def.color,
-      state: s.status === 'done' ? 'done' : s.status === 'active' ? 'active' : s.status === 'skipped' ? 'skipped' : 'pending',
-    }))
+    return only.steps.map(s => {
+      const sd = def.steps.find(x => x.id === s.id)
+      return {
+        label: sd?.label ?? s.id,
+        short: sd?.shortLabel,
+        color: def.color,
+        state: s.status === 'done' ? 'done' : s.status === 'active' ? 'active' : s.status === 'skipped' ? 'skipped' : 'pending',
+      }
+    })
   }
   const nextAt =
     currentPhase(run).status === 'done' ? run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending') : -1
@@ -586,9 +597,22 @@ const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
   const inFlight = linkedInFlight(l.phase).length
   const total = linked.items.length
   const isWaiting = inFlight > 0 && linked.session === undefined
+  // Terminée : sa fermeture s'affiche, et un nouvel envoi attend qu'elle soit fermée.
+  if (inFlight === 0 && linked.session !== undefined && linked.closing?.state !== 'closed') {
+    return (
+      <Box key="linked" flexDirection="column">
+        {line(k, [T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }), T(k, `fermer d'abord la session précédente avant un nouvel envoi`, { dim: true, wrap: 'wrap' })], true)}
+        {closingRow(k, 'items', linked.closing, () => l.act.closeLinkedItems())}
+      </Box>
+    )
+  }
   const parts =
     inFlight === 0
-      ? [T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }), T(k, `${label}${NB}:${NB}${total}/${total}`, { dim: true })]
+      ? [
+          T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }),
+          T(k, `${label}${NB}:${NB}${total}/${total}`, { dim: true }),
+          linked.closing?.state === 'closed' && T(k, `✕${NB}session et worktree fermés`, { dim: true }),
+        ]
       : linked.session !== undefined
         ? [
             T(k, `↗${NB}Session${NB}liée${NB}au${NB}travail`, { color: C.blue, bold: true }),
@@ -602,9 +626,13 @@ const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
               T(k, `${plural(inFlight, label.replace(/s$/, ''), label)} en attente : Claude a rendu la main sans lancer de session. S'il te pose une question, réponds-lui ; sinon redemande, ou annule pour les remettre au choix.`, { dim: true, wrap: 'wrap' }),
             ]
           : [T(k, `↗${NB}Session${NB}liée${NB}à${NB}lancer`, { color: C.amber, bold: true }), T(k, `${plural(inFlight, label.replace(/s$/, ''), label)} en attente : envoie la demande à Claude, qui lance la session (plus dans le prompt : « Redemander »)`, { dim: true, wrap: 'wrap' })]
+  // Fermée : de quoi la rouvrir sur sa branche gardée.
+  const run = l.view.board?.runs.find(r => r.phases.includes(l.phase))
+  const reopen = inFlight === 0 && run ? reopenText({ run, target: { kind: 'items', skill: l.phase.skill }, closing: linked.closing, session: linked.session, seq: linked.seq, root: l.view.board?.root ?? '' }) : null
   return (
     <Box key="linked" flexDirection="row" flexWrap="wrap" alignItems="center">
       <Box flexShrink={1}>{line(k, parts, true)}</Box>
+      {reopen && <Box marginLeft={1} flexShrink={0}>{reopenButton(k, 'items', reopen, l.act)}</Box>}
       {isWaiting && (
         <Box marginLeft={1} flexShrink={0}>
           <Button key="linked-retry" plain={true} dimColor={linked.missedAt === undefined} label={`↻${NB}Redemander`} onPress={() => l.act.relaunchLinked()} />
@@ -845,9 +873,16 @@ const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, ac
         <Button key={`group-linked-cancel-${g.group.id}`} plain={true} dimColor={true} label="Annuler" onPress={() => act.cancelGroupLinked(g.group.id)} />
       ) : null,
       isDelegable(g) ? <Button key={`launch-linked-${g.group.id}`} variant="primary" label={`↗${NB}Session${NB}liée`} onPress={() => act.launchGroupLinked(g.group.id)} /> : null,
+      isDelegable(g) ? xhighButton(k, `launch-xhigh-${g.group.id}`, g.group.id, act) : null,
     ],
     true,
   )
+}
+
+/** « ↗ xhigh », discret après « ↗ Session liée » : le même groupe, en xhigh imposé ; l'appui donne sa surface. */
+const xhighButton = (k: Kit, key: string, id: string, act: Actions): unknown => {
+  const { Button } = k
+  return <Button key={key} plain={true} dimColor={true} label={`↗${NB}xhigh`} onPress={(press?: { surface?: string }) => act.launchGroupLinkedXhigh(id, press?.surface)} />
 }
 
 /** Un lot parallèle : une session liée par groupe. */
@@ -876,11 +911,12 @@ const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Ac
   const group = { id }
   if (!sec) return null
   if (sec.ranAt !== undefined) {
-    const counts =
-      sec.findings !== undefined
-        ? ` · ${plural(sec.findings, 'constat')}${(sec.fixed ?? 0) > 0 ? ` · ${sec.fixed} corrigé${sec.fixed! > 1 ? 's' : ''}` : ''}`
+    const counts = hasUnreadableCounts(sec)
+      ? ` · comptes relus hors forme (—), à renvoyer`
+      : sec.findings !== undefined
+        ? ` · ${plural(sec.findings, 'constat')}${(sec.fixed ?? 0) > 0 ? ` · ${sec.fixed} corrigé${sec.fixed! > 1 ? 's' : ''}` : ''}${(sec.dismissed ?? 0) > 0 ? ` · ${sec.dismissed} laissée${sec.dismissed! > 1 ? 's' : ''}` : ''}${(sec.proposedDismissed ?? 0) > 0 && !isSecuritySettled(sec) ? ` · ${sec.proposedDismissed} à laisser, proposé${sec.proposedDismissed! > 1 ? 'es' : 'e'} par la session` : ''}`
         : ''
-    const isOpen = (sec.findings ?? 0) > (sec.fixed ?? 0)
+    const isOpen = !isSecuritySettled(sec)
     return <Box key={`sec-${group.id}`} marginLeft={2}>{T(k, `⛨${NB}sécurité relue${counts}`, { color: isOpen ? C.amber : C.green })}</Box>
   }
   if (sec.isAdvised === undefined) return null
@@ -898,6 +934,42 @@ const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Ac
         {T(k, `${sec.isAdvised ? 'conseillée' : `⛨${NB}sécurité jugée inutile`}${sec.why ? ` : ${sec.why}` : ''}`, { color: sec.isAdvised ? C.amber : undefined, dim: !sec.isAdvised, wrap: 'wrap' })}
       </Box>
       {!sec.isAdvised && launch}
+    </Box>
+  )
+}
+
+/** « ↺ Rouvrir » d'une session fermée, quand la commande (pour l'app, celle qui recrée son worktree) a pu s'écrire. */
+const reopenButton = (k: Kit, id: string, reopen: ReopenText | null | undefined, act: Actions | undefined): unknown => {
+  const { Button } = k
+  if (!reopen || !act) return null
+  return <Button key={`reopen-${id}`} plain={true} dimColor={true} label={`↺${NB}Rouvrir`} onPress={(press?: { surface?: string }) => act.reopenSession(reopen, press?.surface)} />
+}
+
+/**
+ * Où en est la fermeture d'une session liée rendue : rien tant que rien n'a été tenté (elle part
+ * d'office par la réponse de l'outil), puis fermée, à archiver dans l'app, ou arrêtée avec sa
+ * raison et « ↻ Relancer la fermeture », le seul bouton, pour relancer une fois la cause réglée.
+ * Fermée avec de quoi la rouvrir : « ↺ Rouvrir ».
+ */
+const closingRow = (k: Kit, id: string, closing: Closing | undefined, relaunch: () => unknown, reopen?: ReopenText | null, act?: Actions): unknown => {
+  const { Box, Button } = k
+  if (!closing) return null
+  if (closing.state === 'closed')
+    return (
+      <Box key={`close-row-${id}`} flexDirection="row" flexWrap="wrap" alignItems="center">
+        <Box marginRight={1} flexShrink={1}>
+          {T(k, `✕${NB}session et worktree fermés`, { dim: true })}
+        </Box>
+        {reopenButton(k, id, reopen, act)}
+      </Box>
+    )
+  if (closing.state === 'app') return <Box key={`close-row-${id}`}>{T(k, `⧗${NB}à archiver dans l'app${closing.why ? ` : ${closing.why}` : ''}`, { color: C.amber, wrap: 'wrap' })}</Box>
+  return (
+    <Box key={`close-row-${id}`} flexDirection="row" flexWrap="wrap" alignItems="center">
+      <Box marginRight={1} flexShrink={1}>
+        {T(k, `!${NB}fermeture arrêtée${closing.why ? ` : ${closing.why}` : ''}`, { color: C.amber, wrap: 'wrap' })}
+      </Box>
+      <Button key={`close-linked-${id}`} plain={true} dimColor={true} label={`↻${NB}Relancer la fermeture`} onPress={relaunch} />
     </Box>
   )
 }
@@ -954,15 +1026,16 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
             ))}
         </Box>
         {/* Pas avant sa revue : elle se fait dans la session et son worktree. */}
-        {!g.isFallback && g.group.delegated !== undefined && isGroupReviewed(run, g.group) && (
-          <Box key={`close-row-${g.group.id}`} flexDirection="row" flexWrap="wrap">
-            {g.group.delegated.closeAskedAt === undefined ? (
-              <Button key={`close-linked-${g.group.id}`} plain={true} dimColor={true} label={`✕${NB}Fermer la session et le worktree`} onPress={() => act.closeLinkedGroup(g.group.id)} />
-            ) : (
-              T(k, `✕${NB}fermeture demandée (session et worktree)`, { dim: true })
-            )}
-          </Box>
-        )}
+        {!g.isFallback &&
+          g.group.delegated !== undefined &&
+          closingRow(
+            k,
+            g.group.id,
+            g.group.delegated.closing,
+            () => act.closeLinkedGroup(g.group.id),
+            reopenText({ run, target: { kind: 'group', id: g.group.id, name: g.group.name }, closing: g.group.delegated.closing, session: g.group.delegated.session, seq: g.group.delegated.seq, root: view.board?.root ?? '' }),
+            act,
+          )}
         {!g.isFallback && securityRow(k, g.group.security, g.group.id, act)}
         {/* « tout voir » déplie aussi les groupes finis : leurs tickets restent consultables. */}
         {view.ui.showAllTickets && g.tickets.map(ticket => ticketRow(k, run, ticket, view, act))}
@@ -983,7 +1056,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
       {plan.delegated.length > 0 &&
         T(k, `↗${NB}${plan.delegated.join(', ')} en session liée : son avancement (tickets d'après Asana, commits, tests) s'affiche sur le groupe, marqué ↗. Claude vérifie le travail à sa note de fin, puis rend les statuts ici.`, { dim: true, wrap: 'wrap' })}
       {isNewHere &&
-        T(k, `↗${NB}« Session liée » : Claude lance une session qui fait le groupe, et le parcours reste ici.`, { dim: true, wrap: 'wrap' })}
+        T(k, `↗${NB}« Session liée » : Claude lance une session qui fait le groupe, et le parcours reste ici. « ↗ xhigh » : la même session, lancée en xhigh, sans question sur l'effort, pour un groupe qui demande du jugement.`, { dim: true, wrap: 'wrap' })}
     </Box>
   )
 }
@@ -1632,7 +1705,7 @@ const advisorOfCaller = (calls: readonly AdvisorCall[], by: string, view: View):
 const advisorCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], agents: readonly RegistryAgent[], view: View): unknown => {
   const { Box } = k
   const advisor = l.advisor!
-  const callerOf = (by: string): string => (by === MAIN ? (lanes[0]?.name ?? 'Orchestrateur') : (agents.find(a => a.agentId === by)?.name ?? by))
+  const callerOf = (by: string): string => (by === MAIN ? (lanes[0]?.name ?? 'Orchestrateur') : (lanes.find(x => x.agent?.agentId === by)?.name ?? agents.find(a => a.agentId === by)?.name ?? by))
   const shown = advisor.calls.slice(-ADVISOR_CALLS_SHOWN)
   const sum = advisorCostOf(advisor.calls, view.agentPrices ?? {})
   const t = sum.tokens
@@ -1687,6 +1760,7 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
       {line(k, [type ? T(k, `${type.glyph}${NB}${type.label}`, { color: type.color, bold: true }) : T(k, l.caption !== undefined ? `↗${NB}Session${NB}liée` : `◆${NB}Orchestrateur`, { color: l.color, bold: true }), T(k, l.name, { bold: true, wrap: 'truncate-end' })], true)}
       {models.length > 0 && cardLine(k, 'Modèles', models.join(' · '))}
       {lane.effort !== undefined && cardLine(k, 'Effort', lane.effort)}
+      {a && l.name !== a.name && cardLine(k, 'Commande', a.name)}
       {a && cardLine(k, 'Lancé par', parent)}
       {a && cardLine(k, 'Période', `${clockText(a.startedAt)}${a.finishedAt !== undefined ? ` → ${clockText(a.finishedAt)}` : ' → en cours'}${a.isEndUnseen === true ? ' (fin constatée après coup)' : ` · ${dur((a.finishedAt ?? now) - a.startedAt)}`}`)}
       {t && cardLine(k, 'Coût', agentCost(l.lane, a, view) !== null ? costText(agentCost(l.lane, a, view)!) : 'coût indisponible')}
@@ -1735,6 +1809,12 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
 }
 
 
+/**
+ * L'effort demandé aux requêtes d'une session liée ou d'un sous-agent, sous son nom (jamais pour
+ * l'orchestrateur) ; rien quand il n'est pas relevé.
+ */
+const effortText = (k: Kit, effort: string | undefined): unknown => (effort !== undefined && effort !== '' ? T(k, effort, { color: C.lilac }) : null)
+
 /** Une rangée de la frise : à gauche le bouton (nom) et l'état, à droite la piste. */
 const laneRow = (k: Kit, l: FriseLane, axis: Axis, view: View, act: Actions, labelCells: number, trackCells: number): unknown => {
   const { Box, Button } = k
@@ -1763,7 +1843,7 @@ const laneRow = (k: Kit, l: FriseLane, axis: Axis, view: View, act: Actions, lab
       <Box key={`lane-row-${l.key}`} flexDirection="row" alignItems="center">
         <Box width={labelCells} flexShrink={0} flexDirection="column" marginRight={1} paddingLeft={indent}>
           <Button key={`lane-${l.key}`} plain={true} label={`↗${NB}${l.name}`} onPress={() => act.selectAgentsSession(ls.key)} />
-          {line(k, [T(k, look.word, { color: look.color, dim: ls.state === 'closed' }), T(k, `session${NB}liée`, { dim: true })])}
+          {line(k, [T(k, look.word, { color: look.color, dim: ls.state === 'closed' }), T(k, `session${NB}liée`, { dim: true }), effortText(k, l.lane.effort)], true)}
         </Box>
         <Box flexShrink={1}>{laneTrack(k, l, axis, trackCells, now)}</Box>
       </Box>
@@ -1785,12 +1865,19 @@ const laneRow = (k: Kit, l: FriseLane, axis: Axis, view: View, act: Actions, lab
       <Box width={labelCells} flexShrink={0} flexDirection="column" marginRight={1} paddingLeft={indent}>
         <Button key={`lane-${l.key}`} plain={true} label={`${glyph}${NB}${l.name}`} onPress={() => act.toggleAgentCard(l.key)} />
         {a && state
-          ? line(k, [
-              a.model !== undefined && chip(k, shortModel(a.model), C.lilac),
-              T(k, state.word, { color: state.color, dim: a.status === 'done' }),
-              a.isEndUnseen !== true && T(k, dur((a.finishedAt ?? now) - a.startedAt), { dim: true }),
-            ])
-          : T(k, l.caption ?? `cette${NB}discussion`, { dim: true })}
+          ? line(
+              k,
+              [
+                a.model !== undefined && chip(k, shortModel(a.model), C.lilac),
+                effortText(k, a.effort),
+                T(k, state.word, { color: state.color, dim: a.status === 'done' }),
+                a.isEndUnseen !== true && T(k, dur((a.finishedAt ?? now) - a.startedAt), { dim: true }),
+              ],
+              true,
+            )
+          : l.caption !== undefined
+            ? line(k, [T(k, l.caption, { dim: true }), effortText(k, l.lane.effort)], true)
+            : T(k, `cette${NB}discussion`, { dim: true })}
       </Box>
       <Box flexShrink={1}>{laneTrack(k, l, axis, trackCells, now)}</Box>
     </Box>
@@ -2108,6 +2195,23 @@ const erasingLine = (k: Kit, view: View): unknown => {
 }
 
 /**
+ * Le repère court d'un ticket, pour le nom d'une passe « bogues » : la lettre de son groupe et son
+ * rang dans le groupe (E2), comme les relecteurs nomment les tickets ; sinon son id s'il est court
+ * (`03`, `#12`), jamais un id Asana entier.
+ */
+const ticketTagOf =
+  (board: Board | null) =>
+  (ticket: string): string | undefined => {
+    for (const run of board?.runs ?? []) {
+      for (const g of run.groups ?? []) {
+        const i = g.tickets.indexOf(ticket)
+        if (i >= 0) return `${g.id}${i + 1}`
+      }
+    }
+    return ticket.length <= 4 ? ticket : undefined
+  }
+
+/**
  * L'onglet Agents : en tête, l'orchestrateur et ses sessions liées en pastilles ; puis le résumé
  * et la frise de la session choisie. Celle de l'orchestrateur a sa piste en tête, une piste par
  * session liée (lancement et retour), puis une par sous-agent dans l'ordre de départ, sans
@@ -2130,10 +2234,19 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
       : isPastLoading
         ? null
         : (view.agents ?? null)
-  const agents = [...(reg?.agents ?? [])].sort((a, b) => a.startedAt - b.startedAt)
+  // Un appel à l'advisor sans réponse n'a pas fait attendre son appelant : son attente part de sa piste.
+  const voidWaits = new Set((reg?.advisor?.calls ?? []).filter(c => c.isVoid === true).map(c => `${c.by}|${c.s}`))
+  const withoutVoidWaits = <L extends AgentLane>(lane: L, by: string | undefined): L =>
+    voidWaits.size === 0 || by === undefined || !(lane.segments ?? []).some(x => x.k === 'waitAdvisor' && voidWaits.has(`${by}|${x.s}`))
+      ? lane
+      : { ...lane, segments: lane.segments!.filter(x => !(x.k === 'waitAdvisor' && voidWaits.has(`${by}|${x.s}`))) }
+  const agents = [...(reg?.agents ?? [])].map(a => withoutVoidWaits(a, a.agentId)).sort((a, b) => a.startedAt - b.startedAt)
   const now = view.now
   // Les sous-agents en arbre (Q13) : enfants en retrait sous leur parent, Workflow repliés.
   const tree = laneTree(agents, new Set(view.ui.openWorkflows ?? []))
+  // Les exécutions de /code-review sous leur nom standard ; le groupe, celui de la session montrée.
+  const tagOf = ticketTagOf(view.board ?? null)
+  const shownName = (a: RegistryAgent): string => reviewForkName(a.name, tagOf, reg?.group) ?? a.name
   // Dans la frise de l'orchestrateur, une piste par session liée : ses périodes de travail et
   // d'attente, un départ à son lancement, un retour à son compte rendu (ou à sa fin).
   const linkedLanes: FriseLane[] = chosen
@@ -2143,6 +2256,7 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
         name: ls.title,
         color: LINKED_COLOR,
         lane: {
+          ...(theirs?.main?.effort !== undefined ? { effort: theirs.main.effort } : {}),
           segments: settledLane(theirs?.main ?? {}, ls, theirs).segments ?? [],
           marks: [
             ...(ls.launchedAt !== undefined ? [{ k: 'relay' as const, at: ls.launchedAt }] : []),
@@ -2152,7 +2266,10 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
         linked: ls,
       }))
   const returns: AgentMark[] = chosen ? [] : linked.flatMap(({ session: ls }) => (ls.returnedAt !== undefined ? [{ k: 'back' as const, at: ls.returnedAt, to: `session:${ls.key}` }] : []))
-  const main = reg?.main ?? {}
+  const main = withoutVoidWaits(reg?.main ?? {}, MAIN)
+  // Les appels à l'advisor qui ont eu lieu : un appel sans réponse ne coûte rien et ne se montre pas.
+  const advisorCalls = (reg?.advisor?.calls ?? []).filter(c => c.isVoid !== true)
+  const advisor: AdvisorLane | undefined = advisorCalls.length > 0 ? { calls: advisorCalls } : undefined
   const lanes: FriseLane[] = [
     {
       key: MAIN,
@@ -2162,13 +2279,13 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
       ...(chosen ? { caption: `session${NB}liée` } : {}),
     },
     // La ligne advisor de la session montrée, seulement si elle l'a consulté.
-    ...((reg?.advisor?.calls.length ?? 0) > 0
-      ? [{ key: 'advisor', name: ADVISOR_NAME, color: ADVISOR_COLOR, lane: { segments: reg!.advisor!.calls.map(c => ({ k: 'write' as const, s: c.s, e: c.e ?? c.s })) }, advisor: reg!.advisor! }]
+    ...(advisor
+      ? [{ key: 'advisor', name: ADVISOR_NAME, color: ADVISOR_COLOR, lane: { segments: advisor.calls.map(c => ({ k: 'write' as const, s: c.s, e: c.e ?? c.s })) }, advisor }]
       : []),
     ...linkedLanes,
     ...tree.map((row): FriseLane =>
       row.kind === 'agent'
-        ? { key: row.agent.key, name: row.agent.name, color: AGENT_TYPE[row.agent.type ?? 'other'].color, lane: row.agent, agent: row.agent, depth: row.depth }
+        ? { key: row.agent.key, name: shownName(row.agent), color: AGENT_TYPE[row.agent.type ?? 'other'].color, lane: row.agent, agent: row.agent, depth: row.depth }
         : {
             key: `wf-${row.id}`,
             name: `⚙${NB}Workflow${NB}·${NB}${plural(row.agents.length, 'agent')}`,
@@ -2203,7 +2320,7 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
   const costs = agents.map(a => agentCost(a, a, view)).filter((c): c is number => c !== null)
   const totalCost = costs.length > 0 ? costs.reduce((n, c) => n + c, 0) : null
   // L'advisor à part, sous son nom : compté une seule fois, sur sa ligne.
-  const advisorSum = reg?.advisor ? advisorCostOf(reg.advisor.calls, view.agentPrices ?? {}) : null
+  const advisorSum = advisor ? advisorCostOf(advisor.calls, view.agentPrices ?? {}) : null
   const advisorPart = advisorSum?.tokens || advisorSum?.isUnknown ? (advisorSum.cost !== null && !advisorSum.isUnknown ? `advisor${NB}${costText(advisorSum.cost)}` : `advisor${NB}:${NB}coût${NB}inconnu`) : null
   const pauses = axis.pieces.filter(p => p.pause !== undefined)
   const labelCells = Math.max(18, Math.min(34, Math.floor(k.width * 0.36)))
@@ -2278,7 +2395,9 @@ const launchParts = (k: Kit, run: Run, rec: NextLaunch, view: View, act: Actions
     // Un groupe ne se fait qu'en session liée.
     const id = rec.group
     return {
-      buttons: rec.isDelegable ? [<Button key={`next-linked-${id}`} variant="primary" label={`↗${NB}Groupe ${id} · session liée`} onPress={() => act.launchGroupLinked(id)} />] : [],
+      buttons: rec.isDelegable
+        ? [<Button key={`next-linked-${id}`} variant="primary" label={`↗${NB}Groupe ${id} · session liée`} onPress={() => act.launchGroupLinked(id)} />, xhighButton(k, `next-xhigh-${id}`, id, act)]
+        : [],
       note: 'le prochain groupe prêt',
     }
   }
@@ -2289,7 +2408,7 @@ const launchParts = (k: Kit, run: Run, rec: NextLaunch, view: View, act: Actions
 
 const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const { Box, Button } = k
-  const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet })
+  const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet, versionUnits: view.sync.versionUnits })
   const rec = nextLaunchFor(run)
   const phase = currentPhase(run)
   if (rec === null && sug.primary === null && !sug.canFinish) return null
@@ -2325,6 +2444,11 @@ const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
           {buttons.map(b => (
             <Box marginRight={1}>{b}</Box>
           ))}
+        </Box>
+      )}
+      {rec === null && sug.versionPreview && (
+        <Box key="version-preview" flexDirection="column" marginTop={1}>
+          {sug.versionPreview.map(l => T(k, l, { dim: true, wrap: 'wrap' }))}
         </Box>
       )}
     </Box>

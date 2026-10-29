@@ -4,6 +4,21 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.11.0 — 2026-10-28
+
+### Ajouté
+- **Temps cumulé, à côté du temps actif** : la somme des temps actifs de chaque discussion (deux discussions en même temps comptent deux fois), quand le temps actif ne compte qu'une fois leur période commune. Journée : tuile « Temps cumulé » et temps cumulé de chaque projet. Aperçu : tuile « Temps cumulé » avec sa moyenne par jour actif. Évolution en durée et Rythme : bascule « temps actif / temps cumulé » sur la carte. Projets : temps cumulé de chaque projet. Pour une seule discussion (onglet Discussion, Sessions), il vaut son temps actif : rien de plus. Récap (`/stats-board:recap`) : temps cumulé du jour, de chaque projet et d'un parcours. Choix de Mathis : « Mettre à côté ».
+- **Attente de ta réponse, hors temps actif** : pendant une question à boutons (`AskUserQuestion`) ou un plan à valider (`ExitPlanMode`), la requête attend ; le mod note ce moment dans le fichier de relevé (`waits`) et l'enlève du temps actif, de l'heure, de la durée d'une requête pour les médianes et du temps cumulé. Les appels au modèle de ses sous-agents pendant ce temps (`busy`) restent actifs. Une nuit devant une question ne compte donc plus. Onglet Discussion : tuile « Attente de ta réponse », et « attente » sur une requête qui en a une ; récap de la discussion : « attente de ta réponse ». Une attente restée ouverte (redémarrage pendant la question) s'arrête à la fin de sa requête. Une demande d'autorisation d'outil n'est pas comptée : le moteur ne dit pas quand on y répond. Les requêtes relevées avant la 0.11.0 gardent leurs durées. Choix de Mathis : « Ne plus compter le temps où Claude t'attend ».
+- **Temps cumulé publié dans claude-usage**, au même format 1 : `cumulMs` sur chaque ligne `active`, `cumul` sur chaque ligne `hours`. Un poste pas encore à jour ne les publie pas : ses jours s'affichent « — » en temps cumulé, et l'Aperçu les compte à part (« N jours sans mesure »).
+
+### Changé
+- **Totaux par mois** : une ligne sans temps cumulé (écrite avant la 0.11.0, ou par une session pas encore à jour) fait relire tous les fichiers de relevé du mois au relevé suivant. Le format des mois reste le 1, pour qu'une session encore en 0.10 ne les écarte pas.
+
+### Développement
+- Le crochet `tool.call` de chaque outil d'attente est une fonction du module, nommée outil par outil : un nom d'outil en variable dans le filtre fait déborder la mémoire de `tsc`, et le moteur refuse un crochet déclaré dans `register`.
+
+---
+
 ## 0.10.1 — 2026-10-28
 
 ### Modifié

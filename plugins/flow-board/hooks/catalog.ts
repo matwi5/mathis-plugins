@@ -41,6 +41,11 @@ export type StepDef = {
   id: string
   /** Libellé affiché. */
   label: string
+  /**
+   * Nom court de l'étape, pour la frise du terminal d'un parcours à une seule phase, dont les
+   * stations sont les étapes ; `label` sinon.
+   */
+  shortLabel?: string
   /** Ce que Claude comprend de l'étape (anglais). */
   hint: string
   /** Le même hint quand le projet n'est pas un dépôt git (point fixe par copies), s'il diffère. */
@@ -110,7 +115,12 @@ export type SkillDef = {
   groupSteps?: StepDef[]
 }
 
-const step = (id: string, label: string, hint: string): StepDef => ({ id, label, hint })
+const step = (id: string, label: string, hint: string, shortLabel?: string): StepDef => ({
+  id,
+  label,
+  hint,
+  ...(shortLabel !== undefined ? { shortLabel } : {}),
+})
 
 /** Le hint d'une étape selon que le projet est un dépôt git ou non. */
 export const hintOf = (s: StepDef, isRepo: boolean): string => (isRepo ? s.hint : (s.noGitHint ?? s.hint))
@@ -167,7 +177,7 @@ export const SENSITIVE_NO_FIX = `when a ticket of the group touches a sensitive 
  * pour laisser démarrer le suivant ; un ticket sensible garde sa revue avant son commit.
  */
 export const COMMIT_BEFORE_REVIEW =
-  'a ticket sent with "sensitive": false is committed once its checks pass, before its review, so the next ticket starts while the review runs: the review target is then <commit before the ticket>..<the ticket\'s commit>, never ..HEAD (HEAD and the working tree already hold the next ticket); its fixes land in a commit of their own, and its findings go in "review" without "step" (the next ticket\'s steps stay where they are); the ticket turns done in the tracker only once its review is back and its fixes are committed; a ticket that touches a sensitive area, or did not say, keeps its review before its commit, on a snapshot ref (refs/worktree/flow-board/<ticket id>, see the review step)'
+  'a ticket sent with "sensitive": false is committed once its checks pass, before its review, so the next ticket starts while the review runs: the review target is then <commit before the ticket>..<the ticket\'s commit>, never ..HEAD (HEAD and the working tree already hold the next ticket); its fixes land in a commit of their own, and its findings go in "review" without "step" (the next ticket\'s steps stay where they are); the ticket turns done in the tracker only once its review is back and its fixes are committed (its content and form review too, when it has one); a ticket that touches a sensitive area, or did not say, keeps its review before its commit, on a snapshot ref (refs/worktree/flow-board/<ticket id>, see the review step)'
 
 /**
  * Les critères du ticket cochés avant son commit, chacun avec le test qui le couvre : des constats
@@ -183,6 +193,15 @@ export const TICK_CRITERIA =
  */
 export const TICKET_REVIEWER =
   'both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail'
+
+/**
+ * Les noms des relecteurs (description de l'appel Agent), tels que l'onglet Agents les montre : la
+ * sorte, puis la portée. Les noms variaient d'une session à l'autre (« Revue du ticket » suivi
+ * d'un numéro, « Revue Standards+Spec E1 ») ; les exécutions de /code-review, que le moteur nomme d'après leur
+ * commande, prennent la même forme dans la frise (`reviewForkName`).
+ */
+export const REVIEWER_NAMES =
+  'give each reviewer subagent you launch a standard description, the name the Agents tab shows: "Standards+Spec · <ticket>" for the two axes of a ticket, <ticket> being the group letter and the ticket\'s rank in its group (E2), or the ticket id in a lot without groups; "Sécurité · groupe <letter>" for a security reviewer ("Sécurité · lot" without groups); never the level nor the effort, which the tab shows apart'
 
 /**
  * Un groupe d'un seul ticket sans logique ni zone sensible : la revue du ticket est la seule, et la
@@ -203,7 +222,7 @@ export const TICKET_SNAPSHOT =
 
 /** La consigne de la revue d'un ticket, pour un point fixe donné ; sans git, la passe « bogues » n'a pas de plage. */
 const ticketReviewHint = (fixedPoint: string, isRepo: boolean): string =>
-  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}), its Standards and Spec axes, ${TICKET_REVIEWER}. Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the effort criterion of the security review method file decides (the stakes, the size), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
+  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}), its Standards and Spec axes, ${TICKET_REVIEWER}; for a ticket with a « Lecteur » line, the content and form review too ("Content and form review" below). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the effort criterion of the security review method file decides (the stakes, the size), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
 
 /** Le point fixe d'une revue de ticket. */
 export const TICKET_FIXED_POINT = 'fixed point: the commit before the ticket'
@@ -278,6 +297,7 @@ const SENSITIVE_STEP = step(
   'sensitive',
   'Conséquences sensibles',
   `list what the change, or a removal, leaves behind in a sensitive area (${SENSITIVE_AREAS}): files left in clear, logs that depend on a mode, data kept once a feature is gone; each one becomes a question to the user`,
+  'Sensible',
 )
 
 /**
@@ -288,10 +308,10 @@ const BUTTON_QUESTION =
   'a button question (AskUserQuestion): one sentence on what is validated and where to read it, then « Valider (Recommandé) » and « À reprendre » (none in a linked session: there the validation goes up to the main discussion)'
 
 const GRILL_STEPS = [
-  step('tree', 'Arbre des décisions', 'map the design tree of decisions'),
-  step('rounds', 'Tours de questions', 'ask the frontier, round after round'),
+  step('tree', 'Arbre des décisions', 'map the design tree of decisions', 'Arbre'),
+  step('rounds', 'Tours de questions', 'ask the frontier, round after round', 'Questions'),
   SENSITIVE_STEP,
-  step('agree', 'Accord partagé', `confirm the shared understanding with ${BUTTON_QUESTION}; the rounds before it stay in text`),
+  step('agree', 'Accord partagé', `confirm the shared understanding with ${BUTTON_QUESTION}; the rounds before it stay in text`, 'Accord'),
 ]
 
 const DECISIONS = { label: 'Décisions', hint: 'the decisions of the design tree (done = settled, dropped = out of scope)' }
@@ -490,11 +510,11 @@ export const SKILLS: Record<string, SkillDef> = {
     role: 'detour',
     isUserOnly: false,
     steps: [
-      step('mode', 'Logique ou UI', 'pick the logic or the UI branch'),
-      step('question', 'Question posée', 'state the question the prototype answers'),
-      step('build', 'Construire', 'build the throwaway prototype'),
+      step('mode', 'Logique ou UI', 'pick the logic or the UI branch', 'Branche'),
+      step('question', 'Question posée', 'state the question the prototype answers', 'Question'),
+      step('build', 'Construire', 'build the throwaway prototype', 'Bâtir'),
       step('iterate', 'Itérer', 'iterate on feedback'),
-      step('capture', 'Décision capturée', 'capture the verdict and clean up'),
+      step('capture', 'Décision capturée', 'capture the verdict and clean up', 'Décision'),
     ],
     items: { label: 'Variantes', hint: 'the variants or scenarios (done = kept, dropped = rejected)' },
     flow: [phase('prototype')],
@@ -538,8 +558,8 @@ export const SKILLS: Record<string, SkillDef> = {
     isUserOnly: false,
     steps: [
       step('frame', 'Procédure', 'list the stages and get them confirmed'),
-      step('trace', 'Tracer les étapes', 'URL, clicks and value of each stage'),
-      step('script', 'Écrire le script', 'copy the template, one stage per step'),
+      step('trace', 'Tracer les étapes', 'URL, clicks and value of each stage', 'Étapes'),
+      step('script', 'Écrire le script', 'copy the template, one stage per step', 'Script'),
       step('verify', 'Vérifier', 'bash -n, shellcheck, chmod +x, hand over'),
     ],
     flow: [phase('wizard')],
@@ -670,7 +690,7 @@ export const SKILLS: Record<string, SkillDef> = {
     steps: [
       step('facts', 'Rassembler les faits', 'collect the facts: git log since the run started, git status, the tracking file, the tracker'),
       step('write', 'Rédiger le rapport', 'write the report in the fixed sections, short and plain'),
-      step('validate', 'Ta validation', 'in one line of text, tell the user to click « ✓ Valider le rapport » in the dashboard, never with a button question; then wait for the user to validate the report from the dashboard'),
+      step('validate', 'Ta validation', 'in one line of text, tell the user to click « ✓ Valider le rapport » in the dashboard, never with a button question; then wait for the user to validate the report from the dashboard: flow-board then sends you a message saying so'),
     ],
     next: ['project:version'],
   },
@@ -743,14 +763,15 @@ export const SKILLS: Record<string, SkillDef> = {
     role: 'flow',
     isUserOnly: true,
     steps: [
-      step('style', 'Guide de style', 'load writing-for-agents'),
-      step('read', 'Lire la session', 'read the session logs'),
-      step('find', 'Pistes (7 axes)', 'look for improvements in the seven categories'),
-      step('present', 'Par sévérité', 'present them by severity, those that touch another repository apart, as a correction list ready to hand to an agent of that repository; then wait: the user picks the improvements of this repository in the dashboard and sends them to a linked session, or tells you which ones to apply'),
+      step('style', 'Guide de style', 'load writing-for-agents', 'Style'),
+      step('read', 'Lire la session', 'read the session logs', 'Lecture'),
+      step('find', 'Pistes (7 axes)', 'look for improvements in the seven categories', 'Pistes'),
+      step('present', 'Par sévérité', 'present them by severity, those that touch another repository apart, as a correction list ready to hand to an agent of that repository; then wait: the user picks the improvements of this repository in the dashboard and sends them to a linked session, or tells you which ones to apply', 'Tri'),
       step(
         'apply',
         'Modifications en cours',
-        'set by the dashboard once the linked session you launch for the improvements the user sent has started; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then complete unless some went back to todo',
+        'set by the dashboard once the linked session you launch for the improvements the user sent has started; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then close the session when the answer lists it under « Close now » and send "closed", then complete unless some went back to todo',
+        'Appliquer',
       ),
     ],
     items: { label: 'Pistes', hint: 'the improvement candidates of this repository only (label = "category: fix"); those that touch another repository stay out of the items', linkedStep: 'apply' },
@@ -803,8 +824,8 @@ export const SKILLS: Record<string, SkillDef> = {
     role: 'detour',
     isUserOnly: false,
     steps: [
-      step('frame', 'Cadrer le problème', 'constraints, dependencies, sketch'),
-      step('alternatives', 'Alternatives', 'sub-agents design different interfaces'),
+      step('frame', 'Cadrer le problème', 'constraints, dependencies, sketch', 'Problème'),
+      step('alternatives', 'Alternatives', 'sub-agents design different interfaces', 'Options'),
       step('compare', 'Comparer', 'compare depth, locality and seams'),
     ],
     items: { label: 'Designs', hint: 'the alternative interfaces (done = recommended, dropped = discarded)' },
@@ -820,9 +841,9 @@ export const SKILLS: Record<string, SkillDef> = {
     role: 'detour',
     isUserOnly: false,
     steps: [
-      step('challenge', 'Confronter au glossaire', 'challenge terms against GLOSSARY.md'),
-      step('sharpen', 'Préciser les termes', 'propose canonical terms, probe edge cases'),
-      step('record', 'Glossaire et ADR', 'write the glossary and ADRs'),
+      step('challenge', 'Confronter au glossaire', 'challenge terms against GLOSSARY.md', 'Glossaire'),
+      step('sharpen', 'Préciser les termes', 'propose canonical terms, probe edge cases', 'Termes'),
+      step('record', 'Glossaire et ADR', 'write the glossary and ADRs', 'Consigner'),
     ],
     flow: [phase('domain-modeling')],
   },
@@ -859,9 +880,9 @@ export const SKILLS: Record<string, SkillDef> = {
     isUserOnly: true,
     steps: [
       step('summary', 'Résumé', 'summarise the session'),
-      step('skills', 'Skills suggérés', 'suggest the next skills'),
-      step('refs', 'Références', 'point to specs, ADRs, issues, commits'),
-      step('save', 'Document enregistré', 'save it in the temp directory'),
+      step('skills', 'Skills suggérés', 'suggest the next skills', 'Skills'),
+      step('refs', 'Références', 'point to specs, ADRs, issues, commits', 'Renvois'),
+      step('save', 'Document enregistré', 'save it in the temp directory', 'Document'),
     ],
     flow: [phase('handoff')],
   },
@@ -877,7 +898,7 @@ export const SKILLS: Record<string, SkillDef> = {
     isUserOnly: true,
     steps: [
       step('mission', 'Mission', 'check MISSION.md'),
-      step('resources', 'Ressources', 'gather trusted resources'),
+      step('resources', 'Ressources', 'gather trusted resources', 'Sources'),
       step('level', 'Niveau', 'find the zone of proximal development'),
       step('lesson', 'Leçon', 'write and open the lesson'),
       step('record', 'Acquis', 'write a learning record'),
@@ -914,12 +935,12 @@ export const SKILLS: Record<string, SkillDef> = {
     role: 'flow',
     isUserOnly: true,
     steps: [
-      step('explore', 'Explorer le dépôt', 'remote, CLAUDE.md, glossaries, docs/agents'),
+      step('explore', 'Explorer le dépôt', 'remote, CLAUDE.md, glossaries, docs/agents', 'Dépôt'),
       step('tracker', 'Tracker', 'section A: the issue tracker'),
       step('labels', 'Labels', 'section B: triage labels'),
-      step('domain', 'Docs de domaine', 'section C: domain docs layout'),
+      step('domain', 'Docs de domaine', 'section C: domain docs layout', 'Domaine'),
       step('draft', 'Brouillon', 'show the draft'),
-      step('write', 'Config écrite', 'write docs/agents and the Agent skills block'),
+      step('write', 'Config écrite', 'write docs/agents and the Agent skills block', 'Écriture'),
     ],
     flow: [phase('setup-matt-pocock-skills')],
     next: ['grill-with-docs', 'triage'],

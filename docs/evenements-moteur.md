@@ -101,6 +101,16 @@ Les règles que le chrono de `session-tools` et le suivi des requêtes de `stats
 - **Interruption** (ou erreur) : faute de `classic.Stop`, les tâches qui restent sont celles du dernier `classic.Stop` de la requête, moins celles qui ont notifié leur fin depuis, plus les agents de `$.agent.list()` encore `running`, `pending` ou `waiting` qui lui sont rattachés. Si aucune ne reste, la requête est finie.
 - **Rechargement du module** : les prompts en attente de leur tour sont perdus. Une notification se reconnaît alors à son texte (`<task-notification>`, `<agent-message from=`), et tout autre texte non vide compte comme un message.
 
+## Attentes
+
+Le suivi des requêtes de `stats-board` (depuis sa 0.11.0) retire du temps actif les moments où une requête attend la réponse de l'utilisateur.
+
+- **Question à boutons** : `tool.call` de `AskUserQuestion` ; son `next(e)` ne rend la main qu'à la réponse de l'utilisateur, tout l'appel est donc une attente. Constaté sur une transcription du 28/10/2026 : l'appel de 00:47, son résultat à 11:02, sans autre événement du fil principal entre les deux.
+- **Plan à valider** : `tool.call` de `ExitPlanMode`, traité de même ; qu'il attende toute la validation est à confirmer par un essai.
+- **Demande d'autorisation d'un outil** : non comptée. `classic.PermissionRequest` dit quand la boîte s'ouvre, mais aucun événement ne dit quand l'utilisateur répond : le `next(e)` de `tool.call` couvre la boîte puis l'outil, sans les séparer.
+- **Sous-agents pendant l'attente** : leurs appels au modèle (`turn.step` avec `agentId`) continuent ; leur intervalle, coupé à l'attente, reste actif.
+- **Typage** : un crochet `tool.call` dont le filtre prend le nom d'outil d'une variable (`{ tool }` dans une boucle) fait déborder la mémoire de `tsc` 5.9.3 (types de Claude Code 2.1.302) ; un nom en toutes lettres passe. Et le moteur refuse un crochet qui n'est pas une fonction déclarée au niveau du module (constaté le 28/10/2026).
+
 ## Faux moteurs des tests
 
 Les tests de `session-tools` (`realEngine`) et de `stats-board` (`requestEngine`) simulent ce moteur. Ils émettent `prompt.submit`, attendent sa fin, puis émettent `turn.start` avec le même texte ; finissent un tour normal par `classic.Stop` (avec `background_tasks`) puis `turn.complete` ; et une interruption par `turn.complete` seul. Un faux moteur qui démarre le tour à l'intérieur de `prompt.submit` cache les défauts d'ordre : le chrono de `session-tools` passait ainsi ses tests alors qu'il repartait de zéro au retour d'une tâche de fond.

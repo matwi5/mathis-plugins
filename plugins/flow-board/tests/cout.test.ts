@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { costOf, costText, pricesFor, pricesFromCcusage } from '../hooks/cost.ts'
+import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 
 const PLUGIN = 'flow-board'
 const PANE = {
@@ -66,20 +67,14 @@ const world = (on: any, ccusage: (argv: string[]) => unknown) => {
   })
   on('agent.spawn', () => ({ agentId: 'a1', model: 'claude-opus-5-5' }))
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
-  on('turn.step', async function* (_$: unknown, e: any) {
-    const usage = { input_tokens: 10, output_tokens: 2_000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 30_000, model: 'claude-opus-5-5' }
-    yield { kind: 'stop', stopReason: 'end_turn', usage }
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage }
-  })
+  on('turn.step', stoppedStep(stepUsage('claude-opus-5-5', { input_tokens: 10, output_tokens: 2_000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 30_000 })))
   return { mem, calls }
 }
 
 const launchAndWork = async ($: any) => {
   await $.tool.call({ tool: 'Agent', description: 'Implement ticket #5', subagent_type: 'agents:worker', model: 'opus', prompt: 'p', run_in_background: true, tool_use_id: 'call-1' })
   await $.agent.spawn({ prompt: 'p', description: 'Implement ticket #5', background: true, tool_use_id: 'call-1' })
-  for await (const _ of $.turn.step({ turnId: 'ta', index: 0, model: 'claude-opus-5-5', messageCount: 1, agentId: 'a1' })) {
-    // la réponse
-  }
+  await playStep($, { turnId: 'ta', model: 'claude-opus-5-5', agentId: 'a1' })
 }
 
 test('le coût estimé « ≈ » de chaque sous-agent dans sa carte, et le total dans le résumé', { timeoutMs: 15000 }, async ($, on) => {

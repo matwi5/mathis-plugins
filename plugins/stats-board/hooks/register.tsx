@@ -58,6 +58,7 @@ import {
   finishTask,
   noteTasks,
   openRequest,
+  endWait,
   ownerNow,
   recordCall,
   relaunchOwner,
@@ -65,6 +66,7 @@ import {
   requestOfAgent,
   requestOfTurn,
   startTurn,
+  startWait,
   type Call,
   type Relaunch,
 } from './requests.ts'
@@ -252,6 +254,25 @@ const answer = async ($: any, e: { args: string }) => {
 // déjà là avant le premier message, y suffit et le doublon disparaît.
 const hideDuplicate = async ($: any, e: any, next: any) => ({ ...(await next(e)), isHidden: true })
 
+/**
+ * Une question à boutons ou un plan à valider : tout l'appel attend la réponse de l'utilisateur, une
+ * attente exclue du temps actif de la requête. Sa requête est lue à l'entrée, comme pour un appel au
+ * modèle ; le résultat de `next` est rendu tel quel (le moteur y retrouve ses messages). Un crochet
+ * par outil, chacun nommé en toutes lettres : un nom d'outil en variable fait déborder la mémoire de tsc.
+ */
+async function waitForAnswer($: any, e: { agentId?: string }, next: (e: any) => Promise<any>) {
+  const from = await $.clock.now()
+  const t = await read($, requests)
+  const request = e.agentId ? requestOfAgent(t, e.agentId) : (ownerNow(t) ?? undefined)
+  await quietly(() => update($, requests, (x) => startWait(x, request, from)))
+  try {
+    return await next(e)
+  } finally {
+    const at = await $.clock.now()
+    await quietly(() => update($, requests, (x) => endWait(x, request, from, at)))
+  }
+}
+
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -372,10 +393,13 @@ export const register: Register = (on) => {
     // Sans usage (appel interrompu ou en échec) : ses durées comptent, sans token.
     const end = await $.clock.now()
     // Sans usage, le modèle demandé, sans sa marque de variante (`[1m]`) : l'id que l'API rend aux autres appels.
-    const call: Call = { model: usage?.model || e.model.replace(/\[[^\]]*\]$/, ''), usage: usage ?? NO_USAGE, apiMs: end - startedAt, genMs: (stopAt ?? end) - (firstAt ?? end) }
+    const call: Call = { model: usage?.model || e.model.replace(/\[[^\]]*\]$/, ''), usage: usage ?? NO_USAGE, apiMs: end - startedAt, genMs: (stopAt ?? end) - (firstAt ?? end), span: [startedAt, end] }
     await quietly(() => update($, requests, (t) => recordCall(t, request, call)))
     return result
   })
+
+  on('tool.call', { tool: 'AskUserQuestion' }, waitForAnswer)
+  on('tool.call', { tool: 'ExitPlanMode' }, waitForAnswer)
 
   // Le fil principal s'arrête : la liste des tâches de fond est à jour (repli sans elle : les agents
   // encore actifs), puis le relevé de la session est écrit (un peu après, pour la fin du tour).

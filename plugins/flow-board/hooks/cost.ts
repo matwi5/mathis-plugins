@@ -150,12 +150,13 @@ export const costText = (usd: number): string => {
  * Ce que coûtent des appels à l'advisor, chacun au prix de son modèle : la somme des tokens relus,
  * leurs modèles, le coût (null sans aucun appel chiffré), `isUnknown` dès qu'un appel relu n'a pas
  * de prix (sans modèle connu, ou sans tokens) : le total serait faux, il ne s'affiche pas ; et le
- * nombre d'appels pas encore relus dans un transcript.
+ * nombre d'appels pas encore relus dans un transcript. Un appel sans réponse (`isVoid`) ne compte pas.
  */
 export const advisorCostOf = (
-  calls: readonly AdvisorCall[],
+  all: readonly AdvisorCall[],
   prices: Readonly<Record<string, UnitPrices>>,
 ): { tokens?: AgentTokens; models: string[]; cost: number | null; isUnknown: boolean; unread: number } => {
+  const calls = all.filter(c => c.isVoid !== true)
   const read = calls.filter(c => c.tokens !== undefined || c.isRead === true)
   const counted = read.filter(c => c.tokens !== undefined)
   const tokens = counted.length > 0 ? (Object.fromEntries(KEYS.map(k => [k, counted.reduce((n, c) => n + c.tokens![k], 0)])) as AgentTokens) : undefined

@@ -81,6 +81,31 @@ test('« ✎ À reprendre » prépare la réponse ; « ✓ Valider » clôt la p
   await ui.unmount()
 })
 
+test('« ✓ Valider le rapport » le dit à Claude par un message ; « ✎ À reprendre » n’envoie rien', async ($, on) => {
+  mock.clock(on, { now: 91_500_000 })
+  mock.store(on)
+  engine(on)
+  const submitted: { text: string; origin?: { kind?: string; asUser?: boolean } }[] = []
+  on('prompt.submit', (_$: unknown, e: { text: string; origin?: { kind?: string; asUser?: boolean } }) => {
+    submitted.push(e)
+    return { text: e.text }
+  })
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Lot xhigh', complete: true } as any)
+  await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'r' })
+
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await ui.press({ key: 'report-redo' })
+  expect(submitted).toHaveLength(0)
+  await ui.press({ key: 'report-ok' })
+  expect(submitted).toHaveLength(1)
+  expect(submitted[0]!.text).toMatch(/^J'ai validé le compte rendu du parcours « Lot xhigh » depuis le tableau de bord \(✓ Valider le rapport\)\./)
+  // Le message vient du mod, pas des mots de la personne.
+  expect(submitted[0]!.origin?.kind).toBe('plugin')
+  expect(submitted[0]!.origin?.asUser).toBeUndefined()
+  await ui.unmount()
+})
+
 test('livrer sans rapport validé : le compte rendu est sauté, et le journal le dit', async ($, on) => {
   mock.clock(on, { now: 92_000_000 })
   mock.store(on)

@@ -14,7 +14,7 @@ import type { LinkedSession } from './linked.ts'
 import { EMPTY_UI } from './model.ts'
 import { agentCalls, claudeHome, otherRegistries, refreshLinked } from './register.tsx'
 import { commitRegistry, lockRegistryDir, registryKey, registryPath } from './registry-file.ts'
-import { MAIN, catchUpAdvisor } from './registry.ts'
+import { MAIN, catchUpAdvisor, isAdvisorUnsettled } from './registry.ts'
 import { minOf } from './timeline.ts'
 import { SUBAGENT_FILE, type TranscriptAgent, catchUp, drainWithin, isTranscriptPath, laneFromTranscript, metaFromText, readArgv, subagentsDirOf } from './transcript.ts'
 
@@ -150,8 +150,22 @@ export async function transcriptAgents($: any, transcript: string): Promise<Tran
   return (await scanTranscriptAgents($, transcript)).agents
 }
 
-/** Les appels à l'advisor de l'orchestrateur déjà cherchés dans le transcript de la session, par ce processus. */
-const advisorSought = new Set<string>()
+/**
+ * Les appels à l'advisor déjà cherchés dans un transcript, par ce processus : combien de fois, et
+ * quand. Un appel que le transcript ne donne pas encore (en vol, ou étape coupée) se recherche au
+ * plus SEEK_MAX fois, une minute d'écart, sans relancer la lecture à chaque passage.
+ */
+type Sought = Map<string, { n: number; at: number }>
+const SEEK_MAX = 3
+const SEEK_GAP_MS = 60_000
+const isToSeek = (sought: Sought, key: string, now: number): boolean => {
+  const was = sought.get(key)
+  return was === undefined || (was.n < SEEK_MAX && now - was.at >= SEEK_GAP_MS)
+}
+const noteSought = (sought: Sought, key: string, now: number) => sought.set(key, { n: (sought.get(key)?.n ?? 0) + 1, at: now })
+
+/** Les appels à l'advisor de l'orchestrateur, cherchés dans le transcript de la session. */
+const advisorSought: Sought = new Map()
 
 /**
  * Le rattrapage de cette session : ses sous-agents d'après leurs transcripts ; reconstruit
@@ -163,13 +177,12 @@ export async function catchUpOwn($: any, isRebuild = false) {
   if (!transcript) return
   const found = await transcriptAgents($, transcript)
   // Le transcript de la session se relit pour une reconstruction, ou quand un appel à l'advisor de
-  // l'orchestrateur n'y a pas encore été relu (le direct ne donne ni modèle ni tokens) ; un appel
-  // que le transcript ne donne pas (étape coupée) n'en relance pas la lecture à chaque passage.
-  const unread = (reg?.advisor?.calls ?? []).filter(c => c.by === MAIN && c.isRead !== true && !advisorSought.has(c.id)).map(c => c.id)
-  const mainText = isRebuild || unread.length > 0 ? await readTranscript($, transcript) : null
-  for (const id of unread) advisorSought.add(id)
-  const main = mainText !== null ? laneFromTranscript(mainText, true) : null
+  // l'orchestrateur n'y a pas encore été relu (le direct ne donne ni modèle ni tokens).
   const now = await $.clock.now()
+  const unread = (reg?.advisor?.calls ?? []).filter(c => c.by === MAIN && isAdvisorUnsettled(c) && isToSeek(advisorSought, c.id, now)).map(c => c.id)
+  const mainText = isRebuild || unread.length > 0 ? await readTranscript($, transcript) : null
+  for (const id of unread) noteSought(advisorSought, id, now)
+  const main = mainText !== null ? laneFromTranscript(mainText, true) : null
   // Les appels encore en vol ici ne se closent pas d'après leur transcript.
   const inFlight = new Set(agentCalls)
   const traces = await readTraces($)
@@ -309,17 +322,27 @@ export function updateRebuilt(
     })
 }
 
+/** Les appels à l'advisor des sessions liées, cherchés dans leur transcript (`<session>|<appel>`). */
+const linkedAdvisorSought: Sought = new Map()
+
 /**
  * Le rattrapage d'une session liée affichée : d'après le transcript que son en-tête relève, son
- * fichier à part se fusionne (S13, S20) ; son propre fichier n'est jamais touché (Q7).
+ * fichier à part se fusionne (S13, S20) ; son propre fichier n'est jamais touché (Q7). Ses propres
+ * appels à l'advisor se relisent ici aussi : une session liée n'ouvre presque jamais son onglet
+ * Agents, seul endroit où elle les relit elle-même (catchUpOwn), et sans relecture leur coût restait vide.
  */
 async function catchUpLinked($: any, session: string) {
   const reg = otherRegistries.get(session)?.reg
   if (!reg?.transcript) return
   const agents = await transcriptAgents($, reg.transcript)
-  if (agents.length === 0) return
+  const now = await $.clock.now()
+  const unread = (reg.advisor?.calls ?? []).filter(c => c.by === MAIN && isAdvisorUnsettled(c) && isToSeek(linkedAdvisorSought, `${session}|${c.id}`, now)).map(c => c.id)
+  const text = unread.length > 0 ? await readTranscript($, reg.transcript) : null
+  for (const id of unread) noteSought(linkedAdvisorSought, `${session}|${id}`, now)
+  const advisor = text !== null ? (laneFromTranscript(text, true).advisor ?? []) : []
+  if (agents.length === 0 && advisor.length === 0) return
   const before = JSON.stringify(await readRebuilt($, session))
-  await updateRebuilt($, session, session, was => unionRebuilt(was, { v: 1, session, agents }))
+  await updateRebuilt($, session, session, was => unionRebuilt(was, { v: 1, session, agents, ...(advisor.length > 0 ? { main: { advisor } } : {}) }))
   if (JSON.stringify(await readRebuilt($, session)) === before) return
   // La prochaine relecture applique le fichier à part.
   otherRegistries.delete(session)

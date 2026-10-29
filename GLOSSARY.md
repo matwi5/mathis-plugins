@@ -24,8 +24,12 @@ La somme des temps de tous les appels d'une requête, sous-agents compris, de l'
 _Avoid_: temps de calcul, temps agents
 
 **Temps actif** :
-Le temps, sur une période (discussion, jour, projet), pendant lequel au moins une requête était en cours : pauses exclues, chevauchements comptés une fois.
+Le temps, sur une période (discussion, jour, projet), pendant lequel au moins une requête était en cours : pauses exclues, attentes de la réponse de l'utilisateur à une question ou à un plan exclues (sauf le travail de ses sous-agents pendant ce temps), chevauchements comptés une fois.
 _Avoid_: durée de session, durée de la discussion
+
+**Temps cumulé** :
+La somme des temps actifs de chaque discussion d'une période : deux discussions qui travaillent en même temps comptent deux fois. Pour une seule discussion, il vaut son temps actif.
+_Avoid_: temps total, temps additionné
 
 **Vitesse** :
 Les tokens générés par un modèle divisés par le temps passé à les générer, du premier morceau de réponse au dernier, sur l'ensemble de ses appels.
@@ -98,7 +102,7 @@ Un groupe rendu dont la branche est fusionnée dans la branche de travail, la re
 _Avoid_: groupe totalement fini, groupe terminé
 
 **Fermer un groupe** :
-Arrêter la session liée d'un groupe clos et retirer son worktree ; sa branche et sa conversation restent.
+Arrêter la session liée d'un groupe clos et retirer son worktree ; sa branche et sa conversation restent. La session liée des pistes d'une rétro se ferme de même.
 _Avoid_: archiver le groupe, nettoyer le groupe
 
 **Tâche de jugement** :
@@ -112,3 +116,7 @@ _Avoid_: tâche simple
 **Session autonome** :
 Une session liée de groupe lancée à l'effort le plus haut (xhigh), qui tranche elle-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur. Elle sert aux tâches de jugement.
 _Avoid_: mode xhigh, session xhigh
+
+**Relecture du fond et de la forme** :
+La relecture d'un document par quelqu'un d'autre que son auteur, pour le lecteur visé : ce qu'il dit (exact, complet) et comment il le dit (structure, clarté, ton).
+_Avoid_: relecture, revue de doc

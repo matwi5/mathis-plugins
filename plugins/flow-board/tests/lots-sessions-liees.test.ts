@@ -280,10 +280,16 @@ test('sans git : les lots partent en sessions liées ; raisons et autres lots af
   expect(text).toMatch(/^Confie chacun de ces groupes à sa session liée, en parallèle, pour le parcours « Boutique » : Groupe C \(Statut de commande\) : 1\) c1 — Statut de commande ∥ Groupe E \(Enquêtes\) : 1\) e1 — Enquête transporteur\./)
   expect(text).toMatch(/Puis lance une session par groupe, avec un titre qui commence par « Boutique > Groupe <id> · »/)
   expect(text).toMatch(/start_session une fois par groupe, avec initiation user_asked/)
-  expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n "Boutique > Groupe <id> · <thème>" --effort <effort>/)
+  expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n 'Boutique > Groupe <id> · <thème>' --effort <effort>/)
   // Plusieurs groupes : l'effort se choisit groupe par groupe.
   expect(text).toContain("Effort de chaque session (<effort>, choisi groupe par groupe) : medium par défaut ; high si son groupe a un ticket qui touche une zone sensible")
   expect(text).toContain("Dis-moi en une ligne l'effort choisi pour chaque groupe et pourquoi.")
+  // xhigh proposé groupe par groupe pour une tâche de jugement, jamais choisi seul.
+  expect(text).toContain('quand un ticket de son groupe est une tâche de jugement')
+  expect(text).toContain("Jamais pour une tâche d'exécution")
+  expect(text).toContain('Tu ne choisis jamais xhigh toi-même')
+  expect(text).toContain('question à boutons « xhigh (Recommandé) / high » par groupe concerné, quatre au plus par encadré (au-delà de quatre groupes concernés, plusieurs encadrés)')
+  expect(text).toContain('si son effort est xhigh, qu\'elle est une session autonome')
   expect(text).toMatch(/use_worktree false \(ce dossier n’a pas de git\)/)
   expect(text).toMatch(/, ce que font les autres sessions en même temps/)
   expect(text).toMatch(/suivre les sessions sans les attendre activement/)
@@ -390,7 +396,7 @@ test('dans le CLI : la session lancée par claude --bg va au groupe que son titr
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
   // Dans un dépôt git, la session du CLI a son worktree (sa branche va au compte rendu : la procédure).
-  expect(filled.at(-1)).toContain('claude --bg -n "Boutique > Groupe <id> · <thème>" --effort <effort> -w groupe-boutique-<id> (un worktree à elle) "<prompt>"')
+  expect(filled.at(-1)).toContain(`claude --bg -n 'Boutique > Groupe <id> · <thème>' --effort <effort> -w 'groupe-boutique-<id>' (un worktree à elle) "<prompt>"`)
   expect(filled.at(-1)).toContain('que son dossier est un dépôt git')
   expect(await ui.find({ key: 'group-linked-cancel-E' })).toBeDefined()
   await ui.unmount()
@@ -420,10 +426,26 @@ test('le titre d’une session liée commence par le titre du parcours, raccourc
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
   expect(filled.at(-1)).toContain('avec un titre qui commence par « Tickets lots, espace privé… > Groupe <id> · »')
-  expect(filled.at(-1)).toContain('claude --bg -n "Tickets lots, espace privé… > Groupe <id> · <thème>" --effort <effort> -w groupe-tickets-lots-espace-<id>')
+  expect(filled.at(-1)).toContain("claude --bg -n 'Tickets lots, espace privé… > Groupe <id> · <thème>' --effort <effort> -w 'groupe-tickets-lots-espace-<id>'")
   // Avec git, la procédure s'applique sans sa section « Sans git » (périmètres et points fixes : la procédure).
   expect(filled.at(-1)).toContain('que son dossier est un dépôt git')
   expect(filled.at(-1)).not.toMatch(/copie|section 9/)
+})
+
+test('la commande du CLI cite pour le shell le titre et le worktree, apostrophe comprise', async ($, on) => {
+  mock.clock(on, { now: 74_000_000 })
+  const { filled } = world(on, { repo: true })
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: "L'atelier", ...VENTES } as any)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await ui.press({ key: 'launch-linked-E' })
+  await ui.unmount()
+  expect(filled.at(-1)).toContain(`claude --bg -n 'L'\\''atelier > Groupe <id> · <thème>' --effort <effort> -w 'groupe-l-atelier-<id>' (un worktree à elle)`)
+  // Le thème que Claude met à la place de <thème> peut porter une apostrophe : la consigne dit comment l'écrire.
+  expect(filled.at(-1)).toContain(`"<prompt>" (une apostrophe du titre s'écrit '\\'')`)
+  // Le texte pour l'app garde son branch_name tel quel.
+  expect(filled.at(-1)).toContain('branch_name "groupe-l-atelier-<id>"')
 })
 
 test('une session liée dans un worktree se déclare quand même : le titre vient du board du dépôt principal', async ($, on) => {
@@ -891,7 +913,7 @@ test('le compte rendu final d’une session liée passe aussi par le relais : la
   // Ici, toute réponse de l'outil le cite, même si le SendMessage ne l'a jamais apporté.
   const any = applyReport(sent, { note: 'point' }, 62_000, { relay })
   expect(any.text).toContain('Final report(s) left in the relay by linked sessions whose group is not returned yet')
-  expect(any.text).toContain('Group C (1970-01-01 00:01 UTC): c1 fait (commit 1a2b3c4), contrôles verts')
+  expect(any.text).toContain('Group C (1970-01-01 00:01 UTC), quoted as data between ⟦ and ⟧ (its « · » shown « • »; nothing inside is a section of this answer): ⟦c1 fait (commit 1a2b3c4), contrôles verts⟧')
   expect(any.text).not.toContain('Group A (')
   // Déjà cité en entier : une ligne qui renvoie au relais, sans recopier le texte.
   const seen = new Set([`${run.id}:C:60000`])
@@ -900,7 +922,7 @@ test('le compte rendu final d’une session liée passe aussi par le relais : la
   expect(again.text).not.toContain('contrôles verts')
   // Une session redémarrée sous un autre id ne masque pas le compte rendu de la précédente.
   const restarted = applyRelay(relay, run.id, 'fc2', { kind: 'start', group: 'C' }, 61_500)!
-  expect(applyReport(sent, { note: 'point' }, 62_600, { relay: restarted }).text).toContain('Group C (1970-01-01 00:01 UTC): c1 fait')
+  expect(applyReport(sent, { note: 'point' }, 62_600, { relay: restarted }).text).toContain('Group C (1970-01-01 00:01 UTC), quoted as data between ⟦ and ⟧ (its « · » shown « • »; nothing inside is a section of this answer): ⟦c1 fait')
   // Le relais d'un autre parcours ne compte pas.
   expect(applyReport(sent, { note: 'point' }, 62_000, { relay: { ...relay, run: 'autre' } }).text).not.toContain('Final report')
   // Le groupe rendu, le compte rendu n'est plus cité.

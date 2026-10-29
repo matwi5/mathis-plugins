@@ -126,6 +126,8 @@ export type Actions = {
   dismissNotice: () => unknown
   hideBand: () => unknown
   openPane: () => unknown
+  /** Copie une adresse (PR, commit) dans le presse-papiers de la surface pressée ; `copied` : le toast qui le dit. */
+  copyLink: (url: string, copied: string, surface?: string) => unknown
 }
 
 // ─── Petits outils ────────────────────────────────────────────────────────
@@ -156,6 +158,19 @@ const TT = (k: Kit, parts: unknown[], style: Style = {}): unknown => h(k.Text, p
 
 /** Pastille pleine : texte foncé sur la couleur. `style` ajoute par exemple une troncature. */
 const chip = (k: Kit, text: string, color: string, style: Style = {}): unknown => T(k, `${NB}${text}${NB}`, { ...style, bg: color, color: C.ink, bold: true })
+
+/**
+ * Un lien externe : `Link` sur les surfaces riches ; au terminal, qui écrit l'adresse entière
+ * derrière son libellé quand il ne sait pas faire de lien, un bouton qui la copie.
+ */
+const urlCell = (k: Kit, key: string, href: string, link: { label: string; copyLabel: string; copied: string }, act: Actions): unknown => {
+  const { Button, Link } = k
+  if (!k.isRich) return <Button key={key} plain={true} dimColor={true} label={link.copyLabel} onPress={(press?: { surface?: string }) => act.copyLink(href, link.copied, press?.surface)} />
+  return Link ? <Link key={key} href={href} label={link.label} /> : null
+}
+
+/** Les liens d'une PR ; le terminal n'a que le bouton qui copie. */
+const PR_LINK = { copyLabel: `⧉${NB}PR`, copied: 'Lien PR copié' }
 
 const isShown = (item: unknown): boolean => item !== null && item !== undefined && item !== false && item !== ''
 
@@ -392,7 +407,7 @@ const welcome = (k: Kit, view: View, act: Actions): unknown => {
  * dit qu'une fois : sur une surface riche la jauge porte ↑/↓, ailleurs ce sont les pastilles.
  */
 const hero = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
-  const { Box, Button, Link } = k
+  const { Box, Button } = k
   const m = view.meta
   const n = countsOf(r)
   const pr = prOfBranch(r, view.pr)
@@ -448,9 +463,9 @@ const hero = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
           { wrap: 'truncate-end' },
         )}
       </Box>
-      {Link && pr.url && (
+      {pr.url && (
         <Box flexShrink={0} marginLeft={1}>
-          <Link href={pr.url} label="Ouvrir ↗" />
+          {urlCell(k, 'pr-link', pr.url, { label: 'Ouvrir ↗', ...PR_LINK }, act)}
         </Box>
       )}
     </Box>
@@ -573,7 +588,7 @@ const actionBar = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
 // ─── Tiroir de l'action choisie ─────────────────────────────────────────
 
 const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
-  const { Box, Button, Input, Select, Link } = k
+  const { Box, Button, Input, Select } = k
   const open = view.action
   if (!open) return null
   const m = view.meta
@@ -705,7 +720,7 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
       [
         say(pr.title),
         <Box marginTop={1}>
-          {line(k, [T(k, `${prLabel(pr)} vers ${pr.base}`, { color: prColor(pr) }), Link && pr.url && <Link href={pr.url} label="Ouvrir sur GitHub ↗" />])}
+          {line(k, [T(k, `${prLabel(pr)} vers ${pr.base}`, { color: prColor(pr) }), pr.url && urlCell(k, 'pr-card-link', pr.url, { label: 'Ouvrir sur GitHub ↗', ...PR_LINK }, act)])}
         </Box>,
       ],
       null,
@@ -1018,14 +1033,14 @@ const historyTab = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
         T(k, `${r.commits.length}${NB}derniers`, { dim: true }),
         unpushed > 0 && T(k, `↑${NB}${unpushed >= 500 ? '500+' : unpushed}${NB}pas${NB}encore${NB}poussé${unpushed > 1 ? 's' : ''}`, { color: C.green, bold: true }),
       ])}
-      {shown.map((c) => commitRow(k, view, r, c))}
+      {shown.map((c) => commitRow(k, view, r, c, act))}
       {r.commits.length > COMMITS_CAP && showAllToggle(k, 'commits-all', view.expanded.commits, r.commits.length, () => act.toggleExpanded('commits'))}
     </Box>
   )
 }
 
-const commitRow = (k: Kit, view: View, r: GitRepo, c: GitCommit): unknown => {
-  const { Box, Link } = k
+const commitRow = (k: Kit, view: View, r: GitRepo, c: GitCommit, act: Actions): unknown => {
+  const { Box } = k
   const isLocal = r.hasRemote && !c.isPushed
   const tags = c.refs
     .split(', ')
@@ -1045,7 +1060,7 @@ const commitRow = (k: Kit, view: View, r: GitRepo, c: GitCommit): unknown => {
           T(k, c.short, { dim: true }),
           k.width >= 90 && T(k, c.author, { dim: true }),
           k.width >= 64 && T(k, ago(c.date, view.now), { dim: true }),
-          r.webUrl && Link && <Link href={`${r.webUrl}/commit/${c.hash}`} label="↗" />,
+          r.webUrl && urlCell(k, `commit-link-${c.hash}`, `${r.webUrl}/commit/${c.hash}`, { label: '↗', copyLabel: '⧉', copied: 'Lien du commit copié' }, act),
         ])}
       </Box>
     </Box>

@@ -135,11 +135,18 @@ export type ApiRow = {
   speeds?: Record<string, number>
 }
 
-/** Temps actif d'un jour et d'un projet (worktrees réunis à leur dépôt, brouillons ensemble), sans double compte. */
-export type ActiveRow = { date: string; project: string; machine: string; activeMs: number; requests: number }
+/**
+ * Temps actif d'un jour et d'un projet (worktrees réunis à leur dépôt, brouillons ensemble), sans
+ * double compte ; `cumulMs`, depuis la 0.11.0, le temps cumulé (la somme des temps actifs de ses
+ * discussions), absent d'une ligne d'avant.
+ */
+export type ActiveRow = { date: string; project: string; machine: string; activeMs: number; requests: number; cumulMs?: number }
 
-/** Temps actif d'un jour par heure locale (24 valeurs, en ms), toutes discussions confondues, sans double compte. */
-export type HourRow = { date: string; machine: string; hours: number[] }
+/**
+ * Temps actif d'un jour par heure locale (24 valeurs, en ms), toutes discussions confondues, sans
+ * double compte ; `cumul`, depuis la 0.11.0, le temps cumulé de chaque heure, absent d'une ligne d'avant.
+ */
+export type HourRow = { date: string; machine: string; hours: number[]; cumul?: number[] }
 
 /** Une discussion un jour donné : son temps actif, sa durée API et ses requêtes. */
 export type SessionDayRow = { date: string; session: string; project: string; machine: string; activeMs: number; apiMs: number; requests: number }
@@ -178,9 +185,9 @@ export type Published = {
    * Depuis la 0.10.0, au même format 1 (un poste pas encore mis à jour lit le reste) : temps actif et
    * requêtes par jour et projet. Jamais une requête, son heure ni un texte ; durées à la minute.
    */
-  active?: { date: string; project: string; activeMs: number; requests: number }[]
-  /** Depuis la 0.10.0 : temps actif par jour et heure locale, à la minute. */
-  hours?: { date: string; hours: number[] }[]
+  active?: { date: string; project: string; activeMs: number; requests: number; cumulMs?: number }[]
+  /** Depuis la 0.10.0 : temps actif par jour et heure locale, à la minute ; `cumul` (temps cumulé) depuis la 0.11.0. */
+  hours?: { date: string; hours: number[]; cumul?: number[] }[]
   /** Depuis la 0.10.0 : les durées d'appels d'un jour, projet et modèle que ccusage n'a pas encore dans `rows`. */
   apiOnly?: { date: string; project: string; model: string; apiMs: number; genMs: number; calls: number; genOutput: number }[]
 }
@@ -216,6 +223,8 @@ export type Ui = {
   sessionSort: SessionSort
   /** Évolution : la durée (temps actif) à la place du coût ou des tokens ; absent d'un état d'avant la 0.10.0. */
   isTrendDuration?: boolean
+  /** Évolution en durée et Rythme : le temps actif ou le temps cumulé ; absent d'un état d'avant la 0.11.0 (le temps actif). */
+  durationKind?: 'active' | 'cumul'
   /** Tri de la carte « Requêtes » de l'onglet Discussion ; absent d'un état d'avant la 0.10.0. */
   requestSort?: RequestSort
   expanded: Expanded
@@ -302,6 +311,14 @@ export type RequestRecord = {
   agents: number
   /** Ses appels, par modèle (l'identifiant que l'API donne). */
   models: Record<string, CallStats>
+  /**
+   * Depuis la 0.11.0 : les moments où elle attendait la réponse de l'utilisateur (question à boutons,
+   * plan à valider), [début, fin] en ms, la fin null tant qu'il n'a pas répondu ; exclus de son temps
+   * actif. Absent sans attente.
+   */
+  waits?: [number, number | null][]
+  /** Depuis la 0.11.0 : les appels de ses sous-agents pendant ses attentes, [début, fin] en ms, fusionnés ; eux restent actifs. */
+  busy?: [number, number][]
 }
 
 /** Le relevé d'une ouverture de session, écrit dans `~/.claude/stats-board/requetes/<session>_<ouverture>.json`. */

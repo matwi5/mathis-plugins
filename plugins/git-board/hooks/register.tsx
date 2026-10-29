@@ -289,7 +289,19 @@ function actionsFor($: any): Actions {
       await quietly(() => $.ui.toast('Bandeau Git masqué : /git show pour le réafficher'))
     },
     openPane: () => quietly(() => $.ui.open({ id: PANE, title: PANE_TITLE })),
+    copyLink: (url, copied, surface) => copyLink($, url, copied, surface),
   }
+}
+
+/** Copie une adresse dans le presse-papiers de la surface pressée et le dit ; sans copie, le toast donne l'adresse à recopier. */
+async function copyLink($: any, url: string, copied: string, surface?: string) {
+  let done: { isCopied?: boolean } | null = null
+  try {
+    done = await $.ui.copy({ text: url, ...(surface ? { surface } : {}) })
+  } catch {
+    // Le toast donne alors l'adresse à recopier.
+  }
+  await quietly(() => $.ui.toast(done?.isCopied ? copied : `Copie impossible : ${url}`))
 }
 
 async function setBandHidden($: any, hidden: boolean) {

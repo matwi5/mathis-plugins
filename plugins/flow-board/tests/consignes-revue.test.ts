@@ -114,4 +114,66 @@ test('dans une session liée, les consignes de revue sont celles de la procédur
   expect(text).toMatch(/puis lire la procédure d'une session liée de groupe, \S*reference\/procedure-groupe\.md/)
   expect(text).not.toContain('jamais un hash seul')
   expect(text).not.toContain('lui donner le nom de la branche')
+  // La procédure cite la méthode de la relecture du fond et de la forme ; son chemin installé varie.
+  expect(text).toMatch(/le fichier de méthode de la relecture du fond et de la forme, \S+\/reference\/relecture-fond-forme\.md/)
+})
+
+// Relecture du fond et de la forme : la ligne « Lecteur » d'un ticket la déclenche (spec xhigh-groupe, Q11).
+test('le découpage fait porter une ligne « Lecteur » au ticket dont le livrable est un document lu par d’autres', async ($, on) => {
+  mock.clock(on, { now: 96_600_000 })
+  world(on)
+  await start($)
+  const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
+  expect(tickets).toContain('a line « Lecteur : <who> »')
+  expect(tickets).toContain('neither a code ticket nor an internal working document carries it')
+  expect(tickets).toContain('nothing new is sent to the tool')
+})
+
+test('dans la discussion, la revue d’un ticket qui a une ligne « Lecteur » lance aussi la relecture du fond et de la forme, avec sa méthode', async ($, on) => {
+  mock.clock(on, { now: 96_700_000 })
+  world(on)
+  await start($)
+  const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
+  // L'étape de revue l'annonce, la consigne à part donne le relecteur et le chemin de la méthode.
+  expect(implement).toContain('for a ticket with a « Lecteur » line, the content and form review')
+  expect(implement).toMatch(/Content and form review: [^\n]*in the same message as the two axes, on the same target/)
+  expect(implement).toContain('a reviewer subagent (Agent tool, general-purpose, model opus, effort high, passed explicitly), read-only')
+  expect(implement).toMatch(/the path of the content and form review method file, \S+\/reference\/relecture-fond-forme\.md/)
+  // Un ticket ancien sans ligne : la session nomme le lecteur et le déclare.
+  expect(implement).toContain('name the reader yourself and declare it in {"decided": …}')
+  // Le relecteur reçoit le lecteur par son fichier de consignes, celui du ticket ou celui nommé par la session.
+  expect(implement).toContain('its instructions file gives the reader (the « Lecteur » line, or the one you named)')
+  // Ses correctifs avec ceux de la revue, ses constats avec l'axe Spec.
+  expect(implement).toContain('in the commit of the review fixes, before the ticket turns done')
+  expect(implement).toContain('its findings count with the Spec axis in "review"')
+  // Ni le découpage ni la spec ne la lancent.
+  const spec = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text as string
+  expect(spec).toContain('For a ticket in a sensitive area, settle with the user while framing')
+  expect(spec).not.toContain('Content and form review:')
+})
+
+// La version se pose en fin de parcours par /project:version : le ticket de version d'un groupe était
+// entré en collision avec le même numéro publié par une autre discussion (rétro du parcours xhigh, r2).
+test('ni la spec ni le découpage ne prévoient de ticket de version : /project:version le fait en fin de parcours', async ($, on) => {
+  mock.clock(on, { now: 96_800_000 })
+  world(on)
+  await start($)
+  for (const skill of ['mattpocock-skills:to-tickets', 'mattpocock-skills:to-spec']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('No ticket for the version or the CHANGELOG: a linked session touches neither (its report lists what the CHANGELOG must say)')
+    expect(text).toContain("the version is set once, at the end of the run, by /project:version, which the user launches from the dashboard's Version button")
+  }
+  const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
+  expect(implement).not.toContain('No ticket for the version')
+})
+
+// Le seul défaut important d'un groupe venait de la spec : l'effort figé au clic, lu après un changement (r7).
+test('la spec se demande si un texte écrit à un moment est lu plus tard, et ce qu’il dit si la valeur a changé', async ($, on) => {
+  mock.clock(on, { now: 96_900_000 })
+  world(on)
+  await start($)
+  const spec = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text as string
+  expect(spec).toContain('« un texte écrit à un moment est-il lu plus tard, et que dit-il si la valeur a changé entre-temps ? »')
+  const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
+  expect(tickets).not.toContain('un texte écrit à un moment est-il lu plus tard')
 })

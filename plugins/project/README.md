@@ -20,7 +20,7 @@ claude plugin install project@mathis-plugins
 | `/project:sync [base]` | Met la branche à jour avec son remote (rebase + autostash), ou avec la branche par défaut avec `base` |
 | `/project:push` | Commit du reste, vérifications du projet, mise à jour du journal et des décisions, synchronisation, push sans force, puis suivi de la CI du commit envoyé (par son identifiant complet) |
 | `/project:pr [base] [--draft] [--auto]` | Ouvre la pull request vers la branche par défaut ou `base`, avec le modèle de PR du dépôt ou celui du plugin (section publique pour les notes de version + détails internes) ; auto-merge seulement avec `--auto`, si le dépôt l'autorise et avec sa méthode de fusion (sinon la PR reste ouverte et Claude dit quoi faire) |
-| `/project:version [patch\|minor\|major\|ota]` | Montée de version SemVer sur tous les fichiers de version détectés ; gère le choix natif ou OTA des apps Expo |
+| `/project:version [patch\|minor\|major\|ota]` | Montée de version SemVer sur tous les fichiers de version détectés, partie par partie dans un dépôt qui en a plusieurs (plugins d'une marketplace, paquets) ; un plugin Claude Code change ensemble son `.claude-plugin/plugin.json` et son entrée de `.claude-plugin/marketplace.json` ; se sert du script de version que nomme le `CLAUDE.md` du projet ; gère le choix natif ou OTA des apps Expo |
 
 Toutes les commandes se lancent à la main (`disable-model-invocation`), car elles écrivent des fichiers ou agissent sur git, sauf `/project:commit`, que Claude peut aussi lancer de lui-même : un commit local se défait, le push reste au porteur.
 
