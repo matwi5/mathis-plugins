@@ -10,7 +10,7 @@ Ce fichier est la procédure fixe que suit une session liée à qui la discussio
 - le chemin du fichier de méthode de la relecture du fond et de la forme (`relecture-fond-forme.md`, dans le dossier de ce fichier) ;
 - si le projet a un `CODING_STANDARDS.md` à sa racine (ses règles de jugement à la revue) ;
 - si le dossier de travail est un dépôt git ; sans git, la section 9 remplace ce qu'elle nomme ;
-- si la session est une session autonome (lancée en xhigh) : la section 10 s'applique alors.
+- si la session est une session autonome (lancée en xhigh, ou par un parcours en mode auto quel que soit son effort) : la section 10 s'applique alors.
 
 « Je », « me » et « moi » désignent la personne qui porte le parcours ; « la discussion principale », celle qui a lancé la session. Le fichier de décisions du projet (`DECISIONS.md`, ou celui que nomme son `CLAUDE.md`) et les commentaires « mise à jour du porteur » des tickets priment sur le prompt et sur ce fichier.
 
@@ -19,6 +19,8 @@ Ce fichier est la procédure fixe que suit une session liée à qui la discussio
 Me poser en une fois les questions sensibles du groupe : un choix qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence, commande ou chemin construit à partir d'une valeur lue ailleurs : fichier partagé, autre session, compte rendu), que les tickets laissent ouvert. Pour les trouver avant de coder, une passe en lecture seule « ce qui viole l'invariant » sur chaque ticket sensible et le code qu'il touche (les fonctions qu'il nomme, les chemins qui écrivent, fusionnent ou effacent ses données) remonte toutes ses questions d'un coup, au lieu d'une par passe « bogues ». En attendant mes réponses, avancer les tickets qui n'en dépendent pas (une session avait attendu 10 heures à vide).
 
 Seules les questions sensibles et les choix de conception attendent ma réponse (sauf dans une session autonome : section 10). Un choix qui change qui écrit, fusionne ou efface une donnée est une question, jamais un choix déclaré. La lecture d'une décision déjà prise, hors zone sensible (sa portée, un cas qu'elle ne nomme pas), ne bloque pas : la coder selon l'option la plus proche de la décision, la déclarer dans `{"decided": …}` avec sa raison, et continuer (une session avait attendu 14 minutes une réponse qui a confirmé l'option recommandée, déjà codée).
+
+Tenir la liste de tâches de la session (outils `TaskCreate` et `TaskUpdate`, quand ils sont là) : une tâche par ticket, dans l'ordre du groupe, plus une pour la revue du groupe, la revue de sécurité et le compte rendu ; chacune passe « en cours » quand elle commence et « faite » quand elle est finie. Elle montre l'avancement à qui ouvre la discussion de la session.
 
 ## 2. Chaque ticket, un par un et dans l'ordre
 
@@ -94,7 +96,7 @@ Quand le prompt dit que le dossier de travail n'a pas de git (pas de worktree, p
 
 ## 10. Session autonome
 
-Seulement quand le prompt dit que la session est une session autonome (lancée en xhigh, sur ma demande) ; sinon, la section 1 vaut telle quelle et les choix de conception attendent ma réponse.
+Seulement quand le prompt dit que la session est une session autonome : lancée en xhigh, sur ma demande, ou par un parcours en mode auto, quel que soit son effort (un parcours en auto ne lance jamais une session en xhigh) ; sinon, la section 1 vaut telle quelle et les choix de conception attendent ma réponse. Une coupure de l'auto après le lancement ne change pas la session : son prompt est figé à l'envoi.
 
 - Un choix de conception hors zone sensible : la session le tranche elle-même, sans attendre ma réponse. Avant chaque grand choix (une approche parmi plusieurs, une interface, un format, ce qui ne doit pas bouger), elle consulte l'advisor quand elle a l'outil `advisor` ; sans lui, elle relit elle-même son choix (les options, ce que chacune engage) avant de s'y engager ; puis le déclare aussitôt dans `{"decided": …}` avec sa raison, selon la règle des choix déclarés (`config/rules/flow-board.md`, une fois installé).
 - Un choix qui touche une zone sensible (confidentialité, suppression de données, chiffrement, concurrence, commande ou chemin construit à partir d'une valeur lue ailleurs), ou dont la sensibilité est douteuse, reste une question pour moi : dans le doute, sensible. La session me le pose et avance, en attendant, ce qui n'en dépend pas.

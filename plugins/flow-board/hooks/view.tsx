@@ -16,6 +16,16 @@ import {
   type GroupRelay,
   activeDetour,
   activeRun,
+  autoStateOf,
+  closingReason,
+  isAutoOn,
+  CHOICES_LISTED,
+  openQuestions,
+  pendingAutoMarks,
+  STALE_PREFIX,
+  waitTargetLabel,
+  ORIGIN_LABELS,
+  originOf,
   asanaUrl,
   blockedCount,
   externalOf,
@@ -138,6 +148,13 @@ export type View = {
   ui: UiState
   sync: SyncState
   now: number
+  /** L'id de la discussion du moment (nouveau après un `/clear`) : le mode auto n'envoie que de celle qui l'a allumé. */
+  here?: string
+  /**
+   * La date du second clic que cette discussion garde pour le parcours actif ici (`$.store`), null sans
+   * clic gardé : l'auto n'envoie d'ici que si l'« allumé à » la vaut ; absent, pas vérifié.
+   */
+  autoConfirmedAt?: number | null
   /** L'avancement relayé par les sessions liées du parcours actif. */
   relay?: Relay | null
   /** Le registre des sous-agents de cette session (onglet Agents). */
@@ -172,6 +189,14 @@ export type Actions = {
   finish: () => unknown
   /** Met de côté le parcours actif ici, sans le clore : la discussion peut en ouvrir un autre. */
   setAside: () => unknown
+  /** « ⚡ Auto », premier clic : montre ce que l'activation vaut et « Confirmer » (ou le cache). */
+  askAuto: () => unknown
+  /** « Confirmer » : allume le mode auto du parcours actif ici, pour cette discussion. */
+  confirmAuto: () => unknown
+  /** Coupe le mode auto du parcours actif ici. */
+  stopAuto: () => unknown
+  /** « ↻ Renvoyer » sur la question « envoi resté sans suite » d'une marque d'envoi du mode auto. */
+  resendAuto: (runId: string, key: string) => unknown
   resume: (id: string) => unknown
   drop: (id: string) => unknown
   /** Range un parcours aux archives. */
@@ -975,11 +1000,12 @@ const closingRow = (k: Kit, id: string, closing: Closing | undefined, relaunch: 
         {reopenButton(k, id, reopen, act)}
       </Box>
     )
-  if (closing.state === 'app') return <Box key={`close-row-${id}`}>{T(k, `⧗${NB}à archiver dans l'app${closing.why ? ` : ${closing.why}` : ''}`, { color: C.amber, wrap: 'wrap' })}</Box>
+  const reason = closingReason(closing.why)
+  if (closing.state === 'app') return <Box key={`close-row-${id}`}>{T(k, `⧗${NB}à archiver dans l'app${reason ? ` : ${reason}` : ''}`, { color: C.amber, wrap: 'wrap' })}</Box>
   return (
     <Box key={`close-row-${id}`} flexDirection="row" flexWrap="wrap" alignItems="center">
       <Box marginRight={1} flexShrink={1}>
-        {T(k, `!${NB}fermeture arrêtée${closing.why ? ` : ${closing.why}` : ''}`, { color: C.amber, wrap: 'wrap' })}
+        {T(k, `!${NB}fermeture arrêtée${reason ? ` : ${reason}` : ''}`, { color: C.amber, wrap: 'wrap' })}
       </Box>
       <Button key={`close-linked-${id}`} plain={true} dimColor={true} label={`↻${NB}Relancer la fermeture`} onPress={relaunch} />
     </Box>
@@ -1112,7 +1138,11 @@ const decidedBlock = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const unseen = all.filter(d => d.seenAt === undefined)
   const seen = all.filter(d => d.seenAt !== undefined)
   const isOpen = view.ui.showDecided === true
-  const rows = [...unseen].reverse().concat(isOpen ? [...seen].reverse() : [])
+  // Un parcours en auto en déclare des centaines : les plus récents de chaque sorte, le reste compté.
+  const shownUnseen = [...unseen].reverse().slice(0, CHOICES_LISTED)
+  const shownSeen = isOpen ? [...seen].reverse().slice(0, CHOICES_LISTED) : []
+  const rows = shownUnseen.concat(shownSeen)
+  const hidden = unseen.length - shownUnseen.length + (isOpen ? seen.length - shownSeen.length : 0)
   return (
     <Box key="decided" flexDirection="column" marginTop={1}>
       <Box flexDirection="row" alignItems="center" justifyContent="space-between">
@@ -1137,11 +1167,14 @@ const decidedBlock = (k: Kit, run: Run, view: View, act: Actions): unknown => {
             <Box marginRight={1} flexShrink={0} width={3}>
               {T(k, d.seenAt === undefined ? '⚑' : '✓', { color: d.seenAt === undefined ? C.amber : C.gray, dim: d.seenAt !== undefined })}
             </Box>
-            <Box flexShrink={1}>{T(k, d.relayedFrom !== undefined ? `${d.what} (↗${NB}Groupe${NB}${d.relayedFrom})` : d.what, { wrap: 'wrap', dim: d.seenAt !== undefined })}</Box>
+            <Box flexShrink={1}>
+              {T(k, d.relayedFrom !== undefined ? `${d.what} (↗${NB}Groupe${NB}${d.relayedFrom})` : originOf(d.origin) ? `${d.what} (${ORIGIN_LABELS[originOf(d.origin)!]})` : d.what, { wrap: 'wrap', dim: d.seenAt !== undefined })}
+            </Box>
           </Box>
           {d.why !== undefined && <Box paddingLeft={4}>{T(k, `car : ${d.why}`, { dim: true, wrap: 'wrap' })}</Box>}
         </Box>
       ))}
+      {hidden > 0 && T(k, `+${NB}${hidden}${NB}autres, plus anciens : le fichier des choix déjà déclarés les donne tous`, { dim: true, wrap: 'wrap' })}
     </Box>
   )
 }
@@ -2623,6 +2656,108 @@ const anytimeCard = (k: Kit, act: Actions, run?: Run): unknown => {
   )
 }
 
+/** Ce que vaut l'allumage du mode auto, décidé au cadrage du mode auto, montré au premier clic sur « ⚡ Auto ». */
+const AUTO_WORTH =
+  'Ton second clic vaut ton accord, pour ce parcours seulement, sur ses validations à boutons (accord du cadrage, spec, découpage, plan) et sur les écritures Asana qu’il prévoit (création des tickets, statuts) : chacune sera inscrite dans « Décidé sans toi ». L’auto s’arrête au rapport du compte rendu ; le valider, la version et le push restent à toi. Restent aussi à toi, et n’arrêtent que ce qu’elles concernent :'
+
+/** Les six catégories de décisions qui bloquent toujours, même en auto (fixées au cadrage du mode auto). */
+const AUTO_BLOCKS: readonly string[] = [
+  'une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), invariant compris ;',
+  'une question sans recommandation défendable (goût, priorité, intention ambiguë) ;',
+  'un changement qui contredit une décision déjà prise ;',
+  'laisser une faille de sécurité sans correctif ;',
+  'l’effort xhigh d’une session liée ;',
+  'une dépense ou une action externe hors du parcours (dépendance lourde, service tiers).',
+]
+
+/**
+ * Le bouton « ⚡ Auto » du parcours actif ici, seul moyen de l'allumer : un premier clic montre ce que l'activation vaut,
+ * « Confirmer » l'allume pour cette discussion ; quand il envoie d'ici, le même bouton le coupe d'un clic.
+ */
+const autoRow = (k: Kit, run: Run, view: View, act: Actions): unknown => {
+  const { Box, Button } = k
+  const state = view.board ? autoStateOf(run, view.board, view.here ?? view.board.session ?? '', view.autoConfirmedAt) : ({ kind: 'off' } as const)
+  if (state.kind !== 'on' && view.ui.confirmAuto === run.id) {
+    return (
+      <Box key="auto" flexDirection="column" borderStyle="round" borderColor={C.amber} paddingX={1} marginTop={1}>
+        {T(k, `⚡${NB}Allumer le mode auto de ce parcours ?`, { bold: true, color: C.amber })}
+        {T(k, AUTO_WORTH, { wrap: 'wrap' })}
+        {AUTO_BLOCKS.map((text, i) => (
+          <Box key={`auto-block-${i}`} flexDirection="row">
+            <Box marginRight={1} flexShrink={0}>
+              {T(k, `${i + 1}.`, { dim: true })}
+            </Box>
+            <Box flexShrink={1}>{T(k, text, { wrap: 'wrap' })}</Box>
+          </Box>
+        ))}
+        <Box flexDirection="row" marginTop={1}>
+          <Box marginRight={1}>
+            <Button key="auto-confirm" variant="primary" label="Confirmer" onPress={() => act.confirmAuto()} />
+          </Box>
+          <Button key="auto-cancel" plain={true} dimColor={true} label="Annuler" onPress={() => act.askAuto()} />
+        </Box>
+      </Box>
+    )
+  }
+  // Allumé par une autre discussion (pause déduite) : il se coupe d'ici d'un clic, ou se rallume pour elle en deux.
+  const isOn = isAutoOn(run)
+  // Une pause posée par le mod s'efface d'un clic aussi : sinon le bandeau la redirait jusqu'au rallumage.
+  // Lu sur le même état que le texte, pour que le bouton et le texte disent la même chose.
+  const canCut = isOn || state.kind === 'paused'
+  const hint =
+    state.kind === 'on'
+      ? 'le parcours avance seul ; un clic rend la main'
+      : state.kind === 'paused' && isOn
+        ? `en pause : ${state.why} ; deux clics le rallument ici, un clic le coupe`
+        : state.kind === 'paused'
+          ? `en pause : ${state.why} ; deux clics le rallument, un clic l’éteint pour de bon`
+          : 'le parcours avance seul jusqu’au rapport ; deux clics pour l’allumer'
+  return (
+    <Box key="auto" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
+      {state.kind !== 'on' && (
+        <Box marginRight={1}>
+          <Button key="auto-on" label={`⚡${NB}Auto`} onPress={() => act.askAuto()} />
+        </Box>
+      )}
+      {canCut && (
+        <Box marginRight={1}>
+          <Button key="auto-off" label={`⚡${NB}Couper l’auto`} onPress={() => act.stopAuto()} />
+        </Box>
+      )}
+      {T(k, hint, { dim: true, wrap: 'wrap' })}
+    </Box>
+  )
+}
+
+/**
+ * Les questions qui attendent la personne (`waiting`), chacune avec ce qu'elle bloque : Claude les
+ * retire une fois qu'elle y a répondu. Rien sans question.
+ */
+const waitingCard = (k: Kit, run: Run, act?: Actions): unknown => {
+  const { Box, Button } = k
+  const open = openQuestions(run)
+  if (open.length === 0) return null
+  // « Envoi resté sans suite » : la marque attend encore son démarrage, « ↻ Renvoyer » l'efface et laisse l'auto renvoyer.
+  // Seulement sur le parcours actif ici (`act` donné) : ailleurs, il ne pourrait pas renvoyer.
+  const stale = new Set(act ? pendingAutoMarks(run).filter(m => m.staleAt !== undefined).map(m => m.key) : [])
+  return (
+    <Box key="waiting" flexDirection="column" borderStyle="round" borderColor={C.amber} paddingX={1} marginTop={1}>
+      {line(k, [T(k, `❓${NB}Questions qui t’attendent`, { bold: true, color: C.amber }), T(k, `${open.length}`, { dim: true })])}
+      {open.map(q => (
+        <Box key={`wait-${q.id}`} flexDirection="column" marginTop={1}>
+          {T(k, q.text || '(question sans texte)', { wrap: 'wrap' })}
+          {T(k, `bloque ${waitTargetLabel(run, q)}${SEP}${q.id}`, { dim: true, wrap: 'wrap' })}
+          {q.id.startsWith(STALE_PREFIX) && stale.has(q.id.slice(STALE_PREFIX.length)) && (
+            <Box flexDirection="row">
+              <Button key={`auto-resend-${q.id.slice(STALE_PREFIX.length)}`} label={`↻${NB}Renvoyer`} onPress={() => act?.resendAuto(run.id, q.id.slice(STALE_PREFIX.length))} />
+            </Box>
+          )}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
 /** Mettre de côté le parcours actif : ni clos ni archivé, il attend dans l'historique. */
 const asideRow = (k: Kit, act: Actions): unknown => {
   const { Box, Button } = k
@@ -2638,7 +2773,7 @@ const asideRow = (k: Kit, act: Actions): unknown => {
 
 const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
   const isMine = run.id === view.board?.activeId
-  if (run.status === 'active' && isMine) return [phaseCard(k, run, view, act), agentsLine(k, view, act), nextCard(k, run, view, act), asideRow(k, act), anytimeCard(k, act, run)]
+  if (run.status === 'active' && isMine) return [phaseCard(k, run, view, act), waitingCard(k, run, act), agentsLine(k, view, act), nextCard(k, run, view, act), autoRow(k, run, view, act), asideRow(k, act), anytimeCard(k, act, run)]
   const { Box, Button } = k
   const isElsewhere = run.status === 'active'
   const isAside = run.status === 'paused' && run.asideAt !== undefined
@@ -2656,16 +2791,22 @@ const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
       : run.status === 'paused'
         ? 'Il reprend tout seul quand tu relances un de ses skills.'
         : 'Le suivant démarre au prochain skill.'
+  // Le mode auto d'un parcours qui n'est pas actif ici : en pause (déduite ou posée), ou envoyé d'ailleurs.
+  const auto = view.board ? autoStateOf(run, view.board, view.here ?? view.board.session ?? '') : ({ kind: 'off' } as const)
+  const autoLine =
+    auto.kind === 'paused' ? `⚡${NB}Auto en pause : ${auto.why}` : auto.kind === 'elsewhere' ? `⚡${NB}Auto allumé, le parcours est suivi dans une autre discussion` : ''
   return [
     <Box key="idle" flexDirection="column" borderStyle="round" borderDimColor={true} paddingX={1} marginTop={1}>
       {T(k, head, { bold: true })}
       {T(k, hint, { dim: true, wrap: 'wrap' })}
+      {autoLine !== '' && T(k, autoLine, { color: auto.kind === 'paused' ? C.amber : C.teal, wrap: 'wrap' })}
       {(run.status === 'paused' || isElsewhere) && (
         <Box marginTop={1}>
           <Button key={`resume-${run.id}`} variant="primary" label="↻ Reprendre" onPress={() => act.resume(run.id)} />
         </Box>
       )}
     </Box>,
+    waitingCard(k, run),
     launcher(k, act),
     anytimeCard(k, act),
   ]
@@ -2979,6 +3120,23 @@ const relayPills = (run: Run, view: View): BandPill[] =>
       return { text: `↗${g.id}${NB}${done}/${total}`, color: relay?.endedAt !== undefined && done < total ? C.amber : C.blue, bold: true }
     })
 
+/**
+ * Dans le bandeau, le mode auto du parcours : « ⚡ Auto · en cours » quand il envoie d'ici, « ⚡ Auto ·
+ * attend ta réponse (N) » quand des questions bloquantes l'attendent,
+ * « ⚡ Auto en pause : <raison> » quand il s'est arrêté sans un geste de la personne ni la fin du
+ * parcours, ou que la pause se déduit (discussion changée) ; rien, éteint. À part des autres
+ * pastilles : il se coupe quand la place manque et ne retire jamais le bouton de l'étape suivante.
+ */
+const autoPill = (run: Run, view: View): BandPill | null => {
+  if (!view.board) return null
+  const state = autoStateOf(run, view.board, view.here ?? view.board.session ?? '', view.autoConfirmedAt)
+  const waiting = openQuestions(run).length
+  if (state.kind === 'on' && waiting > 0) return { text: `⚡${NB}Auto${NB}·${NB}attend${NB}ta${NB}réponse${NB}(${waiting})`, color: C.amber, bold: true }
+  if (state.kind === 'on') return { text: `⚡${NB}Auto${NB}·${NB}en${NB}cours`, color: C.teal, bold: true }
+  if (state.kind === 'paused') return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}${state.why.replace(/ /g, NB)}`, color: C.amber, bold: true }
+  return null
+}
+
 /** Les pastilles du bandeau après la phase : les tickets, les groupes en sessions liées, les agents au travail, les choix à relire. */
 const bandPills = (run: Run, view: View): BandPill[] => {
   const t = countTickets(run.tickets)
@@ -2998,8 +3156,8 @@ const bandPills = (run: Run, view: View): BandPill[] => {
  */
 const BAND_KEEP = 40
 
-/** Largeur estimée d'un texte du bandeau, en cellules : « ⚑ » en prend deux sur certains terminaux. */
-const bandCells = (text: string): number => [...text].reduce((n, ch) => n + (ch === '⚑' ? 2 : 1), 0)
+/** Largeur estimée d'un texte du bandeau, en cellules : « ⚑ » et « ⚡ » en prennent deux sur certains terminaux. */
+const bandCells = (text: string): number => [...text].reduce((n, ch) => n + (ch === '⚑' || ch === '⚡' ? 2 : 1), 0)
 
 /** La place du bouton de l'étape suivante au bandeau : son libellé, ses crochets de bouton principal au terminal, sa marge. */
 const leadCells = (b: NextButton): number => bandCells(b.label) + 4 + 1
@@ -3014,6 +3172,8 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
   const { skill } = focusOf(run)
   const nodes = roadNodes(run)
   const pills = bandPills(run, view)
+  // Le mode auto se coupe plutôt que de prendre la place du bouton : il ne compte pas dans `room`.
+  const auto = autoPill(run, view)
   // Le bouton de l'étape suivante, celui de la carte « Ensuite » : la frise et le titre tombent avant
   // lui ; lui ne vient que si les pastilles, qui ne se coupent pas, gardent leur place. La place se
   // compte dès qu'il y a un bouton, même trop large pour venir : la frise ne passe jamais devant lui.
@@ -3044,6 +3204,7 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
           width >= 90 + room && <Box flexShrink={1}>{T(k, run.title, { bold: true, wrap: 'truncate-end' })}</Box>,
           mini,
           <Box flexShrink={1}>{T(k, `${skill.glyph}${NB}${skill.label}`, { color: skill.color, bold: true, wrap: 'truncate-end' })}</Box>,
+          auto !== null && <Box flexShrink={1}>{T(k, auto.text, { ...auto, wrap: 'truncate-end' })}</Box>,
           ...pills.map(p => T(k, p.text, p)),
         ])}
       </Box>

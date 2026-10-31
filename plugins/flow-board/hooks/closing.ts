@@ -190,6 +190,13 @@ const neutralCore = (text: string): string =>
     .replace(INVISIBLES, '')
 
 /**
+ * Une valeur relue recopiée dans une consigne donnée avec un skill, où seule la ligne fait structure
+ * (les faits du compte rendu, la file de /implement) : le cœur commun (`neutralCore`) seul ; elle
+ * n'y ouvre aucune ligne, et garde ses guillemets « » et ses « · ».
+ */
+export const neutralLine = (text: string): string => neutralCore(text)
+
+/**
  * Une valeur recopiée dans une demande mise dans le prompt (titre du parcours, id ou libellé d'une
  * piste, description d'une fermeture) : le cœur commun (`neutralCore`), puis ses guillemets « » et
  * leurs sosies montrés “ ”, ses crochets et leurs sosies montrés ( ) : elle ne ferme ni une citation
@@ -218,6 +225,13 @@ export const asciiJson = (value: unknown): string =>
 
 /** Un id de session (id court du CLI, `local_…` de l'app) ou de conversation : lettres, chiffres, _ et -. */
 export const isSafeId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(value)
+
+/**
+ * Un id de question bloquante en forme : lettres et chiffres ASCII, puis aussi `_ : # + . -` (ceux que le
+ * mod génère : `sans-suite:review:A#1+B#1`, `relance:A#2`, `illisible-<empreinte>`), 200 au plus ; ni
+ * espace, ni virgule, ni « · », ni fin de ligne.
+ */
+export const isQuestionIdForm = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_:#+.-]{0,199}$/.test(value)
 
 /** Le sessionId que reprend `claude --resume` : l'id complet d'une conversation, un UUID. */
 const isConversationId = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
@@ -341,7 +355,7 @@ const describe = (run: Run, target: CloseTarget, seq?: number) => {
   const wt = itemsWorktree(run, label, seq)
   const title = `« ${linkedPrefix(run)}${label} · »`
   return {
-    what: `la session des ${label.toLowerCase()} de la phase ${def?.label ?? target.skill} du parcours « ${neutralInPrompt(run.title)} »`,
+    what: `la session des ${label.toLowerCase()} de la phase ${def?.label ?? neutralInPrompt(String(target.skill))} du parcours « ${neutralInPrompt(run.title)} »`,
     owner: `des ${label.toLowerCase()}`,
     title,
     titles: title,

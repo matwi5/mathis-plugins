@@ -9,6 +9,7 @@ import type {
   Board,
   ClosedLink,
   Closing,
+  DecisionOrigin,
   Detour,
   ExternalBlocker,
   FlowItem,
@@ -22,19 +23,24 @@ import type {
   RelayEntry,
   RelayEntryFile,
   Run,
+  RunAuto,
   SecurityCheck,
   SoloDecision,
   SyncState,
   Ticket,
   TicketGroup,
   TicketStatus,
+  Tombstone,
   UiState,
   Tone,
   VersionCommit,
   VersionUnit,
+  WaitTarget,
+  WaitingQuestion,
+  AutoMark,
 } from '../types'
 import { SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
-import { GROUP_ID_FORM, asciiJson, branchFate, neutralInPrompt, neutralRelayed, closedHint, closingProcedure, isGroupId, isSafeBranch, isSafeId, isSessionId, isWorktreePath, sendNumber, type CloseTarget } from './closing.ts'
+import { GROUP_ID_FORM, asciiJson, branchFate, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isSessionId, isWorktreePath, sendNumber, type CloseTarget } from './closing.ts'
 import { ownPart } from './linked.ts'
 import { maxOf, minOf } from './timeline.ts'
 
@@ -61,6 +67,8 @@ export const LIMITS = {
   /** Parcours archivés gardés par projet, au-delà des 15 parcours vivants. */
   archived: 100,
   decided: 30,
+  /** Les choix gardés d'un parcours qui a été en auto, une fois son rapport validé. */
+  autoDecided: 200,
 } as const
 
 /** Ce que l'interface doit jouer après une transition. */
@@ -431,6 +439,10 @@ export const flowCallLabel = (input: unknown): string => {
   if (at.review && typeof at.review === 'object') parts.push('revue')
   if (at.security && typeof at.security === 'object') parts.push('sécurité')
   if (list('decided').length > 0) parts.push(counted(list('decided').length, 'décision', 'décisions'))
+  const asked = list('waiting').filter(q => (q as { answered?: unknown } | null)?.answered !== true).length
+  const answered = list('waiting').length - asked
+  if (asked > 0) parts.push(counted(asked, 'question en attente', 'questions en attente'))
+  if (answered > 0) parts.push(counted(answered, 'question répondue', 'questions répondues'))
   if (list('reviewed').length > 0) parts.push(`relu ${list('reviewed').map(str).filter(Boolean).join(', ')}`)
   if (list('returned').length > 0) parts.push(`rendu ${list('returned').map(str).filter(Boolean).join(', ')}`)
   if (str(at.note)) parts.push('note')
@@ -749,14 +761,22 @@ export const isBugPass = (run: Run, session?: string): boolean => {
 }
 
 /**
- * `/code-review` vient d'être lancé : les groupes finis et pas encore relus le sont, en priorité
- * ceux de la file lancée dans cette discussion. Rend leurs noms.
+ * `/code-review` vient d'être lancé : les groupes finis ici et pas encore relus le sont, en priorité
+ * ceux de la file lancée dans cette discussion, et toujours ceux que nomme une revue lancée (la marque
+ * démarrée de l'auto ou d'un bouton) ; jamais un groupe confié à une session liée (sa revue se fait
+ * là-bas, puis `reviewed`), en vol ou rendu. Rend leurs noms.
  */
 const markReviewed = (run: Run, now: number): string[] => {
   const queue = run.queue ?? []
-  const due = (run.groups ?? []).filter(g => awaitsReview(run, g))
+  // Seulement les groupes finis ici : la revue d'un groupe confié se fait dans sa session liée (sa branche
+  // est fusionnée ici), et un groupe en vol n'est pas fini ; sinon un groupe renvoyé serait clos sans la
+  // revue de son dernier envoi.
+  const due = (run.groups ?? []).filter(g => g.linked === undefined && g.delegated === undefined && awaitsReview(run, g))
   const fromQueue = due.filter(g => g.tickets.some(id => queue.includes(id)))
-  const targets = fromQueue.length > 0 ? fromQueue : due
+  // Un groupe que nomme une revue lancée (marque démarrée de l'auto ou d'un bouton) est relu par elle, file ou non :
+  // sinon l'auto attendrait pour toujours une revue qu'il ne redemande pas.
+  const named = due.filter(g => readMarks(run).marks.some(m => m.startedAt !== undefined && m.key.startsWith('review:') && m.key.slice('review:'.length).split('+').includes(hereUnitOf(g))))
+  const targets = fromQueue.length > 0 ? [...fromQueue, ...named.filter(g => !fromQueue.includes(g))] : due
   for (const g of targets) g.reviewedAt = now
   if (isAllDone(run, run.tickets.map(t => t.id))) run.reviewedAt = now
   return targets.map(g => `${g.id} (${g.name})`)
@@ -791,7 +811,8 @@ const markSecured = (run: Run, now: number): string[] => {
     return []
   }
   const queue = run.queue ?? []
-  const finished = groups.filter(g => g.security?.ranAt === undefined && isGroupDone(run, g))
+  // Jamais un groupe en vol : son envoi en cours n'est pas encore fusionné, ni rendu.
+  const finished = groups.filter(g => g.linked === undefined && g.security?.ranAt === undefined && isGroupDone(run, g))
   // Un groupe sans logique ni zone sensible, sans avis, n'a pas de revue de sécurité : il n'est visé
   // que s'il est le seul fini (sinon des comptes jamais envoyés retiendraient sa fermeture).
   const needed = finished.filter(g => !(g.security === undefined && isTicketReviewEnough(run, g)))
@@ -853,8 +874,9 @@ const securityText = (check: SecurityCheck | undefined): string => {
     const counts = check.findings !== undefined ? ` (${securityCounts(check)})` : ''
     return `security review run${counts}`
   }
-  if (check?.isAdvised === true) return `security review advised but not run${check.why ? ` (${check.why})` : ''}`
-  if (check?.isAdvised === false) return `security review judged not needed${check.why ? ` (${check.why})` : ''}`
+  // La raison, relue du fichier partagé, sur une seule ligne : ce texte entre dans les faits du compte rendu.
+  if (check?.isAdvised === true) return `security review advised but not run${check.why ? ` (${shownInNote(check.why)})` : ''}`
+  if (check?.isAdvised === false) return `security review judged not needed${check.why ? ` (${shownInNote(check.why)})` : ''}`
   return ''
 }
 
@@ -1024,6 +1046,8 @@ const shelve = (run: Run, now: number) => {
   if (isRunComplete(run)) {
     run.status = 'done'
     run.finishedAt = now
+    // Terminé, il ne se rouvre plus en auto sans un nouveau second clic.
+    stopAuto(run, now, AUTO_STOPS.finished)
   } else {
     run.status = 'paused'
   }
@@ -1629,7 +1653,8 @@ export const summaryOf = (run: Run): string => {
   const stepLabel = skill.steps.find(s => s.id === stepId)?.label
   const t = countTickets(run.tickets)
   return [
-    `Dashboard: ${run.title}`,
+    // Le titre, relu du fichier partagé pour un parcours repris, cité neutralisé : il n'ouvre aucune section.
+    `Dashboard: ${shownText(run.title)}`,
     `${skill.label}${stepLabel ? ` > ${stepLabel}` : ''} (${target.status === 'done' ? 'done' : 'in progress'})`,
     t.total > 0 ? `tickets ${t.done}/${t.total} done` : '',
     reportStateOf(run),
@@ -1719,7 +1744,7 @@ export const openRun = (board: Board, ask: { entry?: string; title?: string }, n
   fx.toasts.push(`✚ Parcours ouvert : ${run.title}`)
   fx.openPane = true
   prune(b)
-  const left = previous ? ` "${previous.title}" was ${previous.status === 'done' ? 'closed (nothing required left)' : 'paused'}, untouched; the user resumes it from the History tab.` : ''
+  const left = previous ? ` ${JSON.stringify(shownText(previous.title))} was ${previous.status === 'done' ? 'closed (nothing required left)' : 'paused'}, untouched; the user resumes it from the History tab.` : ''
   const named = title ? nameDiscussion(b, run, fx) : ' Send {"fix": {"title": "..."}} to name it.'
   return { board: b, fx, text: `New workflow "${run.title}" (${SKILLS[entry]!.flowLabel}) opened in this discussion; the rest of this call went to it.${left}${fallback}${named}` }
 }
@@ -1775,7 +1800,7 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
       phase.status = 'active'
       phase.finishedAt = undefined
       run.cursor = at
-      done.push(`phase ${SKILLS[phase.skill]?.label ?? phase.skill}`)
+      done.push(`phase ${phaseLabel(phase.skill)}`)
     }
   }
   const stepId = str(fix.step)
@@ -1783,7 +1808,7 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
     addSkillStep(phase, stepId)
     const at = phase.steps.findIndex(s => s.id === stepId)
     if (at < 0) {
-      notes.push(`step "${stepId}" is not a step of ${phase.skill} (${phase.steps.map(s => s.id).join(', ') || 'no steps'})`)
+      notes.push(`step "${stepId}" is not a step of ${shownText(phase.skill)} (${phase.steps.map(s => shownText(s.id)).join(', ') || 'no steps'})`)
     } else {
       // Les étapes d'après redeviennent à faire : une correction peut revenir en arrière.
       phase.steps = phase.steps.map((s, i): FlowStep =>
@@ -1888,8 +1913,9 @@ const reportOnce = (
   const resumed = resumeRun(board, resumeId, now)
   if (!resumed) return { board, fx: noFx(), text: `No workflow "${resumeId}" in this project: nothing was resumed nor recorded. ${noActiveText(board)}` }
   const out = reportHere(resumed.board, input, now, opts)
+  // Le titre, relu du fichier partagé, cité neutralisé comme dans `summaryOf`.
   const title = resumed.board.runs.find(r => r.id === resumeId)?.title ?? resumeId
-  return { board: out.board, fx: { ...out.fx, toasts: [...resumed.fx.toasts, ...out.fx.toasts] }, text: `Workflow "${title}" resumed in this discussion. ${out.text}` }
+  return { board: out.board, fx: { ...out.fx, toasts: [...resumed.fx.toasts, ...out.fx.toasts] }, text: `Workflow ${JSON.stringify(shownText(title))} resumed in this discussion. ${out.text}` }
 }
 
 /** Les comptes rendus finals déposés au relais par les sessions des groupes encore confiés. */
@@ -1988,12 +2014,12 @@ export const restoreDelegate = (board: Board, kept: unknown, now?: number): Boar
 export const reloadText = (board: Board): string => {
   if (board.delegate) {
     const group = board.delegate.group ? `, group ${board.delegate.group}` : ''
-    return `State found after a plugin reload: delegate mode kept for the workflow "${delegatedTitle(board)}"${group}; nothing to send again.`
+    return `State found after a plugin reload: delegate mode kept for the workflow ${JSON.stringify(shownText(delegatedTitle(board)))}${group}; nothing to send again.`
   }
   const run = activeRun(board)
   if (!run) return ''
   const phase = currentPhase(run)
-  return `State found after a plugin reload: ${run.tickets.length} tickets, ${(run.groups ?? []).length} groups, phase ${SKILLS[phase.skill]?.label ?? phase.skill}; nothing to send again.`
+  return `State found after a plugin reload: ${run.tickets.length} tickets, ${(run.groups ?? []).length} groups, phase ${phaseLabel(phase.skill)}; nothing to send again.`
 }
 
 /** Le titre du parcours pour lequel la discussion travaille : dans ce board, sinon celui relevé à la déclaration. */
@@ -2011,7 +2037,7 @@ const reachText = (board: Board): string => {
   const isFollowed = board.delegate?.mainAt !== undefined
   const how = `call ListAgents, find the row whose [ref] is ${main ? 'that one' : 'the one your brief gives'}, and send to that row's "<name> [ref]" exactly as listed (its name can change, its [ref] does not); if no row has it, say so in the first line of your final message.`
   return main
-    ? `Reach the main discussion, "${main}" ${isFollowed ? '(its reference of the moment, newer than your brief\'s)' : 'in your brief'}, by its [ref]: ${how}`
+    ? `Reach the main discussion, ${asciiJson(main)} ${isFollowed ? '(its reference of the moment, newer than your brief\'s)' : 'in your brief'}, by its [ref]: ${how}`
     : `Reach the main discussion by the [ref] your brief gives: ${how}`
 }
 
@@ -2020,14 +2046,14 @@ const reachLine = (board: Board): string => {
   const main = board.delegate?.main
   const isFollowed = board.delegate?.mainAt !== undefined
   return main
-    ? `The main discussion: "${main}"${isFollowed ? " (its reference of the moment, newer than your brief's)" : ''}, reached by its [ref] in ListAgents, as the delegate answer says.`
+    ? `The main discussion: ${asciiJson(main)}${isFollowed ? " (its reference of the moment, newer than your brief's)" : ''}, reached by its [ref] in ListAgents, as the delegate answer says.`
     : 'The main discussion: reached by the [ref] your brief gives, in ListAgents, as the delegate answer says.'
 }
 
 const delegateText = (board: Board): string => {
   const title = delegatedTitle(board)
   return (
-    `This discussion works for the workflow "${title}", which stays in the main discussion: nothing is recorded on it from here (skills, steps, phases). ` +
+    `This discussion works for the workflow ${JSON.stringify(shownText(title))}, which stays in the main discussion: nothing is recorded on it from here (skills, steps, phases). ` +
     'Your progress is relayed to the main discussion\'s dashboard on its own: ticket statuses from your Asana updates (« Statut : » line, completion), your commits and your test runs. ' +
     'Only if a ticket\'s status changes without an Asana update, send it here with {"set": [{"id": "<ticket id>", "status": "doing|done|blocked", "why": "<if blocked>"}]}. ' +
     'Each choice you make that the user neither asked for nor approved goes here at once, in {"decided": [{"what": "<the choice>", "why": "<why>"}]}: the main dashboard shows it for review right away; a choice that touches a sensitive area (' +
@@ -2095,7 +2121,9 @@ const refusedRelayText = (input: Readonly<Record<string, unknown>>): string => {
  */
 const delegatedReportText = (board: Board, input: Readonly<Record<string, unknown>>): string => {
   const sentence = relayedSentence(input)
-  return sentence === '' ? `${delegateText(board)}${refusedRelayText(input)}` : `${sentence} ${reachLine(board)}${refusedRelayText(input)}`
+  // Une session liée ne déclare pas de question bloquante : la discussion principale la déclare.
+  const waiting = input.waiting !== undefined ? ' · "waiting" is not recorded in a linked session: send your question to the main discussion by SendMessage, which declares it there.' : ''
+  return sentence === '' ? `${delegateText(board)}${refusedRelayText(input)}${waiting}` : `${sentence} ${reachLine(board)}${refusedRelayText(input)}${waiting}`
 }
 
 /**
@@ -2146,6 +2174,9 @@ const reportHere = (
   }
   // Une rétro dont la session de pistes s'est fermée ou annulée depuis la dernière lecture.
   extendActive(run)
+  // Les choix d'avant l'appel, relayés compris : l'auto se met en pause au passage des 200 (plus bas).
+  const choiceRelay = isRelay(opts.relay, run.id) ? opts.relay : null
+  const choicesBefore = (run.decided ?? []).length + relayedDecisions(run, choiceRelay).length
 
   // Une correction d'abord : la phase qu'elle choisit reçoit le reste de l'appel.
   const fix = input.fix !== null && typeof input.fix === 'object' ? (input.fix as Record<string, unknown>) : null
@@ -2174,6 +2205,8 @@ const reportHere = (
       phase.status = 'active'
       phase.finishedAt = undefined
     }
+    // Le rapport du compte rendu est écrit : l'auto s'arrête là, sans le valider (« rapport prêt »).
+    if (isOnTarget && target === phase && phase.skill === 'compte-rendu' && stepId === 'validate') stopAuto(run, now, AUTO_STOPS.report)
   }
 
   // Les éléments qu'une session liée lancée rend « à faire » dans cet appel : ils reviennent au choix.
@@ -2347,6 +2380,7 @@ const reportHere = (
         ...(was?.linked !== undefined ? { linked: was.linked } : {}),
         ...(was?.delegated !== undefined ? { delegated: was.delegated } : {}),
         ...(was?.sends !== undefined ? { sends: was.sends } : {}),
+        ...(was?.isReset === true ? { isReset: true as const } : {}),
       }
     })
     // Un groupe déjà confié à une session liée (en cours, rendu, fermé, ou à l'envoi annulé) n'est
@@ -2415,9 +2449,12 @@ const reportHere = (
     const marked: string[] = []
     const refused: string[] = []
     const waiting: string[] = []
+    const inFlight: string[] = []
     for (const id of ids) {
       const g = sentGroupOf(run, id)
-      if (!g || !isAllDone(run, g.tickets)) refused.push(shownGroupId(id))
+      // En vol après une remise à zéro (renvoi, ou premier envoi d'un groupe relu) : une revue qui arrive maintenant peut être celle d'avant l'envoi.
+      if (g && isResentInFlight(g)) inFlight.push(`group ${shownGroupId(g.id)} ${inFlightWhy(g)}: send its review with its return`)
+      else if (!g || !isAllDone(run, g.tickets)) refused.push(shownGroupId(id))
       else if (!isGroupDone(run, g))
         waiting.push(`group ${shownGroupId(g.id)} not finished, still open (attached to it by the plan): ${openAttachedOf(run, g).join(', ')}${hasGroupReview(g) ? ' (its review date is kept and counts once they are done)' : ''}`)
       else if (!hasGroupReview(g)) {
@@ -2428,6 +2465,7 @@ const reportHere = (
     if (marked.length > 0) log(run, now, '◆', `Revue du groupe faite ailleurs : ${marked.join(', ')}`, 'accent')
     if (refused.length > 0) reviewedText = ` · reviewed: no finished group among ${refused.join(', ')}`
     if (waiting.length > 0) reviewedText += ` · reviewed: ${waiting.join('; ')}; send it once they are done`
+    if (inFlight.length > 0) reviewedText += ` · reviewed: ${inFlight.join('; ')}; nothing recorded`
   }
   // Après `reviewed` : une revue que le compte rendu de la session confirme, envoyée avec `returned`, vaut.
   const unreviewed = returned.filter(id => {
@@ -2482,6 +2520,12 @@ const reportHere = (
     securityReply = ` · security: no finished group to give it to (groups: ${run.groups!.map(g => shownGroupId(g.id)).join(', ')}); send it with "group"; nothing recorded`
   } else if (security && outOfRange.length > 0) {
     securityReply = ` · security: refused, counts out of range (${outOfRange.join(', ')}): each is a whole number from 0 to ${SECURITY_COUNT_MAX}; nothing recorded`
+  } else if (security && isResentInFlight(sentTarget ?? (named === '' ? securityGroupOf(run, '') : null))) {
+    // En vol après une remise à zéro (renvoi, ou premier envoi d'un groupe relu) : un avis qui arrive maintenant
+    // peut être celui d'avant l'envoi ; posé sur l'envoi en cours, il le clorait sans sa propre revue de sécurité.
+    // Un premier envoi en vol d'un groupe parti sans revue ni avis garde l'avis envoyé d'ici, qui l'emporte sur le relais (inchangé).
+    const target = (sentTarget ?? securityGroupOf(run, ''))!
+    securityReply = ` · security: group ${shownGroupId(target.id)} ${inFlightWhy(target)}: its security advice and counts come with its return (send them with "returned"); nothing recorded`
   } else if (security) {
     const group = sentTarget ?? securityGroupOf(run, '')
     securityGroup = group?.id ?? null
@@ -2566,20 +2610,40 @@ const reportHere = (
       withdrawnText += ` · "withdrawn": no choice in force reads "${w.what}" (send it as it was declared)`
       continue
     }
+    const isReplacing = w.replacedBy !== undefined && !(run.decided ?? []).some(x => x !== kept && sameChoice(x.what, w.replacedBy!) && x.withdrawnAt === undefined)
+    // Au plafond, le remplaçant ne tiendrait pas : le choix d'origine reste en vigueur, et la réponse le dit.
+    const refusal = isReplacing ? choiceRefusal(run) : ''
+    if (refusal !== '') {
+      withdrawnText += ` · "withdrawn": "${clip(w.what, 60)}" kept in force, its replacement "${clip(w.replacedBy!, 60)}": ${refusal}`
+      continue
+    }
     kept.withdrawnAt = now
     kept.withdrawnWhy = w.replacedBy ? `${w.why ? `${w.why} ; ` : ''}remplacé par « ${w.replacedBy} »` : w.why
     log(run, now, '⚑', `Choix retiré : ${kept.what}${w.why ? ` (${w.why})` : ''}`, 'info')
-    if (w.replacedBy && !(run.decided ?? []).some(x => sameChoice(x.what, w.replacedBy!) && x.withdrawnAt === undefined)) {
-      run.decided = [...(run.decided ?? []), { at: now, what: w.replacedBy, ...(w.why ? { why: w.why } : {}) }].slice(-LIMITS.decided)
-      log(run, now, '⚑', `Décidé sans toi : ${w.replacedBy}`, 'warn')
+    if (isReplacing) {
+      run.decided = keepChoices([...(run.decided ?? []), { at: now, what: w.replacedBy!, ...(w.why ? { why: w.why } : {}) }], choiceRoom(run))
+      log(run, now, '⚑', `Décidé sans toi : ${w.replacedBy!}`, 'warn')
     }
   }
+  let decidedText = ''
+  const ignored = ignoredOrigins(input)
+  if (ignored.length > 0) decidedText += ` · decided: origin ${ignored.map(o => JSON.stringify(o)).join(', ')} ignored (one of ${Object.keys(ORIGIN_LABELS).join(', ')}); the choice is kept without it`
+  let refusedChoices = 0
   for (const d of reportedDecisions(input)) {
     // Le même choix renvoyé deux fois n'est compté qu'une fois.
     if ((run.decided ?? []).some(x => x.what === d.what)) continue
-    run.decided = [...(run.decided ?? []), { at: now, what: d.what, ...(d.why ? { why: d.why } : {}) }].slice(-LIMITS.decided)
+    if (choiceRefusal(run) !== '') {
+      refusedChoices += 1
+      continue
+    }
+    run.decided = keepChoices([...(run.decided ?? []), { at: now, what: d.what, ...(d.why ? { why: d.why } : {}), ...(d.origin ? { origin: d.origin } : {}) }], choiceRoom(run))
     log(run, now, '⚑', `Décidé sans toi : ${d.what}`, 'warn')
   }
+  if (refusedChoices > 0) decidedText += ` · decided: ${refusedChoices} choice(s) refused: ${choiceRefusal(run)}`
+  // Au passage des 200 choix, relayés compris, l'auto se met en pause au lieu d'en couper.
+  pauseAtChoiceLimit(run, choicesBefore, (run.decided ?? []).length + relayedDecisions(run, choiceRelay).length, now)
+
+  const waitingText = input.waiting !== undefined ? applyWaiting(run, input.waiting, now) : ''
 
   const note = str(input.note)
   if (note) log(run, now, '✎', note, 'info')
@@ -2612,6 +2676,7 @@ const reportHere = (
       if (isLast) {
         run.status = 'done'
         run.finishedAt = now
+        stopAuto(run, now, AUTO_STOPS.finished)
         log(run, now, '★', 'Parcours terminé', 'ok')
         fx.toasts.push(`★ Parcours terminé : ${run.title}`)
       } else {
@@ -2625,6 +2690,7 @@ const reportHere = (
   if (isLotRemoved && run.status === 'active' && phase.status === 'done' && !hasOpenLot(run) && isRunComplete(run)) {
     run.status = 'done'
     run.finishedAt = now
+    stopAuto(run, now, AUTO_STOPS.finished)
     log(run, now, '★', 'Parcours terminé', 'ok')
     fx.toasts.push(`★ Parcours terminé : ${run.title}`)
   }
@@ -2651,7 +2717,7 @@ const reportHere = (
     withSession.length > 0
       ? ` · with the linked session until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
       : ''
-  return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${itemsText}${groupText}${returnText}${reviewedText}${securityReply}${closedText}${gateText}${linkedText}${withdrawnText}` }
+  return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${itemsText}${groupText}${returnText}${reviewedText}${securityReply}${closedText}${gateText}${linkedText}${withdrawnText}${decidedText}${waitingText}` }
 }
 
 // ─── Éléments confiés à une session liée ──────────────────────────────────
@@ -2828,17 +2894,74 @@ export const startLinkedGroups = (board: Board, ids: readonly string[], now: num
   if (picked.length === 0) return null
   const b = clone(board)
   const run = activeRun(b)!
+  const resets: string[] = []
   run.groups = (run.groups ?? []).map(g => {
     if (!picked.includes(g.id)) return g
     // Un envoi suivant du groupe a son numéro : son worktree ne bute pas sur la branche gardée d'un précédent.
     const seq = groupSendSeq(g)
-    return { ...g, sends: seq, linked: { at: now, ...(seq > 1 ? { seq } : {}) } }
+    const sent: TicketGroup = { ...g, sends: seq, linked: { at: now, ...(seq > 1 ? { seq } : {}) } }
+    // Tout envoi d'un groupe déjà relu, ici ou par un envoi précédent (même un lien rendu relu d'un autre
+    // type) : sa revue et son avis de sécurité ne valent pas pour ce nouvel envoi, qui demande les siens.
+    if (g.reviewedAt === undefined && g.security === undefined) return sent
+    const back = g.delegated !== null && typeof g.delegated === 'object' ? g.delegated : undefined
+    // La revue et l'avis de sécurité d'avant (faits ici, ou ceux de l'envoi rendu) quittent le groupe, et le
+    // journal les cite.
+    const { reviewedAt, security, ...rest } = sent
+    const before = g.delegated === undefined ? 'faites ici' : `de l'envoi ${sendNumber(back?.seq) ?? 1}`
+    resets.push(`Envoi ${seq} du groupe ${g.id} : la revue (${reviewTimeOf({ reviewedAt }) !== undefined ? `${isoMinute(reviewTimeOf({ reviewedAt })!)} UTC` : 'aucune'}) et la sécurité (${previousSecurityText(security)}) ${before} ne comptent plus`)
+    // Le groupe le dit jusqu'au retour d'un envoi : une revue ou un avis qui arrivent pendant un envoi sont refusés,
+    // même après une annulation ou un renvoi de vague (la revue d'ici lancée avant peut finir pendant le suivant).
+    return { ...rest, isReset: true }
   })
+  for (const line of resets) log(run, now, '↺', line, 'info')
   log(run, now, '↗', `${picked.length > 1 ? `Groupes ${picked.join(', ')} confiés` : `Groupe ${picked[0]} confié`} à ${picked.length > 1 ? 'des sessions liées' : 'une session liée'}`, 'info')
+  // Relancé (par la personne, après la question d'un renvoi de trop) : la question du mode auto a sa réponse.
+  for (const id of picked) for (const q of readWaiting(run).filter(x => x.id.startsWith(`${RELAUNCH_PREFIX}${id}#`))) withdrawQuestion(run, q.id, now)
   const fx = noFx()
   enterImplementation(run, now, fx)
   run.updatedAt = now
   return { board: b, fx }
+}
+
+/**
+ * La raison d'une fermeture, relue du fichier de parcours (une fusion ou une reprise l'apporte), dans la
+ * réponse de l'outil, juste avant la procédure de fermeture : bornée à 200 caractères, neutralisée comme
+ * un texte relayé et citée en JSON ; rien quand ce n'est pas un texte.
+ */
+const closingWhy = (why: unknown): string => {
+  const reason = closingReason(why)
+  // Bornée encore après la neutralisation, qui peut l'allonger (forme normalisée, invisibles montrés).
+  return reason !== '' ? ` — ${JSON.stringify(clip(neutralRelayed(reason), 200))}` : ''
+}
+
+/**
+ * La raison d'une fermeture, bornée : une ligne (blancs fondus), 200 caractères au plus ; vide quand ce n'est
+ * pas un texte. Le lecteur partagé qui la borne : l'entrée de l'outil, la réponse de l'outil (qui la coupe
+ * encore après sa neutralisation) et le panneau l'appellent, la valeur relue du fichier pouvant venir d'une
+ * autre discussion.
+ */
+export const closingReason = (why: unknown): string => clip(str(why), 200)
+
+/**
+ * Un groupe en vol dont la revue d'avant ne vaut pas pour l'envoi : confié de nouveau (un envoi précédent
+ * rendu), ou remis à zéro à un envoi pas encore revenu (`isReset` du groupe, relu strictement). Une revue ou
+ * un avis qui arrivent maintenant peuvent être ceux d'avant l'envoi : ils viennent avec son retour.
+ */
+const isResentInFlight = (g: TicketGroup | null | undefined): boolean =>
+  g !== null && g !== undefined && g.linked !== undefined && (g.delegated !== undefined || (g as { isReset?: unknown }).isReset === true)
+
+/** Pourquoi la revue ou l'avis d'un groupe en vol attendent son retour, pour la réponse de l'outil. */
+const inFlightWhy = (g: TicketGroup): string =>
+  g.delegated !== undefined
+    ? `is in a linked session again (send ${sendNumber(g.linked?.seq) ?? 1}), not returned yet`
+    : `is in a linked session (send ${sendNumber(g.linked?.seq) ?? 1}), its review and security advice reset at a send not returned yet`
+
+/** L'avis de sécurité d'un envoi précédent, en mots pour le journal : l'avis, et les comptes s'il y en a. */
+const previousSecurityText = (sec: SecurityCheck | undefined): string => {
+  if (!sec || typeof sec !== 'object') return 'aucun avis'
+  const advice = sec.isAdvised === true ? 'conseillée' : sec.isAdvised === false ? 'jugée inutile' : 'sans avis'
+  const counts = sec.findings !== undefined && !hasUnreadableCounts(sec) ? `, ${sec.findings} faille(s), ${sec.fixed ?? 0} corrigée(s)${(sec.dismissed ?? 0) > 0 ? `, ${sec.dismissed} laissée(s)` : ''}` : ''
+  return `${advice}${sec.ranAt !== undefined ? ', lancée' : ''}${counts}`
 }
 
 /**
@@ -2979,13 +3102,16 @@ const returnGroups = (run: Run, value: unknown, now: number, stored?: unknown): 
             : ranAt !== undefined
               ? { ...g.security, ranAt }
               : g.security
+      // Le retour d'un envoi efface la marque de la remise à zéro : la revue et l'avis de cet envoi arrivent avec lui.
+      const { isReset: _reset, ...kept } = g
+      const sentLink = g.linked!
       return withoutLink({
-        ...g,
+        ...kept,
         // Confié de nouveau puis rendu : une autre session, à fermer à son tour ; la précédente reste
         // notée (`earlier`) : fermée, elle ne redevient jamais à fermer ; sinon, elle reste à fermer.
         delegated: g.delegated
           ? {
-              ...g.linked!,
+              ...sentLink,
               earlier: [
                 ...earlierOf(g.delegated),
                 {
@@ -2996,7 +3122,7 @@ const returnGroups = (run: Run, value: unknown, now: number, stored?: unknown): 
                 },
               ].filter((x, i, all) => x.closing?.state !== 'closed' || all.length - i <= EARLIER_MAX),
             }
-          : g.linked!,
+          : sentLink,
         ...(reviewedAt !== undefined ? { reviewedAt } : {}),
         ...(security !== undefined ? { security } : {}),
       })
@@ -3152,7 +3278,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
       }
       const name = `the previous linked session of group ${shownGroupId(g.id)} (${shownGroupName(g.name)}), replaced by a new send (sent at ${isoMinute(prev.at)} UTC)`
       if (prev.closing?.state === 'app') {
-        parts.push(` · To archive in the app: ${name}${prev.closing.why ? ` — ${prev.closing.why}` : ''}; ${archived(procedure)} ${closedHint(target, key)}`)
+        parts.push(` · To archive in the app: ${name}${closingWhy(prev.closing.why)}; ${archived(procedure)} ${closedHint(target, key)}`)
       } else if ((prev.closing === undefined || retried) && !isStillActive(relay, g, prev, nextSend(prev.at))) {
         parts.push(
           ` · Close now: ${name}: its work came back with its group, a new session took its place. Only in the discussion that leads the workflow, never in a linked session (a bug-diagnosis session that resumed the workflow included: there, ignore this section). The new session of the group may work in a worktree of the same name: the worktree to close is the one of this previous session only, found by its branch and its session's cwd; if that worktree is the new session's (its cwd, or the new session's branch), stop the closing and tell the user. ${procedure} ${closedHint(target, key)}`,
@@ -3180,7 +3306,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     }
     if (link.closing?.state === 'app') {
       const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}) })
-      parts.push(` · To archive in the app: ${name}${link.closing.why ? ` — ${link.closing.why}` : ''}; ${archived(procedure)} Then send {"closed": [{"group": ${asciiJson(g.id)}, "state": "closed", "sessionId": "<full sessionId>", "branch": "<kept branch>", "worktree": "<removed worktree path>"}]} (the last three when known).`)
+      parts.push(` · To archive in the app: ${name}${closingWhy(link.closing.why)}; ${archived(procedure)} Then send {"closed": [{"group": ${asciiJson(g.id)}, "state": "closed", "sessionId": "<full sessionId>", "branch": "<kept branch>", "worktree": "<removed worktree path>"}]} (the last three when known).`)
       continue
     }
     if (isCloseCandidate(run, g, relay)) {
@@ -3210,7 +3336,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     const name = `the linked session of the ${def.items.label} of phase ${def.label} (session ${isSafeId(link.session) ? link.session : 'id de session hors forme'})`
     const procedure = closingProcedure({ run, target, isRepo, session: link.session, ...(link.seq !== undefined ? { seq: link.seq } : {}) })
     if (link.closing?.state === 'app') {
-      parts.push(` · To archive in the app: ${name}${link.closing.why ? ` — ${link.closing.why}` : ''}; ${archived(procedure)} ${closedHint(target)}`)
+      parts.push(` · To archive in the app: ${name}${closingWhy(link.closing.why)}; ${archived(procedure)} ${closedHint(target)}`)
     } else if (isItemsCloseCandidate(phase)) {
       parts.push(` · Close now: ${name} is closed (every item judged). Only in the discussion that leads the workflow, never in a linked session (a bug-diagnosis session that resumed the workflow included: there, ignore this section). Before completing the phase. ${procedure} ${closedHint(target)}`)
     }
@@ -3243,7 +3369,8 @@ const REOPEN_FIELDS = {
  * Un champ hors forme n'est pas gardé (le précédent reste) et se nomme dans `refused`.
  */
 const closingOf = (e: Record<string, unknown>, state: Closing['state'], was: Closing | undefined, now: number, root: string, refused: string[]): Closing => {
-  const why = str(e.why) !== '' ? { why: clip(str(e.why), 200) } : {}
+  const reason = closingReason(e.why)
+  const why = reason !== '' ? { why: reason } : {}
   const fields: Partial<Pick<Closing, keyof typeof REOPEN_FIELDS>> = {}
   for (const key of Object.keys(REOPEN_FIELDS) as (keyof typeof REOPEN_FIELDS)[]) {
     // Tel qu'envoyé, sans fondre ses blancs intérieurs : un saut de ligne le rend hors forme ; une
@@ -3573,17 +3700,24 @@ export const inForce = (list: readonly SoloDecision[], relay?: Relay | null): So
 }
 
 /** Les choix faits sans la personne envoyés par `decided` dans un appel de l'outil. */
-export const reportedDecisions = (input: Readonly<Record<string, unknown>>): { what: string; why?: string }[] =>
+export const reportedDecisions = (input: Readonly<Record<string, unknown>>): { what: string; why?: string; origin?: DecisionOrigin }[] =>
   asList(input.decided)
-    .map(d => ({ what: clip(str(d.what) || str(d.text), TEXT_MAX), why: clip(str(d.why), TEXT_MAX) || undefined }))
+    .map(d => ({ what: clip(str(d.what) || str(d.text), TEXT_MAX), why: clip(str(d.why), TEXT_MAX) || undefined, origin: originOf(d.origin) }))
     .filter(d => d.what !== '')
-    .map(d => (d.why ? d : { what: d.what }))
+    .map(d => ({ what: d.what, ...(d.why ? { why: d.why } : {}), ...(d.origin ? { origin: d.origin } : {}) }))
+
+/** Les origines envoyées que l'outil ne connaît pas : le choix est gardé sans elle, et la réponse le dit. */
+const ignoredOrigins = (input: Readonly<Record<string, unknown>>): string[] =>
+  asList(input.decided)
+    .map(d => d.origin)
+    .filter(o => o !== undefined && originOf(o) === undefined)
+    .map(o => clip(typeof o === 'string' ? o : asciiJson(o), 30))
 
 /**
  * Le plus de choix (déclarés ou retirés) qu'une entrée de relais garde : au-delà, un nouvel envoi est
  * refusé et la réponse le dit (`relayRefusal`), plutôt que de retirer en silence les premiers gardés.
  */
-export const RELAY_CHOICES_MAX = 200
+export const RELAY_CHOICES_MAX = LIMITS.autoDecided
 
 /** Pourquoi le relais ne garderait pas ce signal, ou null : la borne des choix d'une session. */
 export const relayRefusal = (own: RelayEntry | undefined, event: RelayEvent): string | null => {
@@ -3643,15 +3777,15 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
     // Le même choix renvoyé deux fois n'est gardé qu'une fois.
     const fresh = event.items.filter(d => !(entry.decided ?? []).some(x => x.what === d.what))
     if (fresh.length === 0) return null
-    entry.decided = [...(entry.decided ?? []), ...fresh.map(d => ({ ...d, at: now }))].slice(-RELAY_CHOICES_MAX)
+    entry.decided = keepChoices([...(entry.decided ?? []), ...fresh.map(d => ({ ...d, at: now }))], RELAY_CHOICES_MAX)
     entry.last = { kind: 'decided', text: `décidé sans toi : ${clip(fresh[fresh.length - 1]!.what, 140)}`, at: now }
   } else if (event.kind === 'withdrawn') {
     const fresh = event.items.filter(w => !(entry.withdrawn ?? []).some(x => sameChoice(x.what, w.what)))
     if (fresh.length === 0) return null
-    entry.withdrawn = [...(entry.withdrawn ?? []), ...fresh.map(w => ({ what: w.what, ...(w.why ? { why: w.why } : {}), at: now }))].slice(-RELAY_CHOICES_MAX)
+    entry.withdrawn = keepChoices([...(entry.withdrawn ?? []), ...fresh.map(w => ({ what: w.what, ...(w.why ? { why: w.why } : {}), at: now }))], RELAY_CHOICES_MAX)
     // Un choix qui en remplace un autre arrive comme un choix déclaré.
     const replacing = fresh.filter(w => w.replacedBy).map(w => ({ what: w.replacedBy!, ...(w.why ? { why: w.why } : {}), at: now }))
-    entry.decided = [...(entry.decided ?? []).filter(d => !fresh.some(w => sameChoice(w.what, d.what))), ...replacing].slice(-RELAY_CHOICES_MAX)
+    entry.decided = keepChoices([...(entry.decided ?? []).filter(d => !fresh.some(w => sameChoice(w.what, d.what))), ...replacing], RELAY_CHOICES_MAX)
     entry.last = { kind: 'decided', text: `choix retiré : ${clip(fresh[fresh.length - 1]!.what, 140)}`, at: now }
   } else if (event.kind === 'report') {
     const length = event.text.length > REPORT_MAX ? event.text.length : undefined
@@ -3940,7 +4074,7 @@ export const withRelay = (run: Run, relay: Relay | null | undefined): Run => {
             const m = moved.get(t.id)
             return m && t.status !== 'done' ? { ...t, status: m.status, relayedFrom: m.group } : t
           }),
-    ...(decided.length > 0 ? { decided: [...(run.decided ?? []), ...decided].slice(-LIMITS.decided) } : {}),
+    ...(decided.length > 0 ? { decided: keepChoices([...(run.decided ?? []), ...decided], choiceRoom(run)) } : {}),
   }
 }
 
@@ -3959,7 +4093,7 @@ const relayedDecisions = (run: Run, relay: Relay | null | undefined): SoloDecisi
       const what = neutralRelayed(d.what)
       if (known.has(what) || gone.some(w => sameChoice(w.what, d.what))) continue
       known.add(what)
-      out.push({ at: d.at, what, ...(d.why ? { why: neutralRelayed(d.why) } : {}), relayedFrom: g.id })
+      out.push({ at: d.at, what, ...(d.why ? { why: neutralRelayed(d.why) } : {}), ...(hasBeenAuto(run) ? { origin: 'linked-session' as const } : {}), relayedFrom: g.id })
     }
   }
   return out.sort((x, y) => x.at - y.at)
@@ -3972,7 +4106,10 @@ const relayedDecisions = (run: Run, relay: Relay | null | undefined): SoloDecisi
  */
 export const decidedFileText = (run: Run, relay: Relay | null | undefined): string => {
   const all = inForce(withRelay(run, relay).decided ?? [], relay)
-  const line = (d: SoloDecision) => `- ${d.what}${d.why ? ` — ${d.why}` : ''} (${d.relayedFrom ? `groupe ${d.relayedFrom}, ` : ''}${isoMinute(d.at)} UTC)`
+  const line = (d: SoloDecision) => {
+    const origin = originOf(d.origin)
+    return `- ${d.what}${d.why ? ` — ${d.why}` : ''} (${origin ? `${ORIGIN_LABELS[origin]}, ` : ''}${d.relayedFrom ? `groupe ${d.relayedFrom}, ` : ''}${isoMinute(d.at)} UTC)`
+  }
   return [
     `# Choix déjà déclarés · ${run.title}`,
     '',
@@ -3987,7 +4124,9 @@ export const decidedFileText = (run: Run, relay: Relay | null | undefined): stri
 const keepDecisions = (run: Run, list: readonly SoloDecision[], seenAt?: number) => {
   if (list.length === 0) return
   const stored = list.map(({ relayedFrom: _from, ...d }) => (seenAt !== undefined ? { ...d, seenAt } : d))
-  run.decided = [...(run.decided ?? []), ...stored].slice(-LIMITS.decided)
+  // Tous gardés, même au-delà de 1 000 : le relais les borne à 200 par session, et un choix relayé
+  // refusé ici serait perdu (le groupe rendu, son relais ne se lit plus).
+  run.decided = keepChoices([...(run.decided ?? []), ...stored], choiceRoom(run))
 }
 
 /** Les parcours du projet qu'une discussion peut reprendre : en pause, ou suivis ailleurs. */
@@ -3999,13 +4138,32 @@ const ticketCount = (run: Run): string => {
   return t.total > 0 ? `${t.done}/${t.total} tickets` : 'no tickets'
 }
 
-/** Pour Claude, quand cette discussion n'a pas de parcours actif. */
+/** L'id d'un parcours relu du fichier partagé, dans une réponse de l'outil : tel quel en forme, sinon échappé (JSON). */
+const shownRunId = (id: unknown): string => (isSafeId(id) ? id : asciiJson(id))
+
+/**
+ * Un texte relu du fichier partagé (titre d'un parcours, phase), dans une réponse de l'outil :
+ * neutralisé comme un texte relayé, il n'y ouvre aucune section (« · ») ni ligne.
+ */
+const shownText = (text: unknown): string => neutralRelayed(typeof text === 'string' ? text : '')
+
+/**
+ * Un texte relu du fichier partagé (titre, nom ou id d'un ticket, choix déclaré, chemin), dans une
+ * consigne donnée à Claude avec un skill, où seule la ligne fait structure : il n'y ouvre aucune
+ * ligne, et garde ses guillemets « » et ses « · » (`neutralLine`).
+ */
+const shownInNote = (text: unknown): string => neutralLine(typeof text === 'string' ? text : '')
+
+/** Le nom d'une phase relue : son libellé connu, sinon son id neutralisé. */
+const phaseLabel = (skill: unknown): string => (typeof skill === 'string' ? SKILLS[skill]?.label : undefined) ?? shownText(skill)
+
+/** Pour Claude, quand cette discussion n'a pas de parcours actif : titres et ids des parcours relus neutralisés. */
 export const noActiveText = (board: Board): string => {
   const waiting = resumable(board)
   if (waiting.length === 0) return 'No workflow is running on the dashboard: it starts when a mattpocock skill loads.'
   const state = (r: Run) => (r.status === 'active' ? 'in progress in another discussion' : r.asideAt !== undefined ? 'set aside by the user' : 'paused')
   const list = waiting
-    .map(r => `"${r.title}" (${state(r)}, ${ticketCount(r)}, phase ${SKILLS[currentPhase(r).skill]?.label ?? currentPhase(r).skill}, id ${r.id})`)
+    .map(r => `${JSON.stringify(shownText(r.title))} (${state(r)}, ${ticketCount(r)}, phase ${phaseLabel(currentPhase(r).skill)}, id ${shownRunId(r.id)})`)
     .join('; ')
   return `No workflow is active in this discussion, so nothing was recorded. This project already has: ${list}. Do not start another lot nor look for tickets elsewhere: ask the user which one to resume (/flow-board:flow, History tab, "↻ Reprendre ici"), then send your report again. Only if the user asks for a new workflow, send {"open": {"title": "..."}} with the report.`
 }
@@ -4017,7 +4175,7 @@ export const noActiveFrench = (board: Board): string => {
   const list = waiting
     .map(r => {
       const t = countTickets(r.tickets)
-      return `« ${r.title} » (${r.status === 'active' ? 'suivi dans une autre discussion' : r.asideAt !== undefined ? 'mis de côté' : 'en pause'}${t.total > 0 ? `, ${t.done}/${t.total} tickets` : ''})`
+      return `« ${neutralInPrompt(typeof r.title === 'string' ? r.title : '')} » (${r.status === 'active' ? 'suivi dans une autre discussion' : r.asideAt !== undefined ? 'mis de côté' : 'en pause'}${t.total > 0 ? `, ${t.done}/${t.total} tickets` : ''})`
     })
     .join(', ')
   return `Aucun parcours actif dans cette discussion. À reprendre (onglet Historique, « ↻ Reprendre ici ») : ${list}.`
@@ -4026,16 +4184,82 @@ export const noActiveFrench = (board: Board): string => {
 /**
  * Une date d'activité dans le futur (fichier retouché à la main, horloge d'une autre machine)
  * gagnerait toutes les fusions et annulerait chaque reprise : elle est ramenée à la dernière
- * activité réelle du parcours.
+ * activité réelle du parcours ; de même l'état auto et les traces de retrait. Le seul point où une
+ * trace de suppression datée à plus d'une minute dans le futur tombe : jamais appliquée (`mergeBoards`
+ * et `dropRun` ne relisent que la forme, et écartent une trace mal formée ; `detachOnLoad` passe par ici). La lecture qui en fait tomber une fait réécrire le fichier
+ * (`hasUnsoundTombstones`), pour qu'une lecture plus tardive, l'horloge rattrapant la date, ne l'applique pas.
  */
 export const clampFuture = (board: Board, now: number): Board => {
   const isAhead = (r: Run) => r.updatedAt > now + 60_000
-  if (!board.runs.some(isAhead)) return board
+  const isDeletedSound = !hasUnsoundTombstones(board, now)
+  if (isDeletedSound && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now))) return board
   const b = clone(board)
+  // Une trace de suppression datée dans le futur, ou mal formée, tombe à la lecture : jamais appliquée.
+  if (!isDeletedSound) b.deleted = soundTombstones(b.deleted, now)
   for (const r of b.runs) {
     if (isAhead(r)) r.updatedAt = Math.min(now, maxOf(r.log.map(e => e.at).filter(at => at <= now), r.startedAt))
+    if (isAutoAhead(r, now)) r.auto = autoAtMost(r, now)
+    if (areTracesAhead(r, now)) {
+      r.autoResent = tracesAtMost(r.autoResent, now) as Run['autoResent']
+      r.answered = tracesAtMost(r.answered, now) as Run['answered']
+    }
   }
   return b
+}
+
+/**
+ * Les traces de suppression relues, bornées ici : un id texte non vide et une vraie date (`isTime`) ;
+ * avec `now`, une date à plus d'une minute dans le futur aussi écartée (les fichiers de parcours sont
+ * propres au poste : une telle date vient d'une retouche ou d'un recul de l'horloge ; la minute de
+ * tolérance est celle de toutes les dates relues). Invariant : un parcours
+ * n'est effacé par une trace de suppression que si cette trace est une vraie date (au plus une minute
+ * dans le futur), postérieure à sa dernière modification. Une liste qui n'en est pas une n'a aucune trace.
+ */
+export const soundTombstones = (list: unknown, now?: number): Tombstone[] =>
+  (Array.isArray(list) ? (list as unknown[]) : []).filter((t): t is Tombstone => {
+    if (t === null || typeof t !== 'object') return false
+    const x = t as Record<string, unknown>
+    return typeof x.id === 'string' && x.id !== '' && isTime(x.at) && (now === undefined || x.at <= now + 60_000)
+  })
+
+/** La liste des traces de suppression d'une copie relue en porte une qui tombe à la lecture (mal formée ou future), ou n'est pas une liste. */
+export const hasUnsoundTombstones = (board: Board, now: number): boolean =>
+  board.deleted !== undefined && (!Array.isArray(board.deleted) || soundTombstones(board.deleted, now).length !== board.deleted.length)
+
+/** Une trace de retrait relue datée au-delà de la tolérance d'une minute. */
+const isTraceAhead = (t: unknown, now: number): boolean =>
+  t !== null && typeof t === 'object' && isTime((t as { at?: unknown }).at) && (t as { at: number }).at > now + 60_000
+
+/** Le parcours porte une trace « ↻ Renvoyer » ou « répondue » datée dans le futur (fichier retouché, horloge recalée). */
+const areTracesAhead = (run: Run, now: number): boolean =>
+  [run.autoResent, run.answered].some(list => Array.isArray(list) && (list as unknown[]).some(t => isTraceAhead(t, now)))
+
+/**
+ * Les traces de retrait ramenées à maintenant : une trace future effacerait, à chaque fusion, toute
+ * marque ou question de son id posée avant elle, et pousserait leurs dates après elle. Les autres
+ * entrées restent telles quelles.
+ */
+const tracesAtMost = (list: unknown, now: number): unknown =>
+  Array.isArray(list) ? (list as unknown[]).map(t => (isTraceAhead(t, now) ? { ...(t as object), at: now } : t)) : list
+
+/** L'état auto porte une date dans le futur (fichier retouché, horloge recalée). */
+const isAutoAhead = (run: Run, now: number): boolean => {
+  const auto = autoOf(run)
+  return (auto?.onAt ?? 0) > now + 60_000 || (auto?.offAt ?? 0) > now + 60_000
+}
+
+/**
+ * L'état auto ramené à maintenant : une date future gagnerait toute fusion, et un « allumé à » futur
+ * l'emporterait sur une coupure posée après lui. « Allumé à » descend à maintenant (il ne peut que
+ * s'éteindre plus tôt) ; « éteint à » descend sans repasser avant « allumé à » : éteint, il le reste.
+ */
+const autoAtMost = (run: Run, now: number): RunAuto | undefined => {
+  const auto = autoOf(run)
+  if (!auto) return auto
+  const limit = now + 60_000
+  const onAt = auto.onAt !== undefined && auto.onAt > limit ? now : auto.onAt
+  const offAt = auto.offAt !== undefined && auto.offAt > limit ? Math.max(now, onAt ?? now) : auto.offAt
+  return { ...auto, ...(onAt !== undefined ? { onAt } : {}), ...(offAt !== undefined ? { offAt } : {}) }
 }
 
 // ─── Fin de tour : questions du grilling, synthèse de revue ───────────────
@@ -4747,6 +4971,1317 @@ export const applyAgentActivity = (board: Board, now: number): Outcome => {
   return { board: b, fx: noFx() }
 }
 
+// ─── Mode auto ────────────────────────────────────────────────────────────
+//
+// L'auto d'un parcours tient en deux dates : « allumé à », posée seulement par le second clic de la
+// personne, et « éteint à ». Il est actif quand la première est plus récente que la seconde. Chaque
+// date se fusionne à la plus récente des deux copies (`keepAuto`), jamais par la copie la plus récente
+// du parcours : une copie en retard ne rallume rien. Une date hors forme le dit éteint. L'état relu
+// passe par un seul point de bornage (`readAuto`) : chaque lecture le reçoit propre.
+
+/** Les raisons d'un arrêt de l'auto, telles que le bandeau les dit (« ⚡ Auto en pause : <raison> »). */
+export const AUTO_STOPS = {
+  click: 'coupé par toi',
+  aside: 'parcours mis de côté',
+  closed: 'parcours clos',
+  finished: 'parcours terminé',
+  archived: 'parcours archivé',
+  ended: 'discussion fermée',
+  unreadable: 'lecture du parcours ratée',
+  unwritten: 'écriture du parcours ratée',
+  limit: 'limite de 200 choix atteinte',
+  report: 'rapport prêt',
+  quota: 'quota atteint',
+  stuck: 'plus rien ne peut avancer sans toi',
+} as const
+
+/** Les pauses déduites, sans écriture : l'auto reste allumé, mais cette discussion n'envoie pas. */
+export const AUTO_PAUSES = {
+  changed: 'discussion changée',
+  paused: 'parcours en pause',
+  /** Allumé au nom de cette discussion, sans la date de son clic gardée ici : un fichier seul ne rallume rien. */
+  unconfirmed: 'allumage non confirmé ici',
+} as const
+
+/**
+ * Les arrêts qui ne sont pas des pauses : un geste de la personne, ou le parcours qui se termine.
+ * L'auto est éteint, et ni le bandeau ni une notification n'en disent rien.
+ */
+const QUIET_STOPS: ReadonlySet<string> = new Set([AUTO_STOPS.click, AUTO_STOPS.aside, AUTO_STOPS.closed, AUTO_STOPS.finished, AUTO_STOPS.archived])
+
+/** Longueur gardée de l'id de la discussion qui l'a allumé : bien au-delà d'un id réel. */
+const AUTO_ID_MAX = 200
+
+/** Les raisons qu'un arrêt peut porter ; une raison relue hors de cette liste se lit `UNKNOWN_STOP`. */
+const KNOWN_STOPS: ReadonlySet<string> = new Set(Object.values(AUTO_STOPS))
+const UNKNOWN_STOP = 'raison inconnue'
+
+/** La pause d'un groupe revenu trop de fois pour repartir seul : « deuxième échec du groupe <id> ». */
+const GROUP_FAIL_PREFIX = 'deuxième échec du groupe '
+export const groupFailStop = (id: string): string => `${GROUP_FAIL_PREFIX}${id}`
+
+/** Une raison d'arrêt connue : une de `AUTO_STOPS`, ou le deuxième échec d'un groupe à l'id en forme. */
+const isKnownStop = (why: string): boolean => KNOWN_STOPS.has(why) || (why.startsWith(GROUP_FAIL_PREFIX) && isGroupId(why.slice(GROUP_FAIL_PREFIX.length)))
+
+/**
+ * L'état auto relu d'un parcours, borné ici et nulle part ailleurs : des dates lisibles, l'id de la
+ * discussion qui l'a allumé, une raison prise dans `AUTO_STOPS`. `isDamaged` : l'état est là mais
+ * abîmé (pas un objet, une date hors forme). Un « éteint à » hors forme est ramené au dernier
+ * « allumé à » lisible, pour que l'auto se lise éteint ; sans « allumé à » lisible, l'état n'a plus de
+ * date d'allumage, et l'auto reste éteint, ici comme à la fusion (`mergeAuto`).
+ */
+const readAuto = (raw: unknown): { auto?: RunAuto; isDamaged: boolean } => {
+  if (raw === undefined) return { isDamaged: false }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { isDamaged: true }
+  const x = raw as Record<string, unknown>
+  const onAt = isTime(x.onAt) ? x.onAt : undefined
+  const isOffDamaged = x.offAt !== undefined && !isTime(x.offAt)
+  const isDamaged = isOffDamaged || (x.onAt !== undefined && onAt === undefined)
+  const offAt = isTime(x.offAt) ? x.offAt : isOffDamaged ? onAt : undefined
+  const onBy = clip(str(x.onBy), AUTO_ID_MAX)
+  const why = str(x.offWhy)
+  const offWhy = isOffDamaged && offAt !== undefined ? AUTO_STOPS.unreadable : why === '' ? '' : isKnownStop(why) ? why : UNKNOWN_STOP
+  const auto: RunAuto = {
+    ...(onAt !== undefined ? { onAt, ...(onBy !== '' ? { onBy } : {}) } : {}),
+    ...(offAt !== undefined ? { offAt, ...(offWhy !== '' ? { offWhy } : {}) } : {}),
+  }
+  return Object.keys(auto).length > 0 ? { auto, isDamaged } : { isDamaged }
+}
+
+const autoOf = (run: Run): RunAuto | undefined => readAuto(run.auto).auto
+
+/** Un état éteint par une pause posée par le mod ou la fin de la discussion : ni un geste de la personne, ni la fin du parcours. */
+const isStoredPause = (auto: RunAuto | undefined): boolean => !isAutoOnIn(auto) && auto?.offWhy !== undefined && !QUIET_STOPS.has(auto.offWhy)
+
+/** L'auto est actif : « allumé à » plus récent que « éteint à ». */
+const isAutoOnIn = (auto: RunAuto | undefined): boolean => auto?.onAt !== undefined && (auto.offAt === undefined || auto.onAt > auto.offAt)
+
+export const isAutoOn = (run: Run): boolean => isAutoOnIn(autoOf(run))
+
+/**
+ * Ce que l'auto d'un parcours fait vu de la discussion `here` (son id du moment, lu après un `/clear`) :
+ * la seule fonction qui dit s'il envoie ici (`on`). Il envoie quand il est actif, que cette discussion
+ * est celle qui l'a allumé, et que le parcours y est actif. Sinon : `elsewhere`, allumé sur un parcours
+ * suivi par une autre discussion (rien n'y dit si elle est celle qui l'a allumé) ; `paused`, une pause
+ * déduite (discussion changée, parcours en pause) ou posée par un arrêt qui n'est ni un geste de la
+ * personne ni la fin du parcours ; `off`, éteint.
+ */
+export type AutoView = { kind: 'off' } | { kind: 'on' } | { kind: 'elsewhere' } | { kind: 'paused'; why: string }
+
+/**
+ * `confirmedAt` : la date du second clic que cette discussion garde à part (`$.store`), null sans clic
+ * gardé ; l'auto n'envoie d'ici que si l'« allumé à » fusionné la vaut : un fichier de parcours seul,
+ * forgé ou rejoué, ne le rallume jamais. Absent : pas vérifié (une lecture qui n'envoie rien).
+ */
+export const autoStateOf = (run: Run, board: Board, here: string, confirmedAt?: number | null): AutoView => {
+  const auto = autoOf(run)
+  if (!auto) return { kind: 'off' }
+  if (!isAutoOnIn(auto)) return isStoredPause(auto) ? { kind: 'paused', why: auto.offWhy! } : { kind: 'off' }
+  const isHere = board.delegate === undefined && board.activeId === run.id && run.status === 'active'
+  if (!isHere) return run.status === 'active' ? { kind: 'elsewhere' } : { kind: 'paused', why: AUTO_PAUSES.paused }
+  if (auto.onBy === undefined || auto.onBy !== clip(str(here), AUTO_ID_MAX)) return { kind: 'paused', why: AUTO_PAUSES.changed }
+  return confirmedAt === undefined || confirmedAt === auto.onAt ? { kind: 'on' } : { kind: 'paused', why: AUTO_PAUSES.unconfirmed }
+}
+
+/**
+ * L'auto d'un parcours est allumé au nom de la discussion `here`, avec la date de son clic gardée ici
+ * (`confirmedAt`) : il envoie d'ici, ou y reprendra sans nouveau clic (pause déduite : le parcours mis
+ * en pause par l'ouverture d'un autre). Pour la fusion d'ici, seules les traces de retrait écrites ici
+ * s'appliquent alors à ce parcours ; l'union revient dès que l'auto s'éteint. `unread` : la date du clic
+ * ne s'est pas lue ce coup-ci ; dans le doute, l'auto compte allumé d'ici (sens sûr : une trace
+ * d'ailleurs ne retire rien pendant une lecture ratée).
+ */
+export const isAutoLitBy = (run: Run, here: string, confirmedAt: number | null | 'unread'): boolean => {
+  const auto = autoOf(run)
+  const isConfirmed = confirmedAt === 'unread' || (confirmedAt !== null && confirmedAt === auto?.onAt)
+  return isAutoOnIn(auto) && auto?.onBy !== undefined && str(here) !== '' && auto.onBy === clip(str(here), AUTO_ID_MAX) && isConfirmed
+}
+
+/**
+ * L'« allumé à » que poserait un second clic maintenant : après « éteint à » et après l'allumage
+ * précédent, même quand l'horloge les place avant. La discussion le garde à part avant d'allumer.
+ */
+export const nextAutoOnAt = (run: Run, now: number): number => {
+  const was = autoOf(run)
+  return Math.max(now, (was?.offAt ?? -1) + 1, (was?.onAt ?? -1) + 1)
+}
+
+/**
+ * Éteint l'auto d'un parcours actif : « éteint à » après « allumé à » (et après la coupure d'avant),
+ * même quand l'horloge le place avant (date venue d'ailleurs), pour que l'arrêt tienne. Éteint, il
+ * n'écrit rien, sauf pour remplacer la raison d'une pause par celle d'un geste de la personne. Rend
+ * vrai s'il a écrit.
+ */
+const stopAuto = (run: Run, now: number, why: string): boolean => {
+  const auto = autoOf(run)
+  // Déjà éteint par une pause (fin de discussion, lecture ratée) : un geste de la personne remplace sa
+  // raison, pour que le bandeau ne redise plus la pause qu'elle vient de trancher.
+  const isRelabel = isStoredPause(auto) && QUIET_STOPS.has(why)
+  if (!isAutoOnIn(auto) && !isRelabel) return false
+  run.auto = { ...auto, offAt: Math.max(now, (auto!.onAt ?? -1) + 1, (auto!.offAt ?? -1) + 1), offWhy: why }
+  log(run, now, '⚡', `Mode auto éteint : ${why}`, 'info')
+  return true
+}
+
+/**
+ * Le second clic de la personne (« Confirmer ») sur le parcours actif ici : « allumé à » et « allumé
+ * par » (`here`, l'id de la discussion du clic). « Allumé à » passe après « éteint à » et après
+ * l'allumage précédent, même quand l'horloge les place avant ; l'état est réécrit borné.
+ */
+export const switchOnAuto = (board: Board, here: string, now: number, confirmedAt?: number | null): Outcome => {
+  const run0 = activeRun(board)
+  // Déjà allumé d'ici, avec la date de son clic gardée ici (`confirmedAt`) : rien à faire ; sans elle, le clic rallume.
+  if (!run0 || board.delegate || str(here) === '' || autoStateOf(run0, board, here, confirmedAt).kind === 'on') return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const was = autoOf(run)
+  const onAt = nextAutoOnAt(run, now)
+  run.auto = { onAt, onBy: clip(str(here), AUTO_ID_MAX), ...(was?.offAt !== undefined ? { offAt: was.offAt, ...(was.offWhy !== undefined ? { offWhy: was.offWhy } : {}) } : {}) }
+  run.updatedAt = now
+  log(run, now, '⚡', 'Mode auto allumé', 'accent')
+  return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto allumé : ${run.title}`] } }
+}
+
+/**
+ * Le fichier de parcours ne s'est pas lu (une lecture ratée éteint l'auto, jamais l'inverse), au
+ * chargement, à la sauvegarde ou à la relecture périodique : la copie de cette discussion éteint l'auto
+ * de chacun de ses parcours, raison « lecture du parcours ratée ». Null quand aucun n'était allumé.
+ */
+export const stopAutoUnread = (board: Board, now: number): Board | null => {
+  if (!board.runs.some(isAutoOn)) return null
+  const b = clone(board)
+  // Sans toucher à `updatedAt` : la copie, peut-être périmée, ne doit pas l'emporter pour le reste du
+  // parcours ; la coupure, elle, passe par la fusion date par date.
+  for (const run of b.runs) stopAuto(run, now, AUTO_STOPS.unreadable)
+  return b
+}
+
+/**
+ * Le clic de coupure sur le parcours actif ici, en auto, qu'il envoie d'ici ou soit en pause déduite
+ * (allumé par une autre discussion) : « éteint à », raison « coupé par toi ». Sur une pause posée par
+ * le mod (fin de discussion, lecture ratée, limite), le même clic remplace sa raison : le bandeau n'en
+ * dit plus rien.
+ */
+export const switchOffAuto = (board: Board, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || !(isAutoOn(run0) || isAutoPauseStored(run0))) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  stopAuto(run, now, AUTO_STOPS.click)
+  run.updatedAt = now
+  return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto coupé : ${run.title}`] } }
+}
+
+/** L'auto est éteint par une pause du mod (ni un geste de la personne ni la fin du parcours) : le bandeau la montre. */
+export const isAutoPauseStored = (run: Run): boolean => isStoredPause(autoOf(run))
+
+/** Éteint l'auto du parcours actif ici, pour une raison du mod (`AUTO_STOPS`) ; null quand il n'était pas allumé. */
+export const stopActiveAuto = (board: Board, why: string, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || !isAutoOn(run0)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  stopAuto(run, now, why)
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+// ─── Envois du mode auto ──────────────────────────────────────────────────
+//
+// Chaque action que l'auto envoie a une clé stable et une marque dans le parcours, posée avant l'envoi :
+// « envoyée », puis « démarrée » quand son tour commence. Invariant : une même action auto (phase,
+// vague, groupe, revue) n'est jamais envoyée deux fois. Les marques ne se coupent jamais : seuls
+// « ↻ Renvoyer », le retrait d'une marque qui n'est pas partie (écriture ratée, auto éteint avant
+// l'envoi) et l'effacement du parcours en retirent. Deux copies s'unissent marque par marque, l'état le
+// plus avancé gagnant, et chaque retrait laisse une trace datée (les 100 plus récentes) qu'une copie en
+// retard ne défait pas. Une liste relue abîmée bloque tout envoi (le sens sûr).
+
+/** Les traces de retrait (« ↻ Renvoyer », marque qui n'est pas partie) gardées, les plus récentes : une copie plus en retard ferait revenir une marque, et l'action ne repartirait pas (sens sûr). */
+export const AUTO_RESENT_MAX = 100
+
+/** Longueur la plus grande d'une clé relue : au-delà, l'entrée est abîmée. */
+const AUTO_KEY_MAX = 200
+
+/** Sans démarrage après ce délai, la discussion au repos, une marque « envoyée » devient la question « envoi resté sans suite ». */
+export const AUTO_STALE_MS = 2 * 60_000
+
+/** Les phases que l'auto lance lui-même ; jamais la livraison, la rétro, la clôture ni la validation du rapport. */
+export const AUTO_PHASES: ReadonlySet<string> = new Set(['to-spec', 'to-tickets', 'implement', 'compte-rendu'])
+
+/** Le préfixe de l'id de la question « envoi resté sans suite » d'une marque : suivi de sa clé. */
+export const STALE_PREFIX = 'sans-suite:'
+
+/**
+ * Une action que l'auto peut envoyer : sa clé, ce qu'elle est en mots, ce qu'elle bloque ; la commande
+ * d'une phase, ou un texte : les groupes d'une vague confiés à leurs sessions liées, la revue d'un
+ * groupe rendu, sa revue de sécurité.
+ */
+export type AutoAction = { key: string; what: string; blocks: WaitTarget } & (
+  | { kind: 'command'; skill: string }
+  | { kind: 'groups'; groups: string[] }
+  | { kind: 'review'; group: string }
+  | { kind: 'security'; group: string }
+)
+
+/** Une marque relue : bornée ici et nulle part ailleurs ; `raw`, l'entrée telle qu'elle est enregistrée. */
+type ReadMark = { mark: AutoMark | null; raw: unknown }
+
+const readMark = (raw: unknown): ReadMark => {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { mark: null, raw }
+  const x = raw as Record<string, unknown>
+  const key = str(x.key)
+  if (key === '' || key.length > AUTO_KEY_MAX || !isTime(x.at)) return { mark: null, raw }
+  // Une date de démarrage ou de « sans suite » présente mais illisible : la marque est abîmée, jamais lue « en attente ».
+  if ((x.startedAt !== undefined && !isTime(x.startedAt)) || (x.staleAt !== undefined && !isTime(x.staleAt))) return { mark: null, raw }
+  const b = x.blocks !== null && typeof x.blocks === 'object' ? (x.blocks as Record<string, unknown>) : {}
+  const kind = WAIT_KINDS.find(k => k === b.kind)
+  const target = kind && typeof b.id === 'string' && b.id !== '' && b.id.length <= AUTO_KEY_MAX ? { kind, id: b.id } : undefined
+  const mark: AutoMark = {
+    key,
+    at: x.at,
+    ...(isTime(x.startedAt) ? { startedAt: x.startedAt } : {}),
+    ...(isTime(x.staleAt) ? { staleAt: x.staleAt } : {}),
+    ...(typeof x.what === 'string' && x.what !== '' ? { what: clip(x.what, TEXT_MAX) } : {}),
+    ...(target ? { blocks: target } : {}),
+  }
+  return { mark, raw }
+}
+
+/** Les marques relues d'un parcours ; `isDamaged` : la liste n'est pas un tableau, ou une entrée ne se lit pas. */
+const readMarks = (run: Run): { marks: AutoMark[]; entries: ReadMark[]; isDamaged: boolean } => {
+  const raw: unknown = run.autoSent
+  if (raw === undefined) return { marks: [], entries: [], isDamaged: false }
+  if (!Array.isArray(raw)) return { marks: [], entries: [{ mark: null, raw }], isDamaged: true }
+  const entries = raw.map(readMark)
+  return { marks: entries.flatMap(e => (e.mark ? [e.mark] : [])), entries, isDamaged: entries.some(e => e.mark === null) }
+}
+
+/** Les traces de « ↻ Renvoyer » relues : une clé et une date lisibles, la plus récente par clé. */
+const readResent = (list: readonly unknown[]): { key: string; at: number }[] => {
+  const byKey = new Map<string, number>()
+  for (const t of list) {
+    if (t === null || typeof t !== 'object') continue
+    const x = t as Record<string, unknown>
+    const key = str(x.key)
+    if (key === '' || key.length > AUTO_KEY_MAX || !isTime(x.at)) continue
+    byKey.set(key, Math.max(byKey.get(key) ?? -1, x.at))
+  }
+  return [...byKey].map(([key, at]) => ({ key, at }))
+}
+
+const resentOf = (run: Run): { key: string; at: number }[] => readResent(Array.isArray(run.autoResent) ? (run.autoResent as unknown[]) : [])
+
+/** Les marques d'envoi du parcours, lues : pour l'affichage et les tests. */
+export const autoMarksOf = (run: Run): AutoMark[] => readMarks(run).marks
+
+/** L'action de cette clé est déjà partie (ou la liste des marques est abîmée : rien ne part). */
+const isMarked = (run: Run, key: string): boolean => {
+  const read = readMarks(run)
+  return read.isDamaged || read.marks.some(m => m.key === key)
+}
+
+/** Une marque « envoyée » dont le tour n'a pas commencé : tant qu'il y en a une, rien d'autre ne part. */
+export const pendingAutoMarks = (run: Run): AutoMark[] => readMarks(run).marks.filter(m => m.startedAt === undefined)
+
+/** La clé d'une phase envoyée : son skill et son rang parmi les phases de ce skill du parcours, stable quand d'autres s'insèrent. */
+const phaseKey = (run: Run, at: number): string => {
+  const skill = run.phases[at]!.skill
+  const rank = run.phases.slice(0, at + 1).filter(p => p.skill === skill).length
+  return `phase:${skill}#${rank}`
+}
+
+/**
+ * L'action que l'auto enverrait maintenant, la suite du bouton de l'étape suivante : la phase qui suit,
+ * une fois la phase en cours finie (ou un lot de groupes clos, `isGroupLotOver`), quand c'est une des phases que l'auto lance. Null sinon (pas finie,
+ * une suite qui n'est pas une commande, la livraison, la rétro, la clôture).
+ */
+export const autoActionOf = (run: Run, opts: SuggestOpts = {}): AutoAction | null => {
+  const phase = currentPhase(run)
+  if ((phase.status !== 'done' && !isGroupLotOver(run)) || run.status !== 'active') return null
+  const skill = nextCommandSkill(run, opts)
+  if (skill === null || !AUTO_PHASES.has(skill)) return null
+  const at = run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending' && (p.skill === skill || p.alts.includes(skill)))
+  const key = at >= 0 ? phaseKey(run, at) : `phase:${skill}#next-${run.cursor}`
+  return { kind: 'command', key, skill, what: `/${skill}`, blocks: { kind: 'phase', id: skill } }
+}
+
+/**
+ * Revenu ce nombre de fois de sa session liée (`returnsOf`, un envoi annulé ne compte pas), un groupe
+ * aux tickets ouverts ne repart plus seul : il est renvoyé une fois, puis une question le bloque.
+ */
+export const AUTO_GROUP_SENDS = 2
+
+/** Le préfixe de l'id de la question d'un groupe revenu trop de fois pour repartir seul : suivi de `<groupe>#<envoi>`. */
+export const RELAUNCH_PREFIX = 'relance:'
+
+/** Une unité (`A#2`) est déjà nommée par une marque de cette sorte (`groups:`, `review:`) : une clé `groups:A#1+B#1` couvre chacun de ses groupes. */
+const isUnitMarked = (run: Run, prefix: string, unit: string): boolean => {
+  const read = readMarks(run)
+  return read.isDamaged || read.marks.some(m => m.key.startsWith(prefix) && m.key.slice(prefix.length).split('+').includes(unit))
+}
+
+/** L'envoi d'un groupe (`A#2`) est déjà parti dans une vague. */
+const isGroupSendMarked = (run: Run, unit: string): boolean => isUnitMarked(run, 'groups:', unit)
+
+/**
+ * Ce que l'auto ferait pour les groupes d'une phase à tickets, la suite des boutons de la ligne d'un
+ * groupe et de la carte « Ensuite » : la revue d'un groupe rendu fini qui l'attend (texte de « ◆ Revue
+ * du groupe · session liée »), puis sa revue de sécurité conseillée et pas encore lancée ; sinon, quand
+ * aucun groupe n'est en vol ni rendu fini sans être clos (la vague en cours close), la vague prête (le
+ * lot parallèle, ou le seul groupe prêt), sans les groupes bloqués par une question ; `relaunch` : les
+ * groupes revenus trop de fois pour repartir seuls, que l'auto ne lance pas (une question les bloque).
+ */
+export const autoGroupActionOf = (run: Run): { action: AutoAction | null; relaunch: string[] } => {
+  const none = { action: null, relaunch: [] as string[] }
+  const phase = currentPhase(run)
+  // L'implémentation, ou le découpage une fois fini (la carte « Ensuite » propose alors les groupes) ;
+  // jamais une autre phase à tickets (une rétro), ni une phase qu'une question retient.
+  const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
+  if (!isOwnPhase || run.status !== 'active' || isBlocked(run, { kind: 'phase', id: phase.skill })) return none
+  const groups = run.groups ?? []
+  if (!groupPlan(run)) return none
+  const finished = groups.filter(x => x.linked === undefined && isGroupDone(run, x) && isGroupId(x.id) && !isBlocked(run, { kind: 'group', id: x.id }))
+  // Finis ici, sans session liée : un seul /code-review les relit tous (« ◆ Revue du groupe »), une fois.
+  // Un groupe déjà nommé par une marque de revue n'en reçoit pas d'autre, même si cette revue ne l'a pas marqué relu.
+  const here = finished.filter(g => g.delegated === undefined && !isGroupReviewed(run, g) && !isUnitMarked(run, 'review:', hereUnitOf(g)))
+  const hereKey = `review:${here.map(g => hereUnitOf(g)).join('+')}`
+  if (here.length > 0 && !isMarked(run, hereKey)) {
+    return { action: { kind: 'command', skill: 'final-review', key: hereKey, what: `/code-review des groupes ${here.map(g => g.id).join(', ')}`, blocks: { kind: 'group', id: here[0]!.id } }, relaunch: [] }
+  }
+  for (const g of finished.filter(x => x.delegated !== undefined)) {
+    const seq = sendNumber(g.delegated?.seq) ?? 1
+    const blocks: WaitTarget = { kind: 'group', id: g.id }
+    if (!isGroupReviewed(run, g)) {
+      // Rendu par sa session liée : sa revue se fait là-bas (« ◆ Revue du groupe · session liée »).
+      const key = `review:${g.id}#${seq}`
+      if (!isMarked(run, key)) return { action: { kind: 'review', group: g.id, key, what: `revue du groupe ${g.id}`, blocks }, relaunch: [] }
+      continue
+    }
+    const sec = g.security
+    if (g.delegated !== undefined && sec && typeof sec === 'object' && sec.isAdvised === true && sec.ranAt === undefined && sec.findings === undefined) {
+      const key = `security:${g.id}#${seq}`
+      if (!isMarked(run, key)) return { action: { kind: 'security', group: g.id, key, what: `revue de sécurité du groupe ${g.id}`, blocks }, relaunch: [] }
+    }
+  }
+  // Une nouvelle vague attend que celle en cours soit close : rien en vol, rien de fini sans être clos.
+  const returned = groups.filter(g => g.linked === undefined && g.delegated !== undefined && isGroupDone(run, g))
+  if (groups.some(g => g.linked !== undefined) || returned.some(g => closeMissing(run, g).length > 0)) return none
+  const rec = nextLaunchFor(run)
+  const picked = rec?.kind === 'parallel' ? rec.groups : rec?.kind === 'group' && rec.isDelegable ? [rec.group] : []
+  const relaunch: string[] = []
+  const units: string[] = []
+  for (const id of picked) {
+    const g = groups.find(x => x.id === id)
+    if (!g || !isGroupId(id) || isBlocked(run, { kind: 'group', id })) continue
+    const seq = groupSendSeq(g)
+    // Ses envois revenus avec des tickets ouverts (un envoi annulé n'en est pas un) : un renvoi, pas deux.
+    if (returnsOf(g) >= AUTO_GROUP_SENDS) {
+      relaunch.push(`${id}#${seq}`)
+      continue
+    }
+    if (!isGroupSendMarked(run, `${id}#${seq}`)) units.push(`${id}#${seq}`)
+  }
+  // Le lot proposé ne part pas parce qu'un groupe bloqué par une question y tenait la place : le premier
+  // autre groupe prêt part seul. Jamais quand rien n'était proposé (un ticket en cours ici, rien de prêt).
+  const isHeldOnly = picked.length > 0 && picked.every(id => isBlocked(run, { kind: 'group', id }))
+  if (units.length === 0 && relaunch.length === 0 && isHeldOnly) {
+    const other = groupPlan(run)!.groups.find(v => isDelegable(v) && !v.isCyclic && isGroupId(v.group.id) && !picked.includes(v.group.id) && !isBlocked(run, { kind: 'group', id: v.group.id }) && returnsOf(v.group) < AUTO_GROUP_SENDS)
+    if (other && !isGroupSendMarked(run, `${other.group.id}#${groupSendSeq(other.group)}`)) units.push(`${other.group.id}#${groupSendSeq(other.group)}`)
+  }
+  if (units.length === 0) return { action: null, relaunch }
+  const ids = units.map(u => u.replace(/#\d+$/, ''))
+  const what = `${ids.length > 1 ? 'groupes' : 'groupe'} ${ids.join(', ')} en session liée`
+  return { action: { kind: 'groups', groups: ids, key: `groups:${units.join('+')}`, what, blocks: { kind: 'group', id: ids[0]! } }, relaunch }
+}
+
+/**
+ * Un groupe à l'id hors forme (relu du fichier partagé) que l'auto aurait encore à faire avancer, dans
+ * une phase où il agit sur les groupes : confié, pas fini, ou fini sans être clos. Son id n'entre dans
+ * aucun texte : rien ne part, et l'auto se met en pause « lecture du parcours ratée » au lieu de
+ * l'écarter en silence. Un tel groupe fini et clos ne retient rien.
+ */
+const hasUnsafeOpenGroup = (run: Run): boolean => {
+  const phase = currentPhase(run)
+  const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
+  return isOwnPhase && run.status === 'active' && (run.groups ?? []).some(g => !isGroupId(g.id) && (g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g).length > 0))
+}
+
+/**
+ * La question d'un renvoi de trop (`relance:<groupe>#<envoi>`) attend encore : son groupe a des tickets
+ * ouverts dans le plan, sans être confié de nouveau (l'envoi qu'elle nomme est toujours le prochain).
+ * Faux une fois le groupe vidé, ses tickets faits, relancé, ou disparu du plan.
+ */
+const isRelaunchAwaited = (run: Run, id: string): boolean => {
+  const unit = /^(.+)#(\d+)$/.exec(id.slice(RELAUNCH_PREFIX.length))
+  const g = unit ? recordedGroup(run, unit[1]!) : undefined
+  if (!unit || !g || g.linked !== undefined || groupSendSeq(g) !== Number(unit[2])) return false
+  return groupTicketIds(run, g).some(tid => {
+    const t = ticketOf(run, tid)
+    return t !== undefined && t.status !== 'done'
+  })
+}
+
+/** Une marque d'envoi que poserait l'auto pour une revue : sa clé, ce qu'elle est en mots, ce qu'elle bloque. */
+export type AutoMarkSpec = { key: string; what: string; blocks: WaitTarget }
+
+/** La marque de la revue d'un groupe rendu par sa session liée (« ◆ Revue du groupe · session liée »), sous la clé de son dernier envoi. */
+export const linkedReviewMark = (run: Run, groupId: string): AutoMarkSpec | null => {
+  const g = (run.groups ?? []).find(x => x.id === groupId)
+  if (!g?.delegated || !isGroupId(g.id)) return null
+  return { key: `review:${g.id}#${sendNumber(g.delegated.seq) ?? 1}`, what: `revue du groupe ${g.id}`, blocks: { kind: 'group', id: g.id } }
+}
+
+/** La marque de la revue de sécurité d'un groupe (« ⛨ Revue de sécurité »), sous la clé de son dernier envoi rendu (l'unité d'ici pour un groupe jamais rendu). */
+export const securityReviewMark = (run: Run, groupId: string): AutoMarkSpec | null => {
+  const g = (run.groups ?? []).find(x => x.id === groupId)
+  if (!g || !isGroupId(g.id)) return null
+  return { key: `security:${g.delegated !== undefined ? `${g.id}#${sendNumber(g.delegated?.seq) ?? 1}` : hereUnitOf(g)}`, what: `revue de sécurité du groupe ${g.id}`, blocks: { kind: 'group', id: g.id } }
+}
+
+/**
+ * L'unité d'une revue faite ici, sur un groupe jamais rendu par une session liée : `<groupe>#<n>`, n les
+ * envois commencés (0 pour un groupe jamais confié, un envoi annulé gardant son numéro). Relu ici puis
+ * confié, le groupe demande la revue de cet envoi (`#<n+1>`, celle de sa session) ; confié, annulé puis fini
+ * ici, une nouvelle revue d'ici (`#<n>`, que l'envoi annulé n'a jamais eue : sa revue suit son retour).
+ */
+const hereUnitOf = (g: TicketGroup): string => `${g.id}#${groupSendSeq({ ...g, linked: undefined }) - 1}`
+
+/** La marque du /code-review des groupes finis ici et pas relus (« ◆ Revue du groupe »), celle de l'envoi auto de cette revue. */
+export const hereReviewMark = (run: Run): AutoMarkSpec | null => {
+  const here = (run.groups ?? []).filter(g => g.linked === undefined && g.delegated === undefined && isGroupId(g.id) && isGroupDone(run, g) && !isGroupReviewed(run, g))
+  if (here.length === 0) return null
+  return { key: `review:${here.map(g => hereUnitOf(g)).join('+')}`, what: `/code-review des groupes ${here.map(g => g.id).join(', ')}`, blocks: { kind: 'group', id: here[0]!.id } }
+}
+
+/**
+ * Un bouton (« ◆ Revue du groupe », « ⛨ Revue de sécurité ») lance à la main une revue que l'auto
+ * enverrait : sa marque, sous la même clé, se pose déjà démarrée (le mod ne voit pas l'Entrée de la
+ * personne), sur un parcours qui a été en auto ; l'auto ne redemande jamais cette revue. Null sans
+ * marque à poser (pas d'auto, déjà marquée, liste de marques illisible).
+ */
+export const markAutoLaunched = (board: Board, mark: AutoMarkSpec | null, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!mark || !run0 || run0.auto === undefined) return null
+  // Une marque de la même clé qui attend son démarrage (envoi resté sans suite) : lancée à la main, elle démarre
+  // et sa question se retire, sans que « ↻ Renvoyer » fasse redemander la même revue.
+  if (pendingAutoMarks(run0).some(m => m.key === mark.key)) return markAutoStarted(board, m => m.key === mark.key, now)
+  if (isUnitsMarked(run0, mark.key)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const at = Math.max(now, (resentOf(run).find(t => t.key === mark.key)?.at ?? -1) + 1)
+  run.autoSent = [...(Array.isArray(run.autoSent) ? run.autoSent : []), { key: mark.key, at, startedAt: at, what: mark.what, blocks: mark.blocks }]
+  log(run, now, '⚡', `Lancé à la main, l'auto ne le redemande pas : ${mark.what}`, 'info')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/** Chaque unité d'une clé (`review:A#1+B#1`) est déjà nommée par une marque de sa sorte (ou la liste est illisible). */
+const isUnitsMarked = (run: Run, key: string): boolean => {
+  const at = key.indexOf(':')
+  const prefix = key.slice(0, at + 1)
+  return isMarked(run, key) || key.slice(at + 1).split('+').every(unit => isUnitMarked(run, prefix, unit))
+}
+
+/**
+ * Un lot à groupes que plus rien ne fait avancer sans un geste de la personne : dans une phase où l'auto
+ * agit sur les groupes, rien en vol (`inFlight` : une tâche de fond ; un groupe confié), aucune question
+ * ni marque qui attend, le lot pas clos, et aucune action à envoyer ; et aucune revue lancée dont le
+ * résultat n'est pas encore là. Par exemple un groupe relu sans avis de sécurité envoyé, un groupe fini
+ * ici avec une revue de sécurité conseillée et pas lancée, un groupe gardé vide après un envoi annulé.
+ */
+export const isGroupLotStuck = (run: Run, inFlight: boolean): boolean => {
+  const phase = currentPhase(run)
+  const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
+  const groups = run.groups ?? []
+  if (!isOwnPhase || run.status !== 'active' || groups.length === 0 || !groupPlan(run)) return false
+  if (inFlight || groups.some(g => g.linked !== undefined)) return false
+  const read = readMarks(run)
+  if (read.isDamaged || read.marks.some(m => m.startedAt === undefined) || readWaiting(run).length > 0) return false
+  if (isGroupLotOver(run)) return false
+  // Rien à envoyer : ni action prête (une action déjà marquée ne repart pas), ni relance à poser.
+  // Une relance encore sans question est posée à la fin du tour, avant ce guet : une relance sans question
+  // à poser (répondue ici, puis redevenue nécessaire) laisse le lot bloqué.
+  const decision = autoDecision(run, {}, inFlight)
+  if (decision.kind !== 'none') return false
+  // Une revue ou une revue de sécurité lancée (marque démarrée) dont le résultat n'est pas encore là : on l'attend.
+  const isAwaiting = groups.some(g => {
+    const unit = g.delegated !== undefined ? `${g.id}#${sendNumber(g.delegated?.seq) ?? 1}` : hereUnitOf(g)
+    if (!isGroupReviewed(run, g) && isUnitMarked(run, 'review:', unit)) return true
+    const sec = g.security
+    return sec !== undefined && sec !== null && typeof sec === 'object' && sec.isAdvised === true && sec.findings === undefined && isUnitMarked(run, 'security:', unit)
+  })
+  return !isAwaiting
+}
+
+/** Les envois d'un groupe revenus de leur session liée (le dernier et les précédents gardés) ; un envoi annulé n'en est pas un. */
+export const returnsOf = (g: TicketGroup): number => (g.delegated !== undefined && g.delegated !== null && typeof g.delegated === 'object' ? 1 + earlierOf(g.delegated).length : 0)
+
+/**
+ * Les questions bloquantes d'un groupe revenu trop de fois pour repartir seul (`<groupe>#<envoi>`), posées
+ * par le mod une fois chacune (une question déjà répondue ne revient pas) : l'auto ne le relance pas.
+ * `own` : les traces de retrait écrites par cette discussion ; pour un parcours dont l'auto est allumé au nom de cette discussion (`isAutoLitBy`),
+ * seule une réponse donnée ici empêche de la reposer (une trace d'ailleurs ne la retire pas). Reposée,
+ * elle est datée après la trace de son id, qu'aucune fusion ne l'efface.
+ */
+export const raiseRelaunchQuestions = (board: Board, units: readonly string[], now: number, own?: OwnTraces | null): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0) return null
+  const traces = readAnswered(run0)
+  const answered = new Set((own && own.runId === run0.id ? own.answered : traces).map(t => t.id))
+  const open = new Set(readWaiting(run0).map(q => q.id))
+  const fresh = units.filter(u => !answered.has(`${RELAUNCH_PREFIX}${u}`) && !open.has(`${RELAUNCH_PREFIX}${u}`))
+  if (fresh.length === 0) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const added: WaitingQuestion[] = fresh.map(u => {
+    const id = u.replace(/#\d+$/, '')
+    const returns = returnsOf(run.groups?.find(g => g.id === id) ?? { id, name: '', tickets: [] })
+    const traceAt = traces.find(t => t.id === `${RELAUNCH_PREFIX}${u}`)?.at
+    return { id: `${RELAUNCH_PREFIX}${u}`, blocks: { kind: 'group', id }, text: `Le groupe ${id} est revenu ${returns} fois de sa session liée avec des tickets ouverts : l'auto ne le renvoie plus. Relance-le toi-même (« ↗ Session liée »), ou dis à Claude quoi en faire.`, at: Math.max(now, (traceAt ?? -1) + 1) }
+  })
+  run.waiting = [...readWaiting(run).map(q => q.raw as WaitingQuestion), ...added]
+  for (const u of fresh) {
+    const id = u.replace(/#\d+$/, '')
+    log(run, now, '❓', `Groupe ${id} revenu ${returnsOf(run.groups?.find(g => g.id === id) ?? { id, name: '', tickets: [] })} fois : une question le bloque`, 'warn')
+  }
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+/**
+ * Une implémentation à groupes dont tout est fini : chaque ticket fait, chaque groupe rendu et clos (relu,
+ * sécurité tranchée), aucun en vol. Lancés depuis le tableau de bord, ses groupes ne chargent jamais la
+ * consigne de /implement qui fait envoyer `complete` : sa suite (le compte rendu, dont le lancement clôt
+ * la phase) part comme celle d'une phase finie.
+ */
+const isGroupLotOver = (run: Run): boolean => {
+  const phase = currentPhase(run)
+  const groups = run.groups ?? []
+  if (phase.skill !== 'implement' || phase.status !== 'active' || groups.length === 0 || run.tickets.length === 0) return false
+  if (!run.tickets.every(t => t.status === 'done')) return false
+  return groups.every(g => g.linked === undefined && closeMissing(run, g).length === 0) && nextLaunchFor(run) === null
+}
+
+/** Ce que l'auto fait à la fin d'un tour : envoyer une action, se mettre en pause, ou rien ; `relaunch` : les questions d'un renvoi de trop à poser d'abord. */
+export type AutoDecision = ({ kind: 'send'; action: AutoAction } | { kind: 'stop'; why: string } | { kind: 'none' }) & { relaunch: string[] }
+
+/**
+ * La décision de l'auto à la fin d'un tour, sur le parcours relu : rien tant qu'une marque attend son
+ * démarrage ; l'action des groupes, sinon celle de la phase, si elle n'est ni marquée ni bloquée par une
+ * question ; sinon, quand des questions attendent et que rien n'est en vol (`inFlight` : une tâche de
+ * fond ; une session liée au travail compte aussi), la pause « plus rien ne peut avancer sans toi », ou
+ * « deuxième échec du groupe <id> » quand c'est la question d'un renvoi de trop qui retient. Une liste
+ * de marques abîmée : la pause « lecture du parcours ratée », rien ne part.
+ */
+export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean): AutoDecision => {
+  const read = readMarks(run)
+  if (read.isDamaged) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
+  if (read.marks.some(m => m.startedAt === undefined)) return { kind: 'none', relaunch: [] }
+  if (hasUnsafeOpenGroup(run)) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
+  const grouped = autoGroupActionOf(run)
+  if (grouped.action) return { kind: 'send', action: grouped.action, relaunch: grouped.relaunch }
+  const action = autoActionOf(run, opts)
+  const phase = currentPhase(run)
+  const isHeld = action !== null && (isBlocked(run, action.blocks) || isBlocked(run, { kind: 'phase', id: phase.skill }))
+  if (action && !isHeld && !isMarked(run, action.key)) return { kind: 'send', action, relaunch: grouped.relaunch }
+  const isAway = inFlight || (run.groups ?? []).some(g => g.linked !== undefined)
+  const open = readWaiting(run)
+  if (!isAway && open.length > 0) {
+    const relaunched = open.find(q => q.id.startsWith(RELAUNCH_PREFIX))
+    const why = relaunched?.blocks?.kind === 'group' && isGroupId(relaunched.blocks.id) ? groupFailStop(relaunched.blocks.id) : AUTO_STOPS.stuck
+    return { kind: 'stop', why, relaunch: grouped.relaunch }
+  }
+  return { kind: 'none', relaunch: grouped.relaunch }
+}
+/** La marque « envoyée » d'une action, posée sur le parcours actif ici avant l'envoi. Null quand elle y est déjà. */
+export const markAutoSent = (board: Board, action: AutoAction, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || isMarked(run0, action.key)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  // Après la trace d'un « ↻ Renvoyer » de la même clé, même face à une horloge en retard : la fusion ne l'efface pas.
+  const at = Math.max(now, (resentOf(run).find(t => t.key === action.key)?.at ?? -1) + 1)
+  run.autoSent = [...(Array.isArray(run.autoSent) ? run.autoSent : []), { key: action.key, at, what: action.what, blocks: action.blocks }]
+  log(run, now, '⚡', `Envoi auto : ${action.what}`, 'accent')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * Retire la marque d'une action qui n'est pas partie (l'écriture du fichier a raté, ou l'auto s'est
+ * éteint entre la relecture et l'envoi), avec une trace datée, comme « ↻ Renvoyer » : la marque a pu
+ * déjà s'écrire dans le fichier, et la fusion suivante la ferait revenir, « envoyée » sans l'être.
+ */
+export const unmarkAutoSent = (board: Board, key: string, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || !pendingAutoMarks(run0).some(m => m.key === key)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  retractPending(run, key, now)
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * Retire les marques en attente d'une clé, avec une trace datée après elles, qu'une copie en retard ne
+ * défait pas. Une marque démarrée de la même clé reste : la trace n'efface jamais une marque démarrée
+ * (`keepAutoSent`), l'action partie ne repart pas.
+ */
+const retractPending = (run: Run, key: string, now: number) => {
+  const pending = readMarks(run).marks.filter(m => m.key === key && m.startedAt === undefined)
+  run.autoSent = readMarks(run).entries.filter(e => !(e.mark?.key === key && e.mark.startedAt === undefined)).map(e => e.raw as AutoMark)
+  const at = maxOf([now, ...pending.map(m => m.at + 1), (resentOf(run).find(t => t.key === key)?.at ?? -1) + 1])
+  run.autoResent = [...resentOf(run).filter(t => t.key !== key), { key, at }].sort((p, q) => q.at - p.at).slice(0, AUTO_RESENT_MAX)
+}
+
+/**
+ * Le tour d'une action envoyée a commencé : sa marque passe « démarrée » (la plus ancienne qui attend
+ * et que `isIt` reconnaît), et sa question « envoi resté sans suite », s'il y en a une, se retire.
+ */
+export const markAutoStarted = (board: Board, isIt: (m: AutoMark) => boolean, now: number): Outcome => {
+  const run0 = activeRun(board)
+  const target = run0 ? pendingAutoMarks(run0).filter(isIt).sort((x, y) => x.at - y.at)[0] : undefined
+  if (!run0 || !target) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  run.autoSent = readMarks(run).entries.map(e => (e.mark && e.mark.key === target.key && e.mark.at === target.at ? { ...(e.raw as AutoMark), startedAt: now } : (e.raw as AutoMark)))
+  withdrawQuestion(run, `${STALE_PREFIX}${target.key}`, now)
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * Les marques « envoyées » sans démarrage depuis `AUTO_STALE_MS` (ou toutes celles qui attendent, quand
+ * `isNow` : l'envoi a été refusé) deviennent chacune la question bloquante « envoi resté sans suite »,
+ * une fois : rien ne repart sans « ↻ Renvoyer ». Null quand aucune ne l'est devenue.
+ */
+export const raiseStaleAutoSends = (board: Board, now: number, isNow = false): Outcome => {
+  const run0 = activeRun(board)
+  const stale = run0 ? pendingAutoMarks(run0).filter(m => m.staleAt === undefined && (isNow || now - m.at >= AUTO_STALE_MS)) : []
+  if (!run0 || stale.length === 0) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const keys = new Set(stale.map(m => m.key))
+  run.autoSent = readMarks(run).entries.map(e => (e.mark && keys.has(e.mark.key) && e.mark.startedAt === undefined && e.mark.staleAt === undefined ? { ...(e.raw as AutoMark), staleAt: now } : (e.raw as AutoMark)))
+  const open = readWaiting(run)
+  const traces = readAnswered(run)
+  const added: WaitingQuestion[] = stale
+    .filter(m => !open.some(q => q.id === `${STALE_PREFIX}${m.key}`))
+    .map(m => {
+      const id = `${STALE_PREFIX}${m.key}`
+      const traceAt = traces.find(t => t.id === id)?.at
+      return { id, blocks: m.blocks ?? { kind: 'phase', id: currentPhase(run).skill }, text: `Envoi resté sans suite : ${m.what ?? m.key}. « ↻ Renvoyer » le relance une fois ; sinon, lance la suite toi-même.`, at: Math.max(now, (traceAt ?? -1) + 1) }
+    })
+  run.waiting = [...open.map(q => q.raw as WaitingQuestion), ...added]
+  for (const m of stale) log(run, now, '❓', `Envoi auto resté sans suite : ${m.what ?? m.key}`, 'warn')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * « ↻ Renvoyer » sur la question « envoi resté sans suite » d'une marque : la marque s'efface, avec une
+ * trace datée qu'une copie en retard ne défait pas, et la question se retire ; l'auto peut renvoyer
+ * l'action. Seulement une marque qui attend encore son démarrage.
+ */
+export const resendAutoMark = (board: Board, runId: string, key: string, now: number): Outcome => {
+  const run0 = activeRun(board)
+  // Le parcours du bouton, actif ici : une clé (`phase:to-tickets#1`) se retrouve dans d'autres parcours.
+  if (!run0 || run0.id !== runId || !pendingAutoMarks(run0).some(m => m.key === key && m.staleAt !== undefined)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  retractPending(run, key, now)
+  // Une vague restée sans suite : ses groupes, liés sans session lancée, redeviennent à lancer (comme « Annuler »).
+  // Seulement le lien de cet envoi même (son numéro), jamais un lien posé après par un bouton.
+  if (key.startsWith('groups:')) {
+    const units = key.slice('groups:'.length).split('+')
+    run.groups = (run.groups ?? []).map(g => (g.linked !== undefined && g.linked.session === undefined && units.includes(`${g.id}#${sendNumber(g.linked.seq) ?? 1}`) ? withoutLink(g) : g))
+  }
+  withdrawQuestion(run, `${STALE_PREFIX}${key}`, now)
+  log(run, now, '↻', `Envoi auto à refaire : ${key}`, 'info')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * Le parcours gardé par la fusion reçoit les marques des deux copies : chaque entrée face à la trace de
+ * sa clé d'abord (une trace efface les marques en attente posées avant elle, jamais une démarrée), puis une marque par clé et date, la
+ * plus avancée (« démarrée » l'emporte, la question « sans suite » aussi) ; une entrée abîmée gardée
+ * telle quelle ; l'union des traces, les 100 plus récentes. Rendu tel quel quand rien ne change.
+ * `own` : pour un parcours dont l'auto est allumé au nom de cette discussion (`isAutoLitBy`), les traces que cette discussion a écrites, seules
+ * à retirer une marque (une trace d'ailleurs, forgée ou rejouée, ne fait rien repartir).
+ */
+const keepAutoSent =(kept: Run, other: Run | undefined, own?: OwnTraces['resent']): Run => {
+  if (!other || (other.autoSent === undefined && other.autoResent === undefined)) return kept
+  const traces = readResent([...(Array.isArray(kept.autoResent) ? kept.autoResent : []), ...(Array.isArray(other.autoResent) ? other.autoResent : [])])
+  // Pour un parcours dont l'auto est allumé d'ici, seules les traces écrites ici retirent une marque ; les traces gardées restent l'union.
+  // Une trace d'ici ne compte jamais plus tard que celle du parcours de même clé, ramenée à maintenant à la lecture.
+  const unionAt = new Map(traces.map(t => [t.key, t.at]))
+  const traceAt = new Map((own ? readResent(own) : traces).map(t => [t.key, Math.min(t.at, unionAt.get(t.key) ?? t.at)]))
+  const autoResent = traces.sort((p, q) => q.at - p.at).slice(0, AUTO_RESENT_MAX)
+  const byKey = new Map<string, unknown>()
+  const marksById = new Map<string, AutoMark>()
+  for (const e of [...readMarks(kept).entries, ...readMarks(other).entries]) {
+    if (!e.mark) {
+      byKey.set(`raw:${JSON.stringify(e.raw)}`, e.raw)
+      continue
+    }
+    const m = e.mark
+    // Une trace n'efface qu'une marque en attente : une marque démarrée (l'action est partie) reste, d'où qu'elle vienne.
+    if (m.startedAt === undefined && (traceAt.get(m.key) ?? -Infinity) >= m.at) continue
+    const id = `mark:${m.key}|${m.at}`
+    // Les deux versions d'une marque se fusionnent lues (bornées), jamais depuis l'entrée brute.
+    const was = marksById.get(id)
+    if (!was) {
+      marksById.set(id, m)
+      byKey.set(id, e.raw)
+      continue
+    }
+    const startedAt = was.startedAt !== undefined && m.startedAt !== undefined ? Math.min(was.startedAt, m.startedAt) : (was.startedAt ?? m.startedAt)
+    const staleAt = was.staleAt !== undefined && m.staleAt !== undefined ? Math.min(was.staleAt, m.staleAt) : (was.staleAt ?? m.staleAt)
+    // Rien de plus que la première version : son entrée telle quelle, pour que la relecture ne croie pas à un changement.
+    if (startedAt === was.startedAt && staleAt === was.staleAt) continue
+    const merged: AutoMark = { ...was, ...(startedAt !== undefined ? { startedAt } : {}), ...(staleAt !== undefined ? { staleAt } : {}) }
+    marksById.set(id, merged)
+    byKey.set(id, merged)
+  }
+  const autoSent = [...byKey.values()] as AutoMark[]
+  const isSame = JSON.stringify(autoSent) === JSON.stringify(kept.autoSent ?? []) && JSON.stringify(autoResent) === JSON.stringify(kept.autoResent ?? [])
+  return isSame ? kept : { ...kept, autoSent, autoResent }
+}
+
+/** La plus récente des dates des deux copies, avec ce qui l'accompagne (auteur, raison). */
+const latestOf = <K extends 'onAt' | 'offAt'>(key: K, ...autos: (RunAuto | undefined)[]): RunAuto | undefined =>
+  autos.filter((x): x is RunAuto => x !== undefined && x[key] !== undefined).sort((x, y) => y[key]! - x[key]!)[0]
+
+/**
+ * La fusion de l'état auto de deux copies, date par date : « allumé à » et « éteint à », chacun le plus
+ * récent des deux, avec son auteur et sa raison. Une copie abîmée (une date illisible) éteint l'auto
+ * fusionné : on ne sait pas quand elle l'a coupé, peut-être après un second clic de l'autre copie. La
+ * coupure prend la date du dernier allumage ; l'état écrit ensuite est propre, et le clic suivant
+ * rallume.
+ */
+const mergeAuto = (ours: unknown, theirs: unknown): RunAuto | undefined => {
+  const a = readAuto(ours)
+  const b = readAuto(theirs)
+  if (!a.auto && !b.auto && !a.isDamaged && !b.isDamaged) return undefined
+  const on = latestOf('onAt', a.auto, b.auto)
+  const off = latestOf('offAt', a.auto, b.auto)
+  const merged: RunAuto = {
+    ...(on ? { onAt: on.onAt!, ...(on.onBy !== undefined ? { onBy: on.onBy } : {}) } : {}),
+    ...(off ? { offAt: off.offAt!, ...(off.offWhy !== undefined ? { offWhy: off.offWhy } : {}) } : {}),
+  }
+  if ((a.isDamaged || b.isDamaged) && isAutoOnIn(merged)) {
+    merged.offAt = merged.onAt
+    merged.offWhy = AUTO_STOPS.unreadable
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined
+}
+
+/**
+ * Le parcours gardé par la fusion de deux copies reçoit l'état auto fusionné des deux (`mergeAuto`) ;
+ * rendu tel quel quand rien ne change, pour que la relecture ne croie pas à un changement.
+ */
+const keepAuto = (kept: Run, other: Run | undefined): Run => {
+  if (kept.auto === undefined && other?.auto === undefined) return kept
+  const merged = mergeAuto(kept.auto, other?.auto)
+  // Rien de lisible (deux états abîmés) : l'état présent reste tel quel, jamais retiré. Il se lit
+  // éteint, et le parcours reste « a été en auto », pour que ses choix ne soient pas coupés à 30.
+  if (merged === undefined) return kept.auto !== undefined ? kept : { ...kept, auto: other!.auto }
+  return JSON.stringify(merged) === JSON.stringify(kept.auto) ? kept : { ...kept, auto: merged }
+}
+
+/**
+ * La marque de validation du rapport d'une copie ou de l'autre : une validation faite ne se perd pas
+ * à la fusion (le plafond de 200 d'un parcours en auto vient après elle). Rendu tel quel sans changement.
+ */
+const keepReportMark = (kept: Run, other: Run | undefined): Run => {
+  const theirs = other && isTime(other.reportValidatedAt) ? other.reportValidatedAt : undefined
+  if (theirs === undefined || (isTime(kept.reportValidatedAt) && kept.reportValidatedAt >= theirs)) return kept
+  return { ...kept, reportValidatedAt: theirs }
+}
+
+/**
+ * La fusion de deux copies d'un même parcours : la plus récente, avec les champs qui se fusionnent à
+ * part. `own` : les traces de retrait écrites par cette discussion, pour chaque parcours dont l'auto est
+ * allumé en son nom (celui qu'elles nomment) ; seules elles y retirent une marque ou une question.
+ */
+const keepRun = (kept: Run, other: Run | undefined, own: readonly OwnTraces[] = [], isKeptLocal = true): Run => {
+  const mine = own.find(o => o.runId === kept.id)
+  return keepAutoSent(keepDecided(keepWaiting(keepAuto(keepReportMark(keepClosings(kept, other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent)
+}
+
+// ─── Traces de retrait écrites ici ────────────────────────────────────────
+//
+// Invariant : une trace lue dans le fichier partagé, que la discussion d'où l'auto agit n'a pas écrite,
+// ne fait jamais repartir une action ni retirer une question pour l'auto de cette discussion. La
+// discussion garde à part (`$.store`, avec son id et celui du processus, comme la date du clic) les
+// traces qu'elle écrit ; tant que l'auto d'un parcours est allumé en son nom, la date du clic gardée ici (même mis en pause par l'ouverture d'un autre parcours), la fusion ne lui applique qu'elles. Les traces
+// gardées dans le parcours restent l'union : les autres discussions les appliquent toutes.
+
+/** Les traces de retrait qu'une discussion a écrites pour un parcours : « ↻ Renvoyer » (`resent`), questions retirées (`answered`). */
+export type OwnTraces = {
+  runId: string
+  resent: readonly { key: string; at: number }[]
+  answered: readonly { id: string; at: number; isUndated?: true }[]
+}
+
+/** Les traces gardées ici au plus, les plus récentes de chaque sorte, comme celles du parcours. */
+export const OWN_TRACES_MAX = 100
+
+/**
+ * Les traces de retrait qu'un changement local du board a écrites sur le parcours actif : celles qui
+ * apparaissent, ou dont la date avance, entre `before` et `after`. Null sans parcours actif.
+ * Seulement pour un changement fait ici (une transition, pas une fusion) : une fusion apporterait les
+ * traces des autres copies.
+ */
+export const writtenTraces = (before: Board, after: Board): OwnTraces | null => {
+  const run = activeRun(after)
+  if (!run) return null
+  const was = before.runs.find(r => r.id === run.id)
+  const wasResent = new Map((was ? resentOf(was) : []).map(t => [t.key, t.at]))
+  const wasAnswered = new Map((was ? readAnswered(was) : []).map(t => [t.id, t.at]))
+  return {
+    runId: run.id,
+    resent: resentOf(run).filter(t => (wasResent.get(t.key) ?? -1) < t.at),
+    answered: readAnswered(run).filter(t => (wasAnswered.get(t.id) ?? -1) < t.at),
+  }
+}
+
+/** Des traces gardées ici, avec celles qu'un changement vient d'écrire : une par clé ou id, la plus récente, les 100 plus récentes de chaque sorte. */
+export const addOwnTraces = (kept: OwnTraces, added: OwnTraces): OwnTraces => ({
+  runId: added.runId,
+  resent: readResent([...kept.resent, ...added.resent])
+    .sort((p, q) => q.at - p.at)
+    .slice(0, OWN_TRACES_MAX),
+  answered: mergeTraces([...kept.answered, ...added.answered])
+    .sort((p, q) => q.at - p.at)
+    .slice(0, OWN_TRACES_MAX),
+})
+
+// ─── Questions bloquantes ─────────────────────────────────────────────────
+//
+// Claude déclare chaque question qui attend la personne (`waiting` de l'outil), avec ce qu'elle bloque,
+// et la retire une fois répondue (`answered`). Invariant : une question ne disparaît jamais par une
+// fusion ou une reconstruction ; seuls son retrait ou l'effacement du parcours la font disparaître.
+// Les copies se fusionnent question par question (union), et chaque retrait laisse une trace datée.
+
+/**
+ * L'id d'une question relue (l'union des copies l'apporte), dans la réponse de l'outil : tel quel s'il a la
+ * forme d'un id de question (`isQuestionIdForm`), sinon échappé en JSON : réversible, Claude la retire par
+ * son id exact, et il n'ouvre ni ligne ni section.
+ */
+const shownQuestionId = (id: string): string => (isQuestionIdForm(id) ? id : asciiJson(id))
+
+/** Les questions ouvertes au plus : au-delà, une nouvelle est refusée, jamais une ancienne coupée. */
+export const WAITING_MAX = 50
+
+/** Les traces de retrait gardées, les plus récentes : une copie plus en retard pourrait faire revenir une question (sens sûr : elle bloque). */
+const ANSWERED_MAX = 100
+
+/** Longueur la plus grande d'un id de question ou de sa cible envoyé par l'outil : au-delà, refusé (jamais rogné). */
+const WAIT_ID_MAX = 60
+
+/** Longueur la plus grande d'un id relu : au-delà, l'entrée se lit sous un id calculé, jamais rognée sur une autre. */
+const WAIT_READ_MAX = 200
+
+const WAIT_KINDS: readonly WaitTarget['kind'][] = ['phase', 'group', 'ticket']
+
+/** Un id tel qu'il est écrit : une chaîne non vide (rognée de ses blancs autour), ou un nombre fini ; sinon ''. */
+const idText = (value: unknown): string =>
+  typeof value === 'number' && Number.isFinite(value) ? String(value) : typeof value === 'string' ? value.trim() : ''
+
+/** Une empreinte courte et stable d'une valeur relue, pour l'id d'une entrée qui n'en a pas de lisible. */
+const fingerprint = (value: unknown): string => {
+  let hash = 5381
+  for (const ch of JSON.stringify(value) ?? String(value)) hash = ((hash * 33) ^ ch.codePointAt(0)!) >>> 0
+  return hash.toString(36)
+}
+
+/**
+ * Une question relue, bornée ici et nulle part ailleurs : un id, sa cible (null quand elle est
+ * illisible : la question bloque alors tout, le sens sûr), son texte, sa date (null quand elle est
+ * illisible : aucune trace de retrait ne l'efface alors, seul un retrait explicite). `raw` : l'entrée
+ * telle qu'elle est enregistrée, réécrite telle quelle à la fusion et par l'outil, jamais reconstruite.
+ */
+export type OpenQuestion = { id: string; blocks: WaitTarget | null; text: string; at: number | null; raw: unknown }
+
+/** Le rang d'une question parmi celles du même id : la plus récente ; une date illisible passe après toute date lisible. */
+const questionRank = (q: OpenQuestion): number => q.at ?? -1
+
+/** Une question par id, la mieux classée (`questionRank`), dans l'ordre de leur première apparition. */
+const oneById = (list: readonly OpenQuestion[]): OpenQuestion[] => {
+  const byId = new Map<string, OpenQuestion>()
+  for (const q of list) {
+    const was = byId.get(q.id)
+    if (!was || questionRank(q) > questionRank(was)) byId.set(q.id, q)
+  }
+  return [...byId.values()]
+}
+
+/** Une trace de retrait relue : sa date, et `isUndated` quand elle retire aussi une question de cet id sans date lisible. */
+type AnswerTrace = { id: string; at: number; isUndated?: true }
+
+/**
+ * Une trace de retrait efface la question : datée, posée avant ou au moment du retrait ; sans date
+ * lisible, seulement par la trace d'un retrait explicite de cette question (`isUndated`), jamais par
+ * une trace plus ancienne de son id.
+ */
+const isAnsweredBy = (q: OpenQuestion, trace: AnswerTrace | undefined): boolean =>
+  trace !== undefined && (q.at === null ? trace.isUndated === true : trace.at >= q.at)
+
+const readQuestion = (raw: unknown): OpenQuestion => {
+  const x = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+  const written = idText(x.id)
+  const id = written !== '' && written.length <= WAIT_READ_MAX ? written : `illisible-${fingerprint(raw)}`
+  const b = x.blocks !== null && typeof x.blocks === 'object' ? (x.blocks as Record<string, unknown>) : {}
+  const kind = WAIT_KINDS.find(k => k === b.kind)
+  const targetId = idText(b.id)
+  const target = kind && targetId !== '' && targetId.length <= WAIT_READ_MAX ? { kind, id: targetId } : null
+  return { id, blocks: target, text: clip(str(x.text), TEXT_MAX), at: isTime(x.at) ? x.at : null, raw }
+}
+
+/**
+ * Les questions relues d'un parcours, une par id (la plus récente). Une liste qui n'est pas un tableau
+ * (fichier abîmé) se lit comme une seule question sans cible ni date, qui bloque tout et garde la
+ * valeur entière (`damaged`) : réécrite par la fusion ou l'outil, rien n'en est perdu.
+ */
+const readWaiting = (run: Run): OpenQuestion[] => oneById(readEntries(run))
+
+/** Toutes les entrées relues de la liste, sans en retirer aucune (`readWaiting` en garde une par id). */
+const readEntries = (run: Run): OpenQuestion[] => {
+  const raw: unknown = run.waiting
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    const id = `illisible-${fingerprint(raw)}`
+    return [{ id, blocks: null, text: '', at: null, raw: { id, damaged: raw } }]
+  }
+  return raw.map(readQuestion)
+}
+
+/** Les questions ouvertes du parcours. */
+export const openQuestions = (run: Run): OpenQuestion[] => readWaiting(run)
+
+/** Les traces de retrait relues : un id et une date lisibles, la plus récente par id ; `isUndated` d'une seule suffit. */
+const readAnswered = (run: Run): AnswerTrace[] => mergeTraces(Array.isArray(run.answered) ? (run.answered as unknown[]) : [])
+
+/** Les traces de plusieurs listes réunies : une par id, la date la plus récente, `isUndated` dès qu'une le porte. */
+const mergeTraces = (list: readonly unknown[]): AnswerTrace[] => {
+  const byId = new Map<string, AnswerTrace>()
+  for (const t of list) {
+    if (t === null || typeof t !== 'object') continue
+    const x = t as Record<string, unknown>
+    const id = idText(x.id)
+    if (id === '' || id.length > WAIT_READ_MAX || !isTime(x.at)) continue
+    const was = byId.get(id)
+    const isUndated = x.isUndated === true || was?.isUndated === true
+    byId.set(id, { id, at: Math.max(was?.at ?? -1, x.at), ...(isUndated ? { isUndated: true as const } : {}) })
+  }
+  return [...byId.values()]
+}
+
+/** Deux ids de groupe, à la casse près ; un id relu qui n'est pas une chaîne n'est l'id d'aucun groupe. */
+const sameGroupId = (a: unknown, b: unknown): boolean => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase()
+
+/**
+ * Les questions qui bloquent une action, la seule fonction qui le dit : une phase, par les questions
+ * posées sur elle ; un groupe, par les siennes, celles de ses tickets (rattachés compris) et celles de
+ * la phase Implémentation ; un ticket, par les siennes, celles de son groupe et celles de la phase
+ * Implémentation. Une question à la cible illisible bloque tout.
+ */
+export const blockingQuestions = (run: Run, target: WaitTarget): OpenQuestion[] => {
+  const group = target.kind === 'group' ? recordedGroup(run, target.id) : (run.groups ?? []).find(g => groupTicketIds(run, g).some(id => sameTicket(id, target.id)))
+  const groupTickets = target.kind === 'group' && group ? groupTicketIds(run, group) : []
+  return readWaiting(run).filter(q => {
+    const b = q.blocks
+    if (!b) return true
+    if (target.kind === 'phase') return b.kind === 'phase' && b.id === target.id
+    if (b.kind === 'phase') return b.id === 'implement'
+    if (target.kind === 'group') return (b.kind === 'group' && sameGroupId(b.id, target.id)) || (b.kind === 'ticket' && groupTickets.some(id => sameTicket(id, b.id)))
+    return (b.kind === 'ticket' && sameTicket(b.id, target.id)) || (b.kind === 'group' && group !== undefined && sameGroupId(b.id, group.id))
+  })
+}
+
+/** Une action est bloquée par au moins une question ouverte. */
+export const isBlocked = (run: Run, target: WaitTarget): boolean => blockingQuestions(run, target).length > 0
+
+/** Ce qu'une question bloque, en mots : « le ticket Deux », « le groupe A · Code », « la phase Tickets ». */
+export const waitTargetLabel = (run: Run, q: OpenQuestion): string => {
+  const b = q.blocks
+  if (!b) return 'tout (cible illisible)'
+  if (b.kind === 'ticket') return `le ticket ${ticketOf(run, b.id)?.name ?? b.id}`
+  if (b.kind === 'group') {
+    const g = recordedGroup(run, b.id)
+    return `le groupe ${b.id}${g?.name ? ` · ${shownGroupName(g.name)}` : ''}`
+  }
+  return `la phase ${SKILLS[b.id]?.label ?? b.id}`
+}
+
+/** La cible d'une question envoyée, telle que le parcours la connaît, ou pourquoi elle est refusée. */
+const waitTargetOf = (run: Run, kind: WaitTarget['kind'], raw: string): WaitTarget | string => {
+  if (kind === 'ticket') {
+    const t = ticketOf(run, raw)
+    return t ? { kind, id: t.id } : `no ticket "${clip(raw, WAIT_ID_MAX)}" in this workflow`
+  }
+  if (kind === 'group') {
+    const g = recordedGroup(run, raw)
+    return g ? { kind, id: g.id } : `no group "${clip(raw, WAIT_ID_MAX)}" in this workflow`
+  }
+  const id = catalogId(raw)
+  const phase = id ? run.phases.find(p => p.skill === id || p.alts.includes(id)) : undefined
+  return phase ? { kind, id: phase.skill } : `no phase "${clip(raw, WAIT_ID_MAX)}" in this workflow (phases: ${run.phases.map(p => p.skill).join(', ')})`
+}
+
+/**
+ * Retire la question ouverte `id` du parcours, avec la trace datée de son retrait (une copie en retard
+ * ne la fait pas revenir) : la réponse de Claude (`answered`), ou le mod pour une question qu'il a posée
+ * (« envoi resté sans suite »). Rend faux quand aucune question ouverte ne porte cet id.
+ */
+const withdrawQuestion = (run: Run, id: string, now: number): boolean => {
+  const open = readWaiting(run)
+  const was = open.find(q => q.id === id)
+  if (!was) return false
+  run.waiting = open.filter(q => q.id !== id).map(q => q.raw as WaitingQuestion)
+  const before = readAnswered(run).find(t => t.id === id)
+  const trace: AnswerTrace = { id, at: Math.max(now, was.at ?? 0, before?.at ?? 0), ...(was.at === null || before?.isUndated ? { isUndated: true as const } : {}) }
+  run.answered = [...readAnswered(run).filter(t => t.id !== id), trace].sort((p, q) => q.at - p.at).slice(0, ANSWERED_MAX)
+  log(run, now, '✓', `Question répondue : ${id}`, 'ok')
+  return true
+}
+
+/**
+ * Les questions envoyées par `waiting` sur le parcours actif ici : `{ id, phase | group | ticket, text }`
+ * en ajoute une (ou met à jour la question ouverte du même id), `{ id, answered: true }` la retire et en
+ * garde la trace. Une entrée hors forme, une cible inconnue, une question de plus que la borne : refusées,
+ * et la réponse le dit. Rend la phrase de la réponse.
+ */
+const applyWaiting = (run: Run, value: unknown, now: number): string => {
+  const sent = Array.isArray(value) ? value : [value]
+  const refused: string[] = []
+  const missed: string[] = []
+  for (const one of sent) {
+    const x = one !== null && typeof one === 'object' && !Array.isArray(one) ? (one as Record<string, unknown>) : null
+    const id = x ? idText(x.id) : ''
+    if (!x || id === '') {
+      refused.push('an entry without "id"')
+      continue
+    }
+    const open = readWaiting(run)
+    const was = open.find(q => q.id === id)
+    if (x.answered === true) {
+      // La question « envoi resté sans suite » est celle du mod : « ↻ Renvoyer », ou l'étape lancée à la main, y répond.
+      if (id.startsWith(STALE_PREFIX) && was) refused.push(`"${id}": a question of the mod; the user answers it with « ↻ Renvoyer » on the dashboard, or by launching the step: do not withdraw it`)
+      // La question d'un renvoi de trop tient tant que le groupe attend sa relance : la retirer laisserait le groupe écarté sans question.
+      else if (id.startsWith(RELAUNCH_PREFIX) && was && isRelaunchAwaited(run, id))
+        refused.push(`"${id}": the group still waits for its relaunch: relaunch the group (« ↗ Session liée »), or answer otherwise (its open tickets set done, or removed from the lot with "remove"); then withdraw the question`)
+      else if (!withdrawQuestion(run, id, now)) missed.push(id)
+      continue
+    }
+    if (!was && id.length > WAIT_ID_MAX) {
+      refused.push(`"${clip(id, 40)}": an id has ${WAIT_ID_MAX} characters at most`)
+      continue
+    }
+    const kinds = WAIT_KINDS.filter(k => idText(x[k]) !== '')
+    if (kinds.length !== 1) {
+      refused.push(`"${id}": give exactly one of "phase", "group" or "ticket"`)
+      continue
+    }
+    const target = waitTargetOf(run, kinds[0]!, idText(x[kinds[0]!]))
+    if (typeof target === 'string') {
+      refused.push(`"${id}": ${target}`)
+      continue
+    }
+    const text = clip(str(x.text), TEXT_MAX)
+    if (text === '') {
+      refused.push(`"${id}": no "text"`)
+      continue
+    }
+    if (!was && open.length >= WAITING_MAX) {
+      refused.push(`"${id}": ${WAITING_MAX} open questions at most; withdraw an answered one first`)
+      continue
+    }
+    // Une question reposée passe après la trace de son retrait, même dans le même appel ou face à une
+    // trace datée d'une horloge en avance : la fusion ne l'efface pas.
+    const traceAt = readAnswered(run).find(t => t.id === id)?.at
+    const question: WaitingQuestion = { id, blocks: target, text, at: was?.at ?? Math.max(now, (traceAt ?? -1) + 1) }
+    run.waiting = was ? open.map(q => (q.id === id ? question : (q.raw as WaitingQuestion))) : [...open.map(q => q.raw as WaitingQuestion), question]
+    if (!was) log(run, now, '❓', `Question en attente (${id}) : bloque ${waitTargetLabel(run, readQuestion(question))}`, 'warn')
+  }
+  const open = readWaiting(run)
+  return [
+    ` · waiting: ${open.length} question(s) waiting for the user${open.length > 0 ? ` (${open.map(q => shownQuestionId(q.id)).join(', ')})` : ''}`,
+    refused.length > 0 ? ` · waiting refused: ${refused.join('; ')}; nothing recorded for these` : '',
+    missed.length > 0 ? ` · waiting: no open question ${missed.map(m => `"${m}"`).join(', ')}` : '',
+  ].join('')
+}
+
+/**
+ * Le parcours gardé par la fusion reçoit les questions des deux copies : l'union, une par id (la
+ * plus récente), moins celles qu'une trace de retrait, d'une copie ou de l'autre, a retirées après leur
+ * pose ; et l'union des traces, les plus récentes. Rendu tel quel quand rien ne change. `own` : pour
+ * un parcours dont l'auto est allumé au nom de cette discussion, les traces qu'elle a écrites, seules à retirer
+ * une question (une trace d'ailleurs, forgée ou rejouée, ne retire rien), et l'entrée ouverte d'ici d'une
+ * question l'emporte sur celle de même id de l'autre copie, même plus récente (une copie forgée ne la recible
+ * pas) ; les ids qui ne sont pas ouverts ici s'ajoutent. `isKeptLocal` : `kept` est la copie d'ici.
+ */
+const keepWaiting = (kept: Run, other: Run | undefined, own?: OwnTraces['answered'], isKeptLocal = true): Run => {
+  if (!other || (other.waiting === undefined && other.answered === undefined)) return kept
+  const merged = mergeTraces([...readAnswered(kept), ...readAnswered(other)])
+  // Une trace d'ici ne compte jamais plus tard que celle du parcours de même id, ramenée à maintenant à la lecture.
+  const unionAt = new Map(merged.map(t => [t.id, t.at]))
+  const traces = new Map((own ? mergeTraces(own) : merged).map(t => [t.id, { ...t, at: Math.min(t.at, unionAt.get(t.id) ?? t.at) }]))
+  const answered = merged.sort((p, q) => q.at - p.at).slice(0, ANSWERED_MAX)
+  // Chaque entrée des deux copies face à la trace de son id d'abord, puis une par id parmi celles qui restent :
+  // une entrée retirée ne cache jamais une autre du même id qui, elle, est encore ouverte. Avec `own`,
+  // l'entrée ouverte d'ici passe avant toute entrée de même id de l'autre copie.
+  const isOpen = (q: OpenQuestion) => !isAnsweredBy(q, traces.get(q.id))
+  const here = (isKeptLocal ? readEntries(kept) : readEntries(other)).filter(isOpen)
+  const there = (isKeptLocal ? readEntries(other) : readEntries(kept)).filter(isOpen)
+  const open = own ? [...here, ...there.filter(q => !here.some(l => l.id === q.id))] : [...readEntries(kept), ...readEntries(other)].filter(isOpen)
+  const waiting = oneById(open).map(q => q.raw as WaitingQuestion)
+  const isSame = JSON.stringify(waiting) === JSON.stringify(kept.waiting ?? []) && JSON.stringify(answered) === JSON.stringify(kept.answered ?? [])
+  if (isSame) return kept
+  return { ...kept, waiting, answered }
+}
+
+/**
+ * Les notifications d'un changement du board, au texte fixé, sans texte de question ni code : une
+ * question qui apparaît sur un parcours en auto (« Parcours <titre> : N question(s) t'attendent ») ;
+ * un auto qui s'éteint sans un geste de la personne ni la fin du parcours (« Parcours <titre> : auto
+ * en pause (<raison>) »). Rien hors auto, rien pour une question retirée ou redéclarée.
+ */
+export const autoNotices = (before: Board, after: Board): string[] => {
+  const out: string[] = []
+  for (const run of after.runs) {
+    const was = before.runs.find(r => r.id === run.id)
+    if (!was) continue
+    const why = autoOf(run)?.offWhy
+    if (isAutoOn(was) && !isAutoOn(run) && why !== undefined && !QUIET_STOPS.has(why)) out.push(autoPauseNotice(run.title, why))
+    const known = new Set(readWaiting(was).map(q => q.id))
+    const open = readWaiting(run)
+    if (isAutoOn(run) && open.some(q => !known.has(q.id))) out.push(autoQuestionsNotice(run.title, open.length))
+  }
+  return out
+}
+
+/**
+ * Le texte fixé de la notification d'une question bloquante, le seul : le mod (`$.ui.notify`) et la
+ * consigne de Claude (`PushNotification`) le tirent d'ici, le titre neutralisé de la même façon.
+ */
+export const autoQuestionsNotice = (title: string, count: number | string): string => `Parcours ${neutralInPrompt(title)} : ${count} question(s) t'attendent`
+
+/** Le texte fixé de la notification d'une pause de l'auto. */
+export const autoPauseNotice = (title: string, why: string): string => `Parcours ${neutralInPrompt(title)} : auto en pause (${why})`
+
+// ─── Décidé sans toi : plafond et origine ─────────────────────────────────
+//
+// Une seule règle coupe les choix, partout où une liste de choix s'écrit (`keepChoices`). Invariant :
+// en auto, aucun choix déclaré n'est coupé avant la validation du rapport. Un parcours qui a été en
+// auto (son état auto est là, même éteint ou abîmé) ne coupe rien avant « ✓ Valider le rapport » ; au
+// passage des 200 choix, son auto se met en pause ; au-delà de 1 000, un nouveau choix déclaré ici est
+// refusé, jamais un ancien coupé (les choix relayés se gardent tous, le relais les borne à 200 par
+// session) ; une fois le rapport validé, il garde les 200 plus récents. Hors auto, les 30 plus récents.
+
+/** Les choix gardés d'un parcours qui a été en auto, une fois son rapport validé ; le seuil de la pause de l'auto. */
+export const AUTO_CHOICES_MAX = LIMITS.autoDecided
+
+/** Les choix listés au plus, dans la carte de la phase et les faits du compte rendu ; au-delà, comptés. */
+export const CHOICES_LISTED = 40
+
+/** Avant la validation du rapport, au-delà, un nouveau choix déclaré ici est refusé avec un message, jamais un ancien coupé (les choix relayés se gardent tous). */
+export const CHOICES_CEILING = 1000
+
+/** Les origines d'un choix, telles que le rapport et le fichier des choix les disent. */
+export const ORIGIN_LABELS: Record<DecisionOrigin, string> = {
+  recommendation: 'reco prise',
+  'skipped-validation': 'validation sautée',
+  'linked-session': 'choix de session liée',
+}
+
+/** L'origine relue d'un choix : une des trois, sinon aucune. */
+export const originOf = (value: unknown): DecisionOrigin | undefined =>
+  typeof value === 'string' && Object.prototype.hasOwnProperty.call(ORIGIN_LABELS, value) ? (value as DecisionOrigin) : undefined
+
+/** Le parcours a été en auto : son état auto est là, même éteint, et même abîmé (dans le doute, rien n'est coupé). */
+const hasBeenAuto = (run: Run): boolean => run.auto !== undefined
+
+/**
+ * Le compte rendu du parcours est validé par la personne (« ✓ Valider le rapport ») : sa marque, que
+ * seule la validation pose (une clôture ou une suite proposée finit aussi la phase, sans elle), égale
+ * à la fin de la dernière phase de compte rendu (rouverte, puis finie autrement, son rapport est à
+ * valider de nouveau).
+ */
+const isReportValidated = (run: Run): boolean => {
+  const report = run.phases.filter(p => p.skill === 'compte-rendu').at(-1)
+  // La marque est la fin même de la phase que « ✓ Valider le rapport » a finie : rouverte, puis finie
+  // autrement (une clôture), sa fin change et la marque ne vaut plus, quelle que soit l'horloge.
+  return isTime(run.reportValidatedAt) && report?.status === 'done' && report.finishedAt === run.reportValidatedAt
+}
+
+/**
+ * La place des choix d'un parcours, la règle de toutes les coupes : les 30 plus récents hors auto ;
+ * pour un parcours qui a été en auto, aucune coupe avant la validation du rapport (null), les 200 plus
+ * récents ensuite.
+ */
+const choiceRoom = (run: Run): number | null => (!hasBeenAuto(run) ? LIMITS.decided : isReportValidated(run) ? AUTO_CHOICES_MAX : null)
+
+/** Une liste de choix coupée à sa place (les plus récents), ou entière quand rien ne se coupe. */
+const keepChoices = <T,>(list: readonly T[], room: number | null): T[] => (room === null ? [...list] : list.slice(-room))
+
+/** Un nouveau choix ne tient plus : le parcours, qui ne coupe rien, en a déjà 1 000. Rend le refus, ou ''. */
+const choiceRefusal = (run: Run): string =>
+  choiceRoom(run) === null && (run.decided ?? []).length >= CHOICES_CEILING
+    ? `this workflow keeps ${CHOICES_CEILING} choices at most until its report is validated, and cuts none: not recorded; put it in the report yourself`
+    : ''
+
+/**
+ * Au passage des 200 choix (relayés compris), l'auto d'un parcours allumé se met en pause, au lieu
+ * d'en couper. Au passage seulement : rallumé ensuite par deux clics, il ne retombe pas à chaque appel.
+ */
+const pauseAtChoiceLimit = (run: Run, before: number, after: number, now: number) => {
+  if (isAutoOn(run) && before < AUTO_CHOICES_MAX && after >= AUTO_CHOICES_MAX) stopAuto(run, now, AUTO_STOPS.limit)
+}
+
+/** Deux versions d'un même choix (même texte) : la plus ancienne date, et ce que l'une ou l'autre a appris (relu, retiré, origine). */
+const mergeChoice = (a: SoloDecision, b: SoloDecision): SoloDecision => {
+  const withdrawn = a.withdrawnAt !== undefined ? a : b.withdrawnAt !== undefined ? b : undefined
+  const at = isTime(a.at) && isTime(b.at) ? Math.min(a.at, b.at) : isTime(a.at) ? a.at : b.at
+  const seenAt = a.seenAt ?? b.seenAt
+  const origin = originOf(a.origin) ?? originOf(b.origin)
+  const why = a.why ?? b.why
+  return {
+    ...a,
+    at,
+    ...(why !== undefined ? { why } : {}),
+    ...(seenAt !== undefined ? { seenAt } : {}),
+    ...(origin !== undefined ? { origin } : { origin: undefined }),
+    ...(withdrawn ? { withdrawnAt: withdrawn.withdrawnAt, ...(withdrawn.withdrawnWhy !== undefined ? { withdrawnWhy: withdrawn.withdrawnWhy } : {}) } : {}),
+  }
+}
+
+/**
+ * La fusion des choix de deux copies d'un parcours qui a été en auto (l'une ou l'autre) : l'union, un
+ * par texte et date (le même choix porte la même date dans les deux copies ; un choix remis en vigueur
+ * sous le texte d'un choix retiré en est un autre), chacun avec ce que l'une ou l'autre copie a appris ;
+ * une entrée hors forme est gardée telle quelle. Puis la règle de coupe (aucune avant le rapport). Hors auto, la copie gardée, comme
+ * avant. Rendu tel quel quand rien ne change.
+ */
+const keepDecided = (kept: Run, other: Run | undefined): Run => {
+  if (!other || !(hasBeenAuto(kept) || hasBeenAuto(other))) return kept
+  const theirs = Array.isArray(other.decided) ? other.decided : []
+  if (theirs.length === 0) return kept
+  const mine = Array.isArray(kept.decided) ? kept.decided : []
+  const byKey = new Map<string, SoloDecision>()
+  for (const d of [...mine, ...theirs]) {
+    const isSound = d !== null && typeof d === 'object' && typeof d.what === 'string'
+    const key = isSound ? `what:${d.what}|at:${String(d.at)}` : `raw:${JSON.stringify(d)}`
+    const was = byKey.get(key)
+    byKey.set(key, was && isSound ? mergeChoice(was, d) : (was ?? d))
+  }
+  const rank = (d: SoloDecision) => (d !== null && typeof d === 'object' && isTime(d.at) ? d.at : Number.POSITIVE_INFINITY)
+  const union = [...byKey.values()].sort((x, y) => rank(x) - rank(y))
+  const decided = keepChoices(union, choiceRoom(kept))
+  return JSON.stringify(decided) === JSON.stringify(kept.decided ?? []) ? kept : { ...kept, decided }
+}
+
 // ─── Chargement ───────────────────────────────────────────────────────────
 
 /**
@@ -4766,7 +6301,7 @@ export const detachOnLoad = (board: Board, now: number, session: string): Board 
   b.session = session
   // Propre à la discussion qui l'a déclaré : une copie lue du stockage ne le garde pas.
   delete b.delegate
-  b.deleted = b.deleted ?? []
+  b.deleted = soundTombstones(b.deleted, now)
   b.runs = b.runs.map(upgradeRun)
   for (const run of b.runs) {
     if (run.status === 'active' && (!run.owner || run.owner === session || now - run.updatedAt > ORPHAN_MS)) shelve(run, now)
@@ -4777,11 +6312,21 @@ export const detachOnLoad = (board: Board, now: number, session: string): Board 
 /**
  * Fusionne la copie de cette discussion avec le stockage partagé. Pour chaque parcours, la
  * version la plus récente l'emporte, sauf le parcours actif ici, qui garde la version locale
- * tant qu'une autre discussion ne l'a pas repris. Les suppressions (traces) gagnent toujours.
+ * tant qu'une autre discussion ne l'a pas repris. Une trace de suppression bien formée l'emporte sur
+ * toute copie qui n'est pas plus récente qu'elle ; une trace mal formée ne s'applique jamais, et une
+ * trace future est tombée à la lecture (`clampFuture`).
+ * Certains champs se fusionnent à part, quelle que soit la copie gardée (`keepRun`) : les fermetures
+ * des sessions liées, qui ne reculent jamais, l'état auto, date par date, les questions bloquantes,
+ * une par une, retraits tracés, et, pour un parcours qui a été en auto, les choix « décidé sans toi »,
+ * un par un. `own` : les traces de retrait que cette discussion a écrites, pour chaque parcours dont
+ * l'auto est allumé en son nom (`isAutoLitBy`) : seules elles y retirent une marque en attente ou une
+ * question (`keepRun`) ; les autres parcours reçoivent l'union des traces.
  * L'écriture qui suit n'est pas atomique entre discussions : la fusion suivante rattrape.
  */
-export const mergeBoards = (local: Board, stored: Board): Board => {
-  const deleted = [...(local.deleted ?? []), ...(stored.deleted ?? [])]
+export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces | readonly OwnTraces[] | null): Board => {
+  const own: readonly OwnTraces[] = ownTraces == null ? [] : Array.isArray(ownTraces) ? ownTraces : [ownTraces as OwnTraces]
+  // Seules des traces bien formées s'appliquent (`soundTombstones`) ; une trace future est déjà tombée à la lecture (`clampFuture`).
+  const deleted = [...soundTombstones(local.deleted), ...soundTombstones(stored.deleted)]
     .sort((x, y) => y.at - x.at)
     .filter((t, i, all) => all.findIndex(o => o.id === t.id) === i)
     .slice(0, LIMITS.tombstones)
@@ -4803,11 +6348,11 @@ export const mergeBoards = (local: Board, stored: Board): Board => {
         other !== undefined && other.status === 'active' && other.owner !== undefined && other.owner !== local.session && other.updatedAt > run.updatedAt
       if (isTakenOver) {
         activeId = null
-        byId.set(run.id, keepClosings(other, run))
-      } else byId.set(run.id, keepClosings(run, other))
+        byId.set(run.id, keepRun(other, run, own, false))
+      } else byId.set(run.id, keepRun(run, other, own))
       continue
     }
-    byId.set(run.id, !other || run.updatedAt >= other.updatedAt ? keepClosings(run, other) : keepClosings(other, run))
+    byId.set(run.id, !other || run.updatedAt >= other.updatedAt ? keepRun(run, other, own) : keepRun(other, run, own, false))
   }
   if (activeId !== null && !byId.has(activeId)) activeId = null
   const merged: Board = {
@@ -4824,7 +6369,10 @@ export const mergeBoards = (local: Board, stored: Board): Board => {
 export const parkActive = (board: Board, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
-  shelve(activeRun(b)!, now)
+  const run = activeRun(b)!
+  // La discussion qui porte le parcours se ferme : son auto s'éteint ; un /clear n'arrive pas ici.
+  stopAuto(run, now, AUTO_STOPS.ended)
+  shelve(run, now)
   b.activeId = null
   return { board: b, fx: noFx() }
 }
@@ -4844,6 +6392,7 @@ export const setAsideActive = (board: Board, now: number): Outcome => {
   run.owner = undefined
   run.asideAt = now
   run.updatedAt = now
+  stopAuto(run, now, AUTO_STOPS.aside)
   b.activeId = null
   log(run, now, '‖', 'Parcours mis de côté', 'info')
   return { board: b, fx: { ...noFx(), toasts: [`‖ Mis de côté : ${run.title}`] } }
@@ -4860,6 +6409,7 @@ export const finishActive = (board: Board, now: number): Outcome => {
   run.status = 'done'
   run.finishedAt = now
   run.updatedAt = now
+  stopAuto(run, now, AUTO_STOPS.closed)
   b.activeId = null
   log(run, now, '★', 'Parcours clos', 'ok')
   return { board: b, fx: { ...noFx(), toasts: [`★ Parcours clos : ${run.title}`] } }
@@ -4935,6 +6485,8 @@ export const validateReport = (board: Board, now: number): Outcome => {
   const run = activeRun(b)!
   const phase = run.phases[at0]!
   finishPhase(phase, now)
+  // La fin même de la phase (finishPhase vient de la poser à `now`) : la validation se lit par égalité.
+  run.reportValidatedAt = now
   log(run, now, '✓', 'Compte rendu validé', 'ok')
   // Les choix faits sans la personne sont dans le rapport : les valider, c'est les avoir relus.
   if (run.decided) run.decided = run.decided.map(d => (d.seenAt === undefined ? { ...d, seenAt: now } : d))
@@ -4946,10 +6498,10 @@ export const validateReport = (board: Board, now: number): Outcome => {
  * Ce que le tableau de bord sait du parcours, donné à Claude quand le compte rendu se charge :
  * il part de ces faits et les complète par git et le tracker.
  */
-export const reportFacts = (run: Run, failedAgents = 0): string[] => {
-  const lines = [`- Run "${run.title}", started ${isoMinute(run.startedAt)} UTC (use it for git log --since).`]
+export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | null = null): string[] => {
+  const lines = [`- Run ${JSON.stringify(shownInNote(run.title))}, started ${isoMinute(run.startedAt)} UTC (use it for git log --since).`]
   const ticket = (t: Ticket) =>
-    `${t.name} [${t.id}]: ${t.status}${t.why ? ` (waits for: ${t.why})` : ''}${t.startedAt !== undefined && t.finishedAt !== undefined ? `, ${Math.round((t.finishedAt - t.startedAt) / 60_000)} min` : ''}`
+    `${shownInNote(t.name)} [${shownInNote(t.id)}]: ${shownInNote(t.status)}${t.why ? ` (waits for: ${shownInNote(t.why)})` : ''}${t.startedAt !== undefined && t.finishedAt !== undefined ? `, ${Math.round((t.finishedAt - t.startedAt) / 60_000)} min` : ''}`
   if (run.tickets.length > 0) lines.push(`- Tickets of the lot: ${run.tickets.map(ticket).join('; ')}.`)
   const groups = run.groups ?? []
   if (groups.length > 0) {
@@ -4970,26 +6522,34 @@ export const reportFacts = (run: Run, failedAgents = 0): string[] => {
   const tracking = run.artifacts.filter(a => a.kind === 'tracking')
   lines.push(
     tracking.length > 0
-      ? `- Tracking files of this run (one per discussion; read them all, they hold what the other discussions did, found and decided): ${tracking.map(a => `${a.path}${a.detail ? ` (${a.detail})` : ''}`).join('; ')}. Also look in travail/tasks/ for others changed since the run started (git log).`
+      ? `- Tracking files of this run (one per discussion; read them all, they hold what the other discussions did, found and decided): ${tracking.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}. Also look in travail/tasks/ for others changed since the run started (git log).`
       : '- Tracking files: look in travail/tasks/ for every file changed since the run started (git log): one per discussion, they hold what the other discussions did, found and decided.',
   )
   const found = run.found ?? []
-  if (found.length > 0) lines.push(`- Found on the way (tracker tasks created during the run, outside the lot): ${found.map(f => `${f.name} [${f.id}]: ${f.status}${f.why ? ` (${f.why})` : ''}${f.isForUser ? ', assigned to the user' : ''}`).join('; ')}.`)
-  const decided = inForce(run.decided ?? [])
+  if (found.length > 0) lines.push(`- Found on the way (tracker tasks created during the run, outside the lot): ${found.map(f => `${shownInNote(f.name)} [${shownInNote(f.id)}]: ${shownInNote(f.status)}${f.why ? ` (${shownInNote(f.why)})` : ''}${f.isForUser ? ', assigned to the user' : ''}`).join('; ')}.`)
+  const all = inForce(run.decided ?? [])
+  // Un parcours en auto en déclare des centaines : les 40 plus récents ici, tous dans le fichier des choix.
+  const decided = all.slice(-CHOICES_LISTED)
   const withdrawn = (run.decided ?? []).filter(d => d.withdrawnAt !== undefined)
+  if (all.length > decided.length) {
+    const counts = Object.entries(ORIGIN_LABELS).map(([key, label]) => `${all.filter(d => originOf(d.origin) === key).length} « ${label} »`)
+    lines.push(
+      `- ${all.length} choices reported as made without the user (${counts.join(', ')}, ${all.filter(d => !originOf(d.origin)).length} without origin): only the ${decided.length} latest are listed below; ${decidedFile ? `read them all in the file of declared choices, ${decidedFile}` : 'the dashboard (⚑ Décidé sans toi) shows them all'}.`,
+    )
+  }
   lines.push(
     decided.length > 0
-      ? `- Choices reported as made without the user: ${decided.map(d => `${d.what}${d.why ? ` (because ${d.why})` : ''}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list.`
+      ? `- Choices reported as made without the user: ${decided.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}${originOf(d.origin) ? ` [origin: ${ORIGIN_LABELS[originOf(d.origin)!]}]` : ''}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list.${all.some(d => originOf(d.origin)) ? ' Some have an origin: group « Décidé sans toi » by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de session liée »), then the others under « Autres ».' : ''}`
       : '- No choice was reported as made without the user: check the work for any, and put them in « Décidé sans toi ».',
   )
-  if (withdrawn.length > 0) lines.push(`- Choices withdrawn during the run (no longer in force; say so apart in « Décidé sans toi », with why): ${withdrawn.map(d => `${d.what}${d.withdrawnWhy ? ` (${d.withdrawnWhy})` : ''}`).join('; ')}.`)
+  if (withdrawn.length > 0) lines.push(`- Choices withdrawn during the run (no longer in force; say so apart in « Décidé sans toi », with why): ${withdrawn.map(d => `${shownInNote(d.what)}${d.withdrawnWhy ? ` (${shownInNote(d.withdrawnWhy)})` : ''}`).join('; ')}.`)
   const plans = run.artifacts.filter(a => a.kind === 'plan')
-  if (plans.length > 0) lines.push(`- Plans written: ${plans.map(a => `${a.path}${a.detail ? ` (${a.detail})` : ''}`).join('; ')}.`)
+  if (plans.length > 0) lines.push(`- Plans written: ${plans.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}.`)
   const tests = run.tests.filter(t => t.kind === 'test')
   if (tests.length > 0) lines.push(`- Test runs seen: ${tests.length}, ${tests.filter(t => !t.ok).length} red; last one ${tests.at(-1)!.ok ? 'green' : 'RED'}.`)
   if (failedAgents > 0) lines.push(`- Subagents that failed: ${failedAgents}.`)
   const warnings = run.log.filter(l => l.tone === 'warn' || l.tone === 'error').slice(0, 8)
-  if (warnings.length > 0) lines.push(`- Warnings in the dashboard log: ${warnings.map(l => l.text).join('; ')}.`)
+  if (warnings.length > 0) lines.push(`- Warnings in the dashboard log: ${warnings.map(l => shownInNote(l.text)).join('; ')}.`)
   return lines
 }
 
@@ -5028,6 +6588,7 @@ export const archiveRun = (board: Board, id: string, now: number): Outcome => {
   }
   run.archivedAt = now
   run.updatedAt = now
+  stopAuto(run, now, AUTO_STOPS.archived)
   log(run, now, '▣', 'Parcours archivé', 'info')
   return { board: b, fx: { ...noFx(), toasts: [`▣ Archivé : ${run.title}`] } }
 }
@@ -5098,7 +6659,7 @@ export const dropRun = (board: Board, id: string, now: number): Outcome => {
   if (!board.runs.some(r => r.id === id)) return null
   const b = clone(board)
   b.runs = b.runs.filter(r => r.id !== id)
-  b.deleted = [{ id, at: now }, ...(b.deleted ?? []).filter(t => t.id !== id)].slice(0, LIMITS.tombstones)
+  b.deleted = [{ id, at: now }, ...soundTombstones(b.deleted).filter(t => t.id !== id)].slice(0, LIMITS.tombstones)
   if (b.activeId === id) b.activeId = null
   return { board: b, fx: noFx() }
 }

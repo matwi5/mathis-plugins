@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { closingProcedure, isGroupId, isSafeBranch, isSafeId, isWorktreePath, linkedPrefix, neutralInPrompt, reopenText, shellQuote } from '../hooks/closing.ts'
-import { activeRun, applyRelay, applyReport, decidedFileText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, reopenText, shellQuote } from '../hooks/closing.ts'
+import { AUTO_STOPS, activeRun, applyRelay, applyReport, autoStateOf, decidedFileText, emptyBoard, groupFailStop, newRun, startLinkedGroups } from '../hooks/model.ts'
 import type { Board, Closing } from '../types'
 import { CORPUS, ch } from './corpus.mjs'
 
@@ -87,6 +87,11 @@ test('isGroupId, la forme d’un id de groupe et d’un id de piste nouveau, ref
   expect(passing(token => isGroupId(`A${token}1`))).toEqual([])
 })
 
+test('isQuestionIdForm, la forme d’un id de question cité tel quel, refuse chaque entrée du corpus', () => {
+  expect(isQuestionIdForm('sans-suite:review:A#1+B#1')).toBe(true)
+  expect(passing(token => isQuestionIdForm(`relance:A${token}#2`))).toEqual([])
+})
+
 /** Les guillemets « » et leurs sosies en chevron (≪ ≫ n'est pas une ponctuation pour Unicode). */
 const QUOTE_SOSIES = new Set([0xab, 0xbb, 0x2039, 0x203a, 0x226a, 0x226b, 0x300a, 0x300b, 0x3008, 0x3009, 0x276e, 0x276f, 0x27e8, 0x27e9, 0x27ea, 0x27eb])
 
@@ -120,6 +125,20 @@ test('neutralInPrompt ne garde, d’aucune entrée du corpus ni crochet ou guill
   expect(leaks).toEqual([])
   // Le texte autour reste lisible.
   expect(neutralInPrompt('Rétro · « a » [b]')).toBe('Rétro · “ a ” (b)')
+})
+
+/** Ce qu'une valeur recopiée dans une consigne de skill ne garde jamais : une fin de ligne, un contrôle, un caractère de format ou un invisible. */
+const breaksALine = (c: string): boolean => /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/u.test(c)
+
+test('neutralLine ne garde de quoi ouvrir une ligne pour aucun point de code, ni pour aucune entrée du corpus', () => {
+  const leaks: string[] = []
+  for (const code of [...Array.from({ length: 0x30000 }, (_, i) => i), ...Array.from({ length: 0x1000 }, (_, i) => 0xe0000 + i)]) {
+    if ([...neutralLine(`a${String.fromCodePoint(code)}b`)].some(breaksALine)) leaks.push(`U+${code.toString(16).toUpperCase().padStart(4, '0')}`)
+  }
+  expect(leaks).toEqual([])
+  expect(entries.filter(([, token]) => [...neutralLine(`avant ${token} après`)].some(breaksALine)).map(([name]) => name)).toEqual([])
+  // Le texte autour reste lisible : ses guillemets et ses « · » restent.
+  expect(neutralLine(`Rétro · « a » [b]${ch(0xa)}suite`)).toBe('Rétro · « a » [b] ⏎ suite')
 })
 
 test('linkedPrefix, le début d’un titre de session liée cité entre « » dans le prompt, ne garde rien qui ferme cette citation', () => {
@@ -174,4 +193,24 @@ test('shellQuote pour PowerShell : une valeur qui porte une apostrophe, droite o
   expect(leaks).toEqual([])
   // Pour POSIX, rien ne change : l'apostrophe typographique n'y cite rien.
   expect(shellQuote(`l${ch(0x2019)}outil 'x'`)).toBe(`'l${ch(0x2019)}outil '\\''x'\\'''`)
+})
+
+test('la raison d’une pause du mode auto, relue d’un fichier, n’affiche qu’une raison connue ou « raison inconnue », pour chaque entrée du corpus', () => {
+  const known = [...Object.values(AUTO_STOPS), 'raison inconnue']
+  const run = newRun('implement', 1_000, 'Boutique')
+  const board: Board = { ...emptyBoard('', 'p'), session: 'sa', deleted: [], runs: [run], activeId: run.id }
+  const shown = (offWhy: string) => {
+    const view = autoStateOf({ ...run, auto: { onAt: 1_000, onBy: 'sa', offAt: 2_000, offWhy } }, board, 'sa')
+    return view.kind === 'paused' ? view.why : ''
+  }
+  expect(shown('discussion fermée')).toBe('discussion fermée')
+  // Une raison connue est un texte fixé, sans aucune entrée du corpus : seule une raison hors liste fuirait.
+  expect(passing(token => !known.includes(shown(`discussion${token}fermée`)))).toEqual([])
+  // « deuxième échec du groupe <id> » : seulement avec un id de groupe en forme (le garde d'`isGroupId`), sinon « raison inconnue ».
+  expect(shown(groupFailStop('A2'))).toBe('deuxième échec du groupe A2')
+  const prefix = groupFailStop('')
+  expect(passing(token => {
+    const why = shown(groupFailStop(`A${token}`))
+    return why !== 'raison inconnue' && !(why.startsWith(prefix) && isGroupId(why.slice(prefix.length)))
+  })).toEqual([])
 })

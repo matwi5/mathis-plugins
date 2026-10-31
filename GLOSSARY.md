@@ -91,6 +91,18 @@ _Avoid_: bandeau du haut, barre
 Le bouton qui propose la prochaine action à faire, le même dans le panneau d'un mod et dans son bandeau.
 _Avoid_: bouton Ensuite, bouton suivant
 
+**Mode auto** :
+L'état d'un parcours flow-board que l'utilisateur a allumé par deux clics (« ⚡ Auto », puis « Confirmer ») : le parcours avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour ce parcours seulement, depuis la discussion du clic ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto »), et le mod le met en pause dans certains cas (une lecture ratée, plus rien qui puisse avancer sans l'utilisateur).
+_Avoid_: pilote automatique, mode autonome
+
+**Question bloquante** :
+Une décision qui reste à l'utilisateur même en mode auto, déclarée avec ce qu'elle bloque (une phase, un groupe ou un ticket) : seule cette partie du parcours l'attend, le reste avance. Elle se retire une fois répondue.
+_Avoid_: question en attente, blocage
+
+**Validation sautée** :
+Une validation à boutons (accord du cadrage, spec, découpage, plan, écritures Asana du parcours) que le mode auto ne demande pas, déclarée dans « Décidé sans toi » avec le chemin ou le lien du texte validé, pour que l'utilisateur la relise au rapport.
+_Avoid_: validation automatique, accord implicite
+
 ## Lots de tickets
 
 **Groupe** :
@@ -134,7 +146,7 @@ Une tâche à la consigne explicite, dont le résultat se vérifie tout de suite
 _Avoid_: tâche simple
 
 **Session autonome** :
-Une session liée de groupe lancée à l'effort le plus haut (xhigh), qui tranche elle-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur. Elle sert aux tâches de jugement.
+Une session liée de groupe qui tranche elle-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur : celle lancée à l'effort le plus haut (xhigh), pour les tâches de jugement, et, quel que soit son effort, celle d'un parcours en mode auto.
 _Avoid_: mode xhigh, session xhigh
 
 **Relecture du fond et de la forme** :

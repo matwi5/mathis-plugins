@@ -4,6 +4,30 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.74.0 — 2026-10-31
+
+Mode auto d'un parcours : allumé en deux clics, il enchaîne cadrage, spec, tickets, groupes et revues jusqu'au rapport, et s'arrête sur les questions qui t'attendent.
+
+### Ajouté
+- **Mode auto** : bouton « ⚡ Auto » de l'onglet du parcours (deux clics pour l'allumer, un pour le couper), bandeau « ⚡ Auto · en cours », « attend ta réponse (N) » ou « en pause : <raison> ». L'état est propre à chaque parcours et se fusionne date par date : une copie en retard, une fusion ou une lecture ratée ne le rallument jamais. La date du « Confirmer » se garde aussi dans le stockage du mod, liée à la discussion et au processus : après un redémarrage, l'auto se met en pause « allumage non confirmé ici ». Éteint par la mise de côté, la clôture, l'archivage, la fin du parcours ou de la discussion, le rapport prêt ; pause déduite après un `/clear`.
+- **Envoi de la suite** : à la fin d'un tour, la phase suivante (`/to-spec`, `/to-tickets`, `/implement`, `/flow-board:compte-rendu`) part seule par `$.command.run`, une seule fois : sa marque est écrite dans le fichier de parcours avant l'envoi, jamais coupée, fusionnée par union. Un envoi resté sans suite devient une question avec « ↻ Renvoyer ». Pauses « quota atteint », « écriture du parcours ratée », « plus rien ne peut avancer sans toi », « deuxième échec du groupe <id> », « limite de 200 choix atteinte ».
+- **Groupes en auto** : la vague prête part par le texte de « ⇉ en parallèle » ou « ↗ Session liée », la suivante une fois la vague en cours close ; revue du groupe et revue de sécurité conseillée au retour, une fois chacune par envoi ; un renvoi unique, puis une question ; le compte rendu une fois le lot clos. Les sessions liées d'un parcours en auto sont autonomes à tout effort, jamais en xhigh.
+- **Questions bloquantes** (`waiting` de l'outil) : listées avec ce qu'elles bloquent (une phase, un groupe ou un ticket), 50 ouvertes au plus, fusionnées une par une avec les traces de leur retrait (100) ; notification locale au texte fixé, sans le texte de la question.
+- **Origine des choix « décidé sans toi »** (`origin`) : reco prise, validation sautée, choix de session liée ; le compte rendu les regroupe par origine. Un parcours qui a été en auto ne coupe aucun choix avant la validation du rapport.
+- **Consignes du mode auto** : un bloc à la fin de la consigne de chaque skill d'un parcours en auto (recos prises et validations sautées déclarées, six catégories en questions bloquantes, `PushNotification` au texte fixé).
+- **Procédure des sessions liées** : une liste de tâches, une par ticket, plus la revue du groupe, la sécurité et le compte rendu.
+
+### Modifié
+- **Revues d'un groupe renvoyé** : un groupe déjà relu qui part en session liée perd cette revue et son avis de sécurité (cités au journal) et demande les siens ; un avis ou un `reviewed` arrivés pendant cet envoi sont refusés jusqu'à son retour. Les boutons « ◆ Revue du groupe » et « ⛨ Revue de sécurité » posent la marque de l'auto. Un `/code-review` lancé ici ne marque relus que les groupes finis ici.
+
+### Corrigé
+- **Valeurs relues du fichier de parcours** : les ids de parcours, de groupe et de session, la branche par défaut, les titres, la raison d'une fermeture et les ids de questions n'entrent plus bruts dans les textes soumis ni dans les réponses de l'outil : forme vérifiée, échappés ou neutralisés ; hors forme, rien ne part.
+- **Traces de retrait** : pour un parcours dont l'auto est allumé d'une discussion, seules les traces « ↻ Renvoyer » et « répondue » qu'elle a écrites retirent une marque ou une question, et son entrée d'une question l'emporte : une copie forgée ou rejouée ne fait rien repartir ni ne libère une question.
+- **Trace de suppression** : mal formée ou datée à plus d'une minute dans le futur, elle n'efface plus un parcours vivant.
+- **Lecture ratée du fichier de parcours** : elle éteint l'auto au lieu d'écraser le fichier avec une copie où il est allumé.
+
+---
+
 ## 0.73.0 — 2026-10-31
 
 Les pistes d'une rétro se découpent en tickets depuis le tableau de bord ; le relais garde ce qu'envoie une session liée ; durcissement des revues, des ids et de la fermeture.

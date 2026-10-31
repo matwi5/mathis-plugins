@@ -792,7 +792,10 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   const text = filled.at(-1)!
   expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) du parcours « Boutique » par sa session liée/)
   expect(text).toContain("« Boutique > Groupe E · » (« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0) ou « Groupe E · »")
-  expect(text).toMatch(/git merge --ff-only /)
+  // La branche par défaut du distant n'est pas mesurée ici : la demande la nomme, sans commande (une
+  // branche en forme entre dans « git merge --ff-only », valeurs-relues.test.ts).
+  expect(text).toContain('1) remettre sa branche au niveau de la branche principale par une avance rapide, pour que les correctifs portent sur le code actuel ;')
+  expect(text).not.toContain('git merge --ff-only')
   // e1 ne dit pas s'il touche une zone sensible : dans le doute, le groupe est sensible, sa revue part sans --fix.
   expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans sous-agent qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un sous-agent relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high (outil Skill « code-review », arguments « high <plage> consignes : <chemin> ») sur les seuls commits du groupe')
   expect(text).not.toContain('high --fix')

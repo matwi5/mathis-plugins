@@ -2,6 +2,11 @@
 
 Reads the JSON payload Claude Code pipes on stdin and prints a compact
 one-line status: dir | model (effort) | ctx % | 5h % | wk %.
+
+The 5-hour quota shows only from 1 % used. The Ultra plan has no 5-hour limit:
+Claude Code then omits the window or reports it near 0 %, and neither the payload nor
+~/.claude.json names an Ultra plan (checked on Claude Code 2.1.316). Pro and
+Max, which keep the limit, see it again as soon as it reaches 1 %.
 """
 
 import json
@@ -109,10 +114,10 @@ def main():
         f"\033[1;36m{dir_name}{RESET}" if dir_name else "",
         f"\033[35m{model}{RESET}" if model else "",
         label("🧠", ctx, step=5),
-        label("⏱️", five, step=10),
+        label("⏱️", five, step=10) if five is not None and five >= 1 else "",
         label("📅", week, step=10),
     ]
-    print(" | ".join(parts))
+    print(" | ".join(p for p in parts if p))
 
 
 if __name__ == "__main__":

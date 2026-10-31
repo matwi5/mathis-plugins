@@ -83,6 +83,7 @@ const groups = where => {
   board = model.startLinkedGroups(board, ['A'], T0 + 2).board
   const a = model.activeRun(board).groups.find(g => g.id === 'A')
   a.sends = 2
+  a.isReset = true
   if (where === 'linked') a.linked = structuredClone(GROUP_LINK)
   else {
     delete a.linked
@@ -97,23 +98,28 @@ test('renvoi du plan des groupes : le lien d’un groupe confié ou rendu garde 
     const out = model.applyReport(groups(where), { groups: PLAN }, T0 + 100).board
     assert.deepEqual(lost('GroupLink', groupA(out)[where]), [], where)
     assert.equal(groupA(out).sends, 2)
+    assert.equal(groupA(out).isReset, true, `${where} : la marque de la remise à zéro`)
   }
   // Omis du plan renvoyé, un groupe déjà confié reste, avec son lien et son compteur.
   const omitted = model.applyReport(groups('delegated'), { groups: [{ id: 'B', tickets: ['t1', 't2'] }, { id: 'C', tickets: [] }] }, T0 + 100).board
   assert.deepEqual(lost('GroupLink', groupA(omitted)?.delegated), [])
   assert.equal(groupA(omitted).sends, 2)
+  assert.equal(groupA(omitted).isReset, true)
 })
 
 test('retrait d’un ticket : le lien du groupe garde chaque champ', { skip: SKIP }, () => {
   for (const where of ['linked', 'delegated']) {
     const out = model.applyReport(groups(where), { remove: ['t2'] }, T0 + 100).board
     assert.deepEqual(lost('GroupLink', groupA(out)[where]), [], where)
+    assert.equal(groupA(out).isReset, true, where)
   }
 })
 
-test('retour d’un groupe : le lien confié devient le lien rendu avec chaque champ', { skip: SKIP }, () => {
+test('retour d’un groupe : le lien confié devient le lien rendu avec chaque champ ; la marque de la remise à zéro s’efface', { skip: SKIP }, () => {
   const out = model.applyReport(groups('linked'), { returned: ['A'], set: [{ id: 't1', status: 'done' }] }, T0 + 100).board
   assert.deepEqual(lost('GroupLink', groupA(out).delegated), [])
+  // `isReset` du groupe ne vaut que jusqu'au retour d'un envoi.
+  assert.equal(groupA(out).isReset, undefined)
 })
 
 test('fusion de deux copies : la plus récente garde chaque champ, la fermeture de l’autre revient', { skip: SKIP }, () => {
@@ -125,6 +131,7 @@ test('fusion de deux copies : la plus récente garde chaque champ, la fermeture 
   model.activeRun(local).updatedAt = 99_000
   const merged = model.mergeBoards(local, stored)
   assert.deepEqual(lost('GroupLink', groupA(merged).delegated), [])
+  assert.equal(groupA(merged).isReset, true)
 })
 
 // ─── Les pistes d'une phase ──────────────────────────────────────────────

@@ -16,11 +16,15 @@ const repoFile = file => (existsSync(at(`../../${file}`)) ? read(`../../${file}`
 
 const SURFACES = {
   'config/rules/flow-board.md': repoFile('config/rules/flow-board.md'),
+  'config/rules/general.md': repoFile('config/rules/general.md'),
+  'config/rules/asana-board.md': repoFile('config/rules/asana-board.md'),
+  'GLOSSARY.md': repoFile('GLOSSARY.md'),
   'config/reference/revues.md': repoFile('config/reference/revues.md'),
   'reference/procedure-groupe.md': read('reference/procedure-groupe.md'),
   'README.md': read('README.md'),
   'hooks/register.tsx': read('hooks/register.tsx'),
   'hooks/catalog.ts': read('hooks/catalog.ts'),
+  'hooks/view.tsx': read('hooks/view.tsx'),
 }
 
 /** Chaque consigne : ses mots-clés, et les surfaces qui la recopient (la procédure ne reçoit de la règle d'effort que la session autonome). */
@@ -73,6 +77,56 @@ const CONSIGNES = [
     name: "les revues d'un groupe sans logique ni zone sensible, en anglais",
     keywords: ['has neither a group review nor a security review'],
     surfaces: ['hooks/catalog.ts', 'hooks/register.tsx'],
+  },
+  {
+    // Les six catégories qui restent à la personne en auto : la règle des lots, le premier clic sur « ⚡ Auto » (view.tsx), le README.
+    name: 'les six catégories qui bloquent en mode auto',
+    keywords: ['zone sensible', 'recommandation défendable', 'contredit une décision déjà prise', 'faille de sécurité sans correctif', 'effort xhigh', 'action externe hors du parcours'],
+    surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/view.tsx'],
+  },
+  {
+    // Les origines d'un choix déclaré en auto, et la notification au texte fixé : la règle des lots et le README.
+    name: 'les choix et la notification du mode auto',
+    keywords: ['« reco prise »', '« validation sautée »', 'PushNotification', "N question(s) t'attendent"],
+    surfaces: ['config/rules/flow-board.md', 'README.md'],
+  },
+  {
+    // Ce que le second clic accorde : les validations sautées, la même liste dans la règle des lots, le glossaire et le README.
+    name: 'les validations sautées du mode auto',
+    keywords: ['accord du cadrage, spec, découpage, plan, écritures Asana du parcours'],
+    surfaces: ['config/rules/flow-board.md', 'GLOSSARY.md', 'README.md'],
+  },
+  { name: 'les validations sautées du mode auto, en anglais', keywords: ['framing agreement, spec, ticket split, work plan', 'the tickets created, their statuses'], surfaces: ['hooks/register.tsx'] },
+  {
+    // Les écritures Asana que le second clic accorde : la règle Asana et le premier clic sur « ⚡ Auto ».
+    name: 'les écritures Asana accordées en mode auto',
+    keywords: ['création des tickets, statuts'],
+    surfaces: ['config/rules/asana-board.md', 'hooks/view.tsx'],
+  },
+  {
+    // Les exceptions du mode auto des règles communes ne valent que là où l'auto agit, et renvoient à la règle des lots.
+    name: 'les exceptions du mode auto des règles communes',
+    keywords: ["dans la discussion d'où l'auto agit", 'règle « Mode auto » du plugin `flow-board`', '« Confirmer »'],
+    surfaces: ['config/rules/general.md', 'config/rules/asana-board.md'],
+  },
+  {
+    // La session autonome et l'effort en mode auto : à tout effort, jamais xhigh proposé ; la vague suivante lancée par le mod.
+    name: 'la session autonome et l’effort en mode auto',
+    keywords: ['quel que soit son effort', 'ne propose jamais xhigh', 'le mod lance lui-même la vague suivante'],
+    surfaces: ['config/rules/flow-board.md'],
+  },
+  { name: 'la session autonome en mode auto, au glossaire', keywords: ['quel que soit son effort', 'mode auto'], surfaces: ['GLOSSARY.md'] },
+  {
+    // Une session liée d'un parcours en mode auto est autonome à tout effort : la règle, la procédure, la demande de délégation, le README.
+    name: 'la session autonome à tout effort en mode auto',
+    keywords: ['quel que soit son effort'],
+    surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe.md', 'hooks/register.tsx', 'README.md'],
+  },
+  {
+    // Les mêmes, en anglais, dans la consigne du mode auto, avec ses deux origines de choix.
+    name: 'les six catégories qui bloquent en mode auto, en anglais',
+    keywords: ['a sensitive area', 'no defensible recommendation', 'contradicts DECISIONS.md', 'leaving a security finding unfixed', 'declare that xhigh was not offered', 'external action outside the run', '« reco prise »', '« validation sautée »'],
+    surfaces: ['hooks/register.tsx'],
   },
 ]
 

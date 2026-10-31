@@ -116,6 +116,38 @@ import {
   parkActive,
   resumeRun,
   setAsideActive,
+  stopAutoUnread,
+  AUTO_STOPS,
+  autoDecision,
+  markAutoSent,
+  markAutoStarted,
+  nextAutoOnAt,
+  pendingAutoMarks,
+  raiseStaleAutoSends,
+  resendAutoMark,
+  raiseRelaunchQuestions,
+  STALE_PREFIX,
+  RELAUNCH_PREFIX,
+  stopActiveAuto,
+  unmarkAutoSent,
+  isAutoOn,
+  isAutoLitBy,
+  addOwnTraces,
+  writtenTraces,
+  hasUnsoundTombstones,
+  isGroupLotStuck,
+  markAutoLaunched,
+  linkedReviewMark,
+  securityReviewMark,
+  hereReviewMark,
+  type OwnTraces,
+  type AutoAction,
+  autoNotices,
+  autoQuestionsNotice,
+  autoStateOf,
+  WAITING_MAX,
+  switchOffAuto,
+  switchOnAuto,
   setQueue,
   togglePick,
   summaryOf,
@@ -174,7 +206,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { GROUP_ID_FORM, GROUP_ID_FORM_FR, OLD_SEPARATORS, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, isGroupId, isSafeId, itemsWorktree, neutralInPrompt, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
+import { GROUP_ID_FORM, GROUP_ID_FORM_FR, OLD_SEPARATORS, asciiJson, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, isGroupId, isSafeBranch, isSafeId, itemsWorktree, neutralInPrompt, neutralLine, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
 import { COMPACT_FIRST_TOAST, ORIGIN_FILE_RULE, compactionInstructions, compactionRoleOf, retroTranscriptNote, suggestsCompaction, withCompactionInstructions, type CompactionRole } from './compaction.ts'
 import { applyTraces } from './erase.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
@@ -186,6 +218,8 @@ import { catchUpAgent, catchUpOwn, catchUpShown, claudeDir, needsRebuild, readRe
 import { eraseRun, erasedRuns, erasingNow, forgetSession, readTraces, reconcileErased } from './erase-run.ts'
 
 const PANE = 'flow-board'
+/** Le nom de ce mod, tel que le moteur le met dans l'origine de ses envois (`origin.name`) ; pas `PLUGIN`, celui des skills. */
+const SELF = 'flow-board'
 /** Le terminal seul ne dessine pas les SVG (sa table porte quand même un `Svg`, qui rend une boîte vide). */
 const capsOf = (surface: string): Caps => ({ hasSvg: surface !== 'terminal' })
 const PANE_TITLE = 'Parcours'
@@ -249,7 +283,9 @@ const TOOL_DESCRIPTION =
   '"open" starts a new workflow in this discussion without any skill, and the rest of the same call (tickets, groups...) goes to it; ' +
   '"fix" corrects the active workflow (title, current phase, step). Never open a workflow on your own initiative: ' +
   'when nothing is active here, the answer names the workflows to resume, so ask the user. To take tickets out of the wrong ' +
-  'workflow, send "remove" in a call before the "open" one.'
+  'workflow, send "remove" in a call before the "open" one. ' +
+  'A question that waits for the user and holds back part of the workflow goes in "waiting", with what it blocks (a phase, a group or a ticket); ' +
+  'send it again with "answered": true once the user has answered it (the mod\'s own questions excepted: see "waiting").'
 
 export const TOOL_SCHEMA = {
   type: 'object',
@@ -345,6 +381,12 @@ export const TOOL_SCHEMA = {
         properties: {
           what: { type: 'string', description: "The choice, short, in the user's language" },
           why: { type: 'string', description: "Why, short, in the user's language" },
+          origin: {
+            type: 'string',
+            enum: ['recommendation', 'skipped-validation', 'linked-session'],
+            description:
+              'Where it comes from, in auto mode: recommendation, your recommended answer taken without the user; skipped-validation, a validation the auto mode skipped (framing agreement, spec, ticket split, plan, Asana writes), with the path or link of the validated text in "what"; linked-session, a choice of a linked session. Leave it out otherwise',
+          },
         },
         required: ['what'],
       },
@@ -475,6 +517,25 @@ export const TOOL_SCHEMA = {
         step: { type: 'string', description: 'Id of a step of the current (or fixed) phase to make current; the steps after it become pending' },
       },
     },
+    waiting: {
+      type: 'array',
+      description:
+        'Questions that wait for the user and hold back part of the workflow (in auto mode, each decision that stays with the user): each with its "id", exactly one of "phase", "group" or "ticket" that it blocks, and its "text", shown on the dashboard only (a notification never carries it). Send {"id", "answered": true} once the user has answered: it leaves the list; except the mod\'s own questions: « ' + STALE_PREFIX + '… » (answered by « ↻ Renvoyer »), and « ' + RELAUNCH_PREFIX + '… » while its group still has open tickets and is not sent again (relaunch the group, or answer otherwise: its open tickets set done, or removed from the lot with "remove"; then withdraw it). At most ' +
+        WAITING_MAX +
+        ' open at once; a new one beyond is refused. Not in a linked session: its question goes to the main discussion by SendMessage',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'A short id you choose (Q1, invariant-totaux…), the same to withdraw it' },
+          phase: { type: 'string', description: 'The skill id of the phase of this workflow it blocks (to-spec, implement…)' },
+          group: { type: 'string', description: 'The id of the group it blocks' },
+          ticket: { type: 'string', description: 'The id of the ticket it blocks' },
+          text: { type: 'string', description: "The question, short, in the user's language" },
+          answered: { type: 'boolean', description: 'true once the user has answered: the question leaves the list' },
+        },
+        required: ['id'],
+      },
+    },
     note: { type: 'string', description: 'One short line worth keeping in the activity log (a decision, a finding)' },
     complete: { type: 'boolean', description: 'true when the work of the current skill is finished' },
   },
@@ -540,6 +601,27 @@ export async function sessionId($: any): Promise<string> {
   }
   sessionCache ??= `local-${Math.random().toString(36).slice(2)}`
   return sessionCache
+}
+
+/**
+ * L'id de la discussion du moment, pour le mode auto (« allumé par ») : un `/clear` en donne un nouveau
+ * sans recharger le mod (docs/evenements-moteur.md), que `sessionId` ne relit pas. Relu après chaque
+ * `session.start`, `session.end` et `classic.SessionStart` ; sans id du moteur, celui de `sessionId`.
+ */
+let hereCache: string | null = null
+export async function hereId($: any): Promise<string> {
+  if (hereCache !== null) return hereCache
+  hereCache = await freshHereId($)
+  return hereCache
+}
+
+/** L'id de la discussion du moment, relu sans le garder : pour un geste qui ne doit pas remplir le cache (une fin de discussion). */
+const freshHereId = async ($: any): Promise<string> => {
+  let id: unknown
+  await quietly(async () => {
+    id = await $.session.id()
+  })
+  return typeof id === 'string' && id !== '' ? id : await sessionId($)
 }
 
 // ─── Fichier commun des parcours ──────────────────────────────────────────
@@ -625,13 +707,19 @@ const writeShared = async ($: any, root: string, board: Board): Promise<boolean>
   }
 }
 
-const legacyGet = async ($: any, root: string): Promise<unknown> => {
+/** `$.store` lu, `ok` faux quand la lecture échoue (une valeur absente se lit bien). */
+const legacyRead = async ($: any, root: string): Promise<{ ok: boolean; value: unknown }> => {
   try {
-    return await $.store.get(storeKey(root))
+    return { ok: true, value: await $.store.get(storeKey(root)) }
   } catch {
-    return undefined
+    return { ok: false, value: undefined }
   }
 }
+
+const legacyGet = async ($: any, root: string): Promise<unknown> => (await legacyRead($, root)).value
+
+/** Une valeur relue est le board de ce projet. */
+const isOwnBoard = (value: unknown, root: string): value is Board => isBoard(value) && normRoot(value.root) === normRoot(root)
 
 /** Projets dont l'ancien stockage de ce mode de chargement est déjà versé dans le fichier commun. */
 const migrated = new Set<string>()
@@ -640,13 +728,21 @@ const migrationKey = (root: string): string => `migrated:${storeKey(root)}`
 /**
  * Le board enregistré du projet : le fichier commun, sinon `$.store`. Une seule fois par mode de
  * chargement, l'ancien `$.store` est fusionné dans le fichier commun : le desktop y apporte son
- * historique, le CLI le sien.
+ * historique, le CLI le sien. `isUnread` : le stockage ne s'est pas lu (fichier commun connu mais
+ * illisible, `$.store` en échec quand il est le stockage, ou une valeur qui n'est pas le board du
+ * projet) ; un stockage vide se lit bien. Le mode auto s'éteint alors : une lecture ratée ne le
+ * laisse jamais allumé.
  */
-const loadStored = async ($: any, root: string): Promise<unknown> => {
+const loadStored = async ($: any, root: string): Promise<{ value: unknown; isUnread: boolean }> => {
   const shared = await readShared($, root)
-  if (!shared.ok) return legacyGet($, root)
+  if (!shared.ok) {
+    const legacy = await legacyRead($, root)
+    const isUnread = sharedPath($, root) !== null || !legacy.ok || (legacy.value !== undefined && !isOwnBoard(legacy.value, root))
+    return { value: legacy.value, isUnread }
+  }
+  const isUnread = shared.value !== undefined && !isOwnBoard(shared.value, root)
   const key = storeKey(root)
-  if (migrated.has(key)) return shared.value
+  if (migrated.has(key)) return { value: shared.value, isUnread }
   let isDone = false
   try {
     isDone = (await $.store.get(migrationKey(root))) === true
@@ -655,14 +751,18 @@ const loadStored = async ($: any, root: string): Promise<unknown> => {
   }
   if (isDone) {
     migrated.add(key)
-    return shared.value
+    return { value: shared.value, isUnread }
   }
   const legacy = await legacyGet($, root)
-  if (!isBoard(legacy) || normRoot(legacy.root) !== normRoot(root)) {
+  if (!isOwnBoard(legacy, root)) {
     migrated.add(key)
-    return shared.value
+    return { value: shared.value, isUnread }
   }
-  const value = isBoard(shared.value) ? mergeBoards(shared.value, legacy) : legacy
+  // Les deux copies ramenées à maintenant, comme à toute lecture : une trace de suppression future ne s'applique pas.
+  const at = await $.clock.now()
+  const fused = isBoard(shared.value) ? mergeBoards(clampFuture(shared.value, at), clampFuture(legacy, at)) : clampFuture(legacy, at)
+  // Le fichier commun ne se lisait pas comme un board : le versement l'écrase, mode auto éteint.
+  const value = isUnread ? (stopAutoUnread(fused, at) ?? fused) : fused
   if (await writeShared($, root, sharedCopy(value))) {
     migrated.add(key)
     try {
@@ -671,7 +771,7 @@ const loadStored = async ($: any, root: string): Promise<unknown> => {
       // Le versement sera refait au prochain chargement ; la fusion le rend sans effet.
     }
   }
-  return value
+  return { value, isUnread }
 }
 
 /**
@@ -698,14 +798,21 @@ const mainRepoTitle = async ($: any, runId: string): Promise<string | undefined>
   return (await mainRepoRun($, runId, board.root))?.title
 }
 
-/** Écrit dans le fichier commun, sinon dans `$.store`, sans ce qui est propre à la session (`sharedCopy`). */
-const saveStored = async ($: any, root: string, board: Board) => {
+/**
+ * Écrit le board dans le fichier commun, sinon dans `$.store`, sans ce qui est propre à la session
+ * (`sharedCopy`). Rend vrai quand il est dans celui que la relecture lit : le fichier
+ * commun, ou `$.store` quand le mod ne sait pas où est ce fichier. Un fichier connu qui refuse l'écriture
+ * retombe sur `$.store`, que la relecture ne lit pas tant que le fichier se lit : faux.
+ */
+const saveStored = async ($: any, root: string, board: Board): Promise<boolean> => {
   const shared = sharedCopy(board)
-  if (await writeShared($, root, shared)) return
+  if (await writeShared($, root, shared)) return true
   try {
     await $.store.set(storeKey(root), shared)
+    return sharedPath($, root) === null
   } catch {
     // Stockage indisponible (test, quota) : l'état de la session reste juste.
+    return false
   }
 }
 
@@ -1090,7 +1197,8 @@ const followMainRef = async ($: any): Promise<string | undefined> => {
   if (!next) return undefined
   const written = await $.state.set(BOARD_REF, next, { ifVersion: version })
   if (!written.isSet) return undefined
-  return `The main discussion restarted: its reference is now "${next.delegate!.main}" (written by it next to the relay; the one in your brief is out of date). Send your messages there.`
+  // Relue d'un fichier à côté du relais : échappée, elle se recopie exacte sans rien glisser dans la réponse.
+  return `The main discussion restarted: its reference is now ${asciiJson(next.delegate!.main)} (written by it next to the relay; the one in your brief is out of date). Send your messages there.`
 }
 
 /** Dans la discussion principale : relit le relais du parcours actif quand un groupe est confié. */
@@ -1111,12 +1219,16 @@ const ensureBoard = async ($: any): Promise<Board | null> => {
   const current = await read($, boardAtom)
   const root = await sessionRoot($)
   if (current && (root === '' || normRoot(current.root) === normRoot(root))) return current
-  const stored = await loadStored($, root)
+  const { value: stored, isUnread } = await loadStored($, root)
   const session = await sessionId($)
-  const loaded =
-    isBoard(stored) && normRoot(stored.root) === normRoot(root)
-      ? detachOnLoad(stored, await $.clock.now(), session)
+  // Une seule horloge pour le chargement et le contrôle des traces de suppression qui suit.
+  const loadedAt = await $.clock.now()
+  const detached =
+    isOwnBoard(stored, root)
+      ? detachOnLoad(stored, loadedAt, session)
       : { ...emptyBoard(root, root ? projectName(root) : 'projet'), session, deleted: [] }
+  // Un stockage illisible : la copie chargée peut être périmée, son mode auto s'éteint.
+  const loaded = isUnread ? (stopAutoUnread(detached, await $.clock.now()) ?? detached) : detached
   // Une session liée retrouve sa délégation, propre à elle et jamais dans le stockage partagé.
   let kept: unknown
   await quietly(async () => {
@@ -1128,6 +1240,11 @@ const ensureBoard = async ($: any): Promise<Board | null> => {
   const board = restoreDelegate(loaded, kept, await $.clock.now())
   keptDelegate = JSON.stringify(board.delegate ?? null)
   await update($, boardAtom, () => board)
+  // Une trace de suppression tombée au chargement (mal formée ou future), lue du fichier commun (pas d'une
+  // copie de secours) : le fichier se réécrit sans elle.
+  if (!isUnread && isOwnBoard(stored, root) && hasUnsoundTombstones(stored, loadedAt)) scheduleSave($)
+  // Rien n'est actif ici au chargement : une pause qu'il pose (lecture ratée) n'est pas notifiée d'ici,
+  // les discussions qui portent les parcours la notifient à leur propre relecture.
   return board
 }
 
@@ -1144,37 +1261,91 @@ const keepDelegate = async ($: any) => {
   })
 }
 
-const readStored = async ($: any, root: string): Promise<Board | null> => {
-  const stored = await loadStored($, root)
-  return isBoard(stored) && normRoot(stored.root) === normRoot(root) ? clampFuture(stored, await $.clock.now()) : null
+/**
+ * Le board enregistré, et si le stockage ne s'est pas lu (`isUnread`, voir `loadStored`) ;
+ * `isTrimmed` : une trace de suppression y est tombée à la lecture (mal formée ou future), le fichier
+ * est à réécrire sans elle.
+ */
+const readStored = async ($: any, root: string): Promise<{ board: Board | null; isUnread: boolean; isTrimmed: boolean }> => {
+  const { value, isUnread } = await loadStored($, root)
+  if (!isOwnBoard(value, root)) return { board: null, isUnread, isTrimmed: false }
+  const now = await $.clock.now()
+  // Seulement lue du fichier commun : une copie de secours ne fait pas réécrire un fichier qui ne s'est pas lu.
+  return { board: clampFuture(value, now), isUnread, isTrimmed: !isUnread && hasUnsoundTombstones(value, now) }
 }
 
 /**
  * Le stockage est partagé par toutes les discussions du projet : on y fusionne sa copie au lieu
  * de l'écraser, et la discussion récupère au passage les parcours des autres.
  */
-const saveNow = async ($: any) => {
+const saveOnce = async ($: any): Promise<boolean> => {
   saveTimer = null
   const { value, version } = await $.state.get(BOARD_REF)
-  if (!value) return
-  const stored = await readStored($, value.root)
-  const merged = stored ? mergeBoards(value, stored) : value
-  await saveStored($, value.root, merged)
+  if (!value) return false
+  const { board: stored, isUnread } = await readStored($, value.root)
+  // Le stockage ne s'est pas lu : ce qui s'écrit (fusionné, peut-être avec une copie de secours
+  // périmée) a son mode auto éteint, puisque l'écriture remplace un fichier qu'on n'a pas lu.
+  // La copie d'ici est ramenée à maintenant comme la copie relue : une date future de l'auto, prise
+  // avant un recalage de l'horloge, gagnerait sinon la fusion sur une coupure posée après elle.
+  const now = await $.clock.now()
+  const local = clampFuture(value, now)
+  // Pour chaque parcours dont l'auto est allumé d'ici (`isAutoLitBy`), seules les traces écrites ici retirent une marque ou une question.
+  const fused = stored ? mergeBoards(local, stored, await ownTracesFor($, value)) : local
+  const merged = isUnread ? (stopAutoUnread(fused, now) ?? fused) : fused
+  const isDurable = await saveStored($, value.root, merged)
   await writeDecidedFile($, merged)
-  // Si l'état a bougé entre-temps, la prochaine sauvegarde refusionnera.
-  if (merged !== value) await $.state.set(BOARD_REF, merged, { ifVersion: version })
+  // Si l'état a bougé entre-temps, la prochaine sauvegarde refusionnera, et notifiera alors.
+  const isSet = merged === value || (await $.state.set(BOARD_REF, merged, { ifVersion: version })).isSet
+  // Une pause que l'écriture pose (lecture ratée, copie abîmée) sur le parcours porté ici, notifiée une fois écrite.
+  if (isSet) await afterAuto($, value, merged, true)
+  return isDurable && !isUnread
 }
 
-/** Lit ce que les autres discussions ont enregistré, sans rien écrire dans le stockage. */
-const pull = async ($: any) => {
-  const { value, version } = await $.state.get(BOARD_REF)
-  if (!value) return
-  const stored = await readStored($, value.root)
-  if (!stored) return
-  const merged = mergeBoards(value, stored)
-  if (JSON.stringify(merged) !== JSON.stringify(value)) await $.state.set(BOARD_REF, merged, { ifVersion: version })
+/**
+ * Les sauvegardes, une à la fois et dans l'ordre : une sauvegarde partie avant la marque d'un envoi de
+ * l'auto (lue avant elle) n'écrit plus le fichier après la sienne, ce qui l'en retirerait.
+ */
+let saveChain: Promise<unknown> = Promise.resolve()
+const saveNow = ($: any): Promise<boolean> => {
+  const next = saveChain.then(
+    () => saveOnce($),
+    () => saveOnce($),
+  )
+  saveChain = next.catch(() => undefined)
+  return next
 }
 
+/** Le board réduit au parcours actif ici : seule la discussion qui le porte notifie ce qu'une fusion lui fait. */
+const carried = (board: Board): Board => ({ ...board, runs: board.runs.filter(r => r.id === board.activeId) })
+
+/**
+ * Lit ce que les autres discussions ont enregistré, sans rien écrire dans le stockage (sauf une
+ * sauvegarde programmée quand une trace de suppression y est tombée à la lecture) ; rejoué si
+ * l'état a bougé entre la lecture et l'écriture. Faux quand le stockage ne se lit pas : l'auto s'éteint
+ * alors ici (la relecture avant un envoi de l'auto n'envoie rien).
+ */
+const pull = async ($: any): Promise<boolean> => {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { value, version } = await $.state.get(BOARD_REF)
+    if (!value) return false
+    const { board: stored, isUnread, isTrimmed } = await readStored($, value.root)
+    // Une trace de suppression tombée à la lecture : le fichier se réécrit sans elle, sinon une lecture
+    // plus tardive, l'horloge rattrapant sa date, l'appliquerait.
+    if (isTrimmed) scheduleSave($)
+    // Rien de relu et une lecture ratée : l'auto s'éteint quand même ici, comme à la sauvegarde.
+    if (!stored && !isUnread) return true
+    // Relu d'un stockage de secours, peut-être périmé, quand le fichier ne se lit pas : l'auto s'éteint.
+    const now = await $.clock.now()
+    const fused = stored ? mergeBoards(clampFuture(value, now), stored, await ownTracesFor($, value)) : value
+    const merged = isUnread ? (stopAutoUnread(fused, now) ?? fused) : fused
+    if (JSON.stringify(merged) === JSON.stringify(value)) return !isUnread
+    if ((await $.state.set(BOARD_REF, merged, { ifVersion: version })).isSet) {
+      await afterAuto($, value, merged, true)
+      return !isUnread
+    }
+  }
+  return false
+}
 const scheduleSave = ($: any) => {
   saveTimer?.cancel()
   saveTimer = $.clock.after(600, () => void saveNow($))
@@ -1191,6 +1362,9 @@ export async function commit($: any, change: (board: Board) => Outcome): Promise
     const written = await $.state.set(BOARD_REF, out.board, { ifVersion: version })
     if (written.isSet) {
       await afterChange($, out.fx, out.board)
+      // Avant `afterAuto` : un arrêt de l'auto dans ce même changement oublie aussi ces traces.
+      await quietly(() => recordOwnTraces($, value, out.board))
+      await afterAuto($, value, out.board)
       return out.fx
     }
   }
@@ -2073,6 +2247,237 @@ const afterChange = async ($: any, fx: Effects, board: Board) => {
   await quietly(() => syncStatus($, board))
 }
 
+/**
+ * Lève les notifications du mode auto sur le poste (`$.ui.notify`), au texte fixé (`autoNotices`) :
+ * un échec (pas de canal, pas de terminal, discussion qui se ferme) ne bloque rien.
+ */
+const notifyAll = async ($: any, texts: readonly string[]) => {
+  for (const text of texts) await quietly(() => $.ui.notify(text))
+}
+
+// ─── Date du second clic, gardée à part ───────────────────────────────────
+//
+// Le second clic (« Confirmer ») garde sa date dans `$.store`, une entrée par parcours (la discussion
+// du clic, sa date, et l'id du processus qui l'a gardée), réécrite à chaque clic : l'auto n'envoie d'ici
+// que si l'« allumé à » fusionné la vaut, qu'elle vient de cette discussion et de ce processus. Un
+// fichier de parcours seul, forgé ou rejoué, ne rallume donc rien, même avec une date restée d'avant un
+// redémarrage. L'entrée s'efface dès que cette discussion voit l'auto de ce parcours éteint après ce
+// clic (coupure, fin de discussion, mise de côté, clôture, archivage, rapport prêt, pause du mod), et à
+// l'effacement du parcours. Si `$.store` refuse l'écriture au clic, l'auto ne s'allume pas.
+
+/** La date du clic gardée pour un parcours : la discussion du clic, son « allumé à » et le processus qui l'a gardée. */
+type AutoConfirm = { by: string; onAt: number; boot: string }
+
+const confirmKey = (runId: string): string => `auto-confirm:${runId}`
+
+/** L'id de ce processus (`autoBoot` de l'état de la session) : gardé après /reload-plugins, neuf après un redémarrage. */
+const bootAtom = atom({ plugin: 'flow-board', key: 'autoBoot' } as const, '')
+
+/** Pose l'id de ce processus au premier chargement du mod ; un rechargement le garde. */
+const ensureBoot = async ($: any): Promise<string> => {
+  const kept = await read($, bootAtom)
+  if (kept !== '') return kept
+  const boot = `${await $.clock.now()}-${Math.random().toString(36).slice(2)}`
+  await update($, bootAtom, was => (was === '' ? boot : was))
+  return read($, bootAtom)
+}
+
+/** Une date du clic relue : bornée ici (un id de discussion, une date lisible, un id de processus), sinon aucune. */
+const readConfirmValue = (value: unknown): AutoConfirm | null => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const x = value as Record<string, unknown>
+  const isDate = typeof x.onAt === 'number' && Number.isFinite(x.onAt) && x.onAt >= 0
+  const isId = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= 200
+  return isId(x.by) && isId(x.boot) && isDate ? { by: x.by, onAt: x.onAt as number, boot: x.boot } : null
+}
+
+/** Les dates du clic lues depuis le chargement du mod, par parcours (null : aucune) ; une lecture ratée ne s'y garde pas. */
+const confirms = new Map<string, AutoConfirm | null>()
+
+const readConfirm = async ($: any, runId: string): Promise<AutoConfirm | null> => {
+  if (confirms.has(runId)) return confirms.get(runId)!
+  try {
+    const value = readConfirmValue(await $.store.get(confirmKey(runId)))
+    confirms.set(runId, value)
+    return value
+  } catch {
+    // Illisible ce coup-ci : aucune date, donc aucun envoi, et on relira.
+    return null
+  }
+}
+
+/** Garde la date d'un clic de cette discussion, pour ce processus ; faux quand `$.store` refuse l'écriture. */
+const writeConfirm = async ($: any, runId: string, by: string, onAt: number): Promise<boolean> => {
+  const value: AutoConfirm = { by, onAt, boot: await ensureBoot($) }
+  try {
+    await $.store.set(confirmKey(runId), value)
+    confirms.set(runId, value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Oublie la date du clic d'un parcours : d'abord ici (rien n'envoie plus d'ici), puis dans `$.store`,
+ * l'entrée de cette discussion, relue juste avant : celle d'une autre discussion (un nouveau clic
+ * là-bas) reste, et son auto se juge là-bas ; sauf pour un parcours effacé (`isErased`), dont l'entrée
+ * part quelle que soit sa discussion.
+ */
+const forgetConfirm = async ($: any, runId: string, here: string, isErased = false) => {
+  confirms.set(runId, null)
+  await quietly(async () => {
+    // Un parcours effacé emporte l'entrée de n'importe quelle discussion : il n'y a plus d'auto à juger.
+    const kept = isErased ? null : readConfirmValue(await $.store.get(confirmKey(runId)))
+    if (isErased || (kept !== null && kept.by === here)) await $.store.delete(confirmKey(runId))
+  })
+}
+
+/** La date du clic que cette discussion (`here`) garde pour ce parcours dans ce processus, null sinon. */
+const confirmedAtFor = async ($: any, run: Run, here: string): Promise<number | null> => {
+  const kept = await readConfirm($, run.id)
+  // Lecture seule (un dessin peut l'appeler) : l'id du processus se pose au démarrage du mod ; vide, rien ne vaut.
+  const boot = await read($, bootAtom)
+  return kept !== null && boot !== '' && kept.by === here && kept.boot === boot ? kept.onAt : null
+}
+
+/**
+ * Les dates du clic à oublier après un changement du board : celles d'un parcours dont l'auto était
+ * allumé et ne l'est plus, ou qui a quitté le board (effacé).
+ */
+const pruneConfirms = async ($: any, before: Board, after: Board) => {
+  const gone = before.runs.filter(run => {
+    const now = after.runs.find(r => r.id === run.id)
+    return !now || (isAutoOn(run) && !isAutoOn(now))
+  })
+  if (gone.length === 0) return
+  // Relu sans le garder : appelée aussi pendant une fin de discussion, après que `session.end` a vidé le cache.
+  const here = await freshHereId($)
+  for (const run of gone) {
+    const isErased = !after.runs.some(r => r.id === run.id)
+    await forgetConfirm($, run.id, here, isErased)
+    await forgetOwnTraces($, run.id, here, isErased)
+  }
+}
+
+// ─── Traces de retrait écrites ici, gardées à part ────────────────────────
+//
+// Les traces « ↻ Renvoyer » et « répondue » que cette discussion écrit se gardent aussi dans `$.store`,
+// une entrée par parcours, avec la discussion et le processus, comme la date du clic : tant que l'auto
+// d'un parcours est allumé au nom de cette discussion, la date du clic gardée ici (même mis en pause par
+// l'ouverture d'un autre parcours), la fusion ne lui applique qu'elles (`mergeBoards`, `own`), et une
+// trace forgée ou rejouée ne retire rien ici. Écrites au moment du retrait, par un changement fait ici (jamais par une fusion) ;
+// effacées avec la date du clic (mêmes arrêts) et à l'effacement du parcours ; les 100 plus récentes de
+// chaque sorte. Reconnues après /reload-plugins, pas après un redémarrage (l'auto est alors en pause
+// « allumage non confirmé ici »).
+
+/** Les traces gardées pour un parcours : la discussion qui les a écrites, le processus, et les traces. */
+type StoredTraces = { by: string; boot: string; traces: OwnTraces }
+
+const tracesKey = (runId: string): string => `auto-traces:${runId}`
+
+/** Des traces gardées relues : bornées ici (un id de discussion et de processus, des traces lisibles, 100 de chaque sorte), sinon aucune. */
+const readTracesValue = (value: unknown, runId: string): StoredTraces | null => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const x = value as Record<string, unknown>
+  const isId = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= 200
+  if (!isId(x.by) || !isId(x.boot)) return null
+  const list = (v: unknown) => (Array.isArray(v) ? v : []) as OwnTraces['resent'] & OwnTraces['answered']
+  return { by: x.by, boot: x.boot, traces: addOwnTraces({ runId, resent: [], answered: [] }, { runId, resent: list(x.resent), answered: list(x.answered) }) }
+}
+
+/** Les traces gardées lues depuis le chargement du mod, par parcours (null : aucune) ; une lecture ratée ne s'y garde pas. */
+const ownTraceCache = new Map<string, StoredTraces | null>()
+
+const readOwnTraces = async ($: any, runId: string): Promise<StoredTraces | null> => {
+  if (ownTraceCache.has(runId)) return ownTraceCache.get(runId)!
+  try {
+    const value = readTracesValue(await $.store.get(tracesKey(runId)), runId)
+    ownTraceCache.set(runId, value)
+    return value
+  } catch {
+    // Illisibles ce coup-ci : aucune trace d'ici ne retire rien (sens sûr), et on relira.
+    return null
+  }
+}
+
+/**
+ * Les traces que cette discussion (`here`) a écrites pour ce parcours, dans ce processus ; aucune sinon.
+ * Une trace datée à plus d'une minute dans le futur est ramenée à maintenant, comme celles du parcours
+ * (`clampFuture`) ; la fusion ne la compte en plus jamais plus tard que la trace du parcours de même clé.
+ */
+const ownTracesHere = async ($: any, runId: string, here: string): Promise<OwnTraces> => {
+  const kept = await readOwnTraces($, runId)
+  const boot = await read($, bootAtom)
+  if (kept === null || boot === '' || kept.by !== here || kept.boot !== boot) return { runId, resent: [], answered: [] }
+  const now = await $.clock.now()
+  const atMost = <T extends { at: number }>(t: T): T => (t.at > now + 60_000 ? { ...t, at: now } : t)
+  return { runId, resent: kept.traces.resent.map(atMost), answered: kept.traces.answered.map(atMost) }
+}
+
+/**
+ * Pour la fusion : les traces écrites ici, pour chaque parcours dont l'auto est allumé au nom de cette
+ * discussion avec la date du clic gardée ici (`isAutoLitBy`), qu'il envoie d'ici ou y reprenne sans
+ * nouveau clic (mis en pause par l'ouverture d'un autre parcours) ; les autres parcours reçoivent
+ * l'union. L'id de la discussion est relu sans le garder : la sauvegarde d'une fin de discussion passe
+ * par ici, après que `session.end` a vidé le cache.
+ */
+const ownTracesFor = async ($: any, board: Board | null): Promise<OwnTraces[]> => {
+  if (board === null || board.delegate) return []
+  const here = await freshHereId($)
+  const out: OwnTraces[] = []
+  for (const run of board.runs) {
+    const at = await confirmedAtFor($, run, here)
+    // Une date du clic qui ne s'est pas lue (`readConfirm` ne garde pas l'échec) : dans le doute, allumé d'ici.
+    if (isAutoLitBy(run, here, at === null && !confirms.has(run.id) ? 'unread' : at)) out.push(await ownTracesHere($, run.id, here))
+  }
+  return out
+}
+
+/** Les écritures et oublis des traces gardées, un à la fois et dans l'ordre. */
+let tracesChain: Promise<unknown> = Promise.resolve()
+
+const inTracesChain = async (work: () => Promise<void>) => {
+  const next = tracesChain.then(work, work)
+  tracesChain = next.catch(() => undefined)
+  await next
+}
+
+/**
+ * Garde les traces qu'un changement fait ici (une transition du board, pas une fusion) vient d'écrire
+ * sur le parcours actif. Gardées d'abord pour ce chargement du mod : une écriture que `$.store` refuse
+ * ne les perd qu'au rechargement (une copie en retard ramène alors une marque ou une question : elle
+ * bloque, rien ne repart).
+ */
+const recordOwnTraces = async ($: any, before: Board, after: Board) => {
+  const written = writtenTraces(before, after)
+  if (!written || (written.resent.length === 0 && written.answered.length === 0)) return
+  await inTracesChain(async () => {
+    // Relu sans le garder, comme pour la fusion : jamais l'id d'avant un /clear remis dans le cache.
+    const here = await freshHereId($)
+    const boot = await ensureBoot($)
+    const traces = addOwnTraces(await ownTracesHere($, written.runId, here), written)
+    ownTraceCache.set(written.runId, { by: here, boot, traces })
+    await quietly(() => $.store.set(tracesKey(written.runId), { by: here, boot, resent: traces.resent, answered: traces.answered }))
+  })
+}
+
+/** Oublie les traces gardées d'un parcours, comme la date du clic (`forgetConfirm`) : l'entrée de cette discussion, ou toute entrée d'un parcours effacé. */
+const forgetOwnTraces = async ($: any, runId: string, here: string, isErased = false) =>
+  inTracesChain(async () => {
+    ownTraceCache.set(runId, null)
+    await quietly(async () => {
+      const kept = isErased ? null : readTracesValue(await $.store.get(tracesKey(runId)), runId)
+      if (isErased || (kept !== null && kept.by === here)) await $.store.delete(tracesKey(runId))
+    })
+  })
+
+/** Après un changement du board : les notifications de l'auto (`isCarried` : du seul parcours porté ici) et l'oubli des dates du clic d'un auto éteint. */
+const afterAuto = async ($: any, before: Board, after: Board, isCarried = false) => {
+  await notifyAll($, autoNotices(isCarried ? carried(before) : before, isCarried ? carried(after) : after))
+  await pruneConfirms($, before, after)
+}
+
 /** Ouvre le panneau de lui-même, sauf si la personne l'a fermé pendant la session. */
 const openUnasked = async ($: any) => {
   const ui = await read($, uiAtom)
@@ -2322,7 +2727,62 @@ const FRAMING_SKILLS = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-q
 /** Les consignes où une revue reçoit le fichier des choix déclarés. */
 const REVIEW_NOTES = new Set(['implement', 'final-review', 'code-review', 'branch-review'])
 
-const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, session?: string, decidedAt?: string | null, failedAgents = 0, standards: string | null = null): string => {
+// ─── Consignes du mode auto ───────────────────────────────────────────────
+//
+// Un parcours en auto (il envoie d'ici : `isAutoHere`) reçoit, à la fin de la consigne de chaque skill,
+// ce que Claude fait sans la personne : un bloc commun (l'accord du second clic, les choix déclarés avec
+// leur origine, les six catégories qui restent des questions bloquantes, la notification), puis le bloc
+// de sa phase. Hors auto, la consigne est inchangée. Les six catégories sont celles que montre le
+// premier clic sur « ⚡ Auto » (`AUTO_BLOCKS` de view.tsx) ; `consignes-coherentes.test.mjs` les compare.
+
+/** Les six catégories de décisions qui restent à la personne en auto : jamais un choix déclaré. */
+export const AUTO_CATEGORIES_EN: readonly string[] = [
+  `a sensitive area (${SENSITIVE_AREAS}), the invariant of a ticket in such an area included`,
+  'a question with no defensible recommendation (taste, business priority, ambiguous intent)',
+  'a design change that contradicts DECISIONS.md or a decision already taken with the user',
+  'leaving a security finding unfixed',
+  'an xhigh effort for a linked session: in auto mode, stay in high and declare that xhigh was not offered, instead of asking',
+  'a spending or an external action outside the run (installing a heavy dependency, writing to a third-party service)',
+]
+
+/** Ce que Claude fait des failles et des constats sur du code antérieur, en implémentation et aux revues. */
+const AUTO_FINDINGS =
+  '- Findings in auto mode: when a security review comes back, fix every kept finding without asking the user (apply, test, commit, then send "fixed"); leaving one unfixed is the user\'s decision, a blocking question on its group (or on this phase without groups). Findings that reviews kept apart on code older than the lot: do not propose a « durcissement » group; list them for the report.'
+
+/** Les blocs propres à une phase, par skill ; la revue, la passe et la sécurité suivent l'implémentation. */
+const AUTO_PHASE_NOTES: Record<string, string> = {
+  'to-spec':
+    '- Spec in auto mode: the seams are not asked: settle them by your recommended answer, write them in the decision file as « acceptée en auto (reco) » and declare them ("origin": "recommendation"); the validation of the spec is not asked either: declare it ("origin": "skipped-validation", with the path or link of the spec), then publish it; the tracker writes of the run (the spec published) are made without asking again. The questions of a sensitive area and the invariants stay blocking questions on this phase ("phase": "to-spec").',
+  'to-tickets':
+    '- Ticket split in auto mode: the breakdown is not approved by a button question: declare it ("origin": "skipped-validation", with the path of the tickets or the tracker link), then publish; the tracker writes of the run (the tickets created, their statuses) are made without asking again, declared once ("origin": "skipped-validation", with their list). The invariant of a sensitive ticket and the sensitive questions stay blocking questions on this phase ("phase": "to-tickets").',
+  implement: `- Implementation in auto mode: flow-board itself sends, at the end of a turn, the request to launch the next wave of groups (once every group of the current wave is closed), the review of a group that came back without one and its advised security review: do not ask the user to press the dashboard buttons. Launch the linked sessions at the effort of the rule (medium; high for a sensitive group or one that touches several modules), never xhigh: do not ask the xhigh question, declare instead that xhigh was not offered. A group that came back with failed checks: leave its tickets concerned not done ({"set": [{"id": "<ticket>", "status": "todo"}]}).\n${AUTO_FINDINGS}`,
+  'final-review': AUTO_FINDINGS,
+  'code-review': AUTO_FINDINGS,
+  'branch-review': AUTO_FINDINGS,
+  'security-review': AUTO_FINDINGS,
+  'compte-rendu':
+    '- Report in auto mode: the auto mode stops once the report is written ({"step": "validate"}): it never validates it; validating it, /project:version and /project:push stay with the user. In the report, keep « Décidé sans toi » grouped by origin, and list the findings on code older than the lot that the reviews kept apart, for the user to decide on a « durcissement » group.',
+}
+
+/** Le bloc du cadrage (un grilling) : un seul tour d'intention avec la personne, puis les recos prises. */
+const AUTO_FRAMING =
+  '- Framing in auto mode: one round only with the user, on intent (the goal, the scope, what is out of scope), asked in one go in your message; wait for those answers (they are not blocking questions). Then settle each other question yourself with your recommended answer: write it in the decision file (DECISIONS.md, or the one the project\'s CLAUDE.md names) as « acceptée en auto (reco) », the question and the answer word for word, and declare it ("origin": "recommendation"); a question of the six kinds above stays a blocking question. The final agreement is not asked: declare it ("origin": "skipped-validation", with the path of the decision file), then {"complete": true}.'
+
+/** La consigne du mode auto pour le skill `id` d'un parcours en auto : le bloc commun, puis celui de sa phase. */
+const autoNote = (id: string, run: Run): string[] => {
+  const lines = [
+    '- Auto mode is on for this run (« ⚡ Auto »): the user\'s second click is their agreement, for this run only, to its button validations (framing agreement, spec, ticket split, work plan) and to the tracker writes it plans (the tickets created, their statuses). Do not ask for what it settles: flow-board itself sends the next step at the end of a turn, once this one is complete and nothing waits. If the auto mode is cut or paused while you work, the answer of the flow tool says so: from then on, the usual rules apply again (button validations, the user\'s agreement before a tracker write).',
+    '- Each recommendation you take without the user is a declared choice: {"decided": [{"what": "...", "why": "...", "origin": "recommendation"}]} (« reco prise »). Each validation the auto mode skips is declared instead of a button question: {"decided": [{"what": "<what was validated, with the path or link of the validated text>", "origin": "skipped-validation"}]} (« validation sautée »).',
+    `- Six kinds of decisions stay with the user even in auto mode, always as blocking questions, never as declared choices: ${AUTO_CATEGORIES_EN.map((c, i) => `${i + 1}) ${c}`).join('; ')}. Ask it in your message (options, the recommended one first) and declare it: {"waiting": [{"id": "<short id>", "phase": "<skill id>" | "group": "<group id>" | "ticket": "<ticket id>", "text": "<the question, shown on the dashboard only>"}]}; only what it blocks waits: go on with the rest. Once the user has answered, withdraw it: {"waiting": [{"id": "<id>", "answered": true}]}. A question whose id starts with « ${STALE_PREFIX} » is the mod's (« envoi resté sans suite »): never withdraw it; the user answers it with « ↻ Renvoyer » on the dashboard, or by launching the step. A question whose id starts with « ${RELAUNCH_PREFIX} » is the mod's too (a group back too many times from its linked session): while the group still has open tickets in the plan and is not sent again, the flow tool refuses its withdrawal; the user relaunches the group (« ↗ Session liée »), or answers otherwise (its open tickets set done, or removed from the lot with "remove"): then withdraw it.`,
+    `- Each time you declare blocking questions, also send one PushNotification (a deferred tool: load it with ToolSearch, select:PushNotification) with exactly this text and nothing else, neither the question nor any code: « ${autoQuestionsNotice(run.title, 'N')} », N being the open questions of the run once yours are declared (the answer of the flow tool says « waiting: N question(s) »).`,
+  ]
+  if (SKILLS[id]?.isGrilling) lines.push(AUTO_FRAMING)
+  const own = AUTO_PHASE_NOTES[id]
+  if (own) lines.push(own)
+  return lines
+}
+
+const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, session?: string, decidedAt?: string | null, failedAgents = 0, standards: string | null = null, isAuto = false): string => {
   const def = SKILLS[id]!
   const lines = [
     '',
@@ -2382,7 +2842,8 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     const names = run.queue
       .map((q, i) => {
         const t = run.tickets.find(x => x.id === q)
-        return `${i + 1}) ${t?.name ?? q} [${q}]${t ? QUEUE_STATE[t.status] : ''}`
+        // Le nom et l'id, relus du fichier partagé, neutralisés : en auto, cette consigne part sans relecture.
+        return `${i + 1}) ${neutralLine(String(t?.name ?? q))} [${neutralLine(String(q))}]${t ? QUEUE_STATE[t.status] : ''}`
       })
       .join('; ')
     lines.push(`- Ticket queue chosen by the user, in order: ${names}. Set each one to doing when you start it and to done when it is finished.`)
@@ -2391,7 +2852,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     const started = run.tickets.filter(t => t.status === 'doing')
     if (started.length > 0) {
       lines.push(
-        `- Already in progress when this skill loaded: ${started.map(t => `${t.name} [${t.id}]`).join('; ')}. A previous discussion may have stopped in the middle: ${isRepo ? 'check git status and git diff' : 'compare its copies with the current files ("Without git")'} before writing anything, and continue its uncommitted work instead of starting over. Tickets marked done are committed: do not redo them.`,
+        `- Already in progress when this skill loaded: ${started.map(t => `${neutralLine(String(t.name))} [${neutralLine(String(t.id))}]`).join('; ')}. A previous discussion may have stopped in the middle: ${isRepo ? 'check git status and git diff' : 'compare its copies with the current files ("Without git")'} before writing anything, and continue its uncommitted work instead of starting over. Tickets marked done are committed: do not redo them.`,
       )
     }
   }
@@ -2415,7 +2876,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   }
   if (id === 'compte-rendu') {
     lines.push('- What the dashboard knows about this run (start from it, then check and complete it with git and the tracker):')
-    lines.push(...reportFacts(run, failedAgents).map(l => `  ${l}`))
+    lines.push(...reportFacts(run, failedAgents, decidedAt ?? null).map(l => `  ${l}`))
     lines.push('- When the report is written: {"step": "validate"}. Never send {"complete": true}: the user validates the report from the dashboard (✓ Valider le rapport), and flow-board then sends you a message saying so. If the user asks for changes, rewrite the report and send {"step": "validate"} again.')
   }
   const advice = CODE_SKILLS.has(id) ? syncAdvice(sync) : null
@@ -2457,7 +2918,246 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   } else if (id !== 'compte-rendu' && def.role !== 'event') {
     lines.push(`- When the work of ${id} is finished: {"complete": true}. Add {"note": "<one short line>"} for a decision worth keeping.`)
   }
+  // En auto, en dernier : ses consignes l'emportent sur les demandes de validation et d'accord qui précèdent.
+  if (isAuto) lines.push(...autoNote(id, run))
   return lines.join('\n')
+}
+
+/**
+ * Les parcours dont une consigne a porté le bloc du mode auto, depuis le chargement du mod : coupé ou en
+ * pause ensuite, la réponse suivante de l'outil le dit une fois, sinon Claude suivrait encore le bloc.
+ */
+const autoNoted = new Set<string>()
+
+/** Ce que la réponse de l'outil dit quand l'auto d'un parcours dont la consigne portait le bloc ne l'est plus. */
+export const AUTO_OFF_NOTICE =
+  ' · Auto mode is OFF for this run now (cut, paused or stopped): the auto mode block of the skill instructions no longer applies; from now on, ask the user for every validation (button question) and every tracker write, as without the auto mode.'
+
+/** Le parcours actif ici est en auto et envoie d'ici : sa consigne porte le bloc du mode auto. */
+const isAutoHere = async ($: any, board: Board | null): Promise<boolean> => {
+  const run = activeRun(board)
+  if (run === null || board === null) return false
+  const here = await hereId($)
+  return autoStateOf(run, board, here, await confirmedAtFor($, run, here)).kind === 'on'
+}
+
+/** La date du clic gardée ici pour le parcours actif, pour le dessin ; null sans parcours ni clic gardé. */
+const autoConfirmedHere = async ($: any, board: Board | null): Promise<number | null> => {
+  const run = activeRun(board)
+  return run ? await confirmedAtFor($, run, await hereId($)) : null
+}
+
+// ─── Envoi du mode auto ───────────────────────────────────────────────────
+//
+// À la fin d'un tour de la discussion qui porte le parcours (ni un sous-agent, ni un tour interrompu),
+// l'auto relit le fichier de parcours, choisit la suite (`autoDecision`), pose sa marque « envoyée »
+// dans le fichier, puis l'envoie : une commande par `$.command.run` (jamais `$.prompt.submit`, que le
+// moteur refuse pour un texte en « / »), hors du hook qui l'a décidé et sans l'attendre. Invariant :
+// une même action auto n'est jamais envoyée deux fois. Une lecture ratée n'envoie rien et éteint
+// l'auto ; une écriture ratée de la marque n'envoie rien, retire la marque et le met en pause.
+
+/** Le délai entre la fin d'un tour et l'envoi : le hook de fin de tour a rendu la main, le moteur est au repos. */
+const AUTO_SEND_DELAY_MS = 300
+
+/** Un envoi de l'auto se décide à la fois, jamais deux en même temps. */
+let isAutoDeciding = false
+/** Une évaluation demandée pendant qu'une autre tournait : à refaire après elle (`gesture` : un geste l'a demandée). */
+let autoAgain: 'turn' | 'gesture' | null = null
+let autoTimer: { cancel: () => void } | null = null
+
+/**
+ * Un tour du fil principal est ouvert (de `turn.start` à `turn.complete`) : rien ne part pendant ce tour,
+ * même quand la discussion attend la réponse à une question à boutons (`live` dit alors « waiting »).
+ */
+let isTurnOpen = false
+
+/**
+ * L'évaluation de l'auto, un peu après la fin d'un tour, ou après un geste au repos (`isGesture` : deux
+ * clics sur « ⚡ Auto », « ↻ Renvoyer ») ; un geste n'envoie que ce qui peut partir, sans poser la pause
+ * « plus rien ne peut avancer sans toi » (la personne est là, et va répondre).
+ */
+const scheduleAutoTurn = ($: any, isGesture = false) => {
+  autoTimer?.cancel()
+  autoTimer = $.clock.after(AUTO_SEND_DELAY_MS, () => void quietly(() => autoTurn($, isGesture)))
+}
+
+/** Ce que l'auto choisit d'après le parcours : la carte « Ensuite » du moment (GitHub, versions). */
+const autoOpts = async ($: any) => {
+  const sync: SyncState = await read($, syncAtom)
+  return { hasPullRequests: sync.isGitHub !== false, isVersionSet: sync.isVersionSet }
+}
+
+
+/**
+ * L'envoi d'une action marquée, sans l'attendre : une commande par `$.command.run`, un texte (vague,
+ * revue du groupe, revue de sécurité) par `$.prompt.submit`, au nom du mod. Partie, sa marque démarre ;
+ * refusée (nom inconnu, limite de l'hôte, message que le moteur n'a pas fait entrer), elle reste, et
+ * devient tout de suite la question « envoi resté sans suite ». Une tenue de compte ratée après l'envoi
+ * ne la fait jamais passer pour refusée.
+ */
+const sendAutoAction = ($: any, action: AutoAction, run: Run, text: string) => {
+  void (async () => {
+    let isRefused = false
+    try {
+      if (action.kind === 'command') {
+        const command = await commandFor($, action.skill)
+        await $.command.run({ command, args: commandArgsOf(run, action.skill) })
+      } else {
+        const result = await $.prompt.submit({ text })
+        // Entré : un texte rendu, sans `drop` (absent ou `undefined`, que le type permet à un message entré).
+        isRefused = !(result !== null && typeof result === 'object' && typeof result.text === 'string' && result.drop === undefined)
+      }
+    } catch {
+      isRefused = true
+    }
+    const at = await $.clock.now()
+    if (isRefused) await quietly(() => commit($, board => raiseStaleAutoSends(board, at, true)))
+    else await quietly(() => commit($, board => markAutoStarted(board, m => m.key === action.key, at)))
+  })()
+}
+
+/**
+ * Le texte d'une action de l'auto, construit à l'instant de l'envoi comme le bouton l'aurait mis dans
+ * le prompt : les groupes d'une vague (« ⇉ en parallèle », « ↗ Session liée », en mode auto), la revue
+ * d'un groupe rendu (« ◆ Revue du groupe · session liée »), sa revue de sécurité (« ⛨ Revue de
+ * sécurité »). Vide pour une commande, et quand il n'y a rien à demander (rien ne part alors) ;
+ * `Unsafe` quand une valeur relue du fichier partagé qu'il porterait est hors forme (l'auto se met
+ * alors en pause « lecture du parcours ratée »).
+ */
+const autoActionText = async ($: any, run: Run, action: AutoAction): Promise<string | Unsafe> => {
+  if (action.kind === 'command') return ''
+  if (action.kind === 'review') return (await linkedReviewText($, run, action.group)) ?? ''
+  if (action.kind === 'security') return (await securityReviewText($, run, action.group)) ?? ''
+  const plan = groupPlan(run)
+  const views = plan ? plan.groups.filter(g => action.groups.includes(g.group.id) && g.open.length > 0) : []
+  if (views.length === 0) return ''
+  // Refusé avant d'écrire le fichier des choix : un id hors forme ne fait rien écrire.
+  if (!isSafeId(run.id)) return { unsafe: 'l’id du parcours' }
+  return delegationText($, run, views, await writeDecidedFile($, await read($, boardAtom)), undefined, true)
+}
+
+/**
+ * Pose la marque « envoyée » d'une action ; pour une vague, ses groupes passent « session liée à
+ * lancer » dans la même écriture (comme au clic sur « ↗ Session liée »), pour qu'aucun ne reparte.
+ */
+const markAutoAction = (board: Board, action: AutoAction, now: number): Outcome => {
+  if (action.kind !== 'groups') return markAutoSent(board, action, now)
+  const linked = startLinkedGroups(board, action.groups, now)
+  // Chacun des groupes du texte, lié par cette écriture même : un groupe lié entre-temps (un bouton) ferait deux sessions.
+  const run = linked ? activeRun(linked.board) : null
+  const isWhole = run !== null && action.groups.every(id => run.groups?.find(g => g.id === id)?.linked?.at === now)
+  const marked = linked && isWhole ? markAutoSent(linked.board, action, now) : null
+  return linked && marked ? { board: marked.board, fx: linked.fx } : null
+}
+
+/** Défait la marque d'une action qui n'est pas partie ; pour une vague, ses groupes reviennent à lancer. */
+const unmarkAutoAction = async ($: any, action: AutoAction, at: number) => {
+  await commit($, b => unmarkAutoSent(b, action.key, at))
+  if (action.kind === 'groups') for (const id of action.groups) await commit($, b => cancelLinkedGroup(b, id, at))
+}
+
+/**
+ * L'auto, à la fin d'un tour : rien hors auto ici ; sinon relire le fichier, décider, marquer, écrire,
+ * vérifier, envoyer. Une fin de tour qu'un nouveau tour a déjà suivie (un message de la personne) attend
+ * la fin de celui-ci.
+ */
+const autoTurn = async ($: any, isGesture = false) => {
+  // Une évaluation déjà en cours : celle-ci repart après elle, sur l'état d'alors (un geste n'est jamais perdu).
+  if (isAutoDeciding) {
+    autoAgain = autoAgain === 'gesture' || isGesture ? 'gesture' : 'turn'
+    return
+  }
+  isAutoDeciding = true
+  try {
+    if (isTurnOpen) return
+    if (!(await isAutoHere($, await read($, boardAtom)))) return
+    // Relu juste avant : une lecture ratée éteint l'auto ici, et rien ne part.
+    if (!(await pull($))) return
+    const now = await $.clock.now()
+    const decide = async () => {
+      const board: Board | null = await read($, boardAtom)
+      const run = activeRun(board)
+      return run && (await isAutoHere($, board)) ? { run, decision: autoDecision(run, await autoOpts($), hasBackgroundWork) } : null
+    }
+    let decided = await decide()
+    if (!decided) return
+    // Un groupe revenu trop de fois pour repartir seul : sa question d'abord, puis la décision, qui la voit.
+    if (decided.decision.relaunch.length > 0) {
+      const units = decided.decision.relaunch
+      const own = (await ownTracesFor($, await read($, boardAtom))).find(o => o.runId === decided!.run.id)
+      if (await commit($, b => raiseRelaunchQuestions(b, units, now, own))) decided = await decide()
+      if (!decided) return
+    }
+    const { run, decision } = decided
+    // Un geste (deux clics, « ↻ Renvoyer ») n'envoie que ce qui peut partir : la personne est là, et va répondre.
+    if (decision.kind === 'stop' && !(isGesture && decision.why !== AUTO_STOPS.unreadable)) await commit($, b => stopActiveAuto(b, decision.why, now))
+    if (decision.kind !== 'send') return
+    const action = decision.action
+    // Le texte d'abord, sur le parcours tel qu'il est : il fige la liste des groupes, leur effort et leur numéro d'envoi.
+    const text = await autoActionText($, run, action)
+    // Une valeur relue hors forme n'entre pas dans le texte : rien ne part, l'auto se met en pause, et un toast dit laquelle.
+    if (isUnsafe(text)) {
+      await commit($, b => stopActiveAuto(b, AUTO_STOPS.unreadable, now))
+      await quietly(() => $.ui.toast(`⚡ Auto en pause : ${text.unsafe} est hors forme dans le fichier de parcours (relu, peut-être retouché) ; rien n’est parti.`))
+      return
+    }
+    if (action.kind !== 'command' && text === '') return
+    if (!(await commit($, b => markAutoAction(b, action, now)))) return
+    // La marque est dans le fichier avant l'envoi : une reprise après un plantage ne le refait pas.
+    saveTimer?.cancel()
+    const isWritten = await saveNow($)
+    const after: Board | null = await read($, boardAtom)
+    const marked = activeRun(after)
+    // Un tour ouvert entre-temps (un message de la personne) : rien ne part derrière lui, la marque se retire.
+    // La marque doit avoir passé la fusion de la sauvegarde : sans elle, l'action repartirait au tour suivant.
+    const isStillMarked = marked !== null && pendingAutoMarks(marked).some(m => m.key === action.key)
+    if (!isWritten || !marked || !isStillMarked || isTurnOpen || !(await isAutoHere($, after))) {
+      const at = await $.clock.now()
+      await unmarkAutoAction($, action, at)
+      if (!isWritten) await commit($, b => stopActiveAuto(b, AUTO_STOPS.unwritten, at))
+      return
+    }
+    sendAutoAction($, action, marked, text)
+  } finally {
+    isAutoDeciding = false
+    const again = autoAgain
+    autoAgain = null
+    if (again !== null) scheduleAutoTurn($, again === 'gesture')
+  }
+}
+/** Le tour d'une commande que l'auto a envoyée commence : sa marque passe « démarrée ». */
+const noteAutoStart = async ($: any, skill: string | null) => {
+  if (!skill) return
+  const now = await $.clock.now()
+  // Reconnue par la commande partie (`what`) comme par sa clé : une phase peut partir par un skill de rechange.
+  await quietly(() => commit($, board => markAutoStarted(board, m => m.key.startsWith('phase:') && (m.what === `/${skill}` || m.key.startsWith(`phase:${skill}#`)), now)))
+}
+
+/** Une marque « envoyée » sans démarrage, la discussion au repos depuis un moment : la question « envoi resté sans suite ». */
+const AUTO_IDLE_MS = 30_000
+
+/** Le dernier geste sur l'auto (deux clics, « ↻ Renvoyer ») : la personne est là, le guet ne pose pas la pause d'un lot bloqué juste après. */
+let autoGestureAt = -Infinity
+
+const watchAutoSends = async ($: any) => {
+  const live = await read($, liveAtom)
+  const now = await $.clock.now()
+  if (live.mode === 'working' || now - live.since < AUTO_IDLE_MS) return
+  const board: Board | null = await read($, boardAtom)
+  const run = activeRun(board)
+  if (!run) return
+  if (pendingAutoMarks(run).length > 0) {
+    await commit($, b => raiseStaleAutoSends(b, now))
+    return
+  }
+  // Un lot à groupes que plus rien ne fait avancer sans un geste : l'auto se met en pause et le notifie,
+  // au lieu d'attendre en silence ; au repos seulement, car Claude envoie parfois l'avis au tour suivant.
+  if (isTurnOpen || isAutoDeciding || now - autoGestureAt < AUTO_IDLE_MS || !isGroupLotStuck(run, hasBackgroundWork) || !(await isAutoHere($, board))) return
+  // Revérifié sur le board du moment de l'écriture : un tour ouvert ou un avis arrivé entre-temps l'emporte.
+  await commit($, b => {
+    const fresh = activeRun(b)
+    return fresh && !isTurnOpen && isGroupLotStuck(fresh, hasBackgroundWork) ? stopActiveAuto(b, AUTO_STOPS.stuck, now) : null
+  })
 }
 
 // ─── Gestes de l'interface ────────────────────────────────────────────────
@@ -2508,6 +3208,13 @@ const askFastForward = async ($: any, dir: string | null) => {
 /** La suite du parcours : la commande va dans le prompt, Entrée la lance (rien ne part sans toi). */
 const launch = async ($: any, skill: string, given?: string) => {
   if (skill === 'retro' && (await launchRetro($))) return
+  // « ◆ Revue du groupe » (le /code-review des groupes finis ici) lancé à la main : la marque de l'auto,
+  // démarrée, pour qu'il ne redemande pas cette revue (parcours qui a été en auto).
+  if (skill === 'final-review') {
+    const run = activeRun(await read($, boardAtom))
+    const now = await $.clock.now()
+    if (run) await commit($, b => markAutoLaunched(b, hereReviewMark(run), now))
+  }
   const args = given ?? commandArgsOf(activeRun(await read($, boardAtom)), skill)
   const command = `${await commandFor($, skill)}${args ? ` ${args}` : ''}`
   let isFilled = false
@@ -2716,6 +3423,14 @@ const GROUP_EFFORT = (many: boolean, imposed: ImposedEffort | undefined, current
       `Si je réponds xhigh : ${XHIGH_LAUNCH(many, current)}`
 
 /**
+ * L'effort d'une session de groupe lancée par le mode auto : la même règle sans xhigh ni sa question,
+ * l'absence de proposition déclarée.
+ */
+const AUTO_GROUP_EFFORT = (many: boolean): string =>
+  `Effort de ${many ? 'chaque session (<effort>, choisi groupe par groupe)' : 'la session (<effort>)'} : medium par défaut ; high si ${many ? 'son' : 'le'} groupe a un ticket qui touche une zone sensible, s'il reste des choix de conception à faire ou s'il touche plusieurs modules à la fois. Dis-moi en une ligne l'effort choisi${many ? ' pour chaque groupe' : ''} et pourquoi. ` +
+  "Le parcours est en mode auto : jamais xhigh ; ne me pose pas la question « xhigh (Recommandé) / high » ; quand un ticket relèverait de xhigh (une tâche de jugement), lance en high et déclare dans decided que xhigh n’a pas été proposé. "
+
+/**
  * Ce que le background d'une session liée garde : ce qui varie d'une session à l'autre. Les règles
  * (écritures permises, gestes réservés, dépôt public, modèle et effort des revues) se citent par
  * leur document : recopiées, elles se périmaient (un brief imposait encore un effort abandonné).
@@ -2736,19 +3451,39 @@ const MERGE_MOVED =
 const atEnd = (whose: string): string => `À la note de fin de ${whose} (dans le CLI : son message reçu par SendMessage)`
 
 /** Une faille corrigée après le retour d'un groupe : sans nouvel envoi, le tableau de bord gardait « 0 corrigé ». */
-const FIXED_LATER =
-  "une faille corrigée après coup (avec mon accord) se renvoie aussi, avec \"fixed\" mis à jour, sinon le tableau de bord garde « 0 corrigé » ; une faille laissée, sur ma confirmation, par \"dismissed\" (le total, à jour avec \"findings\" et \"fixed\")"
+const fixedLater = (isAuto: boolean): string =>
+  `une faille corrigée après coup${isAuto ? '' : ' (avec mon accord)'} se renvoie aussi, avec "fixed" mis à jour, sinon le tableau de bord garde « 0 corrigé » ; une faille laissée, sur ma confirmation, par "dismissed" (le total, à jour avec "findings" et "fixed")`
+const FIXED_LATER = fixedLater(false)
+
+/** La même consigne en mode auto, où une faille se corrige d'office, sans accord à demander. */
+const FIXED_LATER_AUTO = fixedLater(true)
 
 const LINKED_NO_GIT_GROUP_POINT =
   "point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe (un fichier touché seulement par un ticket suivant n'a pas de copie du premier), comparée au fichier actuel, les fichiers nouveaux en entier ; lui donner la liste des copies et des fichiers"
 
 /**
+ * Une demande que le mod ne construit pas : une valeur relue du fichier de parcours partagé (que tout
+ * processus de la session peut réécrire) n'a pas sa forme. Invariant : un texte que le mod soumet ou
+ * rend à Claude n'insère jamais une valeur relue du fichier partagé sans l'avoir contrôlée (forme d'id,
+ * de branche) ou échappée. `unsafe` : ce qui est hors forme, en mots, sans la valeur elle-même.
+ */
+type Unsafe = { unsafe: string }
+
+const isUnsafe = (x: unknown): x is Unsafe => x !== null && typeof x === 'object' && 'unsafe' in x
+
+/** Le toast d'un bouton dont la demande ne s'écrit pas : la valeur hors forme n'y est pas recopiée. */
+const unsafeToast = (u: Unsafe): string => `Rien n’est mis dans le prompt : ${u.unsafe} est hors forme dans le fichier de parcours (relu, peut-être retouché).`
+
+/**
  * La demande à Claude pour confier des groupes à des sessions liées, une par groupe. Le parcours
  * reste ici (un seul écrivain) : chaque session se déclare (`delegate`), suit la procédure de
  * `reference/procedure-groupe.md` (citée par son chemin, jamais recopiée) selon le CLAUDE.md du
- * projet, puis rend compte ; Claude rend les statuts ici. Le prompt ne porte que ce qui varie.
+ * projet, puis rend compte ; Claude rend les statuts ici. Le prompt ne porte que ce qui varie. Hors
+ * forme, l'id du parcours ou d'un groupe n'y entre pas : la demande ne s'écrit pas (`Unsafe`).
  */
-const delegationText = async ($: any, run: Run, views: readonly GroupView[], decidedAt: string | null = null, imposed?: ImposedEffort): Promise<string> => {
+const delegationText = async ($: any, run: Run, views: readonly GroupView[], decidedAt: string | null = null, imposed?: ImposedEffort, isAuto = false): Promise<string | Unsafe> => {
+  if (!isSafeId(run.id)) return { unsafe: 'l’id du parcours' }
+  if (!views.every(v => isGroupId(v.group.id))) return { unsafe: 'l’id d’un groupe' }
   noteReferences($)
   // Sans git, pas de worktree possible : les sessions travaillent dans ce dossier.
   const isRepo = await measureRepo($)
@@ -2757,7 +3492,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   const ticketReview = `/${await commandFor($, 'code-review')}`
   const standards = await standardsPath($)
   const many = views.length > 1
-  const delegate = `{"delegate": "${run.id}", "group": ${JSON.stringify(many ? '<id du groupe>' : views[0]!.group.id)}, "main": "[<ref>]"}`
+  const delegate = `{"delegate": ${asciiJson(run.id)}, "group": ${asciiJson(many ? '<id du groupe>' : views[0]!.group.id)}, "main": "[<ref>]"}`
   const groups = views.map(v => `Groupe ${v.group.id} (${neutralInPrompt(v.group.name)}) : ${ticketList(run, v.open.map(t => t.id))}`).join(' ∥ ')
   const prefix = linkedPrefix(run)
   // Dans le dépôt de flow-board, ses fichiers à jour sont ceux du dépôt, pas ceux installés ; les
@@ -2769,19 +3504,22 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   const autonomous = "qu'elle est une session autonome : elle applique la section « Session autonome » de la procédure"
   return (
     `${many ? 'Confie chacun de ces groupes à sa session liée, en parallèle,' : 'Confie ce groupe à une session liée,'} pour le parcours « ${neutralInPrompt(run.title)} » : ${groups}. ` +
-    `Avant de lancer : repère ce dont ${many ? 'les sessions auront' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé) et règle-le d'abord avec moi ici, sinon ${many ? 'elles y buteront' : 'elle y butera'}. ` +
+    (isAuto
+      ? `Avant de lancer : ce dont ${many ? 'une session aura' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé), déclare-le en question bloquante sur son groupe ("waiting") et ne lance ce groupe qu'une fois ma réponse donnée${many ? ' ; lance les autres tout de suite' : ''}. `
+      : `Avant de lancer : repère ce dont ${many ? 'les sessions auront' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé) et règle-le d'abord avec moi ici, sinon ${many ? 'elles y buteront' : 'elle y butera'}. `) +
     `Puis lance ${many ? 'une session par groupe' : 'la session'}, avec un titre qui commence par « ${prefix}Groupe <id> · » : le début dit de quelle discussion ${many ? 'elles viennent' : 'elle vient'}, et « Groupe <id> » relie la session à son groupe au tableau de bord. ` +
-    launchHow({ many, isRepo, ownFolder: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: GROUP_EFFORT(many, imposed, await sessionEffort($)) }) +
+    launchHow({ many, isRepo, ownFolder: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: isAuto && !imposed ? AUTO_GROUP_EFFORT(many) : GROUP_EFFORT(many, imposed, await sessionEffort($)) }) +
     (isRepo ? resentWorktrees(run, views) : '') +
+    (isAuto ? resentFindings(views) : '') +
     `${BACKGROUND(many)}${decidedAt ? `le fichier des choix déjà déclarés du parcours se cite par son chemin, ${decidedAt}` : 'les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste : leur fichier est hors d\'atteinte'}. ` +
     `Le prompt de ${many ? 'chaque session' : 'la session'} : 1) d'abord, appeler une seule fois l'outil flow de flow-board avec ${delegate} : le parcours reste ici, et l'avancement de la session (statuts Asana des tickets, commits, tests) est relayé tout seul au tableau de bord d'ici ; ` +
     `2) puis lire la procédure d'une session liée de groupe, ${procedure}, et la suivre jusqu'au bout : questions sensibles d'abord, puis chaque section dans l'ordre jusqu'au compte rendu déposé au relais puis une ligne à cette discussion ; chaque fichier lu à part, et de la spec les seules sections que cite le ticket ; ` +
-    `3) ce qui varie, que la procédure attend du prompt : les commandes de ce poste (TDD : ${tdd} ; revue du ticket : ${ticketReview} ; ${implement} est réservé à l'utilisateur), le fichier de méthode de la revue de sécurité, ${cite(securityMethod, SECURITY_METHOD_FILE)}, le fichier de méthode de la relecture du fond et de la forme, ${cite(readingMethod, READING_METHOD_FILE)}, ${decidedAt ? `le fichier des choix déjà déclarés du parcours, ${decidedAt}` : 'la liste des choix déjà déclarés (leur fichier est hors d\'atteinte : section 8 de la procédure)'}, ${standards ? 'que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)' : "que le projet n'a pas de CODING_STANDARDS.md à sa racine"}, ${isRepo ? 'que son dossier est un dépôt git' : "que son dossier n'a pas de git (section 9 de la procédure)"}, ${imposed ? `et ${autonomous}` : `et, si son effort est xhigh, ${autonomous}`}. ` +
+    `3) ce qui varie, que la procédure attend du prompt : les commandes de ce poste (TDD : ${tdd} ; revue du ticket : ${ticketReview} ; ${implement} est réservé à l'utilisateur), le fichier de méthode de la revue de sécurité, ${cite(securityMethod, SECURITY_METHOD_FILE)}, le fichier de méthode de la relecture du fond et de la forme, ${cite(readingMethod, READING_METHOD_FILE)}, ${decidedAt ? `le fichier des choix déjà déclarés du parcours, ${decidedAt}` : 'la liste des choix déjà déclarés (leur fichier est hors d\'atteinte : section 8 de la procédure)'}, ${standards ? 'que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)' : "que le projet n'a pas de CODING_STANDARDS.md à sa racine"}, ${isRepo ? 'que son dossier est un dépôt git' : "que son dossier n'a pas de git (section 9 de la procédure)"}, ${isAuto ? `et qu'elle est une session autonome quel que soit son effort (le parcours est en mode auto${imposed ? '' : ', jamais en xhigh'}) : elle applique la section « Session autonome » de la procédure` : imposed ? `et ${autonomous}` : `et, si son effort est xhigh, ${autonomous}`}. ` +
     `Ici : garder le parcours (pas de nouveau parcours) et suivre ${many ? 'les sessions sans les ' : "la session sans l'"}attendre activement : ${FOLLOW(isRepo)}. ` +
     `Le compte rendu complet d'une session est dans le relais, son message n'en porte qu'une ligne : chaque réponse de l'outil flow ici cite ceux des groupes pas encore rendus. ` +
-    `Si l'app ou cette discussion redémarre, le parcours passe en pause et ne reçoit plus rien : à la reprise de cette discussion, le reprendre ici avant toute autre écriture, par l'appel flow {"resume": "${run.id}", "main": "[<ref>]"} (comme « ↻ Reprendre ici » ; "main" : ta référence du moment, lue par ListAgents, qui change au redémarrage : les sessions liées la relisent par leur outil flow), puis rendre les statuts des tickets faits pendant la pause d'après Asana. ` +
-    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail ; avant d'appliquer ici un correctif que son compte rendu propose, lire ${isRepo ? 'sa branche (git log et git diff de son worktree)' : 'ses fichiers'} : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici ; vérifier aussi, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; un groupe sans logique ni zone sensible n'a ni revue du groupe ni revue de sécurité, ni avis)${isRepo ? `, fusionner sa branche (${MERGE_MOVED})` : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set", avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
-    `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction ; ${FIXED_LATER}. ` +
+    `Si l'app ou cette discussion redémarre, le parcours passe en pause et ne reçoit plus rien : à la reprise de cette discussion, le reprendre ici avant toute autre écriture, par l'appel flow {"resume": ${asciiJson(run.id)}, "main": "[<ref>]"} (comme « ↻ Reprendre ici » ; "main" : ta référence du moment, lue par ListAgents, qui change au redémarrage : les sessions liées la relisent par leur outil flow), puis rendre les statuts des tickets faits pendant la pause d'après Asana. ` +
+    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail ; avant d'appliquer ici un correctif que son compte rendu propose, lire ${isRepo ? 'sa branche (git log et git diff de son worktree)' : 'ses fichiers'} : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici ; vérifier aussi, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; un groupe sans logique ni zone sensible n'a ni revue du groupe ni revue de sécurité, ni avis)${isRepo ? `, fusionner sa branche (${MERGE_MOVED})` : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set"${isAuto ? " (un ticket dont les contrôles ont échoué reste à faire, en todo : l'auto renvoie le groupe une fois)" : ''}, avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
+    `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; ${isAuto ? AUTO_FINDINGS_FR : 'me dire les failles trouvées : je décide de leur correction'} ; ${isAuto ? FIXED_LATER_AUTO : FIXED_LATER}. ` +
     `Enfin, un groupe clos (« Close now » dans la réponse de l’outil) se ferme selon sa procédure, puis {"closed": [...]}.`
   )
 }
@@ -2796,6 +3534,16 @@ const resentWorktrees = (run: Run, views: readonly GroupView[]): string =>
     // Un id hors forme n'a pas de nom de worktree (`groupWorktree` rend null) : rien ne se lance pour lui.
     .filter(x => x.seq > 1 && isGroupId(x.id))
     .map(x => `Worktree et branche de cet envoi : ${groupWorktree(run, x.id, x.seq) ?? ''} (${x.seq}e envoi du groupe ${x.id} : les noms des envois précédents restent pris), à la place de ${groupWorktree(run, x.id) ?? ''} ; titre : « ${linkedPrefix(run)}${groupTitle(x.id, x.seq)}<thème> », qui le distingue de la session précédente. `)
+    .join('')
+
+/**
+ * En mode auto, un groupe renvoyé (deuxième envoi, revenu avec des tickets ouverts) repart avec ce que
+ * la session précédente a trouvé. Rien pour un premier envoi.
+ */
+const resentFindings = (views: readonly GroupView[]): string =>
+  views
+    .filter(v => v.group.delegated !== undefined)
+    .map(v => `Le groupe ${v.group.id} repart après un envoi revenu avec des tickets ouverts : donne à sa session ce que la précédente a trouvé (son compte rendu au relais, sa branche), pour qu'elle reprenne là où elle s'est arrêtée. `)
     .join('')
 
 /** Le refus de lancer un groupe à l'id hors forme : ce qu'il faut faire pour le lancer. */
@@ -2814,6 +3562,11 @@ const delegateGroups = async ($: any, ids: readonly string[], imposed?: ImposedE
   const run = activeRun(await read($, boardAtom))
   const plan = run ? groupPlan(run) : null
   if (!run || !plan) return
+  // L'id du parcours, relu du fichier partagé, entre dans le brief : hors forme, rien n'est lié ni mis dans le prompt.
+  if (!isSafeId(run.id)) {
+    await quietly(() => $.ui.toast(unsafeToast({ unsafe: 'l’id du parcours' })))
+    return
+  }
   const now = await $.clock.now()
   // Un id hors forme (d'avant la règle) ne se lance pas : il faut d'abord renommer le groupe. Le
   // refus va dans le seul toast de l'action, après le lancement des autres : un second toast le cacherait.
@@ -2828,7 +3581,14 @@ const delegateGroups = async ($: any, ids: readonly string[], imposed?: ImposedE
   await update($, uiAtom, ui => ({ ...ui, selection: [] }))
   // Le brief cite le fichier des choix : il existe avant que la session le lise, sinon le brief n'en cite pas le chemin.
   const decidedAt = await writeDecidedFile($, await read($, boardAtom))
-  const text = await delegationText($, run, views, decidedAt, imposed)
+  // Dans un parcours en auto, le bouton confie le groupe avec la demande du mode auto (session autonome, sans question xhigh).
+  const text = await delegationText($, run, views, decidedAt, imposed, await isAutoHere($, await read($, boardAtom)))
+  // Contrôlés avant le lien : ce cas ne se voit pas ; s'il se voyait, les groupes redeviennent à lancer.
+  if (isUnsafe(text)) {
+    for (const id of fine) await commit($, b => cancelLinkedGroup(b, id, now))
+    await quietly(() => $.ui.toast(unsafeToast(text)))
+    return
+  }
   const names = views.map(v => v.group.id).join(', ')
   const how = imposed ? ` en ${imposed}` : ''
   const current = imposed ? await sessionEffort($) : undefined
@@ -2844,50 +3604,82 @@ const delegateGroups = async ($: any, ids: readonly string[], imposed?: ImposedE
 }
 
 /**
- * La revue d'un groupe rendu par sa session liée sans revue : ici, sa branche est fusionnée et
- * `/code-review` n'aurait rien à lire. La demande va dans le prompt : Claude la fait faire à la
- * session, sur les commits du groupe lus sur le code actuel, puis marque le groupe relu.
+ * Ce qu'une demande de revue dit des failles en mode auto : la règle de l'auto (toutes corrigées d'office),
+ * à la place de « je décide de leur correction ».
  */
-const reviewLinkedGroup = async ($: any, groupId: string) => {
+const AUTO_FINDINGS_FR =
+  "le parcours est en mode auto : corrige d'office chaque faille gardée (applique, teste, commite, puis renvoie \"fixed\") ; seule la décision d'en laisser une sans correctif me revient, en question bloquante sur son groupe"
+
+/**
+ * La demande de revue d'un groupe rendu par sa session liée sans revue : ici, sa branche est fusionnée
+ * et `/code-review` n'aurait rien à lire ; Claude la fait faire à la session, sur les commits du groupe
+ * lus sur le code actuel, puis marque le groupe relu. Null quand le groupe n'a pas été rendu par une
+ * session liée. `isAuto` : envoyée par le mode auto. L'id du groupe et celui de sa session, relus du
+ * fichier partagé, hors forme : la demande ne s'écrit pas (`Unsafe`) ; la branche par défaut du
+ * distant, hors forme ou inconnue : la demande la nomme « la branche principale », sans commande.
+ */
+const linkedReviewText = async ($: any, run: Run, groupId: string, isAuto = true): Promise<string | null | Unsafe> => {
+  const group = run.groups?.find(g => g.id === groupId)
+  if (!group?.delegated) return null
+  if (!isGroupId(group.id)) return { unsafe: 'l’id du groupe' }
+  const sessionId: unknown = group.delegated.session
+  if (sessionId !== undefined && sessionId !== '' && !isSafeId(sessionId)) return { unsafe: `l’id de la session du groupe ${group.id}` }
   noteReferences($)
-  const run = activeRun(await read($, boardAtom))
-  const group = run?.groups?.find(g => g.id === groupId)
-  if (!run || !group?.delegated) return
   const isRepo = await measureRepo($)
-  const main = (await read($, syncAtom)).main ?? 'la branche principale'
-  const session = group.delegated.session ? ` (id ${group.delegated.session})` : ''
+  const main = (await read($, syncAtom)).main
+  const session = isSafeId(sessionId) ? ` (id ${sessionId})` : ''
   // Les arguments de sa revue suivent sa sensibilité : sans --fix pour un groupe sensible, comme depuis le panneau.
   const args = groupReviewArgs(run, group)
-  const text =
+  return (
     `Fais faire la revue du groupe ${group.id} (${neutralInPrompt(group.name)}) du parcours « ${neutralInPrompt(run.title)} » par sa session liée : le groupe est revenu sans revue, et ici sa branche est déjà fusionnée. ` +
     `Sa session a un titre qui commence par ${linkedTitles(run, group.id)}${session} : retrouve-la par ListAgents. ` +
     `Envoie-lui par SendMessage : ` +
-    (isRepo ? `1) remettre sa branche au niveau de ${main} par une avance rapide (git merge --ff-only ${main}), pour que les correctifs portent sur le code actuel ; ` : '1) travailler sur le code actuel ; ') +
+    (isRepo
+      ? isSafeBranch(main)
+        ? `1) remettre sa branche au niveau de ${main} par une avance rapide (git merge --ff-only ${main}), pour que les correctifs portent sur le code actuel ; `
+        : '1) remettre sa branche au niveau de la branche principale par une avance rapide, pour que les correctifs portent sur le code actuel ; '
+      : '1) travailler sur le code actuel ; ') +
     `2) lancer elle-même la revue, ${LINKED_GROUP_REVIEW} ; la revue est /${slashOf('final-review')} ${args} (outil Skill « ${slashOf('final-review')} », arguments « ${args} ${isRepo ? '<plage> ' : ''}consignes : <chemin> ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel, avec pour cible leur plage <commit d'avant le premier du groupe>..<dernier commit du groupe> (une revue sans cible n'y verrait aucun changement, et un hash seul ne relirait qu'un commit)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et la consigne des relecteurs (section 7 de la procédure des sessions liées de groupe, ${procedurePath}), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; ` +
     `3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ; ` +
     `4) juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_CRITERIA}) et, si oui, ${linkedSecurityReview(isRepo ? 'les commits du groupe' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; ` +
     `5) envoyer son compte rendu par SendMessage : constats et corrigés, commits, contrôles, avis et failles de sécurité. ` +
-    `Si la session n'existe plus ou si l'outil Skill refuse la revue, dis-le-moi : je la lancerai moi-même. ` +
-    `Au compte rendu : vérifier son travail${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow {"reviewed": [${JSON.stringify(group.id)}]} et {"security": {"group": ${JSON.stringify(group.id)}, "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction ; ${FIXED_LATER}.`
+    `Si la session n'existe plus ou si l'outil Skill refuse la revue, ${isAuto ? 'déclare-le en question bloquante sur le groupe ("waiting")' : 'dis-le-moi'} : je la lancerai moi-même. ` +
+    `Au compte rendu : vérifier son travail${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow {"reviewed": [${asciiJson(group.id)}]} et {"security": {"group": ${asciiJson(group.id)}, "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; ${isAuto ? AUTO_FINDINGS_FR : 'me dire les failles trouvées : je décide de leur correction'} ; ${isAuto ? FIXED_LATER_AUTO : FIXED_LATER}.`
+  )
+}
+
+/** « ◆ Revue du groupe · session liée » : la demande va dans le prompt, Entrée la lance. */
+const reviewLinkedGroup = async ($: any, groupId: string) => {
+  const run = activeRun(await read($, boardAtom))
+  const text = run ? await linkedReviewText($, run, groupId, await isAutoHere($, await read($, boardAtom))) : null
+  if (!text) return
+  if (isUnsafe(text)) {
+    await quietly(() => $.ui.toast(unsafeToast(text)))
+    return
+  }
+  // Lancée à la main : la marque de l'auto, démarrée, pour qu'il ne la redemande pas (parcours qui a été en auto).
+  const now = await $.clock.now()
+  await commit($, b => markAutoLaunched(b, run ? linkedReviewMark(run, groupId) : null, now))
   let isFilled = false
   await quietly(async () => {
     isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
   })
   await quietly(() =>
-    $.ui.toast(isFilled ? `Revue de ${group.id} par sa session liée : la demande est dans le prompt, Entrée pour la lancer` : `Demande à taper : fais relire ${group.id} par sa session liée`),
+    $.ui.toast(isFilled ? `Revue de ${groupId} par sa session liée : la demande est dans le prompt, Entrée pour la lancer` : `Demande à taper : fais relire ${groupId} par sa session liée`),
   )
 }
 
 /**
- * « ⛨ Revue de sécurité » sur un groupe relu (ou sur le lot sans groupes) : Claude la lance
- * d'ordinaire lui-même après la revue ; le bouton la lui demande quand il ne l'a pas fait (avis
- * « inutile », ou relance). Jamais `/security-review`, qui relit la branche face à la branche par défaut.
+ * La demande de revue de sécurité d'un groupe relu (ou du lot sans groupes, `id` « lot ») : Claude la
+ * lance d'ordinaire lui-même après la revue ; le bouton, ou le mode auto pour une revue conseillée, la
+ * lui demande. Jamais `/security-review`, qui relit la branche face à la branche par défaut. Null pour
+ * un groupe inconnu. `isAuto` : envoyée par le mode auto. L'id du groupe, relu du fichier partagé,
+ * hors forme : la demande ne s'écrit pas (`Unsafe`).
  */
-const securityReview = async ($: any, id: string) => {
-  const run = activeRun(await read($, boardAtom))
-  if (!run) return
+const securityReviewText = async ($: any, run: Run, id: string, isAuto = true): Promise<string | null | Unsafe> => {
   const group = id === 'lot' ? undefined : run.groups?.find(g => g.id === id)
-  if (id !== 'lot' && !group) return
+  if (id !== 'lot' && !group) return null
+  if (group && !isGroupId(group.id)) return { unsafe: 'l’id du groupe' }
   const isRepo = await measureRepo($)
   const scope = !group
     ? 'les changements que la revue de ce parcours a relus'
@@ -2897,11 +3689,32 @@ const securityReview = async ($: any, id: string) => {
         ? `les commits du groupe ${group.id}, lus sur le code actuel`
         : `git diff <base>..<lancement> (<base> : le commit d'avant le premier ticket du groupe ${group.id} ; <lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes, pour que les correctifs de la revue du groupe se commitent pendant qu'elle tourne sans changer son périmètre)`
   const what = group ? `du groupe ${group.id} (${neutralInPrompt(group.name)})` : 'de ce parcours'
-  const send = group ? `{"security": {"group": ${JSON.stringify(group.id)}, "findings": <failles gardées>, "fixed": <corrigées>}}` : '{"security": {"findings": <failles gardées>, "fixed": <corrigées>}}'
+  const send = group ? `{"security": {"group": ${asciiJson(group.id)}, "findings": <failles gardées>, "fixed": <corrigées>}}` : '{"security": {"findings": <failles gardées>, "fixed": <corrigées>}}'
   noteReferences($)
-  const text =
+  const decide = isAuto ? ` ; ${AUTO_FINDINGS_FR}.` : ', je décide de leur correction ; une réponse comme « corrige F1 et F3 » suffit : applique-les, teste-les, commite-les.'
+  return (
     `Lance la revue de sécurité ${what} : confie-la à un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode pour sa recherche, ses vérifications en high), en lecture seule, avec pour seul périmètre ${scope}, pour critères ${SECURITY_CRITERIA} et pour méthode ${securityMethodFr().replace('le fichier de méthode', 'le chemin du fichier de méthode')}, ${INSTRUCTIONS_IN_PROMPT_FR} ; ` +
-    `pas /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes. Le sous-agent ne corrige rien : chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt (ce qu'il change, le choix qu'il implique s'il y en a un), je décide de leur correction ; une réponse comme « corrige F1 et F3 » suffit : applique-les, teste-les, commite-les. Puis envoie à l'outil flow ${send} (les failles gardées seulement, pas la liste « à surveiller ») ; ${FIXED_LATER}.`
+    `pas /security-review, qui relit la branche face à la branche par défaut, donc aussi les autres groupes. Le sous-agent ne corrige rien : chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt (ce qu'il change, le choix qu'il implique s'il y en a un)${decide} Puis envoie à l'outil flow ${send} (les failles gardées seulement, pas la liste « à surveiller ») ; ${isAuto ? FIXED_LATER_AUTO : FIXED_LATER}.`
+  )
+}
+
+/**
+ * « ⛨ Revue de sécurité » sur un groupe relu (ou sur le lot sans groupes) : la demande va dans le
+ * prompt, Entrée la lance.
+ */
+const securityReview = async ($: any, id: string) => {
+  const run = activeRun(await read($, boardAtom))
+  const text = run ? await securityReviewText($, run, id, await isAutoHere($, await read($, boardAtom))) : null
+  if (!run || !text) return
+  if (isUnsafe(text)) {
+    await quietly(() => $.ui.toast(unsafeToast(text)))
+    return
+  }
+  const group = id === 'lot' ? undefined : run.groups?.find(g => g.id === id)
+  const what = group ? `du groupe ${group.id} (${neutralInPrompt(group.name)})` : 'de ce parcours'
+  // Lancée à la main : la marque de l'auto, démarrée, pour qu'il ne la redemande pas (parcours qui a été en auto).
+  const now = await $.clock.now()
+  if (group) await commit($, b => markAutoLaunched(b, securityReviewMark(run, group.id), now))
   let isFilled = false
   await quietly(async () => {
     isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
@@ -2998,8 +3811,9 @@ const BUG_EFFORT =
 const launchBugLinked = async ($: any) => {
   const run = activeRun(await read($, boardAtom))
   if (!run) return
-  const phase = SKILLS[currentPhase(run).skill]?.label ?? currentPhase(run).skill
-  const resume = `{"resume": "${run.id}"}`
+  const phase = SKILLS[currentPhase(run).skill]?.label ?? neutralInPrompt(String(currentPhase(run).skill))
+  // L'id du parcours, relu du fichier partagé, échappé en JSON : il se recopie exact sans rien glisser dans le brief.
+  const resume = `{"resume": ${asciiJson(run.id)}}`
   const prefix = linkedPrefix(run)
   const text =
     `Lance un diagnostic de bug dans une session liée, pour le parcours « ${neutralInPrompt(run.title)} » (phase ${phase}), avec un titre qui commence par « ${prefix}Bug · ». ` +
@@ -3194,9 +4008,9 @@ const askNext = async ($: any) => {
   const detour = activeDetour(phase)
   const where = [
     `parcours « ${neutralInPrompt(run.title)} »`,
-    `phase ${def?.label ?? phase.skill}${phase.status === 'done' ? ' (terminée)' : ''}`,
+    `phase ${def?.label ?? neutralInPrompt(String(phase.skill))}${phase.status === 'done' ? ' (terminée)' : ''}`,
     step ? `étape ${step}` : '',
-    detour ? `détour ${SKILLS[detour.skill]?.label ?? detour.skill}` : '',
+    detour ? `détour ${SKILLS[detour.skill]?.label ?? neutralInPrompt(String(detour.skill))}` : '',
   ]
     .filter(Boolean)
     .join(', ')
@@ -3237,6 +4051,51 @@ const actionsFor = ($: any): Actions => ({
   setAside: async () => {
     const now = await $.clock.now()
     await commit($, board => setAsideActive(board, now))
+  },
+  // Le mode auto, jamais allumé sans le second clic : un premier clic montre ce que l'activation
+  // vaut, « Confirmer » l'allume pour la discussion du moment ; un clic le coupe.
+  askAuto: async () => {
+    const run = activeRun(await read($, boardAtom))
+    await update($, uiAtom, ui => ({ ...ui, confirmAuto: run && ui.confirmAuto !== run.id ? run.id : undefined }))
+  },
+  confirmAuto: async () => {
+    const asked = (await read($, uiAtom)).confirmAuto
+    await update($, uiAtom, ui => ({ ...ui, confirmAuto: undefined }))
+    const now = await $.clock.now()
+    const here = await hereId($)
+    // Le second clic vaut seulement pour le parcours dont le premier a montré le texte.
+    const run = activeRun(await read($, boardAtom))
+    if (!run || run.id !== asked) return
+    // Sa date se garde à part d'abord : sans elle, l'auto ne s'allume pas (il n'enverrait jamais d'ici).
+    const wasConfirmed = await confirmedAtFor($, run, here)
+    // Déjà allumé d'ici, son clic gardé (un double clic, un panneau pas encore redessiné) : rien à refaire.
+    const board0: Board | null = await read($, boardAtom)
+    if (board0 && autoStateOf(run, board0, here, wasConfirmed).kind === 'on') return
+    const onAt = nextAutoOnAt(run, now)
+    if (!(await writeConfirm($, run.id, here, onAt))) {
+      await quietly(() => $.ui.toast('⚡ Auto non allumé : le stockage du mod a refusé de garder la date du clic'))
+      return
+    }
+    const fx = await commit($, board => (activeRun(board)?.id === asked ? switchOnAuto(board, here, onAt, wasConfirmed) : null))
+    const lit = activeRun(await read($, boardAtom))
+    const litAt = lit?.id === run.id ? lit.auto?.onAt : undefined
+    if (!fx) await forgetConfirm($, run.id, here)
+    // Le parcours a bougé entre la lecture et l'écriture : la date gardée suit celle qui a été posée.
+    else if (litAt !== undefined && litAt !== onAt && !(await writeConfirm($, run.id, here, litAt))) await commit($, board => switchOffAuto(board, litAt))
+    // Rallumé au repos (après une pause), la suite peut partir sans attendre une fin de tour.
+    if (fx) autoGestureAt = now
+    if (fx && !isTurnOpen) scheduleAutoTurn($, true)
+  },
+  resendAuto: async (runId: string, key: string) => {
+    const now = await $.clock.now()
+    if (!(await commit($, board => resendAutoMark(board, runId, key, now)))) return
+    autoGestureAt = now
+    // Au repos, l'auto renvoie tout de suite ; pendant un tour, à sa fin.
+    if (!isTurnOpen) scheduleAutoTurn($, true)
+  },
+  stopAuto: async () => {
+    const now = await $.clock.now()
+    await commit($, board => switchOffAuto(board, now))
   },
   resume: async (id: string) => {
     const now = await $.clock.now()
@@ -3671,6 +4530,8 @@ const readView = async ($: any): Promise<View> => {
     ui: await read($, uiAtom),
     sync,
     now: await $.clock.now(),
+    here: await hereId($),
+    autoConfirmedAt: await autoConfirmedHere($, board),
     relay: await read($, relayAtom),
     agents: await read($, registryAtom),
     linked: (await read($, linkedAtom)).map(session => ({ session, reg: linkedRegistryOf(session.session) })),
@@ -3695,6 +4556,7 @@ const tick = async ($: any) => {
     await pullRelay($, (await read($, boardAtom)) ?? board)
     await quietly(() => refreshLinked($))
     await quietly(() => migrateRunAgents($))
+    await quietly(() => watchAutoSends($))
     const ui = await read($, uiAtom)
     if (ui.tab === 'agents' && ui.agentsHistory !== undefined) await quietly(() => refreshHistory($))
     if (ui.tab === 'agents') await quietly(() => reconcileErased($))
@@ -3742,14 +4604,14 @@ const runFlow = async ($: any, e: { args: string }) => {
   if (arg === 'pause') {
     const run = activeRun(board)
     const fx = await commit($, b => setAsideActive(b, now))
-    return { text: fx && run ? `Parcours mis de côté : ${run.title} (Historique, « Reprendre », pour le rouvrir tel quel).` : 'Aucun parcours en cours.' }
+    return { text: fx && run ? `Parcours mis de côté : ${neutralInPrompt(run.title)} (Historique, « Reprendre », pour le rouvrir tel quel).` : 'Aucun parcours en cours.' }
   }
   if (arg === 'reset') {
     const run = activeRun(board)
     if (!run) return { text: 'Aucun parcours en cours.' }
     // On n'efface plus : le parcours abandonné part aux archives, d'où il peut revenir.
     await commit($, b => archiveRun(b, run.id, now))
-    return { text: `Parcours archivé : ${run.title} (Historique, « Archivés », pour le rouvrir).` }
+    return { text: `Parcours archivé : ${neutralInPrompt(run.title)} (Historique, « Archivés », pour le rouvrir).` }
   }
   const tab: Tab = arg === 'history' ? 'history' : arg === 'activity' ? 'activity' : arg === 'commands' ? 'commands' : 'flow'
   await update($, uiAtom, ui => ({ ...ui, tab, isPaneDismissed: false, isBandHidden: arg === 'show' ? false : ui.isBandHidden }))
@@ -3787,6 +4649,11 @@ export const register: Register = on => {
     // Un board déjà là au démarrage, hors d'un /clear : le mod a été rechargé (/reload-plugins), son état est intact.
     isReloadToAnnounce = !isAfterClear && (await read($, boardAtom)) !== null
     isAfterClear = false
+    hereCache = null
+    // Les traces gardées ici se relisent de `$.store` : après /reload-plugins, comme un mod rechargé.
+    ownTraceCache.clear()
+    // L'id de ce processus pour la date du clic de l'auto, hors d'un dessin (où l'état ne s'écrit pas).
+    await quietly(() => ensureBoot($))
     await ensureBoard($)
     await quietly(() => ensureRegistry($))
     // S1 : les anciens sous-agents des parcours rejoignent le registre, puis quittent le board.
@@ -3838,6 +4705,9 @@ export const register: Register = on => {
       const written = await $.state.set(BOARD_REF, out.board, { ifVersion: version })
       if (written.isSet) {
         await afterChange($, out.fx, out.board)
+        // Une question retirée par Claude ici : sa trace est gardée ici.
+        await quietly(() => recordOwnTraces($, value, out.board))
+        await afterAuto($, value, out.board)
         break
       }
     }
@@ -3892,6 +4762,13 @@ export const register: Register = on => {
     const sentence = relayedSentence(input)
     if (lost.length > 0 && sentence !== '') text = text.includes(sentence) ? text.replace(sentence, relayedSentence(input, lost)) : `${text} · ${relayedSentence(input, lost)}`
     text += startText
+    // Coupé ou en pause depuis une consigne qui portait le bloc du mode auto : la réponse le dit une fois.
+    const shown: Board | null = await read($, boardAtom)
+    const shownRun = shown?.delegate ? null : activeRun(shown)
+    if (shownRun && autoNoted.has(shownRun.id) && !(await isAutoHere($, shown))) {
+      autoNoted.delete(shownRun.id)
+      text += AUTO_OFF_NOTICE
+    }
     for (const note of notes) text += ` · Relayed, but ${note}: send your final report by SendMessage too.`
     if (moved !== undefined) text = `${moved} ${text}`
     await keepDelegate($)
@@ -3937,6 +4814,8 @@ export const register: Register = on => {
       return withTail(result, tail)
     }
     const fx = await commit($, board => applySkill(board, e.skill, { now, isMain, args }))
+    // Le skill d'une phase que l'auto a envoyée se charge : sa marque passe « démarrée ».
+    if (isMain) await noteAutoStart($, id)
     // Les revues du groupe et de sécurité ne changent pas de phase, mais leurs consignes comptent.
     if (!fx || (fx.note === 'none' && id !== 'final-review' && id !== 'security-review')) return withTail(result, tail)
     const run = activeRun(await read($, boardAtom))
@@ -3948,7 +4827,9 @@ export const register: Register = on => {
     // celui de cette discussion et ceux de ses sessions liées (Q-c), pour le seul compte rendu.
     const failedAgents = run && noteId === 'compte-rendu' ? await failedOfRun($, run) : 0
     noteReferences($)
-    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null)}${tail}` } : withTail(result, tail)
+    const isAuto = await isAutoHere($, await read($, boardAtom))
+    if (isAuto && run) autoNoted.add(run.id)
+    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null, isAuto)}${tail}` } : withTail(result, tail)
   })
 
   // Ce qui se passe pendant un parcours : sous-agents, fichiers, commandes, Asana, questions.
@@ -4192,6 +5073,8 @@ export const register: Register = on => {
     return withDiscussionTitle($, e, await next(e))
   })
   on('classic.SessionStart', async ($, e, next) => {
+    // Après un /clear, la discussion a un nouvel id : le mode auto le relit.
+    hereCache = null
     await noteTranscript($, e)
     return withDiscussionTitle($, e, await next(e))
   })
@@ -4203,6 +5086,7 @@ export const register: Register = on => {
     const at = await $.clock.now()
     await quietly(() => commitRegistry($, reg => closeSegment(reg, MAIN, s => s.k === 'waitBg', at)))
     await setLive($, 'working', null)
+    isTurnOpen = true
     await reconcileAgents($)
     return next(e)
   })
@@ -4212,6 +5096,8 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     // Lu à l'entrée : un message en file peut ouvrir le tour suivant pendant ce traitement.
     const askedAt = submitAt
+    // Fermé à l'entrée, pour la même raison : le `turn.start` d'un tour suivant, pendant ce traitement, le rouvre.
+    if (e.agentId === undefined) isTurnOpen = false
     const result = await next(e)
     // La fin du tour d'un sous-agent : sa réponse est rendue, il a fini.
     if (e.agentId !== undefined) {
@@ -4253,7 +5139,19 @@ export const register: Register = on => {
     }
     await setLive($, 'waiting', ask)
     await suggestNext($, e.answer, ask)
+    // L'auto décide de la suite à la fin d'un tour répondu de la discussion, pas d'un tour interrompu ni en erreur.
+    if (!e.isAborted && e.reason === 'answer') scheduleAutoTurn($)
     return result
+  })
+
+  // Une erreur de quota en fin de tour met l'auto en pause (« quota atteint ») ; un nouveau clic le relance.
+  on('classic.StopFailure', async ($, e, next) => {
+    const error = (e as unknown as { error?: unknown }).error
+    if ((error === 'rate_limit' || error === 'billing_error') && (await isAutoHere($, await read($, boardAtom)))) {
+      const now = await $.clock.now()
+      await quietly(() => commit($, board => stopActiveAuto(board, AUTO_STOPS.quota, now)))
+    }
+    return next(e)
   })
 
   // Pas de push en cours de parcours : la suggestion `/project:push` de git-board s'écarte tant
@@ -4272,6 +5170,8 @@ export const register: Register = on => {
     const launcher = returned !== null ? await launcherOf($, returned) : null
     if (launcher) await markLane($, launcher.lane, { k: 'back', at: await $.clock.now(), to: launcher.key })
     if (kind === 'composer' || kind === 'bridge' || kind === 'sdk') submitAt = await $.clock.now()
+    // Le tour d'une commande que l'auto a envoyée (`$.command.run` de ce mod) : sa marque passe « démarrée ».
+    if (kind === 'plugin' && (e.origin as { name?: unknown }).name === SELF && e.command) await noteAutoStart($, skillIdOf(e.command.name))
     if ((kind === 'composer' || kind === 'bridge' || kind === 'sdk') && !e.text.trimStart().startsWith('/')) {
       const now = await $.clock.now()
       await commit($, board => applyUserAnswer(board, now))
@@ -4281,16 +5181,30 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     saveTimer?.cancel()
+    hereCache = null
     isAfterClear = e.reason === 'clear'
+    let notices: string[] = []
     // Une vraie fin (pas un /clear) laisse le parcours en pause pour la prochaine discussion.
     if (e.reason !== 'clear') {
       await quietly(() => relaySignal($, { kind: 'end' }))
       const now = await $.clock.now()
-      const { value, version } = await $.state.get(BOARD_REF)
-      const parked = value ? parkActive(value, now) : null
-      if (parked) await $.state.set(BOARD_REF, parked.board, { ifVersion: version })
+      // Rejouée si l'état a bougé entre la lecture et l'écriture (une relecture du stockage) : sinon la
+      // pause, et l'« éteint à » de l'auto, se perdraient.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { value, version } = await $.state.get(BOARD_REF)
+        const parked = value ? parkActive(value, now) : null
+        if (!parked) break
+        if ((await $.state.set(BOARD_REF, parked.board, { ifVersion: version })).isSet) {
+          notices = autoNotices(value!, parked.board)
+          await pruneConfirms($, value!, parked.board)
+          break
+        }
+      }
     }
     await saveNow($)
+    // Après la dernière sauvegarde, que l'« éteint à » soit écrit avant : la discussion se ferme, la
+    // notification peut ne plus trouver de terminal, et elle ne bloque rien.
+    await notifyAll($, notices)
     registrySaveTimer?.cancel()
     // Les changements encore dans la file passent d'abord, puis la dernière écriture (R2).
     await registryQueue

@@ -67,6 +67,14 @@ export type TicketGroup = {
   security?: SecurityCheck
   /** Les envois du groupe à une session liée, annulés compris : le suivant prend le numéro d'après (jamais un numéro déjà donné). */
   sends?: number
+  /**
+   * La revue et l'avis de sécurité d'avant (faits ici, ou ceux d'un envoi rendu) ont été remis à zéro à un
+   * envoi qui n'est pas encore revenu : tant que le groupe est en vol, « reviewed » et un avis de sécurité pour
+   * lui sont refusés (une revue ou un avis faits avant l'envoi ne valent jamais pour lui). Posé par
+   * `startLinkedGroups` ; lu seulement s'il vaut `true` ; gardé par une annulation, un renvoi de vague, un plan
+   * renvoyé et la fusion ; effacé seulement au retour d'un envoi (`returnGroups`).
+   */
+  isReset?: true
 }
 
 /** Un groupe confié à une session liée : quand, et l'id `local_…` de la session une fois lancée. */
@@ -306,11 +314,20 @@ export type SoloDecision = {
   seenAt?: number
   /** Affichage seulement, jamais enregistré : le groupe confié dont la session liée a relayé ce choix. */
   relayedFrom?: string
+  /**
+   * D'où vient le choix, en auto : une recommandation prise sans la personne, une validation sautée
+   * (accord du cadrage, spec, découpage, plan, écritures Asana), un choix d'une session liée ; absent
+   * pour un choix d'avant l'auto ou sans origine dite.
+   */
+  origin?: DecisionOrigin
   /** Le choix ne tient plus (`withdrawn` de l'outil) : il reste au parcours, hors du fichier des choix et du panneau. */
   withdrawnAt?: number
   /** Pourquoi il a été retiré, et ce qui le remplace s'il y a lieu. */
   withdrawnWhy?: string
 }
+
+/** L'origine d'un choix fait sans la personne : « reco prise », « validation sautée », « choix de session liée ». */
+export type DecisionOrigin = 'recommendation' | 'skipped-validation' | 'linked-session'
 
 export type AgentRow = {
   /** tool_use_id de l'appel Agent. */
@@ -582,6 +599,11 @@ export type Run = {
   decided?: SoloDecision[]
   /** Plan d'exécution : les tickets regroupés par contexte (liste complète, remplacée d'un bloc). */
   groups?: TicketGroup[]
+  /**
+   * Quand la personne a validé le compte rendu (« ✓ Valider le rapport ») : seule cette marque compte
+   * pour la règle de coupe des choix d'un parcours qui a été en auto (une clôture finit aussi la phase).
+   */
+  reportValidatedAt?: number
   /** Quand `/code-review` a relu le lot entier (parcours sans groupes, tickets tous faits). */
   reviewedAt?: number
   /** La revue de sécurité du lot entier, pour un parcours sans groupes. */
@@ -620,6 +642,71 @@ export type Run = {
    */
   asideAt?: number
   finishedAt?: number
+  /**
+   * Le mode auto du parcours (« ⚡ Auto »), propre à ce parcours : absent, il n'a jamais été allumé.
+   * Actif quand `onAt` est plus récent que `offAt` ; une date hors forme le dit éteint.
+   */
+  auto?: RunAuto
+  /**
+   * Les questions qui attendent la personne (`waiting` de l'outil), chacune avec ce qu'elle bloque.
+   * Fusionnées une par une entre deux copies (union, retraits tracés) : une question ne disparaît que
+   * par son retrait ou l'effacement du parcours (une copie en retard de plus de 100 retraits pourrait en
+   * faire revenir une). 50 ouvertes au plus : au-delà, une nouvelle est refusée.
+   */
+  waiting?: WaitingQuestion[]
+  /** La trace des questions retirées (`answered`), les 100 plus récentes : une copie en retard ne les fait pas revenir. */
+  answered?: { id: string; at: number }[]
+  /**
+   * Les actions que le mode auto a envoyées (une phase, une vague, une revue), une marque par action, posée
+   * avant l'envoi : une action marquée ne repart jamais. Fusionnées marque par marque entre deux copies,
+   * jamais coupées : seuls « ↻ Renvoyer » (tracé dans `autoResent`) et l'effacement du parcours en retirent.
+   */
+  autoSent?: AutoMark[]
+  /** La trace des marques retirées par « ↻ Renvoyer », les 100 plus récentes : une copie en retard ne les fait pas revenir. */
+  autoResent?: { key: string; at: number }[]
+}
+
+/**
+ * La marque d'une action envoyée par le mode auto : sa clé stable, quand elle est partie (« envoyée »),
+ * quand son tour a commencé (« démarrée »), et quand elle est devenue la question « envoi resté sans suite ».
+ */
+export type AutoMark = {
+  key: string
+  at: number
+  startedAt?: number
+  staleAt?: number
+  /** Ce qui est parti, en mots : la commande, ou les groupes confiés. */
+  what?: string
+  /** Ce que bloque sa question « envoi resté sans suite » : la phase envoyée, ou le groupe. */
+  blocks?: WaitTarget
+}
+
+/** Ce qu'une question bloque : une phase (son skill), un groupe ou un ticket du parcours. */
+export type WaitTarget = { kind: 'phase' | 'group' | 'ticket'; id: string }
+
+/** Une question qui attend la personne, déclarée par Claude, retirée par lui une fois répondue. */
+export type WaitingQuestion = {
+  id: string
+  blocks: WaitTarget
+  /** Le texte de la question, pour le tableau de bord seulement (jamais dans une notification). */
+  text: string
+  /** Quand elle a été posée : une trace de retrait plus récente l'efface à la fusion. */
+  at: number
+}
+
+/**
+ * L'état auto d'un parcours : deux dates fusionnées chacune à la plus récente des deux copies,
+ * jamais par la copie la plus récente du parcours, pour qu'une copie en retard ne rallume rien.
+ */
+export type RunAuto = {
+  /** « Allumé à » : posé seulement par le second clic de la personne (« Confirmer »). */
+  onAt?: number
+  /** « Allumé par » : l'id de la discussion du clic (lu après un `/clear`, qui en donne un nouveau). */
+  onBy?: string
+  /** « Éteint à » : la coupure, la mise de côté, la clôture, l'archivage, la fin de la discussion porteuse. */
+  offAt?: number
+  /** La raison de l'arrêt, avec `offAt`. */
+  offWhy?: string
 }
 
 /** Trace d'un parcours supprimé, pour qu'une autre discussion ne le fasse pas revenir. */
@@ -800,6 +887,8 @@ export type UiState = {
   itemSelection?: string[]
   /** Parcours archivé dont la suppression attend sa confirmation. */
   confirmDrop?: string
+  /** Parcours dont l'allumage du mode auto attend son second clic (« Confirmer »). */
+  confirmAuto?: string
   /**
    * Frise de l'onglet Agents : la fenêtre de vue (zoom et déplacement), en temps réel ; absente,
    * tout. Propre à la discussion, jamais enregistrée, remise à « tout » à la réouverture.
@@ -845,6 +934,11 @@ declare module 'claude-code' {
       agentsLinked: { key: string; session?: string; title: string; how: 'run' | 'relay' | 'id' | 'job' | 'title' | 'none'; state: 'working' | 'returned' | 'failed' | 'closed'; launchedAt?: number; returnedAt?: number }[]
       /** Le sélecteur d'historique de l'onglet Agents. */
       agentsHistory: { key: string; kind: 'now' | 'run' | 'session'; title: string; at?: number; isArchived?: boolean; agents?: number }[]
+      /**
+       * L'id de ce processus pour la date du second clic du mode auto, posé au premier chargement du mod :
+       * gardé après /reload-plugins, neuf après un redémarrage, où une date gardée avant ne vaut plus.
+       */
+      autoBoot: string
       /** Les prix des modèles tirés de ccusage (Q15), relevés au plus une fois par jour. */
       agentPrices: { at: number; prices: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> } | null
     }
