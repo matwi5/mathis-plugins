@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyRelay, applyReport, emptyBoard, newRun, parseMainRef, relayForGroup, reportFileName, startLinkedGroups, updateDelegateMain } from '../hooks/model.ts'
-import type { Board, Relay } from '../types'
+import { activeRun, applyRelay, applyReport, emptyBoard, newRun, parseMainRef, relayEntryFileName, relayForGroup, reportFileName, startLinkedGroups, updateDelegateMain } from '../hooks/model.ts'
+import type { Board, RelayEntryFile } from '../types'
 
 // Rétro de l'onglet Agents : la référence de la discussion principale change à son redémarrage
 // (r10), un compte rendu coupé à 8 000 caractères (r11), des constats de revue jamais envoyés
@@ -123,8 +123,9 @@ test('un compte rendu de 20 000 caractères se relit entier, et sa coupe dans le
   await $.tool.call({ tool: TOOL, report: whole } as any)
   const path = Object.keys(files).find(p => p.endsWith(reportFileName(runId, 'session-liee')))
   // Le dossier du mod ne dit pas toujours où est ~/.claude (clone hors de ~/.claude) : le fichier n'existe alors pas.
-  const relay = (Object.entries(files).find(([p]) => p.endsWith(`/relais/${runId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}.json`))?.[1] ?? JSON.stringify(mem[`relay:${runId}`])) as string
-  const entry = (JSON.parse(relay) as Relay).sessions['session-liee']!
+  // L'entrée de la session, son fichier à elle (un fichier par session liée), sinon sa clé du store.
+  const own = (Object.entries(files).find(([p]) => p.endsWith(`/relais/${relayEntryFileName(runId, 'session-liee')}`))?.[1] ?? JSON.stringify(mem[`relay:${runId}:session-liee`])) as string
+  const entry = (JSON.parse(own) as RelayEntryFile).entry
   expect(entry.report!.text).toHaveLength(8_000)
   expect(entry.report!.length).toBe(20_000)
   if (path) {

@@ -221,14 +221,25 @@ test('la frise du terminal donne aux phases leur nom court : Code, Rapport, Push
   await ui.unmount()
 })
 
-test('la frise du terminal d’un parcours à une phase donne aux étapes leur nom court : la rétro', { timeoutMs: 15000 }, async ($, on) => {
+test('la frise du terminal d’un parcours à une phase donne aux étapes leur nom court : le design de module', { timeoutMs: 15000 }, async ($, on) => {
+  mock.clock(on, { now: 34_000_000 })
+  world(on)
+  await $.skill.prompt({ skill: 'mattpocock-skills:codebase-design', text: 'x' })
+  // Un panneau étroit, où les noms entiers des étapes étaient coupés (« Cadrer le p »).
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 70 } })
+  for (const short of ['Problème', 'Options', 'Comparer']) expect(await ui.find({ type: 'Text', text: new RegExp(`^${short}\\s*$`) })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^(Cadrer le|Alternativ).*\s$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('la frise du terminal d’une rétro montre ses phases, comme le Triage : Rétro, Code, Rapport, Push, PR', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 34_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
-  // Un panneau étroit, où les noms entiers des étapes étaient coupés (« Lire la sessio »).
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 70 } })
-  for (const short of ['Style', 'Lecture', 'Pistes', 'Tri', 'Appliquer']) expect(await ui.find({ type: 'Text', text: new RegExp(`^${short}\\s*$`) })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^(Guide de s|Lire la se|Pistes \(|Par sévéri|Modificati).*\s$/ })).toBeUndefined()
+  for (const short of ['Rétro', 'Code', 'Rapport', 'Push', 'PR']) expect(await ui.find({ type: 'Text', text: new RegExp(`^${short}\\s*$`) })).toBeDefined()
+  // Les étapes de la Rétro restent sur la carte de la phase, plus sur la frise.
+  expect(await ui.find({ type: 'Text', text: /^Appliquer\s*$/ })).toBeUndefined()
   await ui.unmount()
 })
 

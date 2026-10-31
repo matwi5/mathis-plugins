@@ -53,6 +53,17 @@ const world = (on: any, session = 'main') => {
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
+/**
+ * Un disque vide où rien ne s'écrit, pour un test qui relaie sans simuler de disque : le relais (un
+ * fichier par session liée) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
+ */
+const emptyDisk = (on: any) => {
+  on('fs.exists', () => ({ value: false }) as any)
+  on('fs.write', () => {
+    throw new Error('EACCES')
+  })
+}
+
 // Après /reload-plugins, la discussion avait tout renvoyé par précaution alors que l'état était là.
 test('après un rechargement, la première réponse de l’outil dit l’état retrouvé, une fois', async ($, on) => {
   mock.clock(on, { now: 90_000_000 })
@@ -88,6 +99,7 @@ test('le mode délégué d’une session liée est gardé par session et revient
 })
 
 test('une session liée qui redémarre retrouve sa délégation par le vrai chargement, et le rechargement la rappelle', async ($, on) => {
+  emptyDisk(on)
   mock.clock(on, { now: 91_500_000 })
   const { mem } = world(on, 'linked')
   mem['delegate:linked'] = { run: 'run-1', at: 91_000_000, group: 'E', main: '[e5eb08]' }

@@ -35,7 +35,8 @@ import {
   hasUnreadableCounts,
   isSecuritySettled,
   isTicketReviewEnough,
-  groupDone,
+  attachedIdsOf,
+  groupProgress,
   isWaitingTicket,
   openBlockers,
   runProgress,
@@ -48,6 +49,8 @@ import {
   inForce,
   isDelegable,
   groupReviewArgs,
+  hasGroupReview,
+  isPhaseOptional,
   type SyncStep,
 } from './model.ts'
 import { MAIN, reviewForkName, runningOf } from './registry.ts'
@@ -202,11 +205,11 @@ export type Actions = {
   launchBugLinked: () => unknown
   /** Ajoute un élément de la phase (une piste de rétro) à la sélection, ou l'en retire. */
   pickItem: (id: string) => unknown
-  /** Choisit tous les éléments encore à confier, ou les retire tous s'ils l'étaient déjà. */
+  /** Choisit tous les éléments encore à découper, ou les retire tous s'ils l'étaient déjà. */
   pickAllItems: () => unknown
   clearItemPicks: () => unknown
-  /** Confie les éléments choisis à une session liée ; le parcours reste dans cette discussion. */
-  launchItemsLinked: () => unknown
+  /** Met dans le prompt la demande de découpage en tickets des éléments choisis, sans rien enregistrer. */
+  splitItems: () => unknown
   /** Annule un envoi à une session liée qui n'a pas été lancée. */
   cancelLinked: () => unknown
   /** Demande à Claude de vérifier la session liée et de rendre ses éléments (session arrêtée sans note, ou jamais lancée). */
@@ -406,7 +409,7 @@ const phaseSub = (run: Run, index: number): string => {
     const at = p.steps.findIndex(s => s.status === 'active')
     return at >= 0 ? `étape ${at + 1}/${p.steps.length}` : 'en cours'
   }
-  return p.isOptional ? 'facultative' : ''
+  return isPhaseOptional(run, p) ? 'facultative' : ''
 }
 
 /** Les stations : les phases, ou les étapes quand le parcours n'a qu'une phase. */
@@ -436,7 +439,7 @@ const roadNodes = (run: Run): RoadNode[] => {
       sub: phaseSub(run, i),
       color: def.color,
       state,
-      isOptional: p.isOptional,
+      isOptional: isPhaseOptional(run, p),
       detours: p.detours.map(d => ({
         label: SKILLS[d.skill]?.label ?? d.skill,
         color: SKILLS[d.skill]?.color ?? C.gray,
@@ -583,7 +586,7 @@ const stepsList = (k: Kit, steps: readonly FlowStep[], def: SkillDef, color: str
   )
 }
 
-/** Les éléments d'une phase qui peut les confier à une session liée (les pistes d'une rétro). */
+/** Les éléments d'une phase qui peut en demander le découpage en tickets (les pistes d'une rétro), et l'ancien envoi à une session liée qu'elle suit. */
 type Linkable = { phase: FlowPhase; view: View; act: Actions }
 
 /**
@@ -597,11 +600,11 @@ const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
   const inFlight = linkedInFlight(l.phase).length
   const total = linked.items.length
   const isWaiting = inFlight > 0 && linked.session === undefined
-  // Terminée : sa fermeture s'affiche, et un nouvel envoi attend qu'elle soit fermée.
+  // Terminée : sa fermeture s'affiche, et un nouveau découpage attend qu'elle soit fermée.
   if (inFlight === 0 && linked.session !== undefined && linked.closing?.state !== 'closed') {
     return (
       <Box key="linked" flexDirection="column">
-        {line(k, [T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }), T(k, `fermer d'abord la session précédente avant un nouvel envoi`, { dim: true, wrap: 'wrap' })], true)}
+        {line(k, [T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }), T(k, `fermer d'abord la session précédente avant un nouveau découpage`, { dim: true, wrap: 'wrap' })], true)}
         {closingRow(k, 'items', linked.closing, () => l.act.closeLinkedItems())}
       </Box>
     )
@@ -682,7 +685,7 @@ const itemsBlock = (k: Kit, items: readonly FlowItem[], def: SkillDef, color: st
         )}
       </Box>
       {linkable && linkedRow(k, linkable, label)}
-      {pickable.length > 0 && selection.length === 0 && T(k, `Choisis les ${label} à traiter (○), puis confie-les à une session liée.`, { dim: true, wrap: 'wrap' })}
+      {pickable.length > 0 && selection.length === 0 && T(k, `Choisis les ${label} à traiter (○), puis demande leur découpage en tickets.`, { dim: true, wrap: 'wrap' })}
       {shown.map(item => {
         const look = ITEM[item.status]
         const isPicked = selection.includes(item.id)
@@ -716,10 +719,10 @@ const itemsBlock = (k: Kit, items: readonly FlowItem[], def: SkillDef, color: st
         <Box key="item-picks" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
           <Box marginRight={1}>
             <Button
-              key="items-linked"
+              key="items-split"
               variant="primary"
-              label={`↗${NB}Traiter${NB}${selection.length}${NB}${selection.length > 1 ? label : one}${NB}·${NB}session${NB}liée`}
-              onPress={() => linkable!.act.launchItemsLinked()}
+              label={`✂${NB}Découper${NB}${selection.length}${NB}${selection.length > 1 ? label : one}${NB}en${NB}tickets`}
+              onPress={() => linkable!.act.splitItems()}
             />
           </Box>
           <Button key="items-clear" plain={true} dimColor={true} label="Effacer" onPress={() => linkable!.act.clearItemPicks()} />
@@ -1022,11 +1025,11 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
             {T(k, `✓${NB}${g.isFallback ? '' : `${g.group.id}${NB}·${NB}`}${g.group.name} : ${plural(g.tickets.length, 'ticket')} ${g.tickets.length > 1 ? 'faits' : 'fait'}`, { color: C.green, dim: true, wrap: 'truncate-end' })}
           </Box>
           {!g.isFallback &&
-            (g.group.reviewedAt !== undefined ? (
+            (hasGroupReview(g.group) ? (
               T(k, `✓${NB}revu`, { color: C.green, bold: true })
-            ) : isTicketReviewEnough(run, g.group) ? (
-              // Un seul ticket, ni sensible ni avec logique : la revue du ticket suffit.
-              T(k, `✓${NB}revu par son ticket`, { color: C.green, bold: true })
+            ) : isTicketReviewEnough(run, run.groups?.find(x => x.id === g.group.id) ?? g.group) ? (
+              // Aucun ticket sensible ni avec logique : les revues des tickets suffisent, sans revue de sécurité.
+              T(k, `✓${NB}revu par ${g.group.tickets.length > 1 ? 'ses tickets' : 'son ticket'}`, { color: C.green, bold: true })
             ) : g.group.delegated !== undefined ? (
               // Fait par une session liée : ici la branche est fusionnée, la revue se fait là-bas.
               <Button key={`review-linked-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · session liée`} onPress={() => act.reviewLinkedGroup(g.group.id)} />
@@ -1231,8 +1234,8 @@ const ticketsBlock = (k: Kit, run: Run, view: View, act: Actions, cells: number)
       {line(k, [T(k, 'Tickets', { bold: true }), bar, T(k, `${t.done}/${t.total}`, { bold: true }), T(k, pct(t.done / Math.max(1, t.total)), { dim: true })])}
       {open.length > 0 && selection.length === 0 && T(k, hint, { dim: true, wrap: 'wrap' })}
       {plan ? groupsSection(k, run, plan, view, act) : shown.map(ticket => ticketRow(k, run, ticket, view, act))}
-      {/* Pendant le découpage, les groupes peuvent encore venir : pas de lancement du lot entier. */}
-      {!plan && open.length > 0 && selection.length === 0 && currentPhase(run).skill !== 'to-tickets' && (
+      {/* Pendant le découpage (tickets, rétro), les groupes peuvent encore venir : pas de lancement du lot entier. */}
+      {!plan && open.length > 0 && selection.length === 0 && currentPhase(run).skill !== 'to-tickets' && currentPhase(run).skill !== 'retro' && (
         <Box key="launch-all-row" marginTop={1}>
           <Button key="launch-all" label={`▶${NB}Tout implémenter ici`} onPress={() => act.launchAll()} />
         </Box>
@@ -2967,11 +2970,12 @@ type BandPill = Style & { text: string }
 /** Dans le bandeau, l'avancement relayé de chaque groupe confié : « ↗A 2/4 ». */
 const relayPills = (run: Run, view: View): BandPill[] =>
   (run.groups ?? [])
-    .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g) : null }))
+    .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g, g.linked, Infinity, attachedIdsOf(run, g)) : null }))
     // En cours dès que l'id de sa session est relevé, avant le premier signal relayé.
     .filter(x => x.relay !== null || x.g.linked?.session !== undefined)
     .map(({ g, relay }) => {
-      const { done, total } = relay ?? groupDone(run, g)
+      // Les tickets que le plan lui rattache comptent aussi : le parcours les tient, pas sa session.
+      const { done, total } = groupProgress(run, g, relay)
       return { text: `↗${g.id}${NB}${done}/${total}`, color: relay?.endedAt !== undefined && done < total ? C.amber : C.blue, bold: true }
     })
 

@@ -139,7 +139,7 @@ const ROOT = '/Users/m/proj'
 const UUID = '178bd61c-0416-4d88-8317-cc583d9f0d47'
 
 /** Le moteur d'un projet, avec ou sans git ; les messages envoyés à Claude sont relevés. */
-const world = (on: any, isRepo: boolean, isSubmitFailing = false) => {
+const world = (on: any, isRepo: boolean, answer: 'entered' | 'refused' | 'entered-drop-undefined' = 'entered') => {
   const mem: Record<string, unknown> = {}
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
@@ -159,7 +159,9 @@ const world = (on: any, isRepo: boolean, isSubmitFailing = false) => {
   on('prompt.submit', (_$: unknown, e: { text: string }) => {
     submitted.push(e.text)
     // Comme le moteur quand un hook refuse le message : il n'entre pas, sans exception.
-    if (isSubmitFailing) return { drop: 'refusé par un hook' }
+    if (answer === 'refused') return { drop: 'refusé par un hook' }
+    // Un message entré peut porter `drop: undefined` (PromptSubmitResult des types du moteur).
+    if (answer === 'entered-drop-undefined') return { text: e.text, drop: undefined }
     return { text: e.text }
   })
   return { submitted }
@@ -254,7 +256,7 @@ test('dans un dépôt git, « ✓ Valider le rapport » envoie la consigne de su
 
 test('un message refusé (`{ drop }`) ne marque rien : « ↺ Rouvrir » reste, aucune consigne n’étant arrivée', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
-  const w = world(on, true, true)
+  const w = world(on, true, 'refused')
   await atReport($, clock)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'report-ok' })
@@ -266,6 +268,23 @@ test('un message refusé (`{ drop }`) ne marque rien : « ↺ Rouvrir » reste, 
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await after.find({ key: 'report-ok' })).toBeUndefined()
   expect(await after.find({ key: 'reopen-A' })).toBeDefined()
+  await after.unmount()
+})
+
+test('un message entré qui porte `drop: undefined` compte comme entré : « ↺ Rouvrir » disparaît', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 93_000_000 })
+  const w = world(on, true, 'entered-drop-undefined')
+  await atReport($, clock)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await ui.find({ key: 'reopen-A' })).toBeDefined()
+  await ui.press({ key: 'report-ok' })
+  await ui.unmount()
+  for (let i = 0; i < 6; i++) await clock.advance(1000)
+  expect(w.submitted).toHaveLength(1)
+  expect(w.submitted[0]).toContain("branch -d 'worktree-groupe-boutique-A'")
+  const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await after.find({ type: 'Text', text: /session et worktree fermés/ })).toBeDefined()
+  expect(await after.find({ key: 'reopen-A' })).toBeUndefined()
   await after.unmount()
 })
 
@@ -338,12 +357,22 @@ test('seule une branche au nom que flow-board donne à la session de la cible se
   }
 })
 
+test('un id de groupe hors de la forme d’un id de groupe (a/b, A_1, trop long) : sa branche est gardée et dite, jamais visée', () => {
+  for (const id of ['a/b', 'A_1', 'A-1', 'ABCDEFGHIJKLM']) {
+    const run = runWith({ A: closed('worktree-groupe-boutique-A'), [id]: closed(`worktree-groupe-boutique-${id}`) })
+    const text = branchCleanupText({ run, isRepo: true, root: ROOT })!
+    expect(text.match(/branch -d '[^']*'/g)).toEqual(["branch -d 'worktree-groupe-boutique-A'"])
+    expect(text).toMatch(/groupe \(id hors forme, 2e groupe du plan\) : fermé, id de groupe hors forme, branche gardée/)
+    expect(text).not.toContain(id)
+  }
+})
+
 test('un id de groupe relu hors forme (pas une chaîne) ne fait rien tomber : sa branche est gardée et dite', () => {
   const run = runWith({ A: closed('worktree-groupe-boutique-A') })
   run.groups!.push({ id: 7 as unknown as string, name: 'n', tickets: [], delegated: { at: 2_000, closing: closed('groupe-7') } })
   const text = branchCleanupText({ run, isRepo: true, root: ROOT })!
   expect(text).toContain("branch -d 'worktree-groupe-boutique-A'")
-  expect(text).toMatch(/groupe \(id hors forme\) : fermé, id de groupe hors forme, branche gardée/)
+  expect(text).toMatch(/groupe \(id hors forme, 2e groupe du plan\) : fermé, id de groupe hors forme, branche gardée/)
   expect(text).not.toContain("'groupe-7'")
 })
 
@@ -354,7 +383,7 @@ test('le nom d’un groupe, du texte libre relu du tableau de bord, n’entre pa
   const text = branchCleanupText({ run, isRepo: true, root: ROOT })!
   expect(text).toContain("branch -d 'worktree-groupe-boutique-A'")
   expect(text).not.toContain('-D')
-  expect(text).toMatch(/groupe \(id hors forme\) : fermé, id de groupe hors forme, branche gardée/)
+  expect(text).toMatch(/groupe \(id hors forme, 2e groupe du plan\) : fermé, id de groupe hors forme, branche gardée/)
 })
 
 test('la marque se pose, après l’envoi, sur chaque fermeture dont la branche était dans la consigne et le serait encore ; la fusion la garde ; elle part si la branche notée change (série 24)', () => {

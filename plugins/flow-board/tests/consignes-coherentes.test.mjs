@@ -20,6 +20,7 @@ const SURFACES = {
   'reference/procedure-groupe.md': read('reference/procedure-groupe.md'),
   'README.md': read('README.md'),
   'hooks/register.tsx': read('hooks/register.tsx'),
+  'hooks/catalog.ts': read('hooks/catalog.ts'),
 }
 
 /** Chaque consigne : ses mots-clés, et les surfaces qui la recopient (la procédure ne reçoit de la règle d'effort que la session autonome). */
@@ -41,6 +42,37 @@ const CONSIGNES = [
     name: 'la liste des zones sensibles',
     keywords: ["concurrence, commande ou chemin construit à partir d'une valeur lue ailleurs"],
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md', 'hooks/register.tsx'],
+  },
+  {
+    // Un groupe sans logique ni zone sensible : ni revue du groupe ni revue de sécurité, quel que soit son nombre de tickets.
+    name: "les revues d'un groupe sans logique ni zone sensible",
+    keywords: ['ni revue du groupe ni revue de sécurité'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md', 'hooks/register.tsx'],
+  },
+  {
+    // Les correctifs de la passe « bogues » d'un ticket sensible : une seule nouvelle passe, en high, sur leur diff.
+    name: 'la nouvelle passe sur les correctifs de la passe « bogues »',
+    keywords: ['une seule nouvelle passe', 'limitée à leur diff'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md'],
+  },
+  {
+    // Un texte qui fait agir Claude (une règle, une procédure, un skill) est « Logique : oui » : la règle des lots, le README, et la consigne de découpage en anglais.
+    name: 'la logique d’un texte qui fait agir Claude',
+    keywords: ['fait lancer une commande à Claude ou construire un chemin'],
+    surfaces: ['config/rules/flow-board.md', 'README.md'],
+  },
+  { name: 'la logique d’un texte qui fait agir Claude, en anglais', keywords: ['makes Claude act'], surfaces: ['hooks/register.tsx'] },
+  {
+    // Les pistes d'une rétro passent par le découpage en tickets : ses bornes et la règle des fichiers chargés partout.
+    name: 'le découpage des pistes d’une rétro',
+    keywords: ['1 à 3', 'un seul groupe', 'chaque phrase ajoutée ou retirée'],
+    surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/register.tsx'],
+  },
+  {
+    // La même règle dans les consignes en anglais : au découpage (register.tsx) et pendant l'implémentation (catalog.ts).
+    name: "les revues d'un groupe sans logique ni zone sensible, en anglais",
+    keywords: ['has neither a group review nor a security review'],
+    surfaces: ['hooks/catalog.ts', 'hooks/register.tsx'],
   },
 ]
 

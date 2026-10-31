@@ -36,13 +36,13 @@
       "name": "flow-board",
       "source": "./plugins/flow-board",
       "description": "Tableau de bord du workflow mattpocock-skills : un parcours adapté au skill de départ (phases, étapes, tickets, sous-agents, tests, livrables) en panneau et en bandeau ; /flow (onglet Commandes : toutes les commandes).",
-      "version": "0.71.0"
+      "version": "0.73.0"
     },
     {
       "name": "mattpocock-skills",
       "source": "./plugins/mattpocock-skills",
       "description": "Frozen copy of Matt Pocock's mattpocock-skills (MIT): grilling, spec and ticket flows, TDD, code review, domain modelling. Pinned to the version flow-board knows.",
-      "version": "1.3.1-mathis.4",
+      "version": "1.3.1-mathis.5",
       "author": { "name": "Matt Pocock", "url": "https://www.aihero.dev" },
       "license": "MIT"
     },

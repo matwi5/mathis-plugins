@@ -117,6 +117,14 @@ _Avoid_: groupe totalement fini, groupe terminé
 Arrêter la session liée d'un groupe clos et retirer son worktree ; sa conversation reste, et sa branche jusqu'à la validation du compte rendu du parcours, qui la supprime par `git branch -d` si elle est notée sous un nom de sa session et contenue dans la branche de travail. La session liée des pistes d'une rétro se ferme de même.
 _Avoid_: archiver le groupe, nettoyer le groupe
 
+**Lien** :
+L'envoi d'un groupe ou de pistes à une session liée, de son lancement à sa fermeture, avec les envois précédents.
+_Avoid_: délégation, envoi (pour l'ensemble)
+
+**Relais** :
+Ce qu'une session liée transmet à l'orchestrateur pendant qu'elle tourne : avancement, revues, compte rendu.
+_Avoid_: retour, remontée
+
 **Tâche de jugement** :
 Une tâche dont la difficulté est de comprendre ou de définir, pas de produire le changement. Deux sortes : le *jugement sur un existant* (intervenir dans ce qui marche déjà, en tenant compte de ses contraintes implicites : ce dont d'autres dépendent, ce qui ne doit pas bouger, ce que la demande ne dit pas) et l'*objectif ouvert* (le but est donné sans le chemin, et le résultat ne se vérifie pas tout de suite).
 _Avoid_: tâche difficile, tâche large

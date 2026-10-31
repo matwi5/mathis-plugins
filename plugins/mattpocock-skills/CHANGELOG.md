@@ -4,6 +4,13 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.5 — 2026-10-31
+
+### Modifié
+- **`retro`** : en présentant ses pistes, la rétro annonce leur découpage en tickets par le bouton « ✂ Découper » du tableau de bord flow-board.
+
+---
+
 ## 1.3.1-mathis.4 — 2026-10-29
 
 ### Modifié

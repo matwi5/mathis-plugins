@@ -39,7 +39,10 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
 7. les versions des plugins contrôlés citées dans la liste « État » d'ETAT_DU_PROJET.md (fichier
    personnel, lu seulement ; contrôle sans objet sans lui) égales à celles de leur `plugin.json`.
 
---staged (hook pre-commit, décision « Hook »), tout sur une copie de l'index : d'abord la forme du CHANGELOG, la version et
+--staged (hook pre-commit, décision « Hook »), tout sur une copie de l'index : d'abord les numéros de série de chaque
+fichier de décisions indexé (`travail/<sujet>/DECISIONS.md`), même pour un commit de documentation seule : un titre
+« ## Série N » ajouté (face à `HEAD`) avec un numéro déjà pris dans le fichier est refusé, les doublons déjà commités
+passent ; puis la forme du CHANGELOG, la version et
 la liste « État » de chaque plugin dont le CHANGELOG ou le `plugin.json` est indexé, même
 pour un commit de documentation seule ; puis rien de
 plus pour un commit de documentation seule ; sinon, sur une copie de l'index (`git checkout-index`, le
@@ -65,7 +68,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
+
+# Le marqueur « 0.xx.0 » d'une version pas encore connue dans un README, et les lignes dont
+# `scripts/bump-version.py` le remplace : une seule règle pour les deux scripts.
+from placeholders import PLACEHOLDER, git_show, replaced_lines
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -110,9 +118,6 @@ VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-mathis\.(\d+))?")
 # Les références face auxquelles une version posée doit avancer : une autre discussion avait publié
 # sur `main` la même 0.66.0 qu'un groupe, vue seulement au conflit de la fusion.
 VERSION_REFS = ("main", "origin/main")
-# Le marqueur d'une version pas encore connue (« depuis la 0.xx.0 ») dans un README, que
-# `scripts/bump-version.py` remplace par la version posée.
-PLACEHOLDER = "0.xx.0"
 # Les plugins d'une liste « `nom` X.Y.Z » de la section « État » d'ETAT_DU_PROJET.md (fichier personnel,
 # absent de la version publique : lu seulement).
 STATE_FILE = "ETAT_DU_PROJET.md"
@@ -122,6 +127,10 @@ STATE_ENTRY = re.compile(r"`([\w-]+)` (\d+\.\d+\.\d+(?:-mathis\.\d+)?)(?![\w.-])
 API_CALL = re.compile(r"\$\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)")
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 ENGINE_INTERFACE = "export interface CoreEngineInterface {"
+# Les fichiers de décisions d'un chantier, et leurs titres de série : deux discussions avaient pris les
+# mêmes numéros (« ## Série 19 » à 21) dans un même fichier.
+DECISIONS_FILE = re.compile(r"travail/[^/]+/DECISIONS\.md")
+SERIES_TITLE = re.compile(r"^## Série (\d+)\b", re.M)
 
 
 class Failed(Exception):
@@ -599,28 +608,58 @@ def version_advance(plugin, rev=None):
 def leftover_placeholders(plugin, rev=None):
     """Les marqueurs « 0.xx.0 » du README restés après la dernière montée de version : une ligne écrite
     avant elle (git blame), ou toute ligne quand la version change dans l'arbre ou l'index (`rev`).
-    Un marqueur écrit après la dernière montée attend la prochaine : il passe."""
-    readme = plugin / "README.md"
-    if not readme.is_file():
-        return []
-    marked = [n for n, line in enumerate(readme.read_text(encoding="utf-8", errors="replace").splitlines(), 1) if PLACEHOLDER in line]
+    Un marqueur écrit après la dernière montée attend la prochaine : il passe. Avec `rev` vide (le hook),
+    le README lu est celui de l'index, numéros de ligne compris : le marqueur non commité d'une autre
+    discussion, que `scripts/bump-version.py` laisse, ne bloque le commit de version que s'il est indexé,
+    ce que fait un commit par chemin (`git commit -- <chemin>` reprend le fichier entier du disque) ;
+    le message dit alors de retirer cette ligne de l'index, jamais d'y écrire la version."""
+    rel = f"plugins/{plugin.name}/README.md"
+    if rev == "":
+        text = git_show(REPO, f":{rel}")
+        if text is None:
+            return []
+    else:
+        readme = plugin / "README.md"
+        if not readme.is_file():
+            return []
+        text = readme.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    marked = [n for n, line in enumerate(lines, 1) if PLACEHOLDER in line]
     if not marked:
         return []
     current = manifest_version(plugin, rev)
-    rel = f"plugins/{plugin.name}/README.md"
-    fix = f"scripts/bump-version.py {plugin.name} {current} le remplace"
+    # Les marqueurs que `bump-version.py` remplace : la même règle que lui, celle de `placeholders.py`.
+    replaced = replaced_lines(git_show(REPO, f"HEAD:{rel}"), lines)
+
+    def fix(n):
+        if n in replaced:
+            return f"scripts/bump-version.py {plugin.name} {current} le remplace"
+        return ("ligne pas encore commitée, sans doute d'une autre discussion : la retirer de l'index (n'indexer que ses "
+                "propres morceaux, piège « Plusieurs discussions commitent… » de CLAUDE.md), sans y écrire la version")
+
     if current != manifest_version(plugin, "HEAD"):
-        return [f"{rel}:{n} : marqueur « {PLACEHOLDER} » alors que la version passe à {current} : {fix}" for n in marked]
+        return [f"{rel}:{n} : marqueur « {PLACEHOLDER} » alors que la version passe à {current} : {fix(n)}" for n in marked]
     last = git(["log", "-1", "--format=%H", "-G", '"version"[[:space:]]*:', "--", manifest_rel(plugin)], 60)
     if not last:
         return []
-    problems = []
-    for n in marked:
-        blame = git(["blame", "--porcelain", "-L", f"{n},{n}", "--", rel], 60)
-        sha = blame.split(" ", 1)[0] if blame else ""
-        if sha and set(sha) != {"0"} and git(["merge-base", "--is-ancestor", sha, last]) is not None:
-            problems.append(f"{rel}:{n} : marqueur « {PLACEHOLDER} » resté après la montée en {current} : {fix}")
-    return problems
+    contents = []
+    if rev == "":
+        # Le blame porte sur les lignes de l'index : leur texte, passé par un fichier temporaire.
+        handle, copy = tempfile.mkstemp(prefix="check-readme-", suffix=".md")
+        with os.fdopen(handle, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        contents = ["--contents", copy]
+    try:
+        problems = []
+        for n in marked:
+            blame = git(["blame", "--porcelain", "-L", f"{n},{n}", *contents, "--", rel], 60)
+            sha = blame.split(" ", 1)[0] if blame else ""
+            if sha and set(sha) != {"0"} and git(["merge-base", "--is-ancestor", sha, last]) is not None:
+                problems.append(f"{rel}:{n} : marqueur « {PLACEHOLDER} » resté après la montée en {current} : {fix(n)}")
+        return problems
+    finally:
+        if contents:
+            os.unlink(contents[1])
 
 
 def check_versions(plugin, rev=None):
@@ -966,16 +1005,63 @@ def staged_types(plugin, copy):
         shutil.copytree(own, copy / ".claude-plugin" / "types")
 
 
+def series_numbers(text):
+    """Les numéros des titres « ## Série N » d'un fichier de décisions, avec leur nombre d'occurrences."""
+    return Counter(int(n) for n in SERIES_TITLE.findall(text or ""))
+
+
+def staged_sources():
+    """Les fichiers indexés renommés ou copiés (`git mv`), avec leur chemin d'origine dans `HEAD`."""
+    code, out = run(["git", "diff", "--cached", "--name-status", "-M", "-C", "-z"], 60)
+    if code != 0:
+        raise Failed(f"git diff --cached : {out.strip()}")
+    fields, sources, i = out.split("\0"), {}, 0
+    while i < len(fields) and fields[i]:
+        if fields[i][0] in "RC":
+            sources[fields[i + 2]] = fields[i + 1]
+            i += 3
+        else:
+            i += 2
+    return sources
+
+
+def duplicate_series(path, source=None):
+    """Les titres « ## Série N » qu'un fichier de décisions indexé ajoute (face à `HEAD`, au chemin
+    `source` pour un fichier renommé ou copié) avec un numéro déjà pris dans ce fichier : deux
+    discussions avaient pris les mêmes numéros, et les renvois devenaient ambigus. Les doublons déjà
+    commités ne comptent pas, même après un `git mv`."""
+    staged = series_numbers(git_show(REPO, f":{path}"))
+    committed = series_numbers(git_show(REPO, f"HEAD:{source or path}"))
+    doubled = sorted(n for n, count in staged.items() if count > committed[n] and count > 1)
+    if not doubled:
+        return []
+    free = next(n for n in range(1, len(staged) + 2) if n not in staged)
+    return [f"{path} : titre « ## Série {n} » ajouté alors que ce numéro existe déjà ; premier numéro libre : {free}" for n in doubled]
+
+
+def check_decisions(paths):
+    log("→ numéros de série des fichiers de décisions")
+    sources = staged_sources()
+    problems = [p for path in paths for p in duplicate_series(path, sources.get(path))]
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} numéro(s) de série en double")
+    log("  ok")
+
+
 def staged():
     code, out = run(["git", "diff", "--cached", "--name-only", "-z"], 60)
     if code != 0:
         raise Failed(f"git diff --cached : {out.strip()}")
     paths = [p for p in out.split("\0") if p]
+    decisions = [p for p in paths if DECISIONS_FILE.fullmatch(p)]
+    if decisions:
+        check_decisions(decisions)
     # Une édition du CHANGELOG seul est de la documentation : sa forme se contrôle quand même.
     shaped = sorted({p.split("/")[1] for p in paths if re.fullmatch(r"plugins/[^/]+/(?:CHANGELOG\.md|\.claude-plugin/plugin\.json)", p)})
     code_paths = [p for p in paths if not is_doc(p)]
     if not shaped and not code_paths:
-        log("pre-commit : documentation seule, pas de contrôle")
+        log("pre-commit : documentation seule, pas d'autre contrôle" if decisions else "pre-commit : documentation seule, pas de contrôle")
         return
     # Tous les contrôles lisent la copie de l'index : ce qui part, jamais l'arbre de travail.
     tree = export_index()

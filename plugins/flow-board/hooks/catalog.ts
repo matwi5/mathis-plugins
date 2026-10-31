@@ -52,6 +52,8 @@ export type StepDef = {
   noGitHint?: string
   /** L'étape part dans le même message que la précédente (affichée « ∥ ») : la sécurité avec la revue du groupe. */
   isWithPrevious?: boolean
+  /** Étape d'un ancien chemin : connue d'une phase qui la porte déjà, jamais donnée à une phase neuve. */
+  isLegacy?: boolean
 }
 
 export type PhaseSpec = { skill: string; alts?: string[]; isOptional?: boolean }
@@ -85,7 +87,8 @@ export type SkillDef = {
   steps: StepDef[]
   /**
    * Ce que la phase suit comme éléments : hypothèses, candidats, décisions… Avec `linkedStep`, le
-   * panneau permet de choisir des éléments et de les confier à une session liée, ce qui ouvre cette étape.
+   * panneau permet de choisir des éléments et d'en demander le découpage en tickets ; cette étape est
+   * celle de l'ancien chemin, qu'ouvre le lancement d'une session liée déjà demandée pour eux.
    */
   items?: { label: string; hint: string; linkedStep?: string }
   /** Étape d'une phase combinée : lancé seul, ce skill ouvre cette phase à cette étape. */
@@ -212,10 +215,12 @@ export const REVIEWER_NAMES =
   'give each reviewer subagent you launch a standard description, the name the Agents tab shows: "Standards+Spec · <ticket>" for the two axes of a ticket, <ticket> being the group letter and the ticket\'s rank in its group (E2), or the ticket id in a lot without groups; "Sécurité · groupe <letter>" for a security reviewer ("Sécurité · lot" without groups); never the level nor the effort, which the tab shows apart'
 
 /**
- * Un groupe d'un seul ticket sans logique ni zone sensible : la revue du ticket est la seule, et la
- * sécurité se juge à son commit, sans revue du groupe à accompagner.
+ * Un groupe sans logique ni zone sensible (des documents, une icône, une règle qui ne fait rien lancer) : les revues de ses
+ * tickets sont ses seules revues, sans revue du groupe ni revue de sécurité. Un ticket qui a de la
+ * logique, une zone sensible, ou ne dit pas l'un des deux, les rend dues.
  */
-export const SINGLE_TICKET_GROUP = 'A group of a single ticket sent with "sensitive": false and "logic": false has no group review: its ticket review is its only review, the dashboard shows it reviewed, and its security judgement comes once that ticket is committed'
+export const NO_LOGIC_GROUP =
+  'A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing) has neither a group review nor a security review: its ticket reviews are its only reviews, the dashboard shows it reviewed and its security settled, and no security advice is sent for it; a single ticket with logic, in a sensitive area, or that did not say, makes the group review and the security advice due'
 
 /**
  * L'instantané d'un ticket sensible avant sa passe « bogues » (Mathis, L2 a de la rétro de l'onglet
@@ -774,17 +779,26 @@ export const SKILLS: Record<string, SkillDef> = {
       step('style', 'Guide de style', 'load writing-for-agents', 'Style'),
       step('read', 'Lire la session', 'read the session logs', 'Lecture'),
       step('find', 'Pistes (7 axes)', 'look for improvements in the seven categories', 'Pistes'),
-      step('present', 'Par sévérité', 'present them by severity, those that touch another repository apart, as a correction list ready to hand to an agent of that repository; then wait: the user picks the improvements of this repository in the dashboard and sends them to a linked session, or tells you which ones to apply', 'Tri'),
-      step(
-        'apply',
-        'Modifications en cours',
-        'set by the dashboard once the linked session you launch for the improvements the user sent has started; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then close the session when the answer lists it under « Close now » and send "closed", then complete unless some went back to todo',
-        'Appliquer',
-      ),
+      step('present', 'Par sévérité', 'present them by severity, those that touch another repository apart, as a correction list ready to hand to an agent of that repository; then wait: the user picks the improvements of this repository in the dashboard and clicks the splitting button, which puts the splitting request in the prompt; if the user names them in the chat instead, ask them to tick them and click that button: its request carries the splitting rules', 'Tri'),
+      step('split', 'Découpage', 'follow the splitting request the dashboard put in the prompt: settle the decisions with the user, write the tickets and the groups, have the user validate them, then send everything in one call', 'Découpage'),
+      // L'ancien chemin : une session liée lancée pour les pistes, avant la demande de découpage.
+      {
+        ...step(
+          'apply',
+          'Modifications en cours',
+          'set by the dashboard once the linked session you launch for the improvements the user sent has started; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then close the session when the answer lists it under « Close now » and send "closed", then complete unless some went back to todo',
+          'Appliquer',
+        ),
+        isLegacy: true,
+      },
     ],
     items: { label: 'Pistes', hint: 'the improvement candidates of this repository only (label = "category: fix"); those that touch another repository stay out of the items', linkedStep: 'apply' },
     uses: { 'writing-for-agents': 'style' },
-    flow: [phase('retro')],
+    // Les pistes choisies deviennent des tickets groupés, comme à /to-tickets : la suite du Triage.
+    hasTickets: true,
+    flow: [phase('retro'), IMPL_OPT, REPORT_IF_CODE, phase('project:version', true), phase('project:pr', true)],
+    // L'Implémentation se propose par la phase suivante, sans `next` : une rétro restée à sa seule phase
+    // (sa session de pistes ouverte) se finissait, et son parcours avec, sur un /implement.
   },
 
   // ─── Santé du code et conception ────────────────────────────────────────

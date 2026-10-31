@@ -161,7 +161,8 @@ export type FlowStep = {
 export type FlowItem = { id: string; label: string; status: ItemStatus }
 
 /**
- * Éléments d'une phase confiés à une session liée depuis le panneau (les pistes d'une rétro) :
+ * Éléments d'une phase confiés à une session liée (les pistes d'une rétro) par un envoi d'avant la
+ * demande de découpage : le panneau n'en crée plus, mais suit, relance et ferme ceux qui existent ;
  * le parcours reste dans la discussion principale, qui suit la session et rend les statuts.
  */
 export type LinkedWork = {
@@ -178,7 +179,7 @@ export type LinkedWork = {
   missedAt?: number
   /**
    * Où en est la fermeture de la session, une fois ses éléments jugés (`closed` avec `items`).
-   * « closed » ne recule jamais ; tant qu'elle n'est pas fermée, aucun nouvel envoi ne remplace le lien.
+   * « closed » ne recule jamais ; tant qu'elle n'est pas fermée, le lien tient la phase : aucune piste ne se découpe.
    */
   closing?: Closing
   /** Un envoi des éléments de la phase après une fermeture arrêtée : elle redevient à faire. */
@@ -236,8 +237,8 @@ export type FlowPhase = {
   /** Éléments confiés à une session liée, tant que la phase les suit. */
   linked?: LinkedWork
   /**
-   * La fermeture de la dernière session des éléments, gardée quand un nouvel envoi prend sa place :
-   * à côté du lien, qu'un ajout avant le lancement ou une annulation réécrivent.
+   * La fermeture de la dernière session des éléments, gardée quand un nouvel envoi d'avant la demande
+   * de découpage a pris sa place : à côté du lien, qu'une annulation réécrit.
    */
   linkedEarlier?: ClosedLink
   /** Les envois d'éléments faits dans la phase : le suivant prend le numéro d'après. */
@@ -701,8 +702,19 @@ export type RelayEntry = {
   endedAt?: number
 }
 
-/** Le relais d'un parcours : une entrée par session liée (id de la discussion), chacune écrite par elle seule. */
+/**
+ * Le relais d'un parcours : une entrée par session liée (id de la discussion). Tel que la discussion
+ * principale le lit : l'ancien fichier commun (`<parcours>.json`, écrit par les versions d'avant, plus
+ * jamais réécrit) et le fichier de chaque session (`RelayEntryFile`), réunis.
+ */
 export type Relay = { v: 1; run: string; sessions: Record<string, RelayEntry> }
+
+/**
+ * Le fichier d'une session liée dans le relais (`<parcours>.<session>.entry.json`, ou la clé
+ * `relay:<parcours>:<session>` du store) : son entrée seule, écrite par elle seule (un fichier par session liée) ;
+ * aucune écriture ne touche plus l'entrée d'une autre session.
+ */
+export type RelayEntryFile = { v: 1; run: string; session: string; entry: RelayEntry }
 
 export type Live = {
   mode: LiveMode
@@ -784,7 +796,7 @@ export type UiState = {
   hideFound?: boolean
   /** Tickets choisis dans le panneau, dans l'ordre de sélection (cette discussion seulement). */
   selection: string[]
-  /** Éléments de la phase (pistes d'une rétro) choisis pour une session liée. */
+  /** Éléments de la phase (pistes d'une rétro) choisis pour leur découpage en tickets. */
   itemSelection?: string[]
   /** Parcours archivé dont la suppression attend sa confirmation. */
   confirmDrop?: string

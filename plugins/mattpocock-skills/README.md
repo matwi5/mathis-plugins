@@ -2,7 +2,7 @@
 
 Copie du plugin [`mattpocock-skills`](https://github.com/mattpocock/skills) de **Matt Pocock**, sous licence MIT (voir [`LICENSE`](LICENSE)), sans autre modification que les écarts listés plus bas. Tout le mérite de ces skills lui revient ; la section Summary du skill `pr` reprend le skill `show-me` de Dex Horthy (voir [`skills/engineering/pr/CREDITS.md`](skills/engineering/pr/CREDITS.md)).
 
-Version actuelle : **1.3.1-mathis.4**, commit amont `49dd158d1076134a641b33efb035946536778336` (9 octobre 2026). Historique : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **1.3.1-mathis.5**, commit amont `49dd158d1076134a641b33efb035946536778336` (9 octobre 2026). Historique : [CHANGELOG.md](CHANGELOG.md).
 
 ## Pourquoi une copie
 

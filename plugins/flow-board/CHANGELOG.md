@@ -4,6 +4,52 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.73.0 — 2026-10-31
+
+Les pistes d'une rétro se découpent en tickets depuis le tableau de bord ; le relais garde ce qu'envoie une session liée ; durcissement des revues, des ids et de la fermeture.
+
+### Ajouté
+- **Découpage des pistes d'une rétro** : le bouton « ✂ Découper N pistes en tickets » met une demande de découpage dans le prompt (1 à 3 pistes voisines par ticket, une piste sensible seule, 5 tickets par groupe, un seul groupe permis, validation à boutons, un seul appel) et n'enregistre rien ; étape « Découpage » de la Rétro.
+- **Un fichier de relais par session liée** : chaque session écrit le sien (l'ancien fichier commun est encore lu, plus jamais réécrit), effacé avec le parcours ; une discussion restée sur une version d'avant ne voit pas les sessions lancées ou rechargées après la mise à jour.
+
+### Modifié
+- **Consignes de `/to-tickets`** : un ticket dont le texte fait lancer une commande à Claude ou construire un chemin se déclare « Logique : oui » ; l'exemple d'un ticket sans logique n'est plus « des règles ».
+- **Fin d'un groupe** : elle compte les tickets que le plan lui rattache ; tant que l'un est ouvert, le groupe n'est ni dû à sa revue, ni relu, ni clos, ni fermé ; `reviewed`, `closed` et `app` sont refusés en le nommant ; un avis `security` sans groupe, quand aucun n'est fini, est refusé.
+- **Ids** : un id de piste hors forme reçoit un id dérivé de lui (« p » + empreinte en base 36), retrouvé tant que la piste garde son libellé ; la forme d'un id de groupe est une seule règle, contrôlée partout ; un id hors forme se montre échappé et n'accepte que `stopped`.
+- **Valeurs mises dans le prompt** : titre, ids, libellés et noms y sont neutralisés (contrôles, invisibles, crochets et sosies de guillemets par catégories Unicode) ; le début du titre des sessions liées perd les mêmes caractères (une session lancée avant sous un tel titre n'est plus reconnue par lui) ; citation PowerShell pour « ↺ Rouvrir » sous Windows.
+
+### Corrigé
+- **Relais** : ce qu'une session liée envoie avec `delegate` (compte rendu, choix, comptes de revue) n'est plus jeté en silence ; la réponse de l'outil dit ce qui n'a pas été gardé et pourquoi.
+- **Lot pas lancé** : un Triage ou un parcours « Santé du code » qui finit avec un lot pas lancé passe en pause au lieu de « terminé » ; retirer un lot ouvert rend l'Implémentation facultative.
+- **Revues** : « revu » ne s'affiche plus pour une date illisible ; une seule règle lit la date de revue ; la revue d'un groupe perd `--fix` dès qu'un ticket sensible lui est rattaché, aussi pour un groupe rendu lancé depuis le panneau.
+- **Fermeture** : elle s'arrête sur un id de groupe hors forme, avec git comme sans, et ne demande rien à une session encore active ; la suppression des branches garde celle d'un tel groupe.
+- **Rétro d'avant** : une rétro qui suit encore l'ancienne session des pistes garde son étape et ses consignes ; une piste ne se coche plus pendant un envoi sans session.
+
+### Retiré
+- **Lien unique des pistes** : le tableau de bord ne crée plus de session liée unique pour les pistes ; les liens existants restent suivis, relancés et fermés.
+
+---
+
+## 0.72.0 — 2026-10-30
+
+Une rétro porte des tickets et va jusqu'à l'implémentation ; un groupe sans logique ni zone sensible n'a plus de revue du groupe ni de revue de sécurité.
+
+### Ajouté
+- **Rétro en tickets** : une rétro suit la séquence du tri (Rétro, Implémentation facultative, compte rendu s'il y a du code, Version, PR). Un seul appel de l'outil, avec les pistes jugées, les tickets, les groupes et `complete`, enregistre le tout et finit la Rétro ; la carte « Ensuite » propose alors le premier groupe. Une rétro garde un plan d'un seul groupe ; un plan refusé (id de groupe hors forme, ticket inconnu, aucun groupe) n'enregistre rien de l'appel. Une Rétro finie sans tickets clôt le parcours. Les worktrees de groupe d'une rétro portent son sujet (`groupe-retro-<sujet>-<id>`).
+- **Rétros d'avant** : un parcours de rétro pas fini, dont la Rétro est la dernière phase, reçoit à sa lecture la séquence d'une rétro neuve, les phases seulement ajoutées. Si sa session des pistes n'est pas encore fermée, il garde sa phase unique jusqu'à cette fermeture, et un découpage en tickets est refusé en entier, avec ce qui ferme la session.
+- **Revues allégées** : un groupe dont chaque ticket est dit ni sensible ni avec logique (des règles, des documents, une icône) est relu par les revues de ses tickets seules, quelle que soit sa taille. Le tableau de bord le montre « revu par ses tickets » et sa sécurité tranchée, et il est clos sans attendre. Un ticket avec logique, sensible, muet sur l'un des deux ou ajouté au groupe après coup rend dues la revue du groupe et l'avis de sécurité.
+
+### Modifié
+- **Correctifs d'une passe « bogues »** : dans la procédure d'un groupe (étape 5), les correctifs de la passe « bogues » d'un ticket sensible ont une seule nouvelle passe, en effort high, limitée à leur diff ; ce qu'elle trouve sans violer l'invariant va au compte rendu, sous « Pistes ».
+
+### Corrigé
+- **Marque de suppression des branches** : la validation du compte rendu marque les fermetures visées aussi quand le moteur rend un message entré avec `drop: undefined` ; « ↺ Rouvrir » disparaît alors bien.
+- **Publications d'une rétro** : les issues qu'ouvre `/retro` sur un autre dépôt restent des tâches trouvées, plus des tickets du lot, et n'empêchent plus une rétro sans tickets de finir.
+- **`/security-review` tapé à la main** : il marque d'abord les groupes finis qui attendent un avis de sécurité ; un groupe sans logique ni ticket sensible ne l'est que s'il est le seul fini.
+- **Feuille de route d'une rétro au terminal** : elle montre ses phases, plus ses étapes.
+
+---
+
 ## 0.71.0 — 2026-10-29
 
 Les pistes de la rétro du parcours « Fermeture auto des sessions liées » : une procédure de groupe qui n'attend plus, des revues mieux cadrées, et des outils qui évitent les scripts jetables.

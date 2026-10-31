@@ -139,7 +139,6 @@ const retro = (link = {}) => {
   const run = { ...model.newRun('retro', T0, 'Rétro'), owner: 's' }
   let board = { ...model.emptyBoard('/r', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   board = model.applyReport(board, { items: PISTES, step: 'present' }, T0 + 1).board
-  board = model.startLinkedItems(board, ['p1'], T0 + 2).board
   const phase = model.currentPhase(model.activeRun(board))
   phase.linked = { ...structuredClone(LINKED_WORK), ...link }
   phase.linkedEarlier = structuredClone(CLOSED_LINK)
@@ -155,19 +154,20 @@ test('renvoi des pistes : le lien de la phase garde chaque champ', { skip: SKIP 
   assert.equal(phaseOf(out).linkedSends, 2)
 })
 
-/**
- * Ce que le nouvel envoi des pistes, après une session fermée, ne garde pas de l'ancien lien dans
- * `linkedEarlier`, chacun avec sa raison.
- */
-const NEW_ITEMS_SEND = {
-  seq: "pas noté : la fermeture et la suppression des branches admettent tout numéro d'envoi de ce parcours sans lui (isOwnBranch, closing.ts) ; le noter changerait ce qu'elles visent",
-}
-
-test('nouvel envoi des pistes après une session fermée : l’ancien lien passe dans linkedEarlier', { skip: SKIP }, () => {
-  const out = model.startLinkedItems(retro({ items: [] }), ['p2'], T0 + 100).board
-  assert.deepEqual(lost('ClosedLink', phaseOf(out).linkedEarlier, NEW_ITEMS_SEND), [])
-  assert.equal(phaseOf(out).linkedSends, 3)
-  for (const why of Object.values(NEW_ITEMS_SEND)) assert.ok(why.length > 40)
+test('appel du découpage des pistes après une session fermée : le lien et l’envoi remplacé gardent chaque champ', { skip: SKIP }, () => {
+  const call = {
+    step: 'split',
+    items: PISTES.map(i => ({ ...i, status: 'done' })),
+    tickets: [{ id: '07', name: 'Contrôles et accès', sensitive: false, logic: true }],
+    groups: [{ id: 'A', name: 'Contrôles', tickets: ['07'] }],
+    complete: true,
+  }
+  const out = model.applyReport(retro({ items: [] }), call, T0 + 100).board
+  const phase = out.runs[0].phases[0]
+  assert.deepEqual(out.runs[0].tickets.map(t => t.id), ['07'])
+  assert.deepEqual(lost('LinkedWork', phase.linked), [])
+  assert.deepEqual(lost('ClosedLink', phase.linkedEarlier), [])
+  assert.equal(phase.linkedSends, 2)
 })
 
 test('annulation d’un envoi des pistes sans session : le lien part, l’envoi remplacé et le compteur restent', { skip: SKIP }, () => {

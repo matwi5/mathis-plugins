@@ -165,7 +165,7 @@ test('« ↗ Session liée » confie un groupe à une session liée : le parcour
   expect(text).not.toContain("un par un et dans l'ordre")
   expect(text).not.toContain('consigne des relecteurs')
   expect(text).not.toMatch(/git diff <base>\.\.HEAD/)
-  expect(text).toMatch(/dans son compte rendu, que la revue du groupe a tourné \(sinon, la lui demander par SendMessage avant tout ; un groupe d'un seul ticket ni sensible ni avec logique n'en a pas : la revue de son ticket suffit\)/)
+  expect(text).toMatch(/dans son compte rendu, que la revue du groupe a tourné \(sinon, la lui demander par SendMessage avant tout ; un groupe sans logique ni zone sensible n'a ni revue du groupe ni revue de sécurité, ni avis\)/)
   expect(text).toMatch(/\{"security": \{"group": "<id du groupe>", "advised": true\|false, "why": "<raison>"\}\}/)
   expect(text).toMatch(/\{"returned": \["<id du groupe>"\]\}/)
   // La seule reprise demandée est celle de cette discussion après un redémarrage, jamais par la session liée.

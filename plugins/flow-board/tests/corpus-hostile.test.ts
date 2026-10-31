@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { isSafeBranch, isSafeId, isWorktreePath, reopenText } from '../hooks/closing.ts'
+import { closingProcedure, isGroupId, isSafeBranch, isSafeId, isWorktreePath, linkedPrefix, neutralInPrompt, reopenText, shellQuote } from '../hooks/closing.ts'
 import { activeRun, applyRelay, applyReport, decidedFileText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
 import type { Board, Closing } from '../types'
 import { CORPUS, ch } from './corpus.mjs'
@@ -80,4 +80,98 @@ test('la neutralisation d’un choix relayé ne laisse ni fin de ligne, ni sosie
     if (line === undefined || !line.includes(' x') || breaksASection(line)) leaks.push(name)
   }
   expect(leaks).toEqual([])
+})
+
+test('isGroupId, la forme d’un id de groupe et d’un id de piste nouveau, refuse chaque entrée du corpus', () => {
+  expect(isGroupId('A1b')).toBe(true)
+  expect(passing(token => isGroupId(`A${token}1`))).toEqual([])
+})
+
+/** Les guillemets « » et leurs sosies en chevron (≪ ≫ n'est pas une ponctuation pour Unicode). */
+const QUOTE_SOSIES = new Set([0xab, 0xbb, 0x2039, 0x203a, 0x226a, 0x226b, 0x300a, 0x300b, 0x3008, 0x3009, 0x276e, 0x276f, 0x27e8, 0x27e9, 0x27ea, 0x27eb])
+
+/**
+ * Ce qu'une valeur recopiée dans une demande mise dans le prompt ne garde jamais, jugé sur les
+ * catégories Unicode plutôt que sur une liste qui en oublierait : une fin de ligne (Zl, Zp et les
+ * contrôles), un caractère de contrôle ou de format (Cc, Cf), un point ignorable par défaut
+ * (Default_Ignorable_Code_Point : invisibles, renversements de sens, sélecteurs de variante,
+ * remplissages hangûl, bloc U+E0000–E0FFF), une ponctuation ouvrante ou fermante (Ps, Pe : crochets et
+ * leurs sosies) autre que ( ) { }, un guillemet « » ou un de ses sosies.
+ */
+const breaksAQuote = (c: string): boolean =>
+  /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/u.test(c) ||
+  (/[\p{Ps}\p{Pe}]/u.test(c) && !'(){}'.includes(c)) ||
+  QUOTE_SOSIES.has(c.codePointAt(0)!)
+const PROMPT_BREAKERS = { has: (code: number): boolean => breaksAQuote(String.fromCodePoint(code)) }
+
+test('neutralInPrompt ne garde de quoi fermer une citation ou couper la liste pour aucun point de code', () => {
+  const leaks: string[] = []
+  for (const code of [...Array.from({ length: 0x30000 }, (_, i) => i), ...Array.from({ length: 0x1000 }, (_, i) => 0xe0000 + i)]) {
+    if ([...neutralInPrompt(`a${String.fromCodePoint(code)}b`)].some(c => breaksAQuote(c))) leaks.push(`U+${code.toString(16).toUpperCase().padStart(4, '0')}`)
+  }
+  expect(leaks).toEqual([])
+})
+
+test('neutralInPrompt ne garde, d’aucune entrée du corpus ni crochet ou guillemet, de quoi fermer une citation ou couper la liste', () => {
+  const quotes = ['[', ']', ch(0x27e6), ch(0x27e7), ch(0x301a), ch(0x301b), ch(0xff3b), ch(0xff3d), ch(0xab), ch(0xbb), ch(0x2039), ch(0x203a), ch(0x226a), ch(0x226b), ch(0x300a), ch(0x300b), ch(0x2329), ch(0x232a), ch(0x276e), ch(0x276f)]
+  const leaks = [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]
+    .filter(([, token]) => [...neutralInPrompt(`avant ${token} après`)].some(c => PROMPT_BREAKERS.has(c.codePointAt(0)!)))
+    .map(([name]) => name)
+  expect(leaks).toEqual([])
+  // Le texte autour reste lisible.
+  expect(neutralInPrompt('Rétro · « a » [b]')).toBe('Rétro · “ a ” (b)')
+})
+
+test('linkedPrefix, le début d’un titre de session liée cité entre « » dans le prompt, ne garde rien qui ferme cette citation', () => {
+  const quotes = ['[', ']', ch(0x27e6), ch(0x27e7), ch(0x301a), ch(0x301b), ch(0xff3b), ch(0xff3d), ch(0xab), ch(0xbb), ch(0x2039), ch(0x203a), ch(0x226a), ch(0x226b), ch(0x300a), ch(0x300b), ch(0x2329), ch(0x232a), ch(0x276e), ch(0x276f)]
+  const leaks = [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]
+    .filter(([, token]) => [...linkedPrefix(newRun('implement', 1_000, `avant ${token} après`))].some(c => PROMPT_BREAKERS.has(c.codePointAt(0)!)))
+    .map(([name]) => name)
+  expect(leaks).toEqual([])
+  expect(linkedPrefix(newRun('implement', 1_000, 'Rétro « a » [b]'))).toBe('Rétro a b > ')
+})
+
+test('la description d’une fermeture cite le titre du parcours neutralisé, pour un groupe comme pour les pistes d’une phase', () => {
+  const quotes = ['[', ']', '«', '»', ch(0x27e8), ch(0x27eb), ch(0x3010), ch(0x2985)]
+  const leaks: string[] = []
+  for (const [name, token] of [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]) {
+    const run = newRun('implement', 1_000, `Avant ${token} après`)
+    for (const target of [{ kind: 'group', id: 'A', name: 'Alpha' } as const, { kind: 'items', skill: 'retro' } as const]) {
+      const text = closingProcedure({ run, target, isRepo: true })
+      const at = text.indexOf('du parcours « Avant')
+      const cited = at < 0 ? '' : text.slice(at + 'du parcours « '.length, text.indexOf('»', at))
+      // Le titre se retrouve entier entre ses « » (jusqu'à sa fin, coupée ou non) : rien dans sa citation ne la ferme ni ne la coupe.
+      if (at < 0 || !cited.trimEnd().endsWith(run.title.slice(-5).normalize('NFKC')) || [...cited].some(c => breaksAQuote(c))) leaks.push(`${name} (${target.kind})`)
+    }
+  }
+  expect(leaks).toEqual([])
+})
+
+/**
+ * Une chaîne entre apostrophes lue comme PowerShell la lit (sans pwsh) : ' ‘ ’ ‚ ‛ ouvrent et ferment
+ * la chaîne, et deux de suite valent la seconde. Rend la valeur et ce qui suit la chaîne fermée.
+ */
+const PS_QUOTES = new Set(["'", ch(0x2018), ch(0x2019), ch(0x201a), ch(0x201b)])
+const readPowerShellQuoted = (text: string): { value: string; rest: string } | null => {
+  const chars = [...text]
+  if (!PS_QUOTES.has(chars[0] ?? '')) return null
+  let value = ''
+  for (let i = 1; i < chars.length; i++) {
+    if (!PS_QUOTES.has(chars[i]!)) value += chars[i]
+    else if (PS_QUOTES.has(chars[i + 1] ?? '')) value += chars[++i]
+    else return { value, rest: chars.slice(i + 1).join('') }
+  }
+  return null
+}
+
+test('shellQuote pour PowerShell : une valeur qui porte une apostrophe, droite ou typographique, reste une seule valeur', () => {
+  const leaks = [...entries, ['apostrophes mêlées', `l${ch(0x2019)}outil 'x' ${ch(0x2018)}y${ch(0x201b)}`] as [string, string]]
+    .filter(([, token]) => {
+      const read = readPowerShellQuoted(shellQuote(`a${token}b`, 'powershell'))
+      return read === null || read.value !== `a${token}b` || read.rest !== ''
+    })
+    .map(([name]) => name)
+  expect(leaks).toEqual([])
+  // Pour POSIX, rien ne change : l'apostrophe typographique n'y cite rien.
+  expect(shellQuote(`l${ch(0x2019)}outil 'x'`)).toBe(`'l${ch(0x2019)}outil '\\''x'\\'''`)
 })

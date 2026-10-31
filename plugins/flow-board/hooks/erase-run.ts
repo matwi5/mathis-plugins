@@ -14,7 +14,7 @@ import { type Trace, agentTraces, applyTraces, cleanTrace, eraseWith, isClosedSe
 import { carriedRunAt, runFileId, runWindow, runsCarriedBy } from './history.ts'
 import { isSameProject, isSureLink, linkedSessions } from './linked.ts'
 import { EMPTY_UI, dropRun, relayFileSlug } from './model.ts'
-import { type HistoryShown, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayKey, relayPath, reportPath } from './register.tsx'
+import { type HistoryShown, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
 import { commitRegistry, readRegistry, registryDir, registryKey, registryPath, writeRegistry } from './registry-file.ts'
 
 /** Les atomes lus ou mis à jour ici : le moteur veut leur déclaration dans le fichier qui les lit. */
@@ -460,6 +460,14 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
   await eraseKey($, mainRefKey(run.id))
   await eraseFile($, relayPath($, run.id))
   await eraseKey($, relayKey(run.id))
+  // L'entrée de chaque session, son fichier à elle (un fichier par session liée) : par son chemin calculé
+  // d'après les ids, puis par le dossier et par les clés du store (celles que le relais ne nomme plus).
+  for (const id of new Set([...linkedIds, ...Object.keys(relay?.sessions ?? {})])) {
+    await eraseFile($, relayEntryPath($, run.id, id))
+    await eraseKey($, relayEntryKey(run.id, id))
+  }
+  for (const path of await relayEntryFilesOf($, run.id)) await eraseFile($, path)
+  for (const key of await relayEntryKeysOf($, run.id)) await eraseKey($, key)
   await eraseFile($, decidedPath($, run.id))
   await reportEraseFailures($)
   if (missed.failed > 0) await quietly(() => $.ui.toast(`${missed.failed} ${missed.failed > 1 ? 'transcripts non relus' : 'transcript non relu'} : un sous-agent manqué pourrait revenir sans parcours.`))

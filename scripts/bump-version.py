@@ -9,7 +9,10 @@ Met à jour, en gardant la mise en forme de chaque fichier :
 2. l'entrée du plugin dans `.claude-plugin/marketplace.json` (`"version"`) ;
 3. la ligne « Version actuelle : **x.y.z** » du README du plugin ;
 4. les marqueurs « 0.xx.0 » de ce README (« depuis la 0.xx.0 », écrit quand la version n'était pas
-   encore connue), remplacés par la nouvelle version.
+   encore connue), remplacés par la nouvelle version, seulement sur les lignes que le README de
+   `HEAD` porte déjà : un marqueur d'une ligne pas encore commitée (le travail en cours d'une autre
+   discussion, qui attend sa propre version) reste, et le rapport donne sa ligne. Sans README
+   commité (plugin neuf, copie hors git), aucun marqueur n'est remplacé.
 
 Ne touche ni au CHANGELOG (son entrée reste à écrire : `scripts/check.sh` refuse une première entrée
 qui diffère de `plugin.json`) ni à la liste « État » d'ETAT_DU_PROJET.md (contrôlée aussi). Un
@@ -23,13 +26,14 @@ import re
 import sys
 from pathlib import Path
 
+from placeholders import PLACEHOLDER, git_show, replaced_lines
+
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
 VERSION = re.compile(r"\d+\.\d+\.\d+(?:-mathis\.\d+)?")
-PLACEHOLDER = "0.xx.0"
 CURRENT_LINE = re.compile(r"(Version actuelle : \*\*)([^*]+)(\*\*)")
 VERSION_FIELD = re.compile(r'("version"\s*:\s*")([^"]*)(")')
 
@@ -69,15 +73,27 @@ def bump_marketplace(path, name, version):
     return m.group(2)
 
 
-def bump_readme(path, version):
-    """La ligne « Version actuelle » et les marqueurs « 0.xx.0 » ; rend (ligne trouvée, marqueurs remplacés)."""
+def bump_readme(path, version, committed=""):
+    """La ligne « Version actuelle » et les marqueurs « 0.xx.0 » des lignes commitées (`committed`, le
+    README de `HEAD` ; règle de `placeholders.replaced_lines`) ; rend (ligne trouvée, marqueurs
+    remplacés, numéros des lignes laissées). Une ligne marquée absente de `HEAD` vient d'un texte pas
+    encore commité, peut-être d'une autre discussion, qui attend sa propre version : en posant la
+    0.70.0, un tel marqueur avait été remplacé et la phrase annonçait la mauvaise version."""
     if not path.is_file():
-        return False, 0
+        return False, 0, []
     text = path.read_text(encoding="utf-8")
     text, lines = CURRENT_LINE.subn(lambda m: m.group(1) + version + m.group(3), text, count=1)
-    markers = text.count(PLACEHOLDER)
-    write(path, text.replace(PLACEHOLDER, version))
-    return lines == 1, markers
+    replaced = replaced_lines(committed, text.splitlines())
+    out, markers, left = [], 0, []
+    for n, line in enumerate(text.splitlines(keepends=True), 1):
+        if n in replaced:
+            markers += line.count(PLACEHOLDER)
+            line = line.replace(PLACEHOLDER, version)
+        elif PLACEHOLDER in line:
+            left.append(n)
+        out.append(line)
+    write(path, "".join(out))
+    return lines == 1, markers, left
 
 
 def main():
@@ -95,7 +111,8 @@ def main():
             raise Failed(f"plugin inconnu : {args.plugin} (pas de {manifest})")
         old = bump_manifest(manifest, args.version)
         listed = bump_marketplace(args.root / ".claude-plugin" / "marketplace.json", args.plugin, args.version)
-        has_line, markers = bump_readme(plugin / "README.md", args.version)
+        readme = plugin / "README.md"
+        has_line, markers, left = bump_readme(readme, args.version, git_show(args.root, f"HEAD:plugins/{args.plugin}/README.md"))
     except (Failed, OSError) as err:
         print(f"ÉCHEC : {err}")
         sys.exit(1)
@@ -104,6 +121,9 @@ def main():
     print(f"  marketplace.json : {listed} → {args.version}")
     print(f"  README, ligne « Version actuelle » : {'à jour' if has_line else 'absente'}")
     print(f"  README, marqueurs « {PLACEHOLDER} » remplacés : {markers}")
+    if left:
+        print(f"  README, marqueurs « {PLACEHOLDER} » laissés dans du texte non commité : "
+              f"{', '.join(f'ligne {n}' for n in left)} ({readme})")
     print(f"Reste à écrire : l'entrée {args.version} du CHANGELOG du plugin, et sa version dans la liste « État » "
           "d'ETAT_DU_PROJET.md s'il en a une ; scripts/check.sh les contrôle.")
 

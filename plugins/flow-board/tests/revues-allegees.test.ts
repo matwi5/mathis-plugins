@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, commandArgsOf, emptyBoard, needsReview, newRun } from '../hooks/model.ts'
-import type { Board } from '../types'
+import { activeRun, applyReport, commandArgsOf, emptyBoard, groupPlan, groupReviewArgs, needsReview, newRun, reportFacts } from '../hooks/model.ts'
+import type { Board, Run } from '../types'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -112,8 +112,8 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   // La recherche part d'abord, et seuls les candidats moyens ou hauts sont vérifiés.
   expect(implement).toContain('the search starts at once, without a reading of the diff beforehand')
   expect(implement).toContain('one verification subtask per finding of medium or high severity only')
-  // Un groupe d'un seul ticket sans logique ni zone sensible n'a pas de revue du groupe.
-  expect(implement).toContain('A group of a single ticket sent with "sensitive": false and "logic": false has no group review')
+  // Un groupe sans logique ni zone sensible n'a ni revue du groupe ni revue de sécurité.
+  expect(implement).toContain('A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing) has neither a group review nor a security review')
   // Les constats sur du code antérieur au lot : à part, non corrigés, un groupe « durcissement » en fin de lot.
   expect(implement).toContain('findings on code older than the lot')
   expect(implement).toContain('« durcissement »')
@@ -173,4 +173,69 @@ test('sans groupes, la revue proposée perd --fix dès qu’un ticket du lot est
   expect(commandArgsOf(activeRun(silent), 'final-review')).toBe('high')
   // Les autres commandes gardent leurs arguments.
   expect(commandArgsOf(activeRun(lot), 'implement')).toBe('')
+})
+
+/** Le groupe D (d1, fait), le seul fini ; `extra` : des tickets envoyés après le plan. */
+const finishedD = (extra: object[] = []): Board => {
+  const b = boardWith(withOther({ tickets: [{ id: 'd1', name: 'Code', status: 'done', sensitive: false, logic: true }], groups: [{ id: 'D', name: 'Code', tickets: ['d1'] }] }))
+  return extra.length > 0 ? applyReport(b, { tickets: extra }, 3_000).board : b
+}
+
+test('un ticket sensible que le plan rattache au groupe lui retire --fix, au panneau comme dans les arguments de l’outil', () => {
+  const run = activeRun(finishedD([{ id: 'x', name: 'Purge', status: 'done', sensitive: true, logic: true, blockedBy: ['d1'] }]))!
+  // Enregistré sans x, montré avec x : le plan le rattache après coup.
+  expect(run.groups!.find(g => g.id === 'D')!.tickets).toEqual(['d1'])
+  const shown = groupPlan(run)!.groups.find(g => g.group.id === 'D')!.group
+  expect(shown.tickets).toEqual(['d1', 'x'])
+  expect(groupReviewArgs(run, shown)).toBe('high')
+  expect(groupReviewArgs(run, run.groups!.find(g => g.id === 'D')!)).toBe('high')
+  expect(commandArgsOf(run, 'final-review')).toBe('high')
+})
+
+test('un groupe sans ticket sensible, enregistré ni rattaché, garde --fix partout', () => {
+  const run = activeRun(finishedD([{ id: 'y', name: 'Route', status: 'done', sensitive: false, logic: true, blockedBy: ['d1'] }]))!
+  const shown = groupPlan(run)!.groups.find(g => g.group.id === 'D')!.group
+  expect(shown.tickets).toEqual(['d1', 'y'])
+  expect(groupReviewArgs(run, shown)).toBe('high --fix')
+  expect(commandArgsOf(run, 'final-review')).toBe('high --fix')
+})
+
+/** Le parcours du groupe D fini, sa date de revue relue telle quelle, en pause au stockage. */
+const storedD = (reviewedAt: unknown): Board => {
+  const b = finishedD()
+  const run = activeRun(b)!
+  const groups = run.groups!.map(g => (g.id === 'D' ? { ...g, reviewedAt } : g))
+  return { ...b, runs: [{ ...run, status: 'paused', owner: undefined, groups } as Run], activeId: null }
+}
+
+test('les faits du compte rendu ne disent un groupe relu que pour une date de revue valide', () => {
+  for (const reviewedAt of [null, 'hier', -5]) expect(reportFacts(storedD(reviewedAt).runs[0]!).join('\n')).not.toContain('reviewed by /code-review')
+  expect(reportFacts(storedD(5_000).runs[0]!).join('\n')).toContain('D (Code): 1/1 done, reviewed by /code-review')
+})
+
+// Une date de revue hors forme ne compte pas pour la logique (`isGroupReviewed`) : le panneau non plus.
+for (const [why, reviewedAt] of [['null', null], ['un texte', 'hier'], ['négative', -5]] as const) {
+  test(`le panneau : une date de revue relue hors forme (${why}) ne montre pas « revu », la revue reste proposée`, { timeoutMs: 15000 }, async ($, on) => {
+    mock.clock(on, { now: 64_000_000 })
+    const stored = storedD(reviewedAt)
+    mock.store(on, { 'board:': stored })
+    world(on)
+    await $.tool.call({ tool: TOOL, resume: stored.runs[0]!.id } as any)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+    expect(await ui.find({ type: 'Text', text: /^✓.revu$/ })).toBeUndefined()
+    expect(await ui.find({ key: 'review-group-D' })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test('le panneau : une date de revue valide montre « revu »', { timeoutMs: 15000 }, async ($, on) => {
+  mock.clock(on, { now: 64_000_000 })
+  const stored = storedD(5_000)
+  mock.store(on, { 'board:': stored })
+  world(on)
+  await $.tool.call({ tool: TOOL, resume: stored.runs[0]!.id } as any)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /^✓.revu$/ })).toBeDefined()
+  expect(await ui.find({ key: 'review-group-D' })).toBeUndefined()
+  await ui.unmount()
 })

@@ -1,8 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { closingProcedure } from '../hooks/closing.ts'
-import { activeRun, applyReport, cancelLinked, currentPhase, emptyBoard, linkSession, mergeBoards, newRun, pickableItems, startLinkedItems } from '../hooks/model.ts'
+import { activeRun, applyReport, cancelLinked, currentPhase, emptyBoard, linkSession, mergeBoards, newRun, pickableItems } from '../hooks/model.ts'
 import type { Board } from '../types'
+import { withItemsLink } from './lien-pistes.ts'
 
 // La session liée des pistes d'une rétro se ferme comme un groupe, une fois chacune de ses pistes
 // jugée. Invariants : l'état de fermeture d'une session liée n'est jamais perdu ni reculé par un
@@ -32,7 +33,7 @@ const retro = (): Board => {
   return applyReport(board, { items: PISTES, step: 'present' }, 1_500).board
 }
 /** p1 et p3 confiées à la session 9f9f9f9f, lancée. */
-const running = (): Board => linkSession(startLinkedItems(retro(), ['p1', 'p3'], 2_000)!.board, '9f9f9f9f', 2_200)!.board
+const running = (): Board => linkSession(withItemsLink(retro(), ['p1', 'p3'], 2_000), '9f9f9f9f', 2_200)!.board
 /** Les pistes jugées : p1 faite, p3 revenue au choix. */
 const judged = (): Board => applyReport(running(), { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], PISTES[2]] }, 4_000, REPO).board
 const linkOf = (b: Board) => currentPhase(activeRun(b)!).linked
@@ -65,7 +66,7 @@ test('« closed » avec « items » : noté sur le lien des pistes, ne recule ja
   // Une session dont des pistes sont encore en cours ne se ferme pas.
   expect(applyReport(running(), { closed: [{ items: 'retro', state: 'closed' }] }, 3_000, REPO).text).toContain('closed: refused for Pistes of phase Rétro (items still in progress: send their verdicts first)')
   // La copie où un nouvel envoi a remplacé la session fermée : la fusion lui rend sa fermeture.
-  const resent = startLinkedItems(closed.board, ['p2'], 6_000)!.board
+  const resent = withItemsLink(closed.board, ['p2'], 6_000)
   const fromEarlier = mergeBoards(base, { ...resent, runs: resent.runs.map(r => ({ ...r, status: 'paused' as const, updatedAt: 99_999 })) })
   expect(linkOf(fromEarlier)!.closing?.state).toBe('closed')
   expect(applyReport(fromEarlier, { note: 'point' }, 99_999_000, REPO).text).not.toContain('Close now')
@@ -77,39 +78,30 @@ test('« closed » avec « items » : noté sur le lien des pistes, ne recule ja
   expect(applyReport(stopped, { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], PISTES[2]] }, 6_000, REPO).text).toContain('Close now: the linked session of the Pistes')
 })
 
-test('un nouvel envoi n’écrase jamais une session de pistes non fermée ; une fois fermée, il part et la garde notée', () => {
+test('une session de pistes non fermée tient la phase ; fermée, ses pistes se choisissent de nouveau et elle reste notée', () => {
   const b = judged()
   expect(pickableItems(currentPhase(activeRun(b)!))).toEqual([])
-  expect(startLinkedItems(b, ['p2'], 5_000)).toBeNull()
   expect(linkOf(b)!.session).toBe('9f9f9f9f')
   const closed = applyReport(b, { closed: [{ items: 'retro', state: 'closed', sessionId: '9f9f9f9f-0000-4000-8000-000000000000' }] }, 6_000, REPO).board
   expect(pickableItems(currentPhase(activeRun(closed)!)).map(i => i.id)).toEqual(['p2', 'p3'])
-  const again = startLinkedItems(closed, ['p2'], 7_000)!.board
-  expect(linkOf(again)).toEqual({ items: ['p2'], at: 7_000, seq: 2 })
-  expect(currentPhase(activeRun(again)!).linkedEarlier).toMatchObject({ at: 2_000, session: '9f9f9f9f', closing: { state: 'closed', sessionId: '9f9f9f9f-0000-4000-8000-000000000000' } })
-  // Une piste ajoutée avant le lancement, puis l'envoi annulé : la fermeture précédente reste notée.
-  const more = startLinkedItems(again, ['p3'], 7_100)!.board
-  expect(currentPhase(activeRun(more)!).linkedEarlier?.closing?.sessionId).toBe('9f9f9f9f-0000-4000-8000-000000000000')
-  const cancelled = cancelLinked(more, 7_200)!.board
+  expect(linkOf(closed)).toMatchObject({ at: 2_000, session: '9f9f9f9f', closing: { state: 'closed', sessionId: '9f9f9f9f-0000-4000-8000-000000000000' } })
+  // Un nouvel envoi fait par une version d'avant, puis annulé : la fermeture précédente reste notée.
+  const again = withItemsLink(closed, ['p2', 'p3'], 7_000)
+  expect(currentPhase(activeRun(again)!).linkedEarlier?.closing?.sessionId).toBe('9f9f9f9f-0000-4000-8000-000000000000')
+  const cancelled = cancelLinked(again, 7_200)!.board
   expect(currentPhase(activeRun(cancelled)!).linked).toBeUndefined()
   expect(currentPhase(activeRun(cancelled)!).linkedEarlier?.closing?.sessionId).toBe('9f9f9f9f-0000-4000-8000-000000000000')
 })
 
-test('un worktree unique par envoi de pistes, au nom du parcours : pistes-<parcours>-1, puis -2 ; un ajout avant le lancement garde le numéro', () => {
-  const first = startLinkedItems(retro(), ['p1'], 2_000)!.board
-  expect(linkOf(first)!.seq).toBe(1)
-  const joined = startLinkedItems(first, ['p3'], 2_100)!.board
-  expect(linkOf(joined)!.seq).toBe(1)
-  const launched = linkSession(joined, '9f9f9f9f', 2_200)!.board
+test('un worktree unique par envoi de pistes, au nom du parcours : pistes-<parcours>-1, puis -2', () => {
+  const launched = linkSession(withItemsLink(retro(), ['p1', 'p3'], 2_000), '9f9f9f9f', 2_200)!.board
   const judgedOnce = applyReport(launched, { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], { ...PISTES[2], status: 'done' }] }, 3_000, REPO)
   // La procédure de fermeture nomme la branche de cet envoi.
   expect(judgedOnce.text).toContain('worktree-pistes-retro-du-groupe-a-1 (lancée par le CLI), pistes-retro-du-groupe-a-1 ou claude/pistes-retro-du-groupe-a-1-<suffixe>')
   const closed = applyReport(judgedOnce.board, { closed: [{ items: 'retro', state: 'closed' }] }, 3_100, REPO).board
-  const second = startLinkedItems(closed, ['p2'], 4_000)!.board
-  expect(linkOf(second)!.seq).toBe(2)
-  // Annulé puis renvoyé : un numéro neuf, jamais celui d'une branche gardée.
-  const third = startLinkedItems(cancelLinked(second, 4_100)!.board, ['p2'], 4_200)!.board
-  expect(linkOf(third)!.seq).toBe(3)
+  // Le deuxième envoi d'une version d'avant : sa fermeture nomme la branche -2.
+  const second = linkSession(withItemsLink(closed, ['p2'], 4_000), '8e8e8e8e', 4_100)!.board
+  expect(applyReport(second, { items: PISTES.map(i => ({ ...i, status: 'done' })) }, 4_200, REPO).text).toContain('worktree-pistes-retro-du-groupe-a-2 (lancée par le CLI)')
 })
 
 test('la rétro ne se clôt pas avant que la session des pistes soit fermée (ou sa fermeture tentée)', () => {
@@ -129,7 +121,9 @@ test('la rétro ne se clôt pas avant que la session des pistes soit fermée (ou
 
 test('le panneau de la rétro : « fermer d’abord la session précédente », puis arrêtée avec « ↻ Relancer la fermeture », à archiver, fermée', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 90_000_000 })
-  mock.store(on)
+  // Un envoi de p1 enregistré avant la demande de découpage, encore sans session.
+  const old = { ...activeRun(withItemsLink(retro(), ['p1'], 2_000))!, status: 'paused' as const, owner: undefined }
+  mock.store(on, { 'board:': { ...emptyBoard('', 'p'), deleted: [], runs: [old], activeId: null } })
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
   on('session.repo', () => ({ value: { root: 'C:/proj', remote: null, internal: false, name: null } }))
@@ -139,11 +133,9 @@ test('le panneau de la rétro : « fermer d’abord la session précédente », 
     filled.push(e.text)
     return { isFilled: true }
   })
-  await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
-  await $.tool.call({ tool: TOOL, items: PISTES, step: 'present' } as any)
+  await $.tool.call({ tool: TOOL, resume: old.id } as any)
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  await ui.press({ key: 'item-pick-p1' })
-  await ui.press({ key: 'items-linked' })
+  await ui.press({ key: 'linked-retry' })
   await ui.unmount()
   // Le texte des pistes demande la fermeture après la fusion et les verdicts.
   // Le worktree de cet envoi porte son numéro.

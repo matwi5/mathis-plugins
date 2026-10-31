@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, applySkill, cancelLinkedGroup, emptyBoard, linkSession, newRun, renameRun, startLinkedGroups, startLinkedItems } from '../hooks/model.ts'
+import { activeRun, applyReport, applySkill, cancelLinkedGroup, emptyBoard, linkSession, newRun, renameRun, startLinkedGroups } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
+import { withItemsLink } from './lien-pistes.ts'
 
 // Titre réfléchi et renommage de la discussion (spec « Titres », série 1 Q13 à Q15, série 2 Q6 à Q8).
 
@@ -99,7 +100,7 @@ test('fix.title et /flow rename renomment la discussion avant une session liée,
 
 test('une session liée lancée pour des éléments bloque le renommage, même quand ils reviennent à faire', () => {
   let board = applyReport(opened(empty(), 'mattpocock-skills:retro'), { title: 'Rétro', items: [{ id: 'r1', label: 'Piste' }] }, 2_000).board
-  board = startLinkedItems(board, ['r1'], 3_000)!.board
+  board = withItemsLink(board, ['r1'], 3_000)
   board = linkSession(board, 'local_pistes', 3_500)!.board
   // Les éléments reviennent à faire : la phase ne suit plus la session, le parcours s'en souvient.
   board = { ...board, runs: board.runs.map(r => ({ ...r, phases: r.phases.map(p => ({ ...p, linked: undefined })) })) }

@@ -1,8 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { reopenText } from '../hooks/closing.ts'
-import { newRun } from '../hooks/model.ts'
-import type { Closing } from '../types'
+import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
+import type { Board, Closing } from '../types'
+import { withItemsLink } from './lien-pistes.ts'
 
 // Rouvrir une session liée fermée : le bouton « ↺ Rouvrir » copie une commande qui recrée son
 // worktree sur sa branche gardée, sans rien forcer, puis reprend sa conversation dans ce worktree ;
@@ -242,13 +243,14 @@ test('la session des pistes d’une rétro, fermée avec son sessionId : « ↺ 
     { id: 'p1', label: 'Contrôles', status: 'todo' },
     { id: 'p2', label: 'Accès', status: 'todo' },
   ]
+  // Un envoi de p1 enregistré avant la demande de découpage, encore sans session.
+  const retro = { ...newRun('retro', 1_000, 'Rétro'), owner: 's' }
+  const fresh: Board = { ...emptyBoard(ROOT, 'proj'), session: 's', deleted: [], runs: [retro], activeId: retro.id }
+  const sent = withItemsLink(applyReport(fresh, { items: PISTES, step: 'present' }, 1_500).board, ['p1'], 2_000)
+  w.mem[`board:${ROOT.toLowerCase()}`] = { ...sent, session: undefined, runs: sent.runs.map(r => ({ ...r, status: 'paused', owner: undefined })), activeId: null }
   await $.session.start({ cwd: '', surface: null, isInteractive: true })
-  await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
-  await $.tool.call({ tool: TOOL, items: PISTES, step: 'present' } as any)
-  let u = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  await u.press({ key: 'item-pick-p1' })
-  await u.press({ key: 'items-linked' })
-  await u.unmount()
+  await $.tool.call({ tool: TOOL, resume: retro.id } as any)
+  let u: any
   await $.tool.call({ tool: START, title: 'Rétro > Pistes · contrôles' } as any)
   await $.tool.call({ tool: TOOL, items: [{ ...PISTES[0], status: 'done' }, PISTES[1]] } as any)
   // Fermée sans sessionId : pas de bouton ; avec lui : le bouton.

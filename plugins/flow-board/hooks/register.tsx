@@ -17,7 +17,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { AgentLane, AgentMark, AgentsWindow, AgentSegment, AgentType, Board, FlowPhase, Relay, Run, SessionRegistry, SyncState, Tab, VersionUnit } from '../types'
+import type { AgentLane, AgentMark, AgentsWindow, AgentSegment, AgentType, Board, FlowItem, FlowPhase, Relay, RelayEntry, RelayEntryFile, Run, SessionRegistry, SyncState, Tab, VersionUnit } from '../types'
 import {
   CODE_SKILLS,
   NO_GIT_COPIES,
@@ -32,10 +32,9 @@ import {
   SENSITIVE_AREAS,
   TRUST_COMMAND,
   SENSITIVE_NO_FIX,
-  SINGLE_TICKET_GROUP,
+  NO_LOGIC_GROUP,
   SKILLS,
   TICKET_FIXED_POINT,
-  commandLineOf,
   hintOf,
   reviewInstructions,
   skillIdOf,
@@ -47,14 +46,13 @@ import {
   applyAgentStart,
   applyAnswer,
   applyAsana,
-  applyRelay,
+  applyRelayEntry,
   asanaChanges,
   localTicketChange,
   ticketFilesIn,
   askCloseLinkedGroup,
   askCloseLinkedItems,
   groupSendSeq,
-  isGroupId,
   reloadText,
   restoreDelegate,
   applyCommand,
@@ -78,6 +76,8 @@ import {
   decidedFileText,
   isBugPass,
   relayedReportKeys,
+  relayedPartsOf,
+  relayedSentence,
   archiveRun,
   cancelLinked,
   cancelLinkedGroup,
@@ -92,7 +92,7 @@ import {
   type GroupView,
   linkedInFlight,
   pickableItems,
-  startLinkedItems,
+  holdsItemsSession,
   renameRun,
   unarchiveRun,
   EMPTY_SYNC,
@@ -103,6 +103,7 @@ import {
   focusOf,
   clampFuture,
   groupPlan,
+  groupReviewArgs,
   noActiveFrench,
   withoutPullRequest,
   isBoard,
@@ -124,7 +125,13 @@ import {
   reportedChanges,
   reportedCounts,
   reportedWithdrawals,
+  latestRelayEntry,
+  mergeRelay,
+  nextRelayTime,
+  parseRelayEntryFile,
+  relayEntryFileName,
   relayFileSlug,
+  relayRefusal,
   reportFileName,
   mainRefFileName,
   parseMainRef,
@@ -132,6 +139,8 @@ import {
   type MainRef,
   reportedDecisions,
   type RelayEvent,
+  type RelayLoss,
+  type RelayPart,
   commandArgsOf,
 } from './model.ts'
 import type { LiveAgent, SyncAdvice } from './model.ts'
@@ -165,7 +174,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { OLD_SEPARATORS, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, itemsWorktree, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
+import { GROUP_ID_FORM, GROUP_ID_FORM_FR, OLD_SEPARATORS, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, isGroupId, isSafeId, itemsWorktree, neutralInPrompt, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
 import { COMPACT_FIRST_TOAST, ORIGIN_FILE_RULE, compactionInstructions, compactionRoleOf, retroTranscriptNote, suggestsCompaction, withCompactionInstructions, type CompactionRole } from './compaction.ts'
 import { applyTraces } from './erase.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
@@ -242,7 +251,7 @@ const TOOL_DESCRIPTION =
   'when nothing is active here, the answer names the workflows to resume, so ask the user. To take tickets out of the wrong ' +
   'workflow, send "remove" in a call before the "open" one.'
 
-const TOOL_SCHEMA = {
+export const TOOL_SCHEMA = {
   type: 'object',
   properties: {
     title: { type: 'string', description: "A short title you choose that sums up the whole work, 3 to 6 words, in the user's language; never their message itself; only the first one sent is kept (fix.title changes it). The discussion where the workflow was born takes it too, unless another workflow was born there: the answer says which" },
@@ -253,7 +262,10 @@ const TOOL_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string' },
+          id: {
+            type: 'string',
+            description: `For the tracks of a retro: ${GROUP_ID_FORM}. A new id out of that form gets an id derived from it (p then base 36), found again when the track comes back under that id with the same label, never another listed track's; the answer names it, send that track under it from then on. An id already recorded stays as it is.`,
+          },
           label: { type: 'string' },
           status: { type: 'string', enum: ['todo', 'doing', 'done', 'dropped'] },
         },
@@ -316,7 +328,7 @@ const TOOL_SCHEMA = {
         properties: {
           group: { type: 'string', description: 'Group id (A, B...)' },
           items: { type: 'string', description: 'Instead of "group": the skill of the phase whose linked session of items (the improvements of a retro) was closed' },
-          state: { type: 'string', enum: ['closed', 'app', 'stopped'], description: 'closed: session and worktree closed; app: the user must archive the session in the app; stopped: something stopped the closing (why)' },
+          state: { type: 'string', enum: ['closed', 'app', 'stopped'], description: 'closed: session and worktree closed; app: the user must archive the session in the app; stopped: something stopped the closing (why). For a group whose id is out of form, only stopped is accepted' },
           why: { type: 'string', description: "For app and stopped: the gesture or the reason, short, in the user's language" },
           sessionId: { type: 'string', description: 'For closed, when known: the full sessionId of the conversation (claude agents --json, read before the stop: a UUID), or the local_… id of an app session; else refused' },
           branch: { type: 'string', description: 'For closed, when known: the kept branch of the group; only letters, digits, ., _, / and -, no leading -, else refused' },
@@ -385,7 +397,7 @@ const TOOL_SCHEMA = {
     groups: {
       type: 'array',
       description:
-        'Execution plan: the tickets grouped by shared context. Each group is done in a linked session, never in this discussion. Same group = tickets that touch the same files or modules, or chain through their dependencies: its linked session does them in a row with /implement and reuses the loaded context. Different context = another group, done later in its own linked session, or at the same time as other independent groups (one linked session per group). A group of one ticket is fine when its context is its own. Full list: it replaces the previous one; every ticket in exactly one group. A group already sent to a linked session (in flight, returned, closed, or with its send cancelled) is never dropped, by a plan or by removing its tickets: omitted, it stays at the end of the plan, even empty, with its send number. A group in flight, or returned and not closed, also keeps its tickets even if the new plan gives them to another group (the answer says so); a closed group, or one whose send was cancelled, lets the plan give its tickets to another group. A group id is 1 to 12 ASCII letters or digits. Never a single group: a plan of one group (or one group plus tickets outside it) is ignored, so send no groups and do the lot here with /implement',
+        'Execution plan: the tickets grouped by shared context. Each group is done in a linked session, never in this discussion. Same group = tickets that touch the same files or modules, or chain through their dependencies: its linked session does them in a row with /implement and reuses the loaded context. Different context = another group, done later in its own linked session, or at the same time as other independent groups (one linked session per group). A group of one ticket is fine when its context is its own. Full list: it replaces the previous one; every ticket in exactly one group. A group already sent to a linked session (in flight, returned, closed, or with its send cancelled) is never dropped, by a plan or by removing its tickets: omitted, it stays at the end of the plan, even empty, with its send number. A group in flight, or returned and not closed, also keeps its tickets even if the new plan gives them to another group (the answer says so); a closed group, or one whose send was cancelled, lets the plan give its tickets to another group. A group id has ' + GROUP_ID_FORM + '. Never a single group: a plan of one group (or one group plus tickets outside it) is ignored, so send no groups and do the lot here with /implement; except in a retro workflow (its picked improvements made into tickets), where a single group is kept and goes to a linked session, and where, while its retro phase is current, a plan refused (a group id out of form, an unknown ticket id, no group) records nothing of the call, items and complete included',
       items: {
         type: 'object',
         properties: {
@@ -432,7 +444,7 @@ const TOOL_SCHEMA = {
     report: {
       type: 'string',
       description:
-        'Only in a linked session: your whole final report, also sent to the main discussion with SendMessage. It is kept in the run\'s relay file, which the main discussion rereads if the message gets lost (renamed or restarted discussion)',
+        'Only in a linked session: your whole final report, also sent to the main discussion with SendMessage. It is kept in your relay file (one per linked session, next to the run\'s), which the main discussion rereads if the message gets lost (renamed or restarted discussion)',
     },
     main: {
       type: 'string',
@@ -699,8 +711,9 @@ const saveStored = async ($: any, root: string, board: Board) => {
 
 // ─── Relais des sessions liées ────────────────────────────────────────────
 //
-// Un fichier par parcours, à côté des parcours : chaque session liée y tient son entrée, la
-// discussion principale le lit. Il ne dépend pas de la racine : une session dans un worktree
+// Un fichier par session liée, à côté des parcours (`<parcours>.<session>.entry.json`) : chacune n'écrit
+// que le sien, la discussion principale les lit et les réunit, avec l'ancien fichier commun du parcours,
+// plus jamais réécrit (un fichier par session liée). Ils ne dépendent pas de la racine : une session dans un worktree
 // (autre racine, autre fichier de parcours) écrit au même endroit que si elle était dans le dossier.
 
 const runSlug = relayFileSlug
@@ -817,50 +830,205 @@ const seenReports = new Set<string>()
 
 export const relayKey = (runId: string): string => `relay:${runId}`
 
-export async function readRelay($: any, runId: string): Promise<unknown> {
-  const path = relayPath($, runId)
-  if (path) {
-    try {
-      return (await $.fs.exists(path)) ? JSON.parse(String(await $.fs.read(path))) : undefined
-    } catch {
-      // Fichier hors d'atteinte : l'ancien stockage prend le relais.
-    }
-  }
+/** Le fichier de l'entrée d'une session liée, à côté du relais ; écrit par elle seule. */
+export function relayEntryPath($: any, runId: string, session: string): string | null {
+  const home = claudeHome($)
+  return home && runSlug(runId) && relayFileSlug(session) ? `${home}/flow-board/relais/${relayEntryFileName(runId, session)}` : null
+}
+
+/** Sa clé de `$.store`, quand le fichier est hors d'atteinte. */
+export const relayEntryKey = (runId: string, session: string): string => `relay:${runId}:${session}`
+
+/** Les fichiers d'entrée des sessions d'un parcours, trouvés dans le dossier du relais. */
+export async function relayEntryFilesOf($: any, runId: string): Promise<string[]> {
+  const sample = relayEntryPath($, runId, 'x')
+  if (!sample) return []
+  const dir = sample.slice(0, sample.lastIndexOf('/'))
+  const prefix = `${relayFileSlug(runId)}.`
   try {
-    return await $.store.get(relayKey(runId))
+    const names = ((await $.fs.list(dir)) as { name: string }[]).map(x => x.name)
+    return names.filter(n => n.startsWith(prefix) && n.endsWith('.entry.json')).map(n => `${dir}/${n}`)
   } catch {
-    return undefined
+    return []
   }
 }
 
-const writeRelay = async ($: any, relay: Relay) => {
-  const path = relayPath($, relay.run)
+/** Les clés de `$.store` des entrées des sessions d'un parcours. */
+export async function relayEntryKeysOf($: any, runId: string): Promise<string[]> {
+  try {
+    return ((await $.store.keys()) as string[]).filter(k => k.startsWith(`${relayKey(runId)}:`))
+  } catch {
+    return []
+  }
+}
+
+/** Ce qu'une lecture a trouvé : rien, une valeur, ou un contenu présent qui ne se lit pas (jamais réécrit). */
+type Found = { state: 'absent' } | { state: 'unreadable' } | { state: 'read'; value: unknown }
+
+/** Un fichier JSON : absent, lu, ou illisible (en pleine écriture, abîmé) ; null quand le disque est hors d'atteinte. */
+const readJsonFile = async ($: any, path: string): Promise<Found | null> => {
+  let text: string
+  try {
+    if (!(await $.fs.exists(path))) return { state: 'absent' }
+    text = String(await $.fs.read(path))
+  } catch {
+    return null
+  }
+  try {
+    return { state: 'read', value: JSON.parse(text) }
+  } catch {
+    return { state: 'unreadable' }
+  }
+}
+
+/** L'ancien relais commun d'un parcours (le fichier, sinon `$.store`) : lu seulement, plus jamais réécrit. */
+const readSharedRelay = async ($: any, runId: string): Promise<Found> => {
+  const path = relayPath($, runId)
+  const found = path ? await readJsonFile($, path) : null
+  if (found) return found
+  try {
+    const value = await $.store.get(relayKey(runId))
+    return value === undefined ? { state: 'absent' } : { state: 'read', value }
+  } catch {
+    return { state: 'absent' }
+  }
+}
+
+/**
+ * Le relais d'un parcours, pour la discussion principale : l'ancien fichier commun et le fichier de
+ * chaque session (puis leurs clés de `$.store`), réunis par `mergeRelay` ; un fichier qui ne se lit
+ * pas est passé, jamais réécrit. Rien quand aucune source ne se lit.
+ */
+export async function readRelay($: any, runId: string): Promise<unknown> {
+  const shared = await readSharedRelay($, runId)
+  const own: unknown[] = []
+  for (const path of await relayEntryFilesOf($, runId)) {
+    const found = await readJsonFile($, path)
+    if (found?.state === 'read') own.push(found.value)
+  }
+  for (const key of await relayEntryKeysOf($, runId)) {
+    await quietly(async () => {
+      own.push(await $.store.get(key))
+    })
+  }
+  return mergeRelay(runId, shared.state === 'read' ? shared.value : undefined, own) ?? undefined
+}
+
+/**
+ * L'entrée de cette session, telle qu'elle l'a laissée : la plus récente de son fichier, de sa clé de
+ * `$.store` et de l'ancien relais commun (une session lancée avant le fichier par session). Son fichier
+ * ou sa clé présents mais illisibles, ou une lecture ratée, arrêtent l'écriture : ils ne sont jamais
+ * réécrits, et la réponse le dit. L'ancien relais commun, lui, n'est jamais réécrit du tout.
+ */
+const readOwnEntry = async ($: any, runId: string, session: string): Promise<{ entry: RelayEntry | undefined } | { why: string }> => {
+  const candidates: RelayEntry[] = []
+  const path = relayEntryPath($, runId, session)
+  if (path) {
+    const file = await readJsonFile($, path)
+    // Une lecture ratée n'est pas une absence : l'entrée gardée là ne serait plus qu'à réécrire de zéro.
+    if (file === null) return { why: 'its own relay file could not be read: nothing overwritten' }
+    if (file.state === 'unreadable') return { why: 'its own relay file exists but does not read (cut or damaged): nothing overwritten' }
+    if (file.state === 'read') {
+      const read = parseRelayEntryFile(file.value, runId)
+      if (!read || read.session !== session) return { why: 'its own relay file exists but is not an entry of this session: nothing overwritten' }
+      candidates.push(read.entry)
+    }
+  }
+  let stored: unknown
+  let isStoreRead = true
+  try {
+    stored = await $.store.get(relayEntryKey(runId, session))
+  } catch {
+    isStoreRead = false
+  }
+  if (!isStoreRead) return { why: 'its own relay entry in the store could not be read: nothing overwritten' }
+  if (stored !== undefined) {
+    const read = parseRelayEntryFile(stored, runId)
+    if (!read || read.session !== session) return { why: 'its own relay entry in the store is not an entry of this session: nothing overwritten' }
+    candidates.push(read.entry)
+  }
+  // Une session lancée avant le fichier par session part de son entrée dans l'ancien relais commun.
+  // Illisible, ce fichier n'est ni réécrit ni montré : la session part d'une entrée neuve, la sienne.
+  if (candidates.length === 0) {
+    const shared = await readSharedRelay($, runId)
+    const old = shared.state === 'read' ? mergeRelay(runId, shared.value, [])?.sessions[session] : undefined
+    if (old) candidates.push(old)
+  }
+  return { entry: latestRelayEntry(candidates) }
+}
+
+/** Écrit l'entrée de cette session, son fichier, sinon sa clé de `$.store` ; rend où, ou null quand rien n'a pu s'écrire. */
+const writeOwnEntry = async ($: any, file: RelayEntryFile): Promise<'file' | 'store' | null> => {
+  const path = relayEntryPath($, file.run, file.session)
   if (path) {
     try {
-      await $.fs.write(path, JSON.stringify(relay))
-      return
+      await $.fs.write(path, JSON.stringify(file))
+      return 'file'
     } catch {
       // Repli sur `$.store`.
     }
   }
   try {
-    await $.store.set(relayKey(relay.run), relay)
+    await $.store.set(relayEntryKey(file.run, file.session), file)
+    return 'store'
   } catch {
-    // Rien à relayer cette fois : le signal suivant réécrit toute l'entrée.
+    return null
   }
 }
 
-/** Dans une session liée : un signal (ticket, commit, tests, fin) part au relais du parcours qu'elle sert. */
-const relaySignal = async ($: any, event: RelayEvent) => {
+/** Ce qu'un signal est devenu au relais : gardé (ou déjà là), ou pas gardé, avec la raison. */
+type RelayOutcome = { isKept: true; note?: string } | { isKept: false; why: string }
+
+/** Les signaux de cette session, un à la fois : deux crochets en même temps ne relisent pas la même entrée. */
+let relayQueue: Promise<unknown> = Promise.resolve()
+
+/**
+ * Dans une session liée : un signal (ticket, commit, tests, choix, revue, compte rendu, fin) part à
+ * l'entrée de cette session dans le relais, son fichier à elle (un fichier par session liée), puis l'entrée est
+ * relue. Invariant : un signal est gardé, ou l'outil répond qu'il ne l'a pas gardé et
+ * pourquoi ; aucune écriture ne touche l'entrée d'une autre session, ni ne réécrit un contenu illisible.
+ */
+const relaySignal = ($: any, event: RelayEvent): Promise<RelayOutcome> => {
+  const done = relayQueue.then(() => relaySignalNow($, event))
+  relayQueue = done.catch(() => undefined)
+  return done
+}
+
+const relaySignalNow = async ($: any, event: RelayEvent): Promise<RelayOutcome> => {
   const board: Board | null = await read($, boardAtom)
   const runId = board?.delegate?.run
-  if (!runId) return
+  if (!runId) return { isKept: false, why: 'this session works for no workflow: no "delegate" call is recorded here' }
   // Un parcours effacé (S23) : la session liée le lâche, son relais ne revient pas.
   await quietly(() => readTraces($))
-  if (erasedRuns.has(runId)) return
-  const now = await $.clock.now()
-  const next = applyRelay(await readRelay($, runId), runId, await sessionId($), event, now)
-  if (next) await writeRelay($, next)
+  if (erasedRuns.has(runId)) return { isKept: false, why: 'the workflow was erased' }
+  const session = await sessionId($)
+  const own = await readOwnEntry($, runId, session)
+  if ('why' in own) return { isKept: false, why: own.why }
+  const refusal = relayRefusal(own.entry, event)
+  if (refusal !== null) return { isKept: false, why: refusal }
+  // Toujours après l'entrée relue : à la lecture, la plus récente l'emporte, jamais une égalité.
+  const now = nextRelayTime(own.entry, await $.clock.now())
+  const entry = applyRelayEntry(own.entry, runId, session, event, now)
+  // Rien de neuf (le même compte rendu, un choix déjà gardé) : il est déjà au relais.
+  if (!entry) return { isKept: true }
+  const where = await writeOwnEntry($, { v: 1, run: runId, session, entry })
+  if (!where) return { isKept: false, why: 'the relay could not be written, neither its file nor the store' }
+  // Relue là où elle vient de s'écrire : un disque qui n'a rien gardé se dit.
+  const path = relayEntryPath($, runId, session)
+  let back: unknown
+  await quietly(async () => {
+    if (where === 'file' && path) {
+      const found = await readJsonFile($, path)
+      back = found?.state === 'read' ? found.value : undefined
+    } else back = await $.store.get(relayEntryKey(runId, session))
+  })
+  // Écrite, mais pas relue : ne pas la faire renvoyer (des comptes s'ajouteraient deux fois).
+  if (parseRelayEntryFile(back, runId)?.entry.at !== now)
+    return { isKept: false, why: 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the main discussion checks the relay' }
+  // Le fichier voulu ne s'est pas écrit : le store de cette session n'est pas celui d'une discussion
+  // principale lancée dans l'autre application (desktop ou CLI), qui ne le lit donc pas.
+  if (where === 'store' && path) return { isKept: true, note: 'kept only in the store of this session, its relay file could not be written: a main discussion running in the other app (desktop or CLI) does not read it' }
+  return { isKept: true }
 }
 
 /**
@@ -2023,7 +2191,7 @@ const SENSITIVE_NO_FIX_FR = `si un ticket du groupe touche une zone sensible (${
 const NO_ARBITRATION = "elle ne tranche pas un conflit entre la spec et une consigne (CLAUDE.md, une demande de ma part) : elle ne corrige pas ce point et me le remonte"
 
 /**
- * Qui lance la revue d'un groupe (`/code-review high --fix`) dans une session liée : la session
+ * Qui lance la revue d'un groupe (`/code-review high --fix`, sans `--fix` pour un groupe sensible) dans une session liée : la session
  * elle-même, par l'outil Skill, comme `GROUP_REVIEWER`. Plus de sous-agent qui l'enveloppe, donc
  * plus d'exception à « sans sous-agents qui écrivent » : les correctifs de `--fix` sont ceux de la revue.
  */
@@ -2130,6 +2298,24 @@ const VERSION_AT_END =
 const LATER_READING =
   'For each text written at one moment and read later (a request put in the prompt, a brief, a value shown afterwards), the spec answers « un texte écrit à un moment est-il lu plus tard, et que dit-il si la valeur a changé entre-temps ? »'
 
+/**
+ * « Logique : oui » pour un texte qui fait agir Claude : un ticket de règles ou de skill découpé sans
+ * logique perdait la revue du groupe et l'avis de sécurité, alors qu'il fait lancer des commandes.
+ */
+const TICKET_FLAGS =
+  'Each ticket says, on lines of its own, « Zone sensible : oui/non (pourquoi) » and « Logique : oui/non » (no logic: a visual asset, a document; logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path), and you send both: {"tickets": [{"id": "...", "sensitive": true|false, "logic": true|false}]}. A group whose every ticket says no to both has neither a group review nor a security review: its ticket reviews are its only reviews'
+
+/** Les consignes de découpage de /to-tickets, reprises telles quelles par la demande de découpage des pistes d'une rétro. */
+const TICKET_RULES: readonly string[] = [
+  'Give each ticket the repo paths it touches, read from its acceptance criteria: {"tickets": [{"id": "...", "files": ["<pages, tables, shared files such as a model or a measures file>"]}]}. Name files, not a whole folder, unless the ticket creates files in it: a folder blocks every group that names a file inside it. README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files": almost every ticket cites them, their additions merge without trouble, and the dashboard ignores them anyway',
+  TICKET_FLAGS,
+  READER_LINE,
+  PERSISTED_FIELD,
+  GROUP_SIZE,
+  SENSITIVE_ORDER,
+  OUTSIDE_WRITE,
+]
+
 /** Les skills de cadrage : un choix sensible y devient une question, jamais un choix déclaré. */
 const FRAMING_SKILLS = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-questionnaire', 'to-spec', 'to-tickets', 'domain-modeling'])
 
@@ -2147,15 +2333,25 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   if (!run.isTitled) {
     lines.push(`- First call: {"title": "<a short title you choose that sums up the whole work, 3 to 6 words, in the user's language; never their message itself>"}. If you have a tool that renames this discussion (in the app: set_session_title), call it right away with the same title, unless the answer says this discussion keeps its name.`)
   }
-  if (def.steps.length > 0) {
-    lines.push(`- Steps of ${id}, in order; send {"step": "<id>"} as each one starts: ${def.steps.map(s => `${s.id} (${hintOf(s, isRepo)})`).join('; ')}.`)
+  // L'étape d'un ancien chemin ne se donne qu'à une phase qui le suit encore : une rétro dont la
+  // session liée des pistes n'est pas fermée garde ses consignes jusqu'à sa fermeture.
+  const phase = currentPhase(run)
+  const isOldLinkHeld = phase.skill === id && holdsItemsSession(phase)
+  const steps = def.steps.filter(s => !s.isLegacy || isOldLinkHeld)
+  if (steps.length > 0) {
+    lines.push(`- Steps of ${id}, in order; send {"step": "<id>"} as each one starts: ${steps.map(s => `${s.id} (${hintOf(s, isRepo)})`).join('; ')}.`)
   }
   if (def.items) {
     lines.push(`- Items: ${def.items.hint}. Send the full list {"items": [{"id": "...", "label": "...", "status": "todo|doing|done|dropped"}]} whenever it changes.`)
     if (def.items.linkedStep) {
       lines.push(
-        `- Once the items are presented, the user picks the ones to apply in the dashboard and may send them to a linked session: the request lands in the prompt and you launch the session; the items go "doing" and the "${def.steps.find(s => s.id === def.items!.linkedStep)?.label ?? def.items.linkedStep}" step opens only once the session is launched. Do not send {"complete": true} before the user has decided; while items are with the linked session, launched or not, the dashboard refuses it.`,
+        '- Once the items are presented, the user picks the ones to apply in the dashboard and clicks the splitting button: a splitting request lands in the prompt, and you follow it (tickets and groups, validated by the user, then one call). Do not send {"complete": true} before the user has decided.',
       )
+      if (isOldLinkHeld) {
+        lines.push(
+          `- Items of this phase were given to a linked session before the splitting button existed: follow that session until it is closed, as the "${def.steps.find(s => s.id === def.items!.linkedStep)?.label ?? def.items.linkedStep}" step says; until then, the dashboard shows no splitting button and refuses a splitting call.`,
+        )
+      }
     }
   }
   if (def.hasTickets) {
@@ -2164,14 +2360,8 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   if (id === 'to-tickets') {
     lines.push('- When the tickets are published, send them all with their blocking edges in "blockedBy" (an empty list for a ticket nothing blocks).')
     lines.push('- Also check in the tracker whether a ticket depends on tasks outside this lot. Add the code tickets among them to the lot; send the others (decisions to make, work of someone else) as {"externals": [{"id": "<GID>", "name": "...", "kind": "decision|task", "status": "todo|done"}]} and keep their ids in the blocked tickets\' blockedBy. When one is done or decided, send it again with "status": "done".')
-    lines.push('- Give each ticket the repo paths it touches, read from its acceptance criteria: {"tickets": [{"id": "...", "files": ["<pages, tables, shared files such as a model or a measures file>"]}]}. Name files, not a whole folder, unless the ticket creates files in it: a folder blocks every group that names a file inside it. README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files": almost every ticket cites them, their additions merge without trouble, and the dashboard ignores them anyway.')
-    lines.push('- Each ticket says, on lines of its own, « Zone sensible : oui/non (pourquoi) » and « Logique : oui/non » (no logic: a visual asset, a document), and you send both: {"tickets": [{"id": "...", "sensitive": true|false, "logic": true|false}]}.')
-    lines.push(`- ${READER_LINE}.`)
-    lines.push(`- ${PERSISTED_FIELD}.`)
+    lines.push(...TICKET_RULES.map(rule => `- ${rule}.`))
     lines.push('- A write to CLAUDE.md never goes into the done criteria of a group ticket: a linked session cannot make it. It is a gesture of the main discussion, done when the group is back.')
-    lines.push(`- ${GROUP_SIZE}.`)
-    lines.push(`- ${SENSITIVE_ORDER}.`)
-    lines.push(`- ${OUTSIDE_WRITE}.`)
     lines.push('- Last, group the tickets for execution: {"groups": [{"id": "A", "name": "<short theme>", "tickets": ["<ids in execution order>"], "why": "<the shared context>", "files": ["<other repo paths it touches>"], "resources": ["<what it cannot share>"]}]}. Each group runs in a linked session, never in this discussion. Same group = same files or modules, or a chain of dependencies: its linked session does them in a row with /implement. A different context = another group; a group of one ticket is fine when its context is its own, and a ticket that blocks nothing in its theme but could start now (an export, a query, a data check) is often better in a group of its own or with other data work. Groups that share no file, no resource and do not depend on each other can later run at the same time, one linked session per group. "resources": what a group cannot share with another group working at the same time, with the same name in every group: an application driven on screen and checked by screenshots (e.g. "PowerBI Desktop"), a single database, device or account; check the project\'s CLAUDE.md for such constraints. Every ticket in exactly one group. Send no groups when there would be only one (one group, or one group plus tickets left outside it): a single group brings nothing, the dashboard ignores such a plan, and the lot is done in this discussion with /implement.')
   }
   if (id === 'implement') {
@@ -2180,7 +2370,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   }
   if (def.groupSteps) {
     lines.push(`- Then, for each group once all its tickets are committed and reviewed (their review fixes committed), in this order: ${def.groupSteps.map(s => `${s.label} (${hintOf(s, isRepo)})`).join('; ')}.`)
-    lines.push(`- ${SINGLE_TICKET_GROUP}.`)
+    lines.push(`- ${NO_LOGIC_GROUP}.`)
   }
   if (id === 'implement') lines.push(contentFormReview())
   if (id === 'implement') lines.push(securityAdvice(isRepo))
@@ -2246,7 +2436,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   }
   if (id === 'retro') {
     lines.push(
-      '- Improvements that touch another repository (shared plugins, common config, another project) are not applied from this discussion: keep them out of the items and give them in your message as a correction list ready to hand to an agent working in that repository, one point per improvement: the finding, then the expected correction, with the plugin or files it touches. Only the improvements of this repository go to the items, hence to a linked session.',
+      '- Improvements that touch another repository (shared plugins, common config, another project) are not applied from this discussion: keep them out of the items and give them in your message as a correction list ready to hand to an agent working in that repository, one point per improvement: the finding, then the expected correction, with the plugin or files it touches. Only the improvements of this repository go to the items, hence to tickets.',
     )
   }
   if (REVIEW_NOTES.has(id)) {
@@ -2396,10 +2586,10 @@ const launchRetro = async ($: any): Promise<boolean> => {
   // Une session fermée d'office (archivée, ou retirée par claude rm) n'est plus dans ListAgents : son relais reste.
   const reports = `${claudeHome($) ?? '~/.claude'}/flow-board/relais/${runSlug(run.id)}.<id>.report.md`
   const text =
-    `/${await commandFor($, 'retro')} Rétro globale du parcours « ${run.title} » : cette discussion (la session mère) et ses sessions filles, ${who}, à retrouver d'abord par leurs fichiers de relais, ${reports} (un par session qui a déposé son compte rendu ; <id> est celui de son transcript, <id>.jsonl sous ~/.claude/projects/), puis par ListAgents, qui ne liste plus une session archivée ou retirée par claude rm. ` +
+    `/${await commandFor($, 'retro')} Rétro globale du parcours « ${neutralInPrompt(run.title)} » : cette discussion (la session mère) et ses sessions filles, ${who}, à retrouver d'abord par leurs fichiers de relais, ${reports} (un par session qui a déposé son compte rendu ; <id> est celui de son transcript, <id>.jsonl sous ~/.claude/projects/), puis par ListAgents, qui ne liste plus une session archivée ou retirée par claude rm. ` +
     `1) D'abord, lance un sous-agent par session fille, tous en parallèle et en lecture seule (general-purpose, pas Haiku) : chacun lit le transcript de sa session, son fichier .jsonl sous ~/.claude/projects/ (pas claude logs, dont la sortie de terminal est illisible), en entier, compactions comprises, avec cette règle du fichier d'origine : « ${ORIGIN_FILE_RULE} », et en fait la rétro selon les étapes et les sept axes de ce skill, que tu lui transmets tels que tu les lis ici ; il ne modifie rien et rend ses pistes par sévérité, une par ligne « axe : correction », chacune avec ce qui l'a révélée dans la session. ` +
     `2) Pendant ce temps, fais la rétro de cette discussion. ` +
-    `3) Une fois tous les sous-agents revenus, fais le compte rendu global : les pistes de toutes les sessions, fusionnées et sans doublon, par sévérité, chacune avec la ou les sessions où elle est apparue ; seules les pistes de ce dépôt vont dans les items de l'outil flow (donc, au choix, à une session liée) ; celles qui touchent un autre dépôt (plugins, config commune, autre projet) n'y vont pas : rends-les à part, en une liste de corrections prête à confier à un agent de ce dépôt, un point par piste, le constat puis la correction attendue.`
+    `3) Une fois tous les sous-agents revenus, fais le compte rendu global : les pistes de toutes les sessions, fusionnées et sans doublon, par sévérité, chacune avec la ou les sessions où elle est apparue ; seules les pistes de ce dépôt vont dans les items de l'outil flow (donc, au choix, à leur découpage en tickets) ; celles qui touchent un autre dépôt (plugins, config commune, autre projet) n'y vont pas : rends-les à part, en une liste de corrections prête à confier à un agent de ce dépôt, un point par piste, le constat puis la correction attendue.`
   let isFilled = false
   await quietly(async () => {
     isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
@@ -2445,7 +2635,7 @@ const launchAll = async ($: any) => {
 }
 
 const ticketList = (run: Run, ids: readonly string[]): string =>
-  ids.map((id, i) => `${i + 1}) ${id} — ${run.tickets.find(t => t.id === id)?.name ?? id}`).join(' ; ')
+  ids.map((id, i) => `${i + 1}) ${neutralInPrompt(id)} — ${neutralInPrompt(run.tickets.find(t => t.id === id)?.name ?? id)}`).join(' ; ')
 
 /**
  * Comment lancer une session liée, dans l'app Desktop comme dans le CLI. Claude choisit selon ses
@@ -2568,7 +2758,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   const standards = await standardsPath($)
   const many = views.length > 1
   const delegate = `{"delegate": "${run.id}", "group": ${JSON.stringify(many ? '<id du groupe>' : views[0]!.group.id)}, "main": "[<ref>]"}`
-  const groups = views.map(v => `Groupe ${v.group.id} (${v.group.name}) : ${ticketList(run, v.open.map(t => t.id))}`).join(' ∥ ')
+  const groups = views.map(v => `Groupe ${v.group.id} (${neutralInPrompt(v.group.name)}) : ${ticketList(run, v.open.map(t => t.id))}`).join(' ∥ ')
   const prefix = linkedPrefix(run)
   // Dans le dépôt de flow-board, ses fichiers à jour sont ceux du dépôt, pas ceux installés ; les
   // fichiers de méthode, à côté de la procédure, se retrouvent sans répéter leur chemin installé.
@@ -2578,10 +2768,10 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     isSource ? `${MOD_SOURCE}/${file} (dossier de travail, sinon à côté de la procédure installée)` : installed
   const autonomous = "qu'elle est une session autonome : elle applique la section « Session autonome » de la procédure"
   return (
-    `${many ? 'Confie chacun de ces groupes à sa session liée, en parallèle,' : 'Confie ce groupe à une session liée,'} pour le parcours « ${run.title} » : ${groups}. ` +
+    `${many ? 'Confie chacun de ces groupes à sa session liée, en parallèle,' : 'Confie ce groupe à une session liée,'} pour le parcours « ${neutralInPrompt(run.title)} » : ${groups}. ` +
     `Avant de lancer : repère ce dont ${many ? 'les sessions auront' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé) et règle-le d'abord avec moi ici, sinon ${many ? 'elles y buteront' : 'elle y butera'}. ` +
     `Puis lance ${many ? 'une session par groupe' : 'la session'}, avec un titre qui commence par « ${prefix}Groupe <id> · » : le début dit de quelle discussion ${many ? 'elles viennent' : 'elle vient'}, et « Groupe <id> » relie la session à son groupe au tableau de bord. ` +
-    launchHow({ many, isRepo, ownFolder: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktree(run, '<id>'), effort: GROUP_EFFORT(many, imposed, await sessionEffort($)) }) +
+    launchHow({ many, isRepo, ownFolder: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: GROUP_EFFORT(many, imposed, await sessionEffort($)) }) +
     (isRepo ? resentWorktrees(run, views) : '') +
     `${BACKGROUND(many)}${decidedAt ? `le fichier des choix déjà déclarés du parcours se cite par son chemin, ${decidedAt}` : 'les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste : leur fichier est hors d\'atteinte'}. ` +
     `Le prompt de ${many ? 'chaque session' : 'la session'} : 1) d'abord, appeler une seule fois l'outil flow de flow-board avec ${delegate} : le parcours reste ici, et l'avancement de la session (statuts Asana des tickets, commits, tests) est relayé tout seul au tableau de bord d'ici ; ` +
@@ -2590,7 +2780,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     `Ici : garder le parcours (pas de nouveau parcours) et suivre ${many ? 'les sessions sans les ' : "la session sans l'"}attendre activement : ${FOLLOW(isRepo)}. ` +
     `Le compte rendu complet d'une session est dans le relais, son message n'en porte qu'une ligne : chaque réponse de l'outil flow ici cite ceux des groupes pas encore rendus. ` +
     `Si l'app ou cette discussion redémarre, le parcours passe en pause et ne reçoit plus rien : à la reprise de cette discussion, le reprendre ici avant toute autre écriture, par l'appel flow {"resume": "${run.id}", "main": "[<ref>]"} (comme « ↻ Reprendre ici » ; "main" : ta référence du moment, lue par ListAgents, qui change au redémarrage : les sessions liées la relisent par leur outil flow), puis rendre les statuts des tickets faits pendant la pause d'après Asana. ` +
-    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail ; avant d'appliquer ici un correctif que son compte rendu propose, lire ${isRepo ? 'sa branche (git log et git diff de son worktree)' : 'ses fichiers'} : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici ; vérifier aussi, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; un groupe d'un seul ticket ni sensible ni avec logique n'en a pas : la revue de son ticket suffit)${isRepo ? `, fusionner sa branche (${MERGE_MOVED})` : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set", avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
+    `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail ; avant d'appliquer ici un correctif que son compte rendu propose, lire ${isRepo ? 'sa branche (git log et git diff de son worktree)' : 'ses fichiers'} : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici ; vérifier aussi, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; un groupe sans logique ni zone sensible n'a ni revue du groupe ni revue de sécurité, ni avis)${isRepo ? `, fusionner sa branche (${MERGE_MOVED})` : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set", avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
     `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; me dire les failles trouvées : je décide de leur correction ; ${FIXED_LATER}. ` +
     `Enfin, un groupe clos (« Close now » dans la réponse de l’outil) se ferme selon sa procédure, puis {"closed": [...]}.`
   )
@@ -2603,13 +2793,14 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
 const resentWorktrees = (run: Run, views: readonly GroupView[]): string =>
   views
     .map(v => ({ id: v.group.id, seq: groupSendSeq(v.group) }))
-    .filter(x => x.seq > 1)
-    .map(x => `Worktree et branche de cet envoi : ${groupWorktree(run, x.id, x.seq)} (${x.seq}e envoi du groupe ${x.id} : les noms des envois précédents restent pris), à la place de ${groupWorktree(run, x.id)} ; titre : « ${linkedPrefix(run)}${groupTitle(x.id, x.seq)}<thème> », qui le distingue de la session précédente. `)
+    // Un id hors forme n'a pas de nom de worktree (`groupWorktree` rend null) : rien ne se lance pour lui.
+    .filter(x => x.seq > 1 && isGroupId(x.id))
+    .map(x => `Worktree et branche de cet envoi : ${groupWorktree(run, x.id, x.seq) ?? ''} (${x.seq}e envoi du groupe ${x.id} : les noms des envois précédents restent pris), à la place de ${groupWorktree(run, x.id) ?? ''} ; titre : « ${linkedPrefix(run)}${groupTitle(x.id, x.seq)}<thème> », qui le distingue de la session précédente. `)
     .join('')
 
 /** Le refus de lancer un groupe à l'id hors forme : ce qu'il faut faire pour le lancer. */
 export const unsafeGroupToast = (ids: readonly string[]): string =>
-  `Pas de session liée pour ${ids.map(id => `« ${id} »`).join(', ')} : un id de groupe n’a que des lettres et des chiffres ASCII (12 au plus), sinon sa session ne se fermerait jamais d’office. Renomme le groupe dans le plan (demande à Claude de renvoyer les groupes avec un id en forme), puis lance-le.`
+  `Pas de session liée pour ${ids.map(id => `« ${neutralInPrompt(String(id))} »`).join(', ')} : un id de groupe n’a que des ${GROUP_ID_FORM_FR}, sinon sa session ne se fermerait jamais d’office. Renomme le groupe dans le plan (demande à Claude de renvoyer les groupes avec un id en forme), puis lance-le.`
 
 /** Les efforts sous xhigh : relevée à l'un d'eux, une discussion de l'app plafonne la session xhigh qu'elle lance. */
 const BELOW_XHIGH: readonly string[] = ['low', 'medium', 'high']
@@ -2665,12 +2856,14 @@ const reviewLinkedGroup = async ($: any, groupId: string) => {
   const isRepo = await measureRepo($)
   const main = (await read($, syncAtom)).main ?? 'la branche principale'
   const session = group.delegated.session ? ` (id ${group.delegated.session})` : ''
+  // Les arguments de sa revue suivent sa sensibilité : sans --fix pour un groupe sensible, comme depuis le panneau.
+  const args = groupReviewArgs(run, group)
   const text =
-    `Fais faire la revue du groupe ${group.id} (${group.name}) du parcours « ${run.title} » par sa session liée : le groupe est revenu sans revue, et ici sa branche est déjà fusionnée. ` +
+    `Fais faire la revue du groupe ${group.id} (${neutralInPrompt(group.name)}) du parcours « ${neutralInPrompt(run.title)} » par sa session liée : le groupe est revenu sans revue, et ici sa branche est déjà fusionnée. ` +
     `Sa session a un titre qui commence par ${linkedTitles(run, group.id)}${session} : retrouve-la par ListAgents. ` +
     `Envoie-lui par SendMessage : ` +
     (isRepo ? `1) remettre sa branche au niveau de ${main} par une avance rapide (git merge --ff-only ${main}), pour que les correctifs portent sur le code actuel ; ` : '1) travailler sur le code actuel ; ') +
-    `2) lancer elle-même la revue, ${LINKED_GROUP_REVIEW} ; la revue est /${commandLineOf('final-review')} (outil Skill « ${slashOf('final-review')} », arguments « ${SKILLS['final-review']!.args} ${isRepo ? '<plage> ' : ''}consignes : <chemin> ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel, avec pour cible leur plage <commit d'avant le premier du groupe>..<dernier commit du groupe> (une revue sans cible n'y verrait aucun changement, et un hash seul ne relirait qu'un commit)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et la consigne des relecteurs (section 7 de la procédure des sessions liées de groupe, ${procedurePath}), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; ` +
+    `2) lancer elle-même la revue, ${LINKED_GROUP_REVIEW} ; la revue est /${slashOf('final-review')} ${args} (outil Skill « ${slashOf('final-review')} », arguments « ${args} ${isRepo ? '<plage> ' : ''}consignes : <chemin> ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel, avec pour cible leur plage <commit d'avant le premier du groupe>..<dernier commit du groupe> (une revue sans cible n'y verrait aucun changement, et un hash seul ne relirait qu'un commit)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et la consigne des relecteurs (section 7 de la procédure des sessions liées de groupe, ${procedurePath}), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; ` +
     `3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ; ` +
     `4) juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_CRITERIA}) et, si oui, ${linkedSecurityReview(isRepo ? 'les commits du groupe' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; ` +
     `5) envoyer son compte rendu par SendMessage : constats et corrigés, commits, contrôles, avis et failles de sécurité. ` +
@@ -2703,7 +2896,7 @@ const securityReview = async ($: any, id: string) => {
       : group.delegated
         ? `les commits du groupe ${group.id}, lus sur le code actuel`
         : `git diff <base>..<lancement> (<base> : le commit d'avant le premier ticket du groupe ${group.id} ; <lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes, pour que les correctifs de la revue du groupe se commitent pendant qu'elle tourne sans changer son périmètre)`
-  const what = group ? `du groupe ${group.id} (${group.name})` : 'de ce parcours'
+  const what = group ? `du groupe ${group.id} (${neutralInPrompt(group.name)})` : 'de ce parcours'
   const send = group ? `{"security": {"group": ${JSON.stringify(group.id)}, "findings": <failles gardées>, "fixed": <corrigées>}}` : '{"security": {"findings": <failles gardées>, "fixed": <corrigées>}}'
   noteReferences($)
   const text =
@@ -2739,8 +2932,11 @@ const closeLinkedGroup = async ($: any, groupId: string) => {
   await fillRequest(
     $,
     text,
-    `Fermeture de ${group.id} : la demande est dans le prompt, Entrée pour la lancer`,
-    `Demande à taper : ferme la session et le worktree de ${group.id}, en vérifiant d'abord, sans rien forcer, seulement propre et fusionné, la branche gardée`,
+    // Un id hors forme : la demande est un refus ; le toast ne propose jamais de fermer à la main.
+    isGroupId(group.id) ? `Fermeture de ${group.id} : la demande est dans le prompt, Entrée pour la lancer` : 'Fermeture refusée : l’id du groupe est hors forme ; la demande le dit à Claude, Entrée pour l’envoyer',
+    isGroupId(group.id)
+      ? `Demande à taper : ferme la session et le worktree de ${group.id}, en vérifiant d'abord, sans rien forcer, seulement propre et fusionné, la branche gardée`
+      : 'Fermeture refusée : l’id du groupe est hors forme, aucune session ni aucun worktree ne se ferme d’ici',
   )
 }
 
@@ -2806,7 +3002,7 @@ const launchBugLinked = async ($: any) => {
   const resume = `{"resume": "${run.id}"}`
   const prefix = linkedPrefix(run)
   const text =
-    `Lance un diagnostic de bug dans une session liée, pour le parcours « ${run.title} » (phase ${phase}), avec un titre qui commence par « ${prefix}Bug · ». ` +
+    `Lance un diagnostic de bug dans une session liée, pour le parcours « ${neutralInPrompt(run.title)} » (phase ${phase}), avec un titre qui commence par « ${prefix}Bug · ». ` +
     // Elle reprend le parcours (`resume`) : il faut qu'elle lise le même fichier, donc ce dossier, pas un worktree.
     launchHow({ many: false, isRepo: false, ownFolder: false, title: `${prefix}Bug · <sujet>`, worktree: '', effort: BUG_EFFORT }) +
     `Brief de la session : 1) d'abord, appeler l'outil flow de flow-board avec ${resume}, pour reprendre le parcours dans la session ; ` +
@@ -2822,6 +3018,13 @@ const launchBugLinked = async ($: any) => {
   await quietly(() => $.ui.toast(isFilled ? 'Bug en session liée : décris-le après « Bug : », puis Entrée' : 'Demande à taper : lance un diagnostic de bug dans une session liée'))
 }
 
+/**
+ * Les éléments recopiés dans une demande mise dans le prompt : « n) [id] « libellé » », séparés par
+ * « ; », chaque id et libellé neutralisé (`neutralInPrompt`) : un libellé ne ferme ni sa citation ni la
+ * liste, et n'y ajoute ni élément ni consigne.
+ */
+const itemList = (items: readonly FlowItem[]): string => items.map((i, n) => `${n + 1}) [${neutralInPrompt(i.id)}] « ${neutralInPrompt(i.label)} »`).join(' ; ')
+
 /** Comment rendre chaque élément confié à la note de fin de sa session. */
 const ITEM_VERDICTS = "done si elle est faite et vérifiée ; todo si elle n'a pas été faite (elle revient à mon choix, sans être écartée) ; dropped seulement si je décide de l'abandonner"
 
@@ -2833,14 +3036,11 @@ const ITEM_VERDICTS = "done si elle est faite et vérifiée ; todo si elle n'a p
 const itemsRequest = async ($: any, run: Run, phase: FlowPhase, ids: readonly string[]): Promise<string> => {
   const def = SKILLS[phase.skill]!
   const label = def.items!.label.toLowerCase()
-  const list = phase.items
-    .filter(i => ids.includes(i.id))
-    .map((i, n) => `${n + 1}) [${i.id}] ${i.label}`)
-    .join(' ; ')
+  const list = itemList(phase.items.filter(i => ids.includes(i.id)))
   // Sans git, pas de worktree possible : la session travaille dans ce dossier.
   const isRepo = await measureRepo($)
   return (
-    `Traite ces ${label} de la phase ${def.label} du parcours « ${run.title} » dans une session liée : ${list}. ` +
+    `Traite ces ${label} de la phase ${def.label} du parcours « ${neutralInPrompt(run.title)} » dans une session liée : ${list}. ` +
     `Avant de la lancer : repère les ${label} qui ont besoin d'une information ou d'une décision de ma part (un accès, un choix entre options) et règle-les d'abord avec moi ici, sinon la session y butera. ` +
     `Puis lance la session, avec un titre qui commence par « ${linkedPrefix(run)}${def.items!.label} · ». ` +
     launchHow({ many: false, isRepo, ownFolder: true, title: `${linkedPrefix(run)}${def.items!.label} · <sujet>`, worktree: itemsWorktree(run, label, phase.linked?.seq) }) +
@@ -2871,7 +3071,7 @@ const reportValidated = (run: Run | undefined, isRepo: boolean, root: unknown): 
   }
   const suite = "dis-moi la suite en une ligne, d'après la réponse de l'outil flow."
   if (cleanup) return { text: `J'ai validé le compte rendu depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas. ${cleanup.text} Puis ${suite}`, branches: cleanup.branches }
-  const head = `J'ai validé le compte rendu${run?.title ? ` du parcours « ${run.title} »` : ''} depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas`
+  const head = `J'ai validé le compte rendu${run?.title ? ` du parcours « ${neutralInPrompt(run.title)} »` : ''} depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas`
   const text = isBroken ? `${head}. La consigne des branches des sessions liées n’a pas pu s’écrire : aucune n’est supprimée ; dis-le-moi. Puis ${suite}` : `${head} ; ${suite}`
   return { text, branches: [] }
 }
@@ -2886,29 +3086,47 @@ const fillRequest = async ($: any, text: string, filled: string, typed: string) 
 }
 
 /**
- * Confie les éléments choisis de la phase (les pistes d'une rétro) à une session liée : la demande
- * va dans le prompt pour Claude, qui lance la session. Les éléments passent « en cours » et l'étape
- * « Modifications en cours » s'ouvre au lancement seulement. Le parcours reste ici : la session ne le
- * reprend pas, Claude la suit et rend les statuts.
+ * La demande de découpage en tickets des éléments choisis de la phase (les pistes d'une rétro). Écrite
+ * au clic et lue à l'envoi : elle liste les éléments du clic, et l'appel porte ceux de l'envoi.
  */
-const launchItemsLinked = async ($: any) => {
+const splitRequest = (run: Run, phase: FlowPhase, items: readonly FlowItem[]): string => {
+  const def = SKILLS[phase.skill]!
+  const label = def.items!.label.toLowerCase()
+  const one = label.replace(/s$/, '')
+  const list = itemList(items)
+  return (
+    `Découpe en tickets ces ${label} de la phase ${def.label} du parcours « ${neutralInPrompt(run.title)} » : ${list}. Envoie d'abord {"step": "split"} à l'outil flow. ` +
+    `Cette demande est écrite au clic : une ${one} devenue faite ou écartée au tableau de bord avant ton envoi se saute, et tu me la signales. ` +
+    `1) Règle d'abord avec moi ici les ${label} qui ont besoin d'une information ou d'une décision de ma part (un accès, un choix entre options), en un seul tour de questions. ` +
+    `2) Une ${one} qui touche un autre dépôt (plugins, config commune, autre projet) ne va pas en ticket : donne-la-moi dans une liste de corrections prête à confier à un agent de ce dépôt (le constat, puis la correction attendue) ; elle reste à mon choix. ` +
+    `3) Découpe les autres : un ticket regroupe 1 à 3 ${label} voisines (mêmes fichiers, même sujet) ; une ${one} qui touche une zone sensible (${SENSITIVE_AREAS_FR}) fait un ticket à elle seule. ` +
+    `Pour chaque ${one}, le ticket donne le problème constaté en une phrase, la correction attendue, les fichiers touchés et un critère de fin à cocher. ` +
+    `Il porte la ligne « Pistes : <ids> », ses lignes « Zone sensible », « Logique » et, au besoin, « Lecteur » (consignes ci-dessous), et, en zone concurrence ou suppression, l'invariant fixé avec moi. ` +
+    `Un ticket qui modifie un fichier chargé dans toutes mes sessions (mes règles communes, un CLAUDE.md) dit que la session l'écrit et cite dans son compte rendu chaque phrase ajoutée ou retirée, et que je relis avant la fusion. ` +
+    `4) Groupe les tickets : 5 tickets au plus par groupe ; deux groupes qui touchent un fichier ou une ressource en commun (leurs champs files et resources) s'enchaînent, les autres partent dans la même vague ; un lot de rétro peut n'avoir qu'un seul groupe, qui part quand même en session liée ; chaque groupe prend un id de groupe que ce parcours n'a pas encore. ` +
+    `5) Suis aussi les consignes de découpage que flow-board donne à /to-tickets : ${[...TICKET_RULES, SENSITIVE_FRAMING, CODE_CHECKED_FRAMING, VERSION_AT_END].map(rule => `- ${rule}.`).join(' ')} ` +
+    `6) Les tickets s'écrivent dans le suivi que /to-tickets utilise pour ce projet (son CLAUDE.md le nomme) ; en fichiers locaux, dans le dossier travail/ du parcours étudié par la rétro, en continuant sa numérotation, sinon dans travail/retro-<sujet>/. Les règles du projet se citent par leur chemin, sans recopier leur texte. ` +
+    `7) Fais-moi valider le découpage par une question à boutons, avec la liste des écritures du suivi. Une fois validé, écris les tickets, puis envoie en un seul appel à l'outil flow : la liste complète des ${label} lue au moment de l'envoi (celles mises en ticket en done, les autres avec leur statut), les tickets (avec sensitive, logic et files), le plan entier des groupes (ceux déjà enregistrés dans ce parcours compris : un plan remplace le précédent, et un groupe pas encore confié qu'il omet en sort) et {"complete": true}. Sans aucun ticket (toutes hors dépôt ou écartées), envoie seulement la liste des ${label} et {"complete": true}, sans tickets ni groupes. ` +
+    `Un appel refusé n'enregistre rien : la réponse dit pourquoi ; corrige, puis renvoie l'appel entier.`
+  )
+}
+
+/**
+ * « ✂ Découper » : les éléments choisis de la phase (les pistes d'une rétro) partent dans une demande
+ * de découpage en tickets, mise dans le prompt. Rien n'est enregistré au tableau de bord : seule la
+ * sélection se vide ; l'appel du découpage, validé par la personne, enregistre tout d'un coup.
+ */
+const splitItems = async ($: any) => {
   const run = activeRun(await read($, boardAtom))
-  if (!run) return
+  if (!run || run.status !== 'active') return
   const phase = currentPhase(run)
   const def = SKILLS[phase.skill]
-  const allowed = pickableItems(phase).map(i => i.id)
-  const ids = ((await read($, uiAtom)).itemSelection ?? []).filter(id => allowed.includes(id))
-  if (!def?.items?.linkedStep || ids.length === 0) return
-  const now = await $.clock.now()
-  if (!(await commit($, b => startLinkedItems(b, ids, now)))) return
+  const picked = (await read($, uiAtom)).itemSelection ?? []
+  const items = pickableItems(phase).filter(i => picked.includes(i.id))
+  if (!def?.items?.linkedStep || items.length === 0) return
   await update($, uiAtom, ui => ({ ...ui, itemSelection: [] }))
   const label = def.items.label.toLowerCase()
-  // Un envoi encore sans session reprend aussi les éléments d'avant : la demande les liste tous.
-  const sent = activeRun(await read($, boardAtom))
-  const sentPhase = sent ? currentPhase(sent) : phase
-  const all = linkedInFlight(sentPhase).map(i => i.id)
-  const text = await itemsRequest($, run, sentPhase, all)
-  await fillRequest($, text, `Session liée pour ${all.length} ${label} : la demande est dans le prompt, Entrée pour l'envoyer à Claude`, `Demande à taper : traite les ${label} choisies dans une session liée`)
+  await fillRequest($, splitRequest(run, phase, items), `Découpage de ${items.length} ${label} : la demande est dans le prompt, Entrée pour l’envoyer à Claude`, `Demande à taper : découpe en tickets les ${label} choisies`)
 }
 
 /** « Redemander » : aucune session n'a pris les éléments ; la même demande revient dans le prompt. */
@@ -2941,17 +3159,22 @@ const recoverLinked = async ($: any) => {
   if (!run || !phase || !linked) return
   const def = SKILLS[phase.skill]
   const label = (def?.items?.label ?? 'éléments').toLowerCase()
-  const list = linkedInFlight(phase)
-    .map((i, n) => `${n + 1}) [${i.id}] ${i.label}`)
-    .join(' ; ')
+  const list = itemList(linkedInFlight(phase))
+  const title = neutralInPrompt(run.title)
   // Lire une session : l'outil de l'app Desktop, le CLI ou son transcript, qui marche partout.
   const howToRead =
     "avec tes outils de session de l'app Desktop si tu les as, sinon par ListAgents (est-elle encore là), l'état git de son worktree ou de ce dossier (commits, fichiers modifiés), le tracker, et au besoin son transcript, le fichier .jsonl sous ~/.claude/projects/ (pas claude logs, dont la sortie de terminal est illisible)"
+  // L'id relevé vient du tableau de bord (un fichier partagé) : recopié seulement en forme, sinon la session se cherche par son titre.
+  const session = isSafeId(linked.session) ? linked.session : undefined
+  const opening =
+    linked.session === undefined
+      ? `Aucune session n'a été relevée pour les ${label} du parcours « ${title} » : ${list}.`
+      : `L'id de session relevé pour les ${label} du parcours « ${title} » n'a pas une forme sûre : il n'est pas recopié ici. ${list}.`
   const text =
-    linked.session !== undefined
-      ? `Vérifie l'état de la session liée (${linked.session}) qui traite les ${label} du parcours « ${run.title} » : ${list}. Lis-la ${howToRead}. ` +
+    session !== undefined
+      ? `Vérifie l'état de la session liée (${session}) qui traite les ${label} du parcours « ${title} » : ${list}. Lis-la ${howToRead}. ` +
         `Si elle travaille encore, dis-le-moi et n'envoie rien. Sinon, contrôle son travail (diff, commits, contrôles), puis envoie à l'outil flow la liste complète des items avec le statut de chacun : ${ITEM_VERDICTS} ; enfin {"complete": true} seulement si aucune n'est revenue à todo.`
-      : `Aucune session n'a été relevée pour les ${label} du parcours « ${run.title} » : ${list}. Cherche d'abord si une session a été lancée pour elles : un titre qui commence par « ${linkedPrefix(run)}${def?.items?.label ?? ''} · », ${howToRead}, et cette discussion (un appel de lancement, une erreur). ` +
+      : `${opening} Cherche d'abord si une session a été lancée pour elles : un titre qui commence par « ${linkedPrefix(run)}${def?.items?.label ?? ''} · », ${howToRead}, et cette discussion (un appel de lancement, une erreur). ` +
         `Si tu n'en trouves aucune, le lancement n'a pas eu lieu : n'envoie aucun statut à l'outil flow et ne clos pas la phase ; dis-moi ce qui l'a empêché si tu le vois, je choisis dans le tableau de bord entre « Redemander » et « Annuler » (les ${label} reviennent à mon choix). ` +
         `Si tu en trouves une : contrôle son travail (diff, commits, contrôles), envoie à l'outil flow la liste complète des items, les ${label} faites et vérifiées en done et les autres en todo, sans en clore la phase, et dis-moi celles qui restent : je les rends à mon choix par « Annuler ».`
   await fillRequest($, text, `Reprise des ${label} : la demande est dans le prompt, Entrée pour l'envoyer`, `Demande à taper : vérifie la session liée et rends les ${label}`)
@@ -2970,7 +3193,7 @@ const askNext = async ($: any) => {
   const step = def?.steps.find(s => s.id === stepId)?.label
   const detour = activeDetour(phase)
   const where = [
-    `parcours « ${run.title} »`,
+    `parcours « ${neutralInPrompt(run.title)} »`,
     `phase ${def?.label ?? phase.skill}${phase.status === 'done' ? ' (terminée)' : ''}`,
     step ? `étape ${step}` : '',
     detour ? `détour ${SKILLS[detour.skill]?.label ?? detour.skill}` : '',
@@ -3068,7 +3291,7 @@ const actionsFor = ($: any): Actions => ({
     await update($, uiAtom, ui => ({ ...ui, itemSelection: all.every(id => (ui.itemSelection ?? []).includes(id)) ? [] : all }))
   },
   clearItemPicks: () => update($, uiAtom, ui => ({ ...ui, itemSelection: [] })),
-  launchItemsLinked: () => launchItemsLinked($),
+  splitItems: () => splitItems($),
   recoverLinked: () => recoverLinked($),
   relaunchLinked: () => relaunchLinked($),
   cancelLinked: async () => {
@@ -3103,9 +3326,10 @@ const actionsFor = ($: any): Actions => ({
     const runId = run?.id
     void quietly(async () => {
       const result = await $.prompt.submit({ text })
-      // Le message entré dans la session (ni refusé, ni retiré : pas de `drop`), chaque fermeture visée
-      // se marque (série 24) : un envoi raté ne marque rien. L'heure se relit : l'envoi a pu attendre.
-      const isEntered = result !== null && typeof result === 'object' && typeof result.text === 'string' && !('drop' in result)
+      // Le message entré dans la session (ni refusé, ni retiré : `drop` absent ou `undefined`, que le type
+      // permet à un message entré), chaque fermeture visée se marque (série 24) : un envoi raté ne marque
+      // rien. L'heure se relit : l'envoi a pu attendre.
+      const isEntered = result !== null && typeof result === 'object' && typeof result.text === 'string' && result.drop === undefined
       if (!isEntered || runId === undefined || branches.length === 0) return
       const at = await $.clock.now()
       await commit($, board => markCleanupSent(board, runId, branches, at))
@@ -3624,30 +3848,51 @@ export const register: Register = on => {
       const ref = parseMainRef({ run: resumed, main: input.main, at: now }, resumed)
       if (ref) await quietly(() => writeMainRef($, ref))
     }
+    // Ce que le relais garde se dit une fois les écritures faites : la phrase que le modèle a écrite
+    // d'avance (`relayedSentence(input)`) est remplacée par celle des pertes, ou ajoutée si elle manque.
+    const lost: RelayLoss[] = []
+    const notes = new Set<string>()
+    let startText = ''
     if ((await read($, boardAtom))?.delegate) {
       if (typeof input.delegate === 'string') {
         // La session liée vient de se déclarer : son entrée de relais dit quel groupe elle fait.
-        await relaySignal($, { kind: 'start', ...(typeof input.group === 'string' && input.group.trim() !== '' ? { group: input.group.trim() } : {}) })
-      } else {
-        // Ses `set`, ses choix faits sans la personne et sa note partent au relais, pas sur le parcours.
-        const changes = reportedChanges(input)
-        if (changes.length > 0) await relaySignal($, { kind: 'tickets', changes })
-        const decided = reportedDecisions(input)
-        if (decided.length > 0) await relaySignal($, { kind: 'decided', items: decided })
-        const withdrawn = reportedWithdrawals(input)
-        if (withdrawn.length > 0) await relaySignal($, { kind: 'withdrawn', items: withdrawn })
-        const counts = reportedCounts(input)
-        if (counts.review || counts.security) await relaySignal($, counts)
-        const report = reportedReport(input)
-        if (report !== '') {
-          const runId = (await read($, boardAtom))?.delegate?.run ?? ''
-          // Le fichier garde le texte tel qu'envoyé, sauts de ligne compris (le relais le met sur une ligne).
-          const isWhole = runId !== '' && (await writeReportFile($, runId, await sessionId($), String(input.report).trim()))
-          await relaySignal($, { kind: 'report', text: report, ...(isWhole ? { isWhole } : {}) })
-        }
-        if (typeof input.note === 'string' && input.note.trim() !== '') await relaySignal($, { kind: 'note', text: input.note.trim() })
+        const started = await relaySignal($, { kind: 'start', ...(typeof input.group === 'string' && input.group.trim() !== '' ? { group: input.group.trim() } : {}) })
+        if (started.isKept && started.note) notes.add(started.note)
+        if (!started.isKept)
+          startText = ` · NOT kept in the relay: the declaration of this session (${started.why}); without it, what it relays next is not tied to its group: call again with "delegate", "group" and "main", and send your final report by SendMessage too.`
       }
+      // Ses `set`, ses choix faits sans la personne, ses comptes, son compte rendu et sa note partent au
+      // relais, pas sur le parcours, qu'ils arrivent seuls ou avec "delegate" (la session du groupe C le
+      // renvoyait à chaque appel, et tout le reste se perdait). Ce que le relais ne garde pas se dit.
+      const send = async (parts: RelayPart[], event: RelayEvent) => {
+        const outcome = await relaySignal($, event)
+        if (outcome.isKept && outcome.note) notes.add(outcome.note)
+        if (!outcome.isKept) for (const part of parts) lost.push({ part, why: outcome.why })
+      }
+      const changes = reportedChanges(input)
+      if (changes.length > 0) await send(['set'], { kind: 'tickets', changes })
+      const decided = reportedDecisions(input)
+      if (decided.length > 0) await send(['decided'], { kind: 'decided', items: decided })
+      const withdrawn = reportedWithdrawals(input)
+      if (withdrawn.length > 0) await send(['withdrawn'], { kind: 'withdrawn', items: withdrawn })
+      const counts = reportedCounts(input)
+      if (counts.review || counts.security) await send([...(counts.review ? (['review'] as const) : []), ...(counts.security ? (['security'] as const) : [])], counts)
+      const report = reportedReport(input)
+      if (report !== '') {
+        const runId = (await read($, boardAtom))?.delegate?.run ?? ''
+        // Le fichier garde le texte tel qu'envoyé, sauts de ligne compris (le relais le met sur une ligne).
+        const isWhole = runId !== '' && (await writeReportFile($, runId, await sessionId($), String(input.report).trim()))
+        await send(['report'], { kind: 'report', text: report, ...(isWhole ? { isWhole } : {}) })
+      }
+      if (typeof input.note === 'string' && input.note.trim() !== '') await send(['note'], { kind: 'note', text: input.note.trim() })
+    } else if (typeof input.delegate === 'string') {
+      // La déclaration n'a pas pu s'enregistrer (l'état du tableau de bord ne s'est pas écrit) : rien n'est parti.
+      for (const part of relayedPartsOf(input)) lost.push({ part, why: 'this session could not record its "delegate" declaration, so nothing was sent' })
     }
+    const sentence = relayedSentence(input)
+    if (lost.length > 0 && sentence !== '') text = text.includes(sentence) ? text.replace(sentence, relayedSentence(input, lost)) : `${text} · ${relayedSentence(input, lost)}`
+    text += startText
+    for (const note of notes) text += ` · Relayed, but ${note}: send your final report by SendMessage too.`
     if (moved !== undefined) text = `${moved} ${text}`
     await keepDelegate($)
     if (found !== '') text = `${found} ${text}`

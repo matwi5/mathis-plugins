@@ -1,7 +1,12 @@
 // Sonde des événements du moteur : journalise ceux qui servent à suivre une requête (prompt,
-// tours, appels, agents, arrêts et leurs tâches de fond, compactions) dans `journaux/<heure d'ouverture>.jsonl`,
-// sous le dossier de la sonde, un fichier par session. Jamais livrée : chargée par `--plugin-dir`
+// tours, appels, agents, arrêts et leurs tâches de fond, compactions, skills chargés, commandes, fin de
+// session) dans `journaux/<heure d'ouverture>.jsonl`, sous le dossier de la sonde, un fichier par processus,
+// chaque ligne avec l'identifiant de session du moment. Jamais livrée : chargée par `--plugin-dir`
 // (scripts/sonde.py). Mode d'emploi et résultats : docs/evenements-moteur.md.
+//
+// Elle porte aussi un déclencheur d'envoi : `/sonde-envoi [<s>] [--commande] <texte>` envoie le texte
+// au nom du mod (sans `asUser`), par `$.prompt.submit` ou, avec `--commande`, par `$.command.run`,
+// tout de suite ou après <s> secondes.
 //
 // La sonde fait elle-même des `await` dans ses hooks : l'ordre qu'elle note entre deux événements
 // très proches (moins d'une milliseconde) peut différer de celui d'un plugin sans attente.
@@ -23,7 +28,14 @@ async function log($: any, ev: string, data: object) {
   } catch {
     // session-tools absent
   }
-  lines.push(JSON.stringify({ t: now - t0, at: new Date(now).toISOString().slice(11, 23), ev, chrono, ...data }));
+  // L'identifiant de la session à cet instant : il dit si `/clear` en change.
+  let sid: string | null = null;
+  try {
+    sid = await $.session.id();
+  } catch {
+    // pas d'identifiant
+  }
+  lines.push(JSON.stringify({ t: now - t0, at: new Date(now).toISOString().slice(11, 23), ev, sid, chrono, ...data }));
   await $.fs.write(file, lines.join("\n") + "\n");
 }
 
@@ -43,15 +55,58 @@ async function logClassic($: any, name: string, e: any) {
   });
 }
 
+const ENVOI = "sonde-envoi";
+// Les minuteries d'envoi programmées (`$.clock.after` rend une minuterie, pas une promesse).
+const timers: unknown[] = [];
+
+export type Envoi = { delayS: number; viaCommand: boolean; text: string };
+
+// `[<secondes>] [--commande] <texte>` : le délai (0 sans nombre en tête), la voie (`$.command.run` avec
+// `--commande`, sinon `$.prompt.submit`) et le texte à envoyer.
+export function parseEnvoi(args: string): Envoi {
+  let rest = args.trim();
+  let delayS = 0;
+  const m = /^(\d+(?:\.\d+)?)\s+(\S[\s\S]*)$/.exec(rest);
+  if (m) {
+    delayS = Number(m[1]);
+    rest = m[2] ?? "";
+  }
+  const viaCommand = /^--commande(\s|$)/.test(rest);
+  if (viaCommand) rest = rest.slice("--commande".length).trim();
+  return { delayS, viaCommand, text: rest };
+}
+
+// `/nom arguments` en ce que prend `$.command.run` ; le nom sans sa barre.
+export function splitCommand(text: string): { command: string; args: string } {
+  const m = /^\/?(\S+)\s*([\s\S]*)$/.exec(text.trim());
+  return { command: m?.[1] ?? "", args: m?.[2] ?? "" };
+}
+
+// L'envoi au nom du mod, sans `asUser`, et ce que le moteur en a fait (entré, mis en file, retiré, refusé).
+async function submit($: any, envoi: Envoi) {
+  await log($, "envoi", { viaCommand: envoi.viaCommand, text: short(envoi.text) });
+  try {
+    if (envoi.viaCommand) {
+      const r = await $.command.run(splitCommand(envoi.text));
+      await log($, "envoi:résultat", { text: short(r?.text), context: r?.context?.length });
+    } else {
+      const r = await $.prompt.submit({ text: envoi.text });
+      await log($, "envoi:résultat", { drop: r?.drop, text: short(r?.text), origin: r?.origin });
+    }
+  } catch (err) {
+    await log($, "envoi:erreur", { error: String(err).slice(0, 300) });
+  }
+}
+
 function short(s: unknown) {
   return typeof s === "string" ? s.slice(0, 60) : s;
 }
 
 export const register = (on: any) => {
   on("prompt.submit", async ($: any, e: any, next: any) => {
-    await log($, "prompt.submit", { origin: e.origin, turnId: e.turnId, text: short(e.text) });
+    await log($, "prompt.submit", { origin: e.origin, turnId: e.turnId, command: e.command, isMeta: e.isMeta, text: short(e.text) });
     const r = await next(e);
-    await log($, "prompt.submit:after", { turnId: e.turnId });
+    await log($, "prompt.submit:after", { turnId: e.turnId, drop: r?.drop, text: short(r?.text) });
     return r;
   });
   on("turn.start", async ($: any, e: any, next: any) => {
@@ -96,6 +151,35 @@ export const register = (on: any) => {
   // L'ordre de `session.start` et de `classic.SessionStart` (démarrage, reprise, /clear).
   on("session.start", async ($: any, e: any, next: any) => {
     await log($, "session.start", { cwd: short(e.cwd), surface: e.surface });
+    await $.command.register({ name: ENVOI, description: "Sonde : envoie un texte par $.prompt.submit (par $.command.run avec --commande), après <s> secondes" });
+    return next(e);
+  });
+  // `/clear` finit la session (`reason: "clear"`) : l'identifiant d'après se lit sur les lignes suivantes.
+  on("session.end", async ($: any, e: any, next: any) => {
+    await log($, "session.end", { reason: e.reason, sessionId: e.sessionId });
+    return next(e);
+  });
+  // Le déclencheur d'envoi. Pour tomber en plein tour : un délai, puis un tour long lancé aussitôt.
+  on("command.run", { command: ENVOI }, async ($: any, e: any) => {
+    const envoi = parseEnvoi(e.args);
+    if (!envoi.text) return { text: `usage : /${ENVOI} [<secondes>] [--commande] <texte>` };
+    await log($, "envoi:programmé", { delayS: envoi.delayS, viaCommand: envoi.viaCommand, text: short(envoi.text) });
+    timers.push($.clock.after(envoi.delayS * 1000, () => void submit($, envoi)));
+    return { text: `sonde : « ${short(envoi.text)} » part dans ${envoi.delayS} s par ${envoi.viaCommand ? "$.command.run" : "$.prompt.submit"}` };
+  });
+  on("command.run", async ($: any, e: any, next: any) => {
+    await log($, "command.run", { command: e.command, args: short(e.args), origin: e.origin });
+    return next(e);
+  });
+  // Le skill chargé, et s'il est réservé à l'utilisateur.
+  on("skill.prompt", async ($: any, e: any, next: any) => {
+    await log($, "skill.prompt", {
+      skill: e.skill,
+      pluginName: e.pluginName,
+      source: e.source,
+      disableModelInvocation: e.frontmatter?.["disable-model-invocation"] ?? null,
+      text: short(e.text),
+    });
     return next(e);
   });
   on("classic.SessionStart", async ($: any, e: any, next: any) => {

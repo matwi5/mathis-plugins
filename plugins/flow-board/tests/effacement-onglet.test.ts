@@ -60,6 +60,17 @@ const traces = (mem: Record<string, unknown>): string[] =>
     .map(([, v]) => (v as { id: string }).id)
     .sort()
 
+/**
+ * Un disque vide où rien ne s'écrit, pour un test qui relaie sans simuler de disque : le relais (un
+ * fichier par session liée) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
+ */
+const emptyDisk = (on: any) => {
+  on('fs.exists', () => ({ value: false }) as any)
+  on('fs.write', () => {
+    throw new Error('EACCES')
+  })
+}
+
 test('supprimer un parcours efface ses agents, ses sessions liées fermées, son relais et ses fichiers à part ; une session liée ouverte n’est pas touchée', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot à jeter'), status: 'done', archivedAt: NOW - 8_000_000, agents: [] } as Run
@@ -74,6 +85,8 @@ test('supprimer un parcours efface ses agents, ses sessions liées fermées, son
     'agents:fille-fermee': reg('fille-fermee', old, [{ key: 'f1', name: 'Fille fermée' }], { run: run.id }),
     'agents:fille-ouverte': reg('fille-ouverte', NOW - 60_000, [{ key: 'f2', name: 'Fille ouverte', status: 'running' }], { run: run.id }),
     [`relay:${run.id}`]: { v: 1, run: run.id, sessions: {} },
+    // L'entrée d'une session liée, sa clé à elle (un fichier par session liée).
+    [`relay:${run.id}:fille-fermee`]: { v: 1, run: run.id, session: 'fille-fermee', entry: { tickets: {}, commits: 1, startedAt: old, at: old } },
     [`agents:run-${run.id}:rebuilt`]: { v: 1, session: `run:${run.id}`, agents: [], rows: [{ key: 'vieux', name: 'Vieille ligne', isBackground: true, status: 'done', startedAt: 1, source: 'live', run: run.id }] },
   })
   const before = JSON.stringify(mem['agents:fille-ouverte'])
@@ -89,6 +102,7 @@ test('supprimer un parcours efface ses agents, ses sessions liées fermées, son
   expect((mem[BOARD_KEY] as Board).runs.find(r => r.id === run.id)).toBeUndefined()
   // Le relais, le fichier du parcours et la session liée fermée sont partis.
   expect(mem[`relay:${run.id}`]).toBeUndefined()
+  expect(mem[`relay:${run.id}:fille-fermee`]).toBeUndefined()
   expect(mem[`agents:run-${run.id}:rebuilt`]).toBeUndefined()
   expect(mem['agents:fille-fermee']).toBeUndefined()
   // L'ouverte n'est pas touchée : la trace du parcours la couvrira à sa prochaine écriture.
@@ -312,21 +326,27 @@ test('S25 et S26 : les lancements des sessions liées partent avec le parcours ;
 })
 
 test('S23 : une session liée qui voit la trace de son parcours le lâche : son relais ne revient pas, ses sous-agents ne sont plus rattachés à lui', { timeoutMs: 15000 }, async ($, on) => {
+  emptyDisk(on)
   const clock = mock.clock(on, { now: NOW })
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot effacé'), owner: 's-orch', agents: [] } as Run
   const mem = world(on, { [BOARD_KEY]: { ...emptyBoard('/p', 'p'), session: 's-orch', runs: [run], activeId: null } })
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a9' } }))
   await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
   await $.tool.call({ tool: 'mcp__flow-board__flow', delegate: run.id, group: 'B' } as any)
+  // La déclaration a bien écrit l'entrée de la session au relais (sa clé à elle, un fichier par session liée).
+  const relayKeys = () => Object.keys(mem).filter(k => k === `relay:${run.id}` || k.startsWith(`relay:${run.id}:`))
+  expect(relayKeys()).not.toEqual([])
   // Le parcours est supprimé ailleurs : sa trace arrive, son relais est effacé.
   mem[`agents:run-${run.id}:erased`] = { id: `run:${run.id}`, at: NOW + 1_000 }
-  delete mem[`relay:${run.id}`]
+  for (const key of relayKeys()) delete mem[key]
   await clock.advance(2_000)
   await settle(clock, 6)
-  await $.tool.call({ tool: 'mcp__flow-board__flow', note: 'encore là' } as any)
+  const out = (await $.tool.call({ tool: 'mcp__flow-board__flow', note: 'encore là' } as any)) as { result: string }
   await $.tool.call({ tool: 'Agent', description: 'Après la suppression', prompt: 'p', run_in_background: true } as any)
   await settle(clock, 2)
-  expect(mem[`relay:${run.id}`]).toBeUndefined()
+  expect(relayKeys()).toEqual([])
+  // La note n'est pas gardée, et la réponse le dit.
+  expect(out.result).toMatch(/NOT kept in the relay: the note \(the workflow was erased\)/)
   const after = parseRegistry(mem['agents:s-del'])!
   expect(after.agents.map(a => [a.name, a.run])).toEqual([['Après la suppression', undefined]])
   expect(after.run).toBeUndefined()

@@ -23,10 +23,10 @@ import {
   reportedCounts,
   reportFacts,
   startLinkedGroups,
-  startLinkedItems,
   upgradeRun,
 } from '../hooks/model.ts'
 import type { Board, Relay, Run } from '../types'
+import { withItemsLink } from './lien-pistes.ts'
 
 // Le durcissement de fin de lot : du code antérieur au lot, que les revues des groupes B et C
 // avaient classé à part.
@@ -132,7 +132,7 @@ test('L’en-tête « Close now » des pistes ne cite l’id de session que s’
   const run = { ...newRun('retro', T0, 'Rétro'), owner: 's' }
   let board: Board = { ...emptyBoard('/p', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   board = applyReport(board, { items: [{ id: 'p1', label: 'Piste', status: 'todo' }], step: 'present' }, T0 + 1).board
-  board = linkSession(startLinkedItems(board, ['p1'], T0 + 2)!.board, '9f3e21aa', T0 + 3)!.board
+  board = linkSession(withItemsLink(board, ['p1'], T0 + 2), '9f3e21aa', T0 + 3)!.board
   board = applyReport(board, { items: [{ id: 'p1', label: 'Piste', status: 'done' }] }, T0 + 4, { isRepo: true }).board
   const at = (session: string) => {
     const r = JSON.parse(JSON.stringify(activeRun(board))) as typeof run
@@ -485,7 +485,7 @@ test('La borne des pistes ne coupe jamais une piste confiée ou en cours de l’
   let board: Board = { ...emptyBoard('/p', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   const many = Array.from({ length: 60 }, (_, i) => ({ id: `p${i + 1}`, label: `Piste ${i + 1}`, status: 'todo' }))
   board = applyReport(board, { items: many, step: 'present' }, T0 + 1).board
-  board = linkSession(startLinkedItems(board, ['p1', 'p60'], T0 + 2)!.board, '9f3e21aa', T0 + 3)!.board
+  board = linkSession(withItemsLink(board, ['p1', 'p60'], T0 + 2), '9f3e21aa', T0 + 3)!.board
   // Un envoi de 61 pistes (une nouvelle en tête), p60 confiée en dernier, rendue « à faire ».
   const sent = [{ id: 'p0', label: 'Nouvelle', status: 'todo' }, ...many.slice(0, 59).map(i => (i.id === 'p1' ? { ...i, status: 'doing' } : i)), { ...many[59]!, status: 'todo' }]
   const out = applyReport(board, { items: sent }, T0 + 4)
@@ -528,7 +528,7 @@ test('Un envoi de pistes qui omet une piste confiée sans verdict la garde, en c
     { id: 'p3', label: 'Trois', status: 'todo' },
   ]
   board = applyReport(board, { items: pistes, step: 'present' }, T0 + 1).board
-  board = linkSession(startLinkedItems(board, ['p1', 'p2'], T0 + 2)!.board, '9f3e21aa', T0 + 3)!.board
+  board = linkSession(withItemsLink(board, ['p1', 'p2'], T0 + 2), '9f3e21aa', T0 + 3)!.board
   board = applyReport(board, { items: [{ ...pistes[0], status: 'doing' }, { ...pistes[1], status: 'doing' }, pistes[2]] }, T0 + 4).board
   // L'effet d'abord : tant qu'elles sont en vol, la session n'est pas à fermer.
   expect(linkedInFlight(currentPhase(activeRun(board)!)).map(i => i.id)).toEqual(['p1', 'p2'])

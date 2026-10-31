@@ -155,7 +155,8 @@ test('règles de travail : sous-agents en lecture seule, dossier temporaire, att
 test('revue du groupe : lancée par la session, high --fix sur <base>..HEAD, sans --fix en zone sensible, conflit remonté', () => {
   has(
     section(4),
-    'un groupe d\'un seul ticket ni sensible ni avec logique n\'a pas de revue du groupe',
+    'un groupe dont chaque ticket est dit ni sensible ni avec logique n\'a ni revue du groupe ni revue de sécurité',
+    'un seul ticket avec de la logique, en zone sensible, ou qui ne dit pas l\'un des deux, et la revue du groupe et l\'avis de sécurité sont dus',
     'par l\'outil Skill, sans sous-agent qui l\'enveloppe',
     'arguments « high --fix <base>..HEAD consignes : <chemin> »',
     'avec pour cible `<base>..HEAD` (<base> : le commit d\'où part sa branche)',
@@ -169,7 +170,8 @@ test('revue du groupe : lancée par la session, high --fix sur <base>..HEAD, san
 test('revue de sécurité : relecteur en lecture seule sur le diff du groupe, jamais /security-review, failles numérotées, pas de seconde passe', () => {
   has(
     section(5),
-    'Dans le même message que la revue du groupe',
+    'Un groupe sans revue du groupe (section 4) n\'a pas non plus de revue de sécurité',
+    'dans le même message que la revue du groupe',
     'type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode',
     'avec pour seul périmètre `git diff <base>..<lancement>`',
     '<lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes',

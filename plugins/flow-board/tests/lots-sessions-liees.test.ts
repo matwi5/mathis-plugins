@@ -69,6 +69,17 @@ const VENTES = {
   ],
 }
 
+/**
+ * Un disque vide où rien ne s'écrit, pour un test qui relaie sans simuler de disque : le relais (un
+ * fichier par session liée) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
+ */
+const emptyDisk = (on: any) => {
+  on('fs.exists', () => ({ value: false }) as any)
+  on('fs.write', () => {
+    throw new Error('EACCES')
+  })
+}
+
 test('les fichiers des tickets comptent : le lot garde A ∥ E, et chaque groupe écarté dit pourquoi', () => {
   const board = boardWith(VENTES)
   const plan = planOf(board)
@@ -538,6 +549,7 @@ test('dans la session liée, le bandeau dit pour quel parcours elle travaille, p
 const ASANA = 'mcp__claude_ai_Asana__update_tasks'
 
 test('la session liée relaie ses tickets (Asana, set), ses commits et ses tests, sans toucher au parcours', async ($, on) => {
+  emptyDisk(on)
   const clock = mock.clock(on, { now: 77_000_000 })
   const { mem } = world(on, { repo: false })
   on('tool.call', { tool: ASANA }, () => ({ result: { text: '{"data":[]}' } }))
@@ -552,24 +564,24 @@ test('la session liée relaie ses tickets (Asana, set), ses commits et ses tests
   await clock.advance(1000)
   await $.tool.call({ tool: ASANA, tasks: [{ task: 'e1', completed: true }] } as any)
   await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }], note: 'Banc prêt' } as any)
-  const relay = mem[`relay:${runId}`] as any
-  const entry = relay.sessions['session-A']
+  // L'entrée de la session, dans sa clé à elle (un fichier par session liée).
+  const entry = (mem[`relay:${runId}:session-A`] as any).entry
   expect(entry).toMatchObject({ group: 'E', commits: 1, lastCommit: 'Add the bench', test: { ok: true } })
   expect(entry.tickets.e1.status).toBe('done')
   expect(entry.last).toMatchObject({ kind: 'note', text: 'Banc prêt' })
   // La revue d'un ticket (/mattpocock-skills:code-review) ne compte pas ; les revues du groupe, que la session lance elle-même, si.
   await $.skill.prompt({ skill: 'mattpocock-skills:code-review', text: 'x' })
-  expect((mem[`relay:${runId}`] as any).sessions['session-A'].reviewedAt).toBeUndefined()
+  expect((mem[`relay:${runId}:session-A`] as any).entry.reviewedAt).toBeUndefined()
   // La passe « bogues » d'un ticket encore en cours non plus : ce n'est pas la revue du groupe.
   await $.tool.call({ tool: ASANA, tasks: [{ task: 'e1', notes: 'Statut : en cours\nContexte : …' }] } as any)
   await $.skill.prompt({ skill: 'code-review', text: 'x' })
-  expect((mem[`relay:${runId}`] as any).sessions['session-A'].reviewedAt).toBeUndefined()
-  expect((mem[`relay:${runId}`] as any).sessions['session-A'].last).toMatchObject({ kind: 'review', text: 'passe « bogues » du ticket' })
+  expect((mem[`relay:${runId}:session-A`] as any).entry.reviewedAt).toBeUndefined()
+  expect((mem[`relay:${runId}:session-A`] as any).entry.last).toMatchObject({ kind: 'review', text: 'passe « bogues » du ticket' })
   await $.tool.call({ tool: ASANA, tasks: [{ task: 'e1', completed: true }] } as any)
-  expect((mem[`relay:${runId}`] as any).sessions['session-A'].reviewedAt).toBeUndefined()
+  expect((mem[`relay:${runId}:session-A`] as any).entry.reviewedAt).toBeUndefined()
   await $.skill.prompt({ skill: 'code-review', text: 'x' })
   await $.skill.prompt({ skill: 'security-review', text: 'x' })
-  const reviewed = (mem[`relay:${runId}`] as any).sessions['session-A']
+  const reviewed = (mem[`relay:${runId}:session-A`] as any).entry
   expect(reviewed.reviewedAt).toBeDefined()
   expect(reviewed.securedAt).toBeDefined()
   expect(reviewed.last).toMatchObject({ kind: 'review', text: 'revue /security-review' })
@@ -580,6 +592,7 @@ test('la session liée relaie ses tickets (Asana, set), ses commits et ses tests
 })
 
 test('la session liée relaie aussi les statuts de ses tickets en fichiers locaux (Edit, Write, Bash)', async ($, on) => {
+  emptyDisk(on)
   mock.clock(on, { now: 77_500_000 })
   const { mem } = world(on, { repo: false })
   const files: Record<string, string> = {}
@@ -594,7 +607,7 @@ test('la session liée relaie aussi les statuts de ses tickets en fichiers locau
   const runId = activeRun(main)!.id
   await start($)
   await $.tool.call({ tool: TOOL, delegate: runId, group: 'E' } as any)
-  const entry = () => (mem[`relay:${runId}`] as any).sessions['session-A']
+  const entry = () => (mem[`relay:${runId}:session-A`] as any).entry
   // Une revue lancée avant tout ticket (passe « bogues » prise pour la revue du groupe) ...
   await $.skill.prompt({ skill: 'code-review', text: 'x' })
   expect(entry().reviewedAt).toBeDefined()
@@ -780,7 +793,15 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) du parcours « Boutique » par sa session liée/)
   expect(text).toContain("« Boutique > Groupe E · » (« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0) ou « Groupe E · »")
   expect(text).toMatch(/git merge --ff-only /)
-  expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans sous-agent qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un sous-agent relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix <plage> consignes : <chemin> ») sur les seuls commits du groupe')
+  // e1 ne dit pas s'il touche une zone sensible : dans le doute, le groupe est sensible, sa revue part sans --fix.
+  expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans sous-agent qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un sous-agent relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high (outil Skill « code-review », arguments « high <plage> consignes : <chemin> ») sur les seuls commits du groupe')
+  expect(text).not.toContain('high --fix')
+  // Dit hors zone sensible, le groupe garde --fix.
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'e1', name: 'Enquête transporteur', status: 'done', sensitive: false, logic: true }] } as any)
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await ui.press({ key: 'review-linked-E' })
+  await ui.unmount()
+  expect(filled.at(-1)!).toContain('la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix <plage> consignes : <chemin> »)')
   expect(text).toContain('3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
   // La consigne des relecteurs : celle de la procédure des sessions de groupe, citée par son chemin.
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des sessions liées de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
@@ -815,7 +836,8 @@ test('sans git, la revue d’un groupe rendu porte sur les copies que sa session
   await ui.unmount()
   const text = filled.at(-1)!
   expect(text).toContain('1) travailler sur le code actuel ; ')
-  expect(text).toContain("arguments « high --fix consignes : <chemin> ») sur les seuls changements du groupe, lus sur le code actuel (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe")
+  // e1 ne dit pas sa zone sensible : dans le doute, sa revue part sans --fix.
+  expect(text).toContain("arguments « high consignes : <chemin> ») sur les seuls changements du groupe, lus sur le code actuel (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe")
   expect(text).toContain('sa session a pris ces copies dans son dossier temporaire)')
   expect(text).toMatch(/avec pour seul périmètre les changements du groupe \(point fixe : pour chaque fichier, la plus ancienne copie/)
   expect(text).not.toMatch(/commits du groupe|git merge/)

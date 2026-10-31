@@ -23,9 +23,21 @@ const PREFIX_MAX = 28
  * l'app affichait « ' » à la place de « › »). Dans la
  * liste des discussions, les sessions filles d'une même discussion mère se reconnaissent ainsi. Sans
  * guillemets ni `$`, `\`, accent grave : le titre passe aussi dans `claude --bg -n`, cité par `shellQuote`.
+ * Sans guillemets « » ni crochets, ni leurs sosies, non plus (les tables de `neutralInPrompt`, après
+ * NFKC), ni caractère de contrôle ou invisible : il se cite entre « … » dans les demandes mises dans le prompt.
  */
 export const linkedPrefix = (run: Run): string => {
-  const clean = run.title.replace(/["`$\\«»]/g, '').replace(/[>›]/g, ' ').replace(/\s+/g, ' ').trim()
+  const clean = run.title
+    .normalize('NFKC')
+    .replace(INVISIBLES, '')
+    .replace(QUOTE_OPEN, '')
+    .replace(QUOTE_CLOSE, '')
+    .replace(BRACKET_OPEN, '')
+    .replace(BRACKET_CLOSE, '')
+    .replace(/["`$\\]/g, '')
+    .replace(/>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
   if (!clean) return ''
   if (clean.length <= PREFIX_MAX) return `${clean} ${TITLE_SEPARATOR} `
   const cut = clean.slice(0, PREFIX_MAX)
@@ -39,25 +51,46 @@ export const linkedPrefix = (run: Run): string => {
  * `/stats-board:recap --worktrees` retrouve les sessions d'un parcours par les worktrees `groupe-*`.
  */
 const WORKTREE_SLUG_MAX = 20
-const worktreeSlug = (run: Run): string => {
-  const slug = run.title
+const slugOf = (text: string): string =>
+  text
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
+const shortSlug = (slug: string): string => {
   if (slug.length <= WORKTREE_SLUG_MAX) return slug
   const cut = slug.slice(0, WORKTREE_SLUG_MAX)
   const at = cut.lastIndexOf('-')
   return (at > WORKTREE_SLUG_MAX / 2 ? cut.slice(0, at) : cut).replace(/-+$/, '')
 }
+const worktreeSlug = (run: Run): string => shortSlug(slugOf(run.title))
+
+/**
+ * Le nom court d'un parcours dans le worktree de ses groupes. Celui d'une rétro (« Rétrospective ·
+ * <sujet> ») se prend sur le sujet, derrière `retro-` : tronqué au premier mot, il donnait
+ * `retrospective` à toutes les rétros, et la branche gardée d'un groupe bloquait le même groupe de
+ * la rétro suivante. Les worktrees de pistes (`itemsWorktree`) gardent l'ancien nom court.
+ */
+const groupSlug = (run: Run): string => {
+  if (run.entry !== 'retro') return worktreeSlug(run)
+  const subject = slugOf(run.title).replace(/^retrospective(?:-|$)/, '')
+  return shortSlug(subject ? `retro-${subject}` : 'retro')
+}
+
 /**
  * Le worktree d'un groupe : `groupe-<nom court du parcours>-<id>`, `groupe-<id>` pour un parcours
  * sans titre ; à partir du deuxième envoi du groupe, son numéro en plus (`-2`, `-3`…) : la branche
- * d'un envoi précédent reste, fermée ou non.
+ * d'un envoi précédent reste, fermée ou non. Null pour un id hors forme (`isGroupId`), quel que soit
+ * l'appelant : aucun nom de worktree ni de branche n'est jamais tiré de lui.
  */
-export const groupWorktree = (run: Run, id: string, seq?: number): string => {
-  const slug = worktreeSlug(run)
+export const groupWorktree = (run: Run, id: unknown, seq?: number): string | null => (isGroupId(id) ? worktreeName(run, id, seq) : null)
+
+/** Le nom du worktree d'un groupe, la place de son id gardée (« <id> ») : le gabarit d'un brief, jamais une commande. */
+export const groupWorktreeTemplate = (run: Run): string => worktreeName(run, '<id>')
+
+const worktreeName = (run: Run, id: string, seq?: number): string => {
+  const slug = groupSlug(run)
   const base = slug ? `groupe-${slug}-${id}` : `groupe-${id}`
   const n = sendNumber(seq)
   return n !== undefined && n > 1 ? `${base}-${n}` : base
@@ -109,6 +142,79 @@ export type CloseInput = {
 // Les formes sûres des valeurs qui entrent dans une commande (fermeture, réouverture) : une valeur
 // lue du tableau de bord (un fichier partagé) ou rapportée par Claude n'y entre que vérifiée.
 // Aucune ne commence par « - » : elle serait lue comme une option.
+
+/**
+ * Un id de groupe en forme : lettres et chiffres ASCII, 12 au plus (D1). La seule définition : elle
+ * filtre l'entrée de l'outil, et un id hors forme (enregistré avant elle, ou dans un fichier modifié)
+ * n'entre ni dans la procédure de fermeture ni dans la suppression des branches.
+ */
+export const isGroupId = (id: unknown): id is string => typeof id === 'string' && /^[A-Za-z0-9]{1,12}$/.test(id)
+
+/** La forme d'un id de groupe (et d'un id de piste nouveau), dite en clair, d'après `isGroupId`. */
+export const GROUP_ID_FORM = 'ASCII letters and digits, 12 at most'
+
+/** La même forme, en français, pour les textes à la personne et les procédures. */
+export const GROUP_ID_FORM_FR = 'lettres et chiffres ASCII, 12 au plus'
+
+/**
+ * Les caractères de contrôle et invisibles qu'une valeur recopiée perd, par propriété Unicode : les
+ * contrôles (Cc : C0, DEL, C1), les caractères de format (Cf) et tout point ignorable par défaut
+ * (Default_Ignorable_Code_Point : espaces sans chasse, marques et renversements de sens, trait d'union
+ * conditionnel, sélecteurs de variante, remplissages hangûl, et le bloc U+E0000–E0FFF entier,
+ * étiquettes comprises, assignés ou non).
+ */
+const INVISIBLES = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+
+/** Les guillemets « » et leurs sosies (chevrons, guillemets bas), après NFKC : ouvrants, puis fermants. */
+const QUOTE_OPEN = /[«‹≪《〈❮⟨⟪❬❰⦑⧼‚„]/g
+const QUOTE_CLOSE = /[»›≫》〉❯⟩⟫❭❱⦒⧽]/g
+
+/**
+ * Les crochets et leurs sosies : toute ponctuation ouvrante ou fermante d'Unicode (Ps, Pe), lue après
+ * les guillemets ; seuls ( ) et { } restent, qui ne ferment ni une citation « … » ni un [id].
+ */
+const BRACKET_OPEN = /(?![({])\p{Ps}/gu
+const BRACKET_CLOSE = /(?![)}])\p{Pe}/gu
+
+/**
+ * Le cœur commun de toute neutralisation d'un texte venu du tableau de bord ou d'une autre session,
+ * écrit une fois : NFKC (un sosie pleine chasse devient son modèle), fins de ligne montrées « ⏎ »,
+ * tabulations en espaces, contrôles et invisibles retirés. `neutralInPrompt` et `neutralRelayed` y
+ * ajoutent ce que leur citation demande.
+ */
+const neutralCore = (text: string): string =>
+  text
+    .normalize('NFKC')
+    .replace(/\r?\n|[\r\v\f\u2028\u2029\u0085]/g, ' ⏎ ')
+    .replace(/\t/g, ' ')
+    .replace(INVISIBLES, '')
+
+/**
+ * Une valeur recopiée dans une demande mise dans le prompt (titre du parcours, id ou libellé d'une
+ * piste, description d'une fermeture) : le cœur commun (`neutralCore`), puis ses guillemets « » et
+ * leurs sosies montrés “ ”, ses crochets et leurs sosies montrés ( ) : elle ne ferme ni une citation
+ * « … », ni un [id], et n'ajoute ni piste ni consigne. Le « · » reste : il ne sépare des sections que
+ * dans la réponse de l'outil.
+ */
+export const neutralInPrompt = (text: string): string =>
+  neutralCore(text).replace(QUOTE_OPEN, '“').replace(QUOTE_CLOSE, '”').replace(BRACKET_OPEN, '(').replace(BRACKET_CLOSE, ')')
+
+/**
+ * Un texte relayé par une session liée, cité dans une réponse de l'outil : le cœur commun
+ * (`neutralCore`), puis chaque « · » qui ouvre une section de la réponse montré « • » (ses sosies
+ * aussi), ses crochets doubles retirés (ils ne ferment pas la citation ⟦ … ⟧), ses « ∥ » montrés
+ * « ‖ » (ils ne séparent pas deux comptes rendus) : un texte relayé ne produit jamais une section de
+ * la réponse.
+ */
+export const neutralRelayed = (text: string): string =>
+  neutralCore(text)
+    .replace(/[\u27e6\u27e7\u301a\u301b]/g, '')
+    .replace(/[\u00b7\u0387\u2027\u2219\u22c5\u30fb\uff65]/g, '•')
+    .replace(/[\u2016\u2225\u2af4]/g, '‖')
+
+/** Une valeur en JSON, tout caractère hors de l'ASCII imprimable échappé (\uXXXX) : elle se recopie exacte, sans rien glisser dans la réponse. */
+export const asciiJson = (value: unknown): string =>
+  (JSON.stringify(value) ?? 'null').replace(/[^\x20-\x7e]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 
 /** Un id de session (id court du CLI, `local_…` de l'app) ou de conversation : lettres, chiffres, _ et -. */
 export const isSafeId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(value)
@@ -167,8 +273,13 @@ export const isWorktreePath = (value: unknown, root: string): value is string =>
 const FSMONITOR =
   "Avant toute autre commande : git config --get core.fsmonitor dans ce dossier ; si elle affiche autre chose qu’un booléen (true, false, yes, no, on, off, 1, 0 : le démon intégré de git, sans danger), ne ferme rien et ne lance aucune autre commande git : cette valeur est une commande que git status exécuterait ; dis-le-moi, puis envoie \"state\": \"stopped\" avec cette raison. La même vérification se fait sur le worktree, git -C '<worktree>' config --get core.fsmonitor (sa config propre peut la poser), dès que <worktree> est connu et avant toute autre commande git -C '<worktree>'."
 
-/** Une valeur citée pour le shell (POSIX) : entre apostrophes, chaque apostrophe écrite '\''. */
-export const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
+/**
+ * Une valeur citée pour le shell qui la lira, entre apostrophes. POSIX : chaque apostrophe écrite
+ * '\''. PowerShell, qui lit aussi ‘ ’ ‚ ‛ comme des apostrophes : chacune doublée, pour qu'aucune ne
+ * ferme la chaîne.
+ */
+export const shellQuote = (value: string, shell: 'posix' | 'powershell' = 'posix'): string =>
+  shell === 'powershell' ? `'${value.replace(/['‘’‚‛]/g, c => c + c)}'` : `'${value.replace(/'/g, `'\\''`)}'`
 
 /**
  * La liste jetable, fermée, validée au cadrage (ses dossiers le sont en entier) : ce qu'un worktree
@@ -201,13 +312,14 @@ const APP_RESUME = 'sa conversation est gardée dans l’app, qui la rouvre si o
 /** Ce que la fermeture désigne : la cible, en clair, et ce qui reconnaît sa session. */
 const describe = (run: Run, target: CloseTarget, seq?: number) => {
   if (target.kind === 'group') {
-    const wt = groupWorktree(run, target.id, seq)
+    // Un id hors forme n'a pas de nom de worktree : `closingProcedure` et `reopenText` s'arrêtent avant.
+    const wt = groupWorktree(run, target.id, seq) ?? ''
     const n = sendNumber(seq)
     // Un envoi suivant : son titre et ses branches portent son numéro, sans les noms d'avant la 0.59.0.
     if (n !== undefined && n > 1) {
       const title = `« ${linkedPrefix(run)}${groupTitle(target.id, n)}»`
       return {
-        what: `la session liée du groupe ${target.id} (${target.name}, envoi ${n}) du parcours « ${run.title} »`,
+        what: `la session liée du groupe ${target.id} (${neutralInPrompt(target.name)}, envoi ${n}) du parcours « ${neutralInPrompt(run.title)} »`,
         owner: 'du groupe',
         title,
         titles: title,
@@ -216,7 +328,7 @@ const describe = (run: Run, target: CloseTarget, seq?: number) => {
       }
     }
     return {
-      what: `la session liée du groupe ${target.id} (${target.name}) du parcours « ${run.title} »`,
+      what: `la session liée du groupe ${target.id} (${neutralInPrompt(target.name)}) du parcours « ${neutralInPrompt(run.title)} »`,
       owner: 'du groupe',
       title: `« ${linkedPrefix(run)}Groupe ${target.id} · »`,
       titles: linkedTitles(run, target.id),
@@ -229,7 +341,7 @@ const describe = (run: Run, target: CloseTarget, seq?: number) => {
   const wt = itemsWorktree(run, label, seq)
   const title = `« ${linkedPrefix(run)}${label} · »`
   return {
-    what: `la session des ${label.toLowerCase()} de la phase ${def?.label ?? target.skill} du parcours « ${run.title} »`,
+    what: `la session des ${label.toLowerCase()} de la phase ${def?.label ?? target.skill} du parcours « ${neutralInPrompt(run.title)} »`,
     owner: `des ${label.toLowerCase()}`,
     title,
     titles: title,
@@ -243,6 +355,9 @@ const describe = (run: Run, target: CloseTarget, seq?: number) => {
  * le tableau de bord la lui redemanderait. Rien quand la session travaille encore : la fermeture attend.
  */
 export const closedHint = (target: CloseTarget, link?: number): string => {
+  // Un id de groupe hors forme : rien ne se ferme d'ici, seul l'arrêt se rapporte.
+  if (target.kind === 'group' && !isGroupId(target.id))
+    return `Then send {"closed": [{"group": ${asciiJson(target.id)}${link !== undefined ? `, "link": ${link}` : ''}, "state": "stopped", "why": "id de groupe hors forme"}]}: nothing is closed from here; tell the user why, without offering to close it another way.`
   // `link` : la session précédente d'un groupe confié de nouveau, désignée par son envoi.
   const key = target.kind === 'group' ? `"group": ${JSON.stringify(target.id)}${link !== undefined ? `, "link": ${link}` : ''}` : `"items": "${target.skill}"`
   return (
@@ -276,26 +391,30 @@ export const reopenText = ({ run, target, closing, session, seq, root }: { run: 
   // rouvrir. Toute marque relue compte, même hors forme : la branche a pu partir.
   if (closing?.state === 'closed' && closing.cleanupAt !== undefined) return null
   if (closing?.state !== 'closed' || !isSessionId(closing.sessionId)) return null
+  // Un id de groupe hors forme : aucun titre ni worktree tiré de lui, rien à rouvrir.
+  if (target.kind === 'group' && !isGroupId(target.id)) return null
   const id = closing.sessionId
   const isApp = session?.startsWith('local_') === true || id.startsWith('local_')
   // Sans branche ni worktree sûrs, rien à copier, pour le CLI comme pour l'app.
   if (!isSafeBranch(closing.branch) || !isWorktreePath(closing.worktree, root)) return null
   const worktree = closing.worktree.replace(/\\/g, '/').replace(/\/+$/, '')
-  const repo = shellQuote(repoDir(root))
   // Un chemin Windows : PowerShell, le terminal par défaut, où « && » n'existe pas avant la 7 ; ailleurs, un shell POSIX.
   const isWindows = /^[A-Za-z]:\//.test(worktree)
   const shell = isWindows ? 'PowerShell' : 'un terminal'
+  // Chaque valeur citée pour le shell qui la lira (PowerShell lit aussi ‘ ’ ‚ ‛ comme des apostrophes).
+  const quote = (value: string): string => shellQuote(value, isWindows ? 'powershell' : 'posix')
+  const repo = quote(repoDir(root))
   // Chaque étape seulement si la précédente a réussi : la branche existe (pas une HEAD détachée),
   // le worktree est recréé, on y est entré ; sous PowerShell, Set-Location sans jokers.
   const steps = [
-    `git -C ${repo} show-ref --verify ${shellQuote(`refs/heads/${closing.branch}`)}`,
-    `git -C ${repo} worktree add ${shellQuote(worktree)} ${shellQuote(closing.branch)}`,
+    `git -C ${repo} show-ref --verify ${quote(`refs/heads/${closing.branch}`)}`,
+    `git -C ${repo} worktree add ${quote(worktree)} ${quote(closing.branch)}`,
   ]
   const chain = (list: string[]): string => (isWindows ? list.reduceRight((rest, step) => `${step}; if ($?) { ${rest} }`) : list.join(' && '))
   const add = chain(steps)
   // claude --resume ne reprend que le sessionId du CLI (un UUID) : ni l'id court, ni un id local_… de l'app (essai, point 5).
   const command = isConversationId(id)
-    ? chain([...steps, isWindows ? `Set-Location -LiteralPath ${shellQuote(worktree)}` : `cd ${shellQuote(worktree)}`, `claude --resume ${shellQuote(id)}`])
+    ? chain([...steps, isWindows ? `Set-Location -LiteralPath ${quote(worktree)}` : `cd ${quote(worktree)}`, `claude --resume ${quote(id)}`])
     : null
   if (!isApp) {
     if (!command) return null
@@ -323,9 +442,6 @@ const closingOf = (value: unknown): Closing | undefined => (value !== null && ty
 const earlierLinks = (value: unknown): { seq?: number; closing?: Closing }[] =>
   (Array.isArray(value) ? value : value ? [value] : []).filter(x => x !== null && typeof x === 'object')
 
-/** Un id de groupe relu du tableau de bord, qui entre dans la consigne et dans le nom attendu de sa branche. */
-const isGroupKey = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_]{1,20}$/.test(value)
-
 const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
@@ -342,7 +458,7 @@ const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch: string
   let app: string
   let legacy = ''
   if (target.kind === 'group') {
-    cli = app = escapeRe(groupWorktree(run, target.id, n))
+    cli = app = escapeRe(groupWorktree(run, target.id, n) ?? '')
     if ((n ?? 1) === 1) legacy = `|groupe-${escapeRe(target.id)}`
   } else {
     const label = SKILLS[target.skill]?.items?.label ?? 'Éléments'
@@ -359,7 +475,7 @@ const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch: string
 /** Ce que devient la branche d'une session liée à la validation du compte rendu : supprimée par -d si notée sur une fermeture « closed » sous un nom de la cible, gardée sinon, avec la raison. */
 export const branchFate = (run: Run, target: CloseTarget, seq: unknown, closing: Closing | undefined): { branch: string } | { kept: string } => {
   if (closing?.state === 'closed') {
-    if (target.kind === 'group' && !isGroupKey(target.id)) return { kept: 'fermé, id de groupe hors forme, branche gardée' }
+    if (target.kind === 'group' && !isGroupId(target.id)) return { kept: 'fermé, id de groupe hors forme, branche gardée' }
     if (closing.branch === undefined) return { kept: 'fermé, branche inconnue, gardée' }
     // Ni un pseudo-ref (ORIG_HEAD…), ni un nom qui imite un espace de refs (tags/…) : la suppression ne vise que refs/heads.
     if (!isSafeBranch(closing.branch) || /(?:^|\/)[A-Z_]*_HEAD$|^(?:heads|tags|remotes)\//.test(closing.branch)) return { kept: 'fermé, branche notée hors forme, gardée' }
@@ -410,10 +526,11 @@ const cleanupPlan = ({ run, isRepo, root }: CleanupInput): { folder: string | un
   }
   // Relus d'un fichier partagé : une entrée qui n'est pas un objet est ignorée, sans rien faire tomber.
   const isEntry = <T,>(x: T | null | undefined): x is T => x !== null && typeof x === 'object'
-  for (const g of (Array.isArray(run.groups) ? run.groups : []).filter(isEntry)) {
+  for (const [rank, g] of (Array.isArray(run.groups) ? run.groups : []).filter(isEntry).entries()) {
     const link = isEntry(g.delegated) ? g.delegated : undefined
-    // Ni le nom du groupe ni un id hors forme, du texte libre relu du tableau de bord, n'entrent entre les commandes.
-    const who = (seq: unknown) => `groupe ${isGroupKey(g.id) ? g.id : '(id hors forme)'}${sent(seq)}`
+    // Ni le nom du groupe ni un id hors forme, du texte libre relu du tableau de bord, n'entrent entre les
+    // commandes ; deux groupes hors forme se distinguent par leur rang dans le plan.
+    const who = (seq: unknown) => `groupe ${isGroupId(g.id) ? g.id : `(id hors forme, ${rank + 1}e groupe du plan)`}${sent(seq)}`
     const target = { kind: 'group', id: g.id, name: g.name } as const
     for (const prev of earlierLinks(link?.earlier)) note(who(prev.seq), target, prev.seq, prev.closing)
     if (link) note(who(link.seq), target, link.seq, link.closing)
@@ -470,6 +587,9 @@ export const branchCleanup = (input: CleanupInput): { text: string; branches: st
   return { text, branches: [...toDelete.keys()] }
 }
 
+/** La fin d'un refus de fermeture : rien ne se ferme, et l'arrêt se rapporte. */
+const CLOSE_NOTHING = 'Ne ferme rien : n’arrête aucune session, ne retire aucun worktree ; dis-le-moi, puis envoie "state": "stopped" avec cette raison.'
+
 /**
  * La procédure de fermeture d'une session liée rendue, pour Claude dans la discussion du parcours.
  * Dans un dépôt : retrouver la branche et la ligne du worktree, vérifier la fusion, l'arbre, les
@@ -477,6 +597,11 @@ export const branchCleanup = (input: CleanupInput): { text: string; branches: st
  * worktree, `claude rm` sans option. Sans git : vérifier, puis arrêter la session seulement.
  */
 export const closingProcedure = ({ run, target, isRepo, session, seq }: CloseInput): string => {
+  // Un id de groupe hors forme : le titre de sa session, le nom de son worktree et de sa branche en
+  // seraient tirés. Rien n'en est écrit, pas même l'id : la fermeture s'arrête, avec git comme sans
+  // (invariant : aucun worktree ni branche tiré de lui).
+  if (target.kind === 'group' && !isGroupId(target.id))
+    return `Ne ferme pas la session liée d’un groupe du parcours « ${neutralInPrompt(run.title)} » : son id n’a pas la forme d’un id de groupe (${GROUP_ID_FORM_FR}), et le titre de sa session, le nom de son worktree et celui de sa branche en seraient tirés. ${CLOSE_NOTHING}`
   const d = describe(run, target, seq)
   // Un id ou un nom de worktree hors forme n'entre dans aucune commande : la fermeture s'arrête.
   // Sans git, aucun nom de worktree n'entre dans une commande : seul l'id compte.
@@ -484,10 +609,10 @@ export const closingProcedure = ({ run, target, isRepo, session, seq }: CloseInp
     session !== undefined && !isSafeId(session)
       ? 'l’id relevé de sa session'
       : isRepo && !isSafeBranch(d.worktree)
-        ? `le nom attendu de son worktree (tiré de l’id ${target.kind === 'group' ? 'du groupe' : 'de la phase'})`
+        ? `le nom attendu de son worktree (tiré de la phase ; celui d’un groupe l’est d’un id déjà vérifié)`
         : ''
   if (unsafe !== '')
-    return `Ne ferme pas ${d.what} : ${unsafe} n’a pas une forme sûre pour une commande (seulement lettres, chiffres, ., _, / et -, sans - en tête). Ne ferme rien : n’arrête aucune session, ne retire aucun worktree ; dis-le-moi, puis envoie "state": "stopped" avec cette raison.`
+    return `Ne ferme pas ${d.what} : ${unsafe} n’a pas une forme sûre pour une commande (seulement lettres, chiffres, ., _, / et -, sans - en tête). ${CLOSE_NOTHING}`
   const isApp = session?.startsWith('local_') === true
   const id = session !== undefined ? shellQuote(session) : "'<id>'"
   const busy = 'si elle travaille ("status": "busy", ou "state": "working"), remets la fermeture à plus tard, sans erreur : n’arrête rien, ne retire rien, dis-le-moi en une ligne ; une réponse suivante de l’outil flow la reprendra'

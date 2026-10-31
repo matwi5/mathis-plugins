@@ -1,0 +1,1 @@
+{ "name": "sonde-essai", "version": "0.1.0", "description": "Plugin d'essai de la sonde : un skill réservé à l'utilisateur (disable-model-invocation), que la sonde envoie au nom d'un mod (/sonde-envoi). Jamais livré, chargé par --plugin-dir (scripts/sonde.py --plugin)." }

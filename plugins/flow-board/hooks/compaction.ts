@@ -12,7 +12,7 @@
 
 import type { Board, SessionRegistry } from '../types'
 import { SKILLS } from './catalog.ts'
-import { activeRun, currentPhase, linkedSessionsOf, nextLaunchFor } from './model.ts'
+import { activeRun, currentPhase, groupDone, linkedSessionsOf, nextLaunchFor } from './model.ts'
 import { lastCompactionAt } from './registry.ts'
 
 export type CompactionGroup = { id: string; name: string; done: number; total: number; session?: string }
@@ -44,9 +44,10 @@ export const compactionRoleOf = (board: Board | null | undefined, reg: SessionRe
   if (!run) return null
   const phase = currentPhase(run)
   const groups = (run.groups ?? []).map(g => {
-    const tickets = run.tickets.filter(t => g.tickets.includes(t.id))
+    // Les tickets que le plan lui rattache comptent aussi, comme partout où la fin d'un groupe se juge.
+    const { done, total } = groupDone(run, g)
     const session = (g.linked ?? g.delegated)?.session
-    return { id: g.id, name: g.name, done: tickets.filter(t => t.status === 'done').length, total: tickets.length, ...(session ? { session } : {}) }
+    return { id: g.id, name: g.name, done, total, ...(session ? { session } : {}) }
   })
   // Toutes les sessions que `linkedSessionsOf` relève : celles des groupes, et celles des pistes d'une phase.
   const ofGroups = new Set(groups.map(g => g.session).filter(id => id !== undefined))
