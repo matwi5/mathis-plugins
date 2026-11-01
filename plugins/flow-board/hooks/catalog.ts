@@ -200,10 +200,12 @@ export const TICK_CRITERIA =
 /**
  * Un seul relecteur pour les deux axes d'un ticket, quelle que soit sa taille (rétro de l'onglet
  * Agents) : l'axe Standards seul avait rendu 1 Important en une douzaine de passes, sans lire
- * `CODING_STANDARDS.md`. Ses Mineurs se rendent en un compte : leur détail ne servait pas.
+ * `CODING_STANDARDS.md`. Ses Mineurs se rendent en un compte : leur détail ne servait pas. En medium
+ * hors zone sensible (Mathis, 01/11/2026) : ces axes ne cherchent pas les bogues, et la revue du
+ * groupe, en high, rattrape ce qui naît entre deux tickets ; high coûte environ 1,5 fois medium.
  */
 export const TICKET_REVIEWER =
-  'both axes in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail'
+  'both axes in a single reviewer subagent (Agent tool, model opus, effort medium, or high when the ticket touches a sensitive area, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail'
 
 /**
  * Les noms des relecteurs (description de l'appel Agent), tels que l'onglet Agents les montre : la

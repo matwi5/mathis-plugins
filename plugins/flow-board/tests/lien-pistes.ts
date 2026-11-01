@@ -1,4 +1,4 @@
-import { activeRun, currentPhase } from '../hooks/model.ts'
+import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 /**

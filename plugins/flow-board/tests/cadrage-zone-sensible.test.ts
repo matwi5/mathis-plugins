@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, emptyBoard, groupPlan, newRun } from '../hooks/model.ts'
+import { applyReport, emptyBoard, groupPlan, newRun } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 /** Un parcours actif après un appel de l'outil `flow`. */

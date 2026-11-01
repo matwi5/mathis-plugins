@@ -116,7 +116,7 @@ test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un r
     'le relais y reconnaît la passe « bogues » d\'un ticket en cours',
     'n\'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) », jamais « blocked » au tableau de bord',
     '`<tdd>` par l\'outil Skill (le sauter pour un ticket sans comportement testable : une ressource visuelle, un document)',
-    'sur les seuls changements du ticket (point fixe : le commit d\'avant le ticket), les deux axes dans un seul sous-agent relecteur (outil Agent, modèle opus, effort high, passés explicitement), quelle que soit la taille du diff',
+    'sur les seuls changements du ticket (point fixe : le commit d\'avant le ticket), les deux axes dans un seul sous-agent relecteur (outil Agent, modèle opus, effort medium, ou high si le ticket touche une zone sensible, passés explicitement), quelle que soit la taille du diff',
     'arguments « <niveau> <plage de l\'instantané> consignes : <chemin> »',
     '<niveau> valant xhigh si le ticket supprime des données ou touche la concurrence',
     'l\'invariant du ticket quand il en a un',
@@ -306,7 +306,7 @@ test('après le compte rendu, un correctif suit la procédure du ticket, une que
 test('un choix déclaré ne se défait pas par préférence, mais un défaut qu’il produit se signale ; plus de copie de l’ancienne consigne', () => {
   has(section(7), 'ne pas défaire par préférence un choix de ce fichier, ni le resignaler comme tel, mais signaler tout cas où il produit un défaut, avec son scénario')
   has(section(8), 'signale tout cas où l\'un d\'eux produit un défaut, avec son scénario')
-  const sources = { procedure, register, catalog: read('hooks/catalog.ts'), model: read('hooks/model.ts') }
+  const sources = { procedure, register, catalog: read('hooks/catalog.ts'), model: read('hooks/model.ts'), relay: read('hooks/relay.ts'), basics: read('hooks/basics.ts'), link: read('hooks/link.ts') }
   for (const [name, text] of Object.entries(sources)) {
     for (const old of ['ne pas resignaler ni défaire', 'à ne pas resignaler ni défaire', 'do not report again nor undo', 'not to be reported again nor undone', 'une revue ne les resignale pas']) {
       assert.ok(!text.includes(old), `${name} garde l'ancienne consigne « ${old} »`)

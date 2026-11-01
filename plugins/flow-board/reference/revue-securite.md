@@ -6,11 +6,11 @@ Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de 
 
 ## 1. Choisir l'effort de la revue de sécurité (et de sa recherche)
 
-`xhigh` prend nettement plus de temps que `high` : ne le prendre que si l'un de ces cas est vrai.
+`xhigh` coûte nettement plus que `high` : environ 2,5 fois medium contre 1,5 fois d'après la documentation de Claude, et 4,4 fois la durée de `high` sur une passe « bogues » mesurée. Ne le prendre que si l'un de ces cas est vrai.
 - **Enjeu** : le diff touche une zone où une faille coûte cher : authentification, permissions ou règles d'accès, secrets ou jetons, commande système ou chemin construit à partir d'une entrée, suppression de données, données personnelles ou contenu de messages enregistré sur disque.
 - **Taille** : le diff dépasse 400 lignes modifiées (comptées par `git diff --numstat`, sans tests, fichiers générés ni binaires) **et** touche des accès au réseau ou aux fichiers.
 
-Sinon `high` : petit diff, affichage, lecture de fichiers propres au plugin, réorganisation sans nouvelle entrée venue de l'extérieur. Dans le doute entre les deux, `xhigh`. Le relecteur écrit en tête de son rapport l'effort choisi et le cas qui l'a décidé.
+Sinon `high` : petit diff, affichage, lecture de fichiers propres au plugin, réorganisation sans nouvelle entrée venue de l'extérieur. Dans le doute entre les deux, `high`. Le relecteur écrit en tête de son rapport l'effort choisi et le cas qui l'a décidé.
 
 Celui qui lance le relecteur lui passe cet effort (`model: "opus"`, `effort` choisi) ; le relecteur passe le même à sa sous-tâche de recherche ; ses sous-tâches de vérification tournent en `high`, même quand la recherche est en `xhigh` : `xhigh` sert à trouver, pas à confirmer (une revue de 51 minutes n'avait gardé aucune faille). Pour juger l'enjeu et la taille, la liste des fichiers du diff et `git diff --numstat` suffisent : pas de lecture du diff.
 

@@ -1,28 +1,34 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import {
-  activeRun,
   applyReport,
-  applyRelay,
   applySkill,
   backgroundLaunches,
-  cancelLinkedGroup,
-  currentPhase,
   detachOnLoad,
   emptyBoard,
   groupPlan,
-  linkGroupSession,
   markDecisionsSeen,
   mergeBoards,
   newRun,
-  relayForGroup,
-  countTickets,
-  decidedFileText,
   openBlockers,
   startLinkedGroups,
   suggestionsFor,
-  withRelay,
 } from '../hooks/model.ts'
+import {
+  cancelLinkedGroup,
+  linkGroupSession,
+} from '../hooks/link.ts'
+import {
+  applyRelay,
+  relayForGroup,
+  decidedFileText,
+  withRelay,
+} from '../hooks/relay.ts'
+import {
+  activeRun,
+  currentPhase,
+  countTickets,
+} from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 const PLUGIN = 'flow-board'

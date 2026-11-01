@@ -1,7 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import {
-  activeRun,
   applyReport,
   applySkill,
   detachOnLoad,
@@ -13,6 +12,9 @@ import {
   suggestionsFor,
   upgradeRun,
 } from '../hooks/model.ts'
+import {
+  activeRun,
+} from '../hooks/basics.ts'
 import type { Board, FlowPhase, LinkedWork, Run } from '../types'
 
 // Un parcours de rétro créé avant que la Rétro ait sa suite n'a que la phase Rétro : à la lecture,

@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import { SENSITIVE_AREAS } from '../hooks/catalog.ts'
-import { activeRun, applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 // Les rappels de l'outil flow (rétro du parcours « Fermeture auto des sessions liées ») : un ticket

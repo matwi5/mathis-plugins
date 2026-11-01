@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, applySkill, cancelLinkedGroup, emptyBoard, linkSession, newRun, renameRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, applySkill, emptyBoard, newRun, renameRun, startLinkedGroups } from '../hooks/model.ts'
+import { cancelLinkedGroup, linkSession } from '../hooks/link.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 import { withItemsLink } from './lien-pistes.ts'
 

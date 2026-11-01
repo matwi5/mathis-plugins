@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { activeRun, applySkill, emptyBoard, isRunComplete, newRun } from '../hooks/model.ts'
+import { applySkill, emptyBoard, isRunComplete, newRun } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 const boardWith = (entry: string): Board => {

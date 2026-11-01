@@ -4,6 +4,23 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.75.0 — 2026-11-01
+
+Revues moins chères là où elles suffisent, comptes de la passe « bogues » remontés des sessions liées, et un modèle allégé de son lien et de son relais.
+
+### Ajouté
+- **Comptes de la passe « bogues » d'une session liée** : les constats et corrigés qu'elle envoie (`bugs` dans `review`) passent au relais et au journal du retour de son groupe, avec l'alerte « constats > corrigés » ; un `bugs` illisible est ignoré des deux côtés, et la réponse le dit.
+
+### Modifié
+- **Effort des revues d'un ticket** : le relecteur des axes Standards et Spec tourne en medium pour un ticket hors zone sensible, en high pour un ticket sensible (consigne de `/implement`, `procedure-groupe.md`, `prompt-relecteur.md`).
+- **Revue de sécurité** : high dans le doute entre high et xhigh (`reference/revue-securite.md`), avec le coût de xhigh écrit dans la méthode ; la passe « bogues » qui suit ce critère en hérite.
+- **Remaniement sans changement de comportement** : le cycle de vie du lien d'un groupe (`hooks/link.ts`), le relais des sessions liées (`hooks/relay.ts`) et de petits utilitaires (`hooks/basics.ts`) sortent du modèle ; une seule liste des champs qu'un groupe garde quand son plan est renvoyé ; un test refuse un cycle d'import entre ces modules.
+
+### Corrigé
+- **Relais** : une partie perdue qui ne doit pas être renvoyée est signalée, jamais retrouvée par son texte.
+
+---
+
 ## 0.74.0 — 2026-10-31
 
 Mode auto d'un parcours : allumé en deux clics, il enchaîne cadrage, spec, tickets, groupes et revues jusqu'au rapport, et s'arrête sur les questions qui t'attendent.

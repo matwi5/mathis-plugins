@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, currentPhase, emptyBoard, linkSession, newRun, pickableItems } from '../hooks/model.ts'
+import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
+import { linkSession, pickableItems } from '../hooks/link.ts'
+import { activeRun, currentPhase } from '../hooks/basics.ts'
 import { GROUP_ID_FORM, isGroupId } from '../hooks/closing.ts'
 import { TOOL_SCHEMA } from '../hooks/register.tsx'
 import type { Board } from '../types'

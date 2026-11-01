@@ -13,7 +13,8 @@ import { readRebuiltState, rebuiltKey, rebuiltPath, scanTranscriptAgents, update
 import { type Trace, agentTraces, applyTraces, cleanTrace, eraseWith, isClosedSession, removeArgv } from './erase.ts'
 import { carriedRunAt, runFileId, runWindow, runsCarriedBy } from './history.ts'
 import { isSameProject, isSureLink, linkedSessions } from './linked.ts'
-import { EMPTY_UI, dropRun, relayFileSlug } from './model.ts'
+import { EMPTY_UI, dropRun } from './model.ts'
+import { relayFileSlug } from './relay.ts'
 import { type HistoryShown, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
 import { commitRegistry, readRegistry, registryDir, registryKey, registryPath, writeRegistry } from './registry-file.ts'
 

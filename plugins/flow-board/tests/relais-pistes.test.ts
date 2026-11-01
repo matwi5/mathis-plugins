@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyRelay, applyReport, emptyBoard, newRun, parseMainRef, relayEntryFileName, relayForGroup, reportFileName, startLinkedGroups, updateDelegateMain } from '../hooks/model.ts'
+import { applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyRelay, parseMainRef, relayEntryFileName, relayForGroup, reportFileName, updateDelegateMain } from '../hooks/relay.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, RelayEntryFile } from '../types'
 
 // Rétro de l'onglet Agents : la référence de la discussion principale change à son redémarrage
@@ -176,4 +178,85 @@ test('la session liée envoie ses constats et sa revue de sécurité ; le retour
   const advised = applyReport(sent, { security: { group: 'A', advised: false, why: 'affichage seul' } }, 6_900).board
   const back3 = applyReport(advised, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 7_000, { relay })
   expect(activeRun(back3.board)!.groups!.find(g => g.id === 'A')!.security).toMatchObject({ isAdvised: false, why: 'affichage seul', findings: 1, fixed: 0 })
+})
+
+/** La ligne de journal du retour d'un groupe, et son ton. */
+const returnLine = (board: Board, id: string) => activeRun(board)!.log.find(l => l.text.startsWith(`Revues du groupe ${id} (session liée)`))
+
+test('les bogues relayés se somment sur les sessions du lien et se citent au retour du groupe, absents quand aucune revue n’en a envoyé', () => {
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
+  const run = activeRun(sent)!
+  const group = () => activeRun(sent)!.groups!.find(g => g.id === 'A')!
+  let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 1, spec: 0, fixed: 1 } }, 6_000)!
+  // Sans passe « bogues », pas de « 0 bogue ».
+  expect(relayForGroup(relay, group())!.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 1 })
+  const plain = applyReport(sent, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 7_000, { relay }).board
+  expect(returnLine(plain, 'A')?.text).not.toMatch(/bogue/)
+  // Une ancienne entrée sans bogues, puis deux revues avec : seul leur compte.
+  relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 0, spec: 1, bugs: 2, fixed: 1 } }, 6_100)!
+  relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 0, spec: 0, bugs: 1, fixed: 2 } }, 6_200)!
+  expect(relay.sessions['fa']!.reviews).toEqual({ count: 3, standards: 1, spec: 1, fixed: 4, bugs: 3 })
+  // Une session redémarrée sous un autre id : ses bogues s'ajoutent.
+  relay = applyRelay(relay, run.id, 'fb', { kind: 'start', group: 'A' }, 6_300)!
+  relay = applyRelay(relay, run.id, 'fb', { kind: 'counts', review: { standards: 0, spec: 0, bugs: 4, fixed: 0 } }, 6_400)!
+  expect(relayForGroup(relay, group())!.reviews).toEqual({ count: 4, standards: 1, spec: 1, fixed: 4, bugs: 7 })
+  const back = applyReport(sent, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 7_000, { relay }).board
+  const line = returnLine(back, 'A')!
+  expect(line.text).toBe('Revues du groupe A (session liée) : 1 Standards · 1 Spec · 7 bogues (passe « bogues ») · 4 corrigé(s)')
+  // Constats et bogues dépassent les corrigés : alerte.
+  expect(line.tone).toBe('warn')
+  // Le panneau et les statistiques de la phase ne comptent pas les bogues.
+  expect(activeRun(back)!.phases.find(p => p.skill === 'implement')!.stats).toMatchObject({ reviews: 4, standards: 1, spec: 1, fixed: 4 })
+  expect(activeRun(back)!.phases.find(p => p.skill === 'implement')!.stats).not.toHaveProperty('bugs')
+})
+
+test('la ligne du retour reste neutre quand les corrigés couvrent constats et bogues ; un bogue au singulier', () => {
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
+  const run = activeRun(sent)!
+  let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 1, spec: 0, bugs: 1, fixed: 2 } }, 6_000)!
+  const line = returnLine(applyReport(sent, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 7_000, { relay }).board, 'A')!
+  expect(line.text).toBe('Revues du groupe A (session liée) : 1 Standards · 0 Spec · 1 bogue (passe « bogues ») · 2 corrigé(s)')
+  expect(line.tone).toBe('info')
+})
+
+test('un compte de bogues hors forme lu d’un fichier compte comme absent pour sa session, sans faire tomber ses autres comptes', () => {
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
+  const run = activeRun(sent)!
+  const group = activeRun(sent)!.groups!.find(g => g.id === 'A')!
+  let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fb', { kind: 'start', group: 'A' }, 5_600)!
+  relay = applyRelay(relay, run.id, 'fb', { kind: 'counts', review: { standards: 0, spec: 0, bugs: 2, fixed: 0 } }, 6_100)!
+  for (const bad of [2.5, -1, 10_001, 'deux', null]) {
+    const hand = structuredClone(relay)
+    hand.sessions['fa']!.reviews = { count: 1, standards: 1, spec: 1, fixed: 1, bugs: bad as number }
+    expect(relayForGroup(hand, group)!.reviews).toEqual({ count: 2, standards: 1, spec: 1, fixed: 1, bugs: 2 })
+  }
+})
+
+test('au deuxième envoi d’un groupe, les bogues du premier ne sont pas recités à son second retour', () => {
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
+  const run = activeRun(sent)!
+  let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 0, spec: 0, bugs: 5, fixed: 5 } }, 6_000)!
+  const back = applyReport(sent, { set: [{ id: 'a1', status: 'todo' }], returned: ['A'] }, 7_000, { relay }).board
+  expect(returnLine(back, 'A')?.text).toMatch(/5 bogues/)
+  const again = startLinkedGroups(back, ['A'], 8_000)!.board
+  const relay2 = applyRelay(relay, run.id, 'fc', { kind: 'start', group: 'A' }, 8_500)!
+  const back2 = applyReport(again, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 9_000, { relay: relay2 }).board
+  const lines = activeRun(back2)!.log.filter(l => l.text.startsWith('Revues du groupe A (session liée)'))
+  expect(lines.length).toBe(1)
+})
+
+test('dans la discussion du parcours, un compte de bogues hors forme n’est pas noté, au lieu de valoir 0, et la réponse le dit', () => {
+  for (const bad of ['3', null, -1, 2.5, 10_001]) {
+    const out = applyReport(boardWith(LOT), { review: { standards: 1, spec: 0, bugs: bad, fixed: 1 } }, 3_000)
+    expect(out.text).toContain('bugs ignored: not a whole number from 0 to 10 000')
+    const line = activeRun(out.board)!.log.find(l => l.text.startsWith('Revue :'))!
+    expect(line.text).toBe('Revue : 1 Standards · 0 Spec · 1 corrigé')
+  }
+  const ok = applyReport(boardWith(LOT), { review: { standards: 1, spec: 0, bugs: 2, fixed: 1 } }, 3_000)
+  expect(ok.text).not.toContain('bugs ignored')
+  expect(activeRun(ok.board)!.log.find(l => l.text.startsWith('Revue :'))!.text).toBe('Revue : 1 Standards · 0 Spec · 2 bogues (passe « bogues ») · 1 corrigé')
 })

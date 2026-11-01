@@ -1,7 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import { closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, reopenText, shellQuote } from '../hooks/closing.ts'
-import { AUTO_STOPS, activeRun, applyRelay, applyReport, autoStateOf, decidedFileText, emptyBoard, groupFailStop, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyRelay, decidedFileText } from '../hooks/relay.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Closing } from '../types'
 import { CORPUS, ch } from './corpus.mjs'
 

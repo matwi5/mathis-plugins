@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyCommand, applyReport, applySkill, currentPhase, emptyBoard } from '../hooks/model.ts'
+import { applyCommand, applyReport, applySkill, emptyBoard } from '../hooks/model.ts'
+import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 /** Les étapes de la phase en cours, sous la forme `id:statut`. */

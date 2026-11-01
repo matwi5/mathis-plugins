@@ -1,7 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { closingProcedure, groupWorktree } from '../hooks/closing.ts'
-import { activeRun, applyRelay, applyReport, cancelLinkedGroup, closingReason, emptyBoard, mergeBoards, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, emptyBoard, mergeBoards, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { cancelLinkedGroup, closingReason } from '../hooks/link.ts'
+import { applyRelay } from '../hooks/relay.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Relay } from '../types'
 
 // Un groupe rendu, relu et à la sécurité tranchée est clos : la réponse de l'outil flow le liste

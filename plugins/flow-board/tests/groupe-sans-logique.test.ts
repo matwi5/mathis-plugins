@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, applySkill, closingText, emptyBoard, isCloseCandidate, isGroupReviewed, needsReview, newRun, reportFacts, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, applySkill, closingText, emptyBoard, isCloseCandidate, isGroupReviewed, needsReview, newRun, reportFacts, startLinkedGroups } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
 // Un groupe dont chaque ticket est dit ni sensible ni avec logique (règles, documents, ressources

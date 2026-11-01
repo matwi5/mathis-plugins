@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, archiveRun, cancelLinked, currentPhase, dropRun, emptyBoard, linkSession, newRun, noteUnlaunched, pickableItems, retryLinked } from '../hooks/model.ts'
+import { applyReport, archiveRun, dropRun, emptyBoard, newRun } from '../hooks/model.ts'
+import { cancelLinked, linkSession, noteUnlaunched, pickableItems, retryLinked } from '../hooks/link.ts'
+import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board } from '../types'
 import { withItemsLink } from './lien-pistes.ts'
 

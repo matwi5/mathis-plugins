@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { RELAY_CHOICES_MAX, activeRun, applyReport, emptyBoard, mergeRelay, newRun, nextRelayTime } from '../hooks/model.ts'
+import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
+import { RELAY_CHOICES_MAX, mergeRelay, nextRelayTime, relayedSentence } from '../hooks/relay.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Relay } from '../types'
 
 // Le relais garde ce qu'une session liée y dépose (compte rendu, choix déclarés, comptes de revue et
@@ -245,4 +247,92 @@ test('une écriture de l’entrée d’une session vient toujours après la pré
   expect(nextRelayTime(entry, T0 + 5)).toBe(T0 + 5)
   expect(nextRelayTime(entry, T0)).toBe(T0 + 1)
   expect(nextRelayTime({ ...entry, at: T0 + 9 }, T0)).toBe(T0 + 10)
+})
+
+test('les bogues d’une passe « bogues » partent au relais ; un compte illisible n’y part pas, et la réponse le dit', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  const ok = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: 2, fixed: 3 } } as any)) as { result: string }
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 3, bugs: 2 })
+  expect(ok.result).toMatch(/Relayed to the main discussion's dashboard: the review findings\./)
+  expect(ok.result).not.toMatch(/NOT kept|bug count/)
+  // Une revue sans passe « bogues » ne touche pas aux bogues déjà relayés.
+  await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 1, fixed: 1 } } as any)
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 2, standards: 1, spec: 1, fixed: 4, bugs: 2 })
+  for (const bad of ['3', null, -1, 2.5, 10_001]) {
+    const out = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: bad, fixed: 0 } } as any)) as { result: string }
+    expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the review findings\. NOT kept in the relay: the bug count \(not a whole number from 0 to 10 000; the rest of this review is relayed: do not send it again, give the bug count in your final report\): the main discussion does not see it; do what each reason says, and send your final report by SendMessage too\./)
+    expect(out.result).not.toMatch(/again in a new call/)
+  }
+  // Les autres comptes de ces revues sont gardés, les bogues restent ceux d'avant.
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 7, standards: 6, spec: 1, fixed: 4, bugs: 2 })
+})
+
+test('une entrée dont le compte de bogues est illisible n’est jamais réécrite : la revue avec bogues est refusée, et la réponse le dit', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: 2, fixed: 1 } } as any)
+  const slug = runId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  const ownFile = Object.keys(files).find(p => p.endsWith(`/flow-board/relais/${slug}.s-fille.entry.json`))
+  const write = (f: (v: any) => void) => {
+    if (ownFile) {
+      const v = JSON.parse(files[ownFile]!)
+      f(v)
+      files[ownFile] = JSON.stringify(v)
+    } else f(mem[`relay:${runId}:s-fille`])
+  }
+  // Modifié à la main : le compte de bogues n'est plus un compte.
+  write(v => {
+    v.entry.reviews.bugs = 'deux'
+  })
+  // Avec la revue de sécurité : celle-ci part seule, la revue est refusée.
+  const out = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, bugs: 1, fixed: 0 }, security: { group: 'C', advised: true, why: 'chemins', findings: 1, fixed: 1 } } as any)) as { result: string }
+  expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\. NOT kept in the relay: the review findings \(its relay entry holds an unreadable bug count, never rewritten; send this review again without "bugs", and give the bug count in your final report\)/)
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 1, bugs: 'deux' })
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ advised: true, findings: 1, fixed: 1 })
+  // Sans bogues, la revue se garde : le compte illisible reste tel quel.
+  await $.tool.call({ tool: TOOL, review: { standards: 2, spec: 0, fixed: 0 } } as any)
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 2, standards: 3, spec: 0, fixed: 1, bugs: 'deux' })
+})
+
+test('une revue dont les bogues pousseraient le compte de la session au-delà de 10 000 est refusée, et la réponse le dit', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, bugs: 9_999, fixed: 0 } } as any)
+  const out = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, bugs: 2, fixed: 0 } } as any)) as { result: string }
+  expect(out.result).toMatch(/NOT kept in the relay: the review findings \(its relay entry would pass 10 000 bugs; send this review again without "bugs", and give the bug count in your final report\)/)
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 1, standards: 0, spec: 0, fixed: 0, bugs: 9_999 })
+})
+
+test('un relais qui ne s’écrit pas n’efface pas la raison d’un compte de bogues hors forme', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem } = world(on, 's-fille', { isRelayBroken: true })
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  const out = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: 'x', fixed: 0 } } as any)) as { result: string }
+  // La revue se renvoie (sans bogues), les bogues vont au compte rendu.
+  expect(out.result).toMatch(/the review findings \(the relay could not be written, neither its file nor the store\); the bug count \(not a whole number from 0 to 10 000; send this review again without "bugs", and give the bug count in your final report\)/)
+  expect(out.result).toMatch(/send the review findings again in a new call of this tool, do what each other reason says/)
+})
+
+test('une revue écrite mais pas relue ne se renvoie pas, même avec un compte de bogues hors forme', () => {
+  const input = { review: { standards: 2, spec: 1, bugs: '2', fixed: 0 } }
+  const why = 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the main discussion checks the relay'
+  const text = relayedSentence(input, [{ part: 'review', why, isFinal: true }])
+  // Le message dit la perte de la revue et des bogues, sans jamais demander de renvoyer la revue.
+  expect(text).toContain(`the review findings (${why})`)
+  expect(text).toContain('the bug count (not a whole number from 0 to 10 000; give the bug count in your final report)')
+  expect(text).not.toMatch(/again in a new call|send this review again/)
+  // Une perte qui se renvoie garde sa consigne.
+  expect(relayedSentence({ review: { standards: 1, spec: 0, fixed: 0 } }, [{ part: 'review', why: 'the relay could not be written, neither its file nor the store' }])).toMatch(/send it again in a new call of this tool/)
 })

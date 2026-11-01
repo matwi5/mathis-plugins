@@ -778,7 +778,7 @@ export type RelayEntry = {
     isWhole?: boolean
   }
   /** Les constats des revues que la session a envoyés (`review`), cumulés : comptés au retour du groupe. */
-  reviews?: { count: number; standards: number; spec: number; fixed: number }
+  reviews?: { count: number; standards: number; spec: number; fixed: number; bugs?: number }
   /** La revue de sécurité que la session a envoyée (`security`) : reprise au retour du groupe. */
   security?: { advised?: boolean; why?: string; findings?: number; fixed?: number; dismissed?: number; at: number }
   /** Le dernier signal reçu : un ticket, un commit, des tests, une note, une revue, le compte rendu. */

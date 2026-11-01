@@ -17,6 +17,8 @@ import assert from 'node:assert/strict'
 const [major, minor] = process.versions.node.split('.').map(Number)
 const isOldNode = major < 22 || (major === 22 && minor < 18)
 const model = isOldNode ? null : await import('../hooks/model.ts')
+const basics = isOldNode ? null : await import('../hooks/basics.ts')
+const linkModule = isOldNode ? null : await import('../hooks/link.ts')
 const SKIP = model ? false : `Node ${process.versions.node} ne lit pas model.ts : il faut Node 22.18 ou plus récent`
 
 const TYPES = readFileSync(new URL('../types/index.d.ts', import.meta.url), 'utf8')
@@ -81,7 +83,7 @@ const groups = where => {
   let board = { ...model.emptyBoard('/r', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   board = model.applyReport(board, { tickets: [{ id: 't1', name: 'Un' }, { id: 't2', name: 'Deux' }], groups: PLAN }, T0 + 1).board
   board = model.startLinkedGroups(board, ['A'], T0 + 2).board
-  const a = model.activeRun(board).groups.find(g => g.id === 'A')
+  const a = basics.activeRun(board).groups.find(g => g.id === 'A')
   a.sends = 2
   a.isReset = true
   if (where === 'linked') a.linked = structuredClone(GROUP_LINK)
@@ -91,7 +93,7 @@ const groups = where => {
   }
   return board
 }
-const groupA = board => model.activeRun(board).groups.find(g => g.id === 'A')
+const groupA = board => basics.activeRun(board).groups.find(g => g.id === 'A')
 
 test('renvoi du plan des groupes : le lien d’un groupe confié ou rendu garde chaque champ', { skip: SKIP }, () => {
   for (const where of ['linked', 'delegated']) {
@@ -128,7 +130,7 @@ test('fusion de deux copies : la plus récente garde chaque champ, la fermeture 
   const link = groupA(local).delegated
   delete link.closing
   delete link.earlier[0].closing
-  model.activeRun(local).updatedAt = 99_000
+  basics.activeRun(local).updatedAt = 99_000
   const merged = model.mergeBoards(local, stored)
   assert.deepEqual(lost('GroupLink', groupA(merged).delegated), [])
   assert.equal(groupA(merged).isReset, true)
@@ -146,13 +148,13 @@ const retro = (link = {}) => {
   const run = { ...model.newRun('retro', T0, 'Rétro'), owner: 's' }
   let board = { ...model.emptyBoard('/r', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   board = model.applyReport(board, { items: PISTES, step: 'present' }, T0 + 1).board
-  const phase = model.currentPhase(model.activeRun(board))
+  const phase = basics.currentPhase(basics.activeRun(board))
   phase.linked = { ...structuredClone(LINKED_WORK), ...link }
   phase.linkedEarlier = structuredClone(CLOSED_LINK)
   phase.linkedSends = 2
   return board
 }
-const phaseOf = board => model.currentPhase(model.activeRun(board))
+const phaseOf = board => basics.currentPhase(basics.activeRun(board))
 
 test('renvoi des pistes : le lien de la phase garde chaque champ', { skip: SKIP }, () => {
   const out = model.applyReport(retro(), { items: [{ ...PISTES[0], status: 'doing' }, PISTES[1]] }, T0 + 100).board
@@ -179,7 +181,7 @@ test('appel du découpage des pistes après une session fermée : le lien et l�
 
 test('annulation d’un envoi des pistes sans session : le lien part, l’envoi remplacé et le compteur restent', { skip: SKIP }, () => {
   const board = retro({ session: undefined, closing: undefined })
-  const out = model.cancelLinked(board, T0 + 100).board
+  const out = linkModule.cancelLinked(board, T0 + 100).board
   assert.equal(phaseOf(out).linked, undefined)
   assert.deepEqual(lost('ClosedLink', phaseOf(out).linkedEarlier), [])
   assert.equal(phaseOf(out).linkedSends, 2)
@@ -190,7 +192,7 @@ test('fusion de deux copies d’une rétro : la fermeture des pistes et l’envo
   const local = structuredClone(stored)
   delete phaseOf(local).linked.closing
   delete phaseOf(local).linkedEarlier
-  model.activeRun(local).updatedAt = 99_000
+  basics.activeRun(local).updatedAt = 99_000
   const merged = model.mergeBoards(local, stored)
   assert.deepEqual(lost('LinkedWork', phaseOf(merged).linked), [])
   assert.deepEqual(lost('ClosedLink', phaseOf(merged).linkedEarlier), [])
@@ -200,4 +202,26 @@ test('le test voit un champ perdu : un lien sans « earlier » échoue', () => {
   const { earlier: _, ...without } = GROUP_LINK
   assert.deepEqual(lost('GroupLink', without), ['earlier'])
   assert.deepEqual(lost('GroupLink', { ...GROUP_LINK, closing: { state: 'closed', at: 1 } }), ['closing.why', 'closing.sessionId', 'closing.branch', 'closing.worktree', 'closing.cleanupAt'])
+})
+
+// Les données d'un groupe qui viennent de son plan (`groups` de l'outil) ; tout autre champ se garde
+// quand le plan est réécrit, par la liste de link.ts et sa seule recopie.
+const PLAN_FIELDS = ['id', 'name', 'tickets', 'why', 'files', 'resources']
+
+test('chaque champ d’un groupe vient du plan ou se garde quand le plan est réécrit', { skip: SKIP }, () => {
+  const fields = keysOf('TicketGroup')
+  // Le test lit bien les champs du type avant d'en vérifier le classement.
+  assert.equal(fields.length, 12, `champs de TicketGroup lus : ${fields.join(', ')}`)
+  const unclassified = fields.filter(f => !PLAN_FIELDS.includes(f) && !linkModule.KEPT_GROUP_FIELDS.includes(f))
+  assert.deepEqual(unclassified, [], `ni donnée du plan ni champ gardé : ${unclassified.join(', ')}`)
+})
+
+test('la recopie des champs gardés pose ceux qui existent, et la remise à zéro seulement si elle vaut true', { skip: SKIP }, () => {
+  const was = { id: 'A', name: 'a', tickets: [], linked: { at: 1 }, delegated: GROUP_LINK, sends: 2, reviewedAt: 5, security: { isAdvised: false }, isReset: true }
+  assert.deepEqual(linkModule.keptGroupFields(was), { reviewedAt: 5, security: { isAdvised: false }, linked: { at: 1 }, delegated: GROUP_LINK, sends: 2, isReset: true })
+  assert.deepEqual(Object.keys(linkModule.keptGroupFields(was)), ['reviewedAt', 'security', 'linked', 'delegated', 'sends', 'isReset'])
+  assert.deepEqual(linkModule.keptGroupFields({ id: 'A', name: 'a', tickets: [], isReset: 'oui' }), {})
+  // Un groupe abîmé garde ses champs tels quels, sauf une remise à zéro qui n'est pas `true`.
+  assert.deepEqual(linkModule.keptGroupFields({ id: 'A', name: 'a', tickets: [], reviewedAt: null, sends: 'x', linked: null, isReset: 1 }), { reviewedAt: null, linked: null, sends: 'x' })
+  assert.deepEqual(linkModule.keptGroupFields(undefined), {})
 })

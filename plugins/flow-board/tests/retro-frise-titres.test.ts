@@ -1,7 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { ownPart } from '../hooks/linked.ts'
-import { activeRun, applyReport, emptyBoard, linkGroupSession, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { linkGroupSession } from '../hooks/link.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 // Les pistes de la rétro du parcours « Frise, groupes et titres » qui changent les consignes du mod.

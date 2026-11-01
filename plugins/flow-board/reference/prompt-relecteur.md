@@ -1,6 +1,6 @@
 # Gabarit du prompt du relecteur d'un ticket (flow-board)
 
-Le prompt du sous-agent relecteur unique qui fait les deux axes (Standards et Spec) de la revue d'un ticket (point 4 de la section 2 de `procedure-groupe.md`, dans le dossier de ce fichier). La session le lance par l'outil Agent, modèle opus, effort high, passés explicitement. Copier le texte sous la ligne, remplir chaque `<…>`, retirer les lignes entre crochets qui ne s'appliquent pas (et les crochets des autres) : le fichier de consignes (gabarit `consignes-revue.md`) porte le reste, ce prompt ne le recopie pas.
+Le prompt du sous-agent relecteur unique qui fait les deux axes (Standards et Spec) de la revue d'un ticket (point 4 de la section 2 de `procedure-groupe.md`, dans le dossier de ce fichier). La session le lance par l'outil Agent, modèle opus, effort medium, ou high si le ticket touche une zone sensible, passés explicitement. Copier le texte sous la ligne, remplir chaque `<…>`, retirer les lignes entre crochets qui ne s'appliquent pas (et les crochets des autres) : le fichier de consignes (gabarit `consignes-revue.md`) porte le reste, ce prompt ne le recopie pas.
 
 ---
 

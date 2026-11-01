@@ -1,7 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import { closedHint, closingProcedure } from '../hooks/closing.ts'
-import { activeRun, applyRelay, applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyRelay } from '../hooks/relay.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Relay } from '../types'
 
 // La fermeture ne met dans une commande que des valeurs dont la forme a été vérifiée : un id de

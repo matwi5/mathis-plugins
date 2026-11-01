@@ -11,39 +11,26 @@
 import type { SyncState, AgentStatus, AgentsWindow, AdvisorCall, AdvisorLane, Artifact, ArtifactKind, Board, Closing, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, AgentLane, AgentMark, AgentType, RegistryAgent, SegmentKind, SessionRegistry, Ticket, ToolFamily, TicketGroup, TicketStatus, Tone, UiState } from '../types'
 import { ANYTIME_GROUPS, C, CODE_SKILLS, COMMAND_GROUPS, FLOW_COMMANDS, LAUNCHERS, SKILLS, commandLineOf, slashOf, type AnytimeTool, type SkillDef, type StepDef } from './catalog.ts'
 import {
-  relayForGroup,
-  withRelay,
-  type GroupRelay,
   activeDetour,
-  activeRun,
   autoStateOf,
-  closingReason,
   isAutoOn,
   CHOICES_LISTED,
   openQuestions,
   pendingAutoMarks,
   STALE_PREFIX,
   waitTargetLabel,
-  ORIGIN_LABELS,
-  originOf,
   asanaUrl,
   blockedCount,
   externalOf,
   commandText,
-  countTickets,
-  currentPhase,
   delegatedTitle,
   doingOf,
-  linkedInFlight,
-  pickableItems,
   focusOf,
   groupPlan,
   resumable,
   type GroupPlan,
   type GroupView,
   isPickable,
-  hasUnreadableCounts,
-  isSecuritySettled,
   isTicketReviewEnough,
   attachedIdsOf,
   groupProgress,
@@ -56,13 +43,32 @@ import {
   syncAdvice,
   tddCycles,
   unseenDecisions,
-  inForce,
   isDelegable,
   groupReviewArgs,
-  hasGroupReview,
   isPhaseOptional,
   type SyncStep,
 } from './model.ts'
+import {
+  closingReason,
+  linkedInFlight,
+  pickableItems,
+} from './link.ts'
+import {
+  relayForGroup,
+  withRelay,
+  type GroupRelay,
+  inForce,
+} from './relay.ts'
+import {
+  ORIGIN_LABELS,
+  originOf,
+  activeRun,
+  countTickets,
+  currentPhase,
+  hasUnreadableCounts,
+  isSecuritySettled,
+  hasGroupReview,
+} from './basics.ts'
 import { MAIN, reviewForkName, runningOf } from './registry.ts'
 import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'

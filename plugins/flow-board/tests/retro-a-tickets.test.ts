@@ -2,11 +2,9 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { branchCleanup, groupWorktree, itemsWorktree } from '../hooks/closing.ts'
 import {
-  activeRun,
   applyCommand,
   applyReport,
   applySkill,
-  currentPhase,
   detachOnLoad,
   emptyBoard,
   groupPlan,
@@ -19,6 +17,10 @@ import {
   suggestionsFor,
   validateReport,
 } from '../hooks/model.ts'
+import {
+  activeRun,
+  currentPhase,
+} from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
 // Les pistes choisies d'une rétro deviennent des tickets groupés, et le parcours de la rétro

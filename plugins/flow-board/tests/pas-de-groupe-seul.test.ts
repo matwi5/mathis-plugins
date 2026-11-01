@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, emptyBoard, groupPlan, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, emptyBoard, groupPlan, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 // Un lot qui n'aurait qu'un groupe n'en a pas (spec « Groupes et vagues », série 1 Q11, série 2 Q5).

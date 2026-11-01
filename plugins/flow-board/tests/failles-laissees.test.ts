@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyRelay, applyReport, applySkill, emptyBoard, isSecuritySettled, mergeBoards, newRun, relayForGroup, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, applySkill, emptyBoard, mergeBoards, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyRelay, relayForGroup } from '../hooks/relay.ts'
+import { activeRun, isSecuritySettled } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 // Les failles qu'une revue de sécurité a gardées et que la personne décide de ne pas corriger

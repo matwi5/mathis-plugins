@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { branchCleanupText, reopenText } from '../hooks/closing.ts'
-import { emptyBoard, markCleanupSent, mergeBoards, newRun } from '../hooks/model.ts'
+import { emptyBoard, mergeBoards, newRun } from '../hooks/model.ts'
+import { markCleanupSent } from '../hooks/link.ts'
 import type { Board, Closing, Run } from '../types'
 
 // La validation du compte rendu supprime les branches des sessions liées fermées du parcours

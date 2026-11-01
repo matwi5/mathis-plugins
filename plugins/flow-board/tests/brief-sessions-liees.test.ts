@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 const PLUGIN = 'flow-board'

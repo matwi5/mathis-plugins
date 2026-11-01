@@ -1,7 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import { GROUP_ID_FORM, GROUP_ID_FORM_FR, closingProcedure, groupWorktree, groupWorktreeTemplate, isGroupId } from '../hooks/closing.ts'
-import { activeRun, applyRelay, applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { applyRelay } from '../hooks/relay.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 // La forme d'un id de groupe : une règle, contrôlée partout. Invariant : la procédure de fermeture ne

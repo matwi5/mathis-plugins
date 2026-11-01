@@ -4,7 +4,9 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, applySkill, autoDecision, cancelLinkedGroup, emptyBoard, isGroupLotStuck, hereReviewMark, linkGroupSession, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, applySkill, autoDecision, emptyBoard, isGroupLotStuck, hereReviewMark, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'
+import { cancelLinkedGroup, linkGroupSession } from '../hooks/link.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
 const T0 = 160_000_000

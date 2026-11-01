@@ -12,7 +12,9 @@
 
 import type { Board, SessionRegistry } from '../types'
 import { SKILLS } from './catalog.ts'
-import { activeRun, currentPhase, groupDone, linkedSessionsOf, nextLaunchFor } from './model.ts'
+import { groupDone, nextLaunchFor } from './model.ts'
+import { linkedSessionsOf } from './link.ts'
+import { activeRun, currentPhase } from './basics.ts'
 import { lastCompactionAt } from './registry.ts'
 
 export type CompactionGroup = { id: string; name: string; done: number; total: number; session?: string }

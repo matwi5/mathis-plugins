@@ -42,17 +42,10 @@ import {
 } from './catalog.ts'
 import {
   activeDetour,
-  activeRun,
   applyAgentStart,
   applyAnswer,
   applyAsana,
-  applyRelayEntry,
-  asanaChanges,
-  localTicketChange,
-  ticketFilesIn,
   askCloseLinkedGroup,
-  askCloseLinkedItems,
-  groupSendSeq,
   reloadText,
   restoreDelegate,
   applyCommand,
@@ -60,7 +53,6 @@ import {
   markDecisionsSeen,
   reportFacts,
   validateReport,
-  markCleanupSent,
   applyFileChange,
   applyReport,
   applySkill,
@@ -69,30 +61,12 @@ import {
   applyUserAnswer,
   backgroundLaunches,
   commandSignals,
-  reportedReport,
   commandText,
-  countTickets,
-  currentPhase,
-  decidedFileText,
   isBugPass,
-  relayedReportKeys,
-  relayedPartsOf,
-  relayedSentence,
   archiveRun,
-  cancelLinked,
-  cancelLinkedGroup,
-  clip,
   dropRun,
-  linkGroupSession,
-  linkSession,
-  linkedSessionsOf,
-  noteUnlaunched,
-  retryLinked,
   startLinkedGroups,
   type GroupView,
-  linkedInFlight,
-  pickableItems,
-  holdsItemsSession,
   renameRun,
   unarchiveRun,
   EMPTY_SYNC,
@@ -152,8 +126,33 @@ import {
   togglePick,
   summaryOf,
   syncAdvice,
-  type Effects,
-  type Outcome,
+  commandArgsOf,
+} from './model.ts'
+import {
+  askCloseLinkedItems,
+  groupSendSeq,
+  markCleanupSent,
+  cancelLinked,
+  cancelLinkedGroup,
+  linkGroupSession,
+  linkSession,
+  linkedSessionsOf,
+  noteUnlaunched,
+  retryLinked,
+  linkedInFlight,
+  pickableItems,
+  holdsItemsSession,
+} from './link.ts'
+import {
+  applyRelayEntry,
+  asanaChanges,
+  localTicketChange,
+  ticketFilesIn,
+  reportedReport,
+  decidedFileText,
+  relayedReportKeys,
+  relayedPartsOf,
+  relayedSentence,
   reportedChanges,
   reportedCounts,
   reportedWithdrawals,
@@ -173,8 +172,15 @@ import {
   type RelayEvent,
   type RelayLoss,
   type RelayPart,
-  commandArgsOf,
-} from './model.ts'
+} from './relay.ts'
+import {
+  activeRun,
+  countTickets,
+  currentPhase,
+  clip,
+  type Effects,
+  type Outcome,
+} from './basics.ts'
 import type { LiveAgent, SyncAdvice } from './model.ts'
 import {
   emptyRegistry,
@@ -1083,8 +1089,11 @@ const writeOwnEntry = async ($: any, file: RelayEntryFile): Promise<'file' | 'st
   }
 }
 
-/** Ce qu'un signal est devenu au relais : gardé (ou déjà là), ou pas gardé, avec la raison. */
-type RelayOutcome = { isKept: true; note?: string } | { isKept: false; why: string }
+/**
+ * Ce qu'un signal est devenu au relais : gardé (ou déjà là), ou pas gardé, avec la raison ; `isFinal` : le
+ * renvoyer tel quel ne servirait à rien ou recompterait ; `isBugs` : un refus des bogues d'une revue.
+ */
+type RelayOutcome = { isKept: true; note?: string } | { isKept: false; why: string; isFinal?: true; isBugs?: true }
 
 /** Les signaux de cette session, un à la fois : deux crochets en même temps ne relisent pas la même entrée. */
 let relayQueue: Promise<unknown> = Promise.resolve()
@@ -1112,7 +1121,7 @@ const relaySignalNow = async ($: any, event: RelayEvent): Promise<RelayOutcome> 
   const own = await readOwnEntry($, runId, session)
   if ('why' in own) return { isKept: false, why: own.why }
   const refusal = relayRefusal(own.entry, event)
-  if (refusal !== null) return { isKept: false, why: refusal }
+  if (refusal !== null) return { isKept: false, why: refusal.why, isFinal: true, ...(refusal.isBugs ? { isBugs: true as const } : {}) }
   // Toujours après l'entrée relue : à la lecture, la plus récente l'emporte, jamais une égalité.
   const now = nextRelayTime(own.entry, await $.clock.now())
   const entry = applyRelayEntry(own.entry, runId, session, event, now)
@@ -1131,7 +1140,7 @@ const relaySignalNow = async ($: any, event: RelayEvent): Promise<RelayOutcome> 
   })
   // Écrite, mais pas relue : ne pas la faire renvoyer (des comptes s'ajouteraient deux fois).
   if (parseRelayEntryFile(back, runId)?.entry.at !== now)
-    return { isKept: false, why: 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the main discussion checks the relay' }
+    return { isKept: false, why: 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the main discussion checks the relay', isFinal: true }
   // Le fichier voulu ne s'est pas écrit : le store de cette session n'est pas celui d'une discussion
   // principale lancée dans l'autre application (desktop ou CLI), qui ne le lit donc pas.
   if (where === 'store' && path) return { isKept: true, note: 'kept only in the store of this session, its relay file could not be written: a main discussion running in the other app (desktop or CLI) does not read it' }
@@ -4720,6 +4729,8 @@ export const register: Register = on => {
     }
     // Ce que le relais garde se dit une fois les écritures faites : la phrase que le modèle a écrite
     // d'avance (`relayedSentence(input)`) est remplacée par celle des pertes, ou ajoutée si elle manque.
+    // Un compte de bogues hors forme : la phrase dit sa raison à lui, d'après l'appel, et remplace celle
+    // qu'une perte d'ici lui aurait donnée (une déclaration ratée).
     const lost: RelayLoss[] = []
     const notes = new Set<string>()
     let startText = ''
@@ -4734,10 +4745,11 @@ export const register: Register = on => {
       // Ses `set`, ses choix faits sans la personne, ses comptes, son compte rendu et sa note partent au
       // relais, pas sur le parcours, qu'ils arrivent seuls ou avec "delegate" (la session du groupe C le
       // renvoyait à chaque appel, et tout le reste se perdait). Ce que le relais ne garde pas se dit.
-      const send = async (parts: RelayPart[], event: RelayEvent) => {
+      const send = async (parts: RelayPart[], event: RelayEvent): Promise<RelayOutcome> => {
         const outcome = await relaySignal($, event)
         if (outcome.isKept && outcome.note) notes.add(outcome.note)
-        if (!outcome.isKept) for (const part of parts) lost.push({ part, why: outcome.why })
+        if (!outcome.isKept) for (const part of parts) lost.push({ part, why: outcome.why, ...(outcome.isFinal ? { isFinal: true as const } : {}) })
+        return outcome
       }
       const changes = reportedChanges(input)
       if (changes.length > 0) await send(['set'], { kind: 'tickets', changes })
@@ -4746,7 +4758,17 @@ export const register: Register = on => {
       const withdrawn = reportedWithdrawals(input)
       if (withdrawn.length > 0) await send(['withdrawn'], { kind: 'withdrawn', items: withdrawn })
       const counts = reportedCounts(input)
-      if (counts.review || counts.security) await send([...(counts.review ? (['review'] as const) : []), ...(counts.security ? (['security'] as const) : [])], counts)
+      if (counts.review && !counts.security) await send(['review'], counts)
+      else if (counts.security && !counts.review) await send(['security'], counts)
+      else if (counts.review && counts.security) {
+        // Une revue refusée pour ses bogues (`relayRefusal`) n'emporte pas la revue de sécurité : elle part seule.
+        const outcome = await relaySignal($, counts)
+        if (outcome.isKept && outcome.note) notes.add(outcome.note)
+        if (!outcome.isKept && outcome.isBugs) {
+          lost.push({ part: 'review', why: outcome.why, isFinal: true })
+          await send(['security'], { kind: 'counts', security: counts.security })
+        } else if (!outcome.isKept) for (const part of ['review', 'security'] as const) lost.push({ part, why: outcome.why, ...(outcome.isFinal ? { isFinal: true as const } : {}) })
+      }
       const report = reportedReport(input)
       if (report !== '') {
         const runId = (await read($, boardAtom))?.delegate?.run ?? ''

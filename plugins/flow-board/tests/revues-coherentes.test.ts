@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, applySkill, emptyBoard, groupTicketsOf, isPhaseOptional, needsReview, newRun } from '../hooks/model.ts'
+import { applyReport, applySkill, emptyBoard, groupTicketsOf, isPhaseOptional, needsReview, newRun } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
 // Les revues et les phases jugées par une seule règle : la date de revue d'un groupe ou d'un lot

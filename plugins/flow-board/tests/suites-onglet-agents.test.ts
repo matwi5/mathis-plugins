@@ -1,7 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import { familyOf } from '../hooks/cost.ts'
-import { activeRun, applyRelay, applyReport, applySkill, currentPhase, decidedFileText, emptyBoard, newRun, reportFacts, startLinkedGroups, unseenDecisions } from '../hooks/model.ts'
+import { applyReport, applySkill, emptyBoard, newRun, reportFacts, startLinkedGroups, unseenDecisions } from '../hooks/model.ts'
+import { applyRelay, decidedFileText } from '../hooks/relay.ts'
+import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 // Suites de la rétro de l'onglet Agents (r18, r20) et de celle de « Durée des requêtes » (p3, p13).

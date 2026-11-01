@@ -7,7 +7,7 @@ Tableau de bord en direct du workflow [mattpocock-skills](https://github.com/mat
 - **Il garde les parcours par projet.** Plusieurs discussions peuvent travailler sur le même projet sans se marcher dessus.
 - **Il suit les conventions de livraison du plugin `project`** : `/project:sync`, `/project:version`, `/project:push`, `/project:pr`.
 
-Version actuelle : **0.74.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.75.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -223,7 +223,7 @@ La Rétro se clôt alors, le curseur reste sur elle, et la carte « Ensuite » p
 | Fichiers écrits | Livrables du workflow : glossaire, ADR, spec et tickets `.scratch/`, plans de `docs/plans/` (avec le ticket que le plan cite en tête), rapport d'architecture, questionnaire, leçons, configuration. Les fichiers hors du projet sont ignorés. |
 | Asana (`update_tasks`) | Ticket coché ou ligne « Statut : » (en cours, en attente, à trancher), et levée des dépendances externes. Pour un blocage, le texte de la ligne devient sa raison. |
 | Asana (`create_tasks`), `gh issue create` | Hors des skills qui publient le lot (`/to-tickets`, `/to-spec`, `/triage`), la tâche créée va dans « Trouvé en route », avec le statut de sa ligne « Statut : ». |
-| Réponses de Claude | Questions du grilling (`❓ **Qn**`) ; une synthèse de revue (`## Standards`) fait avancer l'étape. Les chiffres de revue viennent du champ `review` de l'outil, que Claude remplit après chaque revue : la carte affiche le nombre de revues, les constats (Standards, Spec) et les corrigés, cumulés sur la phase. Ses champs `bugs` (constats d'une passe « bogues ») et `group` (la revue d'un groupe) ne s'écrivent que dans le journal (« Revue du groupe A : … · 2 bogues (passe « bogues ») »). Dans la discussion du parcours, chaque réponse de l'outil rappelle les tickets bloqués avec leur raison, et un ticket passé « fait » ici sans revue dans le même appel (une revue envoyée plus tôt le rend sans objet) ; un groupe rendu sans revue dit le `reviewed` à envoyer une fois ses tickets faits. En session liée, le paragraphe qui dit comment joindre la discussion principale (ListAgents, `[ref]`) n'est que dans la réponse à `delegate` ; les relais n'en gardent qu'une ligne. |
+| Réponses de Claude | Questions du grilling (`❓ **Qn**`) ; une synthèse de revue (`## Standards`) fait avancer l'étape. Les chiffres de revue viennent du champ `review` de l'outil, que Claude remplit après chaque revue : la carte affiche le nombre de revues, les constats (Standards, Spec) et les corrigés, cumulés sur la phase. Dans la discussion du parcours, ses champs `bugs` (constats d'une passe « bogues ») et `group` (la revue d'un groupe) ne s'écrivent que dans le journal (« Revue du groupe A : … · 2 bogues (passe « bogues ») »). Envoyé par une session liée, `bugs` part aussi au relais, et le retour de son groupe le cite au journal, avec la même alerte quand constats et bogues dépassent les corrigés ; une revue sans `bugs` n'en compte aucun, jamais « 0 bogue ». Un `bugs` qui n'est pas un entier de 0 à 10 000 est ignoré des deux côtés, sans toucher aux autres comptes, et la réponse le dit (« bugs ignored: … » ici, « NOT kept in the relay: the bug count (…) » en session liée) ; un compte de bogues gardé illisible dans l'entrée d'une session n'est jamais réécrit, ni poussé au-delà de 10 000 : la revue qui en ajouterait est refusée, sa revue de sécurité part seule, et la réponse dit quoi faire (renvoyer la revue sans `bugs`, ou ne pas la renvoyer quand le reste est déjà relayé, et donner le compte dans le compte rendu). Dans la discussion du parcours, chaque réponse de l'outil rappelle les tickets bloqués avec leur raison, et un ticket passé « fait » ici sans revue dans le même appel (une revue envoyée plus tôt le rend sans objet) ; un groupe rendu sans revue dit le `reviewed` à envoyer une fois ses tickets faits. En session liée, le paragraphe qui dit comment joindre la discussion principale (ListAgents, `[ref]`) n'est que dans la réponse à `delegate` ; les relais n'en gardent qu'une ligne. |
 
 ---
 
@@ -539,7 +539,10 @@ flow-board/
 │   ├── history.ts               historique : sélecteur, fichiers à part, vue d'un parcours passé (pur)
 │   ├── erase.ts                 effacement : traces, sessions fermées, confirmation (pur)
 │   ├── compaction.ts            consignes de compaction selon le rôle de la discussion (pur)
-│   └── closing.ts               fermeture d'une session liée rendue : procédure, liste jetable, titres et worktrees (pur)
+│   ├── closing.ts               fermeture d'une session liée rendue : procédure, liste jetable, titres et worktrees (pur)
+│   ├── basics.ts                petits outils du modèle : copie, textes, dates, journal, comptes, lectures simples, coupe et origine des choix ; n'importe pas le modèle (pur)
+│   ├── relay.ts                 relais des sessions liées : ce qu'un appel envoie, l'entrée d'une session, fusion et lecture pour un groupe (pur)
+│   └── link.ts                  cycle de vie du lien d'un groupe ou de pistes : envoi, retour, fermeture notée, fusion des copies (pur)
 ├── reference/revue-securite.md  méthode fixe de la revue de sécurité, citée par son chemin
 ├── reference/procedure-groupe.md procédure d'une session liée de groupe, citée par son chemin
 ├── reference/relecture-fond-forme.md méthode fixe de la relecture du fond et de la forme, citée par son chemin
@@ -612,6 +615,7 @@ flow-board/
     ├── migration-retros.test.ts
     ├── mise-de-cote.test.ts
     ├── mode-auto.test.ts
+    ├── modules-sans-cycle.test.mjs
     ├── multi-sessions.test.ts
     ├── ouverture.test.ts
     ├── parallele.test.ts
@@ -671,11 +675,11 @@ Le moteur (`model.ts`) ne fait que des transitions pures : chacune prend le parc
 |---|---|
 | Titre du parcours et renommage de la discussion | `model.ts` : `renameRun` ; `model.ts` : `nameDiscussion` ; `register.tsx` : `withDiscussionTitle` ; `register.tsx` : `discussionTitleKey` |
 | Plan de groupes, niveaux d'attente et vagues | `model.ts` : `groupPlan` ; `model.ts` : `applyReport` ; `view.tsx` : `groupsSection` |
-| Lancements (groupes, bug, pistes, rétro) | `register.tsx` : `delegateGroups` ; `register.tsx` : `delegationText` ; `register.tsx` : `launchHow` ; `register.tsx` : `launchBugLinked` ; `register.tsx` : `splitItems` ; `register.tsx` : `launchRetro` ; `model.ts` : `startLinkedGroups` ; `model.ts` : `linkGroupSession` |
+| Lancements (groupes, bug, pistes, rétro) | `register.tsx` : `delegateGroups` ; `register.tsx` : `delegationText` ; `register.tsx` : `launchHow` ; `register.tsx` : `launchBugLinked` ; `register.tsx` : `splitItems` ; `register.tsx` : `launchRetro` ; `model.ts` : `startLinkedGroups` ; `link.ts` : `linkGroupSession` |
 | Titres des sessions liées | `closing.ts` : `linkedPrefix` ; `linked.ts` : `ownPart` ; `linked.ts` : `linkedSessions` |
-| Forme d'un id de groupe (une règle, citée partout) | `closing.ts` : `isGroupId` ; `closing.ts` : `GROUP_ID_FORM` ; `closing.ts` : `groupWorktree` ; `model.ts` : `sentGroupOf` |
+| Forme d'un id de groupe (une règle, citée partout) | `closing.ts` : `isGroupId` ; `closing.ts` : `GROUP_ID_FORM` ; `closing.ts` : `groupWorktree` ; `basics.ts` : `sentGroupOf` |
 | Revues et sécurité | `catalog.ts` : `ticketReviewHint` ; `catalog.ts` : `groupReviewHint` ; `register.tsx` : `coachingNote` ; `register.tsx` : `reviewLinkedGroup` ; `register.tsx` : `securityReview` ; `register.tsx` : `contentFormReview` ; `model.ts` : `needsReview` |
-| Retour et fermeture d'un groupe | `register.tsx` : `closeLinkedGroup` ; `model.ts` : `askCloseLinkedGroup` ; `model.ts` : `isCloseCandidate` ; `model.ts` : `closingText` ; `closing.ts` : `closingProcedure` (la procédure de fermeture, avec la liste jetable) ; `closing.ts` : `isSafeId`, `isSafeBranch`, `isWorktreePath` (la forme des valeurs qui entrent dans une commande) ; `closing.ts` : `reopenText` (« ↺ Rouvrir » : la commande copiée et ses toasts) ; `model.ts` : `markCleanupSent` (la marque des fermetures visées, après l'envoi) ; `closing.ts` : `branchCleanup` (la consigne et les branches qu'elle vise, d'un même plan) ; `closing.ts` : `branchCleanupText` (la suppression des branches à la validation du compte rendu) ; `register.tsx` : `reportValidated` ; `view.tsx` : `reopenButton` ; `view.tsx` : `closingRow` |
+| Retour et fermeture d'un groupe | `register.tsx` : `closeLinkedGroup` ; `model.ts` : `askCloseLinkedGroup` ; `model.ts` : `isCloseCandidate` ; `model.ts` : `closingText` ; `closing.ts` : `closingProcedure` (la procédure de fermeture, avec la liste jetable) ; `closing.ts` : `isSafeId`, `isSafeBranch`, `isWorktreePath` (la forme des valeurs qui entrent dans une commande) ; `closing.ts` : `reopenText` (« ↺ Rouvrir » : la commande copiée et ses toasts) ; `link.ts` : `markCleanupSent` (la marque des fermetures visées, après l'envoi) ; `closing.ts` : `branchCleanup` (la consigne et les branches qu'elle vise, d'un même plan) ; `closing.ts` : `branchCleanupText` (la suppression des branches à la validation du compte rendu) ; `register.tsx` : `reportValidated` ; `view.tsx` : `reopenButton` ; `view.tsx` : `closingRow` |
 | Frise des agents | `timeline.ts` : `buildAxis` ; `timeline.ts` : `laneParts` ; `timeline.ts` : `zoomWindow` ; `cells.ts` : `laneCells` ; `cells.ts` : `rulerCells` ; `svg.ts` : `WAIT_TINT` ; `view.tsx` : `agentsTab` ; `view.tsx` : `laneRow` ; `view.tsx` : `legendDetail` |
 | Registre des agents | `registry.ts` : `mergeRegistry` ; `registry.ts` : `catchUpAdvisor` ; `registry-file.ts` : `commitRegistry` |
 | Effacement | `erase-run.ts` : `eraseRun` ; `erase-run.ts` : `forgetSession` ; `erase.ts` : `applyTraces` ; `erase.ts` : `applyTracesToRebuilt` |

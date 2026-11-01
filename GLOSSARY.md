@@ -37,6 +37,10 @@ _Avoid_: débit, tokens/s moyen
 
 ## Suivi des agents
 
+**Coordinateur** :
+La discussion qui suit tous les parcours d'un projet et fait le lien entre eux : elle les empêche de se gêner, garde la vision du projet et ses idées, et ne remonte à l'utilisateur que l'essentiel. Elle ne code pas et ne cadre pas.
+_Avoid_: chief of staff, chef de projet, PMO, directeur de programme
+
 **Orchestrateur** :
 La discussion qui lance les autres : celle qui porte le parcours, ou, sans parcours, la discussion où l'on regarde.
 _Avoid_: discussion mère, session mère, discussion principale

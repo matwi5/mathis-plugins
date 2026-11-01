@@ -1,6 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
-import { activeRun, applyRelay, applyReport, askCloseLinkedGroup, attachedIdsOf, closingText, emptyBoard, groupDone, groupProgress, needsReview, newRun, relayForGroup, reportFacts, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, askCloseLinkedGroup, attachedIdsOf, closingText, emptyBoard, groupDone, groupProgress, needsReview, newRun, reportFacts, startLinkedGroups } from '../hooks/model.ts'
+import { applyRelay, relayForGroup } from '../hooks/relay.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
 // La fin d'un groupe compte les tickets que le plan lui rattache, comme sa sensibilité. Invariant :

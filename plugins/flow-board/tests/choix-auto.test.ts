@@ -6,7 +6,8 @@
 
 import { expect, test } from 'claude-code/testing'
 
-import { applyRelay, applyReport, autoNotices, decidedFileText, finishActive, emptyBoard, isAutoOn, mergeBoards, newRun, reportFacts, switchOffAuto, switchOnAuto, validateReport } from '../hooks/model.ts'
+import { applyReport, autoNotices, finishActive, emptyBoard, isAutoOn, mergeBoards, newRun, reportFacts, switchOffAuto, switchOnAuto, validateReport } from '../hooks/model.ts'
+import { applyRelay, decidedFileText } from '../hooks/relay.ts'
 import type { Board, Relay, Run } from '../types'
 
 const T0 = 97_000_000

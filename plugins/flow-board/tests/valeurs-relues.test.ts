@@ -7,7 +7,9 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeRun, applyReport, emptyBoard, linkGroupSession, newRun, reportFacts, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, emptyBoard, newRun, reportFacts, startLinkedGroups } from '../hooks/model.ts'
+import { linkGroupSession } from '../hooks/link.ts'
+import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
 const T0 = 150_000_000
