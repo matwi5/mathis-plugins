@@ -36,7 +36,10 @@ const world = (on: any) => {
   const files: Record<string, string> = {}
   const disk: { board?: string; isUsed: boolean } = { isUsed: false }
   const ids = { now: 'sa' }
-  const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false }
+  const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false, refusePrompt: false, holdPrompt: false }
+  const held: (() => void)[] = []
+  // Les messages que le mod soumet (la consigne de l'allumage, au repos).
+  const prompts: { text: string; origin: any }[] = []
   const runs: { command: string; args: string; origin: any; stored: Board | undefined }[] = []
   const notices: string[] = []
   const stored = (): Board | undefined => (disk.isUsed && disk.board !== undefined ? JSON.parse(disk.board) : (mem['board:'] as Board | undefined))
@@ -87,7 +90,13 @@ const world = (on: any) => {
     return { text: '' }
   })
   on('prompt.fill', () => ({ isFilled: true }))
-  on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
+  on('prompt.submit', (_$: unknown, e: { text: string; origin?: any }) => {
+    prompts.push({ text: e.text, origin: e.origin })
+    if (flags.refusePrompt) return { drop: 'refusé par un hook' }
+    // Retenu (le moteur le met en file pendant un tour) : il revient quand le test appelle `held`.
+    if (flags.holdPrompt) return new Promise(resolve => held.push(() => resolve({ text: e.text })))
+    return { text: e.text }
+  })
   on('prompt.suggest', () => ({ isShown: true }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
@@ -99,7 +108,7 @@ const world = (on: any) => {
   on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
   on('classic.StopFailure', () => ({}))
   on('classic.SessionStart', () => ({}))
-  return { mem, disk, ids, flags, runs, notices, stored }
+  return { mem, disk, ids, flags, runs, notices, stored, prompts, held }
 }
 type World = ReturnType<typeof world>
 /** Pose un board enregistré, au fichier commun comme dans `$.store` (selon que le dossier du mod dit où est ~/.claude). */
@@ -147,8 +156,10 @@ const specDone = async ($: any, on: any, o: { isAuto?: boolean; isDone?: boolean
   if (o.isAuto !== false) {
     await press($, 'auto-on')
     await press($, 'auto-confirm')
-    // Le clic, au repos, fait évaluer l'auto : la phase n'étant pas finie, rien ne part.
+    // Le clic, au repos, envoie à Claude la consigne de l'allumage ; la fin du tour de ce message fait
+    // évaluer l'auto : la phase n'étant pas finie, rien ne part.
     await settle(clock, 1)
+    await turnEnd($, clock, 'consigne')
   }
   if (o.isDone !== false) await $.tool.call({ tool: TOOL, complete: true } as any)
   await settle(clock, 1)
@@ -182,7 +193,11 @@ test('Rien ne part sans l’auto, ni d’une autre discussion après un /clear, 
   await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Quelle granularité ?' }] } as any)
   await press($, 'auto-on')
   await press($, 'auto-confirm')
+  // La fin du tour envoie d'abord à Claude la consigne de l'allumage ; la fin du tour de ce message décide.
   await turnEnd($, off.clock, 't2')
+  expect(off.prompts.length).toBe(1)
+  expect(autoOf(off)?.offAt).toBeUndefined()
+  await turnEnd($, off.clock, 't2b')
   expect(off.runs).toEqual([])
   expect(autoOf(off)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
   expect(off.notices).toContain("Parcours Boutique : auto en pause (plus rien ne peut avancer sans toi)")
@@ -205,7 +220,10 @@ test('Rien ne part sans l’auto, ni d’une autre discussion après un /clear, 
   await turnEnd($, off.clock, 't3')
   expect(off.runs).toEqual([])
   await clear('sa')
+  // Rallumé pendant un tour sans appel de l'outil : Claude n'est pas prévenu, la fin du tour lui envoie la consigne.
   await turnEnd($, off.clock, 't4')
+  expect(off.runs).toEqual([])
+  await turnEnd($, off.clock, 't5')
   expect(off.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
 })
 
@@ -221,9 +239,10 @@ test('Un fichier de parcours qui pose « allumé à » et « allumé par » sans
   await turnEnd($, clock)
   expect(w.runs).toEqual([])
   expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\sallumage\snon\sconfirmé\sici/)
-  // Deux clics d'ici le rallument : la suite part (contrôle positif).
+  // Deux clics d'ici le rallument : la consigne part à Claude, puis la suite à la fin de son tour (contrôle positif).
   await press($, 'auto-on')
   await press($, 'auto-confirm')
+  await settle(clock, 1)
   await turnEnd($, clock, 't2')
   expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
 })
@@ -257,13 +276,20 @@ test('Une écriture ratée de la marque : rien ne part, la marque est retirée, 
   // Retirée avec sa trace : une copie qui l'aurait reçue ne la fait pas revenir « envoyée ».
   expect(w.stored()!.runs[0]!.autoResent).toEqual([expect.objectContaining({ key: 'phase:to-tickets#1' })])
   expect(w.notices).toContain('Parcours Boutique : auto en pause (écriture du parcours ratée)')
-  // Rallumé au repos, la suite part tout de suite, une fois, sans attendre une fin de tour.
+  // Rallumé au repos : rien ne part tout de suite ; le mod envoie à Claude la consigne de l'allumage, une
+  // fois, et la suite part à la fin du tour de ce message, une fois.
+  const before = w.prompts.length
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)
-  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  expect(w.runs).toEqual([])
+  expect(w.prompts.length).toBe(before + 1)
+  expect(w.prompts.at(-1)!.text).toContain('Auto mode is ON for this run now')
   await turnEnd($, clock, 't2')
   expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  await turnEnd($, clock, 't3')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  expect(w.prompts.length).toBe(before + 1)
 })
 
 test('Un envoi refusé devient la question « envoi resté sans suite » avec « ↻ Renvoyer » ; le clic efface la marque et l’auto renvoie une fois', { timeoutMs: 30000 }, async ($, on) => {
@@ -683,4 +709,300 @@ test('Une trace « ↻ Renvoyer » ou « répondue » datée dans le futur est r
   expect(autoMarksOf(mergeBoards({ ...sent, activeId: null }, clamped).runs[0]!)).toEqual([expect.objectContaining({ key: KEY, at: 6_000 })])
   // Sans la lecture qui la ramène, la trace future aurait effacé cette marque (le contrôle de ce qui précède).
   expect(autoMarksOf(mergeBoards({ ...sent, activeId: null }, boardOf(run)).runs[0]!)).toEqual([])
+})
+
+// ─── Claude prévenu de l'allumage (invariant : aucune étape ne part d'un allumage avant la consigne) ───
+
+const ON = 'Auto mode is ON for this run now'
+
+test('Allumé pendant un tour, un appel de l’outil dans ce tour porte l’avis une fois, et la fin du tour envoie la suite, sans message du mod', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  const first = String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)
+  expect(first).toContain(ON)
+  // La consigne de la phase en cours : le bloc commun du mode auto et ce que Claude fait de ses questions ouvertes.
+  expect(first).toContain('Six kinds of decisions stay with the user')
+  expect(first).toContain('reread your last message')
+  expect(first).toContain('(to-spec)')
+  expect(String((await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result)).not.toContain(ON)
+  await turnEnd($, clock, 't1')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  expect(w.prompts).toEqual([])
+})
+
+test('Allumé pendant un tour, sans appel de l’outil, la fin du tour n’envoie rien et ne pose ni marque ni pause : le mod envoie la consigne à Claude, une fois, et la fin du tour de ce message envoie la suite', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await turnEnd($, clock, 't1')
+  expect(w.runs).toEqual([])
+  expect(marksOf(w)).toEqual([])
+  expect(autoOf(w)?.offAt).toBeUndefined()
+  // Le message, au nom du mod : la consigne de la phase en cours.
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]!.origin).toMatchObject({ kind: 'plugin', name: PLUGIN })
+  expect(w.prompts[0]!.text).toContain(ON)
+  expect(w.prompts[0]!.text).toContain('Six kinds of decisions stay with the user')
+  expect(w.prompts[0]!.text.startsWith('/')).toBe(false)
+  // Le tour du message : Claude, prévenu, ne reçoit pas l'avis en double ; la fin du tour envoie la suite.
+  await $.turn.start({ text: w.prompts[0]!.text, turnId: 't2' })
+  expect(String((await $.tool.call({ tool: TOOL, note: 'rien d’ouvert' } as any)).result)).not.toContain(ON)
+  await turnEnd($, clock, 't2')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  expect(w.prompts.length).toBe(1)
+})
+
+test('Le cas du 01/11 : allumé au repos, la phase finie et aucune question déclarée ; Claude déclare au tour du message une question qui bloque la suite : rien ne part', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  // Autrefois, la suite partait ici dans la seconde ; désormais, seulement le message.
+  expect(w.runs).toEqual([])
+  expect(w.prompts.length).toBe(1)
+  await $.turn.start({ text: w.prompts[0]!.text, turnId: 't1' })
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'D1', phase: 'to-tickets', text: 'Invariant du groupe A ?' }] } as any)
+  await turnEnd($, clock, 't1')
+  expect(w.runs).toEqual([])
+  expect(marksOf(w)).toEqual([])
+  // Le message est parti du geste (le second clic) : sa décision n'envoie que ce qui peut partir, sans pause.
+  expect(autoOf(w)?.offAt).toBeUndefined()
+  // Répondue au tour suivant : la suite part ; sans réponse, une fin de tour ordinaire mettrait l'auto en pause.
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'D1', answered: true }] } as any)
+  await turnEnd($, clock, 't2')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('Relancé par deux clics sur une question encore ouverte : la décision qui suit le message ne remet pas la pause ; la fin de tour suivante, sans réponse, si', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Quelle granularité ?' }] } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  expect(w.prompts.length).toBe(1)
+  await turnEnd($, clock, 't1')
+  expect(autoOf(w)?.offAt).toBeUndefined()
+  await turnEnd($, clock, 't2')
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+  expect(w.runs).toEqual([])
+})
+
+test('Un skill qui prévient Claude porte la consigne de relecture ; hors de la phase en cours, il porte aussi le bloc de cette phase', { timeoutMs: 30000 }, async ($, on) => {
+  await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await $.command.run({ command: 'mattpocock-skills:to-tickets', args: '' } as any)
+  const text = String((await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: {} } as any)).text)
+  expect(text).toContain('reread your last message')
+  expect(text).toContain('Then go on with the current phase')
+  expect(text.split('Six kinds of decisions stay with the user').length).toBe(2)
+})
+
+test('Une fin de tour, ou un appel de l’outil, pendant que le message attend n’envoie ni second message ni avis ; rien ne part avant son retour', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  // Le message reste en attente (le moteur le met en file) jusqu'à `held`.
+  w.flags.holdPrompt = true
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  await turnEnd($, clock, 't0')
+  expect(w.prompts.length).toBe(1)
+  expect(w.runs).toEqual([])
+  expect(String((await $.tool.call({ tool: TOOL, note: 'pendant' } as any)).result)).not.toContain(ON)
+  for (const release of w.held.splice(0)) release()
+  await settle(clock, 1)
+  await turnEnd($, clock, 't1')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  expect(w.prompts.length).toBe(1)
+})
+
+test('« ↻ Renvoyer » au repos après /reload-plugins : Claude n’est plus prévenu, le mod lui renvoie la consigne avant de renvoyer l’action', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on)
+  w.flags.refuseNext = true
+  await turnEnd($, clock)
+  await settle(clock, 1)
+  expect(await paneHas($, 'auto-resend-phase:to-tickets#1')).toBe(true)
+  // /reload-plugins : l'état « prévenu » se perd, la date du clic reste.
+  await start($)
+  const before = w.prompts.length
+  await press($, 'auto-resend-phase:to-tickets#1')
+  await settle(clock, 2)
+  expect(w.prompts.length).toBe(before + 1)
+  expect(w.runs.length).toBe(1)
+  // La fin du tour du message renvoie l'action, une fois.
+  await turnEnd($, clock, 't2')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets', 'mattpocock-skills:to-tickets'])
+})
+
+test('Un message de consigne refusé met l’auto en pause « Claude pas prévenu », notifiée ; rien n’est marqué ni envoyé ; deux clics le rallument et renvoient un message', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  w.flags.refusePrompt = true
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  expect(w.prompts.length).toBe(1)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'Claude pas prévenu' })
+  expect(w.notices).toContain('Parcours Boutique : auto en pause (Claude pas prévenu)')
+  expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\sClaude\spas\sprévenu/)
+  await turnEnd($, clock, 't1')
+  expect(w.runs).toEqual([])
+  expect(marksOf(w)).toEqual([])
+  // Rallumé, le message passe : la suite part à la fin du tour de ce message.
+  w.flags.refusePrompt = false
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  expect(w.prompts.length).toBe(2)
+  await turnEnd($, clock, 't2')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('Un skill chargé après le clic prévient Claude : pas d’avis en double ; coupé puis rallumé, l’avis revient ; après /reload-plugins, Claude est prévenu une fois de plus', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  // La phase suivante tapée par la personne : sa consigne porte le bloc du mode auto, et Claude est prévenu.
+  const sent = w.runs.length
+  await $.command.run({ command: 'mattpocock-skills:to-tickets', args: '' } as any)
+  const consigne = String((await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', pluginName: 'mattpocock-skills', frontmatter: {} } as any)).text)
+  expect(consigne).toContain('Auto mode is on for this run')
+  expect(String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)).not.toContain(ON)
+  // Coupé puis rallumé, sans appel de l'outil entre les deux : Claude repart non prévenu.
+  await press($, 'auto-off')
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  const relit = String((await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result)
+  expect(relit).toContain(ON)
+  expect(relit).not.toContain('Auto mode is OFF for this run now')
+  // /reload-plugins : le mod redémarre, la date du clic reste, Claude est prévenu une fois de plus.
+  await start($)
+  expect(String((await $.tool.call({ tool: TOOL, note: 'après' } as any)).result)).toContain(ON)
+  await turnEnd($, clock, 't1')
+  // La commande tapée par le test passe par le moteur sans origine ; aucune n'est partie au nom du mod.
+  expect(w.runs.length).toBe(sent + 1)
+  expect(w.runs.filter(r => r.origin?.name === PLUGIN)).toEqual([])
+})
+
+test('Prévenu par l’avis de l’outil, puis coupé : la réponse suivante porte l’avis « auto éteint »', { timeoutMs: 30000 }, async ($, on) => {
+  await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  expect(String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)).toContain(ON)
+  await press($, 'auto-off')
+  expect(String((await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result)).toContain('Auto mode is OFF for this run now')
+})
+
+test('L’appel de l’outil par un sous-agent ne prévient pas Claude : ni avis dans sa réponse, ni envoi à la fin du tour ; l’appel suivant de Claude porte l’avis', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  expect(String((await $.tool.call({ tool: TOOL, note: 'du sous-agent', agentId: 'sub1' } as any)).result)).not.toContain(ON)
+  expect(String((await $.tool.call({ tool: TOOL, note: 'de Claude' } as any)).result)).toContain(ON)
+  await turnEnd($, clock, 't1')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('Allumé pendant un tour où seul un sous-agent appelle l’outil : la fin du tour n’envoie que la consigne à Claude', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await $.tool.call({ tool: TOOL, note: 'du sous-agent', agentId: 'sub1' } as any)
+  await turnEnd($, clock, 't1')
+  expect(w.runs).toEqual([])
+  expect(w.prompts.length).toBe(1)
+})
+
+test('Un skill forké (`context: fork`, comme /code-review) ou qu’aucun appel d’ici n’explique (préchargé dans un sous-agent) ne prévient pas Claude : la fin du tour lui envoie la consigne', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  const forked = String((await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: { context: 'fork' } } as any)).text)
+  expect(forked).toContain('Auto mode is on for this run')
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: {} } as any)
+  await turnEnd($, clock, 't1')
+  expect(w.runs).toEqual([])
+  expect(w.prompts.length).toBe(1)
+})
+
+test('L’avis donné en plein tour dit de poursuivre la phase ; le message du mod dit de rendre la main sauf s’il reste à faire ; les deux gardent au cadrage les questions d’intention', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  const notice = String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)
+  expect(notice).toContain('Then go on with the current phase')
+  expect(notice).not.toContain('Then end your turn')
+  expect(notice).toContain('except the intent questions of a framing')
+  await press($, 'auto-off')
+  await turnEnd($, clock, 't1')
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]!.text).toContain('Then end your turn, unless the current phase still has work for you')
+  expect(w.prompts[0]!.text).toContain('except the intent questions of a framing')
+})
+
+test('Coupé puis rallumé pendant que le message du premier allumage attend : l’avis de l’outil prévient le second, et la fin du tour envoie la suite', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  w.flags.holdPrompt = true
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  expect(w.prompts.length).toBe(1)
+  // Un tour s'ouvre (un message de la personne) ; l'auto est coupé puis rallumé pendant ce tour.
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-off')
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  // Le message du premier allumage attend encore : l'avis du second part quand même, une fois.
+  expect(String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)).toContain(ON)
+  for (const release of w.held.splice(0)) release()
+  await settle(clock, 1)
+  await turnEnd($, clock, 't1')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('Le message entré après une coupure ne prévient pas l’allumage d’après : la fin du tour renvoie une consigne, rien ne part', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  w.flags.holdPrompt = true
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(clock, 1)
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-off')
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  for (const release of w.held.splice(0)) release()
+  await settle(clock, 1)
+  w.flags.holdPrompt = false
+  await turnEnd($, clock, 't1')
+  expect(w.runs).toEqual([])
+  expect(w.prompts.length).toBe(2)
+})
+
+test('Un skill intégré à Claude Code (source « built-in », comme /code-review) ne prévient pas Claude, même appelé par lui ou tapé ; une commande tapée n’explique que le premier chargement de son skill', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on, { isAuto: false })
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await $.command.run({ command: 'code-review', args: 'xhigh' } as any)
+  await $.skill.prompt({ skill: 'code-review', text: 'x', source: 'built-in', frontmatter: {} } as any)
+  // Tapée une fois et chargée d'abord dans un fork, la phase suivante : le second chargement (préchargé
+  // dans un sous-agent) n'est plus expliqué par la commande, et ne prévient pas Claude.
+  await $.command.run({ command: 'mattpocock-skills:to-tickets', args: '' } as any)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: { context: 'fork' } } as any)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: {} } as any)
+  await turnEnd($, clock, 't1')
+  expect(w.runs.filter(r => r.origin?.name === PLUGIN)).toEqual([])
+  expect(w.prompts.length).toBe(1)
 })

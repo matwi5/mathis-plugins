@@ -12,6 +12,8 @@ import type { Board, Run } from '../types'
 const T0 = 160_000_000
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
+/** Le début du message de consigne que le mod envoie à Claude quand l'auto s'allume au repos. */
+const BRIEF = '⚡ flow-board: the auto mode instructions for this run'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
@@ -66,6 +68,8 @@ const world = (on: any) => {
     return { text: '' }
   })
   on('prompt.submit', (_$: unknown, e: { text: string }) => {
+    // La consigne de l'allumage, que le mod envoie à Claude au repos : à part des demandes qu'il soumet.
+    if (e.text.startsWith(BRIEF)) return { text: e.text }
     texts.push(e.text)
     return { text: e.text }
   })
@@ -186,6 +190,8 @@ test('Un groupe fini ici avec une revue de sécurité conseillée et pas lancée
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)
+  // Le second clic, au repos, envoie à Claude la consigne de l'allumage ; la fin du tour de ce message décide.
+  await turnEnd($, clock)
   // La revue des groupes finis ici part (/code-review), puis Claude conseille la sécurité de A sans la lancer.
   expect(w.commands).toEqual(['code-review'])
   await $.skill.prompt({ skill: 'code-review', text: 'x' })
@@ -203,6 +209,8 @@ test('Une revue lancée dont le résultat n’est pas encore là n’est pas un 
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)
+  // Le second clic, au repos, envoie à Claude la consigne de l'allumage ; la fin du tour de ce message décide.
+  await turnEnd($, clock)
   // La revue des groupes finis ici part, et rien ne dit encore qu'elle a tourné : l'auto attend son résultat.
   expect(w.commands).toEqual(['code-review'])
   await turnEnd($, clock)
@@ -314,6 +322,8 @@ test('Un groupe renvoyé est relu sur son dernier envoi : la revue et la sécuri
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)
+  // Le second clic, au repos, envoie à Claude la consigne de l'allumage ; la fin du tour de ce message décide.
+  await turnEnd($, clock)
   // Le renvoi de A part (deuxième envoi) ; ce qui vient du premier envoi quitte le groupe, et le journal le dit.
   expect(w.texts.length).toBe(1)
   expect(w.texts[0]).toContain('Groupe A (Worker)')

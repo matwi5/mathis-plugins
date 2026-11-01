@@ -552,6 +552,8 @@ export const TOOL_SCHEMA = {
 let pendingSkills: { skill: string; agentId?: string; args?: string }[] = []
 /** Dernière commande slash d'un skill : `command.run` précède `skill.prompt` et porte les arguments. */
 let lastCommand: { id: string; args: string; at: number } | null = null
+/** La même commande, pour l'auto : elle n'explique que le premier chargement de son skill (Claude prévenu de l'allumage). */
+let typedCommand: { id: string; at: number } | null = null
 let saveTimer: { cancel: () => void } | null = null
 let ticks = 0
 /** Le mod vient d'être rechargé (le board était déjà là au démarrage) : la réponse suivante de l'outil le dit. */
@@ -2956,6 +2958,124 @@ const autoConfirmedHere = async ($: any, board: Board | null): Promise<number | 
   return run ? await confirmedAtFor($, run, await hereId($)) : null
 }
 
+// ─── Claude prévenu de l'allumage ─────────────────────────────────────────
+//
+// Invariant : aucune étape de l'auto ne part d'un allumage avant que Claude en ait reçu la consigne
+// dans cette discussion ; une consigne qui ne passe pas laisse l'auto en pause, jamais en envoi.
+// Claude est prévenu par la consigne d'un skill qui porte le bloc du mode auto, ou par l'avis
+// « auto allumé » d'une réponse de l'outil, donné une fois par allumage. L'état vit en mémoire du mod
+// seulement : après `/reload-plugins` ou un redémarrage, Claude est prévenu une fois de plus.
+
+/**
+ * Les parcours dont Claude a reçu la consigne du mode auto : l'id du parcours, et la date du clic gardée
+ * ici (`confirmedAtFor`) de l'allumage pour lequel il l'a reçue. Un nouvel allumage a une autre date :
+ * Claude repart non prévenu.
+ */
+const briefedAt = new Map<string, number>()
+
+/** Claude a reçu la consigne de l'allumage en cours du parcours `run` (une date du clic gardée ici, la même). */
+const isBriefed = async ($: any, run: Run): Promise<boolean> => {
+  const at = await confirmedAtFor($, run, await hereId($))
+  return at !== null && briefedAt.get(run.id) === at
+}
+
+/**
+ * Claude vient de recevoir la consigne du mode auto de `run` : la coupure suivante lui sera dite
+ * (`autoNoted`, `AUTO_OFF_NOTICE`), et il est prévenu pour l'allumage en cours, seulement s'il est
+ * celui que la consigne visait (`expectedAt`, la date du clic de son envoi, quand elle est connue).
+ */
+const noteBriefed = async ($: any, run: Run, expectedAt?: number) => {
+  autoNoted.add(run.id)
+  const at = await confirmedAtFor($, run, await hereId($))
+  if (at !== null && (expectedAt === undefined || at === expectedAt)) briefedAt.set(run.id, at)
+}
+
+/**
+ * Ce que Claude fait de la consigne reçue en cours de phase, avant que flow-board envoie la suite. Les
+ * questions d'intention d'un cadrage restent à la personne, comme le dit le bloc du cadrage en auto.
+ */
+const AUTO_BRIEF_CORE =
+  'Before flow-board sends the next step, reread your last message to the user: each question still open that is of the six kinds below is a blocking question, to declare in "waiting"; settle each other open question with your recommended answer, declared ("origin": "recommendation"), except the intent questions of a framing (the goal, the scope, what is out of scope), which wait for the user\'s answer; send to the dashboard the work the user already agreed to that it does not show yet (tickets, groups).'
+
+/** Donnée en plein tour, par la réponse de l'outil : Claude déclare, puis poursuit la phase. */
+export const AUTO_BRIEF_IN_TURN = `${AUTO_BRIEF_CORE} Then go on with the current phase: never launch the next step yourself, flow-board sends it at the end of a turn once the phase is complete and nothing waits.`
+
+/** Donnée au repos, par le message du mod : Claude déclare, puis rend la main, sauf s'il reste à faire dans la phase. */
+export const AUTO_BRIEF_AT_REST = `${AUTO_BRIEF_CORE} Then end your turn, unless the current phase still has work for you, which you go on with: never launch the next step yourself, flow-board sends it at the end of a turn once the phase is complete and nothing waits.`
+
+/**
+ * La consigne d'un allumage pour la phase en cours de `run` : l'avis de la réponse de l'outil comme le
+ * message du mod. Elle part aussi après `/reload-plugins` ou un redémarrage, sans nouvel allumage : le
+ * texte ne dit pas que la personne vient de cliquer. L'id de la phase vient du fichier partagé : il
+ * n'entre dans le texte que s'il est celui d'un skill connu.
+ */
+const autoBriefLines = (run: Run, brief: string): string[] => {
+  const read = currentPhase(run).skill
+  // Une clé héritée (`constructor`) ne fait entrer aucun texte : seul l'id d'un skill connu sert.
+  const skill = Object.hasOwn(SKILLS, read) ? read : ''
+  const phase = skill !== '' ? ` (${skill})` : ''
+  return [`Auto mode is ON for this run now, and you have not received its instructions yet: it was lit, or flow-board was reloaded, while the current phase${phase} was under way. ${brief}`, ...autoNote(skill, run)]
+}
+
+/** L'avis « auto allumé » d'une réponse de l'outil, donné en cours de phase. */
+export const autoOnNotice = (run: Run): string => ['', '', '---', ...autoBriefLines(run, AUTO_BRIEF_IN_TURN)].join('\n')
+
+/** Le début fixe du message de consigne que le mod envoie à Claude au repos. */
+export const AUTO_BRIEF_HEAD = '⚡ flow-board: the auto mode instructions for this run, before it sends anything.'
+
+/** Le message que le mod envoie à Claude au repos : la même consigne, annoncée comme venant de flow-board. */
+export const autoBriefText = (run: Run): string => [AUTO_BRIEF_HEAD, ...autoBriefLines(run, AUTO_BRIEF_AT_REST)].join('\n')
+
+/** Le message de consigne en cours, soumis et pas encore revenu : l'id du parcours → la date du clic qu'il prévient. */
+const briefingAt = new Map<string, number>()
+
+/**
+ * Le message de consigne refusé : l'id du parcours → la date du clic. Plus aucun message pour cet
+ * allumage, même si la pause ne s'est pas écrite : un refus met en pause, il ne se réessaie pas (décision de Mathis).
+ */
+const refusedAt = new Map<string, number>()
+
+/** Le message parti d'un geste et entré : l'id du parcours → la date du clic ; la décision qui suit son tour vaut geste. */
+const gestureBriefAt = new Map<string, number>()
+
+/**
+ * Au repos (ou à la fin d'un tour où Claude n'a pas été prévenu), le mod envoie lui-même la consigne de
+ * l'allumage en cours, sans l'attendre : un message par allumage et par processus. Entré, Claude est
+ * prévenu pour cet allumage, et la fin du tour de ce message fait décider l'auto, comme tout tour
+ * répondu. Refusé, l'auto se met en pause « Claude pas prévenu » ; rien n'est marqué, rien ne part.
+ * Le message se reconnaît par la date posée avant l'appel, jamais par son texte.
+ */
+const sendBrief = ($: any, run: Run, at: number, isGesture: boolean) => {
+  if (briefingAt.get(run.id) === at || refusedAt.get(run.id) === at) return
+  // Un tour ouvert depuis la décision (un message de la personne) : rien ne part derrière lui, sa fin réévalue.
+  if (isTurnOpen) return
+  briefingAt.set(run.id, at)
+  void (async () => {
+    let isEntered = false
+    try {
+      const result = await $.prompt.submit({ text: autoBriefText(run) })
+      // Entré : un texte rendu, sans `drop` (absent ou `undefined`, que le type permet à un message entré).
+      isEntered = result !== null && typeof result === 'object' && typeof result.text === 'string' && result.drop === undefined
+    } catch {
+      isEntered = false
+    }
+    if (briefingAt.get(run.id) === at) briefingAt.delete(run.id)
+    if (isEntered) {
+      // Coupé ou rallumé pendant que le message attendait : il ne prévient pas l'allumage d'après.
+      await noteBriefed($, run, at)
+      // Parti d'un geste (le second clic, « ↻ Renvoyer ») : la décision qui suit son tour garde le sens
+      // du geste, et ne pose pas la pause « plus rien ne peut avancer sans toi » (la personne est là).
+      if (isGesture && briefedAt.get(run.id) === at) gestureBriefAt.set(run.id, at)
+      return
+    }
+    refusedAt.set(run.id, at)
+    // La pause ne vise que l'allumage que le message devait prévenir : coupé ou rallumé entre-temps, rien.
+    const now = await $.clock.now()
+    const isSameLighting = (await confirmedAtFor($, run, await hereId($))) === at
+    if (isSameLighting) await quietly(() => commit($, b => (activeRun(b)?.id === run.id ? stopActiveAuto(b, AUTO_STOPS.unbriefed, now) : null)))
+  })()
+}
+
 // ─── Envoi du mode auto ───────────────────────────────────────────────────
 //
 // À la fin d'un tour de la discussion qui porte le parcours (ni un sous-agent, ni un tour interrompu),
@@ -3066,7 +3186,8 @@ const unmarkAutoAction = async ($: any, action: AutoAction, at: number) => {
 }
 
 /**
- * L'auto, à la fin d'un tour : rien hors auto ici ; sinon relire le fichier, décider, marquer, écrire,
+ * L'auto, à la fin d'un tour : rien hors auto ici ; sinon relire le fichier, puis, Claude pas encore
+ * prévenu de l'allumage, lui envoyer la consigne et s'arrêter là ; prévenu, décider, marquer, écrire,
  * vérifier, envoyer. Une fin de tour qu'un nouveau tour a déjà suivie (un message de la personne) attend
  * la fin de celui-ci.
  */
@@ -3080,8 +3201,22 @@ const autoTurn = async ($: any, isGesture = false) => {
   try {
     if (isTurnOpen) return
     if (!(await isAutoHere($, await read($, boardAtom)))) return
-    // Relu juste avant : une lecture ratée éteint l'auto ici, et rien ne part.
+    // Relu juste avant : une lecture ratée éteint l'auto ici, et rien ne part, consigne comprise.
     if (!(await pull($))) return
+    // Claude pas encore prévenu de cet allumage : rien ne part, ni marque, ni pause (invariant ci-dessus) ;
+    // le mod lui envoie la consigne, sur le parcours relu, et la fin du tour de ce message fait décider l'auto.
+    const lit: Board | null = await read($, boardAtom)
+    const litRun = activeRun(lit)
+    if (!litRun || !(await isAutoHere($, lit))) return
+    if (!(await isBriefed($, litRun))) {
+      const at = await confirmedAtFor($, litRun, await hereId($))
+      if (at !== null) sendBrief($, litRun, at, isGesture)
+      return
+    }
+    // La première décision après un message parti d'un geste vaut geste : elle n'envoie que ce qui peut partir.
+    const gestureAt = gestureBriefAt.get(litRun.id)
+    gestureBriefAt.delete(litRun.id)
+    const isGestureNow = isGesture || (gestureAt !== undefined && gestureAt === briefedAt.get(litRun.id))
     const now = await $.clock.now()
     const decide = async () => {
       const board: Board | null = await read($, boardAtom)
@@ -3099,7 +3234,7 @@ const autoTurn = async ($: any, isGesture = false) => {
     }
     const { run, decision } = decided
     // Un geste (deux clics, « ↻ Renvoyer ») n'envoie que ce qui peut partir : la personne est là, et va répondre.
-    if (decision.kind === 'stop' && !(isGesture && decision.why !== AUTO_STOPS.unreadable)) await commit($, b => stopActiveAuto(b, decision.why, now))
+    if (decision.kind === 'stop' && !(isGestureNow && decision.why !== AUTO_STOPS.unreadable)) await commit($, b => stopActiveAuto(b, decision.why, now))
     if (decision.kind !== 'send') return
     const action = decision.action
     // Le texte d'abord, sur le parcours tel qu'il est : il fige la liste des groupes, leur effort et leur numéro d'envoi.
@@ -4091,7 +4226,8 @@ const actionsFor = ($: any): Actions => ({
     if (!fx) await forgetConfirm($, run.id, here)
     // Le parcours a bougé entre la lecture et l'écriture : la date gardée suit celle qui a été posée.
     else if (litAt !== undefined && litAt !== onAt && !(await writeConfirm($, run.id, here, litAt))) await commit($, board => switchOffAuto(board, litAt))
-    // Rallumé au repos (après une pause), la suite peut partir sans attendre une fin de tour.
+    // Allumé au repos : l'évaluation envoie à Claude la consigne de l'allumage (`sendBrief`), et la fin du tour
+    // de ce message fait décider la suite ; pendant un tour, la fin de ce tour le fait.
     if (fx) autoGestureAt = now
     if (fx && !isTurnOpen) scheduleAutoTurn($, true)
   },
@@ -4099,7 +4235,8 @@ const actionsFor = ($: any): Actions => ({
     const now = await $.clock.now()
     if (!(await commit($, board => resendAutoMark(board, runId, key, now)))) return
     autoGestureAt = now
-    // Au repos, l'auto renvoie tout de suite ; pendant un tour, à sa fin.
+    // Au repos, l'auto renvoie tout de suite, ou d'abord la consigne si Claude n'a pas reçu celle de
+    // l'allumage (`sendBrief`) ; pendant un tour, à sa fin.
     if (!isTurnOpen) scheduleAutoTurn($, true)
   },
   stopAuto: async () => {
@@ -4661,6 +4798,11 @@ export const register: Register = on => {
     hereCache = null
     // Les traces gardées ici se relisent de `$.store` : après /reload-plugins, comme un mod rechargé.
     ownTraceCache.clear()
+    // Claude prévenu de l'allumage : rien ne survit à un rechargement, il est prévenu une fois de plus (le sens sûr).
+    briefedAt.clear()
+    briefingAt.clear()
+    refusedAt.clear()
+    gestureBriefAt.clear()
     // L'id de ce processus pour la date du clic de l'auto, hors d'un dessin (où l'état ne s'écrit pas).
     await quietly(() => ensureBoot($))
     await ensureBoard($)
@@ -4785,11 +4927,22 @@ export const register: Register = on => {
     if (lost.length > 0 && sentence !== '') text = text.includes(sentence) ? text.replace(sentence, relayedSentence(input, lost)) : `${text} · ${relayedSentence(input, lost)}`
     text += startText
     // Coupé ou en pause depuis une consigne qui portait le bloc du mode auto : la réponse le dit une fois.
+    // Seulement à Claude, le fil principal : l'appel d'un sous-agent ne prévient pas Claude, ni ne consomme l'avis.
     const shown: Board | null = await read($, boardAtom)
-    const shownRun = shown?.delegate ? null : activeRun(shown)
-    if (shownRun && autoNoted.has(shownRun.id) && !(await isAutoHere($, shown))) {
+    const isMainLoop = e.agentId === undefined
+    const shownRun = shown?.delegate || !isMainLoop ? null : activeRun(shown)
+    const isShownAuto = shownRun !== null && (await isAutoHere($, shown))
+    if (shownRun && autoNoted.has(shownRun.id) && !isShownAuto) {
       autoNoted.delete(shownRun.id)
       text += AUTO_OFF_NOTICE
+    }
+    // Allumé en cours de phase, Claude pas encore prévenu : la réponse lui donne la consigne, une fois.
+    const shownAt = shownRun ? await confirmedAtFor($, shownRun, await hereId($)) : null
+    if (shownRun && isShownAuto && !(await isBriefed($, shownRun)) && briefingAt.get(shownRun.id) !== shownAt) {
+      // L'avis d'abord : un texte qui ne se construit pas (un titre relu qui n'est pas un texte) ne laisse pas Claude compté prévenu.
+      const notice = autoOnNotice(shownRun)
+      await noteBriefed($, shownRun)
+      text += notice
     }
     for (const note of notes) text += ` · Relayed, but ${note}: send your final report by SendMessage too.`
     if (moved !== undefined) text = `${moved} ${text}`
@@ -4812,6 +4965,7 @@ export const register: Register = on => {
   on('command.run', async ($, e, next) => {
     const id = e.command === 'flow' ? null : skillIdOf(e.command)
     if (id) lastCommand = { id, args: e.args, at: await $.clock.now() }
+    if (id) typedCommand = { id, at: lastCommand!.at }
     return next(e)
   })
 
@@ -4826,6 +4980,9 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const args =
       call?.args ?? (lastCommand !== null && lastCommand.id === id && now - lastCommand.at < 60_000 ? lastCommand.args : undefined)
+    // La commande tapée n'explique, pour l'auto, que le premier chargement de son skill, même sans consigne.
+    const isTyped = typedCommand !== null && typedCommand.id === id && now - typedCommand.at < 60_000
+    if (isTyped) typedCommand = null
     if (id === 'project:sync' && isMain) isRecheckAfterTurn = true
     // La rétro relit le transcript de la discussion si elle a été compactée, avec ou sans parcours.
     const tail = id === 'retro' && isMain ? await retroTail($) : ''
@@ -4850,8 +5007,21 @@ export const register: Register = on => {
     const failedAgents = run && noteId === 'compte-rendu' ? await failedOfRun($, run) : 0
     noteReferences($)
     const isAuto = await isAutoHere($, await read($, boardAtom))
-    if (isAuto && run) autoNoted.add(run.id)
-    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null, isAuto)}${tail}` } : withTail(result, tail)
+    // Claude n'est prévenu que par un texte qui reste dans le fil principal : un skill appelé par Claude
+    // lui-même (Skill, sans sous-agent) ou tapé par la personne, jamais un skill forké (`context: fork`,
+    // ou intégré à Claude Code comme /code-review, dont le moteur ne donne pas l'en-tête) ni un skill
+    // qu'aucun appel d'ici n'explique (préchargé dans un sous-agent).
+    const isForked = e.source === 'built-in' || e.frontmatter.context === 'fork'
+    const isInMainLoop = isMain && !isForked && (call !== undefined || isTyped)
+    // Le skill qui prévient Claude porte aussi la consigne de l'allumage : relire son dernier message,
+    // déclarer ses questions ouvertes, et le bloc de la phase en cours (pas seulement celui de ce skill).
+    let brief = ''
+    if (isAuto && run && isInMainLoop) {
+      // Le skill de la phase en cours porte déjà son bloc : il n'y manque que la consigne de relecture.
+      if (!(await isBriefed($, run))) brief = noteId === currentPhase(run).skill ? `\n${AUTO_BRIEF_IN_TURN}` : autoOnNotice(run)
+      await noteBriefed($, run)
+    } else if (isAuto && run) autoNoted.add(run.id)
+    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null, isAuto)}${brief}${tail}` } : withTail(result, tail)
   })
 
   // Ce qui se passe pendant un parcours : sous-agents, fichiers, commandes, Asana, questions.

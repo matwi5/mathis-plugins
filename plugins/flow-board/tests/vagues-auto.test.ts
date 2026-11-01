@@ -12,6 +12,8 @@ import type { Board } from '../types'
 const T0 = 140_000_000
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
+/** Le début du message de consigne que le mod envoie à Claude quand l'auto s'allume au repos. */
+const BRIEF = '⚡ flow-board: the auto mode instructions for this run'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
@@ -67,6 +69,8 @@ const world = (on: any) => {
   // `refusals` : les prochaines demandes du mod que le moteur ne fait pas entrer (un hook rend `drop`).
   const flags = { refusals: 0 }
   on('prompt.submit', (_$: unknown, e: { text: string; origin: any }) => {
+    // La consigne de l'allumage, que le mod envoie à Claude au repos : à part des demandes qu'il soumet.
+    if (e.text.startsWith(BRIEF)) return { text: e.text }
     texts.push({ text: e.text, origin: e.origin })
     if (flags.refusals > 0) {
       flags.refusals -= 1
@@ -305,6 +309,8 @@ test('Un groupe fini ici, sans session liée, a sa revue par /code-review, une f
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)
+  // Le second clic, au repos, envoie à Claude la consigne de l'allumage ; la fin du tour de ce message décide.
+  await turnEnd($, clock)
   expect(w.commands).toEqual(['code-review'])
   await turnEnd($, clock)
   expect(w.commands).toEqual(['code-review'])

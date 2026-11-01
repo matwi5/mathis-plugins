@@ -70,6 +70,8 @@ const world = (on: any) => {
   on('session.end', () => ({ sessionId: ids.now }))
   on('command.list', () => ({ value: [] }))
   on('prompt.fill', () => ({ isFilled: true }))
+  // Le message de consigne que le mod envoie au repos (mode auto allumé) entre dans la session.
+  on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   return { mem, disk, ids, unreadable }
 }
 type World = ReturnType<typeof world>

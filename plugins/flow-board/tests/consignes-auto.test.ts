@@ -44,6 +44,8 @@ const world = (on: any) => {
   on('session.end', () => ({ sessionId: ids.now }))
   on('command.list', () => ({ value: [] }))
   on('prompt.fill', () => ({ isFilled: true }))
+  // Le message de consigne que le mod envoie au repos (mode auto allumé) entre dans la session.
+  on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
   return { ids }

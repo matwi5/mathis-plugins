@@ -16,6 +16,8 @@ const T0 = 150_000_000
 const ROOT = '/proj'
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
+/** Le début du message de consigne que le mod envoie à Claude quand l'auto s'allume au repos. */
+const BRIEF = '⚡ flow-board: the auto mode instructions for this run'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
@@ -88,6 +90,8 @@ const world = (on: any, remote: { main: string } = { main: 'main' }) => {
     return { text: '' }
   })
   on('prompt.submit', (_$: unknown, e: { text: string }) => {
+    // La consigne de l'allumage, que le mod envoie à Claude au repos : à part des demandes qu'il soumet.
+    if (e.text.startsWith(BRIEF)) return { text: e.text }
     texts.push(e.text)
     return { text: e.text }
   })
@@ -160,7 +164,10 @@ const resumed = async ($: any, on: any, run: Run, o: { isAuto?: boolean; main?: 
   if (o.isAuto !== false) {
     await press($, 'auto-on')
     await press($, 'auto-confirm')
-    // Le second clic, au repos, fait évaluer l'auto tout de suite.
+    // Le second clic, au repos, envoie à Claude la consigne de l'allumage ; la fin du tour de ce message
+    // fait évaluer l'auto.
+    await settle(clock, 1)
+    await $.turn.complete({ answer: 'Rien d’ouvert.', durationMs: 10, isAborted: false, turnId: 'consigne', reason: 'answer' })
     await settle(clock, 1)
   }
   return { clock, answer: String(answer.result ?? ''), ...w }

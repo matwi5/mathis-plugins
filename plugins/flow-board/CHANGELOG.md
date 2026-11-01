@@ -4,6 +4,23 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.76.0 — 2026-11-01
+
+Le mode auto prévient Claude avant son premier envoi : allumé en cours de phase, il ne lance plus l'étape suivante tant que Claude n'a pas reçu sa consigne et déclaré ses questions ouvertes.
+
+### Ajouté
+- **Claude prévenu de l'allumage** : aucune étape ne part d'un allumage (le second clic, rallumage compris) avant que Claude en ait reçu la consigne : par un skill chargé dans son propre fil (appelé par Claude ou tapé, jamais forké, intégré à Claude Code ni préchargé dans un sous-agent), qui porte alors la consigne de relecture et le bloc de la phase en cours, ou par l'avis « auto allumé » de la réponse suivante de l'outil, donné une fois et à Claude seul. La consigne lui demande de relire son dernier message, de déclarer en `waiting` les questions ouvertes des six catégories, de trancher les autres par sa reco (sauf les questions d'intention d'un cadrage) et d'envoyer au tableau de bord le travail déjà accepté.
+- **Message de consigne au repos** : au second clic, à « ↻ Renvoyer » ou à la fin d'un tour où Claude n'a pas été prévenu, le mod lui envoie lui-même la consigne, un message par allumage ; la fin du tour de ce message fait décider l'auto. Parti d'un geste, cette décision n'envoie que ce qui peut partir, sans la pause « plus rien ne peut avancer sans toi ».
+- **Pause « Claude pas prévenu »** : un message de consigne refusé met l'auto en pause, avec sa notification ; deux clics le rallument.
+
+### Modifié
+- **Rallumé au repos** : l'auto n'envoie plus la suite tout de suite ; il prévient d'abord Claude. L'état « prévenu » vit en mémoire du mod : après `/reload-plugins`, Claude est prévenu une fois de plus.
+
+### Corrigé
+- **Avis « auto éteint »** : un appel de l'outil par un sous-agent ne le consomme plus ; il va à Claude.
+
+---
+
 ## 0.75.0 — 2026-11-01
 
 Revues moins chères là où elles suffisent, comptes de la passe « bogues » remontés des sessions liées, et un modèle allégé de son lien et de son relais.

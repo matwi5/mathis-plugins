@@ -3574,6 +3574,8 @@ export const AUTO_STOPS = {
   report: 'rapport prêt',
   quota: 'quota atteint',
   stuck: 'plus rien ne peut avancer sans toi',
+  /** Le message du mod qui donne à Claude la consigne de l'allumage n'est pas entré dans la session. */
+  unbriefed: 'Claude pas prévenu',
 } as const
 
 /** Les pauses déduites, sans écriture : l'auto reste allumé, mais cette discussion n'envoie pas. */

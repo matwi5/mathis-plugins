@@ -312,6 +312,8 @@ const world = (on: any, opts: { notifyFails?: boolean } = {}) => {
   on('session.end', () => ({ sessionId: 'sa' }))
   on('command.list', () => ({ value: [] }))
   on('prompt.fill', () => ({ isFilled: true }))
+  // Le message de consigne que le mod envoie au repos (mode auto allumé) entre dans la session.
+  on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   return { mem, disk, notified, tries }
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
