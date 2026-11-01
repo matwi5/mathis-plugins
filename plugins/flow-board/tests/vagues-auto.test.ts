@@ -125,6 +125,12 @@ const LOT = {
   ],
 }
 
+/** Le même lot, son groupe A à deux tickets : un groupe d'un seul ticket n'a pas de revue du groupe. */
+const LOT_A2 = {
+  tickets: [...LOT.tickets, { id: 'a2', name: 'Worker suite', files: ['src/a.ts'] }],
+  groups: [{ ...LOT.groups[0]!, tickets: ['a1', 'a2'] }, ...LOT.groups.slice(1)],
+}
+
 /**
  * Un parcours dont les tickets sont découpés en groupes, actif dans la discussion « sa », auto allumé
  * (ou non), la phase des tickets finie (`questions` : déclarées avant la fin du tour) : la carte « Ensuite »
@@ -209,9 +215,9 @@ test('Un groupe bloqué par une question reste de côté ; les autres partent', 
 })
 
 test('Au retour d’un groupe sans revue, la revue du groupe part une fois ; puis la revue de sécurité conseillée, une fois', { timeoutMs: 40000 }, async ($, on) => {
-  const { clock, ...w } = await implementing($, on)
+  const { clock, ...w } = await implementing($, on, LOT_A2)
   expect(w.texts.length).toBe(1)
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }], returned: ['A'] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'a2', status: 'done' }], returned: ['A'] } as any)
   await turnEnd($, clock)
   expect(w.texts.length).toBe(2)
   expect(w.texts[1]!.text).toContain('Fais faire la revue du groupe A (Worker)')
@@ -223,6 +229,18 @@ test('Au retour d’un groupe sans revue, la revue du groupe part une fois ; pui
   expect(w.texts[2]!.text).toContain('Lance la revue de sécurité du groupe A (Worker)')
   await turnEnd($, clock)
   expect(w.texts.length).toBe(3)
+})
+
+test('Au retour d’un groupe d’un seul ticket, aucune revue du groupe ne part ; sa sécurité conseillée part une fois', { timeoutMs: 40000 }, async ($, on) => {
+  const { clock, ...w } = await implementing($, on)
+  expect(w.texts.length).toBe(1)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }], returned: ['A'], security: { group: 'A', advised: true, why: 'un chemin construit' } } as any)
+  await turnEnd($, clock)
+  expect(w.texts.some(t => t.text.includes('Fais faire la revue du groupe A'))).toBe(false)
+  expect(w.texts.at(-1)!.text).toContain('Lance la revue de sécurité du groupe A (Worker)')
+  const count = w.texts.length
+  await turnEnd($, clock)
+  expect(w.texts.length).toBe(count)
 })
 
 test('Un groupe rendu avec des tickets ouverts repart une fois ; au troisième envoi qu’il faudrait, une question le bloque et l’auto se met en pause', { timeoutMs: 40000 }, async ($, on) => {
@@ -303,9 +321,9 @@ test('Tous les groupes rendus, relus et clos : l’auto lance le compte rendu, u
 })
 
 test('Un groupe fini ici, sans session liée, a sa revue par /code-review, une fois', { timeoutMs: 40000 }, async ($, on) => {
-  const lot = { tickets: LOT.tickets.slice(0, 2), groups: LOT.groups.slice(0, 2) }
+  const lot = { tickets: [...LOT.tickets.slice(0, 2), LOT_A2.tickets.at(-1)!], groups: LOT_A2.groups.slice(0, 2) }
   const { clock, ...w } = await implementing($, on, lot, { isAuto: false })
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'a2', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)

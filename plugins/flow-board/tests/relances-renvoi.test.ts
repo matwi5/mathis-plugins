@@ -106,15 +106,20 @@ const turnEnd = async ($: any, clock: { advance: (ms: number) => Promise<void> }
   await settle(clock, 1)
 }
 
-/** Deux groupes indépendants, A et B. */
+/**
+ * Deux groupes indépendants, A et B, de deux tickets chacun (a0 et b0 faits avec a1 et b1) : un groupe d'un seul
+ * ticket n'a pas de revue du groupe, et ces tests portent sur elle.
+ */
 const LOT = {
   tickets: [
+    { id: 'a0', name: 'Worker prép', files: ['src/a.ts'] },
     { id: 'a1', name: 'Worker', files: ['src/a.ts'] },
+    { id: 'b0', name: 'App prép', files: ['src/b.ts'] },
     { id: 'b1', name: 'App', files: ['src/b.ts'] },
   ],
   groups: [
-    { id: 'A', name: 'Worker', tickets: ['a1'], files: ['src/a.ts'] },
-    { id: 'B', name: 'App', tickets: ['b1'], files: ['src/b.ts'] },
+    { id: 'A', name: 'Worker', tickets: ['a0', 'a1'], files: ['src/a.ts'] },
+    { id: 'B', name: 'App', tickets: ['b0', 'b1'], files: ['src/b.ts'] },
   ],
 }
 
@@ -141,7 +146,7 @@ const keysOf = (w: World) => (w.stored()!.runs[0]!.autoSent ?? []).map(m => m.ke
 test('Le retrait par Claude d’une question « relance: » est refusé tant que le groupe attend sa relance ; la question reste ; ses tickets faits, il est accepté', { timeoutMs: 40000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on)
   expect(w.texts.length).toBe(1)
-  await $.tool.call({ tool: TOOL, set: [{ id: 'b1', status: 'done' }], returned: ['B'], reviewed: ['B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['B'], reviewed: ['B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
   await $.tool.call({ tool: TOOL, returned: ['A'] } as any)
   await turnEnd($, clock)
   await $.tool.call({ tool: TOOL, returned: ['A'] } as any)
@@ -154,7 +159,7 @@ test('Le retrait par Claude d’une question « relance: » est refusé tant que
   await settle(clock, 2)
   expect((w.stored()!.runs[0]!.waiting ?? []).map(q => q.id)).toEqual(['relance:A#3'])
   // Ses tickets faits à la main : le groupe n'attend plus de relance, le retrait est accepté.
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] } as any)
   const accepted = String((await $.tool.call({ tool: TOOL, waiting: [{ id: 'relance:A#3', answered: true }] } as any)).result)
   expect(accepted).not.toContain('still waits for its relaunch')
   await settle(clock, 2)
@@ -163,7 +168,7 @@ test('Le retrait par Claude d’une question « relance: » est refusé tant que
 
 test('Un groupe relu sans avis de sécurité envoyé : l’auto ne reste pas en cours en silence, il se met en pause « plus rien ne peut avancer sans toi » une fois la discussion au repos', { timeoutMs: 60000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on)
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
   await turnEnd($, clock)
   // Juste après la fin du tour : Claude peut encore envoyer l'avis au tour suivant.
   expect(autoOf(w)?.offAt).toBeUndefined()
@@ -175,7 +180,7 @@ test('Un groupe relu sans avis de sécurité envoyé : l’auto ne reste pas en 
 
 test('Un avis envoyé au tour suivant : pas de pause ; le lot clos, le compte rendu part', { timeoutMs: 60000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on)
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
   await turnEnd($, clock)
   await $.tool.call({ tool: TOOL, security: { group: 'A', advised: false, why: 'rien' } } as any)
   await turnEnd($, clock)
@@ -186,7 +191,7 @@ test('Un avis envoyé au tour suivant : pas de pause ; le lot clos, le compte re
 
 test('Un groupe fini ici avec une revue de sécurité conseillée et pas lancée : pause « plus rien ne peut avancer sans toi » au repos', { timeoutMs: 60000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on, { isAuto: false })
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)
@@ -205,7 +210,7 @@ test('Un groupe fini ici avec une revue de sécurité conseillée et pas lancée
 
 test('Une revue lancée dont le résultat n’est pas encore là n’est pas un blocage : l’auto l’attend sans se mettre en pause', { timeoutMs: 60000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on, { isAuto: false })
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await settle(clock, 1)
@@ -223,7 +228,7 @@ test('Un groupe gardé vide après un envoi annulé retient le lot : sans rien e
   let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   b = applyReport(b, LOT, T0 + 1).board
   b = startLinkedGroups(b, ['A', 'B'], T0 + 2)!.board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'] }, T0 + 3).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'] }, T0 + 3).board
   b = applyReport(b, { security: { group: 'A', advised: false, why: 'rien' } }, T0 + 4).board
   b = applyReport(b, { security: { group: 'B', advised: false, why: 'rien' } }, T0 + 5).board
   const over = activeRun(b)!
@@ -242,7 +247,7 @@ test('« ◆ Revue du groupe · session liée » pose la marque de l’auto, dé
   const { clock, ...w } = await implementing($, on)
   // L'auto coupé : le parcours a été en auto. A et B rendus finis, sans revue.
   await press($, 'auto-off')
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'] } as any)
   await press($, 'review-linked-A')
   await settle(clock, 2)
   expect(w.filled.at(-1)).toContain('Fais faire la revue du groupe A (Worker)')
@@ -261,7 +266,7 @@ test('« ◆ Revue du groupe · session liée » pose la marque de l’auto, dé
 test('« ⛨ Revue de sécurité » pose la marque de l’auto, démarrée : rallumé, l’auto demande la revue de sécurité de B, pas celle de A', { timeoutMs: 60000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on)
   await press($, 'auto-off')
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A', 'B'] } as any)
   await $.tool.call({ tool: TOOL, security: { group: 'A', advised: true, why: 'un chemin construit' } } as any)
   await $.tool.call({ tool: TOOL, security: { group: 'B', advised: true, why: 'un chemin construit' } } as any)
   await press($, 'security-group-A')
@@ -283,7 +288,7 @@ test('« ◆ Revue du groupe » des groupes finis ici pose la marque du /code-re
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await press($, 'auto-off')
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }] } as any)
   await press($, 'review-group-A')
   await settle(clock, 2)
   expect(w.filled.at(-1)).toContain('/code-review')
@@ -337,7 +342,7 @@ test('Un groupe renvoyé est relu sur son dernier envoi : la revue et la sécuri
   await settle(clock, 2)
   expect(groupOf(w, 'A').security).toBeUndefined()
   // Rendu fini : sa revue part, sous la clé de cet envoi, une fois.
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'], reviewed: ['B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
   await turnEnd($, clock)
   expect(w.texts.at(-1)).toContain('Fais faire la revue du groupe A (Worker)')
   expect(keysOf(w)).toContain('review:A#2')
@@ -361,21 +366,25 @@ const mixedBoard = (): Board => {
   b = applyReport(
     b,
     {
+      // Deux tickets par groupe, faits ensemble : un groupe d'un seul ticket n'a pas de revue du groupe.
       tickets: [
+        { id: 'a0', name: 'Un prép', files: ['a'] },
         { id: 'a1', name: 'Un', files: ['a'] },
+        { id: 'b0', name: 'Deux prép', files: ['b'] },
         { id: 'b1', name: 'Deux', files: ['b'] },
+        { id: 'c0', name: 'Trois prép', files: ['c'] },
         { id: 'c1', name: 'Trois', files: ['c'] },
       ],
       groups: [
-        { id: 'A', tickets: ['a1'], files: ['a'] },
-        { id: 'B', tickets: ['b1'], files: ['b'] },
-        { id: 'C', tickets: ['c1'], files: ['c'] },
+        { id: 'A', tickets: ['a0', 'a1'], files: ['a'] },
+        { id: 'B', tickets: ['b0', 'b1'], files: ['b'] },
+        { id: 'C', tickets: ['c0', 'c1'], files: ['c'] },
       ],
     },
     T0 + 1,
   ).board
   b = startLinkedGroups(b, ['A', 'B'], T0 + 2)!.board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }, { id: 'c1', status: 'done' }], returned: ['A'] }, T0 + 3).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'c0', status: 'done' }, { id: 'c1', status: 'done' }], returned: ['A'] }, T0 + 3).board
   return b
 }
 
@@ -396,7 +405,7 @@ test('« reviewed » et un avis de sécurité pour un groupe confié de nouveau 
   // A, rendu, rouvert puis confié de nouveau (envoi 2), ses tickets faits dans sa session : rien n'est posé sur lui.
   let b = applyReport(mixedBoard(), { set: [{ id: 'a1', status: 'todo' }] }, T0 + 4).board
   b = startLinkedGroups(b, ['A'], T0 + 5)!.board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }] }, T0 + 6).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] }, T0 + 6).board
   const out = applyReport(b, { reviewed: ['A'], security: { group: 'A', advised: false, why: 'du premier envoi' } }, T0 + 7)
   expect(out.text).toContain('group A is in a linked session again (send 2), not returned yet: send its review with its return')
   expect(out.text).toContain('security: group A is in a linked session again (send 2), not returned yet')
@@ -439,7 +448,7 @@ test('Un groupe relu ici puis confié pour la première fois perd sa revue et sa
   const run = newRun('implement', T0, 'Boutique')
   let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   b = applyReport(b, LOT, T0 + 1).board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }] }, T0 + 2).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] }, T0 + 2).board
   const r = activeRun(b)!
   b = { ...b, runs: [{ ...r, auto: { onAt: T0, onBy: 's' } }] }
   // Relu ici, sous la marque de la revue d'ici (unité #0), sa sécurité jugée inutile.
@@ -456,7 +465,7 @@ test('Un groupe relu ici puis confié pour la première fois perd sa revue et sa
   expect(a.security).toBeUndefined()
   expect(activeRun(b)!.log.some(l => l.text.includes('faites ici ne comptent plus'))).toBe(true)
   // Rendu fini : la revue de cet envoi (review:A#1) est demandée, pas confondue avec celle d'ici.
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, T0 + 8).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'] }, T0 + 8).board
   expect(autoDecision(activeRun(b)!, {}, false)).toMatchObject({ kind: 'send', action: { kind: 'review', key: 'review:A#1' } })
 })
 
@@ -465,7 +474,7 @@ const reviewedThenReopened = (): Board => {
   const run = newRun('implement', T0, 'Boutique')
   let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   b = applyReport(b, LOT, T0 + 1).board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }] }, T0 + 2).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] }, T0 + 2).board
   b = applySkill(b, 'code-review', { now: T0 + 3, isMain: true })!.board
   b = applyReport(b, { security: { group: 'A', advised: true, why: 'à voir' } }, T0 + 4).board
   return applyReport(b, { set: [{ id: 'a1', status: 'todo' }] }, T0 + 5).board
@@ -492,7 +501,7 @@ test('Un groupe relu ici puis confié : une revue ou un avis arrivés pendant l�
   // Pendant l'envoi : l'avis de la revue de sécurité d'ici, lancée avant, est refusé ; « reviewed » aussi.
   expectLateAdviceRefused(b, T0 + 7)
   // Au retour, l'avis de la session vaut, et la marque s'efface.
-  const back = applyReport(b, { set: [{ id: 'a1', status: 'done' }], returned: ['A'], security: { group: 'A', advised: true, findings: 1, fixed: 1 } }, T0 + 8).board
+  const back = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], security: { group: 'A', advised: true, findings: 1, fixed: 1 } }, T0 + 8).board
   expect(groupIn(back, 'A').security).toMatchObject({ isAdvised: true, findings: 1, fixed: 1 })
   expect(groupIn(back, 'A').delegated).toBeDefined()
   expect(groupIn(back, 'A').isReset).toBeUndefined()
@@ -525,7 +534,7 @@ test('Un groupe relu ici, confié puis annulé et fini ici, demande une nouvelle
   const run = newRun('implement', T0, 'Boutique')
   let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   b = applyReport(b, LOT, T0 + 1).board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }] }, T0 + 2).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] }, T0 + 2).board
   const r = activeRun(b)!
   b = { ...b, runs: [{ ...r, auto: { onAt: T0, onBy: 's' } }] }
   b = markAutoLaunched(b, hereReviewMark(activeRun(b)!), T0 + 3)!.board
@@ -534,7 +543,7 @@ test('Un groupe relu ici, confié puis annulé et fini ici, demande une nouvelle
   b = applyReport(b, { set: [{ id: 'a1', status: 'todo' }] }, T0 + 6).board
   b = startLinkedGroups(b, ['A'], T0 + 7)!.board
   b = cancelLinkedGroup(b, 'A', T0 + 8)!.board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }] }, T0 + 9).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] }, T0 + 9).board
   // L'effet : une nouvelle revue d'ici part, sous l'unité de l'envoi annulé.
   const decision = autoDecision(activeRun(b)!, {}, false)
   expect(decision).toMatchObject({ kind: 'send', action: { kind: 'command', key: 'review:A#1' } })
@@ -546,7 +555,7 @@ test('Une revue lancée qui nomme deux groupes finis ici les marque relus tous l
   const run = newRun('implement', T0, 'Boutique')
   let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   b = applyReport(b, { ...LOT, set: [] }, T0 + 1).board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }] }, T0 + 2).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }] }, T0 + 2).board
   const r = activeRun(b)!
   b = { ...b, runs: [{ ...r, auto: { onAt: T0, onBy: 's' }, queue: ['a1'] }] }
   // Sans marque, la file l'emporte : seul A est relu (le comportement d'avant).

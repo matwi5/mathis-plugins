@@ -4,15 +4,19 @@ Ce fichier est la méthode fixe que suit le sous-agent relecteur d'une revue de 
 
 Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de consignes (périmètre, fichier des choix déclarés, points réservés à la personne). Lis les deux, puis lance tout de suite la recherche (section 5) : ne relis pas le diff toi-même avant, c'est la sous-tâche de recherche qui le lit avec son contexte (une relecture préalable avait coûté 7 minutes sans rien changer à la suite).
 
-## 1. Choisir l'effort de la revue de sécurité (et de sa recherche)
+## 1. Quand une revue de sécurité tourne, et à quel effort
 
-`xhigh` coûte nettement plus que `high` : environ 2,5 fois medium contre 1,5 fois d'après la documentation de Claude, et 4,4 fois la durée de `high` sur une passe « bogues » mesurée. Ne le prendre que si l'un de ces cas est vrai.
-- **Enjeu** : le diff touche une zone où une faille coûte cher : authentification, permissions ou règles d'accès, secrets ou jetons, commande système ou chemin construit à partir d'une entrée, suppression de données, données personnelles ou contenu de messages enregistré sur disque.
+Une revue de sécurité ne se conseille que si les changements touchent une zone de cette liste, où une faille coûte cher : authentification ou permissions (règles d'accès comprises), secrets ou jetons, commande système ou chemin construit à partir d'une entrée, suppression de données, données personnelles ou contenu de messages enregistrés sur disque. La concurrence seule n'en fait pas partie : ses défauts relèvent de la passe « bogues » et de la revue du groupe, qui les trouvent. Hors de cette liste, l'avis est « revue jugée inutile » (`"advised": false`). Sur 1 041 sous-agents relus le 01/11/2026, les revues de sécurité n'avaient rendu de faille que là où le diff supprimait, ouvrait un accès ou construisait une commande.
+
+Elle tourne en `high`, recherche et vérifications comprises, en une seule passe : celui qui lance le relecteur lui passe `model: "opus"` et `effort: "high"`, et le relecteur passe le même à ses sous-tâches. Le relecteur écrit en tête de son rapport la zone de la liste qui a décidé la revue. Pour la juger, la liste des fichiers du diff suffit : pas de lecture du diff.
+
+### Critère d'effort de la passe « bogues » d'un ticket sensible
+
+Ce critère ne sert plus à la revue de sécurité, mais à la passe « bogues » d'un ticket sensible qui ne supprime pas de données et ne touche pas la concurrence (celle d'un ticket très sensible est en `xhigh`). `xhigh` coûte nettement plus que `high` : environ 2,5 fois medium contre 1,5 fois d'après la documentation de Claude, et 4,4 fois la durée de `high` sur une passe « bogues » mesurée. Ne le prendre que si l'un de ces cas est vrai.
+- **Enjeu** : le diff touche une zone de la liste ci-dessus.
 - **Taille** : le diff dépasse 400 lignes modifiées (comptées par `git diff --numstat`, sans tests, fichiers générés ni binaires) **et** touche des accès au réseau ou aux fichiers.
 
-Sinon `high` : petit diff, affichage, lecture de fichiers propres au plugin, réorganisation sans nouvelle entrée venue de l'extérieur. Dans le doute entre les deux, `high`. Le relecteur écrit en tête de son rapport l'effort choisi et le cas qui l'a décidé.
-
-Celui qui lance le relecteur lui passe cet effort (`model: "opus"`, `effort` choisi) ; le relecteur passe le même à sa sous-tâche de recherche ; ses sous-tâches de vérification tournent en `high`, même quand la recherche est en `xhigh` : `xhigh` sert à trouver, pas à confirmer (une revue de 51 minutes n'avait gardé aucune faille). Pour juger l'enjeu et la taille, la liste des fichiers du diff et `git diff --numstat` suffisent : pas de lecture du diff.
+Sinon `high` : petit diff, affichage, lecture de fichiers propres au plugin, réorganisation sans nouvelle entrée venue de l'extérieur. Dans le doute entre les deux, `high`.
 
 ## 2. Périmètre et contexte
 
@@ -71,7 +75,7 @@ Pour chaque faille qui reste, juge la qualité du signal : un chemin d'attaque c
 
 ## 5. Méthode en trois étapes
 
-1. **Recherche** : la première chose que fait le relecteur, sans relecture préalable du diff : une sous-tâche (outil Agent, `model: "opus"` et l'effort choisi, passés explicitement, description « Sécurité : recherche ») cherche les failles du diff avec tout ce fichier et le fichier de consignes. Elle rend chaque faille avec son `fichier:ligne`, sa catégorie, sa gravité et son scénario (garde, trou, source, effet : section 6).
+1. **Recherche** : la première chose que fait le relecteur, sans relecture préalable du diff : une sous-tâche (outil Agent, `model: "opus"` et l'effort `high`, passés explicitement, description « Sécurité : recherche ») cherche les failles du diff avec tout ce fichier et le fichier de consignes. Elle rend chaque faille avec son `fichier:ligne`, sa catégorie, sa gravité et son scénario (garde, trou, source, effet : section 6).
 2. **Vérification** : pour chaque faille trouvée de gravité **moyenne ou haute**, une sous-tâche de vérification (outil Agent, `model: "opus"` et l'effort `high`, passés explicitement, description « Sécurité : vérification <n> », <n> le rang de la faille), toutes lancées en parallèle dans un seul message. Une faille de gravité basse n'est pas vérifiée : elle va droit dans la liste « à surveiller » (vérifier des candidats déjà jugés bas coûtait des passes xhigh sans rien garder). Chaque sous-tâche essaie d'en faire un faux positif en relisant le code (exclusions, précédents, gardes existantes) et rend une note de confiance de 1 à 10 :
    - 1 à 3 : probablement un faux positif ;
    - 4 à 6 : à creuser ;
@@ -85,7 +89,7 @@ Gravité :
 
 ## 6. Rapport
 
-En tête : l'effort choisi et le cas qui l'a décidé (section 1), puis le périmètre relu.
+En tête : la zone de la liste qui a décidé la revue (section 1), puis le périmètre relu.
 
 Puis chaque faille gardée, numérotée F1, F2… :
 
@@ -102,7 +106,7 @@ Puis la liste « à surveiller » (notées 5 à 7, gravité basse non vérifiée
 
 ## 7. Après les correctifs de la revue du groupe
 
-Pas de seconde passe sur le diff des correctifs de la revue du groupe (une seconde passe de 33 minutes sur 111 lignes n'avait rien trouvé), sauf dans deux cas : ce diff touche une zone coûteuse de la section 1 (« Enjeu »), ou il dépasse 150 lignes modifiées hors tests (comptées par `git diff --numstat`, sans fichiers générés ni binaires). Alors une seule passe, en effort `high`, sans sous-tâches de vérification : le relecteur cherche lui-même dans ce seul diff et rend ses constats au format de la section 6, la note de confiance étant la sienne.
+Pas de seconde passe sur le diff des correctifs de la revue du groupe (une seconde passe de 33 minutes sur 111 lignes n'avait rien trouvé) : la revue de sécurité tourne une seule fois (Mathis, 01/11/2026).
 
 ## 8. Correctifs
 

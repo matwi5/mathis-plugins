@@ -68,6 +68,8 @@ test('/to-tickets fait dire à chaque ticket sa zone sensible et sa logique, et 
   world(on)
   const text = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
   expect(text).toContain('« Zone sensible : oui/non (pourquoi) »')
+  // Trois questions vérifient le classement ; le « pourquoi » y répond (un ticket mal classé était le premier manque des revues).
+  expect(text).toContain('its « pourquoi » answers three questions: does it build a command or a path from a value read elsewhere? does it write kept data that other discussions or sessions also write? does it delete data? A single yes makes the ticket sensitive at least; a yes to the second or the third makes it very sensitive, and its invariant is fixed at framing')
   expect(text).toContain('« Logique : oui/non »')
   expect(text).toContain('"sensitive": true|false')
   expect(text).toContain('"logic": true|false')

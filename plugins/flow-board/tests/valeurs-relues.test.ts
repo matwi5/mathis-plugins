@@ -133,12 +133,12 @@ const lotRun = (o: { isReturned?: boolean } = {}): Run => {
     board,
     {
       tickets: [
-        { id: 'a1', name: 'Worker', files: ['src/a.ts'] },
-        { id: 'b1', name: 'App', files: ['src/b.ts'] },
+        { id: 'a0', name: 'Worker prép', files: ['src/a.ts'] }, { id: 'a1', name: 'Worker', files: ['src/a.ts'] },
+        { id: 'b0', name: 'App prép', files: ['src/b.ts'] }, { id: 'b1', name: 'App', files: ['src/b.ts'] },
       ],
       groups: [
-        { id: 'A', name: 'Worker', tickets: ['a1'], files: ['src/a.ts'] },
-        { id: 'B', name: 'App', tickets: ['b1'], files: ['src/b.ts'] },
+        { id: 'A', name: 'Worker', tickets: ['a0', 'a1'], files: ['src/a.ts'] },
+        { id: 'B', name: 'App', tickets: ['b0', 'b1'], files: ['src/b.ts'] },
       ],
     },
     T0 + 1,
@@ -146,7 +146,7 @@ const lotRun = (o: { isReturned?: boolean } = {}): Run => {
   if (o.isReturned) {
     b = startLinkedGroups(b, ['A'], T0 + 2)!.board
     b = linkGroupSession(b, 'Boutique > Groupe A · Worker', 'local_ok1', T0 + 3)!.board
-    b = applyReport(b, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, T0 + 4).board
+    b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'] }, T0 + 4).board
   }
   return activeRun(b)!
 }

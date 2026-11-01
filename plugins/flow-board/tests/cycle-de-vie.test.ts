@@ -156,9 +156,10 @@ test('un groupe rendu par sa session liée propose de fermer sa session et son w
   await $.tool.call({ tool: START, title: 'Boutique › Groupe E · Enquêtes' } as any)
   await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['E'] } as any)
   for (let i = 0; i < 6; i++) await clock.advance(1000)
-  // Rendu sans revue : sa revue se fait dans sa session et son worktree, pas de fermeture avant.
+  // Rendu sans avis de sécurité : un groupe d'un seul ticket n'a pas de revue du groupe, mais pas de fermeture avant son avis.
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ key: 'review-linked-E' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^✓.revu par son ticket.·.avis de sécurité dû$/ })).toBeDefined()
+  expect(await ui.find({ key: 'review-linked-E' })).toBeUndefined()
   expect(await ui.find({ key: 'close-linked-E' })).toBeUndefined()
   await ui.unmount()
   await $.tool.call({ tool: TOOL, reviewed: ['E'], security: { group: 'E', advised: false, why: 'requêtes seules' } } as any)

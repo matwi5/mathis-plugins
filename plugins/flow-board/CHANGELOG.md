@@ -4,6 +4,22 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.78.0 — 2026-11-01
+
+Les revues d'un ticket suivent son niveau de sensibilité : moins de relectures en doublon, plus de xhigh d'office, et un classement vérifié deux fois.
+
+### Modifié
+- **Axe Spec seul pour un ticket sensible** : un ticket sensible ou très sensible (un ticket muet compte comme sensible) n'a plus l'axe Standards, que sa passe « bogues » refaisait ; il garde un relecteur de l'axe Spec seul, en high, nommé « Spec · <ticket> », d'après une variante du gabarit du relecteur. Un ticket hors zone sensible garde Standards+Spec en medium.
+- **Une seule passe après la passe « bogues »** : elle relit tout ce qui a changé depuis l'instantané (correctifs et ajouts), une fois les deux revues du ticket revenues, et elle est sautée si rien n'a changé ; une violation de l'invariant qu'elle trouve encore se corrige, s'écrit en test et devient une question, sans nouvelle passe. Le script d'instantané imprime la plage de cette passe.
+- **Classe de défaut** : trouvée une deuxième fois, elle se cherche partout et se corrige d'un coup, la recherche citée au compte rendu, sans passe de plus.
+- **Revue de sécurité** : elle ne se conseille que si le groupe touche une zone de la liste de sa méthode (authentification ou permissions, secrets ou jetons, commande ou chemin construit à partir d'une entrée, suppression, données personnelles ou contenu de messages sur disque ; pas la concurrence seule), et tourne en high, recherche et vérifications comprises, une seule fois : plus de seconde passe sur les correctifs de la revue du groupe. Le critère high ou xhigh ne sert plus qu'à la passe « bogues ».
+- **Groupe d'un seul ticket** : il n'a plus de revue du groupe, quels que soient ses drapeaux (ni bouton, ni envoi en auto) ; avec de la logique, en zone sensible ou muet, son avis de sécurité reste dû, jugé à la fin de son ticket, et le panneau l'affiche.
+
+### Ajouté
+- **Classement en trois questions** : `/to-tickets` fait répondre la ligne « Zone sensible » à trois questions (commande ou chemin construit à partir d'une valeur lue ailleurs, données gardées écrites aussi par d'autres, suppression) ; la session les repose avant chaque ticket et ne redescend jamais un niveau. Une session liée qui reclasse un ticket corrige sa ligne et le dit par une note ; la discussion principale renvoie le ticket avec `"sensitive": true`.
+
+---
+
 ## 0.77.0 — 2026-11-01
 
 Un lot lancé sans groupes, dans la discussion du parcours, se fait exactement comme un groupe : même procédure, même revue du lot, même avis de sécurité, même relance de l'auto. Le lien entre une session liée et son groupe est durci, et les consignes de cadrage et les scripts de session s'étoffent.

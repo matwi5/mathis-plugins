@@ -184,6 +184,13 @@ test('Dans un dépôt, la fermeture commence par la vérification de core.fsmoni
 // Invariant : une valeur relue invalide (relais ou tableau de bord) ne rend jamais un groupe
 // « tranché », « clos » ni « à fermer » : dans le doute, il reste ouvert, et la réponse le dit.
 
+/** Le même lot, le groupe A à deux tickets (t4 déjà fait) : un groupe d'un seul ticket n'a pas de revue du groupe. */
+const linkedLotA2 = (): Board => {
+  const withT4 = applyReport(lot(), { tickets: [{ id: 't4', name: 'Quatre', status: 'done' }] }, T0 + 1.5).board
+  const board = applyReport(withT4, { groups: [{ id: 'A', tickets: ['t1', 't4'] }, { id: 'B', tickets: ['t2', 't3'] }] }, T0 + 2).board
+  return startLinkedGroups(board, ['A'], T0 + 3)!.board
+}
+
 /** Le groupe A rendu par sa session liée, relu, son ticket fait : seule sa sécurité décide. */
 const returnedLot = (relay?: Relay, base: Board = linkedLot()): Board => {
   let board = applyReport(base, { set: [{ id: 't1', status: 'done' }] }, T0 + 4).board
@@ -365,7 +372,7 @@ test('Un « fixed » relayé hors forme sans « findings » garde le groupe ouve
 })
 
 test('Des dates et des liens relus abîmés ne rendent jamais un groupe relu, ni à fermer, ni ne font tomber la réponse', () => {
-  const settled = applyReport(returnedLot(), { security: { group: 'A', advised: false } }, T0 + 6).board
+  const settled = applyReport(returnedLot(undefined, linkedLotA2()), { security: { group: 'A', advised: false } }, T0 + 6).board
   // L'effet d'abord : le groupe est à fermer.
   expect(closingText(activeRun(settled)!, null, true)).toContain('Close now: group A (A) is closed')
   const withA = (patch: (g: Record<string, any>) => void): Run => {
@@ -698,14 +705,14 @@ test('Une session précédente à la fermeture relue hors forme n’est ni relan
 })
 
 test('Une date de revue relue hors forme se remplace par « reviewed », et une revue relayée hors forme ne compte pas', () => {
-  const board = returnedLot()
+  const board = returnedLot(undefined, linkedLotA2())
   const b = JSON.parse(JSON.stringify(board)) as Board
   ;(activeRun(b)!.groups!.find(g => g.id === 'A') as any).reviewedAt = 'x'
   const out = applyReport(b, { reviewed: ['A'], security: { group: 'A', advised: false } }, T0 + 9)
   expect(activeRun(out.board)!.groups!.find(g => g.id === 'A')!.reviewedAt).toBe(T0 + 9)
   expect(out.text).toContain('Close now: group A (A) is closed')
   // Au retour, une date de revue relayée hors forme ne vaut pas une revue.
-  const linked = linkedLot()
+  const linked = linkedLotA2()
   const id = activeRun(linked)!.id
   let relay = applyRelay(undefined, id, 'fa', { kind: 'start', group: 'A' }, T0 + 3.5)!
   relay = applyRelay(relay, id, 'fa', { kind: 'review' }, T0 + 3.6)!

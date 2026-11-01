@@ -31,6 +31,7 @@ import {
   type GroupPlan,
   type GroupView,
   isPickable,
+  isNoLogicGroup,
   isTicketReviewEnough,
   isLotReviewEnough,
   isLotSecurityDue,
@@ -1097,8 +1098,9 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
             (hasGroupReview(g.group) ? (
               T(k, `✓${NB}revu`, { color: C.green, bold: true })
             ) : isTicketReviewEnough(run, run.groups?.find(x => x.id === g.group.id) ?? g.group) ? (
-              // Aucun ticket sensible ni avec logique : les revues des tickets suffisent, sans revue de sécurité.
-              T(k, `✓${NB}revu par ${g.group.tickets.length > 1 ? 'ses tickets' : 'son ticket'}`, { color: C.green, bold: true })
+              // Aucun ticket sensible ni avec logique, ou un seul ticket : les revues des tickets suffisent (l'avis de sécurité d'un groupe d'un ticket reste dû).
+              // Un groupe d'un seul ticket avec logique, sensible ou muet : son avis de sécurité reste dû, la ligne le dit.
+              T(k, `✓${NB}revu par ${g.group.tickets.length > 1 ? 'ses tickets' : 'son ticket'}${g.group.security === undefined && !isNoLogicGroup(run, run.groups?.find(x => x.id === g.group.id) ?? g.group) ? `${NB}·${NB}avis de sécurité dû` : ''}`, { color: C.green, bold: true })
             ) : g.group.delegated !== undefined ? (
               // Fait par une session liée : ici la branche est fusionnée, la revue se fait là-bas.
               <Button key={`review-linked-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · session liée`} onPress={() => act.reviewLinkedGroup(g.group.id)} />

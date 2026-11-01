@@ -24,14 +24,14 @@ const PANE = {
 
 const LOT = {
   tickets: [
-    { id: 'a1', name: 'Code', files: ['a'] },
-    { id: 'b1', name: 'Doc', files: ['b'] },
-    { id: 'c1', name: 'Ici', files: ['c'] },
+    { id: 'a0', name: 'Code prép', files: ['a'] }, { id: 'a1', name: 'Code', files: ['a'] },
+    { id: 'b0', name: 'Doc prép', files: ['b'] }, { id: 'b1', name: 'Doc', files: ['b'] },
+    { id: 'c0', name: 'Ici prép', files: ['c'] }, { id: 'c1', name: 'Ici', files: ['c'] },
   ],
   groups: [
-    { id: 'A', name: 'Alpha', tickets: ['a1'], files: ['a'] },
-    { id: 'B', name: 'Bêta', tickets: ['b1'], files: ['b'] },
-    { id: 'C', name: 'Gamma', tickets: ['c1'], files: ['c'] },
+    { id: 'A', name: 'Alpha', tickets: ['a0', 'a1'], files: ['a'] },
+    { id: 'B', name: 'Bêta', tickets: ['b0', 'b1'], files: ['b'] },
+    { id: 'C', name: 'Gamma', tickets: ['c0', 'c1'], files: ['c'] },
   ],
 }
 
@@ -46,7 +46,7 @@ const REPO = { isRepo: true }
 /** A et B confiés à des sessions liées (ids relevés), puis rendus ; rien d'autre. */
 const returned = (): Board => {
   let b = startLinkedGroups(boardWith(LOT), ['A', 'B'], 3_000)!.board
-  b = applyReport(b, { set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'] }, 4_000, REPO).board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'] }, 4_000, REPO).board
   return b
 }
 /** A rendu, relu, sécurité jugée inutile : clos. B rendu, sans revue. */
@@ -122,9 +122,9 @@ test('« stopped » retire le groupe de la liste jusqu’à un appel qui le touc
   const stopped = applyReport(closable(), { closed: [{ group: 'A', state: 'stopped', why: 'fichier ignoré .env' }] }, 6_000, REPO).board
   const text = (board: Board, input: Record<string, unknown>, at: number) => applyReport(board, input, at, REPO).text
   expect(text(stopped, { note: 'point' }, 7_000)).not.toContain('Close now: group A')
-  expect(text(stopped, { set: [{ id: 'b1', status: 'done' }] }, 7_000)).not.toContain('Close now: group A')
+  expect(text(stopped, { set: [{ id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }] }, 7_000)).not.toContain('Close now: group A')
   for (const touch of [
-    { set: [{ id: 'a1', status: 'done' }] },
+    { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] },
     { review: { standards: 0, spec: 0, fixed: 0 } },
     { reviewed: ['A'] },
     { security: { group: 'A', findings: 1, fixed: 1 } },
@@ -173,7 +173,7 @@ test('un groupe fermé puis confié de nouveau : pas « à fermer » pendant que
   expect(during).not.toContain('Not closed yet: group A')
   // Rendu : une autre session, à fermer à son tour ; la fermeture de la précédente reste notée. La revue
   // et l'avis de sécurité du premier envoi ne comptent plus : ce nouvel envoi reçoit les siens.
-  const back = applyReport(again, { set: [{ id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'rien de sensible' } }, 7_000, REPO)
+  const back = applyReport(again, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'rien de sensible' } }, 7_000, REPO)
   expect(groupOf(back.board, 'A').delegated!.closing).toBeUndefined()
   expect(groupOf(back.board, 'A').delegated!.earlier).toMatchObject([{ closing: { state: 'closed', sessionId: '00000000-0000-4000-8000-0000000000aa' } }])
   // La copie d'avant le retour, fusionnée sur celle d'après qui a pris la place : l'ancien lien reste fermé.
@@ -212,7 +212,7 @@ test('un groupe re-confié dont la session précédente n’est pas fermée : l�
   const busy = applyRelay(relay, runId, 'fa', { kind: 'note', text: 'correctif' }, 4_500)!
   expect(applyReport(again, { note: 'point' }, 5_100, { ...REPO, relay: busy }).text).not.toContain('Close now: the previous linked session of group A (Alpha)')
   // Rendue de nouveau : l'ancien lien passe dans « earlier », toujours à fermer.
-  const back = applyReport(again, { set: [{ id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false } }, 6_000, REPO)
+  const back = applyReport(again, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false } }, 6_000, REPO)
   expect(groupOf(back.board, 'A').delegated!.earlier).toEqual([{ at: first.at }])
   expect(back.text).toContain('Close now: the previous linked session of group A (Alpha)')
   expect(back.text).toContain('Close now: group A (Alpha) is closed')
@@ -310,7 +310,7 @@ test('la ligne d’un groupe rendu et relu : rien tant que rien n’est tenté, 
   // Le texte de délégation demande la fermeture après le retour.
   expect(filled.at(-1)).toContain('Enfin, un groupe clos (« Close now » dans la réponse de l’outil) se ferme selon sa procédure, puis {"closed": [...]}.')
   await $.tool.call({ tool: START, title: 'Boutique > Groupe A · Alpha' } as any)
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'texte seul' } } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'texte seul' } } as any)
   const rendered = async (surface: 'terminal' | 'desktop') => {
     for (let i = 0; i < 6; i++) await clock.advance(1000)
     const u = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
@@ -377,7 +377,7 @@ test('les envois d’un groupe sont numérotés : le premier garde son nom, les 
   // La précédente se ferme sous son nom à elle ; la nouvelle, rendue, sous le sien.
   const during = applyReport(again, { note: 'point' }, 5_100, REPO).text
   expect(during).toContain('worktree-groupe-lot-A (lancée par le CLI), groupe-lot-A ou claude/groupe-lot-A-<suffixe>')
-  const back = applyReport(again, { set: [{ id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false } }, 6_000, REPO)
+  const back = applyReport(again, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false } }, 6_000, REPO)
   expect(groupOf(back.board, 'A').delegated).toMatchObject({ at: 5_000, seq: 2, earlier: [{ at: 3_000 }] })
   expect(back.text).toContain('worktree-groupe-lot-A-2 (lancée par le CLI), groupe-lot-A-2 ou claude/groupe-lot-A-2-<suffixe>')
   // Troisième envoi : -3, même quand la deuxième est fermée.
@@ -393,7 +393,7 @@ test('les envois d’un groupe sont numérotés : le premier garde son nom, les 
   expect(during3).toContain('Close now: the previous linked session of group A (Alpha)')
   expect(during3).toContain('worktree-groupe-lot-A-2 (lancée par le CLI)')
   expect(during3).toContain('« Lot > Groupe A (envoi 2) · »')
-  expect(applyReport(third, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 8_000, REPO).board.runs[0]!.groups!.find(g => g.id === 'A')!.delegated!.earlier).toMatchObject([{ at: 3_000 }, { at: 5_000, seq: 2 }])
+  expect(applyReport(third, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'] }, 8_000, REPO).board.runs[0]!.groups!.find(g => g.id === 'A')!.delegated!.earlier).toMatchObject([{ at: 3_000 }, { at: 5_000, seq: 2 }])
 })
 
 test('le numéro d’envoi d’un groupe ne recule jamais : un envoi annulé le garde, un plan renvoyé aussi ; un numéro illisible ne sert pas', () => {

@@ -24,14 +24,14 @@ const runOf = (board: Board) => activeRun(board)!
 const SERVICE = ['Service macOS du porteur']
 const SHARED = {
   tickets: [
-    { id: 'a1', name: 'File' },
-    { id: 'b1', name: 'Lots', blockedBy: ['a1'] },
-    { id: 'c1', name: 'Prompts' },
+    { id: 'a0', name: 'File prép' }, { id: 'a1', name: 'File' },
+    { id: 'b0', name: 'Lots prép', blockedBy: ['a1'] }, { id: 'b1', name: 'Lots', blockedBy: ['a1'] },
+    { id: 'c0', name: 'Prompts prép' }, { id: 'c1', name: 'Prompts' },
   ],
   groups: [
-    { id: 'A', name: 'File', tickets: ['a1'], resources: SERVICE },
-    { id: 'B', name: 'Lots', tickets: ['b1'], resources: SERVICE },
-    { id: 'C', name: 'Prompts', tickets: ['c1'], resources: SERVICE },
+    { id: 'A', name: 'File', tickets: ['a0', 'a1'], resources: SERVICE },
+    { id: 'B', name: 'Lots', tickets: ['b0', 'b1'], resources: SERVICE },
+    { id: 'C', name: 'Prompts', tickets: ['c0', 'c1'], resources: SERVICE },
   ],
 }
 
@@ -42,14 +42,14 @@ test('la suite recommandée suit les groupes : le prochain, l’attente d’une 
   board = startLinkedGroups(board, ['A'], 3_000)!.board
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'linked', groups: ['A'] })
   // A rendu sans revue : le suivant est prêt, et la revue de A ne se propose pas à sa place.
-  board = report(board, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 4_000)
+  board = report(board, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'] }, 4_000)
   expect(nextLaunchFor(runOf(board))).toMatchObject({ kind: 'group', isDelegable: true })
   expect([suggestionsFor(runOf(board)).primary, ...suggestionsFor(runOf(board)).others]).not.toContain('final-review')
   // Un ticket en cours ici : rien d'autre ne part.
   board = report(board, { set: [{ id: 'b1', status: 'doing' }] }, 5_000)
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'busy', groups: ['B'] })
   // Tout fait : il manque les revues ; ni groupe ni compte rendu.
-  board = report(board, { set: [{ id: 'b1', status: 'done' }, { id: 'c1', status: 'done' }] }, 6_000)
+  board = report(board, { set: [{ id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }, { id: 'c0', status: 'done' }, { id: 'c1', status: 'done' }] }, 6_000)
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'review', groups: ['A', 'B', 'C'] })
   expect(suggestionsFor(runOf(board)).primary).not.toBe('compte-rendu')
   // Toutes relues : la carte revient aux skills, le compte rendu en tête.
@@ -60,14 +60,14 @@ test('la suite recommandée suit les groupes : le prochain, l’attente d’une 
 
 test('des groupes indépendants : la suite recommandée est le lot parallèle', () => {
   const board = boardWith({
-    tickets: [{ id: 'x1', name: 'Un', files: ['app'] }, { id: 'y1', name: 'Deux', files: ['worker'] }],
-    groups: [{ id: 'X', name: 'App', tickets: ['x1'] }, { id: 'Y', name: 'Worker', tickets: ['y1'] }],
+    tickets: [{ id: 'x0', name: 'Un prép', files: ['app'] }, { id: 'x1', name: 'Un', files: ['app'] }, { id: 'y0', name: 'Deux prép', files: ['worker'] }, { id: 'y1', name: 'Deux', files: ['worker'] }],
+    groups: [{ id: 'X', name: 'App', tickets: ['x0', 'x1'] }, { id: 'Y', name: 'Worker', tickets: ['y0', 'y1'] }],
   })
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'parallel', groups: ['X', 'Y'] })
 })
 
 test('un groupe rendu par sa session liée avant la 0.39.0 retrouve sa trace dans le journal', () => {
-  const board = report(boardWith(SHARED), { set: [{ id: 'a1', status: 'done' }, { id: 'c1', status: 'done' }] }, 3_000)
+  const board = report(boardWith(SHARED), { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'c0', status: 'done' }, { id: 'c1', status: 'done' }] }, 3_000)
   const run: Run = runOf(board)
   run.log.push(
     { at: 2_500, glyph: '↗', text: 'Groupe A confié à une session liée', tone: 'info' },
@@ -94,7 +94,7 @@ test('le panneau : « Ensuite » propose le groupe suivant, sans /code-review ni
   })
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: TOOL, ...SHARED } as any)
-  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] } as any)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     // A, fait ici, garde sa revue sur sa ligne ; la carte propose B (ou C), par session liée seulement.
@@ -114,7 +114,7 @@ test('le panneau : « Ensuite » propose le groupe suivant, sans /code-review ni
 
 test('des revues qui manquent, tickets faits : pas de skill pour suite (ni /implement ni compte rendu)', () => {
   let board = boardWith(SHARED)
-  board = report(board, { set: ['a1', 'b1', 'c1'].map(id => ({ id, status: 'done' })) }, 3_000)
+  board = report(board, { set: ['a0', 'a1', 'b0', 'b1', 'c0', 'c1'].map(id => ({ id, status: 'done' })) }, 3_000)
   expect(suggestionsFor(runOf(board)).primary).toBeNull()
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'review', groups: ['A', 'B', 'C'] })
 })

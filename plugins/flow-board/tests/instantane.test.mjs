@@ -60,6 +60,26 @@ test('l’instantané fige les seuls fichiers du ticket sur sa référence, sans
   }
 })
 
+test('un second instantané du même ticket donne la plage de la passe qui suit la passe « bogues »', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T08', 'a.txt').status, 0)
+    const first = git(dir, 'rev-parse', 'refs/worktree/flow-board/T08')
+    // Les correctifs de la passe « bogues » : l'instantané se repose, et la sortie donne first..second.
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket corrigé\n')
+    const out = snap(dir, 'T08', 'a.txt')
+    assert.equal(out.status, 0, out.stderr)
+    const second = git(dir, 'rev-parse', 'refs/worktree/flow-board/T08')
+    assert.notEqual(second, first)
+    assert.match(out.stdout, new RegExp(`Passe après la passe « bogues » : plage ${first}\\.\\.${second}`))
+    assert.doesNotMatch(out.stdout, /Plage des revues/)
+    assert.equal(git(dir, 'diff', '--name-only', `${first}..${second}`), 'a.txt')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('une suppression du ticket entre dans l’instantané', () => {
   const dir = repo()
   try {

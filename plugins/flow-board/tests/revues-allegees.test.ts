@@ -42,38 +42,44 @@ const withOther = (input: { tickets: object[]; groups: object[] }) => ({
 })
 
 // Un groupe d'un seul ticket sans logique (une icône) avait eu quatre revues Opus en cascade, la
-// revue du groupe relisant le même diff que celle du ticket.
-test('un groupe d’un seul ticket ni sensible ni avec logique n’attend pas de revue du groupe ; avec de la logique, si', () => {
-  const icon = boardWith(
-    withOther({
-      tickets: [{ id: 'i1', name: 'Icône', status: 'done', sensitive: false, logic: false }],
-      groups: [{ id: 'I', name: 'Icône', tickets: ['i1'] }],
-    }),
-  )
-  expect(needsReview(activeRun(icon)!)).toBe(false)
+// revue du groupe relisant le même diff que celle du ticket ; depuis le 01/11/2026, un groupe d'un seul
+// ticket n'a plus de revue du groupe, quels que soient ses drapeaux (son avis de sécurité reste dû).
+test('un groupe d’un seul ticket n’attend pas de revue du groupe ; un groupe de deux tickets avec de la logique, si', () => {
+  for (const flags of [
+    { sensitive: false, logic: false },
+    { sensitive: false, logic: true },
+    { sensitive: true, logic: false },
+    {},
+  ]) {
+    const single = boardWith(
+      withOther({
+        tickets: [{ id: 'c1', name: 'Route', status: 'done', ...flags }],
+        groups: [{ id: 'C', name: 'Route', tickets: ['c1'] }],
+      }),
+    )
+    expect(needsReview(activeRun(single)!)).toBe(false)
+  }
   const code = boardWith(
     withOther({
-      tickets: [{ id: 'c1', name: 'Route', status: 'done', sensitive: false, logic: true }],
-      groups: [{ id: 'C', name: 'Route', tickets: ['c1'] }],
+      tickets: [
+        { id: 'c1', name: 'Route', status: 'done', sensitive: false, logic: true },
+        { id: 'c2', name: 'Vue', status: 'done', sensitive: false, logic: false },
+      ],
+      groups: [{ id: 'C', name: 'Route', tickets: ['c1', 'c2'] }],
     }),
   )
   expect(needsReview(activeRun(code)!)).toBe(true)
-  // Sans avis sur le ticket, la revue du groupe reste due.
+  // Sans avis sur un ticket, la revue d'un groupe de deux reste due.
   const silent = boardWith(
     withOther({
-      tickets: [{ id: 's1', name: 'Sans avis', status: 'done' }],
-      groups: [{ id: 'S', name: 'Sans avis', tickets: ['s1'] }],
+      tickets: [
+        { id: 's1', name: 'Sans avis', status: 'done' },
+        { id: 's2', name: 'Doc', status: 'done', sensitive: false, logic: false },
+      ],
+      groups: [{ id: 'S', name: 'Sans avis', tickets: ['s1', 's2'] }],
     }),
   )
   expect(needsReview(activeRun(silent)!)).toBe(true)
-  // Sensible, même sans logique : la revue du groupe reste due.
-  const sensitive = boardWith(
-    withOther({
-      tickets: [{ id: 'p1', name: 'Purge', status: 'done', sensitive: true, logic: false }],
-      groups: [{ id: 'P', name: 'Purge', tickets: ['p1'] }],
-    }),
-  )
-  expect(needsReview(activeRun(sensitive)!)).toBe(true)
 })
 
 const world = (on: any) => {
@@ -98,14 +104,15 @@ test('le groupe d’une icône finie s’affiche relu par la revue de son ticket
     tickets: [
       { id: 'i1', name: 'Icône', sensitive: false, logic: false },
       { id: 'c1', name: 'Route', sensitive: false, logic: true },
+      { id: 'c2', name: 'Vue', sensitive: false, logic: true },
     ],
     groups: [
       { id: 'I', name: 'Icône', tickets: ['i1'] },
-      { id: 'C', name: 'Route', tickets: ['c1'] },
+      { id: 'C', name: 'Route', tickets: ['c1', 'c2'] },
     ],
   } as any)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, set: [{ id: 'i1', status: 'done' }, { id: 'c1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'i1', status: 'done' }, { id: 'c1', status: 'done' }, { id: 'c2', status: 'done' }] } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui.find({ key: 'review-group-I' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /^✓.revu par son ticket$/ })).toBeDefined()
@@ -118,14 +125,25 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   mock.store(on)
   world(on)
   const implement = await groupedImplement($)
-  // Un seul relecteur pour les deux axes, quelle que soit la taille : il lit CODING_STANDARDS.md, compte ses Mineurs.
-  expect(implement).toContain('both axes in a single reviewer subagent (Agent tool, model opus, effort medium, or high when the ticket touches a sensitive area, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail')
+  // Un ticket hors zone sensible : un seul relecteur pour les deux axes, en medium, quelle que soit la taille ;
+  // il lit CODING_STANDARDS.md et compte ses Mineurs.
+  expect(implement).toContain('for a ticket outside sensitive areas, both axes in a single reviewer subagent (Agent tool, model opus, effort medium, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail')
+  // Un ticket sensible ou très sensible : l'axe Standards fait doublon avec sa passe « bogues » ; l'axe Spec seul, en high.
+  expect(implement).toContain('for a sensitive ticket (one that did not say counts as sensitive), the Spec axis alone, without the Standards axis that its bug pass duplicates, in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly) filled from the Spec-only variant of the reviewer template; it does not judge the code against CODING_STANDARDS.md, and its counts go with "standards": 0')
+  expect(implement).toContain('"Spec · <ticket>" for the Spec axis alone of a sensitive ticket')
+  expect(implement).not.toContain('or high when the ticket touches a sensitive area')
+  // Après la passe « bogues » : une seule passe high sur tout ce qui a changé depuis son instantané ; une
+  // violation qu'elle trouve encore se corrige, se teste et part en question, sans nouvelle passe ; sa plage va
+  // du premier instantané à un nouveau, posé après les correctifs.
+  expect(implement).toContain('give that pass the range <first snapshot hash>..<new snapshot hash>')
+  expect(implement).toContain('After the bug pass, a single further pass at high effort reads everything changed since its snapshot, its fixes and any code added after it')
+  expect(implement).toContain('if that pass still finds a breach of the invariant, fix it, write the scenario as a test and ask the user, without another pass')
+  // Une classe de défaut trouvée une deuxième fois se cherche partout et se corrige d'un coup, recherche citée.
+  expect(implement).toContain('a defect class found a second time is searched everywhere: quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it')
   expect(implement).not.toContain('under 100 changed lines')
   // La revue de sécurité, en lecture seule, part avec la revue du groupe ; pas de seconde passe sur ses
-  // correctifs, sauf zone coûteuse ou plus de 150 lignes hors tests, et alors une passe high sans vérifications.
-  expect(implement).toContain('Revue du groupe (')
-  expect(implement).toContain('in the same message as the group review')
-  expect(implement).toContain("no second pass on the diff of the group review's fixes, unless it touches a costly area of the method file (its section 1) or exceeds 150 changed lines outside tests; then a single pass at high effort, without verification subtasks")
+  // correctifs : la revue de sécurité tourne une seule fois (Mathis, 01/11/2026).
+  expect(implement).toContain("no second pass on the diff of the group review's fixes: the security review runs once")
   expect(implement).not.toContain('the diff of those fixes only')
   // La recherche part d'abord, et seuls les candidats moyens ou hauts sont vérifiés.
   expect(implement).toContain('the search starts at once, without a reading of the diff beforehand')
@@ -149,15 +167,17 @@ test('le bouton de revue d’un groupe sensible met /code-review high sans --fix
     tool: TOOL,
     tickets: [
       { id: 'p1', name: 'Purge', sensitive: true, logic: true },
+      { id: 'p2', name: 'Purge suite', sensitive: false, logic: true },
       { id: 'c1', name: 'Route', sensitive: false, logic: true },
+      { id: 'c2', name: 'Vue', sensitive: false, logic: true },
     ],
     groups: [
-      { id: 'P', name: 'Purge', tickets: ['p1'] },
-      { id: 'C', name: 'Route', tickets: ['c1'] },
+      { id: 'P', name: 'Purge', tickets: ['p1', 'p2'] },
+      { id: 'C', name: 'Route', tickets: ['c1', 'c2'] },
     ],
   } as any)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, set: [{ id: 'p1', status: 'done' }, { id: 'c1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'p1', status: 'done' }, { id: 'p2', status: 'done' }, { id: 'c1', status: 'done' }, { id: 'c2', status: 'done' }] } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Button', text: /^◆.Revue du groupe$/ })).toBeDefined()
   await ui.press({ key: 'review-group-P' })
@@ -219,9 +239,12 @@ test('un groupe sans ticket sensible, enregistré ni rattaché, garde --fix part
   expect(commandArgsOf(run, 'final-review')).toBe('high --fix')
 })
 
-/** Le parcours du groupe D fini, sa date de revue relue telle quelle, en pause au stockage. */
+/**
+ * Le parcours du groupe D fini, sa date de revue relue telle quelle, en pause au stockage ; avec un second
+ * ticket que le plan lui rattache, car un groupe d'un seul ticket n'a pas de revue du groupe.
+ */
 const storedD = (reviewedAt: unknown): Board => {
-  const b = finishedD()
+  const b = finishedD([{ id: 'd2', name: 'Doc', status: 'done', sensitive: false, logic: true, blockedBy: ['d1'] }])
   const run = activeRun(b)!
   const groups = run.groups!.map(g => (g.id === 'D' ? { ...g, reviewedAt } : g))
   return { ...b, runs: [{ ...run, status: 'paused', owner: undefined, groups } as Run], activeId: null }
@@ -229,7 +252,7 @@ const storedD = (reviewedAt: unknown): Board => {
 
 test('les faits du compte rendu ne disent un groupe relu que pour une date de revue valide', () => {
   for (const reviewedAt of [null, 'hier', -5]) expect(reportFacts(storedD(reviewedAt).runs[0]!).join('\n')).not.toContain('reviewed by /code-review')
-  expect(reportFacts(storedD(5_000).runs[0]!).join('\n')).toContain('D (Code): 1/1 done, reviewed by /code-review')
+  expect(reportFacts(storedD(5_000).runs[0]!).join('\n')).toContain('D (Code): 2/2 done, reviewed by /code-review')
 })
 
 // Une date de revue hors forme ne compte pas pour la logique (`isGroupReviewed`) : le panneau non plus.

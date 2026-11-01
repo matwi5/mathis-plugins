@@ -617,13 +617,13 @@ export const groupTicketsOf = (run: Run): ReadonlyMap<string, readonly string[]>
 
 /**
  * Un groupe dont chaque ticket est dit ni sensible ni avec logique (des documents, une icône, une
- * règle qui ne fait rien lancer) : les revues de ses tickets sont ses seules revues, sans revue du groupe ni revue de
- * sécurité (`closeMissing`). Invariant : un groupe dont un ticket a de la logique, une zone sensible,
- * ou ne dit pas l'un des deux, n'est jamais réputé relu ni de sécurité tranchée sans sa revue du
- * groupe et son avis de sécurité ; un groupe vide, ou qui cite un ticket inconnu, non plus. Ses
- * tickets sont aussi ceux que le plan lui rattache (`attachLoose`), comme le panneau les montre.
+ * règle qui ne fait rien lancer) : ni revue du groupe ni revue de sécurité, sa sécurité est réputée
+ * tranchée sans avis (`closeMissing`). Invariant : un groupe dont un ticket a de la logique, une zone
+ * sensible, ou ne dit pas l'un des deux, n'est jamais réputé de sécurité tranchée sans un avis de
+ * sécurité envoyé ; un groupe vide, ou qui cite un ticket inconnu, non plus. Ses tickets sont aussi
+ * ceux que le plan lui rattache (`attachLoose`), comme le panneau les montre.
  */
-export const isTicketReviewEnough = (run: Run, group: TicketGroup): boolean => {
+export const isNoLogicGroup = (run: Run, group: TicketGroup): boolean => {
   if (group.tickets.length === 0) return false
   return groupTicketIds(run, group).every(id => {
     const ticket = run.tickets.find(t => sameTicket(t.id, id))
@@ -631,7 +631,22 @@ export const isTicketReviewEnough = (run: Run, group: TicketGroup): boolean => {
   })
 }
 
-/** Un groupe relu : par /code-review, ou par les revues de ses tickets quand aucun n'a de logique ni de zone sensible. */
+/** Un groupe d'un seul ticket connu, rattachés compris : sa revue du groupe relirait le diff de son ticket. */
+const isSingleTicketGroup = (run: Run, group: TicketGroup): boolean => {
+  const ids = groupTicketIds(run, group)
+  return ids.length === 1 && run.tickets.some(t => sameTicket(t.id, ids[0]!))
+}
+
+/**
+ * Les revues des tickets suffisent pour la revue du groupe : un groupe sans logique ni zone sensible,
+ * ou un groupe d'un seul ticket quels que soient ses drapeaux (Mathis, 01/11/2026 : sa revue du groupe
+ * relisait le même diff). Invariant : un groupe de deux tickets ou plus, rattachés compris, n'est
+ * jamais réputé relu sans sa revue du groupe s'il a un ticket avec de la logique, en zone sensible ou
+ * muet ; l'avis de sécurité, lui, reste dû hors d'un groupe sans logique (`isNoLogicGroup`).
+ */
+export const isTicketReviewEnough = (run: Run, group: TicketGroup): boolean => isNoLogicGroup(run, group) || isSingleTicketGroup(run, group)
+
+/** Un groupe relu : par /code-review, ou par les revues de ses tickets (groupe sans logique ni zone sensible, ou d'un seul ticket). */
 export const isGroupReviewed = (run: Run, g: TicketGroup): boolean => hasGroupReview(g) || isTicketReviewEnough(run, g)
 
 /** Un groupe fini attend encore sa revue. */
@@ -684,7 +699,7 @@ export const LOT_PLAN_NOTICE =
 
 /**
  * Un lot sans groupes dispensé de revue et de sécurité : chacun de ses tickets dit ni sensible ni avec
- * logique, la règle d'un groupe sans logique (`isTicketReviewEnough`). Un lot vide, ou dont un ticket
+ * logique, la règle d'un groupe sans logique (`isNoLogicGroup`). Un lot vide, ou dont un ticket
  * ne dit pas l'un des deux, ne l'est jamais.
  */
 export const isLotReviewEnough = (run: Run): boolean => run.tickets.length > 0 && run.tickets.every(t => t.sensitive === false && t.logic === false)
@@ -838,7 +853,7 @@ const markSecured = (run: Run, now: number): string[] => {
   const finished = groups.filter(g => g.linked === undefined && g.security?.ranAt === undefined && isGroupDone(run, g))
   // Un groupe sans logique ni zone sensible, sans avis, n'a pas de revue de sécurité : il n'est visé
   // que s'il est le seul fini (sinon des comptes jamais envoyés retiendraient sa fermeture).
-  const needed = finished.filter(g => !(g.security === undefined && isTicketReviewEnough(run, g)))
+  const needed = finished.filter(g => !(g.security === undefined && isNoLogicGroup(run, g)))
   const due = needed.length > 0 ? needed : finished
   const pick = (list: TicketGroup[]) => {
     const fromQueue = list.filter(g => g.tickets.some(id => queue.includes(id)))
@@ -2647,7 +2662,7 @@ const closeMissing = (run: Run, g: TicketGroup): string[] => {
   const sec = g.security
   // Sans logique ni zone sensible et sans aucun envoi de sécurité, sa sécurité est réputée tranchée ;
   // un envoi explicite, lui, l'emporte (Mathis, 30/10/2026) : rien ne se ferme plus tôt qu'avant.
-  if (sec === undefined && isTicketReviewEnough(run, g)) return missing
+  if (sec === undefined && isNoLogicGroup(run, g)) return missing
   if (sec && typeof sec === 'object' && hasUnreadableCounts(sec)) {
     missing.push(
       `its security counts read back out of form (${unreadableCounts(sec).join(', ')}; each must be a whole number from 0 to ${BUGS_MAX}): send {"security": {"group": ${asciiJson(g.id)}, "findings": <kept findings>, "fixed": <fixed>}} again, with "dismissed" if some are left unfixed (an unreadable "dismissed" not sent again counts as 0)`,
@@ -5291,7 +5306,7 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
       const sec = securityText(g.security)
       // « relu » seulement pour un groupe fini, rattachés compris : une date posée recompte une fois le groupe fini.
       const isDone = isGroupDone(run, g)
-      return `${shownGroupId(g.id)} (${shownGroupName(g.name)}): ${done}/${total} done${isDone && hasGroupReview(g) ? ', reviewed by /code-review' : isDone && isTicketReviewEnough(run, g) ? `, reviewed by its ticket reviews (no logic, not sensitive)${g.security === undefined ? ', no group review nor security review needed' : ''}` : ''}${sec ? `, ${sec}` : ''}`
+      return `${shownGroupId(g.id)} (${shownGroupName(g.name)}): ${done}/${total} done${isDone && hasGroupReview(g) ? ', reviewed by /code-review' : isDone && isNoLogicGroup(run, g) ? `, reviewed by its ticket reviews (no logic, not sensitive)${g.security === undefined ? ', no group review nor security review needed' : ''}` : isDone && isTicketReviewEnough(run, g) ? `, reviewed by its ticket review (a group of one ticket)${g.security === undefined ? ', its security advice still due' : ''}` : ''}${sec ? `, ${sec}` : ''}`
     }
     lines.push(`- Groups, each usually run in its own discussion: ${groups.map(state).join('; ')}. Report every group, not only the one of this discussion: write « Fait » group by group.`)
   }

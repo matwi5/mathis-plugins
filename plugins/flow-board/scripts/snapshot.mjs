@@ -70,13 +70,23 @@ export const snapshot = (ticket, files, cwd = process.cwd()) => {
   return pose(cwd, ticket, ours)
 }
 
-/** Écrit l'arbre de l'index et un commit hors branche, puis pose la référence du ticket. */
+/**
+ * Écrit l'arbre de l'index et un commit hors branche, puis pose la référence du ticket. Une référence
+ * déjà posée (l'instantané de la passe « bogues ») est rendue dans `previous` : la passe qui la suit
+ * relit `previous..commit`, ce qui a changé depuis, pas tout le ticket.
+ */
 const pose = (cwd, ticket, files) => {
   const tree = git(cwd, ['write-tree'])
   const commit = git(cwd, ['commit-tree', tree, '-p', 'HEAD', '-m', `flow-board snapshot ${ticket}`])
   const ref = `refs/worktree/flow-board/${ticket}`
+  let previous = null
+  try {
+    previous = git(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+  } catch {
+    previous = null
+  }
   git(cwd, ['update-ref', ref, commit])
-  return { commit, ref, files }
+  return { commit, ref, files, previous }
 }
 
 /**
@@ -166,9 +176,10 @@ const main = argv => {
     }
     const isStaged = argv[0] === '--staged'
     const [ticket, ...files] = isStaged ? argv.slice(1) : argv
-    const { commit, ref, files: kept } = isStaged ? snapshotStaged(ticket, files) : snapshot(ticket, files)
+    const { commit, ref, files: kept, previous } = isStaged ? snapshotStaged(ticket, files) : snapshot(ticket, files)
     console.log(`Instantané ${commit} posé sur ${ref} (${kept.length} fichier${kept.length > 1 ? 's' : ''} : ${kept.join(', ')}).`)
-    console.log(`Plage des revues : ${ref}^..${ref} ; un fichier se lit par git show ${ref}:<chemin>.`)
+    if (previous) console.log(`Passe après la passe « bogues » : plage ${previous}..${commit} (ce qui a changé depuis l'instantané précédent) ; un fichier se lit par git show ${ref}:<chemin>.`)
+    else console.log(`Plage des revues : ${ref}^..${ref} ; un fichier se lit par git show ${ref}:<chemin>.`)
     console.log(`Après la revue et le vrai commit du ticket : git update-ref -d ${ref}`)
     return 0
   } catch (err) {

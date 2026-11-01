@@ -68,6 +68,61 @@ test('un groupe d’un seul ticket sans logique ni zone sensible garde sa revue 
   expect(closingText(run, null, true)).toContain('Close now: group D (Règles) is closed')
 })
 
+// Un groupe d'un seul ticket : sa revue du groupe relisait le même diff que celle de son ticket
+// (Mathis, 01/11/2026). Invariant : un groupe de deux tickets ou plus n'est jamais réputé relu sans sa
+// revue du groupe, et un groupe dont un ticket a de la logique, une zone sensible ou ne dit pas l'un des
+// deux n'est jamais réputé de sécurité tranchée sans un avis de sécurité envoyé.
+test('un groupe d’un seul ticket, quels que soient ses drapeaux, est relu par la revue de son ticket ; son avis de sécurité reste dû', () => {
+  const cases: Flags[] = [{ sensitive: true, logic: false }, { sensitive: false, logic: true }, { sensitive: true, logic: true }, { logic: false }, {}]
+  for (const odd of cases) {
+    const b = returned([odd])
+    const run = runOf(b)
+    expect(isGroupReviewed(run, groupD(b))).toBe(true)
+    expect(needsReview(run)).toBe(false)
+    const text = closingText(run, null, true)
+    expect(text).not.toContain('its group review')
+    expect(text).toContain('group D (Règles) lacks: the security advice')
+    expect(isCloseCandidate(run, groupD(b))).toBe(false)
+    expect(reportFacts(run).join('\n')).toContain('D (Règles): 1/1 done, reviewed by its ticket review (a group of one ticket)')
+    // L'avis « inutile » le clôt ; un avis « conseillée » attend sa revue de sécurité.
+    const judged = applyReport(b, { security: { group: 'D', advised: false, why: 'ni accès ni suppression' } }, 5_000).board
+    expect(closingText(runOf(judged), null, true)).toContain('Close now: group D (Règles) is closed')
+    const advised = applyReport(b, { security: { group: 'D', advised: true, why: 'une suppression' } }, 5_000).board
+    expect(closingText(runOf(advised), null, true)).toContain('group D (Règles) lacks: the security review it was advised')
+  }
+})
+
+test('l’invariant : un groupe qui passe à deux tickets par le plan n’est plus relu ; un ticket inconnu seul ne l’est jamais', () => {
+  const one = returned([{ sensitive: false, logic: true }])
+  // Le plan renvoyé ajoute un ticket au groupe : il redevient un groupe de deux, qui attend sa revue du groupe.
+  const two = applyReport(
+    one,
+    { tickets: [{ id: 'd2', name: 'Règle 2', sensitive: false, logic: false, status: 'done' }], groups: [{ id: 'D', name: 'Règles', tickets: ['d1', 'd2'] }, { id: 'E', name: 'Code', tickets: ['e1'] }] },
+    4_500,
+  ).board
+  expect(isGroupReviewed(runOf(two), groupD(two))).toBe(false)
+  expect(closingText(runOf(two), null, true)).toContain('group D (Règles) lacks: its group review')
+  // Un groupe qui ne cite qu'un ticket inconnu n'est ni relu ni de sécurité tranchée.
+  const ghost = { ...groupD(one), tickets: ['zz9'] }
+  expect(isGroupReviewed(runOf(one), ghost)).toBe(false)
+  // Le même plan renvoyé, ou le parcours relu du disque : l'avis de sécurité reste dû, jamais réputé tranché.
+  const resent = applyReport(one, { groups: [{ id: 'D', name: 'Règles', tickets: ['d1'] }, { id: 'E', name: 'Code', tickets: ['e1'] }] }, 4_600).board
+  const reread = JSON.parse(JSON.stringify(resent)) as Board
+  for (const b of [resent, reread]) {
+    expect(closingText(runOf(b), null, true)).toContain('group D (Règles) lacks: the security advice')
+    expect(isCloseCandidate(runOf(b), groupD(b))).toBe(false)
+  }
+})
+
+test('les faits du compte rendu ne disent l’avis d’un groupe d’un seul ticket dû que tant qu’il n’est pas envoyé', () => {
+  const one = returned([{ sensitive: false, logic: true }])
+  expect(reportFacts(runOf(one)).join('\n')).toContain('reviewed by its ticket review (a group of one ticket), its security advice still due')
+  const judged = applyReport(one, { security: { group: 'D', advised: false, why: 'rien de sensible' } }, 5_000).board
+  const facts = reportFacts(runOf(judged)).join('\n')
+  expect(facts).toContain('reviewed by its ticket review (a group of one ticket)')
+  expect(facts).not.toContain('its security advice still due')
+})
+
 test('un envoi de sécurité explicite l’emporte : le groupe attend que cette sécurité soit tranchée', () => {
   const advised = applyReport(returned([LIGHT, LIGHT]), { security: { group: 'D', advised: true, why: 'un chemin lu ailleurs' } }, 5_000).board
   expect(isCloseCandidate(runOf(advised), groupD(advised))).toBe(false)

@@ -130,14 +130,15 @@ export const hintOf = (s: StepDef, isRepo: boolean): string => (isRepo ? s.hint 
 
 /** Ce qui justifie une revue de sécurité (lu par Claude). */
 export const SECURITY_CRITERIA =
-  'authentication, permissions or access rules, user input reaching a query, a path or HTML, secrets or tokens, network or file access, uploads, dependencies'
+  'authentication or permissions, secrets or tokens, a command or a path built from an input, data deletion, personal data or message content stored on disk; concurrency alone does not call for it'
 
 /**
- * La seconde passe de sécurité, sur le seul diff des correctifs de la revue du groupe (lu par
- * Claude) : 33 min et 4 agents xhigh pour 0 faille sur 111 lignes (rétro de l'onglet Agents).
+ * Pas de seconde passe de sécurité sur le diff des correctifs de la revue du groupe (lu par Claude) :
+ * 33 min et 4 agents xhigh pour 0 faille sur 111 lignes (rétro de l'onglet Agents), et la revue de
+ * sécurité tourne une seule fois (Mathis, 01/11/2026).
  */
 export const securityFixesPass = (unit: 'group' | 'lot'): string =>
-  `no second pass on the diff of the ${unit} review's fixes, unless it touches a costly area of the method file (its section 1) or exceeds 150 changed lines outside tests; then a single pass at high effort, without verification subtasks`
+  `no second pass on the diff of the ${unit} review's fixes: the security review runs once`
 export const SECURITY_FIXES_PASS = securityFixesPass('group')
 
 /**
@@ -249,9 +250,12 @@ export const TICK_CRITERIA =
  * `CODING_STANDARDS.md`. Ses Mineurs se rendent en un compte : leur détail ne servait pas. En medium
  * hors zone sensible (Mathis, 01/11/2026) : ces axes ne cherchent pas les bogues, et la revue du
  * groupe, en high, rattrape ce qui naît entre deux tickets ; high coûte environ 1,5 fois medium.
+ * Un ticket sensible n'a que l'axe Spec, en high (Mathis, 01/11/2026) : sur 1 041 sous-agents relus,
+ * l'axe Standards y refaisait la passe « bogues » (77 % de doublons), l'axe Spec gardait ses constats.
  */
 export const TICKET_REVIEWER =
-  'both axes in a single reviewer subagent (Agent tool, model opus, effort medium, or high when the ticket touches a sensitive area, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail'
+  'for a ticket outside sensitive areas, both axes in a single reviewer subagent (Agent tool, model opus, effort medium, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail; ' +
+  'for a sensitive ticket (one that did not say counts as sensitive), the Spec axis alone, without the Standards axis that its bug pass duplicates, in a single reviewer subagent (Agent tool, model opus, effort high, passed explicitly) filled from the Spec-only variant of the reviewer template; it does not judge the code against CODING_STANDARDS.md, and its counts go with "standards": 0'
 
 /**
  * Les noms des relecteurs (description de l'appel Agent), tels que l'onglet Agents les montre : la
@@ -260,16 +264,18 @@ export const TICKET_REVIEWER =
  * commande, prennent la même forme dans la frise (`reviewForkName`).
  */
 export const REVIEWER_NAMES =
-  'give each reviewer subagent you launch a standard description, the name the Agents tab shows: "Standards+Spec · <ticket>" for the two axes of a ticket, <ticket> being the group letter and the ticket\'s rank in its group (E2), or the ticket id in a lot without groups; "Sécurité · groupe <letter>" for a security reviewer ("Sécurité · lot" without groups); never the level nor the effort, which the tab shows apart'
+  'give each reviewer subagent you launch a standard description, the name the Agents tab shows: "Standards+Spec · <ticket>" for the two axes of a ticket, <ticket> being the group letter and the ticket\'s rank in its group (E2), or the ticket id in a lot without groups; "Spec · <ticket>" for the Spec axis alone of a sensitive ticket; "Sécurité · groupe <letter>" for a security reviewer ("Sécurité · lot" without groups); never the level nor the effort, which the tab shows apart'
 
 /**
  * Un groupe sans logique ni zone sensible (des documents, une icône, une règle qui ne fait rien lancer ;
  * une règle commune, une référence ou un skill a toujours de la logique) : les revues de ses
  * tickets sont ses seules revues, sans revue du groupe ni revue de sécurité. Un ticket qui a de la
- * logique, une zone sensible, ou ne dit pas l'un des deux, les rend dues.
+ * logique, une zone sensible, ou ne dit pas l'un des deux, les rend dues, sauf dans un groupe d'un
+ * seul ticket (Mathis, 01/11/2026) : sa revue du groupe relisait le diff de son ticket, et seul son
+ * avis de sécurité reste dû.
  */
 export const NO_LOGIC_GROUP =
-  'A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing; a common rule, a reference file or a skill always has logic) has neither a group review nor a security review: its ticket reviews are its only reviews, the dashboard shows it reviewed and its security settled, and no security advice is sent for it; a single ticket with logic, in a sensitive area, or that did not say, makes the group review and the security advice due'
+  'A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing; a common rule, a reference file or a skill always has logic) has neither a group review nor a security review: its ticket reviews are its only reviews, the dashboard shows it reviewed and its security settled, and no security advice is sent for it; a single ticket with logic, in a sensitive area, or that did not say, makes the group review and the security advice due. A group of a single ticket (attached ones included) has no group review either, whatever its flags: the dashboard shows it reviewed by its ticket review and nothing sends its group review; when that ticket has logic, a sensitive area or did not say, its security advice is still due: its linked session (or you, for a group done in this discussion) judges it at the end of its ticket, against the list of the security method, and sends it in "security"'
 
 /**
  * L'instantané d'un ticket sensible avant sa passe « bogues » (Mathis, L2 a de la rétro de l'onglet
@@ -284,7 +290,7 @@ export const TICKET_SNAPSHOT =
 
 /** La consigne de la revue d'un ticket, pour un point fixe donné ; sans git, la passe « bogues » n'a pas de plage. */
 const ticketReviewHint = (fixedPoint: string, isRepo: boolean): string =>
-  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}), its Standards and Spec axes, ${TICKET_REVIEWER}; for a ticket with a « Lecteur » line, the content and form review too ("Content and form review" below). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the effort criterion of the security review method file decides (the stakes, the size), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
+  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}): ${TICKET_REVIEWER}; for a ticket with a « Lecteur » line, the content and form review too ("Content and form review" below). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), or the ticket did not say, launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the bug pass effort criterion of the security review method file decides (its section 1: the stakes, the size; high when in doubt), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. After the bug pass, a single further pass at high effort reads everything changed since its snapshot, its fixes and any code added after it (${isRepo ? "note the hash the bug pass's snapshot printed, pin a new snapshot once the fixes are in and both reviews of the ticket are back (the same command, which moves the ref and prints that range), and give that pass the range <first snapshot hash>..<new snapshot hash>" : "copy the ticket's files once more when its bug pass is launched; that pass reads the difference between that copy and the current files"}), skipped when nothing changed since the snapshot; what it finds without breaking the invariant goes to the report under « Pistes »; if that pass still finds a breach of the invariant, fix it, write the scenario as a test and ask the user, without another pass. Whatever the review, a defect class found a second time is searched everywhere: quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
 
 /** Le point fixe d'une revue de ticket. */
 export const TICKET_FIXED_POINT = 'fixed point: the commit before the ticket'
@@ -314,8 +320,8 @@ export const NO_GIT_COPIES =
   "Without git: this project is not a git repository, so no commit marks where a ticket starts. Before touching the first file of a ticket, copy the files it will change into the session's temporary folder (its absolute path, as for the shell rule: printenv CLAUDE_JOB_DIR, or else the temporary or scratchpad folder your instructions give), one subfolder per ticket keeping the path in the project (<temporary folder>/<ticket id>/<path in the project>). A ticket's fixed point is its copy; a group's fixed point is, file by file, the oldest copy among its tickets (a file only a later ticket touched has no copy from the first one). The reviews read a unified diff of the copy against the current file (git diff --no-index <copy> <file> works outside a repository), not the whole files; a file the ticket creates has no copy: it is new and is read whole. Give the reviews the list of copies and files to compare"
 
 /**
- * Les étapes d'un ticket dans un lot, dans l'ordre : contrôles, puis la revue du ticket (deux axes,
- * et la passe « bogues » dans le même message pour une zone sensible), puis commit et suivi.
+ * Les étapes d'un ticket dans un lot, dans l'ordre : contrôles, puis la revue du ticket (deux axes hors
+ * zone sensible, l'axe Spec seul et la passe « bogues » dans le même message pour une zone sensible), puis commit et suivi.
  */
 const TICKET_STEPS = [
   step('read', 'Lire spec et ticket', 'read the spec or the ticket'),
@@ -369,7 +375,7 @@ export const LOT_STEP_HINTS: Readonly<Record<string, string>> = {
   read: "procedure, section 2, points 1 and 2: the decision file and the ticket's « mise à jour du porteur » comments first, then the ticket to doing",
   tdd: 'procedure, section 2, point 3: <tdd> by the Skill tool, skipped for a ticket with no testable behaviour',
   checks: 'procedure, section 2, point 3: the project checks',
-  review: 'procedure, section 2, points 4 to 8: both axes in a single reviewer, the content and form review, the bug pass and the snapshot of a sensitive ticket, the instructions file, the findings to the flow tool',
+  review: 'procedure, section 2, points 4 to 8: the reviewer of the ticket (both axes outside sensitive areas, the Spec axis alone for a sensitive ticket), the content and form review, the bug pass and the snapshot of a sensitive ticket, the instructions file, the findings to the flow tool',
   commit: 'procedure, section 2, point 9: the criteria ticked, the commit before or after the review depending on the sensitive area, the ticket done in the tracker',
 }
 

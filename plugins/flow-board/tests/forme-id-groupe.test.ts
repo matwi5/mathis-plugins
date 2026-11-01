@@ -4,7 +4,7 @@ import { GROUP_ID_FORM, GROUP_ID_FORM_FR, closingProcedure, groupWorktree, group
 import { applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
 import { applyRelay } from '../hooks/relay.ts'
 import { activeRun } from '../hooks/basics.ts'
-import type { Board } from '../types'
+import type { Board, Run } from '../types'
 
 // La forme d'un id de groupe : une règle, contrôlée partout. Invariant : la procédure de fermeture ne
 // vise jamais un worktree ni une branche tirés d'un id de groupe hors forme : elle s'arrête et le dit,
@@ -49,6 +49,9 @@ test('« Not closed yet » et ce qui manque montrent un id hors forme neutralis�
   const run = activeRun(b)!
   // Des groupes hors forme, rendus, sans revue : la réponse les dit chacun sous son id exact, échappé en JSON.
   run.groups = run.groups!.map(g => (g.id === 'A' ? g : { ...g, delegated: { at: 3_000 } }))
+  // Deux tickets par groupe hors forme (le second déjà fait) : un groupe d'un seul ticket n'a pas de revue du groupe.
+  run.tickets.push(...[4, 5, 6].map(i => ({ id: `t${i}`, name: `T${i}`, status: 'done', sensitive: false, logic: true }) as Run['tickets'][number]))
+  run.groups = run.groups!.map((g, i) => (g.id === 'A' ? g : { ...g, tickets: [...g.tickets, `t${i + 3}`] }))
   b = applyReport(b, { set: [{ id: 't1', status: 'done' }, { id: 't2', status: 'done' }, { id: 't3', status: 'done' }] }, 4_000, REPO).board
   const text = closingText(activeRun(b)!, null, true)
   expect(text).toContain('Not closed yet: group "x]1" (G1)')

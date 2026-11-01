@@ -22,11 +22,11 @@ const world = (on: any) => {
 const LOT = [
   { id: 'A1', name: 'Un', blockedBy: [] },
   { id: 'A2', name: 'Deux', blockedBy: ['A1'] },
-  { id: 'B1', name: 'Trois', blockedBy: ['A2'] },
+  { id: 'B0', name: 'Trois prép', blockedBy: ['A2'] }, { id: 'B1', name: 'Trois', blockedBy: ['A2'] },
 ]
 const GROUPS = [
   { id: 'A', name: 'Worker', tickets: ['A1', 'A2'], files: ['worker'] },
-  { id: 'B', name: 'App', tickets: ['B1'], files: ['app'] },
+  { id: 'B', name: 'App', tickets: ['B0', 'B1'], files: ['app'] },
 ]
 
 // Le plus long de la suite (plusieurs montages du panneau) : sa limite tient compte d'une machine chargée.
@@ -79,7 +79,7 @@ test('le dernier groupe fini puis relu : la livraison revient', async ($, on) =>
   await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)
   await $.tool.call({ tool: TOOL, set: [{ id: 'A1', status: 'done' }, { id: 'A2', status: 'done' }] } as any)
   await $.skill.prompt({ skill: 'code-review', text: 'r' })
-  await $.tool.call({ tool: TOOL, set: [{ id: 'B1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'B0', status: 'done' }, { id: 'B1', status: 'done' }] } as any)
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'review-group-B' })).toBeDefined()
   expect(await ui.find({ key: 'go-compte-rendu' })).toBeUndefined()
@@ -139,8 +139,8 @@ test('la passe « bogues » d’un ticket en cours n’est pas la revue d’un g
   await $.tool.call({ tool: TOOL, step: 'tdd' } as any)
   expect((await $.skill.prompt({ skill: 'code-review', text: 'r' })).text).toContain('This is the review of a finished group')
   // Une fois les contrôles de B1 lancés, /code-review est la passe « bogues » de B1 : aucun groupe relu.
-  await $.tool.call({ tool: TOOL, tickets: [{ id: 'C1', name: 'Quatre' }], groups: [...GROUPS, { id: 'C', name: 'Doc', tickets: ['C1'] }] } as any)
-  await $.tool.call({ tool: TOOL, set: [{ id: 'C1', status: 'done' }], step: 'checks' } as any)
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'C0', name: 'Quatre prép' }, { id: 'C1', name: 'Quatre' }], groups: [...GROUPS, { id: 'C', name: 'Doc', tickets: ['C0', 'C1'] }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'C0', status: 'done' }, { id: 'C1', status: 'done' }], step: 'checks' } as any)
   const bug = (await $.skill.prompt({ skill: 'code-review', text: 'r' })).text
   expect(bug).toContain('This is the bug pass of the ticket in progress')
   expect(bug).not.toContain('"advised": true|false')
@@ -149,7 +149,7 @@ test('la passe « bogues » d’un ticket en cours n’est pas la revue d’un g
   await ui.unmount()
 
   // B1 commité : la même commande est la revue du groupe, avec la liste des choix déclarés et le conflit à remonter.
-  await $.tool.call({ tool: TOOL, set: [{ id: 'B1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'B0', status: 'done' }, { id: 'B1', status: 'done' }] } as any)
   const review = (await $.skill.prompt({ skill: 'code-review', text: 'r' })).text
   expect(review).toContain('This is the review of a finished group')
   expect(review).toContain('It does not settle a conflict between the spec and an instruction')

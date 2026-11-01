@@ -20,6 +20,7 @@ const SURFACES = {
   'config/rules/asana-board.md': repoFile('config/rules/asana-board.md'),
   'GLOSSARY.md': repoFile('GLOSSARY.md'),
   'config/reference/revues.md': repoFile('config/reference/revues.md'),
+  'config/rules/agents.md': repoFile('config/rules/agents.md'),
   'reference/procedure-groupe.md': read('reference/procedure-groupe.md'),
   'README.md': read('README.md'),
   'hooks/register.tsx': read('hooks/register.tsx'),
@@ -32,6 +33,42 @@ const SURFACES = {
 
 /** Chaque consigne : ses mots-clés, et les surfaces qui la recopient (la procédure ne reçoit de la règle d'effort que la session autonome). */
 const CONSIGNES = [
+  {
+    // Un ticket sensible ou très sensible n'a que l'axe Spec, en high : l'axe Standards refait sa passe « bogues ».
+    name: "le relecteur de l'axe Spec seul d'un ticket sensible",
+    keywords: ['axe Spec seul'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'config/rules/agents.md', 'reference/procedure-groupe.md', 'README.md'],
+  },
+  { name: "le relecteur de l'axe Spec seul, en anglais", keywords: ['the Spec axis alone'], surfaces: ['hooks/catalog.ts'] },
+  {
+    // Un groupe d'un seul ticket n'a pas de revue du groupe ; son avis de sécurité reste dû.
+    name: "le groupe d'un seul ticket",
+    keywords: ["un seul ticket n'a pas de revue du groupe", 'avis de sécurité reste dû'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'README.md'],
+  },
+  { name: "le groupe d'un seul ticket, dans la procédure", keywords: ["un groupe d'un seul ticket, rattachés compris, n'a pas de revue du groupe", 'avis de sécurité reste dû'], surfaces: ['reference/procedure-groupe.md'] },
+  { name: "le groupe d'un seul ticket, en anglais", keywords: ['A group of a single ticket (attached ones included) has no group review'], surfaces: ['hooks/catalog.ts'] },
+  {
+    // La revue de sécurité ne se conseille que sur une zone de la liste de sa méthode, jamais pour la concurrence seule.
+    name: 'la liste qui déclenche la revue de sécurité',
+    keywords: ['la concurrence seule', 'suppression de données'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md'],
+  },
+  { name: 'la liste qui déclenche la revue de sécurité, contenu de messages compris', keywords: ['contenu de messages'], surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe.md', 'README.md'] },
+  { name: 'la liste qui déclenche la revue de sécurité, en anglais', keywords: ['concurrency alone does not call for it'], surfaces: ['hooks/catalog.ts'] },
+  {
+    // Trois questions vérifient le classement d'un ticket, au découpage puis avant chaque ticket.
+    name: 'les trois questions du classement',
+    keywords: ['trois questions', 'valeur lue ailleurs', 'supprime'],
+    surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe.md', 'README.md'],
+  },
+  { name: 'les trois questions du classement, en anglais', keywords: ['three questions'], surfaces: ['hooks/register.tsx'] },
+  {
+    // Une classe de défaut trouvée une deuxième fois se corrige partout d'un coup.
+    name: 'la classe de défaut corrigée partout',
+    keywords: ['classe de défaut'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md'],
+  },
   {
     name: "l'effort d'une session de groupe",
     keywords: ['medium par défaut', 'xhigh (Recommandé) / high', 'tâche de jugement', "tâche d'exécution", 'session autonome'],
@@ -57,10 +94,15 @@ const CONSIGNES = [
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md', 'hooks/register.tsx'],
   },
   {
-    // Les correctifs de la passe « bogues » d'un ticket sensible : une seule nouvelle passe, en high, sur leur diff.
-    name: 'la nouvelle passe sur les correctifs de la passe « bogues »',
-    keywords: ['une seule nouvelle passe', 'limitée à leur diff'],
-    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md'],
+    // Après la passe « bogues » d'un ticket sensible : une seule passe high sur tout ce qui a changé depuis son instantané.
+    name: 'la passe unique après la passe « bogues »',
+    keywords: ['une seule passe high', 'depuis son instantané', 'un nouveau, posé après les correctifs'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'README.md'],
+  },
+  {
+    name: 'la plage de la passe unique, dans la procédure',
+    keywords: ['une seule passe high', 'depuis son instantané', '<hash d\'un nouvel instantané>'],
+    surfaces: ['reference/procedure-groupe.md'],
   },
   {
     // Un texte qui fait agir Claude (une règle, une procédure, un skill) est « Logique : oui » : la règle des lots, le README, et la consigne de découpage en anglais.
@@ -208,5 +250,12 @@ test('aucune surface ne dit qu’une règle qui ne fait rien lancer n’a pas de
   const stale = ['config/rules/flow-board.md', 'config/reference/revues.md', 'README.md'].filter(
     surface => SURFACES[surface] !== null && SURFACES[surface].includes('une règle qui ne fait rien lancer'),
   )
+  assert.deepEqual(stale, [])
+})
+
+test('la liste qui déclenche la revue de sécurité : plus aucune surface ne garde l’ancienne liste', () => {
+  // Une copie restée dans le README passait le test à mots-clés, qui les trouvait ailleurs dans le même fichier.
+  const OLD = ["entrées de l'utilisateur jusqu'à une requête", 'user input reaching a query', 'uploads, dependencies', 'accès réseau ou fichiers, envois de fichiers']
+  const stale = Object.entries(SURFACES).flatMap(([name, text]) => (text === null ? [] : OLD.filter(k => text.includes(k)).map(k => `${name} : « ${k} »`)))
   assert.deepEqual(stale, [])
 })

@@ -145,7 +145,7 @@ test('dans la discussion, la revue d’un ticket qui a une ligne « Lecteur » l
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   // L'étape de revue l'annonce, la consigne à part donne le relecteur et le chemin de la méthode.
   expect(implement).toContain('for a ticket with a « Lecteur » line, the content and form review')
-  expect(implement).toMatch(/Content and form review: [^\n]*in the same message as the two axes, on the same target/)
+  expect(implement).toMatch(/Content and form review: [^\n]*in the same message as the ticket's reviewer, on the same target/)
   expect(implement).toContain('a reviewer subagent (Agent tool, general-purpose, model opus, effort high, passed explicitly), read-only')
   expect(implement).toMatch(/the path of the content and form review method file, \S+\/reference\/relecture-fond-forme\.md/)
   // Un ticket ancien sans ligne : la session nomme le lecteur et le déclare.

@@ -72,7 +72,7 @@ export const compactionInstructions = (role: CompactionRole): string => {
     return [
       `Compaction instructions from flow-board: this discussion is a linked session working on group ${role.group} of the run ${run}. The summary must keep:`,
       '- the work plan or spec path, the current task (N of M), a summary of the progress, what is done, left or blocked, the files changed, the results of the checks, the last error, the branch and the worktree;',
-      '- the ticket in progress and its review step (Standards and Spec axes, bug pass, snapshot ref refs/worktree/flow-board/<ticket>), and the commit hash of each ticket done;',
+      '- the ticket in progress and its review step (Standards and Spec axes, or the Spec axis alone for a sensitive ticket, bug pass, snapshot ref refs/worktree/flow-board/<ticket>), and the commit hash of each ticket done;',
       role.main ? `- the main discussion to report to: ${role.main};` : '- the reference of the main discussion to report to, as the brief gives it;',
       '- the paths of the brief and of DECISIONS.md.',
     ].join('\n')

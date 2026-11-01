@@ -144,13 +144,25 @@ test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un r
   has(
     s,
     'Relire d\'abord le fichier de décisions du projet et les commentaires « mise à jour du porteur » du ticket',
+    'Avant d\'écrire du code, reposer les trois questions du classement sur le texte du ticket et le code qu\'il touche',
+    'Un seul oui rend le ticket au moins sensible ; un oui à la deuxième ou à la troisième le rend très sensible',
+    'corriger la ligne « Zone sensible » du ticket, suivre aussitôt les revues du nouveau niveau, et le dire à la discussion principale par une note de l\'outil flow (`{"note": …}`) et dans le compte rendu',
+    'jamais redescendre un niveau',
+    'un ticket devenu très sensible sans invariant dans son texte est une question sensible (section 3) avant d\'être commencé',
     'le relais y reconnaît la passe « bogues » d\'un ticket en cours',
     'n\'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) », jamais « blocked » au tableau de bord',
     '`<tdd>` par l\'outil Skill (le sauter pour un ticket sans comportement testable : une ressource visuelle, un document)',
-    'sur les seuls changements du ticket (point fixe : le commit d\'avant le ticket), les deux axes dans un seul sous-agent relecteur (outil Agent, modèle opus, effort medium, ou high si le ticket touche une zone sensible, passés explicitement), quelle que soit la taille du diff',
+    'sur les seuls changements du ticket (point fixe : le commit d\'avant le ticket). Pour un ticket hors zone sensible, les deux axes dans un seul sous-agent relecteur (outil Agent, modèle opus, effort medium, passés explicitement), quelle que soit la taille du diff',
+    'Pour un ticket sensible ou très sensible (un ticket muet compte comme sensible), l\'axe Spec seul, sans l\'axe Standards que sa passe « bogues » refait, dans un seul sous-agent relecteur (outil Agent, modèle opus, effort high, passés explicitement), nommé « Spec · <ticket> », d\'après la variante « axe Spec seul » du gabarit `prompt-relecteur.md`',
+    'il ne juge pas le code sur `CODING_STANDARDS.md`, et ses constats partent avec `"standards": 0` (point 8)',
     'arguments « <niveau> <plage de l\'instantané> consignes : <chemin> »',
     '<niveau> valant xhigh si le ticket supprime des données ou touche la concurrence',
     'l\'invariant du ticket quand il en a un',
+    'Après la passe « bogues », une seule passe high relit tout ce qui a changé depuis son instantané : ses correctifs, et le code ajouté après elle',
+    'si cette passe trouve encore une violation de l\'invariant, la session la corrige, écrit le scénario en test et me pose la question, sans nouvelle passe',
+    'sur la plage `<hash du premier instantané>..<hash d\'un nouvel instantané>`',
+    'Une classe de défaut trouvée une deuxième fois',
+    'la session cherche toutes ses occurrences, cite sa recherche (la commande et son résultat) au compte rendu et les corrige d\'un coup, sans passe de plus pour elle',
     '`git update-ref refs/worktree/flow-board/<id du ticket> <instantané>`',
     'les deux revues lisent alors la plage `refs/worktree/flow-board/<id du ticket>^..refs/worktree/flow-board/<id du ticket>`',
     'le vrai commit du ticket vient toujours après sa revue',
@@ -201,16 +213,16 @@ test('revue du groupe : lancée par la session, high --fix sur <base>..HEAD, san
 test('revue de sécurité : relecteur en lecture seule sur le diff du groupe, jamais /security-review, failles numérotées, pas de seconde passe', () => {
   has(
     section(5),
-    'Un groupe sans revue du groupe (section 4) n\'a pas non plus de revue de sécurité',
+    'Un groupe sans logique ni zone sensible n\'a ni revue du groupe ni revue de sécurité. Pour tout autre groupe, juger si une revue de sécurité vaut la peine : dans le même message que la revue du groupe (elle est en lecture seule et n\'attend pas ses correctifs), ou, pour un groupe d\'un seul ticket, qui n\'a pas de revue du groupe, à la fin de son ticket',
     'dans le même message que la revue du groupe',
-    'type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode',
+    'type general-purpose, modèle opus, effort high pour sa recherche et ses vérifications, en une seule passe',
+    'la concurrence seule n\'en fait pas partie',
     'avec pour seul périmètre `git diff <base>..<lancement>`',
     '<lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes',
-    'pour sa recherche ; ses vérifications tournent en high',
     'Ne pas lancer `/security-review`',
     'Ne pas corriger ce qu\'il trouve : les failles vont dans le compte rendu',
     'chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt',
-    'pas de seconde passe sur le diff de ses correctifs, sauf s\'il touche une zone coûteuse du fichier de méthode (sa section 1) ou dépasse 150 lignes modifiées hors tests',
+    'pas de seconde passe sur le diff de ses correctifs, la revue de sécurité tourne une seule fois',
   )
 })
 
@@ -370,7 +382,7 @@ test('une question sensible née en cours de ticket part tout de suite, le commi
 test('du code écrit après la passe « bogues » repasse en revue, la ligne « Zone sensible » du ticket qui reçoit une garde se relit', () => {
   has(
     section(2),
-    'Du code écrit après la passe « bogues » (un ajout demandé ensuite, un correctif venu d\'une autre revue) repasse en revue avant son commit',
+    'ses correctifs, et le code ajouté après elle (un ajout demandé ensuite, un correctif venu d\'une autre revue)',
     'la ligne « Zone sensible » du ticket qui la reçoit se relit',
   )
 })
@@ -419,4 +431,22 @@ test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer 
     'les Mineurs en un compte par axe, sans détail',
   )
   has(read('README.md'), '├── reference/prompt-relecteur.md')
+})
+
+test('une session liée ne demande jamais d’envoyer "sensitive" elle-même : elle corrige la ligne et prévient', () => {
+  // L'outil ne relaie pas "tickets" depuis une session liée : aucun point de la section 2 ne doit lui faire envoyer "sensitive".
+  assert.ok(!section(2).includes('(`"sensitive"` à l\'outil flow)'), 'le point 5 fait encore envoyer "sensitive" par la session liée')
+  assert.ok(!/se corrige \(`"sensitive"`/.test(section(2)))
+})
+
+test('un ticket reclassé par une session liée : la description de l’outil fait renvoyer "sensitive" par la discussion principale', () => {
+  // L'outil ne relaie pas "tickets" depuis une session liée : au retour du groupe, la discussion principale renvoie le ticket.
+  assert.ok(register.includes('and resend in "tickets", with "sensitive": true, every ticket its report says it reclassified (a linked session cannot send it)'))
+})
+
+test('la passe « bogues » d’un ticket sensible cite le critère d’effort qui lui est propre, dans la méthode de sécurité', () => {
+  assert.ok(section(2).includes('selon le critère d\'effort de la passe « bogues » du fichier de méthode de la revue de sécurité'))
+  const method = read('reference/revue-securite.md')
+  assert.ok(method.includes('### Critère d\'effort de la passe « bogues » d\'un ticket sensible'))
+  assert.ok(register.includes('as the bug pass effort criterion of the security review method file decides') || read('hooks/catalog.ts').includes('as the bug pass effort criterion of the security review method file decides'))
 })

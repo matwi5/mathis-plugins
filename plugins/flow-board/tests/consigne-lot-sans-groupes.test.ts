@@ -97,6 +97,9 @@ test('sans groupes, les étapes de ticket gardent leurs ids et renvoient aux poi
   expect(steps).toContain('tdd (procedure, section 2, point 3')
   expect(steps).toContain('checks (procedure, section 2, point 3')
   expect(steps).toContain('review (procedure, section 2, points 4 to 8')
+  // Un ticket sensible n'a que l'axe Spec : l'étape ne dit plus « les deux axes » pour tout ticket.
+  expect(steps).toContain('the reviewer of the ticket (both axes outside sensitive areas, the Spec axis alone for a sensitive ticket)')
+  expect(steps).not.toContain('both axes in a single reviewer, the content')
   expect(steps).toContain('commit (procedure, section 2, point 9')
   // Le détail n'est plus recopié : il est dans la procédure.
   expect(steps).not.toContain('git write-tree')

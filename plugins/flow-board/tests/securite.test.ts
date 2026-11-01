@@ -22,11 +22,11 @@ const world = (on: any) => {
 const LOT = [
   { id: 'A1', name: 'Un', blockedBy: [] },
   { id: 'A2', name: 'Deux', blockedBy: ['A1'] },
-  { id: 'B1', name: 'Trois', blockedBy: ['A2'] },
+  { id: 'B0', name: 'Trois prép', blockedBy: ['A2'] }, { id: 'B1', name: 'Trois', blockedBy: ['A2'] },
 ]
 const GROUPS = [
   { id: 'A', name: 'Worker', tickets: ['A1', 'A2'], files: ['worker'] },
-  { id: 'B', name: 'App', tickets: ['B1'], files: ['app'] },
+  { id: 'B', name: 'App', tickets: ['B0', 'B1'], files: ['app'] },
 ]
 
 /** La consigne d'/implement du parcours à groupes (sans groupes, elle suit la procédure d'une session liée). */
@@ -44,12 +44,16 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   const coaching = await groupedCoaching($)
   // Claude sait dès l'implémentation qu'il donnera son avis, puis lancera lui-même le sous-agent relecteur, jamais /security-review.
   expect(coaching).toContain('"advised": true|false')
-  expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort high or xhigh as the criterion of the method file decides for its search, its verifications at high), read-only, limited to git diff <group base>..<launch>')
+  expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort high for its search and its verifications, in a single pass), read-only, limited to git diff <group base>..<launch>')
   // Le périmètre est figé au commit du lancement, pour que les correctifs de la revue du groupe se commitent pendant qu'elle tourne.
   expect(coaching).toContain('<launch>: the hash of HEAD when you launch it, written out in its instructions file')
   // La méthode fixe, citée par son chemin (tiré de la racine du mod), sans être recopiée.
   expect(coaching).toMatch(/the path of the security review method file, \S+\/reference\/revue-securite\.md \(it follows it:/)
   expect(coaching).not.toContain('effort xhigh)')
+  // La revue de sécurité ne se conseille que pour une zone de la liste de la méthode, jamais pour la concurrence seule.
+  expect(coaching).toContain('authentication or permissions, secrets or tokens, a command or a path built from an input, data deletion, personal data or message content stored on disk; concurrency alone does not call for it')
+  expect(coaching).not.toContain('user input reaching a query')
+  expect(coaching).not.toContain('high or xhigh as the criterion of the method file')
   // Les correctifs proposés, acceptés en une ligne ; findings ne compte que les failles gardées.
   expect(coaching).toContain('each kept finding comes numbered (F1, F2…) with a ready fix')
   expect(coaching).toContain('a reply such as "fix F1 and F3" is enough: apply those fixes, test them, commit them, then send "fixed"')
@@ -83,7 +87,7 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   expect(filled.at(-1)).toMatch(/^Lance la revue de sécurité du groupe A \(Worker\) : confie-la à un sous-agent relecteur/)
   expect(filled.at(-1)).toContain("git diff <base>..<lancement> (<base> : le commit d'avant le premier ticket du groupe A ; <lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes")
   expect(filled.at(-1)).toContain('je décide de leur correction')
-  expect(filled.at(-1)).toMatch(/effort high ou xhigh selon le critère du fichier de méthode pour sa recherche, ses vérifications en high\)/)
+  expect(filled.at(-1)).toContain('effort high pour sa recherche et ses vérifications, en une seule passe)')
   expect(filled.at(-1)).toContain('scénario décrit par la garde, le trou, la source et l\'effet')
   expect(filled.at(-1)).toMatch(/le chemin du fichier de méthode de la revue de sécurité, \S+\/reference\/revue-securite\.md/)
   expect(filled.at(-1)).toContain("la recherche part d'abord, sans relecture préalable du diff")
@@ -100,13 +104,13 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   await ui.unmount()
 
   // Le compte rendu sait ce qu'il en est, groupe par groupe.
-  await $.tool.call({ tool: TOOL, set: [{ id: 'B1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'B0', status: 'done' }, { id: 'B1', status: 'done' }] } as any)
   await $.skill.prompt({ skill: 'code-review', text: 'r' })
   await $.tool.call({ tool: TOOL, security: { group: 'B', advised: false, why: 'que de l’affichage' } } as any)
   await $.tool.call({ tool: TOOL, complete: true } as any)
   const report = (await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'c' })).text
   expect(report).toContain('A (Worker): 2/2 done, reviewed by /code-review, security review run (2 findings, 1 fixed)')
-  expect(report).toContain('B (App): 1/1 done, reviewed by /code-review, security review judged not needed (que de l’affichage)')
+  expect(report).toContain('B (App): 2/2 done, reviewed by /code-review, security review judged not needed (que de l’affichage)')
 })
 
 test('un avis « inutile » laisse la lancer quand même', async ($, on) => {
@@ -150,6 +154,6 @@ test('sans groupes, l’avis de sécurité du lot cite aussi le fichier de méth
   const text = (await $.skill.prompt({ skill: 'mattpocock-skills:code-review', text: 'x' })).text
   expect(text).toContain('without "group": it covers the whole run')
   expect(text).toMatch(/the path of the security review method file, \S+\/reference\/revue-securite\.md/)
-  expect(text).toContain('effort high or xhigh as the criterion of the method file decides')
+  expect(text).toContain('effort high for its search and its verifications, in a single pass')
   expect(text).not.toContain('effort xhigh)')
 })

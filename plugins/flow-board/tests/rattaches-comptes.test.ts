@@ -68,8 +68,8 @@ test('une fois le rattaché fait, le groupe se finit comme aujourd’hui', () =>
 
 test('« reviewed » est refusé tant qu’un rattaché est ouvert, avec le ticket nommé ; la revue n’est due qu’une fois le groupe fini', () => {
   let b = boardWith({ ...LOT, set: [{ id: 'a1', status: 'done' }] })
-  // A, fini, attend sa revue : l'effet existe.
-  expect(needsReview(activeRun(b)!)).toBe(true)
+  // A, fini, d'un seul ticket : pas de revue du groupe ; le rattaché en fera un groupe de deux, qui l'attend.
+  expect(needsReview(activeRun(b)!)).toBe(false)
   b = applyReport(b, { tickets: [ATTACHED] }, 2_500).board
   expect(needsReview(activeRun(b)!)).toBe(false)
   const refused = applyReport(b, { reviewed: ['A'] }, 3_000)

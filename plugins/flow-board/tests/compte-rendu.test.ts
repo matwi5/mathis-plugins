@@ -176,7 +176,7 @@ test('plusieurs groupes, plusieurs discussions : le compte rendu reçoit les gro
   await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'b1', status: 'done' }], complete: true } as any)
 
   const note = (await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'r' })).text
-  expect(note).toMatch(/Groups, each usually run in its own discussion: A \(Worker SC\): 1\/1 done; B \(App SC\): 1\/1 done/)
+  expect(note).toMatch(/Groups, each usually run in its own discussion: A \(Worker SC\): 1\/1 done, reviewed by its ticket review \(a group of one ticket\), its security advice still due; B \(App SC\): 1\/1 done, reviewed by its ticket review/)
   expect(note).toMatch(/write « Fait » group by group/)
   expect(note).toMatch(/Tracking files of this run .*travail\/tasks\/2026-10-05_sc-vsc-worker\.md \(groupe A/)
   // Les comptes rendus des sessions liées : leurs fichiers du relais, d'où viennent les trois rubriques.

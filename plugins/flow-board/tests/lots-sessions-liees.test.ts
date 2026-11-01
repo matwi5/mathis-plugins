@@ -750,13 +750,19 @@ test('tous les tickets faits, dont ceux relayés par une session liée : ni comp
   expect(groupPlan(shown)!.groups.find(g => g.group.id === 'E')!.state).not.toBe('done')
 })
 
+/** Les ventes, le groupe E à deux tickets : un groupe d'un seul ticket n'a pas de revue du groupe, et ces tests portent sur elle. */
+const VENTES_E2 = {
+  tickets: [...VENTES.tickets, { id: 'e2', name: 'Enquête relances', files: ['travail/sql'] }],
+  groups: VENTES.groups.map(g => (g.id === 'E' ? { ...g, tickets: ['e1', 'e2'] } : g)),
+}
+
 test('un groupe rendu par sa session liée garde les revues qu’elle a relayées ; sans elles, il reste à relire', () => {
-  const sent = startLinkedGroups(boardWith(VENTES), ['E'], 5_000)!.board
+  const sent = startLinkedGroups(boardWith(VENTES_E2), ['E'], 5_000)!.board
   const runId = activeRun(sent)!.id
   let relay = applyRelay(undefined, runId, 'fille', { kind: 'start', group: 'E' }, 5_500)!
   relay = applyRelay(relay, runId, 'fille', { kind: 'review' }, 6_000)!
   relay = applyRelay(relay, runId, 'fille', { kind: 'security' }, 6_500)!
-  const back = { set: [{ id: 'e1', status: 'done' }], returned: ['E'] }
+  const back = { set: [{ id: 'e1', status: 'done' }, { id: 'e2', status: 'done' }], returned: ['E'] }
   const done = applyReport(sent, back, 7_000, { relay }).board
   const group = activeRun(done)!.groups!.find(g => g.id === 'E')!
   expect(group.linked).toBeUndefined()
@@ -780,11 +786,11 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   const { mem, filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
-  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES } as any)
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES_E2 } as any)
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
-  const back = (await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }], returned: ['E'] } as any)) as any
+  const back = (await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }, { id: 'e2', status: 'done' }], returned: ['E'] } as any)) as any
   expect(JSON.stringify(back)).toMatch(/returned without a \/code-review relayed by its linked session: E/)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   // Sa branche est fusionnée ici : pas de /code-review dans cette discussion, la demande va à la session.
@@ -806,7 +812,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans sous-agent qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un sous-agent relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high (outil Skill « code-review », arguments « high <plage> consignes : <chemin> ») sur les seuls commits du groupe')
   expect(text).not.toContain('high --fix')
   // Dit hors zone sensible, le groupe garde --fix.
-  await $.tool.call({ tool: TOOL, tickets: [{ id: 'e1', name: 'Enquête transporteur', status: 'done', sensitive: false, logic: true }] } as any)
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'e1', name: 'Enquête transporteur', status: 'done', sensitive: false, logic: true }, { id: 'e2', name: 'Enquête relances', status: 'done', sensitive: false, logic: true }] } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'review-linked-E' })
   await ui.unmount()
@@ -815,7 +821,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   // La consigne des relecteurs : celle de la procédure des sessions de groupe, citée par son chemin.
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des sessions liées de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
-  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high ou xhigh selon le critère du fichier de méthode pour sa recherche, ses vérifications en high\), en lecture seule, avec pour seul périmètre les commits du groupe/)
+  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high pour sa recherche et ses vérifications, en une seule passe\), en lecture seule, avec pour seul périmètre les commits du groupe/)
   expect(text).not.toMatch(/sécurité[^;]*effort xhigh\)/)
   expect(text).toContain('{"reviewed": ["E"]}')
   expect(text).not.toMatch(/copie/)
@@ -835,11 +841,11 @@ test('sans git, la revue d’un groupe rendu porte sur les copies que sa session
   const { filled } = world(on, { repo: false })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
-  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES } as any)
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES_E2 } as any)
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
-  await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }], returned: ['E'] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }, { id: 'e2', status: 'done' }], returned: ['E'] } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'review-linked-E' })
   await ui.unmount()
@@ -853,26 +859,26 @@ test('sans git, la revue d’un groupe rendu porte sur les copies que sa session
 })
 
 test('un groupe rendu avec "reviewed" dans le même appel : la revue que son compte rendu confirme vaut, plus de bouton', async ($, on) => {
-  const sent = startLinkedGroups(boardWith(VENTES), ['E'], 5_000)!.board
+  const sent = startLinkedGroups(boardWith(VENTES_E2), ['E'], 5_000)!.board
   // Le relais n'a pas vu la revue ; le compte rendu de la session la dit faite.
-  const out = applyReport(sent, { set: [{ id: 'e1', status: 'done' }], returned: ['E'], reviewed: ['E'] }, 7_000)
+  const out = applyReport(sent, { set: [{ id: 'e1', status: 'done' }, { id: 'e2', status: 'done' }], returned: ['E'], reviewed: ['E'] }, 7_000)
   expect(out.text).not.toMatch(/without a \/code-review/)
   expect(activeRun(out.board)!.groups!.find(g => g.id === 'E')!.reviewedAt).toBe(7_000)
   // Sans "reviewed", la réponse dit quoi envoyer si le compte rendu confirme la revue.
-  const bare = applyReport(sent, { set: [{ id: 'e1', status: 'done' }], returned: ['E'] }, 7_000)
+  const bare = applyReport(sent, { set: [{ id: 'e1', status: 'done' }, { id: 'e2', status: 'done' }], returned: ['E'] }, 7_000)
   expect(bare.text).toContain('If its final report says the group review ran there, send {"reviewed": ["E"]}')
 
   mock.clock(on, { now: 79_500_000 })
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
-  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES } as any)
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...VENTES_E2 } as any)
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
   // La demande de délégation dit d'envoyer "reviewed" avec "returned" quand la revue a tourné.
   expect(filled.at(-1)).toContain('si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]}')
-  await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }], returned: ['E'], reviewed: ['E'] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }, { id: 'e2', status: 'done' }], returned: ['E'], reviewed: ['E'] } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui.find({ key: 'review-linked-E' })).toBeUndefined()
   expect(await ui.find({ key: 'review-group-E' })).toBeUndefined()
