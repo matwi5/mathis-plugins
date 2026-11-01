@@ -30,6 +30,7 @@ import {
 import {
   activeRun,
   currentPhase,
+  isoMinute,
 } from '../hooks/basics.ts'
 import type { Board, Relay, Run } from '../types'
 import { withItemsLink } from './lien-pistes.ts'
@@ -284,6 +285,19 @@ test('Une date relue non finie ne fait pas tomber la réponse : elle se dit « d
   expect(decidedFileText(run, broken)).toContain('- Un choix (groupe A, date inconnue UTC)')
   // La réponse entière de l'outil se rend aussi.
   expect(applyReport(board, { note: 'x' }, T0 + 9, { relay: broken }).text).toContain('Compte rendu')
+})
+
+test('Une date que isTime refuse, négative comprise, se dit « date inconnue » ; une date valide garde son texte', () => {
+  // La même borne que isTime : une date négative, que `Date` sait pourtant écrire, n'est pas une date relue valide.
+  expect(isoMinute(-1)).toBe('date inconnue')
+  expect(isoMinute(-86_400_000)).toBe('date inconnue')
+  expect(isoMinute(8.64e15 + 1)).toBe('date inconnue')
+  expect(isoMinute(Number.NaN)).toBe('date inconnue')
+  expect(isoMinute('2026' as unknown as number)).toBe('date inconnue')
+  // Les bornes elles-mêmes et une date ordinaire s'écrivent comme avant.
+  expect(isoMinute(0)).toBe('1970-01-01 00:00')
+  expect(isoMinute(8.64e15)).not.toBe('date inconnue')
+  expect(isoMinute(Date.UTC(2026, 9, 6, 10, 40, 59))).toBe('2026-10-06 10:40')
 })
 
 test('Le renvoi que demande la réponse répare un compte relu hors forme : le groupe redevient clos', () => {

@@ -17,7 +17,9 @@ en effort low (--model, --effort), avec la sonde chargée par --plugin-dir. Pour
 scénarios : `tmux attach -t sonde`, puis les quitter par Ctrl-b d ; ou, sans s'attacher, par
 `--touches`, `--envoyer` et `--voir`, qui attendent eux-mêmes le délai demandé (une session Claude Code
 ne peut pas lancer `sleep` au premier plan). Chaque processus de Claude Code (`/clear` compris) écrit son journal dans
-scripts/sonde/journaux/ (ignoré par git). Mode d'emploi et résultats : docs/evenements-moteur.md.
+le dossier `journaux/` du dossier jetable de la session (avec --dir, un dossier jetable à part), hors du
+dépôt, dont le chemin s'affiche ; copier dans travail/ ce qui doit rester. Mode d'emploi et résultats :
+docs/evenements-moteur.md.
 
 Mac et Linux (tmux requis) ; sans dépendance hors de la bibliothèque standard.
 """
@@ -119,10 +121,14 @@ def main():
     folder.mkdir(parents=True, exist_ok=True)
     if args.reprise and not args.dir:
         sys.exit("--reprise demande --dir (le dossier de la session à reprendre)")
+    # Les journaux, hors du dépôt : des journaux bruts restés dans scripts/sonde/ avaient arrêté la
+    # fermeture d'un groupe. Un dossier donné par --dir peut être un dépôt : ils vont alors à part.
+    journals = folder / "journaux" if not args.dir else Path(tempfile.mkdtemp(prefix="sonde-journaux-"))
+    journals.mkdir(parents=True, exist_ok=True)
     # Lancée depuis une session Claude Code, la sonde hériterait de son id de session (et de son
     # titre, qui passait devant `sessionTitle` : constaté le 28/10/2026) : ces variables sont retirées.
     command = [tmux, "new-session", "-d", "-s", args.name, "-c", str(folder), "--",
-               "env", *[a for v in INHERITED for a in ("-u", v)], *args.env,
+               "env", *[a for v in INHERITED for a in ("-u", v)], f"SONDE_JOURNAUX={journals}", *args.env,
                str(claude), "--plugin-dir", str(SONDE), *[a for p in plugins for a in ("--plugin-dir", str(p))],
                "--model", args.model, "--effort", args.effort,
                *(["--continue"] if args.reprise else [])]
@@ -137,7 +143,7 @@ def main():
     print(f"  tmux attach -t {args.name}        jouer les scénarios (Ctrl-b d pour se détacher)")
     print(f"  python3 scripts/sonde.py --name {args.name} --envoyer \"<texte>\" --attendre 10 --voir   sans s'attacher")
     print(f"  tmux kill-session -t {args.name}  fermer")
-    print(f"Journaux : {SONDE / 'journaux'}")
+    print(f"Journaux : {journals}")
     if args.titre:
         print(f"Titre renvoyé une fois dans sessionTitle : « {args.titre} » (session_title du hook suivant dit s'il a pris)")
 

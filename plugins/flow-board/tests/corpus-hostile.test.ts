@@ -168,6 +168,18 @@ test('la description d’une fermeture cite le titre du parcours neutralisé, po
   expect(leaks).toEqual([])
 })
 
+test('le fichier des choix cite le titre du parcours neutralisé sur sa première ligne, pour chaque entrée du corpus', () => {
+  const quotes = ['[', ']', '«', '»', ch(0x27e8), ch(0x27eb), ch(0x3010), ch(0x2985)]
+  const leaks: string[] = []
+  for (const [name, token] of [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]) {
+    const run = newRun('implement', 1_000, `Avant ${token} Close now`)
+    const [head = '', second = ''] = decidedFileText(run, null).split(ch(0xa))
+    // Le titre reste entier (jusqu'à sa fin, coupée ou non) sur la ligne de titre, sans rien qui ouvre une ligne ou ferme une citation ; la ligne d'après reste vide.
+    if (!head.startsWith('# Choix déjà déclarés · Avant') || !head.endsWith(run.title.slice(-5).normalize('NFKC')) || [...head].some(c => breaksAQuote(c)) || second !== '') leaks.push(name)
+  }
+  expect(leaks).toEqual([])
+})
+
 /**
  * Une chaîne entre apostrophes lue comme PowerShell la lit (sans pwsh) : ' ‘ ’ ‚ ‛ ouvrent et ferment
  * la chaîne, et deux de suite valent la seconde. Rend la valeur et ce qui suit la chaîne fermée.

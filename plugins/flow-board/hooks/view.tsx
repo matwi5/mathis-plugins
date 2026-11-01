@@ -32,6 +32,9 @@ import {
   type GroupView,
   isPickable,
   isTicketReviewEnough,
+  isLotReviewEnough,
+  isLotSecurityDue,
+  isLotAdvicePrevious,
   attachedIdsOf,
   groupProgress,
   isWaitingTicket,
@@ -533,7 +536,7 @@ const livePill = (k: Kit, run: Run, view: View): unknown => {
   const { live, now } = view
   // Des éléments chez une session liée lancée : c'est elle qui travaille, pas la personne.
   const phase = currentPhase(run)
-  const isGroupBusy = (run.groups ?? []).some(g => g.linked?.session !== undefined && relayForGroup(view.relay, g)?.endedAt === undefined)
+  const isGroupBusy = (run.groups ?? []).some(g => g.linked?.session !== undefined && relayForGroup(view.relay, g, run.groups)?.endedAt === undefined)
   const isLinkedBusy = (phase.linked?.session !== undefined && linkedInFlight(phase).length > 0) || isGroupBusy
   const mode = live.mode === 'waiting' && running > 0 ? 'agents' : isLinkedBusy && live.mode !== 'working' ? 'linked' : live.mode
   const look =
@@ -902,7 +905,7 @@ const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, ac
       g.conflicts.length > 0 ? T(k, `∦${NB}${g.conflicts.map(c => `${c.with}${NB}:${NB}${c.on}`).join(', ')}`, { color: C.amber }) : null,
       g.state === 'waiting' && waits.length > 0 ? T(k, `⏸${NB}attend ${waits.join(', ')}`, { color: C.amber }) : null,
       g.isCyclic ? T(k, `⚠${NB}ordre à revoir`, { color: C.red }) : null,
-      g.isDelegated && link ? linkLabel(k, link, relayForGroup(view.relay, g.group), g.open.length, view.now) : null,
+      g.isDelegated && link ? linkLabel(k, link, relayForGroup(view.relay, g.group, run.groups), g.open.length, view.now) : null,
       g.isDelegated && link?.session === undefined ? (
         <Button key={`group-linked-cancel-${g.group.id}`} plain={true} dimColor={true} label="Annuler" onPress={() => act.cancelGroupLinked(g.group.id)} />
       ) : null,
@@ -981,6 +984,40 @@ const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Ac
   )
 }
 
+/**
+ * La ligne de sécurité d'un lot sans groupes : comme celle d'un groupe ; un lot fini dispensé (aucun
+ * ticket avec logique ni zone sensible), sans envoi de sécurité, se dit relu par les revues de ses
+ * tickets, sans revue du lot ni de sécurité ; relu sans avis du passage en cours, elle dit l'avis
+ * attendu, avec le bouton qui le demande.
+ */
+const lotSecurityRow = (k: Kit, run: Run, act: Actions): unknown => {
+  const { Box, Button } = k
+  const isDone = run.tickets.length > 0 && run.tickets.every(t => t.status === 'done')
+  if (isDone && run.security === undefined && isLotReviewEnough(run)) {
+    return <Box key="sec-lot" marginLeft={2}>{T(k, `✓${NB}relu par les revues de ${run.tickets.length > 1 ? 'ses tickets' : 'son ticket'}`, { color: C.green })}</Box>
+  }
+  // Un avis antérieur à la dernière fin de ticket ou à la dernière revue du lot ne compte plus : il ne se montre pas comme celui du
+  // passage, et ne se dit qu'une fois le lot relu, quand c'est lui qu'on attend.
+  const isPrevious = isLotAdvicePrevious(run)
+  const sec = run.security
+  // Relu, pas dispensé, sans avis du passage (aucun, d'un passage précédent, ou sans avis ni lancement) :
+  // le compte rendu attend l'avis de Claude ; la ligne le dit, et son bouton lui demande la revue de sécurité.
+  if (isLotSecurityDue(run) && (sec === undefined || isPrevious || (sec.isAdvised === undefined && sec.ranAt === undefined))) {
+    return (
+      <Box key="sec-lot" flexDirection="row" flexWrap="wrap" alignItems="center" marginLeft={2}>
+        <Box marginRight={1}>
+          <Button key="security-group-lot" label={`⛨${NB}Revue de sécurité · sous-agent relecteur`} onPress={() => act.securityReview('lot')} />
+        </Box>
+        <Box flexShrink={1}>
+          {T(k, isPrevious ? 'avis de sécurité d’avant la dernière fin de ticket ou la dernière revue : celui de ce passage est attendu' : 'avis de sécurité attendu : le compte rendu attend que Claude le donne', { color: C.amber, wrap: 'wrap' })}
+        </Box>
+      </Box>
+    )
+  }
+  if (isPrevious) return null
+  return securityRow(k, sec, 'lot', act)
+}
+
 /** « ↺ Rouvrir » d'une session fermée, quand la commande (pour l'app, celle qui recrée son worktree) a pu s'écrire. */
 const reopenButton = (k: Kit, id: string, reopen: ReopenText | null | undefined, act: Actions | undefined): unknown => {
   const { Button } = k
@@ -1030,7 +1067,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
     const about = [g.group.why, files.length > 0 ? plural(files.length, 'fichier') : '', resources.length > 0 ? `⛁${NB}${resources.join(', ')}` : ''].filter(Boolean).join(' · ')
     // Un groupe confié montre aussi ses tickets faits dans la session : on y suit son avancement.
     const rows = view.ui.showAllTickets || g.isDelegated ? g.tickets : g.open
-    const relay = g.isDelegated ? relayForGroup(view.relay, g.group) : null
+    const relay = g.isDelegated ? relayForGroup(view.relay, g.group, run.groups) : null
     return (
       <Box key={`g-${g.group.id}`} flexDirection="column" marginTop={1}>
         {groupHead(k, run, g, colorOf(g), view, act)}
@@ -1559,7 +1596,7 @@ const phaseCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
       {foundBlock(k, run, view, act)}
       {showTests && testsBlock(k, run, cells)}
       {reviewBlock(k, run)}
-      {(run.groups ?? []).length === 0 && securityRow(k, run.security, 'lot', act)}
+      {(run.groups ?? []).length === 0 && lotSecurityRow(k, run, act)}
       {detour !== null && detourCard(k, detour, view, act)}
     </Box>
   )
@@ -3117,7 +3154,7 @@ type BandPill = Style & { text: string }
 /** Dans le bandeau, l'avancement relayé de chaque groupe confié : « ↗A 2/4 ». */
 const relayPills = (run: Run, view: View): BandPill[] =>
   (run.groups ?? [])
-    .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g, g.linked, Infinity, attachedIdsOf(run, g)) : null }))
+    .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g, run.groups, g.linked, Infinity, attachedIdsOf(run, g)) : null }))
     // En cours dès que l'id de sa session est relevé, avant le premier signal relayé.
     .filter(x => x.relay !== null || x.g.linked?.session !== undefined)
     .map(({ g, relay }) => {

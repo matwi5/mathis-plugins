@@ -137,7 +137,8 @@ test('un groupe fini ne clôt pas l’implémentation tant que des tickets du lo
   mock.store(on)
   engine(on)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
-  expect(note).toMatch(/A finished group is not the end/)
+  // Sans groupes, la ligne de fin attend aussi la revue du lot et sa sécurité (lot sans groupes).
+  expect(note).toMatch(/When every ticket of the lot is done, the lot review done and its security settled/)
   await $.tool.call({
     tool: TOOL,
     tickets: [
@@ -178,4 +179,17 @@ test('plusieurs groupes, plusieurs discussions : le compte rendu reçoit les gro
   expect(note).toMatch(/Groups, each usually run in its own discussion: A \(Worker SC\): 1\/1 done; B \(App SC\): 1\/1 done/)
   expect(note).toMatch(/write « Fait » group by group/)
   expect(note).toMatch(/Tracking files of this run .*travail\/tasks\/2026-10-05_sc-vsc-worker\.md \(groupe A/)
+  // Les comptes rendus des sessions liées : leurs fichiers du relais, d'où viennent les trois rubriques.
+  expect(note).toMatch(/- The linked sessions' final reports, for the sections « Code antérieur au lot », « Pistes » and « Ce que le CHANGELOG devra dire »: \S*\/flow-board\/relais\/\S+\.<id>\.report\.md/)
+})
+
+test('sans groupes, la consigne du compte rendu ne renvoie à aucun compte rendu de session liée', async ($, on) => {
+  mock.clock(on, { now: 94_500_000 })
+  mock.store(on)
+  engine(on)
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'a1', name: 'Seul', status: 'done', sensitive: false, logic: false }], complete: true } as any)
+  const note = (await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'r' })).text
+  expect(note).toContain('What the dashboard knows about this run')
+  expect(note).not.toContain("The linked sessions' final reports")
 })

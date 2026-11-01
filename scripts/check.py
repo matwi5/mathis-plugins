@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
-"""Contrôles d'un plugin du dépôt, dans l'ordre, arrêtés au premier échec.
+"""Contrôles d'un plugin du dépôt, dans l'ordre, arrêtés au premier échec (sauf l'arbre « Architecture »).
 
     scripts/check.sh <plugin>...           tous les contrôles des plugins nommés (scripts\\check.cmd sous Windows)
-    scripts/check.sh --all                 tous les plugins
+    scripts/check.sh --all                 tous les plugins (et la sonde)
+    scripts/check.sh sonde                 la sonde des événements du moteur (scripts/sonde/) : export, API, tsc, tests
     scripts/check.sh <plugin> --no-desktop sans le Claude Code de l'app desktop (poste sans l'app)
     scripts/check.sh --staged              le hook pre-commit : les plugins dont un fichier est indexé
     scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README, sans rien contrôler
-    scripts/check.sh --test <fichier> <plugin>  ce seul fichier de test (nom nu ou chemin), terminal seulement
+    scripts/check.sh --test <fichier>... <plugin>  ces seuls fichiers de test (nom nu ou chemin), terminal seulement
+    scripts/check.sh --quick <plugin>...   pré-contrôle rapide : tsc et les fichiers de test touchés face à HEAD
+    scripts/check.sh --tsc <plugin>...     le seul `tsc` des plugins (types du moteur copiés dans un worktree)
 
 Les contrôles d'un plugin, chacun seulement s'il s'applique :
 1. pas de renvoi aux tickets ni aux dossiers de travail (`travail/`, absent de la version publique) ;
 2. l'arbre « Architecture » du README cite chaque fichier de `hooks/` et de `tests/` (`--fix` l'écrit,
-   en gardant le commentaire de chaque ligne existante) ;
+   en gardant le commentaire de chaque ligne existante) : un fichier absent est signalé sans couper
+   les contrôles suivants, et la commande échoue à la fin ;
    les termes retirés du plugin (`termes-retires.txt`, une version et un terme par ligne) sont absents
-   de son README, de ses consignes (`hooks/`, `skills/`, `commands/`) et des entrées de son CHANGELOG
-   plus récentes que la version qui les a retirés ;
+   de son README, de ses consignes (`hooks/`, `skills/`, `commands/`, `reference/`), de sa règle
+   (`config/rules/<plugin>.md`) et des entrées de son CHANGELOG plus récentes que la version qui les
+   a retirés ;
+   ses fichiers (tests compris) passent les termes de l'export public (`scripts/export_public.py` :
+   adresses mail hors de la liste permise, dossiers personnels, termes de la liste privée), contrôle
+   sans objet sans ce script ;
    le code (hors `tests/`) n'étale pas une liste dans `Math.min` ou `Math.max` (au-delà de 100 000
    éléments, l'étalement lève une erreur) et n'a pas de bloc `/** */` suivi directement d'un autre
-   (le premier ne documente plus rien) ;
+   (le premier ne documente plus rien) ; aucune source `.ts`, `.tsx` ou `.mjs` (tests compris) n'a de
+   caractère invisible ou séparateur brut (U+0085, U+2028, U+2029, U+200B à U+200F, U+202A à U+202E,
+   U+2060 à U+2069, U+FEFF) : seulement son échappement ; les hooks de flow-board n'insèrent pas
+   dans un texte une valeur relue du parcours brute (`${run.title}`, `${run.id}`, `${g.id}`,
+   `${…why}`) hors d'une fonction de neutralisation, au-delà des sites admis fichier par fichier
+   (`scripts/interpolations-admises.json`) ;
    la forme du CHANGELOG : chaque entrée (`## <version> — <date>`) précédée d'une ligne `---`, versions
    uniques, de la plus récente à la plus ancienne, la première égale à la version de `plugin.json`
    (un séparateur perdu au déplacement d'une entrée n'avait été vu qu'au compte rendu) ;
@@ -42,7 +55,16 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
 --staged (hook pre-commit, décision « Hook »), tout sur une copie de l'index : d'abord les numéros de série de chaque
 fichier de décisions indexé (`travail/<sujet>/DECISIONS.md`), même pour un commit de documentation seule : un titre
 « ## Série N » ajouté (face à `HEAD`) avec un numéro déjà pris dans le fichier est refusé, les doublons déjà commités
-passent ; puis la forme du CHANGELOG, la version et
+passent ; puis chaque ticket indexé (`travail/<sujet>/issues/*.md`) qui dit « Zone sensible : oui » porte une
+ligne « Recherche » avec une commande et son résultat (sur la ligne, ou dans le bloc de code qui la suit),
+sauf un ticket que `HEAD` portait déjà sensible sans elle ;
+puis, même pour un commit de documentation seule, une liste d'admis indexée (`scripts/renvois-admis.json`,
+`scripts/interpolations-admises.json`) qui augmente un compte face à `HEAD` (une clé nouvelle comprise) est
+refusée, et chaque plugin dont la règle (`config/rules/<plugin>.md`) est indexée, ou dont une liste d'admis
+indexée change un compte, passe sur la copie de l'index les contrôles statiques qui les lisent (termes
+retirés, renvois admis, valeurs relues brutes ; ni `tsc` ni tests) : un commit de la règle seule passait
+comme de la documentation ;
+puis la forme du CHANGELOG, la version et
 la liste « État » de chaque plugin dont le CHANGELOG ou le `plugin.json` est indexé, même
 pour un commit de documentation seule ; puis rien de
 plus pour un commit de documentation seule ; sinon, sur une copie de l'index (`git checkout-index`, le
@@ -51,7 +73,8 @@ contenu qui part, pas l'arbre de travail), `validate` du dépôt, puis `validate
 groupes quand le hook ne lançait que `validate` et les tests. Le test avec l'app desktop reste à
 `check.sh <plugin>`, avant le push. Un plugin dont tous les contrôles viennent de passer garde
 l'empreinte de son dossier (arbre de travail, fichiers ignorés exclus) ; le hook saute ses contrôles
-quand l'index à commiter porte exactement cette empreinte (un commit juste après `check.sh`).
+quand l'index à commiter porte exactement cette empreinte (un commit juste après `check.sh`). Le hook
+pre-merge-commit lance le même `--staged` à la fusion d'une branche qui crée son commit.
 
 Une commande en échec affiche ses lignes d'échec (tests, erreurs de types) avec un peu de contexte,
 puis sa fin ; sa sortie entière est écrite dans un fichier temporaire dont le chemin s'affiche.
@@ -83,6 +106,8 @@ except Exception:
 REPO = Path(__file__).resolve().parent.parent
 PLUGINS = REPO / "plugins"
 TYPESCRIPT = "typescript@5.9.3"
+# Les modules du dépôt hors de la marketplace, contrôlés par leur nom comme un plugin (`tsc` et tests).
+TOOLS = {"sonde": REPO / "scripts" / "sonde"}
 # Dossiers de l'app desktop qui gardent ses Claude Code embarqués, un sous-dossier par version.
 DESKTOP_DIRS = {
     "darwin": Path.home() / "Library" / "Application Support" / "Claude" / "claude-code",
@@ -97,20 +122,52 @@ TICKET_REFS = re.compile(r"\btickets?\s+(?:n°\s*)?\d{2}\b|\bQ\d+ de la revue\b|
 DECISION_REFS = re.compile(r"(?<![\w-])(?:Q\d+(?:\.\d+)?|S\d{1,3})(?![\w-])|\b[Ss]éries?\s+\d+\b")
 ADMITTED_REFS = Path(__file__).resolve().parent / "renvois-admis.json"
 CODE_SUFFIXES = {".ts", ".tsx", ".js", ".mjs", ".cjs", ".py", ".sh"}
+# Les valeurs relues du parcours (titre, id, raison) insérées brutes dans un texte des hooks de
+# flow-board, hors des fonctions de neutralisation : celles du 01/11/2026 restent admises, fichier par
+# fichier, à leur nombre de ce jour (`scripts/interpolations-admises.json`), à nettoyer, jamais à augmenter.
+INTERPOLATION_PLUGINS = {"flow-board"}
+INTERPOLATION = re.compile(r"\$\{\s*([^{}]*?)\s*\}")
+# Un chemin de membres (`a.b`, `a?.b`, `a!.b`, `a!`), les paires de membres qui lisent une valeur
+# relue, l'appel d'une fonction de neutralisation juste avant un argument, et une condition après.
+RUN_CHAIN = re.compile(r"(?<![\w$.])[A-Za-z_$][\w$]*(?:(?:\?\.|!\.|\.)[A-Za-z_$][\w$]*)*!?")
+RUN_VALUES = {("run", "title"), ("run", "id"), ("g", "id")}
+NEUTRAL_CALL = re.compile(r"(?<![\w$.])(?:shown\w*|neutral\w*|asciiJson)\(\s*$")
+CONDITION_AFTER = re.compile(r"\s*(?:\?(?![.?])|===|!==|==|!=)")
+ADMITTED_INTERPOLATIONS = Path(__file__).resolve().parent / "interpolations-admises.json"
 # Contrôles 1 et 2 pas encore tenus par un plugin : signalés sans échec, jusqu'à leur reprise.
 PENDING = {}
+# Les défauts signalés sans couper les contrôles (fichiers absents de l'arbre « Architecture ») :
+# ils font échouer la commande à la fin, ou s'affichent avec l'échec d'un autre contrôle.
+DEFERRED = []
 # Les lignes qui disent un échec dans la sortie d'une commande : `(fail)` de `claude plugin test`,
 # `not ok` et `✖` de `node --test`, `error TS` de `tsc`. Une sortie coupée à sa fin les cachait :
 # « 466 pass / 2 fail » sans aucun nom de test.
 FAIL_LINE = re.compile(r"\(fail\)|^\s*not ok\b|✖|\berror TS\d+")
 FAIL_CONTEXT = 2
+# Après un `(fail)`, l'attendu et le reçu du test : le `Received:` cherché dans ces lignes, et son
+# reçu (un objet sur plusieurs lignes) montré jusqu'à ce nombre de lignes.
+RECEIVED_WITHIN = 30
+RECEIVED_MAX = 40
+RECEIVED_FIRST = 5
+# Les lignes de journal d'un mod, retirées de l'extrait.
+LOG_LINE = re.compile(r"^\s*\[flow-board\]")
 FAIL_MAX = 40
 TAIL = 60
 # La liste des termes retirés d'un plugin, à sa racine.
 RETIRED_FILE = "termes-retires.txt"
 # Les dossiers des consignes d'un plugin (le texte que Claude lit), où un terme retiré ne revient pas.
-INSTRUCTION_DIRS = ("hooks", "skills", "commands")
+INSTRUCTION_DIRS = ("hooks", "skills", "commands", "reference")
+# La liste privée des termes que la version publique refuse (absente de celle-ci, comme le script
+# d'export : le contrôle ne garde alors que les adresses et les dossiers personnels, ou se saute).
+EXPORT_DENYLIST = REPO / "config" / "personal" / "public-denylist.txt"
 MINMAX_CALL = re.compile(r"\bMath\.(min|max)\(")
+# Les caractères invisibles et séparateurs qu'une source de plugin n'écrit jamais bruts, seulement
+# échappés : un U+2028 brut, écrit par l'outil Write à la place de son échappement, avait coupé une
+# ligne de JavaScript, et un invisible brut dans une classe d'expression régulière ne casse aucun test.
+# Donnés par leur point de code : un échappement écrit ici deviendrait lui-même le caractère brut.
+INVISIBLE_CODES = (0x85, 0x2028, 0x2029, *range(0x200B, 0x2010), *range(0x202A, 0x202F), *range(0x2060, 0x206A), 0xFEFF)
+INVISIBLE = re.compile("[" + "".join(map(chr, INVISIBLE_CODES)) + "]")
+INVISIBLE_SUFFIXES = {".ts", ".tsx", ".mjs"}
 # Le titre d'une entrée de CHANGELOG. `-mathis.<n>` (mattpocock-skills) est un écart local sur la
 # version de l'amont, rangé après elle (README de ce plugin), au contraire d'une pré-version SemVer.
 CHANGELOG_ENTRY = re.compile(r"^## (\d+)\.(\d+)\.(\d+)(?:-mathis\.(\d+))?(?=\s|$)")
@@ -131,10 +188,29 @@ ENGINE_INTERFACE = "export interface CoreEngineInterface {"
 # mêmes numéros (« ## Série 19 » à 21) dans un même fichier.
 DECISIONS_FILE = re.compile(r"travail/[^/]+/DECISIONS\.md")
 SERIES_TITLE = re.compile(r"^## Série (\d+)\b", re.M)
+# Les tickets d'un chantier, et ce qui dit qu'un ticket est sensible (« Zone sensible : oui », en gras
+# ou non) et qu'il cite sa recherche (une ligne « Recherche … », en gras ou non, avec une commande et
+# son résultat : sur la ligne, `<commande>` suivi d'un texte ; ou dans le bloc de code qui la suit,
+# au moins deux lignes) : deux tickets sensibles sans recherche citée avaient fait refaire la
+# recherche à la session qui les codait.
+TICKET_FILE = re.compile(r"travail/[^/]+/issues/[^/]+\.md")
+SENSITIVE_LINE = re.compile(r"^\*{0,2}Zone sensible\s*:\s*\*{0,2}\s*oui\b", re.M | re.I)
+SEARCH_LINE = re.compile(r"^\*{0,2}Recherche\b")
+# Sur la ligne : une commande (un bout entre accents graves qui porte une espace : un nom et ses
+# arguments, pas un hash seul) suivie d'un texte, son résultat, accents graves permis.
+INLINE_SEARCH = re.compile(r"`[^`\n]*\S [^`\n]*\S[^`\n]*`\s*\S")
+# La règle d'un plugin et les listes d'admis : un commit qui ne touchait qu'elles passait le hook comme
+# de la documentation, sans les contrôles de `check.sh <plugin>` qui les lisent.
+RULE_FILE = re.compile(r"config/rules/([\w-]+)\.md")
+ADMITTED_FILE = re.compile(r"scripts/[\w-]+-admi(?:s|ses)\.json")
 
 
 class Failed(Exception):
     pass
+
+
+class DeferredFailed(Failed):
+    """L'échec de fin des défauts signalés sans couper les contrôles."""
 
 
 def log(msg=""):
@@ -154,13 +230,39 @@ def run(args, timeout, cwd=REPO, env=None):
     return res.returncode, (res.stdout or "") + (res.stderr or "")
 
 
+def failure_end(lines, i):
+    """La dernière ligne à montrer après la ligne d'échec `i` : pour un `(fail)` de `claude plugin test`
+    suivi de son `Received:` (dans les `RECEIVED_WITHIN` lignes, avant le test suivant), la fin du reçu
+    (ses lignes indentées qui suivent, jusqu'à une ligne vide ou une ligne de test en colonne 0 comme
+    `(pass)`, `RECEIVED_MAX` lignes au plus) ; sinon `FAIL_CONTEXT` lignes plus loin.
+    La session ouvrait le journal entier pour lire l'attendu et le reçu d'un test."""
+    end = min(len(lines) - 1, i + FAIL_CONTEXT)
+    if "(fail)" not in lines[i]:
+        return end
+    for j in range(i + 1, min(len(lines), i + 1 + RECEIVED_WITHIN)):
+        if FAIL_LINE.search(lines[j]) or lines[j].startswith("(pass)"):
+            break
+        if lines[j].lstrip().startswith("Received:"):
+            k = j
+            while k + 1 < len(lines) and k + 1 - j < RECEIVED_MAX and lines[k + 1].strip() and lines[k + 1][:1].isspace():
+                k += 1
+            return max(end, k)
+    return end
+
+
 def failure_excerpt(out):
-    """Les lignes d'échec d'une sortie, chacune avec quelques lignes autour, puis sa fin."""
-    lines = out.rstrip().splitlines()
+    """Les lignes d'échec d'une sortie, chacune avec quelques lignes autour (l'attendu et le reçu d'un
+    test en échec), puis sa fin ; sans les lignes de journal du mod (`[flow-board]`), que 21 commandes
+    d'une session filtraient à la main (la sortie entière les garde)."""
+    lines = [line for line in out.rstrip().splitlines() if not LOG_LINE.match(line)]
     hits = [i for i, line in enumerate(lines) if FAIL_LINE.search(line)][:FAIL_MAX]
     tail_from = max(0, len(lines) - TAIL)
     # Les lignes d'échec que la fin de la sortie montre déjà ne se répètent pas.
-    shown = sorted({j for i in hits for j in range(max(0, i - FAIL_CONTEXT), min(len(lines), i + FAIL_CONTEXT + 1)) if j < tail_from})
+    # L'attendu et le reçu des `RECEIVED_FIRST` premiers échecs seulement : 40 reçus sur plusieurs
+    # lignes feraient des milliers de lignes, que la sortie entière garde.
+    shown = sorted({j for n, i in enumerate(hits)
+                    for j in range(max(0, i - FAIL_CONTEXT), (failure_end(lines, i) if n < RECEIVED_FIRST else min(len(lines) - 1, i + FAIL_CONTEXT)) + 1)
+                    if j < tail_from})
     excerpt = []
     if shown:
         excerpt.append(f"  lignes d'échec ({len(hits)}{' au moins' if len(hits) == FAIL_MAX else ''}), avant la fin de la sortie :")
@@ -257,23 +359,36 @@ def comment_of(line, suffix):
     return line[m.start():] if m else ""
 
 
-def admitted_refs():
-    """Les renvois aux décisions admis, par fichier (`<plugin>/<chemin>` → nombre)."""
-    if not ADMITTED_REFS.is_file():
+def admitted_counts(path):
+    """Une liste d'admis fichier par fichier (`{"files": {"<plugin>/<chemin>": nombre}}`) ; vide sans elle."""
+    if not path.is_file():
         return {}
     try:
-        data = json.loads(ADMITTED_REFS.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as err:
-        raise Failed(f"{ADMITTED_REFS.name} illisible : {err}")
+        text = path.read_text(encoding="utf-8")
+    except OSError as err:
+        raise Failed(f"{path.name} illisible : {err}")
+    return admitted_from(text, path.name)
+
+
+def admitted_from(text, name):
+    """Les comptes d'une liste d'admis, lus dans son texte ; vide sans texte."""
+    if text is None:
+        return {}
+    try:
+        data = json.loads(text)
+    except ValueError as err:
+        raise Failed(f"{name} illisible : {err}")
     files = data.get("files") if isinstance(data, dict) else None
     if not isinstance(files, dict):
-        raise Failed(f"{ADMITTED_REFS.name} : pas d'objet « files »")
+        raise Failed(f"{name} : pas d'objet « files »")
     return {k: v for k, v in files.items() if isinstance(v, int)}
 
 
-def ticket_refs(plugin):
+def ticket_refs(plugin, admitted_path=None):
+    """Les renvois aux tickets et aux décisions d'un plugin au-delà des admis (`renvois-admis.json`,
+    ou la liste `admitted_path`, celle de la copie de l'index au hook pre-commit)."""
     problems = []
-    admitted = admitted_refs()
+    admitted = admitted_counts(admitted_path or ADMITTED_REFS)
     for path, rel in files_of(plugin):
         if path.suffix not in CODE_SUFFIXES | {".md"}:
             continue
@@ -401,17 +516,65 @@ def retired_terms(plugin):
     if not terms:
         return []
     problems = []
-    for path, rel in files_of(plugin):
-        is_changelog = rel == "CHANGELOG.md"
-        if not (rel == "README.md" or is_changelog or rel.split("/")[0] in INSTRUCTION_DIRS):
-            continue
+    # La règle du plugin (`config/rules/<plugin>.md`) aussi : un terme retiré du mod y était resté.
+    rule = plugin.parent.parent / "config" / "rules" / f"{plugin.name}.md"
+    sources = [(path, f"{plugin.name}/{rel}", rel == "CHANGELOG.md") for path, rel in files_of(plugin)
+               if rel in ("README.md", "CHANGELOG.md") or rel.split("/")[0] in INSTRUCTION_DIRS]
+    if rule.is_file():
+        sources.append((rule, f"config/rules/{plugin.name}.md", False))
+    for path, where, is_changelog in sources:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         versions = list(changelog_versions(lines)) if is_changelog else [None] * len(lines)
         for n, (line, at) in enumerate(zip(lines, versions), 1):
             for retired_in, term in terms:
                 if term in line and not (is_changelog and (at is None or at <= retired_in)):
-                    problems.append(f"{plugin.name}/{rel}:{n} : terme retiré en {'.'.join(map(str, retired_in))} « {term} »")
+                    problems.append(f"{where}:{n} : terme retiré en {'.'.join(map(str, retired_in))} « {term} »")
     return problems
+
+
+def export_terms(plugin):
+    """Ce que l'export public refuserait dans les fichiers du plugin (tests compris) : adresses mail hors
+    de la liste permise, dossiers personnels, termes de la liste privée, dans le nom et le contenu de
+    chaque fichier (le contenu des binaires excepté, que l'export lit aussi) ; les règles de
+    `problems_in` du script d'export. Une adresse de test n'avait été vue qu'à l'export. None sans ce
+    script (version publique)."""
+    try:
+        import export_public
+    except ImportError:
+        return None
+    denylist = []
+    if EXPORT_DENYLIST.is_file():
+        try:
+            denylist = export_public.load_denylist(EXPORT_DENYLIST.read_text(encoding="utf-8"))
+        except SystemExit as err:
+            raise Failed(str(err))
+    # Ce qui partira : les fichiers suivis et les nouveaux non ignorés, pas ceux que git ignore (un
+    # réglage local ou un journal de débogage, que l'export ne lit pas).
+    listed = git(["ls-files", "--cached", "--others", "--exclude-standard", "--", plugin.as_posix()], 60)
+    kept = None if listed is None else {(REPO / p).resolve() for p in listed.splitlines()}
+    problems = []
+    for path, rel in files_of(plugin):
+        if kept is not None and path.resolve() not in kept:
+            continue
+        found_in = export_public.problems_in(rel, f"{label_of(plugin)}/{rel} (nom)", denylist)
+        data = path.read_bytes()
+        if b"\0" not in data[:8000]:
+            found_in += export_public.problems_in(data.decode("utf-8", "replace"), f"{label_of(plugin)}/{rel}", denylist)
+        for where, rule, found in found_in:
+            problems.append(f"{where} : {rule} « {found} », refusé par l'export public (scripts/export_public.py)")
+    return problems
+
+
+def check_export_terms(plugin):
+    log("→ termes de l'export public (adresses, dossiers personnels, termes interdits)")
+    problems = export_terms(plugin)
+    if problems is None:
+        log("  pas de scripts/export_public.py : contrôle sans objet")
+    elif problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{plugin.name} : {len(problems)} terme(s) que l'export public refuserait")
+    else:
+        log("  ok")
 
 
 def code_of(line):
@@ -463,6 +626,75 @@ def code_rules(plugin):
                     prev_end = n
             elif s:
                 prev_end = None
+    return problems
+
+
+def invisible_chars(plugin):
+    """Les caractères invisibles ou séparateurs bruts des sources `.ts`, `.tsx` et `.mjs` du plugin
+    (tests compris), avec le fichier, la ligne et l'échappement à écrire. Les lignes se coupent au
+    seul `\\n` : `splitlines` couperait aussi à U+2028, U+2029 et U+0085, et les cacherait."""
+    problems = []
+    for path, rel in files_of(plugin):
+        if path.suffix not in INVISIBLE_SUFFIXES:
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").split("\n"), 1):
+            for m in INVISIBLE.finditer(line):
+                code = ord(m.group(0))
+                problems.append(f"{plugin.name}/{rel}:{n} : caractère invisible brut U+{code:04X}, "
+                                f"écrire l'échappement \\u{code:04x} à la place")
+    return problems
+
+
+def is_run_value(chain):
+    """Vrai si un chemin (`a.b!.c?.d`) lit une valeur relue du parcours : il passe par `run.title`,
+    `run.id`, `g.id` ou un membre en `…why` (`change.why`, `kept.withdrawnWhy`), suivi ou non d'un
+    membre de plus (`state.why.replace`, la valeur reste brute)."""
+    parts = [p for p in re.split(r"[?!]*\.", chain.rstrip("!")) if p]
+    return any(p.lower().endswith("why") or (k > 0 and (parts[k - 1], p) in RUN_VALUES) for k, p in enumerate(parts))
+
+
+def raw_values(expression):
+    """Les valeurs relues du parcours qu'une expression d'interpolation insère brutes : chaque chemin
+    qui en lit une (`is_run_value`), hors appel d'une fonction (`inFlightWhy(g)` calcule son texte), sauf l'argument direct d'une fonction de neutralisation (`shown*(`,
+    `neutral*(`, `asciiJson(`) et une condition (suivi de `?` ou d'une comparaison, ou nié par `!`).
+    Une expression composée compte aussi : `.map(g => g.id)`, `String(run.title)`, `x.why ?? '—'`."""
+    found = []
+    for m in RUN_CHAIN.finditer(expression):
+        before, after = expression[:m.start()], expression[m.end():]
+        chain = m.group(0)
+        if re.match(r"\s*\(", after):
+            # Un appel : la fonction (`inFlightWhy(g)`) calcule son texte ; une méthode de la valeur
+            # (`state.why.replace(…)`) la garde brute.
+            chain = re.sub(r"[?!]*\.[^.?!]+!?$", "", chain) if re.search(r"\.[^.?!]+!?$", chain) else ""
+        if not chain or not is_run_value(chain) or NEUTRAL_CALL.search(before) or CONDITION_AFTER.match(after) or re.search(r"!\s*$", before):
+            continue
+        found.append(m.group(0))
+    return found
+
+
+def raw_interpolations(plugin, admitted_path=None):
+    """Les fichiers des hooks de flow-board qui insèrent dans un texte plus de valeurs relues brutes
+    (`run.title`, `run.id`, `g.id`, `…why` dans un `${…}`, `raw_values`) que n'en admet
+    `interpolations-admises.json` : une valeur s'y insère comme argument direct d'une fonction de
+    neutralisation (`shown*`, `neutral*`, `asciiJson`) ; des sites bruts ressortaient à chaque tour de
+    revue d'un groupe (9 constats à la passe « bogues »). Une interpolation qui contient un gabarit
+    imbriqué n'est lue que par ses `${…}` intérieurs. `admitted_path` : une autre liste (celle de la
+    copie de l'index au hook pre-commit)."""
+    if plugin.name not in INTERPOLATION_PLUGINS:
+        return []
+    admitted = admitted_counts(admitted_path or ADMITTED_INTERPOLATIONS)
+    problems = []
+    for path, rel in files_of(plugin):
+        if not rel.startswith("hooks/") or path.suffix not in {".ts", ".tsx"} or ".test." in path.name:
+            continue
+        found = [f"{n} « {value} »"
+                 for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
+                 for m in INTERPOLATION.finditer(code_of(line)) for value in raw_values(m.group(1))]
+        allowed = admitted.get(f"{plugin.name}/{rel}", 0)
+        if len(found) > allowed:
+            problems.append(f"{plugin.name}/{rel} : {len(found)} valeur(s) relue(s) insérée(s) brute(s) dans un texte, "
+                            f"{allowed} admis ({ADMITTED_INTERPOLATIONS.name}) ; la passer par une fonction de "
+                            f"neutralisation (shown*, neutral*, asciiJson) : lignes {', '.join(found[:8])}{' …' if len(found) > 8 else ''}")
     return problems
 
 
@@ -527,33 +759,56 @@ def check_changelog(plugin):
 
 
 def static_checks(plugin):
+    """Les contrôles statiques ; rend les fichiers absents de l'arbre « Architecture », qui ne coupent
+    pas les contrôles suivants (un fichier de test nouveau arrêtait toute la suite) mais échouent à la
+    fin (`fail_deferred`)."""
     pending = PENDING.get(plugin.name)
     log("→ renvois aux tickets et aux dossiers de travail")
     refs = ticket_refs(plugin)
+    if refs and pending:
+        log(f"  {len(refs)} à reprendre, signalés sans échec ({pending}) :")
+        for p in refs:
+            log(f"    {p}")
+    elif refs:
+        log("\n".join(f"  {p}" for p in refs))
+        raise Failed(f"{plugin.name} : {len(refs)} renvoi(s) aux tickets ou aux dossiers de travail")
+    else:
+        log("  ok")
     log("→ arbre « Architecture » du README")
     gaps = architecture_gaps(plugin)
+    deferred = [f"{g} : absent de l'arbre « Architecture » du README (scripts/check.sh --fix {plugin.name} l'écrit)" for g in gaps or []]
     if gaps is None:
         log("  pas d'arbre « Architecture » : contrôle sans objet")
-    problems = refs + [f"{g} : absent de l'arbre « Architecture » du README (scripts/check.sh --fix {plugin.name} l'écrit)" for g in gaps or []]
-    if problems and pending:
-        log(f"  {len(problems)} à reprendre, signalés sans échec ({pending}) :")
-        for p in problems:
+    elif deferred and pending:
+        log(f"  {len(deferred)} à reprendre, signalés sans échec ({pending}) :")
+        for p in deferred:
             log(f"    {p}")
-    elif problems:
-        log("\n".join(f"  {p}" for p in problems))
-        raise Failed(f"{plugin.name} : {len(problems)} renvoi(s) aux tickets ou fichier(s) absents de l'arbre")
+        deferred = []
+    elif deferred:
+        log("\n".join(f"  {p}" for p in deferred))
+        log("  signalé, en échec à la fin : les autres contrôles continuent")
     else:
         log("  ok")
     log("→ termes retirés")
     retired = retired_terms(plugin)
-    log("→ règles du code (Math.min/max étalé, doc détachée)")
-    rules = retired + code_rules(plugin)
+    log("→ règles du code (Math.min/max étalé, doc détachée, caractères invisibles bruts, valeurs relues brutes)")
+    rules = retired + code_rules(plugin) + invisible_chars(plugin) + raw_interpolations(plugin)
     if rules:
         log("\n".join(f"  {p}" for p in rules))
         raise Failed(f"{plugin.name} : {len(rules)} terme(s) retiré(s) ou entorse(s) aux règles du code")
     log("  ok")
+    check_export_terms(plugin)
     check_changelog(plugin)
     check_versions(plugin)
+    return deferred
+
+
+def fail_deferred(deferred):
+    """L'échec, en fin de contrôles, des défauts signalés sans couper la suite."""
+    if deferred:
+        log("\nSignalés plus haut, sans arrêter les contrôles :")
+        log("\n".join(f"  {p}" for p in deferred))
+        raise DeferredFailed(f"{len(deferred)} fichier(s) absent(s) de l'arbre « Architecture »")
 
 
 # --- versions -----------------------------------------------------------------
@@ -768,7 +1023,7 @@ def engine_calls(plugin):
             continue
         for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             for m in API_CALL.finditer(code_of(line)):
-                calls.append((f"{plugin.name}/{rel}:{n}", m.group(1), m.group(2)))
+                calls.append((f"{label_of(plugin)}/{rel}:{n}", m.group(1), m.group(2)))
     return calls
 
 
@@ -821,7 +1076,8 @@ def ensure_types(plugin):
     if (types / "tsconfig.json").is_file():
         return types_written_by(types)
     clone = main_clone()
-    same = clone / "plugins" / plugin.name / ".claude-plugin" / "types"
+    # Le même dossier dans le clone principal : `plugins/<nom>`, ou `scripts/sonde` pour la sonde.
+    same = clone / shown_dir(plugin) / ".claude-plugin" / "types"
     candidates = [same] if (same / "tsconfig.json").is_file() and same != types else []
     if not candidates:
         others = [d for root in {clone, REPO} for d in (root / "plugins").glob("*/.claude-plugin/types")
@@ -830,7 +1086,7 @@ def ensure_types(plugin):
         candidates = others[:1]
     if not candidates:
         raise Failed(f"types du moteur absents de {plugin.name} et du clone principal : lancer une fois "
-                     f"`claude --plugin-dir plugins/{plugin.name}` en session interactive, puis quitter")
+                     f"`claude --plugin-dir {shown_dir(plugin)}` en session interactive, puis quitter")
     shutil.copytree(candidates[0], types)
     log(f"  types du moteur copiés depuis {candidates[0]}")
     return types_written_by(types)
@@ -842,7 +1098,7 @@ def typecheck(plugin):
     log(f"→ types ({TYPESCRIPT} par npx)")
     written = ensure_types(plugin)
     log(f"  types écrits par Claude Code {written or '(version inconnue)'}")
-    step(f"tsc -p plugins/{plugin.name}", [tool("npx"), "--yes", "-p", TYPESCRIPT, "tsc", "-p", plugin], 600)
+    step(f"tsc -p {shown_dir(plugin)}", [tool("npx"), "--yes", "-p", TYPESCRIPT, "tsc", "-p", plugin], 600)
 
 
 # --- tests et validation ------------------------------------------------------
@@ -857,7 +1113,7 @@ def node_tests(plugin):
 
 def plugin_tests(plugin, claude, label):
     if (plugin / "tests").is_dir():
-        step(f"claude plugin test plugins/{plugin.name} ({label})", [claude, "plugin", "test", plugin], 900, r"\d+ pass")
+        step(f"claude plugin test {shown_dir(plugin)} ({label})", [claude, "plugin", "test", plugin], 900, r"\d+ pass")
 
 
 def test_file(plugin, name):
@@ -870,21 +1126,24 @@ def test_file(plugin, name):
                    for t in (plugin / folder).rglob(Path(name).name) if t.is_file() and ".test." in t.name)
     if len(found) != 1:
         where = ", ".join(t.relative_to(REPO).as_posix() for t in found) or "aucun"
-        raise Failed(f"fichier de test « {name} » dans plugins/{plugin.name} : {len(found)} trouvé(s) ({where})")
+        raise Failed(f"fichier de test « {name} » dans {shown_dir(plugin)} : {len(found)} trouvé(s) ({where})")
     return found[0]
 
 
-def single_test(plugin, name):
-    """Un seul fichier de test, avec le Claude Code du terminal : un `.test.mjs` par `node --test` en
-    place ; un `.test.ts`/`.test.tsx` par `claude plugin test` sur une copie temporaire du plugin qui
-    n'a que ce fichier de test (les aides de `tests/` sans `.test.` restent), faute de filtre."""
-    path = test_file(plugin, name)
-    rel = path.relative_to(REPO).as_posix()
-    if path.name.endswith(".test.mjs"):
-        step(f"node --test {rel}", [tool("node"), "--test", path], 600, r"pass \d+")
+def single_test(plugin, names):
+    """Les fichiers de test nommés, avec le Claude Code du terminal : les `.test.mjs` par `node --test`
+    en place ; les `.test.ts`/`.test.tsx` par `claude plugin test` sur une copie temporaire du plugin
+    qui n'a que ces fichiers de test (les aides de `tests/` sans `.test.` restent), faute de filtre."""
+    paths = [test_file(plugin, name) for name in names]
+    node = [p for p in paths if p.name.endswith(".test.mjs")]
+    if node:
+        step("node --test " + " ".join(p.relative_to(REPO).as_posix() for p in node), [tool("node"), "--test", *node], 600, r"pass \d+")
+    engine = [p for p in paths if not p.name.endswith(".test.mjs")]
+    if not engine:
         return
+    rel = " ".join(p.relative_to(REPO).as_posix() for p in engine)
     claude = tool("claude")
-    target = path.relative_to(plugin)
+    targets = {p.relative_to(plugin) for p in engine}
     tmp = Path(tempfile.mkdtemp(prefix="check-test-"))
     try:
         copy = tmp / plugin.name
@@ -893,13 +1152,47 @@ def single_test(plugin, name):
         shutil.copytree(plugin, copy, ignore=lambda folder, names: [
             n for n in names if n == "node_modules" or (n == "types" and Path(folder).resolve() == engine_types)])
         for other in copy.rglob("*.test.*"):
-            if other.relative_to(copy) != target:
+            if other.relative_to(copy) not in targets:
                 other.unlink()
         code, out = run([claude, "--version"], 60)
         version = out.strip().split(" ")[0] if code == 0 else "?"
         step(f"claude plugin test {rel} (terminal {version})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def split_tests(tests, plugins, known):
+    """Les fichiers de `--test` et les plugins : `--test <fichier>… <plugin>` met le plugin au bout de
+    la liste des fichiers ; il en sort quand aucun plugin n'est nommé à part et qu'il en nomme un."""
+    tests, plugins = list(tests), list(plugins)
+    if not plugins and len(tests) > 1 and tests[-1] in known:
+        plugins.append(tests.pop())
+    return tests, plugins
+
+
+def touched_tests(plugin):
+    """Les fichiers de test du plugin modifiés face à `HEAD` (arbre de travail ou index) ou nouveaux
+    (non suivis, fichiers ignorés exclus), en chemins depuis le plugin, triés."""
+    rel = plugin.relative_to(REPO).as_posix()
+    found = set()
+    for args in (["diff", "--name-only", "--diff-filter=d", "HEAD", "--", rel],
+                 ["ls-files", "--others", "--exclude-standard", "--", rel]):
+        out = git(args, 60)
+        if out is None:
+            raise Failed(f"git {' '.join(args[:2])} : échec")
+        found |= {p for p in out.splitlines() if ".test." in Path(p).name}
+    return sorted(Path(p).relative_to(rel).as_posix() for p in found)
+
+
+def quick_check(plugin):
+    """Le pré-contrôle rapide d'un plugin : `tsc`, puis ses seuls fichiers de test touchés (terminal)."""
+    log(f"\n=== {plugin.name} (pré-contrôle rapide)")
+    typecheck(plugin)
+    tests = touched_tests(plugin)
+    if tests:
+        single_test(plugin, tests)
+    else:
+        log("→ aucun fichier de test touché face à HEAD")
 
 
 def validate(target, claude, label=None):
@@ -910,7 +1203,8 @@ def validate(target, claude, label=None):
 def check_plugin(plugin, desktop):
     log(f"\n=== {plugin.name}")
     claude = tool("claude")
-    static_checks(plugin)
+    deferred = static_checks(plugin)
+    DEFERRED.extend(deferred)
     check_engine_api(plugin, desktop)
     typecheck(plugin)
     node_tests(plugin)
@@ -920,7 +1214,51 @@ def check_plugin(plugin, desktop):
         binary, version = desktop
         plugin_tests(plugin, binary, f"desktop {version}")
     validate(plugin, claude)
-    remember_passed(plugin)
+    # Un défaut signalé sans couper la suite fait échouer le contrôle : pas d'empreinte « vert ».
+    if not deferred:
+        remember_passed(plugin)
+
+
+def shown_dir(plugin):
+    """Le dossier d'un plugin ou d'un module tel qu'un message le cite : son chemin depuis le dépôt
+    (`plugins/<nom>`, `scripts/sonde`) ; `plugins/<nom>` pour la copie de l'index du hook."""
+    return plugin.relative_to(REPO).as_posix() if plugin.is_relative_to(REPO) else f"plugins/{plugin.name}"
+
+
+def label_of(plugin):
+    """Le préfixe des fichiers d'un plugin dans un message : son nom (`flow-board/hooks/…`), ou le
+    chemin d'un module hors de la marketplace (`scripts/sonde/hooks/…`)."""
+    return shown_dir(plugin) if plugin in TOOLS.values() else plugin.name
+
+
+def target(name):
+    """Le dossier que nomme un nom de la ligne de commande : un plugin de `plugins/`, ou un module du
+    dépôt hors de la marketplace (`TOOLS`)."""
+    return TOOLS.get(name, PLUGINS / name)
+
+
+def tool_static_checks(module, desktop):
+    """Les contrôles d'un module hors de la marketplace avant `tsc` : les termes de l'export public (il
+    part dans la version publique) et les appels de l'API du moteur, que le Claude Code de l'app doit
+    connaître (la sonde se lance aussi avec lui, et `$: any` cache ses appels à `tsc`)."""
+    check_export_terms(module)
+    check_engine_api(module, desktop)
+
+
+def check_tool(module, desktop):
+    """Les contrôles d'un module du dépôt hors de la marketplace (la sonde) : les termes de l'export et
+    l'API du moteur dans l'app (`tool_static_checks`), `tsc`, puis ses tests avec
+    le Claude Code du terminal et celui de l'app ; une erreur de types de la sonde n'avait été vue que
+    par un `tsc` lancé à la main."""
+    log(f"\n=== {module.relative_to(REPO).as_posix()}")
+    claude = tool("claude")
+    tool_static_checks(module, desktop)
+    typecheck(module)
+    code, out = run([claude, "--version"], 60)
+    plugin_tests(module, claude, f"terminal {out.strip().split(' ')[0] if code == 0 else '?'}")
+    if desktop is not None:
+        binary, version = desktop
+        plugin_tests(module, binary, f"desktop {version}")
 
 
 # --- empreinte d'un plugin contrôlé -------------------------------------------
@@ -1049,6 +1387,94 @@ def check_decisions(paths):
     log("  ok")
 
 
+def cites_search(text):
+    """Vrai si le ticket a une ligne « Recherche … » avec une commande et son résultat : sur la ligne
+    même (`<commande>` suivi d'un texte), ou dans un bloc de code qui la suit (deux lignes au moins)."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if not SEARCH_LINE.match(line):
+            continue
+        if INLINE_SEARCH.search(line):
+            return True
+        if i + 1 < len(lines) and lines[i + 1].startswith("```"):
+            body = []
+            for inner in lines[i + 2:]:
+                if inner.startswith("```"):
+                    break
+                body.append(inner)
+            if len([b for b in body if b.strip()]) >= 2:
+                return True
+    return False
+
+
+def lacks_search(text):
+    """Vrai pour un ticket « Zone sensible : oui » sans sa recherche citée."""
+    return bool(text and SENSITIVE_LINE.search(text) and not cites_search(text))
+
+
+def tickets_without_search(paths, sources=None):
+    """Les tickets indexés sensibles sans leur recherche citée ; un ticket que `HEAD` portait déjà
+    sensible et sans elle passe (cocher un critère d'un ancien ticket ne bloque pas le commit), de même,
+    pendant une fusion, qu'un ticket que la branche fusionnée (`MERGE_HEAD`) portait ainsi."""
+    sources = sources or {}
+    merging = git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None
+    problems = []
+    for path in paths:
+        before = sources.get(path, path)
+        # Pendant une fusion (hook pre-merge-commit), un ticket que la branche fusionnée portait déjà
+        # sensible sans recherche passe aussi : il a été commité avant le contrôle.
+        if lacks_search(git_show(REPO, f":{path}")) and not lacks_search(git_show(REPO, f"HEAD:{before}")) \
+                and not (merging and lacks_search(git_show(REPO, f"MERGE_HEAD:{before}"))):
+            problems.append(f"{path} : « Zone sensible : oui » sans ligne « Recherche … : `<commande>` — <résultat> » (ou la ligne « Recherche » suivie d'un bloc de code : la commande, puis son résultat) "
+                            "(la recherche des chemins qui écrivent, fusionnent ou effacent ses données, citée avec son résultat)")
+    return problems
+
+
+def check_tickets(paths):
+    log("→ recherche citée des tickets sensibles")
+    problems = tickets_without_search(paths, staged_sources())
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} ticket(s) sensible(s) sans recherche citée")
+    log("  ok")
+
+
+def admitted_changes(path):
+    """Une liste d'admis indexée face à `HEAD` : (ses augmentations, les plugins dont un compte change).
+    Une clé nouvelle compte comme une augmentation ; une liste que `HEAD` n'a pas encore n'en a pas (elle
+    se relève une fois, avec le contrôle qui la lit)."""
+    committed_text = git_show(REPO, f"HEAD:{path}")
+    staged_counts = admitted_from(git_show(REPO, f":{path}"), path)
+    committed = admitted_from(committed_text, path)
+    increases = [] if committed_text is None else [
+        f"{path} : « {key} » passe de {committed.get(key, 0)} à {n} admis ; une liste d'admis se nettoie, jamais n'augmente"
+        for key, n in sorted(staged_counts.items()) if n > committed.get(key, 0)]
+    changed = {key.split("/")[0] for key in set(staged_counts) | set(committed) if staged_counts.get(key) != committed.get(key)}
+    return increases, {name for name in changed if is_plugin(name)}
+
+
+def is_plugin(name):
+    """Vrai pour le nom d'un plugin du dépôt (un nom simple, jamais « .. ») : la règle d'un autre sujet
+    (`config/rules/general.md`) ou une clé d'admis hors des plugins ne fait copier ni contrôler rien."""
+    return bool(re.fullmatch(r"[\w-]+", name)) and (REPO / "plugins" / name / ".claude-plugin" / "plugin.json").is_file()
+
+
+def check_rules(names, tree):
+    """Les contrôles statiques qui lisent la règle d'un plugin et les listes d'admis (termes retirés,
+    renvois admis, valeurs relues brutes), sur la copie de l'index, avec ses listes d'admis."""
+    for name in names:
+        copy = tree / "plugins" / name
+        if not (copy / ".claude-plugin" / "plugin.json").is_file():
+            continue
+        log(f"→ plugins/{name} : termes retirés, renvois admis, valeurs relues brutes (règle ou liste d'admis indexée)")
+        problems = retired_terms(copy) + ticket_refs(copy, tree / "scripts" / ADMITTED_REFS.name) \
+            + raw_interpolations(copy, tree / "scripts" / ADMITTED_INTERPOLATIONS.name)
+        if problems:
+            log("\n".join(f"  {p}" for p in problems))
+            raise Failed(f"{name} : {len(problems)} défaut(s) : " + " ; ".join(problems))
+        log("  ok")
+
+
 def staged():
     code, out = run(["git", "diff", "--cached", "--name-only", "-z"], 60)
     if code != 0:
@@ -1057,15 +1483,34 @@ def staged():
     decisions = [p for p in paths if DECISIONS_FILE.fullmatch(p)]
     if decisions:
         check_decisions(decisions)
+    tickets = [p for p in paths if TICKET_FILE.fullmatch(p)]
+    if tickets:
+        check_tickets(tickets)
+    # La règle d'un plugin et les listes d'admis : leurs contrôles statiques, même en documentation seule,
+    # et une liste d'admis qui augmente face à HEAD refusée.
+    ruled = {m.group(1) for p in paths if (m := RULE_FILE.fullmatch(p)) and is_plugin(m.group(1))}
+    lists = [p for p in paths if ADMITTED_FILE.fullmatch(p)]
+    if lists:
+        log("→ listes d'admis indexées (jamais plus qu'à HEAD)")
+        increases = []
+        for path in lists:
+            more, changed = admitted_changes(path)
+            increases += more
+            ruled |= changed
+        if increases:
+            log("\n".join(f"  {p}" for p in increases))
+            raise Failed(f"{len(increases)} augmentation(s) d'une liste d'admis : " + " ; ".join(increases))
+        log("  ok")
     # Une édition du CHANGELOG seul est de la documentation : sa forme se contrôle quand même.
     shaped = sorted({p.split("/")[1] for p in paths if re.fullmatch(r"plugins/[^/]+/(?:CHANGELOG\.md|\.claude-plugin/plugin\.json)", p)})
     code_paths = [p for p in paths if not is_doc(p)]
-    if not shaped and not code_paths:
-        log("pre-commit : documentation seule, pas d'autre contrôle" if decisions else "pre-commit : documentation seule, pas de contrôle")
+    if not shaped and not code_paths and not ruled:
+        log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets else "pre-commit : documentation seule, pas de contrôle")
         return
     # Tous les contrôles lisent la copie de l'index : ce qui part, jamais l'arbre de travail.
     tree = export_index()
     try:
+        check_rules(sorted(ruled), tree)
         for name in shaped:
             if (tree / "plugins" / name / ".claude-plugin" / "plugin.json").is_file():
                 log(f"pre-commit : plugins/{name}")
@@ -1097,32 +1542,51 @@ def staged():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("plugins", nargs="*", help="plugins à contrôler (noms des dossiers de plugins/)")
-    parser.add_argument("--all", action="store_true", help="tous les plugins")
+    parser.add_argument("plugins", nargs="*", help="plugins à contrôler (noms des dossiers de plugins/, ou « sonde » pour scripts/sonde)")
+    parser.add_argument("--all", action="store_true", help="tous les plugins, et la sonde")
     parser.add_argument("--no-desktop", action="store_true", help="sans le Claude Code de l'app desktop")
     parser.add_argument("--staged", action="store_true", help="hook pre-commit : les plugins dont un fichier est indexé")
     parser.add_argument("--fix", action="store_true", help="réécrit l'arbre « Architecture » du README des plugins, sans rien contrôler")
-    parser.add_argument("--test", metavar="FICHIER", help="lance ce seul fichier de test du plugin nommé (terminal), sans les autres contrôles")
+    parser.add_argument("--test", metavar="FICHIER", nargs="+", action="extend",
+                        help="lance ces seuls fichiers de test du plugin nommé (terminal), sans les autres contrôles")
+    parser.add_argument("--quick", action="store_true",
+                        help="pré-contrôle rapide : tsc et les seuls fichiers de test touchés face à HEAD (terminal)")
+    parser.add_argument("--tsc", action="store_true", help="le seul tsc des plugins nommés")
     args = parser.parse_args()
+    known = {p.parent.parent.name for p in PLUGINS.glob("*/.claude-plugin/plugin.json")} | set(TOOLS)
+    if args.test:
+        args.test, args.plugins = split_tests(args.test, args.plugins, known)
     try:
         if args.staged:
             staged()
             return
-        names = sorted(p.parent.parent.name for p in PLUGINS.glob("*/.claude-plugin/plugin.json")) if args.all else args.plugins
+        names = sorted(known) if args.all else args.plugins
         if not names:
             parser.error("nommer au moins un plugin, ou --all")
-        unknown = [n for n in names if not (PLUGINS / n / ".claude-plugin" / "plugin.json").is_file()]
+        unknown = [n for n in names if n not in known]
         if unknown:
-            raise Failed(f"plugin inconnu : {', '.join(unknown)}")
+            raise Failed(f"plugin inconnu : {', '.join(unknown)} (connus : {', '.join(sorted(known))})")
         if args.test:
             if len(names) != 1:
                 parser.error("--test : nommer un seul plugin")
-            single_test(PLUGINS / names[0], args.test)
-            log("\nLe test est passé.")
+            single_test(target(names[0]), args.test)
+            log(f"\n{'Les tests sont passés' if len(args.test) > 1 else 'Le test est passé'}.")
+            return
+        if args.tsc:
+            for name in names:
+                log(f"\n=== {name} (tsc seul)")
+                typecheck(target(name))
+            log("\nLes types sont bons.")
+            return
+        if args.quick:
+            for name in names:
+                quick_check(target(name))
+            log(f"\nPré-contrôle passé ; la suite complète reste à lancer (scripts/check.sh {' '.join(names)}).")
             return
         if args.fix:
             for name in names:
-                fix_architecture(PLUGINS / name)
+                if name not in TOOLS:
+                    fix_architecture(PLUGINS / name)
             log(f"\nRelancer scripts/check.sh {' '.join(names)} pour les contrôles.")
             return
         desktop = None
@@ -1131,10 +1595,17 @@ def main():
             if desktop is None:
                 raise Failed("Claude Code de l'app desktop introuvable : installer l'app, ou relancer avec --no-desktop")
         for name in names:
-            check_plugin(PLUGINS / name, desktop)
+            if name in TOOLS:
+                check_tool(TOOLS[name], desktop)
+            else:
+                check_plugin(PLUGINS / name, desktop)
         validate(REPO, tool("claude"))
         check_state(names)
+        fail_deferred(DEFERRED)
     except Failed as err:
+        if DEFERRED and not isinstance(err, DeferredFailed):
+            log("\nSignalés plus haut, sans arrêter les contrôles :")
+            log("\n".join(f"  {p}" for p in DEFERRED))
         log(f"\nÉCHEC : {err}")
         sys.exit(1)
     log("\nTous les contrôles sont passés.")

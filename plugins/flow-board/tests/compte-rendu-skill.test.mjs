@@ -15,3 +15,52 @@ test('le compte rendu a une borne chiffrée, et « Trouvé » se range par thèm
   assert.ok(found.includes('- **<thème>** :'), '« Trouvé » ne se range pas par thème')
   assert.ok(found.includes('Rangé par thème'), '« Trouvé » ne dit pas son rangement')
 })
+
+// Ce qu'une session liée rend au relais (le CHANGELOG, le code antérieur, les pistes) va au compte rendu
+// du parcours dans tous les cas : repris des sessions liées avec des groupes, rédigé par Claude sans groupes.
+test('le compte rendu demande les trois rubriques, avec ou sans groupes, et dit d’où elles viennent', () => {
+  const sections = [...skill.matchAll(/^## (.+)$/gm)].map(m => m[1])
+  for (const title of ['Code antérieur au lot', 'Pistes', 'Ce que le CHANGELOG devra dire']) assert.ok(sections.includes(title), `rubrique absente : « ${title} »`)
+  // Dans l'ordre du rapport : après « Trouvé », le CHANGELOG avant la livraison.
+  const at = title => sections.indexOf(title)
+  assert.ok(at('Trouvé') < at('Code antérieur au lot') && at('Code antérieur au lot') < at('Pistes') && at('Pistes') < at('Documentation'))
+  assert.ok(at('Documentation') < at('Ce que le CHANGELOG devra dire') && at('Ce que le CHANGELOG devra dire') < at('Ce que la livraison enverra'))
+  const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
+  assert.ok(sources.includes('**avec des groupes**, reprends-les des comptes rendus des sessions liées'), 'origine avec groupes absente')
+  assert.ok(sources.includes('**sans groupes**, rédige-les toi-même'), 'origine sans groupes absente')
+  const older = skill.slice(skill.indexOf('## Code antérieur au lot'), skill.indexOf('## Pistes'))
+  assert.ok(older.includes('groupe « durcissement »'), 'le code antérieur ne sert pas à décider d’un groupe « durcissement »')
+  const tracks = skill.slice(skill.indexOf('## Pistes'), skill.indexOf('## Documentation'))
+  assert.ok(tracks.includes('passe « bogues » qui ne viole pas l\'invariant') && tracks.includes('cas limite relevé en route'), 'les pistes ne disent pas leur source')
+  const changelog = skill.slice(skill.indexOf('## Ce que le CHANGELOG devra dire'), skill.indexOf('## Ce que la livraison enverra'))
+  assert.ok(changelog.includes('<plugin ou paquet>'), 'le CHANGELOG ne se range pas par plugin ou paquet')
+  // La borne de longueur reste.
+  assert.ok(skill.includes('Le rapport entier tient en 60 lignes au plus, titres compris'))
+})
+
+test('le README et la description du skill nomment les mêmes rubriques que le skill', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  const line = readme.split('\n').find(l => l.startsWith('- sections fixes : '))
+  assert.ok(line, 'liste des sections absente du README')
+  const listed = line.slice('- sections fixes : '.length, line.indexOf(' ; ')).split(', ')
+  const template = skill.slice(skill.indexOf('```'), skill.lastIndexOf('```'))
+  const sections = ['En bref', ...[...template.matchAll(/^## (.+)$/gm)].map(m => m[1])]
+  assert.deepEqual(listed, sections)
+  const description = skill.match(/^description: "(.*)"$/m)[1]
+  for (const part of ['code antérieur au lot', 'les pistes', 'ce que le CHANGELOG devra dire']) assert.ok(description.includes(part), `description sans « ${part} »`)
+})
+
+test('avec des groupes, le skill renvoie aux comptes rendus des sessions liées ; « Trouvé » ne range plus de pistes', () => {
+  // La consigne qui donne ce chemin se teste au chargement : compte-rendu.test.ts.
+  assert.ok(skill.includes('dans leurs fichiers du relais, dont la consigne de flow-board plus bas donne le chemin'))
+  // « Trouvé » ne range plus de pistes : elles vont sous « Pistes ».
+  const found = skill.slice(skill.indexOf('## Trouvé'), skill.indexOf('## Code antérieur au lot'))
+  assert.ok(!/piste(?!s des revues)/.test(found.replace('« Pistes »', '')), '« Trouvé » range encore des pistes')
+})
+
+test('la consigne auto du compte rendu renvoie à la rubrique du code antérieur au lot', () => {
+  const register = readFileSync(new URL('../hooks/register.tsx', import.meta.url), 'utf8')
+  const auto = register.match(/'compte-rendu':\s*\n\s*'([^']*)'/)
+  assert.ok(auto, 'consigne auto du compte rendu absente')
+  assert.ok(auto[1].includes('« Code antérieur au lot »'), 'la consigne auto ne nomme pas la rubrique')
+})

@@ -82,7 +82,8 @@ const NOTICE = `« ${autoQuestionsNotice('Boutique', 'N')} »`
 const PHASES: [string, string][] = [
   ['to-spec', 'Spec in auto mode: the seams are not asked: settle them by your recommended answer'],
   ['to-tickets', 'Ticket split in auto mode: the breakdown is not approved by a button question'],
-  ['implement', 'Implementation in auto mode: flow-board itself sends, at the end of a turn, the request to launch the next wave of groups'],
+  // Ce parcours n'a pas de groupes : le bloc du lot (celui d'un parcours à groupes, dans note-revue-du-lot.test.ts).
+  ['implement', 'Implementation in auto mode, without groups: launch the lot review yourself'],
   ['flow-board:compte-rendu', 'Report in auto mode: the auto mode stops once the report is written'],
 ]
 
@@ -113,7 +114,7 @@ test('En auto, la spec, le découpage, l’implémentation et le compte rendu re
     if (name === 'implement') {
       expect(text).toContain('fix every kept finding without asking the user')
       expect(text).toContain('do not propose a « durcissement » group; list them for the report')
-      expect(text).toContain('never xhigh: do not ask the xhigh question, declare instead that xhigh was not offered')
+      expect(text).toContain("flow-board itself sends it at the end of a turn, then the lot's advised security review when it was not launched")
     }
   }
 })

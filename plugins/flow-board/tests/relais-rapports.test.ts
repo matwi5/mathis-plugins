@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
-import { RELAY_CHOICES_MAX, mergeRelay, nextRelayTime, relayedSentence } from '../hooks/relay.ts'
+import { RELAY_CHOICES_MAX, applyRelay, mergeRelay, nextRelayTime, refusedRelayText, relayedSentence } from '../hooks/relay.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Relay } from '../types'
 
@@ -335,4 +335,185 @@ test('une revue écrite mais pas relue ne se renvoie pas, même avec un compte d
   expect(text).not.toMatch(/again in a new call|send this review again/)
   // Une perte qui se renvoie garde sa consigne.
   expect(relayedSentence({ review: { standards: 1, spec: 0, fixed: 0 } }, [{ part: 'review', why: 'the relay could not be written, neither its file nor the store' }])).toMatch(/send it again in a new call of this tool/)
+})
+
+test('au relais, une revue dont un compte est hors forme est refusée en entier, sa revue de sécurité part seule, et la réponse le dit', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 1, fixed: 1 } } as any)
+  for (const field of ['standards', 'spec', 'fixed'] as const) {
+    for (const bad of ['3', null, -1, 2.5, 10_001]) {
+      const out = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, fixed: 0, [field]: bad }, security: { group: 'C', advised: true, why: 'chemins', findings: 1, fixed: 0 } } as any)) as { result: string }
+      expect(out.result).toContain(`review: refused, counts out of range (${field}): each is a whole number from 0 to 10 000; nothing relayed for it, send it again`)
+      expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+      // Un compte de bogues ne se dit pas relayé à part quand la revue entière est refusée.
+      const withBugs = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, fixed: 0, bugs: 'x', [field]: bad } } as any)) as { result: string }
+      expect(withBugs.result).toContain(`review: refused, counts out of range (${field}): each is a whole number from 0 to 10 000`)
+      expect(withBugs.result).not.toMatch(/the rest of this review is relayed|the review findings/)
+    }
+  }
+  // Rien de ces revues n'est relayé ; la revue de sécurité l'est.
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 1, standards: 1, spec: 1, fixed: 1 })
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ advised: true, findings: 1, fixed: 0 })
+  // Un compte absent vaut 0, comme avant.
+  await $.tool.call({ tool: TOOL, review: { spec: 2 } } as any)
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 2, standards: 1, spec: 3, fixed: 1 })
+})
+
+test('une revue dont un compte de la session passerait 10 000 est refusée, sa revue de sécurité part seule, et la réponse dit de donner les comptes dans le compte rendu', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, review: { standards: 9_999, spec: 0, fixed: 10_000 } } as any)
+  const out = (await $.tool.call({ tool: TOOL, review: { standards: 2, spec: 0, fixed: 0 }, security: { group: 'C', advised: false, why: 'aucun risque' } } as any)) as { result: string }
+  expect(out.result).toMatch(/NOT kept in the relay: the review findings \(its relay entry would pass 10 000 \(standards\); give the review counts in your final report\)/)
+  expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+  expect(out.result).not.toMatch(/again in a new call/)
+  const fixed = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, fixed: 1 } } as any)) as { result: string }
+  expect(fixed.result).toMatch(/its relay entry would pass 10 000 \(fixed\)/)
+  // L'entrée reste telle quelle ; la revue de sécurité est gardée.
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 1, standards: 9_999, spec: 0, fixed: 10_000 })
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ advised: false })
+  // Jusqu'à la borne, la revue se garde.
+  await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, fixed: 0 } } as any)
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 2, standards: 10_000, spec: 0, fixed: 10_000 })
+})
+
+test('la borne des comptes s’écrit « 10 000 » dans les réponses, pour la revue comme pour la sécurité', () => {
+  for (const input of [{ security: { group: 'C', findings: -1 } }, { review: { standards: -1, spec: 0, fixed: 0 } }]) {
+    const text = refusedRelayText(input)
+    expect(text).toContain('each is a whole number from 0 to 10 000')
+    expect(text).not.toContain('10000')
+  }
+  // Dans la discussion du parcours aussi.
+  const run = newRun('implement', 1_000, 'Lot')
+  const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  expect(applyReport(board, { security: { findings: -1 } }, 3_000).text).toContain('each is a whole number from 0 to 10 000')
+})
+
+/** L'entrée de relais de la session « s-fille », modifiée à la main (son fichier, sinon sa clé du store). */
+const handEdit = (mem: Record<string, unknown>, files: Record<string, string>, runId: string, f: (entry: any) => void) => {
+  const slug = runId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  const ownFile = Object.keys(files).find(p => p.endsWith(`/flow-board/relais/${slug}.s-fille.entry.json`))
+  if (ownFile) {
+    const v = JSON.parse(files[ownFile]!)
+    f(v.entry)
+    files[ownFile] = JSON.stringify(v)
+  } else f((mem[`relay:${runId}:s-fille`] as any).entry)
+}
+
+test('un compte de revue gardé illisible n’est jamais réécrit : la revue est refusée, sa revue de sécurité part seule, et la réponse le dit', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 1, fixed: 1 } } as any)
+  for (const field of ['count', 'standards', 'spec', 'fixed'] as const) {
+    for (const bad of ['3', null, -1, 2.5, 10_001]) {
+      const kept = { count: 1, standards: 1, spec: 1, fixed: 1, [field]: bad }
+      handEdit(mem, files, runId, e => {
+        e.reviews = { ...kept }
+        delete e.security
+      })
+      const out = (await $.tool.call({ tool: TOOL, review: { standards: 2, spec: 0, fixed: 0 }, security: { group: 'C', advised: true, why: 'chemins', findings: 1, fixed: 1 } } as any)) as { result: string }
+      expect(out.result).toContain(`NOT kept in the relay: the review findings (its relay entry holds an unreadable review count (${field}), never rewritten; give the review counts in your final report)`)
+      expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+      expect(out.result).not.toMatch(/again in a new call/)
+      expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual(kept)
+      expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ advised: true, findings: 1, fixed: 1 })
+    }
+  }
+})
+
+test('des comptes de revue gardés qui ne sont pas un objet ne sont jamais réécrits ; un compte gardé absent vaut 0', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 1, fixed: 1 } } as any)
+  for (const bad of ['abîmé', null, [1, 2], 7]) {
+    handEdit(mem, files, runId, e => {
+      e.reviews = bad
+    })
+    const out = (await $.tool.call({ tool: TOOL, review: { standards: 2, spec: 0, fixed: 0 } } as any)) as { result: string }
+    expect(out.result).toContain('NOT kept in the relay: the review findings (its relay entry holds unreadable review counts, never rewritten; give the review counts in your final report)')
+    expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual(bad)
+  }
+  // Un compte gardé absent (une entrée d'avant, ou modifiée) vaut 0 : la revue s'y ajoute.
+  handEdit(mem, files, runId, e => {
+    e.reviews = { count: 1, standards: 1, fixed: 1 }
+  })
+  await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 2, fixed: 0 } } as any)
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 2, standards: 1, spec: 2, fixed: 1 })
+})
+
+test('un compte de sécurité gardé illisible n’est jamais écrasé : l’avis qui le remplacerait est refusé, la revue du même appel part seule, et la réponse le dit', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, security: { group: 'C', advised: true, findings: 2, fixed: 1, dismissed: 1 } } as any)
+  for (const field of ['findings', 'fixed', 'dismissed'] as const) {
+    for (const bad of ['3', null, -1, 2.5, 10_001]) {
+      handEdit(mem, files, runId, e => {
+        e.security = { advised: true, findings: 2, fixed: 1, dismissed: 1, at: T0, [field]: bad }
+        delete e.reviews
+      })
+      const out = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, fixed: 0 }, security: { group: 'C', findings: 2, fixed: 2, dismissed: 0 } } as any)) as { result: string }
+      expect(out.result).toContain(`NOT kept in the relay: the security review (its relay entry holds an unreadable security count (${field}), never overwritten; give the security counts in your final report)`)
+      expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the review findings\./)
+      const entry = relayOf(mem, files, runId)?.sessions['s-fille']
+      expect(entry?.security).toMatchObject({ advised: true, findings: 2, fixed: 1, dismissed: 1, [field]: bad })
+      expect(entry?.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 0 })
+      // Un avis qui ne touche pas ce compte le laisse tel quel et se garde (il remplace les autres, même plus petits).
+      const other = field === 'dismissed' ? { findings: 1 } : { dismissed: 0 }
+      const next = (await $.tool.call({ tool: TOOL, security: { group: 'C', ...other } } as any)) as { result: string }
+      expect(next.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+      expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ [field]: bad, ...other })
+    }
+  }
+})
+
+test('un avis de sécurité gardé qui n’est pas un objet n’est jamais écrasé', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { mem, files } = world(on, 's-fille')
+  const runId = seeded(mem)
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
+  await $.tool.call({ tool: TOOL, security: { group: 'C', advised: false, why: 'rien' } } as any)
+  for (const bad of ['abîmé', null, [1]]) {
+    handEdit(mem, files, runId, e => {
+      e.security = bad
+    })
+    const out = (await $.tool.call({ tool: TOOL, security: { group: 'C', advised: true, findings: 0 } } as any)) as { result: string }
+    expect(out.result).toContain('NOT kept in the relay: the security review (its relay entry holds an unreadable security review, never overwritten; give the security counts in your final report)')
+    expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toEqual(bad)
+  }
+})
+
+test('appelé sans refus préalable, l’ajout au relais ne réécrit jamais un compte gardé illisible, de revue ou de sécurité', () => {
+  const at = T0
+  const base = { tickets: {}, commits: 0, startedAt: at, at }
+  const relay = (entry: object) => ({ v: 1 as const, run: 'r', sessions: { s: { ...base, ...entry } as any } })
+  const review = applyRelay(relay({ reviews: { count: 1, standards: '3', spec: null, fixed: 1 } }), 'r', 's', { kind: 'counts', review: { standards: 2, spec: 2, fixed: 2 } }, at + 1)!
+  expect(review.sessions.s!.reviews).toEqual({ count: 2, standards: '3', spec: null, fixed: 3 })
+  const odd = applyRelay(relay({ reviews: 'abîmé' }), 'r', 's', { kind: 'counts', review: { standards: 2, spec: 2, fixed: 2 } }, at + 1)
+  // Rien ne s'écrit : l'entrée garde sa valeur, jamais effacée.
+  expect(odd).toBeNull()
+  const security = applyRelay(relay({ security: { findings: 'x', fixed: 1, at } }), 'r', 's', { kind: 'counts', security: { findings: 0, fixed: 0 } }, at + 1)!
+  expect(security.sessions.s!.security).toMatchObject({ findings: 'x', fixed: 0 })
+  const oddSecurity = applyRelay(relay({ security: 'abîmé' }), 'r', 's', { kind: 'counts', security: { findings: 0 } }, at + 1)
+  expect(oddSecurity).toBeNull()
+  // Avec une revue lisible dans le même envoi, seule la revue s'écrit : l'avis gardé reste tel quel.
+  const both = applyRelay(relay({ security: 'abîmé' }), 'r', 's', { kind: 'counts', review: { standards: 1, spec: 0, fixed: 0 }, security: { findings: 0 } }, at + 1)!
+  expect(both.sessions.s!.security).toBe('abîmé')
+  expect(both.sessions.s!.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 0 })
 })

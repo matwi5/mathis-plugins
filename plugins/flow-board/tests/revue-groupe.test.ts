@@ -106,7 +106,7 @@ test('un plan de groupes renvoyé par Claude garde les revues faites ; /code-rev
   await ui.unmount()
 })
 
-test('sans groupes, le lot fini propose une revue, puis la livraison', async ($, on) => {
+test('sans groupes, le lot fini propose une revue, puis, sa sécurité tranchée, la livraison', async ($, on) => {
   mock.clock(on, { now: 98_000_000 })
   mock.store(on)
   world(on)
@@ -119,6 +119,11 @@ test('sans groupes, le lot fini propose une revue, puis la livraison', async ($,
   await $.skill.prompt({ skill: 'code-review', text: 'r' })
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'go-final-review' })).toBeUndefined()
+  // Relu, le lot attend encore son avis de sécurité, comme un groupe.
+  expect(await ui.find({ key: 'go-compte-rendu' })).toBeUndefined()
+  await ui.unmount()
+  await $.tool.call({ tool: TOOL, security: { advised: false, why: 'que de l’affichage' } } as any)
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'go-compte-rendu' })).toBeDefined()
   await ui.unmount()
 })
@@ -160,8 +165,10 @@ const reviewNotes = async ($: any, on: any, repo: boolean) => {
   mock.store(on)
   world(on)
   on('session.repo', () => ({ value: repo ? { root: 'C:/proj', remote: null, internal: false, name: null } : null }))
-  const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)
+  // La consigne d'un parcours à groupes : sans groupes, elle suit la procédure d'une session liée.
+  const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   await $.tool.call({ tool: TOOL, set: [{ id: 'A1', status: 'doing' }] } as any)
   await $.tool.call({ tool: TOOL, step: 'checks' } as any)
   const bug = (await $.skill.prompt({ skill: 'code-review', text: 'r' })).text as string

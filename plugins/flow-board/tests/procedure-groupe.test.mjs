@@ -38,6 +38,37 @@ test('la procédure a chaque étape : questions, tickets, règles, revue du grou
   ])
 })
 
+// Un lot sans groupes fait dans la discussion du parcours suit la même procédure : sa consigne cite
+// des sections qui existent, avec leur titre, et ses exceptions sont les cinq décidées au cadrage.
+const catalog = read('hooks/catalog.ts')
+
+test('lot sans groupes : les sections citées par sa consigne existent dans la procédure, avec leur titre', () => {
+  const block = catalog.match(/export const LOT_SECTIONS[^=]*= \[([\s\S]*?)\n\]/)
+  assert.ok(block, 'LOT_SECTIONS absent de catalog.ts')
+  const cited = [...block[1].matchAll(/\[(\d+), (['"])(.*?)\2\]/g)].map(m => `${m[1]}. ${m[3]}`)
+  const titles = [...procedure.matchAll(/^## (\d+)\. (.+)$/gm)].map(m => `${m[1]}. ${m[2]}`)
+  assert.deepEqual(cited.map(c => c.split('.')[0]), ['1', '2', '3', '4', '5', '7', '8', '9'])
+  for (const c of cited) assert.ok(titles.includes(c), `section citée absente de la procédure : « ${c} »`)
+})
+
+test('lot sans groupes : exactement cinq exceptions, celles du cadrage, qui renvoient à des sections qui existent', () => {
+  const block = catalog.match(/export const LOT_EXCEPTIONS[^=]*= \[([\s\S]*?)\n\]/)
+  assert.ok(block, 'LOT_EXCEPTIONS absent de catalog.ts')
+  const exceptions = [...block[1].matchAll(/^\s+(['"])(.*)\1,$/gm)].map(m => m[2])
+  assert.equal(exceptions.length, 5)
+  const keys = ['the relay and SendMessage', 'the ban on button questions', '« do not launch <implement> » (section 2, point 10)', 'section 10, replaced by the auto mode block', 'a worktree of its own']
+  keys.forEach((key, i) => assert.ok(exceptions[i].startsWith(key), `exception ${i + 1} : « ${exceptions[i]} »`))
+  // Elles se joignent par « ; » dans la consigne : aucune n'en porte.
+  for (const e of exceptions) assert.ok(!e.includes('; ') && !e.includes('. '), `exception coupée : « ${e} »`)
+  has(section(2), '10. Ne pas lancer `<implement>`')
+  has(section(10), 'Seulement quand le prompt dit que la session est une session autonome')
+})
+
+test('l’en-tête de la procédure nomme la discussion du parcours qui fait un lot sans groupes', () => {
+  const head = procedure.slice(0, procedure.indexOf('## 1. '))
+  has(head, 'La discussion principale qui fait elle-même un lot sans groupes suit aussi cette procédure, avec les exceptions que lui donne sa consigne')
+})
+
 test('session autonome : seulement sur le dire du prompt, choix tranchés après l’advisor et déclarés, le sensible ou douteux posé, revues à leur effort', () => {
   const s = section(10)
   has(
@@ -243,7 +274,7 @@ test('le fichier de consignes donne CODING_STANDARDS.md et, pour un ticket, les 
 // en collision avec une autre discussion (r2).
 
 test('gabarit : le fichier de consignes se remplit d’après un gabarit, qui porte la consigne des relecteurs telle quelle', () => {
-  has(section(2), 'copier dans son dossier temporaire le gabarit `consignes-revue.md` (dans le dossier de ce fichier), en remplir les trous')
+  has(section(2), 'qui remplit le gabarit `consignes-revue.md` (dans le dossier de ce fichier) d\'après le ticket', 'pour une autre revue, copier ce gabarit dans son dossier temporaire et en remplir les trous')
   // Le point 7 renvoie au gabarit au lieu d'en décrire le contenu.
   assert.ok(!section(2).includes('les points qui me sont réservés, ce qu\'elle ne doit pas faire'), 'le point 7 décrit encore le contenu')
   has(
@@ -290,6 +321,8 @@ test('les règles de travail disent ce que le garde-fou refuse vraiment, sans cd
     'Pas de `cd` dans un sous-dossier',
     'la commande `timeout` n\'existe pas sur macOS',
     'un script de contrôles qui fixe déjà son délai (le CLAUDE.md du projet le dit) se lance sans enveloppe',
+    'Un message de commit s\'écrit dans un fichier par Write, puis `git commit -F <fichier>`',
+    '`scripts/show.py <fichier> <motif> [+N]`, motif littéral',
   )
   assert.ok(!s.includes('jamais par une boucle cat ou head'), 'l\'ancienne consigne de lecture est restée')
 })

@@ -14,7 +14,7 @@ import type { Board, ClosedLink, Closing, FlowItem, FlowPhase, GroupLink, Linked
 import { SKILLS } from './catalog.ts'
 import { activeRun, clip, clone, currentPhase, hasGroupReview, hasUnreadableCounts, isoMinute, isTime, log, noFx, type Outcome, reviewTimeOf, sentGroupOf, setStep, shownGroupId, str, bugsText } from './basics.ts'
 import { ownPart } from './linked.ts'
-import { branchFate, type CloseTarget, isSafeBranch, isSessionId, isWorktreePath, neutralRelayed, sendNumber } from './closing.ts'
+import { branchFate, type CloseTarget, isSafeBranch, isSessionId, isWorktreePath, neutralRelayed, readClosing, sendNumber } from './closing.ts'
 import { isRelay, keepDecisions, relayedDecisions, relayForGroup, UNREADABLE_COUNT } from './relay.ts'
 import { maxOf } from './timeline.ts'
 
@@ -253,7 +253,7 @@ export const inFlightWhy = (g: TicketGroup): string =>
     : `is in a linked session (send ${sendNumber(g.linked?.seq) ?? 1}), its review and security advice reset at a send not returned yet`
 
 /** L'avis de sécurité d'un envoi précédent, en mots pour le journal : l'avis, et les comptes s'il y en a. */
-const previousSecurityText = (sec: SecurityCheck | undefined): string => {
+export const previousSecurityText = (sec: SecurityCheck | undefined): string => {
   if (!sec || typeof sec !== 'object') return 'aucun avis'
   const advice = sec.isAdvised === true ? 'conseillée' : sec.isAdvised === false ? 'jugée inutile' : 'sans avis'
   const counts = sec.findings !== undefined && !hasUnreadableCounts(sec) ? `, ${sec.findings} faille(s), ${sec.fixed ?? 0} corrigée(s)${(sec.dismissed ?? 0) > 0 ? `, ${sec.dismissed} laissée(s)` : ''}` : ''
@@ -341,14 +341,14 @@ export const returnGroups = (run: Run, value: unknown, now: number, stored?: unk
   }
   if (back.length > 0) {
     // Avant de défaire le lien : le relais d'un groupe ne se lit que tant qu'il est confié.
-    const decided = relayedDecisions({ ...run, groups: run.groups!.filter(g => back.includes(g.id)) }, relay)
+    const decided = relayedDecisions({ ...run, groups: run.groups!.filter(g => back.includes(g.id)) }, relay, run.groups)
     keepDecisions(run, decided)
     for (const d of decided) log(run, now, '⚑', `Décidé sans toi (groupe ${d.relayedFrom}) : ${d.what}`, 'warn')
     const reviewedThere: string[] = []
     const impl = run.phases.find(p => p.skill === 'implement')
     run.groups = run.groups!.map(g => {
       if (!back.includes(g.id)) return g
-      const relayed = relayForGroup(relay, g)
+      const relayed = relayForGroup(relay, g, run.groups)
       // Une date de revue hors forme, d'ici ou relayée, ne compte pas (`isGroupReviewed`).
       const relayedReview = relayed ? reviewTimeOf(relayed) : undefined
       if (!hasGroupReview(g) && relayedReview !== undefined) reviewedThere.push(g.id)
@@ -547,11 +547,11 @@ export const keepClosings = (kept: Run, other: Run | undefined): Run => {
     let delegated = theirs && isAhead(g.delegated.closing, theirs) ? { ...g.delegated, closing: theirs } : g.delegated
     // Les sessions précédentes, chacune avec la fermeture la plus avancée des deux copies.
     const mine = earlierOf(g.delegated)
-    const kept = mine.map(prev => {
+    const mergedEarlier = mine.map(prev => {
       const found = sameLinkClosing(prev, link, earlierOf(link))
       return found && isAhead(prev.closing, found) ? { ...prev, closing: found } : prev
     })
-    if (kept.some((x, i) => x !== mine[i])) delegated = { ...delegated, earlier: kept }
+    if (mergedEarlier.some((x, i) => x !== mine[i])) delegated = { ...delegated, earlier: mergedEarlier }
     if (delegated === g.delegated) return g
     changed = true
     return { ...g, delegated }
@@ -590,20 +590,20 @@ export const markCleanupSent = (board: Board, runId: string, branches: readonly 
       changed = true
     }
   }
-  // Les mêmes gardes que le plan de la consigne : une entrée relue qui n'est pas un objet est ignorée.
+  // Les mêmes gardes que le plan de la consigne : une entrée relue qui n'est pas un objet est ignorée,
+  // et une fermeture se lit par le garde du plan lui-même (`readClosing`).
   const isEntry = <T,>(x: T | null | undefined): x is T => x !== null && typeof x === 'object'
-  const asClosing = (x: unknown): Closing | undefined => (x !== null && typeof x === 'object' ? (x as Closing) : undefined)
   for (const g of (Array.isArray(run.groups) ? run.groups : []).filter(isEntry)) {
     const target = { kind: 'group', id: g.id, name: g.name } as const
     const link = isEntry(g.delegated) ? g.delegated : undefined
-    for (const prev of earlierOf(link)) mark(target, prev.seq, asClosing(prev.closing))
-    if (link) mark(target, link.seq, asClosing(link.closing))
+    for (const prev of earlierOf(link)) mark(target, prev.seq, readClosing(prev.closing))
+    if (link) mark(target, link.seq, readClosing(link.closing))
   }
   for (const phase of (Array.isArray(run.phases) ? run.phases : []).filter(isEntry)) {
     if (!SKILLS[phase.skill]?.items) continue
     const target = { kind: 'items', skill: phase.skill } as const
-    if (isEntry(phase.linkedEarlier)) mark(target, phase.linkedEarlier.seq, asClosing(phase.linkedEarlier.closing))
-    if (isEntry(phase.linked) && phase.linked.session) mark(target, phase.linked.seq, asClosing(phase.linked.closing))
+    if (isEntry(phase.linkedEarlier)) mark(target, phase.linkedEarlier.seq, readClosing(phase.linkedEarlier.closing))
+    if (isEntry(phase.linked) && phase.linked.session) mark(target, phase.linked.seq, readClosing(phase.linked.closing))
   }
   if (!changed) return null
   // Lue après l'envoi, l'heure ne fait jamais reculer le parcours face à une écriture faite entre-temps.

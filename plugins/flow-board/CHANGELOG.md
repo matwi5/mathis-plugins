@@ -4,6 +4,35 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.77.0 — 2026-11-01
+
+Un lot lancé sans groupes, dans la discussion du parcours, se fait exactement comme un groupe : même procédure, même revue du lot, même avis de sécurité, même relance de l'auto. Le lien entre une session liée et son groupe est durci, et les consignes de cadrage et les scripts de session s'étoffent.
+
+### Ajouté
+- **Procédure d'un groupe pour un lot sans groupes** : sans groupes, la consigne d'`/implement` renvoie à `reference/procedure-groupe.md` (sections 1 à 5, 7, 8, 9), avec sa correspondance de lecture (« le groupe » se lit « le lot », dont la base est le commit d'avant son premier ticket) et cinq exceptions. Le compte rendu de la section 6 passe par `/flow-board:compte-rendu`. Claude lance lui-même la revue du lot et son avis de sécurité. Un plan de groupes enregistré en cours de lot est signalé une fois. Avec des groupes, rien ne change.
+- **Revue du lot calculée** : un lot sans groupes est à relire quand tous ses tickets sont faits et qu'il n'a jamais été relu, ou qu'un ticket a fini après sa dernière revue. Il est dispensé quand aucun ticket n'est sensible ni n'a de logique. Le compte rendu attend que la sécurité du lot soit tranchée ; la ligne de sécurité du lot dit l'avis attendu, avec le bouton ⛨.
+- **Note de revue du lot** : `/code-review` pendant l'Implémentation sans groupes reçoit la note de la revue d'un groupe (cible `<base du lot>..HEAD`, sans `--fix` si un ticket est sensible) et l'avis de sécurité au format d'un groupe, envoyé sans `"group"`, après le chargement de la revue.
+- **Relance de l'auto pour le lot** : en mode auto, la revue du lot à relire part une fois par passage (`review:lot@<dernière revue>~<dernière fin de ticket>~<empreinte des tickets faits>`), même après un `complete` envoyé trop tôt ; puis sa sécurité conseillée (`security:lot@<revue>`). Rien ne part pendant une tâche de fond, ni quand une question bloque la phase, ni pour un lot dispensé. « ◆ Revue » et « ⛨ » posent la même clé, déjà démarrée.
+- **Compte rendu en trois rubriques** : code antérieur au lot, pistes, ce que le CHANGELOG devra dire, avec ou sans groupes ; avec des groupes, repris des comptes rendus des sessions liées au relais.
+- **Scripts de session** : `scripts/snapshot.mjs --staged` (instantané de l'index préparé) et `--remplace` (un seul correctif indexé sur la version indexée, reporté dans l'arbre) ; nouveau `scripts/consignes.mjs`, qui écrit le fichier de consignes d'une revue de ticket depuis le gabarit. La procédure de groupe (points 6 et 7) cite ces commandes ; message de commit par `git commit -F`.
+- **Cadrage de `/to-spec` et `/to-tickets`** : la question du cycle de vie d'un champ persisté couvre aussi la lecture et l'écriture ratées, les bornes, l'effacement, une copie forgée et chaque transition de l'objet marqué. Un appel du moteur se vérifie d'abord (skill `plugin-authoring`), et une notification se spécifie avec ses surfaces. `/to-tickets` fait lire le code de chaque ticket sensible, dit « Logique : oui » pour une règle, une référence ou un skill, et relit chaque critère d'un ticket sensible contre son invariant à la validation. Le découpage des pistes d'une rétro reçoit les mêmes consignes.
+
+### Modifié
+- **Avis de sécurité du lot daté** : il ne compte que s'il suit la dernière fin de ticket et la dernière revue du lot. Seul un envoi `advised` ouvre un nouveau passage, qui repart de zéro (les anciens comptes vont au journal). Un `/security-review` tapé sans groupes date aussi l'avis ; tapé avant le `/code-review` du lot, il ne compte pas.
+- **Fusion entre discussions** : la revue du lot et son avis de sécurité venus de l'autre copie ne sont repris que si elle a vu chaque ticket fini de la copie gardée ; sinon le lot est à relire (au pire une revue de plus). Une copie sans avis reprend celui de l'autre, daté 0.
+- **Dates dans le futur** : un avis du lot daté de plus d'une minute dans le futur se relit 0 ; une fin de ticket future se relit maintenant ; une revue du lot future se relit « à refaire », sans rien effacer.
+- **Comptes de revue au relais** : standards, spec et fixed suivent la borne des bogues (un entier de 0 à 10 000) ; une revue avec un compte hors forme est refusée en entier, et un compte gardé illisible n'est jamais réécrit.
+- **Session nommée pour un groupe** : elle ne compte qu'au retour de ce groupe, même pour un ticket d'un autre groupe qu'elle a relayé ; une session sans nom de groupe se rattache par ses tickets.
+- **Revues allégées** : une règle commune, une référence ou un skill a toujours de la logique ; le test de cohérence des consignes le vérifie.
+
+### Corrigé
+- **Fichier des choix déclarés** : il cite le titre du parcours neutralisé et ne lève plus d'exception sur un titre relu qui n'est pas un texte.
+- **`isoMinute`** : une date négative s'écrit « date inconnue ».
+- **Marque de suppression des branches** : elle lit les fermetures par `readClosing` ; `keepClosings` ne masque plus son paramètre ; le test anti-cycle voit tous les imports.
+- **Hooks Notification** : la consigne dit qu'ils tournent encore sans terminal, l'app desktop comprise.
+
+---
+
 ## 0.76.0 — 2026-11-01
 
 Le mode auto prévient Claude avant son premier envoi : allumé en cours de phase, il ne lance plus l'étape suivante tant que Claude n'a pas reçu sa consigne et déclaré ses questions ouvertes.

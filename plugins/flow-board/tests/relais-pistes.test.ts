@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
-import { applyRelay, parseMainRef, relayEntryFileName, relayForGroup, reportFileName, updateDelegateMain } from '../hooks/relay.ts'
+import { applyRelay, decidedFileText, parseMainRef, relayEntryFileName, relayForGroup, reportFileName, updateDelegateMain } from '../hooks/relay.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, RelayEntryFile } from '../types'
 
@@ -164,7 +164,7 @@ test('la session liée envoie ses constats et sa revue de sécurité ; le retour
   relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 1, spec: 2, fixed: 2 } }, 6_000)!
   relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 0, spec: 1, fixed: 1 } }, 6_100)!
   relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', security: { advised: true, why: 'fichiers', findings: 1, fixed: 0 } }, 6_200)!
-  expect(relayForGroup(relay, activeRun(sent)!.groups!.find(g => g.id === 'A')!)).toMatchObject({ reviews: { count: 2, standards: 1, spec: 3, fixed: 3 }, securedAt: 6_200 })
+  expect(relayForGroup(relay, activeRun(sent)!.groups!.find(g => g.id === 'A')!, undefined)).toMatchObject({ reviews: { count: 2, standards: 1, spec: 3, fixed: 3 }, securedAt: 6_200 })
   const back = applyReport(sent, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 7_000, { relay })
   const after = activeRun(back.board)!
   const impl = after.phases.find(p => p.skill === 'implement')!
@@ -190,7 +190,7 @@ test('les bogues relayés se somment sur les sessions du lien et se citent au re
   let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
   relay = applyRelay(relay, run.id, 'fa', { kind: 'counts', review: { standards: 1, spec: 0, fixed: 1 } }, 6_000)!
   // Sans passe « bogues », pas de « 0 bogue ».
-  expect(relayForGroup(relay, group())!.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 1 })
+  expect(relayForGroup(relay, group(), undefined)!.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 1 })
   const plain = applyReport(sent, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 7_000, { relay }).board
   expect(returnLine(plain, 'A')?.text).not.toMatch(/bogue/)
   // Une ancienne entrée sans bogues, puis deux revues avec : seul leur compte.
@@ -200,7 +200,7 @@ test('les bogues relayés se somment sur les sessions du lien et se citent au re
   // Une session redémarrée sous un autre id : ses bogues s'ajoutent.
   relay = applyRelay(relay, run.id, 'fb', { kind: 'start', group: 'A' }, 6_300)!
   relay = applyRelay(relay, run.id, 'fb', { kind: 'counts', review: { standards: 0, spec: 0, bugs: 4, fixed: 0 } }, 6_400)!
-  expect(relayForGroup(relay, group())!.reviews).toEqual({ count: 4, standards: 1, spec: 1, fixed: 4, bugs: 7 })
+  expect(relayForGroup(relay, group(), undefined)!.reviews).toEqual({ count: 4, standards: 1, spec: 1, fixed: 4, bugs: 7 })
   const back = applyReport(sent, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 7_000, { relay }).board
   const line = returnLine(back, 'A')!
   expect(line.text).toBe('Revues du groupe A (session liée) : 1 Standards · 1 Spec · 7 bogues (passe « bogues ») · 4 corrigé(s)')
@@ -231,7 +231,7 @@ test('un compte de bogues hors forme lu d’un fichier compte comme absent pour 
   for (const bad of [2.5, -1, 10_001, 'deux', null]) {
     const hand = structuredClone(relay)
     hand.sessions['fa']!.reviews = { count: 1, standards: 1, spec: 1, fixed: 1, bugs: bad as number }
-    expect(relayForGroup(hand, group)!.reviews).toEqual({ count: 2, standards: 1, spec: 1, fixed: 1, bugs: 2 })
+    expect(relayForGroup(hand, group, undefined)!.reviews).toEqual({ count: 2, standards: 1, spec: 1, fixed: 1, bugs: 2 })
   }
 })
 
@@ -259,4 +259,40 @@ test('dans la discussion du parcours, un compte de bogues hors forme n’est pas
   const ok = applyReport(boardWith(LOT), { review: { standards: 1, spec: 0, bugs: 2, fixed: 1 } }, 3_000)
   expect(ok.text).not.toContain('bugs ignored')
   expect(activeRun(ok.board)!.log.find(l => l.text.startsWith('Revue :'))!.text).toBe('Revue : 1 Standards · 0 Spec · 2 bogues (passe « bogues ») · 1 corrigé')
+})
+
+test('un compte de revue hors forme lu d’un fichier compte comme absent pour sa session, sans arrondi ni faire tomber ses autres comptes', () => {
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
+  const run = activeRun(sent)!
+  const group = activeRun(sent)!.groups!.find(g => g.id === 'A')!
+  let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fb', { kind: 'start', group: 'A' }, 5_600)!
+  relay = applyRelay(relay, run.id, 'fb', { kind: 'counts', review: { standards: 2, spec: 2, fixed: 2 } }, 6_100)!
+  for (const field of ['count', 'standards', 'spec', 'fixed'] as const) {
+    for (const bad of [2.5, -1, 10_001, 'deux', null]) {
+      const hand = structuredClone(relay)
+      hand.sessions['fa']!.reviews = { count: 1, standards: 1, spec: 1, fixed: 1, [field]: bad as number }
+      // Celui de « fa » ne compte pas ; ses autres comptes, si.
+      expect(relayForGroup(hand, group, undefined)!.reviews).toEqual({ count: 2, standards: 3, spec: 3, fixed: 3, [field]: field === 'count' ? 1 : 2 })
+    }
+  }
+  // Jusqu'à 10 000, un compte en forme compte tel quel.
+  const full = structuredClone(relay)
+  full.sessions['fa']!.reviews = { count: 1, standards: 10_000, spec: 0, fixed: 0 }
+  expect(relayForGroup(full, group, undefined)!.reviews).toEqual({ count: 2, standards: 10_002, spec: 2, fixed: 2 })
+})
+
+test('des comptes de revue gardés en liste ne comptent pas à la lecture, comme à l’envoi', () => {
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
+  const run = activeRun(sent)!
+  const group = run.groups!.find(g => g.id === 'A')!
+  const relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  const hand = structuredClone(relay)
+  hand.sessions['fa']!.reviews = [1, 2] as never
+  expect(relayForGroup(hand, group, run.groups)!.reviews).toBeUndefined()
+})
+
+test('le fichier des choix s’écrit même quand le titre relu n’est pas un texte', () => {
+  const run = { ...newRun('implement', 1_000, 'Lot'), title: null as never }
+  expect(decidedFileText(run, null).split('\n')[0]).toBe('# Choix déjà déclarés · ')
 })

@@ -50,10 +50,108 @@ class PatchTest(unittest.TestCase):
             self.assertEqual(self.file.read_bytes(), before)
         self.assertIn("paraît 3 fois", run(str(self.file), "\r\n", "x").stderr)
 
+    def test_la_fin_de_ligne_finale_d_un_fichier_de_texte_est_retiree(self):
+        (self.root / "ancien").write_bytes("trois\n".encode("utf-8"))
+        (self.root / "nouveau").write_bytes("3\n\n".encode("utf-8"))
+        out = run(str(self.file), f"@{self.root / 'ancien'}", f"@{self.root / 'nouveau'}")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"), "un\r\ndeux « git »\r\n3\n\r\n")
+
+    def test_le_marqueur_ecrit_un_echappement_litteral(self):
+        out = run(str(self.file), "trois", "s = '{{u}}2028'")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("s = '" + chr(92) + "u2028'", self.file.read_text(encoding="utf-8"))
+        self.assertNotIn(chr(0x2028), self.file.read_text(encoding="utf-8"))
+
+    def test_le_marqueur_s_echappe_en_doublant_son_u(self):
+        out = run(str(self.file), "trois", "{{uu}} et {{uuu}}")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("{{u}} et {{uu}}", self.file.read_text(encoding="utf-8"))
+        self.assertEqual(run(str(self.file), "{{uu}} et", "x").returncode, 0)
+        self.assertIn("x {{uu}}", self.file.read_text(encoding="utf-8"))
+
     def test_fichier_absent_et_mauvais_nombre_d_arguments(self):
         self.assertEqual(run(str(self.root / "absent.md"), "a", "b").returncode, 1)
         self.assertEqual(run(str(self.file), "@" + str(self.root / "absent"), "b").returncode, 1)
         self.assertEqual(run(str(self.file), "a").returncode, 2)
+
+
+class BatchTest(unittest.TestCase):
+    """Le mode par lot : `patch.py --lot <fichier de paires>`, tout ou rien."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.a = self.root / "a.md"
+        self.b = self.root / "b.ts"
+        self.a.write_text("titre\nun paragraphe\navec « git » dedans\nfin\n", encoding="utf-8")
+        self.b.write_text("const x = 1\nconst y = 2\n", encoding="utf-8")
+        self.lot = self.root / "lot.txt"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def batch(self, text):
+        self.lot.write_text(text, encoding="utf-8")
+        return run("--lot", str(self.lot))
+
+    def test_applique_chaque_paire_dans_l_ordre_sur_plusieurs_fichiers(self):
+        out = self.batch(
+            f"::: fichier {self.a}\n"
+            "::: ancien\nun paragraphe\navec « git » dedans\n::: nouveau\ndeux lignes\n\"citées\" ici\n::: fin\n"
+            "::: ancien\ndeux lignes\n::: nouveau\n2 lignes\n::: fin\n"
+            "\n"
+            f"::: fichier {self.b}\n"
+            "::: ancien\nconst y = 2\n::: nouveau\nconst y = '{{u}}2028'\n::: fin\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.a.read_text(encoding="utf-8"), "titre\n2 lignes\n\"citées\" ici\nfin\n")
+        self.assertEqual(self.b.read_text(encoding="utf-8"), "const x = 1\nconst y = '" + chr(92) + "u2028'\n")
+        self.assertIn("3 remplacements dans 2 fichiers", out.stdout)
+
+    def test_un_ancien_texte_non_unique_n_ecrit_aucun_fichier(self):
+        before = (self.a.read_bytes(), self.b.read_bytes())
+        out = self.batch(
+            f"::: fichier {self.a}\n::: ancien\ntitre\n::: nouveau\nTitre\n::: fin\n"
+            f"::: fichier {self.b}\n::: ancien\nconst\n::: nouveau\nlet\n::: fin\n")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("paraît 2 fois", out.stderr)
+        self.assertIn("paire 2", out.stderr)
+        self.assertEqual((self.a.read_bytes(), self.b.read_bytes()), before)
+
+    def test_un_meme_fichier_sous_deux_noms_garde_chaque_remplacement(self):
+        out = self.batch(
+            f"::: fichier {self.a}\n::: ancien\ntitre\n::: nouveau\nTitre\n::: fin\n"
+            f"::: fichier {self.root}/./a.md\n::: ancien\nfin\n::: nouveau\nFin\n::: fin\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.a.read_text(encoding="utf-8"), "Titre\nun paragraphe\navec « git » dedans\nFin\n")
+        self.assertIn("2 remplacements dans 1 fichier", out.stdout)
+
+    def test_une_ecriture_refusee_est_dite_sans_trace_python(self):
+        self.b.chmod(0o444)
+        try:
+            out = self.batch(
+                f"::: fichier {self.a}\n::: ancien\ntitre\n::: nouveau\nTitre\n::: fin\n"
+                f"::: fichier {self.b}\n::: ancien\nconst y = 2\n::: nouveau\nconst y = 3\n::: fin\n")
+        finally:
+            self.b.chmod(0o644)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("ÉCHEC", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("déjà écrits", out.stderr)
+
+    def test_un_lot_mal_forme_est_refuse(self):
+        before = self.a.read_bytes()
+        for text in [
+            "::: ancien\nx\n::: nouveau\ny\n::: fin\n",  # aucun fichier nommé
+            f"::: fichier {self.a}\n::: ancien\ntitre\n::: fin\n",  # pas de nouveau texte
+            f"::: fichier {self.a}\n::: ancien\ntitre\n::: nouveau\nTitre\n",  # pas de fin
+            f"::: fichier {self.a}\ntexte hors d'une paire\n",
+            "",
+        ]:
+            out = self.batch(text)
+            self.assertEqual(out.returncode, 1, text)
+            self.assertIn("ÉCHEC", out.stderr)
+        self.assertEqual(self.a.read_bytes(), before)
 
 
 if __name__ == "__main__":

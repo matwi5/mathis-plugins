@@ -155,3 +155,128 @@ test('lancé par un lien symbolique, le script tourne quand même (il ne sort pa
 test('la procédure désigne le script d’instantané', () => {
   assert.ok(procedure.includes('node <dossier de flow-board>/scripts/snapshot.mjs <id du ticket> <les fichiers du ticket, par chemin>'), 'la procédure ne cite pas le script')
 })
+
+test('--staged fige l’index tel qu’il est préparé, sans rien indexer ni toucher à l’arbre de travail', () => {
+  const dir = repo()
+  try {
+    const head = git(dir, 'rev-parse', 'HEAD')
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    git(dir, 'add', 'a.txt')
+    // Le ticket suivant a déjà touché a.txt et b.txt dans l'arbre : rien de cela n'entre.
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\nsuite du ticket suivant\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket suivant\n')
+    const out = snap(dir, '--staged', 'T15', 'a.txt')
+    assert.equal(out.status, 0, out.stderr)
+    const ref = 'refs/worktree/flow-board/T15'
+    assert.match(out.stdout, /Instantané [0-9a-f]+ posé sur refs\/worktree\/flow-board\/T15 \(1 fichier : a\.txt\)/)
+    assert.equal(git(dir, 'rev-parse', `${ref}^`), head)
+    assert.equal(git(dir, 'show', `${ref}:a.txt`), 'a du ticket')
+    assert.equal(git(dir, 'show', `${ref}:b.txt`), 'b')
+    assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'a du ticket\nsuite du ticket suivant\n')
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), 'a.txt')
+    assert.equal(git(dir, 'rev-parse', 'HEAD'), head)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--staged refuse un index vide, un index qui porte un autre fichier, un id ou un fichier hors forme', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a modifié\n')
+    const empty = snap(dir, '--staged', 'T16', 'a.txt')
+    assert.equal(empty.status, 1)
+    assert.match(empty.stderr, /ÉCHEC : l'index ne porte aucun changement/)
+    git(dir, 'add', 'a.txt')
+    // Le ticket suivant a indexé un nouveau fichier : il ne part pas avec le correctif.
+    writeFileSync(join(dir, 'c.txt'), 'nouveau du ticket suivant\n')
+    git(dir, 'add', 'c.txt')
+    const other = snap(dir, '--staged', 'T16', 'a.txt')
+    assert.equal(other.status, 1)
+    assert.match(other.stderr, /l'index porte d'autres fichiers que ceux du correctif : c\.txt/)
+    git(dir, 'restore', '--staged', 'c.txt')
+    for (const args of [['--staged', '../x', 'a.txt'], ['--staged', 'T16'], ['--staged', 'T16', '-p'], ['--staged']]) {
+      const bad = snap(dir, ...args)
+      assert.equal(bad.status, 1, args.join(' '))
+      assert.match(bad.stderr, /^ÉCHEC : /)
+    }
+    assert.equal(git(dir, 'for-each-ref', 'refs/worktree/'), '')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--remplace indexe le seul correctif sur la version indexée, et le reporte dans l’arbre de travail', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'un\ndeux\ntrois\n')
+    git(dir, 'add', 'a.txt')
+    git(dir, 'commit', '-q', '-m', 'a')
+    // Le ticket suivant a déjà modifié a.txt dans l'arbre.
+    writeFileSync(join(dir, 'a.txt'), 'un\ndeux\ntrois\nquatre du ticket suivant\n')
+    const out = snap(dir, '--remplace', 'a.txt', 'deux', 'DEUX')
+    assert.equal(out.status, 0, out.stderr)
+    assert.match(out.stdout, /a\.txt : remplacement indexé \(ligne 2\) ; arbre de travail : remplacé/)
+    assert.equal(git(dir, 'show', ':a.txt'), 'un\nDEUX\ntrois')
+    assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'un\nDEUX\ntrois\nquatre du ticket suivant\n')
+    // Un second remplacement part de la version indexée, qui garde le premier ; un @fichier perd sa fin de ligne finale.
+    writeFileSync(join(dir, 'ancien'), 'trois\n')
+    const second = snap(dir, '--remplace', 'a.txt', `@${join(dir, 'ancien')}`, 'TROIS')
+    assert.equal(second.status, 0, second.stderr)
+    assert.equal(git(dir, 'show', ':a.txt'), 'un\nDEUX\nTROIS')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--remplace laisse un arbre qui porte déjà le nouveau texte, et refuse sans rien écrire sinon', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a corrigé\nsuite\n')
+    const done = snap(dir, '--remplace', 'a.txt', 'a', 'a corrigé')
+    assert.equal(done.status, 0, done.stderr)
+    assert.match(done.stdout, /arbre de travail : porte déjà le nouveau texte/)
+    assert.equal(git(dir, 'show', ':a.txt'), 'a corrigé')
+    git(dir, 'reset', '-q', '--hard')
+    writeFileSync(join(dir, 'b.txt'), 'autre chose\n')
+    const neither = snap(dir, '--remplace', 'b.txt', 'b', 'B')
+    assert.equal(neither.status, 1)
+    assert.match(neither.stderr, /ÉCHEC : b\.txt : l'arbre de travail ne porte ni l'ancien texte une fois, ni le nouveau/)
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    const absent = snap(dir, '--remplace', 'a.txt', 'z', 'Z')
+    assert.equal(absent.status, 1)
+    assert.match(absent.stderr, /l'ancien texte paraît 0 fois/)
+    for (const args of [['--remplace', 'c.txt', 'a', 'b'], ['--remplace', '-p', 'a', 'b'], ['--remplace', 'a.txt', 'a']]) {
+      const bad = snap(dir, ...args)
+      assert.equal(bad.status, 1, args.join(' '))
+      assert.match(bad.stderr, /^ÉCHEC : /)
+    }
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    assert.equal(readFileSync(join(dir, 'b.txt'), 'utf8'), 'autre chose\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--remplace d’un texte sur plusieurs lignes : l’index en LF, l’arbre en CRLF, chacun à ses fins de ligne', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'un\ndeux\ntrois\n')
+    git(dir, 'add', 'a.txt')
+    git(dir, 'commit', '-q', '-m', 'a')
+    writeFileSync(join(dir, 'a.txt'), 'un\r\ndeux\r\ntrois\r\nquatre\r\n')
+    writeFileSync(join(dir, 'ancien'), 'deux\r\ntrois\r\n')
+    const out = snap(dir, '--remplace', 'a.txt', `@${join(dir, 'ancien')}`, 'DEUX\nTROIS')
+    assert.equal(out.status, 0, out.stderr)
+    assert.equal(git(dir, 'show', ':a.txt'), 'un\nDEUX\nTROIS')
+    assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'un\r\nDEUX\r\nTROIS\r\nquatre\r\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('la procédure cite les deux modes du script d’instantané par une commande simple', () => {
+  assert.ok(procedure.includes('node <dossier de flow-board>/scripts/snapshot.mjs --staged <id du ticket> <les fichiers du correctif>'), 'la procédure ne cite pas --staged')
+  assert.ok(procedure.includes('node <dossier de flow-board>/scripts/snapshot.mjs --remplace <fichier> <ancien> <nouveau>'), 'la procédure ne cite pas --remplace')
+  assert.ok(procedure.includes('le README et les tests partagés comptent comme fichiers du ticket'), 'la procédure ne dit pas que le README et les tests partagés sont du ticket')
+})

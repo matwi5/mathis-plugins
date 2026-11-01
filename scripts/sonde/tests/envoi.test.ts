@@ -3,16 +3,19 @@ import { expect, mock, test } from 'claude-code/testing'
 import { parseEnvoi, splitCommand } from '../hooks/register.tsx'
 
 // Le moteur sous la sonde : la session, la commande enregistrée, et les envois du mod consignés.
-const engine = (on: any) => {
+const engine = (on: any, env: Record<string, string> = { SONDE_JOURNAUX: '/j' }) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   const submitted: { text: string; origin?: { kind?: string; asUser?: boolean } }[] = []
   const commands: { command: string; args: string; origin?: { kind?: string } }[] = []
   const journal: string[] = []
+  const paths: string[] = []
   // Le journal de la sonde : gardé ici, écrit nulle part.
   on('fs.write', (_$: unknown, e: any) => {
     journal.push(e.text)
+    paths.push(e.path)
     return { value: undefined } as any
   })
+  on('env.get', (_$: unknown, e: any) => ({ value: env[e.name] }) as any)
   on('session.start', (_$: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: {} }) as any)
   on('command.run', (_$: unknown, e: any) => {
@@ -23,7 +26,7 @@ const engine = (on: any) => {
     submitted.push(e)
     return { text: e.text }
   })
-  return { clock, submitted, commands, journal }
+  return { clock, submitted, commands, journal, paths }
 }
 
 const start = ($: any) => $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/w' } as any)
@@ -77,4 +80,11 @@ test('/sonde-envoi sans texte rend son usage et n’envoie rien', async ($, on) 
   await clock.advance(60_000)
   expect(submitted).toHaveLength(0)
   expect(commands.filter(c => c.command !== 'sonde-envoi')).toHaveLength(0)
+})
+
+test('le journal va dans le dossier que donne SONDE_JOURNAUX (le dossier jetable de sonde.py), hors du dépôt', async ($, on) => {
+  const { paths } = engine(on, { SONDE_JOURNAUX: '/tmp/sonde-x/journaux' })
+  await start($)
+  expect(paths.length).toBeGreaterThan(0)
+  expect(paths.every(p => /^\/tmp\/sonde-x\/journaux\/[^/]+\.jsonl$/.test(p))).toBe(true)
 })

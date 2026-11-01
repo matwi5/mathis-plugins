@@ -20,7 +20,7 @@ Work from whatever is already in the conversation context. If the user passes a 
 
 If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
 
-**A ticket in a sensitive area is written from the code, not from memory.** Before writing one of its acceptance criteria, or an option you offer the user about it, read the function it names. List every path that writes, merges or erases its data by a search, and quote that search in the ticket: the command and its result. Ask the lifecycle question (the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated). A ticket never keeps an « à confirmer »: that is a question for the user now, while framing.
+**A ticket in a sensitive area is written from the code, not from memory.** Before writing one of its acceptance criteria, or an option you offer the user about it, read the function it names. List every path that writes, merges or erases its data by a search, and quote that search in the ticket: the command and its result. Ask the lifecycle question (the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated). For a persisted field, it also covers a failed read, a failed write, its bounds (empty, too long, a date in the future or the past), the erasure of what must be kept, a forged copy, and each transition of the object that carries a mark (sent, cancelled, sent again, back), with what the mark becomes at each one: these questions are foreseeable while framing, and left open they come back one ticket at a time during the implementation. A ticket never keeps an « à confirmer »: that is a question for the user now, while framing.
 
 Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
 
@@ -39,6 +39,8 @@ Break the work into **tracer bullet** tickets.
 
 Give each ticket its **blocking edges**: the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
 
+**A measurement ticket** (a probe, a benchmark, a trial whose results a document records) asks, in its acceptance criteria, that each result it writes quotes its log line: the log file and the line, or the raw output it comes from. A text written before the measurement and never checked against it keeps claims that no run showed.
+
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change (rename a column, retype a shared symbol) whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
 
 ### 4. Quiz the user
@@ -54,6 +56,8 @@ Ask the user:
 - Does the granularity feel right? (too coarse / too fine)
 - Are the blocking edges correct: does each ticket only depend on tickets that genuinely gate it?
 - Should any tickets be merged or split further?
+
+Before asking the user to approve (in a run where the approval is skipped, before declaring it skipped), reread each acceptance criterion of a sensitive ticket against its invariant, when it has one (the sentence of what its persisted data must never become): a criterion that breaks it (a date « brought back to now » in a ticket whose invariant says « a real past date ») is rewritten, or becomes a question for the user now.
 
 Iterate until the user approves the breakdown.
 

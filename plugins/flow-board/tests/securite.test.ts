@@ -29,12 +29,19 @@ const GROUPS = [
   { id: 'B', name: 'App', tickets: ['B1'], files: ['app'] },
 ]
 
+/** La consigne d'/implement du parcours à groupes (sans groupes, elle suit la procédure d'une session liée). */
+const groupedCoaching = async ($: any): Promise<string> => {
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)
+  return (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
+}
+
 test('revue de sécurité : l’avis de Claude après la revue du groupe, le bouton, puis « sécurité relue »', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 97_000_000 })
   mock.store(on)
   const filled = world(on)
   on('session.repo', () => ({ value: { root: 'C:/proj', remote: null, internal: false, name: null } }))
-  const coaching = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
+  const coaching = await groupedCoaching($)
   // Claude sait dès l'implémentation qu'il donnera son avis, puis lancera lui-même le sous-agent relecteur, jamais /security-review.
   expect(coaching).toContain('"advised": true|false')
   expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort high or xhigh as the criterion of the method file decides for its search, its verifications at high), read-only, limited to git diff <group base>..<launch>')
@@ -122,7 +129,7 @@ test('sans git, la revue de sécurité d’un groupe lit ses copies d’avant le
   mock.store(on)
   const filled = world(on)
   on('session.repo', () => ({ value: null }))
-  const coaching = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
+  const coaching = await groupedCoaching($)
   expect(coaching).toContain("limited to the group's diff (fixed point: for each file, the oldest copy among the group's tickets, diffed against the current file")
   expect(coaching).not.toContain('git diff <group base>..')
   await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)

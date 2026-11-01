@@ -449,8 +449,11 @@ export const reopenText = ({ run, target, closing, session, seq, root }: { run: 
   }
 }
 
-/** Une fermeture relue du tableau de bord (un fichier partagé) : un objet, sinon aucune. */
-const closingOf = (value: unknown): Closing | undefined => (value !== null && typeof value === 'object' ? (value as Closing) : undefined)
+/**
+ * Une fermeture relue du tableau de bord (un fichier partagé) : un objet, tel quel, sinon aucune. Le
+ * plan de la consigne de suppression et sa marque (`markCleanupSent`, link.ts) la lisent par ce seul garde.
+ */
+export const readClosing = (value: unknown): Closing | undefined => (value !== null && typeof value === 'object' ? (value as Closing) : undefined)
 
 /** Les sessions précédentes d'un groupe confié de nouveau, relues : une liste, ou une seule entrée d'avant. */
 const earlierLinks = (value: unknown): { seq?: number; closing?: Closing }[] =>
@@ -529,7 +532,7 @@ const cleanupPlan = ({ run, isRepo, root }: CleanupInput): { folder: string | un
   const kept: string[] = []
   if (!isRepo) return { folder, toDelete, kept }
   const note = (who: string, target: CloseTarget, seq: unknown, closing: unknown) => {
-    const fate = branchFate(run, target, seq, closingOf(closing))
+    const fate = branchFate(run, target, seq, readClosing(closing))
     if ('kept' in fate) kept.push(`${who} : ${fate.kept}`)
     else if (folder === undefined) kept.push(`${who} : fermé, dossier du parcours hors forme, branche gardée`)
     else toDelete.set(fate.branch, [...(toDelete.get(fate.branch) ?? []), who])

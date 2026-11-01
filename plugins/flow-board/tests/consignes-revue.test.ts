@@ -29,6 +29,12 @@ const world = (on: any) => {
   return filled
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
+/** Un parcours découpé en deux groupes : la consigne d'/implement avec groupes, celle d'avant le lot sans groupes. */
+const grouped = async ($: any) => {
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
+  await $.tool.call({ tool: TOOL, complete: true } as any)
+}
 
 const LOT = {
   tickets: [
@@ -47,6 +53,7 @@ test('dans la discussion, chaque revue reçoit ses consignes par un fichier, sur
   mock.clock(on, { now: 96_000_000 })
   world(on)
   await start($)
+  await grouped($)
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   expect(implement).toContain('/code-review <level> <base>..HEAD consignes : <path>')
   expect(implement).toContain('never a commit hash alone')
@@ -95,6 +102,7 @@ test('la spec fait trancher les cas sensibles et nomme le skill dont elle a beso
   expect(spec).toContain('the instructions file of its bug pass copies it')
   expect(spec).toContain('says « charger le skill <name> » where it needs it')
   expect(spec).not.toContain('A group holds 5 tickets at most')
+  await grouped($)
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   expect(implement).toContain("and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it")
 })
@@ -133,6 +141,7 @@ test('dans la discussion, la revue d’un ticket qui a une ligne « Lecteur » l
   mock.clock(on, { now: 96_700_000 })
   world(on)
   await start($)
+  await grouped($)
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   // L'étape de revue l'annonce, la consigne à part donne le relecteur et le chemin de la méthode.
   expect(implement).toContain('for a ticket with a « Lecteur » line, the content and form review')

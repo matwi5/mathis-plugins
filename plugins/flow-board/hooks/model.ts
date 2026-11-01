@@ -37,9 +37,9 @@ import type {
 import { SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
 import { GROUP_ID_FORM, asciiJson, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isQuestionIdForm, isSafeId, sendNumber } from './closing.ts'
 import { maxOf, minOf } from './timeline.ts'
-import { activeRun, asanaChange, asList, AUTO_CHOICES_MAX, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, SECURITY_COUNT_MAX, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount } from './basics.ts'
+import { activeRun, asanaChange, asList, AUTO_CHOICES_MAX, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
 import { type GroupRelay, ignoredOrigins, inForce, isRelay, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
-import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, keepClosings, linkedInFlight, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
+import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, keepClosings, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
 
 export const emptyBoard = (root: string, name: string): Board => ({ v: 1, root, name, runs: [], activeId: null })
 
@@ -155,9 +155,12 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
   // Avec des groupes, la revue se lance depuis la ligne du groupe (/code-review ici, ou sa session
   // liée pour un groupe qu'elle a fait) : la suite proposée reste le lancement des groupes.
   const isReviewHere = isReviewDue && (run.groups ?? []).length === 0
+  // Sans groupes, le lot relu attend encore sa sécurité tranchée, comme un groupe pas clos : le compte
+  // rendu ne se propose pas avant (la ligne de sécurité du lot porte la suite).
+  const isLotSecurityHeld = SKILLS[phase.skill]?.hasTickets === true && isLotSecurityDue(run)
   const kept = [
     ...(isReviewHere ? ['final-review'] : []),
-    ...(isUnfinished || isReviewDue ? list.filter(skill => !AFTER_TICKETS.has(skill)) : list)
+    ...(isUnfinished || isReviewDue || isLotSecurityHeld ? list.filter(skill => !AFTER_TICKETS.has(skill)) : list)
       .filter(skill => skill !== 'final-review')
       .filter(skill => !(isReportOpen && DELIVERY.has(skill))),
   ]
@@ -199,7 +202,7 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
     (phase.status === 'done' || phase.skill === 'project:version') &&
     !run.phases.slice(run.cursor + 1).some(p => p.status === 'pending' && !isPhaseOptional(run, p))
   // Avec des groupes, une revue qui manque n'a pas de skill pour suite : elle se lance sur la ligne du groupe.
-  const primary = isReviewDue && !isUnfinished && (run.groups ?? []).length > 0 ? null : (kept[0] ?? null)
+  const primary = (isReviewDue && !isUnfinished && (run.groups ?? []).length > 0) || isLotSecurityHeld ? null : (kept[0] ?? null)
   return { primary, others, canFinish, ...(versionNote ? { versionNote } : {}), ...(preview.length > 0 ? { versionPreview: preview } : {}) }
 }
 
@@ -666,12 +669,91 @@ export const commandArgsOf = (run: Run | null, skill: string): string => {
   return reviewArgs(isSensitive)
 }
 
-/** Un groupe fini n'a pas encore eu sa revue ; sans groupes, le lot entier fini et pas relu. */
+/**
+ * La dernière fin de ticket du lot : la plus récente des dates de fin lisibles de ses tickets faits.
+ * Un ticket fait sans date lisible (relu hors forme, ou d'avant les dates) n'en donne aucune.
+ */
+export const lastTicketFinishOf = (run: Run): number | undefined => {
+  const ends = run.tickets.filter(t => t.status === 'done' && isTime(t.finishedAt)).map(t => t.finishedAt as number)
+  return ends.length > 0 ? ends.reduce((x, y) => (y > x ? y : x)) : undefined
+}
+
+/** Un plan de groupes arrivé pendant l'Implémentation d'un lot jusque-là sans groupes (réponse de l'outil, une fois). */
+export const LOT_PLAN_NOTICE =
+  'this Implementation ran without groups until now: the no-groups procedure of the /implement instructions no longer applies (procedure-groupe.md followed in this discussion, the lot review launched by you); the groups go to linked sessions, as the dashboard plans them'
+
+/**
+ * Un lot sans groupes dispensé de revue et de sécurité : chacun de ses tickets dit ni sensible ni avec
+ * logique, la règle d'un groupe sans logique (`isTicketReviewEnough`). Un lot vide, ou dont un ticket
+ * ne dit pas l'un des deux, ne l'est jamais.
+ */
+export const isLotReviewEnough = (run: Run): boolean => run.tickets.length > 0 && run.tickets.every(t => t.sensitive === false && t.logic === false)
+
+/**
+ * Un lot sans groupes à relire : tous ses tickets faits, et jamais relu, ou relu à une date future
+ * (une revue à refaire, `clampFuture`), ou un ticket fini après sa dernière revue (un ticket ajouté
+ * puis fini après elle). Calculé : rien ne s'enregistre pour un nouveau passage, la date de la dernière
+ * revue le désigne. Faux avec des groupes.
+ */
+export const isLotToReview = (run: Run): boolean => {
+  if ((run.groups ?? []).length > 0 || !isAllDone(run, run.tickets.map(t => t.id))) return false
+  const reviewed = reviewTimeOf(run)
+  if (reviewed === undefined) return true
+  const last = lastTicketFinishOf(run)
+  return last !== undefined && last > reviewed
+}
+
+/**
+ * La date de l'avis de sécurité du lot : la sienne, ou, pour un avis sans date (d'avant les dates),
+ * celle de la dernière revue du lot, puisqu'un avis vient après sa revue. Rien sans avis, ni pour un
+ * avis sans date d'un lot jamais relu.
+ */
+const lotAdviceTimeOf = (run: Run): number | undefined => {
+  const sec: unknown = run.security
+  if (sec === null || typeof sec !== 'object') return undefined
+  const at = (sec as SecurityCheck).at
+  return isTime(at) ? at : reviewTimeOf(run)
+}
+
+/**
+ * L'avis de sécurité du lot vaut pour le passage en cours : postérieur à la dernière fin de ticket et à
+ * la dernière revue du lot (une fin ou une revue à la même milliseconde compte comme avant lui). Invariant : un avis antérieur à la dernière
+ * fin de ticket ne rend jamais la sécurité du lot tranchée.
+ */
+export const isLotAdviceCurrent = (run: Run): boolean => {
+  const at = lotAdviceTimeOf(run)
+  if (at === undefined) return false
+  const last = lastTicketFinishOf(run)
+  // Il suit aussi la dernière revue du lot : un /security-review tapé avant le /code-review du passage,
+  // ou une réponse tardive au passage précédent, ne compte pas.
+  const reviewed = reviewTimeOf(run)
+  return (last === undefined || at >= last) && (reviewed === undefined || at >= reviewed)
+}
+
+/** Le lot a un avis de sécurité enregistré qui ne vaut pas pour le passage en cours. */
+export const isLotAdvicePrevious = (run: Run): boolean => run.security !== undefined && !isLotAdviceCurrent(run)
+
+/**
+ * La sécurité d'un lot sans groupes tranchée : son avis du passage en cours, comme celui d'un groupe
+ * (`isSecuritySettled`), ou, sans aucun envoi, un lot dispensé ; un envoi explicite l'emporte sur la
+ * dispense, comme pour un groupe (`closeMissing`), même d'un passage précédent.
+ */
+export const isLotSecuritySettled = (run: Run): boolean =>
+  (run.security === undefined && isLotReviewEnough(run)) || (isLotAdviceCurrent(run) && isSecuritySettled(run.security))
+
+/**
+ * Un lot sans groupes relu (ou dispensé) dont la sécurité n'est pas tranchée : le compte rendu attend
+ * encore, comme un groupe pas clos. Faux avec des groupes, ou tant qu'un ticket est ouvert.
+ */
+export const isLotSecurityDue = (run: Run): boolean =>
+  (run.groups ?? []).length === 0 && isAllDone(run, run.tickets.map(t => t.id)) && !needsReview(run) && !isLotSecuritySettled(run)
+
+/** Un groupe fini n'a pas encore eu sa revue ; sans groupes, le lot à relire et pas dispensé. */
 export const needsReview = (run: Run): boolean => {
   const groups = run.groups ?? []
   // Un groupe encore confié n'est pas fini ici, même ses tickets relayés faits.
   if (groups.length > 0) return groups.some(g => g.linked === undefined && awaitsReview(run, g))
-  return reviewTimeOf(run) === undefined && isAllDone(run, run.tickets.map(t => t.id))
+  return isLotToReview(run) && !isLotReviewEnough(run)
 }
 
 /**
@@ -706,7 +788,16 @@ const markReviewed = (run: Run, now: number): string[] => {
   const named = due.filter(g => readMarks(run).marks.some(m => m.startedAt !== undefined && m.key.startsWith('review:') && m.key.slice('review:'.length).split('+').includes(hereUnitOf(g))))
   const targets = fromQueue.length > 0 ? [...fromQueue, ...named.filter(g => !fromQueue.includes(g))] : due
   for (const g of targets) g.reviewedAt = now
-  if (isAllDone(run, run.tickets.map(t => t.id))) run.reviewedAt = now
+  if (isAllDone(run, run.tickets.map(t => t.id))) {
+    // Un avis du lot encore sans date (d'avant les dates) se date par la revue d'avant, 0 sans elle, avant
+    // que celle-ci la remplace : daté par la nouvelle, il couvrirait un passage qu'il n'a jamais lu. Seul
+    // `at` s'écrit.
+    const sec: unknown = run.security
+    if ((run.groups ?? []).length === 0 && sec !== null && typeof sec === 'object' && !isTime((sec as SecurityCheck).at)) {
+      run.security = { ...(sec as SecurityCheck), at: reviewTimeOf(run) ?? 0 }
+    }
+    run.reviewedAt = now
+  }
   return targets.map(g => `${g.id} (${g.name})`)
 }
 
@@ -735,7 +826,11 @@ const securityGroupOf = (run: Run, id: string): TicketGroup | null => {
 const markSecured = (run: Run, now: number): string[] => {
   const groups = run.groups ?? []
   if (groups.length === 0) {
-    run.security = { ...run.security, ranAt: now }
+    // Daté comme un envoi ; sur un nouveau passage, il repart de zéro (anciens comptes au journal), son
+    // lancement gardé : jamais un compte d'un passage précédent daté de celui-ci.
+    const isNewPass = isLotAdvicePrevious(run)
+    if (isNewPass) logPreviousLotSecurity(run, now)
+    run.security = { ...(isNewPass ? {} : run.security), ranAt: now, at: now }
     return []
   }
   const queue = run.queue ?? []
@@ -754,6 +849,14 @@ const markSecured = (run: Run, now: number): string[] => {
   for (const g of targets) g.security = { ...g.security, ranAt: now }
   return targets.map(g => `${g.id} (${g.name})`)
 }
+
+/**
+ * Un nouveau passage du lot (l'avis enregistré précède la dernière fin de ticket ou la dernière revue
+ * du lot) : les comptes de l'avis
+ * précédent, qui ne comptent plus, vont au journal avant que le nouvel avis le remplace.
+ */
+const logPreviousLotSecurity = (run: Run, now: number) =>
+  log(run, now, '⛨', `Sécurité du lot : nouveau passage, l'avis enregistré (${previousSecurityText(run.security)}) précède la dernière fin de ticket ou la dernière revue du lot, et ne compte plus`, 'info')
 
 /**
  * Les comptes d'une revue de sécurité lancée, en clair : « 2 findings, 1 fixed, 1 dismissed ».
@@ -2110,6 +2213,12 @@ const reportHere = (
     // Ce que les revues ont marqué sur un groupe, et sa session liée, survivent à un plan renvoyé.
     // `parseGroups` a déjà ramené chaque id à celui qui est enregistré : la reprise se fait à l'id exact.
     const before = new Map((run.groups ?? []).map(g => [g.id, g]))
+    // La consigne d'/implement a figé « sans groupes » à son chargement (texte écrit à un moment et lu
+    // plus tard) : le premier plan enregistré pendant l'Implémentation le dit, une fois.
+    // Finie trop tôt (`{"complete": true}`), l'Implémentation reste la phase en cours : sa consigne aussi.
+    if (before.size === 0 && phase.skill === 'implement' && (phase.status === 'active' || phase.status === 'done')) {
+      groupText += ` · groups: ${LOT_PLAN_NOTICE}`
+    }
     const merged = parsed.groups.map(g => {
       const was = before.get(g.id)
       return { ...g, ...keptGroupFields(was) }
@@ -2252,7 +2361,7 @@ const reportHere = (
     // Un parcours à groupes sans groupe fini (rattachés compris) : l'avis n'irait qu'au lot, que rien ne lit alors.
     securityReply = ` · security: no finished group to give it to (groups: ${run.groups!.map(g => shownGroupId(g.id)).join(', ')}); send it with "group"; nothing recorded`
   } else if (security && outOfRange.length > 0) {
-    securityReply = ` · security: refused, counts out of range (${outOfRange.join(', ')}): each is a whole number from 0 to ${SECURITY_COUNT_MAX}; nothing recorded`
+    securityReply = ` · security: refused, counts out of range (${outOfRange.join(', ')}): each is a whole number from 0 to ${BUGS_MAX}; nothing recorded`
   } else if (security && isResentInFlight(sentTarget ?? (named === '' ? securityGroupOf(run, '') : null))) {
     // En vol après une remise à zéro (renvoi, ou premier envoi d'un groupe relu) : un avis qui arrive maintenant
     // peut être celui d'avant l'envoi ; posé sur l'envoi en cours, il le clorait sans sa propre revue de sécurité.
@@ -2262,14 +2371,28 @@ const reportHere = (
   } else if (security) {
     const group = sentTarget ?? securityGroupOf(run, '')
     securityGroup = group?.id ?? null
-    const was = (group ? group.security : run.security) ?? {}
+    // Le lot sans groupes, l'avis enregistré antérieur à la dernière fin de ticket ou à la dernière revue du lot : seul un avis (`advised`)
+    // ouvre le nouveau passage, et repart de zéro, les comptes de l'ancien au journal ; l'avis est remplacé
+    // par celui reçu, jamais effacé ni réécrit vide. Un autre envoi (des comptes ou des failles laissées
+    // arrivés en retard, une raison seule) va sur l'avis enregistré sans le dater du passage : il ne
+    // tranche rien pour lui.
+    const isOldAdvice = !group && isLotAdvicePrevious(run)
+    const isNewPass = isOldAdvice && typeof security.advised === 'boolean'
+    if (isNewPass) logPreviousLotSecurity(run, now)
+    const was = (group ? group.security : isNewPass ? {} : run.security) ?? {}
     const next: SecurityCheck = { ...was }
+    // Chaque envoi de sécurité du lot le date, même un envoi qui ne change que les comptes ; sur l'avis
+    // d'un passage précédent, il garde la date qu'il a (celle de sa revue pour un avis sans date).
+    if (!group) next.at = isOldAdvice && !isNewPass ? (lotAdviceTimeOf(run) ?? 0) : now
     if (typeof security.advised === 'boolean') next.isAdvised = security.advised
     const why = clip(str(security.why), 160)
     if (why) next.why = why
-    // Les comptes envoyés sont en forme (sinon l'envoi est refusé plus haut).
-    const findings = security.findings as number | undefined
-    const fixedSent = security.fixed as number | undefined
+    // Les comptes envoyés sont en forme (sinon l'envoi est refusé plus haut). L'envoi qui ouvre un nouveau
+    // passage du lot n'en prend aucun : ils viennent d'une revue de sécurité lancée avant cet avis, qui ne
+    // compte pas pour lui ; ceux d'une revue lancée après suivent dans un autre envoi.
+    const isCountsDropped = isNewPass && (security.findings !== undefined || security.fixed !== undefined || security.dismissed !== undefined)
+    const findings = isNewPass ? undefined : (security.findings as number | undefined)
+    const fixedSent = isNewPass ? undefined : (security.fixed as number | undefined)
     const hasCounts = findings !== undefined || fixedSent !== undefined
     if (hasCounts) {
       // Un compte absent de l'envoi garde sa valeur : « fixed » seul ne remet pas les failles à zéro.
@@ -2282,7 +2405,7 @@ const reportHere = (
     // Les failles laissées par la personne : un envoi qui les nomme les change ; un envoi qui change
     // les failles gardées sans elles les remet à 0 (une nouvelle revue, d'autres failles) ; un envoi
     // des mêmes comptes les garde. Elles ne disent pas que la revue a tourné.
-    const dismissed = security.dismissed as number | undefined
+    const dismissed = isNewPass ? undefined : (security.dismissed as number | undefined)
     const isNewFindings = findings !== undefined && was.findings !== undefined && findings !== was.findings
     if (dismissed !== undefined) next.dismissed = dismissed
     else if (isNewFindings && next.dismissed !== undefined) next.dismissed = 0
@@ -2299,6 +2422,12 @@ const reportHere = (
     const target = group ? `group ${shownGroupId(group.id)}` : 'the lot'
     if (next.findings !== undefined && (hasCounts || dismissed !== undefined)) securityReply = ` · security of ${target}: ${securityCounts(next)}`
     else if (dismissed !== undefined) securityReply = ` · security of ${target}: ${dismissed} dismissed, kept, but its review has sent no counts yet (send "findings" and "fixed")`
+    // Le lot encore à relire : un avis ne compte qu'après sa revue, et une revue de sécurité lancée avant elle non plus.
+    const reviewFirst = needsReview(run) ? '; the lot needs its review first (/code-review): an advice, and a security review, count only when they come after it' : ''
+    if (isNewPass)
+      securityReply += ` · security of the lot: new pass (the recorded advice precedes the last ticket end or the last lot review): the counts of the previous pass no longer count; this advice starts the new pass${isCountsDropped ? '; the counts sent with it are not recorded (a security review launched before this advice does not count): send those of a security review launched after it' : ''}${reviewFirst}`
+    else if (isOldAdvice)
+      securityReply += ` · security of the lot: the recorded advice is older than the last ticket end or the last lot review: this send is kept on it and settles nothing for the current pass; ${reviewFirst ? 'review the lot first (/code-review), then send' : 'send'} this pass's advice ("advised"), then the counts of a security review launched after it (one launched before does not count: relaunch it)`
     if (hasCounts && hasUnreadableCounts(next)) {
       log(run, now, '⛨', `Sécurité ${who}comptes relus hors forme, à renvoyer`, 'warn')
     } else if (hasCounts) {
@@ -2521,7 +2650,7 @@ const closeMissing = (run: Run, g: TicketGroup): string[] => {
   if (sec === undefined && isTicketReviewEnough(run, g)) return missing
   if (sec && typeof sec === 'object' && hasUnreadableCounts(sec)) {
     missing.push(
-      `its security counts read back out of form (${unreadableCounts(sec).join(', ')}; each must be a whole number from 0 to ${SECURITY_COUNT_MAX}): send {"security": {"group": ${asciiJson(g.id)}, "findings": <kept findings>, "fixed": <fixed>}} again, with "dismissed" if some are left unfixed (an unreadable "dismissed" not sent again counts as 0)`,
+      `its security counts read back out of form (${unreadableCounts(sec).join(', ')}; each must be a whole number from 0 to ${BUGS_MAX}): send {"security": {"group": ${asciiJson(g.id)}, "findings": <kept findings>, "fixed": <fixed>}} again, with "dismissed" if some are left unfixed (an unreadable "dismissed" not sent again counts as 0)`,
     )
   } else if (!isSecuritySettled(sec)) {
     if (sec?.findings !== undefined) {
@@ -2539,8 +2668,8 @@ const closeMissing = (run: Run, g: TicketGroup): string[] => {
  * La session d'un groupe rendu travaille encore : le relais montre une activité postérieure à son
  * dernier compte rendu déposé (S1, signe (a)). Sans compte rendu au relais, rien ne se mesure.
  */
-const isStillActive = (relay: Relay | null, g: TicketGroup, link: { at: number } | undefined = g.delegated, until = Infinity): boolean => {
-  const relayed = relayForGroup(relay, g, link as GroupLink | undefined, until)
+const isStillActive = (relay: Relay | null, g: TicketGroup, plan: readonly TicketGroup[] | undefined, link: { at: number } | undefined = g.delegated, until = Infinity): boolean => {
+  const relayed = relayForGroup(relay, g, plan, link as GroupLink | undefined, until)
   if (relayed?.report === undefined || relayed.last === undefined) return false
   // Une date relue hors forme ne mesure rien : dans le doute, la session compte encore active.
   if (!isTime(relayed.report.at) || !isTime(relayed.last.at) || (relayed.endedAt !== undefined && !isTime(relayed.endedAt))) return true
@@ -2552,7 +2681,7 @@ const isStillActive = (relay: Relay | null, g: TicketGroup, link: { at: number }
 /** Un groupe rendu, relu, à la sécurité tranchée, sans fermeture en cours : candidat à la fermeture. */
 export const isCloseCandidate = (run: Run, g: TicketGroup, relay: Relay | null = null): boolean => {
   const link = g.delegated
-  if (!link || typeof link !== 'object' || g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g).length > 0 || isStillActive(relay, g)) return false
+  if (!link || typeof link !== 'object' || g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g).length > 0 || isStillActive(relay, g, run.groups)) return false
   // Une fermeture relue hors forme (null, un autre type) n'est ni à faire ni relancée.
   return link.closing === undefined || (link.closing !== null && typeof link.closing === 'object' && link.closing.state === 'stopped' && isRetried(link))
 }
@@ -2583,13 +2712,13 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
       // Un id hors forme : la procédure se réduit à son refus, sans consigne autour qui retirerait un worktree.
       if (!isGroupId(g.id) && (prev.closing === undefined || prev.closing?.state === 'app' || retried)) {
         // Comme pour un id en forme : une session qui travaille encore n'a rien à rapporter, elle attend.
-        if (!isStillActive(relay, g, prev, nextSend(prev.at))) parts.push(` · Do not close: ${procedure} ${closedHint(target, key)}`)
+        if (!isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) parts.push(` · Do not close: ${procedure} ${closedHint(target, key)}`)
         continue
       }
       const name = `the previous linked session of group ${shownGroupId(g.id)} (${shownGroupName(g.name)}), replaced by a new send (sent at ${isoMinute(prev.at)} UTC)`
       if (prev.closing?.state === 'app') {
         parts.push(` · To archive in the app: ${name}${closingWhy(prev.closing.why)}; ${archived(procedure)} ${closedHint(target, key)}`)
-      } else if ((prev.closing === undefined || retried) && !isStillActive(relay, g, prev, nextSend(prev.at))) {
+      } else if ((prev.closing === undefined || retried) && !isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) {
         parts.push(
           ` · Close now: ${name}: its work came back with its group, a new session took its place. Only in the discussion that leads the workflow, never in a linked session (a bug-diagnosis session that resumed the workflow included: there, ignore this section). The new session of the group may work in a worktree of the same name: the worktree to close is the one of this previous session only, found by its branch and its session's cwd; if that worktree is the new session's (its cwd, or the new session's branch), stop the closing and tell the user. ${procedure} ${closedHint(target, key)}`,
         )
@@ -2628,7 +2757,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     }
     // Une fermeture arrêtée ne se repropose pas à chaque appel ; relancée, elle dit ce qui manque encore.
     if (link.closing?.state === 'stopped' && !isRetried(link)) continue
-    if (isStillActive(relay, g) && closeMissing(run, g).length === 0) {
+    if (isStillActive(relay, g, run.groups) && closeMissing(run, g).length === 0) {
       parts.push(
         ` · Not closed yet: ${name} — its linked session is still active (relayed activity after its final report): closing waits. Once its work is done and checked, ask it by SendMessage to leave its final report in the relay again, updated with that work (its procedure says so after any later fix; the same text again is ignored): ${isGroupId(g.id) ? 'the next call then closes it' : 'the next call then gives its refusal to report (its id is out of form: nothing is closed from here)'}.`,
       )
@@ -2801,13 +2930,29 @@ export const noActiveFrench = (board: Board): string => {
 export const clampFuture = (board: Board, now: number): Board => {
   const isAhead = (r: Run) => r.updatedAt > now + 60_000
   const isDeletedSound = !hasUnsoundTombstones(board, now)
-  if (isDeletedSound && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now))) return board
+  // L'avis de sécurité du lot daté au-delà de la tolérance : sa date ne se croit pas, il ne vaut plus pour
+  // aucun passage (0, comme un avis d'un lot jamais relu), et ne gagne plus les fusions.
+  const isAdviceAhead = (r: Run) => {
+    const sec: unknown = r.security
+    return sec !== null && typeof sec === 'object' && isTime((sec as SecurityCheck).at) && (sec as SecurityCheck).at! > now + 60_000
+  }
+  // Une fin de ticket datée au-delà de la tolérance, ramenée à maintenant : sinon chaque revue du lot,
+  // datée avant elle, le laisserait à relire, et l'auto renverrait la revue à chaque tour.
+  const isTicketAhead = (r: Run) => r.tickets.some(t => isTime(t.finishedAt) && t.finishedAt > now + 60_000)
+  // Une revue du lot datée au-delà de la tolérance compte comme une revue à refaire : sa date est gardée,
+  // en négatif (rien n'est effacé), illisible comme date de revue ; le lot redevient à relire, sous une clé
+  // de passage qui la nomme (jamais `lot@0`), et la revue suivante la remplace.
+  const isReviewAhead = (r: Run) => isTime(r.reviewedAt) && r.reviewedAt > now + 60_000
+  if (isDeletedSound && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || isReviewAhead(r))) return board
   const b = clone(board)
   // Une trace de suppression datée dans le futur, ou mal formée, tombe à la lecture : jamais appliquée.
   if (!isDeletedSound) b.deleted = soundTombstones(b.deleted, now)
   for (const r of b.runs) {
     if (isAhead(r)) r.updatedAt = Math.min(now, maxOf(r.log.map(e => e.at).filter(at => at <= now), r.startedAt))
     if (isAutoAhead(r, now)) r.auto = autoAtMost(r, now)
+    if (isAdviceAhead(r)) r.security = { ...r.security, at: 0 }
+    if (isReviewAhead(r)) r.reviewedAt = -r.reviewedAt!
+    if (isTicketAhead(r)) r.tickets = r.tickets.map(t => (isTime(t.finishedAt) && t.finishedAt > now + 60_000 ? { ...t, finishedAt: now } : t))
     if (areTracesAhead(r, now)) {
       r.autoResent = tracesAtMost(r.autoResent, now) as Run['autoResent']
       r.answered = tracesAtMost(r.answered, now) as Run['answered']
@@ -3796,8 +3941,8 @@ export const STALE_PREFIX = 'sans-suite:'
 
 /**
  * Une action que l'auto peut envoyer : sa clé, ce qu'elle est en mots, ce qu'elle bloque ; la commande
- * d'une phase, ou un texte : les groupes d'une vague confiés à leurs sessions liées, la revue d'un
- * groupe rendu, sa revue de sécurité.
+ * d'une phase (ou `/code-review` d'un lot sans groupes), ou un texte : les groupes d'une vague confiés à
+ * leurs sessions liées, la revue d'un groupe rendu, sa revue de sécurité (celle du lot, groupe « lot »).
  */
 export type AutoAction = { key: string; what: string; blocks: WaitTarget } & (
   | { kind: 'command'; skill: string }
@@ -3977,6 +4122,74 @@ export const autoGroupActionOf = (run: Run): { action: AutoAction | null; relaun
   return { action: { kind: 'groups', groups: ids, key: `groups:${units.join('+')}`, what, blocks: { kind: 'group', id: ids[0]! } }, relaunch }
 }
 
+/** Ce que bloquent les actions de l'auto pour un lot sans groupes : la phase Implémentation. */
+const LOT_BLOCKS: WaitTarget = { kind: 'phase', id: 'implement' }
+
+/**
+ * Le passage du lot qu'une marque nomme : la date de la dernière revue du lot, 0 sans revue ; une revue
+ * à refaire (datée dans le futur, gardée en négatif à la lecture) nomme sa propre date, jamais `lot@0`,
+ * pour qu'une marque d'un passage sans revue ne la retienne pas.
+ */
+const lotPassOf = (run: Run): string => {
+  const raw: unknown = run.reviewedAt
+  return `lot@${isTime(raw) || (typeof raw === 'number' && isTime(-raw)) ? raw : 0}`
+}
+
+/**
+ * La clé de la revue d'un lot à relire : `review:lot@<dernière revue>~<dernière fin de ticket, 0 sans>~<empreinte
+ * des tickets faits>`. La revue d'un lot qui a vu d'autres tickets a une autre clé : après une revue refusée à la fusion
+ * (elle n'avait pas vu un ticket fini ici), la marque que l'autre copie a posée sur la même revue de base
+ * ne retient pas celle d'ici. La même pour l'auto et pour « ◆ Revue ».
+ */
+const lotReviewKeyOf = (run: Run): string => `review:${lotPassOf(run)}~${lastTicketFinishOf(run) ?? 0}~${doneTicketsPrint(run)}`
+
+/**
+ * L'empreinte des tickets faits du lot (leurs ids et leurs dates de fin, triés), courte : deux lots qui
+ * n'ont pas vu les mêmes tickets finis ont deux empreintes, même quand le ticket qui manque n'est pas
+ * la dernière fin (un ticket sans date lisible, une horloge reculée, la même milliseconde).
+ */
+const doneTicketsPrint = (run: Run): string => {
+  const seen = run.tickets
+    .filter(t => t.status === 'done')
+    .map(t => `${t.id}:${isTime(t.finishedAt) ? t.finishedAt : '-'}`)
+    .sort()
+    .join('|')
+  let hash = 0x811c9dc5
+  for (let i = 0; i < seen.length; i++) hash = Math.imul(hash ^ seen.charCodeAt(i), 0x01000193) >>> 0
+  return hash.toString(36)
+}
+
+/**
+ * Ce que l'auto ferait pour un lot sans groupes pendant l'Implémentation, quel que soit son état (finie
+ * par un `{"complete": true}` envoyé trop tôt comprise) : la revue du lot à relire, une fois par passage
+ * (`lotReviewKeyOf`), avant le compte rendu ; puis sa
+ * revue de sécurité conseillée, postérieure à la dernière fin de ticket et pas lancée
+ * (`security:lot@<date de la dernière revue, celle du passage relu>`), une fois par revue du lot : un
+ * `/code-review` rechargé fait tomber l'avis (il doit suivre la dernière revue), et l'avis de cette
+ * revue fait relancer la sécurité sous sa clé. Rien tant qu'une tâche de fond tourne (`inFlight` :
+ * un sous-agent que Claude a lancé ne pose aucune date de lancement), ni quand une question bloque la
+ * phase, ni pour un lot dispensé, même avec un avis explicite. Invariant : une revue du lot n'est jamais
+ * envoyée deux fois par l'auto pour le même passage, et une marque d'un passage précédent n'empêche
+ * jamais la revue d'un passage suivant (la clé change avec la date de la revue et les tickets faits).
+ */
+const autoLotActionOf = (run: Run, inFlight: boolean): AutoAction | null => {
+  const phase = currentPhase(run)
+  if (phase.skill !== 'implement' || run.status !== 'active' || (run.groups ?? []).length > 0 || inFlight || isBlocked(run, LOT_BLOCKS) || isLotReviewEnough(run)) return null
+  if (needsReview(run)) {
+    const key = lotReviewKeyOf(run)
+    return isMarked(run, key) ? null : { kind: 'command', skill: 'final-review', key, what: '/code-review du lot', blocks: LOT_BLOCKS }
+  }
+  const sec: unknown = run.security
+  if (sec === null || typeof sec !== 'object' || !isLotAdviceCurrent(run) || !isAllDone(run, run.tickets.map(t => t.id))) return null
+  const check = sec as SecurityCheck
+  if (check.isAdvised !== true || check.ranAt !== undefined || check.findings !== undefined) return null
+  // Une revue de sécurité par revue du lot : l'avis ne compte que s'il suit la dernière revue, si bien
+  // qu'une revue rechargée en demande une nouvelle, sous sa clé ; la marque d'une autre revue (rechargée
+  // depuis, datée dans le futur, ou d'une copie dont la revue a été refusée à la fusion) ne la couvre pas.
+  const key = `security:${lotPassOf(run)}`
+  return isMarked(run, key) ? null : { kind: 'security', group: 'lot', key, what: 'revue de sécurité du lot', blocks: LOT_BLOCKS }
+}
+
 /**
  * Un groupe à l'id hors forme (relu du fichier partagé) que l'auto aurait encore à faire avancer, dans
  * une phase où il agit sur les groupes : confié, pas fini, ou fini sans être clos. Son id n'entre dans
@@ -4014,8 +4227,10 @@ export const linkedReviewMark = (run: Run, groupId: string): AutoMarkSpec | null
   return { key: `review:${g.id}#${sendNumber(g.delegated.seq) ?? 1}`, what: `revue du groupe ${g.id}`, blocks: { kind: 'group', id: g.id } }
 }
 
-/** La marque de la revue de sécurité d'un groupe (« ⛨ Revue de sécurité »), sous la clé de son dernier envoi rendu (l'unité d'ici pour un groupe jamais rendu). */
+/** La marque de la revue de sécurité d'un groupe (« ⛨ Revue de sécurité »), sous la clé de son dernier envoi rendu (l'unité d'ici pour un groupe jamais rendu) ; sans groupes, celle du lot (« lot »), sous la date de sa dernière revue. */
 export const securityReviewMark = (run: Run, groupId: string): AutoMarkSpec | null => {
+  // Sans groupes, le lot : la clé de son passage, celle que l'auto enverrait.
+  if (groupId === 'lot' && (run.groups ?? []).length === 0) return { key: `security:${lotPassOf(run)}`, what: 'revue de sécurité du lot', blocks: LOT_BLOCKS }
   const g = (run.groups ?? []).find(x => x.id === groupId)
   if (!g || !isGroupId(g.id)) return null
   return { key: `security:${g.delegated !== undefined ? `${g.id}#${sendNumber(g.delegated?.seq) ?? 1}` : hereUnitOf(g)}`, what: `revue de sécurité du groupe ${g.id}`, blocks: { kind: 'group', id: g.id } }
@@ -4029,8 +4244,10 @@ export const securityReviewMark = (run: Run, groupId: string): AutoMarkSpec | nu
  */
 const hereUnitOf = (g: TicketGroup): string => `${g.id}#${groupSendSeq({ ...g, linked: undefined }) - 1}`
 
-/** La marque du /code-review des groupes finis ici et pas relus (« ◆ Revue du groupe »), celle de l'envoi auto de cette revue. */
+/** La marque du /code-review des groupes finis ici et pas relus (« ◆ Revue du groupe »), celle de l'envoi auto de cette revue ; sans groupes, celle du lot à relire (« ◆ Revue »), sous la clé de son passage. */
 export const hereReviewMark = (run: Run): AutoMarkSpec | null => {
+  // Sans groupes, le lot à relire : la clé de son passage, celle que l'auto enverrait.
+  if ((run.groups ?? []).length === 0) return needsReview(run) ? { key: lotReviewKeyOf(run), what: '/code-review du lot', blocks: LOT_BLOCKS } : null
   const here = (run.groups ?? []).filter(g => g.linked === undefined && g.delegated === undefined && isGroupId(g.id) && isGroupDone(run, g) && !isGroupReviewed(run, g))
   if (here.length === 0) return null
   return { key: `review:${here.map(g => hereUnitOf(g)).join('+')}`, what: `/code-review des groupes ${here.map(g => g.id).join(', ')}`, blocks: { kind: 'group', id: here[0]!.id } }
@@ -4149,7 +4366,8 @@ export type AutoDecision = ({ kind: 'send'; action: AutoAction } | { kind: 'stop
 
 /**
  * La décision de l'auto à la fin d'un tour, sur le parcours relu : rien tant qu'une marque attend son
- * démarrage ; l'action des groupes, sinon celle de la phase, si elle n'est ni marquée ni bloquée par une
+ * démarrage ; l'action des groupes, sinon celle d'un lot sans groupes (sa revue, sa revue de sécurité),
+ * sinon celle de la phase, si elle n'est ni marquée ni bloquée par une
  * question ; sinon, quand des questions attendent et que rien n'est en vol (`inFlight` : une tâche de
  * fond ; une session liée au travail compte aussi), la pause « plus rien ne peut avancer sans toi », ou
  * « deuxième échec du groupe <id> » quand c'est la question d'un renvoi de trop qui retient. Une liste
@@ -4162,6 +4380,9 @@ export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean): Au
   if (hasUnsafeOpenGroup(run)) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
   const grouped = autoGroupActionOf(run)
   if (grouped.action) return { kind: 'send', action: grouped.action, relaunch: grouped.relaunch }
+  // Un lot sans groupes : sa revue, puis sa revue de sécurité, avant la phase suivante.
+  const lot = autoLotActionOf(run, inFlight)
+  if (lot) return { kind: 'send', action: lot, relaunch: grouped.relaunch }
   const action = autoActionOf(run, opts)
   const phase = currentPhase(run)
   const isHeld = action !== null && (isBlocked(run, action.blocks) || isBlocked(run, { kind: 'phase', id: phase.skill }))
@@ -4383,13 +4604,66 @@ const keepReportMark = (kept: Run, other: Run | undefined): Run => {
 }
 
 /**
+ * La revue et l'avis de sécurité du lot sans groupes d'une copie ou de l'autre : la dernière revue la
+ * plus récente des deux, celle de l'autre copie seulement si elle a vu chaque ticket fini de la copie
+ * gardée (fini là-bas aussi, à une date lisible, avant elle, et pas avant la fin d'ici : un ticket rouvert
+ * puis refini ici n'est pas couvert) : sinon la copie gardée garde la sienne, et
+ * le lot est à relire (au pire une revue de plus, jamais une revue manquée) ; l'avis de sécurité de date
+ * la plus récente, en entier, un avis daté avant un avis sans date, celui de la copie gardée à date
+ * égale ou sans date des deux côtés, celui de l'autre copie seulement si elle avait vu, avant lui,
+ * chaque ticket fini de la copie gardée (sinon la copie gardée garde le sien ; sans avis, elle reprend
+ * celui de l'autre daté 0, qui ne vaut pour aucun passage d'ici). Aucune copie ne vide l'avis : une copie sans avis garde celui de
+ * l'autre. Rendu tel quel sans changement.
+ */
+const keepLotReview = (kept: Run, other: Run | undefined): Run => {
+  if (!other) return kept
+  const isNewer = isTime(other.reviewedAt) && !(isTime(kept.reviewedAt) && kept.reviewedAt >= other.reviewedAt)
+  // Vu fini là-bas, à une date lisible, au plus tard à la date donnée (sa revue, ou son avis), et pas avant la fin d'ici (un ticket
+  // rouvert puis refini ici après que l'autre copie l'a vu fini n'est pas couvert).
+  const hasSeenAll = (at: number) =>
+    kept.tickets
+      .filter(t => t.status === 'done')
+      .every(t => {
+        const seen = other.tickets.find(o => sameTicket(o.id, t.id))
+        return seen?.status === 'done' && isTime(seen.finishedAt) && seen.finishedAt <= at && isTime(t.finishedAt) && seen.finishedAt >= t.finishedAt
+      })
+  const theirReview = isNewer && hasSeenAll(other.reviewedAt as number) ? (other.reviewedAt as number) : undefined
+  const ours: unknown = kept.security
+  const theirs: unknown = other.security
+  const dateOf = (sec: unknown): number | undefined => (sec !== null && typeof sec === 'object' && isTime((sec as SecurityCheck).at) ? (sec as SecurityCheck).at : undefined)
+  const isLater = theirs !== undefined && (ours === undefined || (dateOf(theirs) !== undefined && (dateOf(ours) === undefined || dateOf(theirs)! > dateOf(ours)!)))
+  // La même règle pour l'avis : celui de l'autre copie n'est repris que si elle avait vu, avant lui
+  // (sa date, ou celle de sa revue pour un avis sans date), chaque ticket fini de la copie gardée.
+  const theirAt = dateOf(theirs) ?? reviewTimeOf(other)
+  const isTheirs = isLater && theirAt !== undefined && hasSeenAll(theirAt)
+  // La copie gardée sans avis : celui de l'autre, qui n'a pas vu ses tickets, n'est pas perdu (ses failles
+  // ouvertes comprises) mais ne vaut pour aucun passage d'ici : il est repris daté 0, comme un avis daté
+  // dans le futur ; le prochain avis d'ici ouvre un nouveau passage et note ses comptes au journal.
+  const isCarried = !isTheirs && ours === undefined && theirs !== null && typeof theirs === 'object'
+  if (isCarried) {
+    const carried = { ...(theirs as SecurityCheck), at: 0 }
+    return { ...kept, ...(theirReview !== undefined ? { reviewedAt: theirReview } : {}), security: carried }
+  }
+  if (theirReview === undefined && !isTheirs) return kept
+  // Un avis sans date gardé à côté d'une revue venue d'une autre copie : daté d'abord par la revue de sa
+  // propre copie (0 sans elle), comme à la revue (`markReviewed`), pour que la nouvelle revue ne le date
+  // pas d'un passage qu'il n'a jamais lu.
+  const source = isTheirs ? other : kept
+  const review = theirReview ?? kept.reviewedAt
+  const sec = isTheirs ? theirs : ours
+  const isUndated = sec !== null && typeof sec === 'object' && dateOf(sec) === undefined && reviewTimeOf(source) !== reviewTimeOf({ reviewedAt: review })
+  const security = isUndated ? { ...(sec as SecurityCheck), at: reviewTimeOf(source) ?? 0 } : (sec as SecurityCheck)
+  return { ...kept, ...(theirReview !== undefined ? { reviewedAt: theirReview } : {}), ...(isTheirs || isUndated ? { security } : {}) }
+}
+
+/**
  * La fusion de deux copies d'un même parcours : la plus récente, avec les champs qui se fusionnent à
  * part. `own` : les traces de retrait écrites par cette discussion, pour chaque parcours dont l'auto est
  * allumé en son nom (celui qu'elles nomment) ; seules elles y retirent une marque ou une question.
  */
 const keepRun = (kept: Run, other: Run | undefined, own: readonly OwnTraces[] = [], isKeptLocal = true): Run => {
   const mine = own.find(o => o.runId === kept.id)
-  return keepAutoSent(keepDecided(keepWaiting(keepAuto(keepReportMark(keepClosings(kept, other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent)
+  return keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent)
 }
 
 // ─── Traces de retrait écrites ici ────────────────────────────────────────
@@ -5021,8 +5295,25 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
     }
     lines.push(`- Groups, each usually run in its own discussion: ${groups.map(state).join('; ')}. Report every group, not only the one of this discussion: write « Fait » group by group.`)
   }
-  const lotSecurity = groups.length === 0 ? securityText(run.security) : ''
-  if (lotSecurity) lines.push(`- Lot: ${lotSecurity}.`)
+  if (groups.length === 0 && run.tickets.length > 0) {
+    // Le lot sans groupes se dit comme un groupe : relu, dispensé, ou à relire, puis sa sécurité.
+    const isDone = isAllDone(run, run.tickets.map(t => t.id))
+    // Un avis antérieur à la dernière fin de ticket ou à la dernière revue du lot ne compte plus : il ne se dit pas comme celui du passage.
+    const lotSecurity =
+      isLotAdvicePrevious(run) ? 'security advice older than the last ticket end or the last lot review, not settled for the current pass (its own advice is due)' : securityText(run.security)
+    const reviewed = !isDone
+      ? ''
+      : isLotReviewEnough(run)
+        ? `reviewed by its ticket reviews (no logic, not sensitive)${run.security === undefined ? ', no lot review nor security review needed' : ''}`
+        : needsReview(run)
+          ? `lot review due (${reviewTimeOf(run) !== undefined ? 'a ticket finished after its last review' : typeof run.reviewedAt === 'number' && isTime(-run.reviewedAt) ? 'its last review was dated in the future, to redo' : 'never reviewed'})`
+          : 'reviewed by /code-review'
+    const parts = [reviewed, lotSecurity].filter(x => x !== '')
+    if (parts.length > 0) lines.push(`- Lot: ${parts.join(', ')}.`)
+  } else if (groups.length === 0) {
+    const lotSecurity = securityText(run.security)
+    if (lotSecurity) lines.push(`- Lot: ${lotSecurity}.`)
+  }
   const tracking = run.artifacts.filter(a => a.kind === 'tracking')
   lines.push(
     tracking.length > 0

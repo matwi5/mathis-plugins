@@ -167,6 +167,8 @@ test('les trouvailles ouvertes ne retiennent pas la livraison', () => {
   const board: Board = { ...emptyBoard('c:/p', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   const done = applyReport(board, { tickets: [{ id: 'a1', name: 'Un', status: 'done' }], complete: true }, 2_000).board
   ;(done.runs[0] as Run).reviewedAt = 2_500
+  // Le lot relu, sa sécurité tranchée : seule la trouvaille pourrait retenir le compte rendu.
+  ;(done.runs[0] as Run).security = { isAdvised: false }
   const out = applyCreatedTasks(done, [{ name: 'Plus tard', notes: 'Statut : à faire' }], { data: [{ gid: DRAPEAU, name: 'Plus tard' }] }, 3_000)
   const after = out!.board.runs[0] as Run
   expect(after.found?.map(f => f.id)).toEqual([DRAPEAU])

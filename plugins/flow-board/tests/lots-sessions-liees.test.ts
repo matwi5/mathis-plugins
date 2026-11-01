@@ -29,7 +29,7 @@ import {
   currentPhase,
   countTickets,
 } from '../hooks/basics.ts'
-import type { Board } from '../types'
+import type { Board, TicketGroup } from '../types'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -910,21 +910,21 @@ test('le relais d’une session d’avant l’envoi du groupe ne compte pas ; le
   const sent = startLinkedGroups(boardWith(VENTES), ['E'], 5_000)!.board
   const group = activeRun(sent)!.groups!.find(g => g.id === 'E')!
   const old = applyRelay(undefined, 'r', 'avant', { kind: 'tickets', changes: [{ id: 'e1', status: 'done' }] }, 4_000)!
-  expect(relayForGroup(old, group)).toBeNull()
+  expect(relayForGroup(old, group, undefined)).toBeNull()
   const now = applyRelay(old, 'r', 'apres', { kind: 'tickets', changes: [{ id: 'e1', status: 'doing' }] }, 6_000)!
-  expect(relayForGroup(now, group)).toMatchObject({ doing: 1, done: 0, total: 1 })
+  expect(relayForGroup(now, group, undefined)).toMatchObject({ doing: 1, done: 0, total: 1 })
   // Rien de nouveau : pas d'écriture.
   expect(applyRelay(now, 'r', 'apres', { kind: 'tickets', changes: [{ id: 'e1', status: 'doing' }] }, 7_000)).toBeNull()
   // Le groupe nommé « Groupe E » est E ; un nom qui ne dit rien laisse les tickets décider.
   const named = applyRelay(undefined, 'r', 'nommee', { kind: 'start', group: 'Groupe E · Enquêtes' }, 6_500)!
-  expect(relayForGroup(named, group)).toMatchObject({ done: 0, total: 1 })
+  expect(relayForGroup(named, group, undefined)).toMatchObject({ done: 0, total: 1 })
   const vague = applyRelay(applyRelay(undefined, 'r', 'floue', { kind: 'start', group: '<id du groupe>' }, 6_500)!, 'r', 'floue', { kind: 'tickets', changes: [{ id: 'e1', status: 'done' }] }, 6_600)!
-  expect(relayForGroup(vague, group)).toMatchObject({ done: 1 })
+  expect(relayForGroup(vague, group, undefined)).toMatchObject({ done: 1 })
   // Se redéclarer pour un autre groupe change le groupe de l'entrée.
   expect(applyRelay(named, 'r', 'nommee', { kind: 'start', group: 'B' }, 6_700)!.sessions.nommee!.group).toBe('B')
   // La fin de la session est relayée une fois.
   const ended = applyRelay(now, 'r', 'apres', { kind: 'end' }, 8_000)!
-  expect(relayForGroup(ended, group)?.endedAt).toBe(8_000)
+  expect(relayForGroup(ended, group, undefined)?.endedAt).toBe(8_000)
   expect(applyRelay(ended, 'r', 'apres', { kind: 'end' }, 9_000)).toBeNull()
 })
 
@@ -1038,4 +1038,47 @@ test('les consignes ajoutées aux skills : choix sensible en question au cadrage
   const retro = await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
   expect(retro.text).toContain('Improvements that touch another repository')
   expect(retro.text).toContain('Only the improvements of this repository go to the items')
+})
+
+test('une session nommée pour un groupe ne compte qu’à son retour, même quand elle relaie un ticket d’un autre groupe ; une session sans nom de groupe compte par ses tickets', () => {
+  const sent = startLinkedGroups(boardWith(VENTES), ['A', 'E'], 5_000)!.board
+  const plan = activeRun(sent)!.groups
+  const rid = activeRun(sent)!.id
+  const groupOf = (id: string) => plan!.find(g => g.id === id)!
+  // La session du groupe E relaie le ticket a1, que le plan donne au groupe A, avec ses revues, ses bogues, sa sécurité et un choix.
+  let relay = applyRelay(undefined, rid, 'fe', { kind: 'start', group: 'Groupe E · Enquêtes' }, 6_000)!
+  relay = applyRelay(relay, rid, 'fe', { kind: 'tickets', changes: [{ id: 'a1', status: 'done' }, { id: 'e1', status: 'done' }] }, 6_100)!
+  relay = applyRelay(relay, rid, 'fe', { kind: 'counts', review: { standards: 2, spec: 1, fixed: 3, bugs: 4 }, security: { advised: true, findings: 1, fixed: 1 } }, 6_200)!
+  relay = applyRelay(relay, rid, 'fe', { kind: 'decided', items: [{ what: 'Un choix du groupe E' }] }, 6_300)!
+  expect(relayForGroup(relay, groupOf('A'), plan)).toBeNull()
+  expect(relayForGroup(relay, groupOf('E'), plan)).toMatchObject({ done: 1, reviews: { count: 1, standards: 2, spec: 1, fixed: 3, bugs: 4 }, security: { findings: 1, fixed: 1 }, decided: [{ what: 'Un choix du groupe E' }] })
+  // La session du groupe A compte pour A seul : les revues de E n'y entrent pas.
+  relay = applyRelay(relay, rid, 'fa', { kind: 'start', group: 'A' }, 6_400)!
+  relay = applyRelay(relay, rid, 'fa', { kind: 'counts', review: { standards: 1, spec: 0, fixed: 1 } }, 6_500)!
+  expect(relayForGroup(relay, groupOf('A'), plan)!.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 1 })
+  expect(relayForGroup(relay, groupOf('E'), plan)!.reviews).toEqual({ count: 1, standards: 2, spec: 1, fixed: 3, bugs: 4 })
+  // Une session sans nom de groupe (d'avant la déclaration du groupe) compte toujours par ses tickets.
+  const old = applyRelay(undefined, rid, 'ancienne', { kind: 'tickets', changes: [{ id: 'a2', status: 'doing' }] }, 6_600)!
+  expect(relayForGroup(old, groupOf('A'), plan)).toMatchObject({ doing: 1 })
+  expect(relayForGroup(old, groupOf('E'), plan)).toBeNull()
+  // Un nom qui ne désigne aucun groupe du plan, en forme d'id ou non (le modèle jamais rempli, « Group E » en anglais,
+  // le thème du groupe, une faute de frappe), laisse aussi les tickets décider : la session n'est jamais perdue.
+  for (const name of ['<id du groupe>', 'Group E', 'Enquêtes', 'F']) {
+    const vague = applyRelay(applyRelay(undefined, rid, 'floue', { kind: 'start', group: name }, 6_700)!, rid, 'floue', { kind: 'tickets', changes: [{ id: 'e1', status: 'done' }] }, 6_800)!
+    expect({ name, relayed: relayForGroup(vague, groupOf('E'), plan) }).toMatchObject({ name, relayed: { done: 1 } })
+    expect(relayForGroup(vague, groupOf('A'), plan)).toBeNull()
+  }
+  // Un groupe enregistré sous un id hors forme (avant la 0.73.0) : la session déclarée sous cet id ne compte que pour lui,
+  // même quand elle relaie un ticket d'un autre groupe.
+  const old73 = { id: 'a/b', name: 'Ancien', tickets: ['x1'], linked: { at: 5_000 } } as TicketGroup
+  const withOld = [...plan!, old73]
+  const legacy = applyRelay(applyRelay(undefined, rid, 'fx', { kind: 'start', group: 'a/b' }, 6_700)!, rid, 'fx', { kind: 'tickets', changes: [{ id: 'a1', status: 'done' }] }, 6_800)!
+  expect(relayForGroup(legacy, old73, withOld)).toMatchObject({ total: 1 })
+  expect(relayForGroup(legacy, groupOf('A'), withOld)).toBeNull()
+  // Au retour de E seul, ses revues comptent une fois ; la session de A, qui a aussi relayé e1, n'y entre pas : le
+  // retour lit le plan entier, pas les seuls groupes rendus.
+  relay = applyRelay(relay, rid, 'fa', { kind: 'tickets', changes: [{ id: 'e1', status: 'done' }] }, 6_550)!
+  const back = applyReport(sent, { set: [{ id: 'e1', status: 'done' }], returned: ['E'] }, 7_000, { relay }).board
+  expect(activeRun(back)!.phases.find(p => p.skill === 'implement')!.stats).toMatchObject({ reviews: 1, standards: 2, spec: 1, fixed: 3 })
+  expect(activeRun(back)!.decided?.map(d => d.what)).toContain('Un choix du groupe E')
 })

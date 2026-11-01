@@ -125,7 +125,7 @@ test('une session liée relaie « dismissed » ; au retour, c’est une proposit
   expect(told.text).toContain('the security review')
   let relay = applyRelay(undefined, runId, 'fille', { kind: 'start', group: 'B' }, 5_500)!
   relay = applyRelay(relay, runId, 'fille', { kind: 'counts', security: { advised: true, findings: 2, fixed: 1, dismissed: 1 } }, 6_000)!
-  expect(relayForGroup(relay, groupOf(sent, 'B'))?.security).toMatchObject({ findings: 2, fixed: 1, dismissed: 1 })
+  expect(relayForGroup(relay, groupOf(sent, 'B'), undefined)?.security).toMatchObject({ findings: 2, fixed: 1, dismissed: 1 })
   const returned = applyReport(sent, { set: [{ id: 'b1', status: 'done' }], returned: ['B'], reviewed: ['B'] }, 7_000, { relay })
   const back = returned.board
   expect(groupOf(back, 'B').security).toMatchObject({ findings: 2, fixed: 1, proposedDismissed: 1 })
@@ -150,7 +150,7 @@ test('au relais, une revue suivante avec d’autres failles et sans « dismissed
   relay = applyRelay(relay, runId, 'f', { kind: 'counts', security: { findings: 3, fixed: 1, dismissed: 2 } }, 6_000)!
   relay = applyRelay(relay, runId, 'f2', { kind: 'start', group: 'B' }, 6_500)!
   relay = applyRelay(relay, runId, 'f2', { kind: 'counts', security: { findings: 5, fixed: 2 } }, 7_000)!
-  expect(relayForGroup(relay, groupOf(sent, 'B'))?.security?.dismissed).toBeUndefined()
+  expect(relayForGroup(relay, groupOf(sent, 'B'), undefined)?.security?.dismissed).toBeUndefined()
   const back = applyReport(sent, { set: [{ id: 'b1', status: 'done' }], returned: ['B'] }, 8_000, { relay }).board
   expect(groupOf(back, 'B').security?.proposedDismissed).toBeUndefined()
 })
@@ -174,7 +174,7 @@ test('une session liée redémarrée qui n’envoie que « dismissed » garde le
   relay = applyRelay(relay, runId, 'f1', { kind: 'counts', security: { advised: true, findings: 2, fixed: 1 } }, 6_000)!
   relay = applyRelay(relay, runId, 'f2', { kind: 'start', group: 'B' }, 6_500)!
   relay = applyRelay(relay, runId, 'f2', { kind: 'counts', security: { dismissed: 1 } }, 7_000)!
-  expect(relayForGroup(relay, groupOf(sent, 'B'))).toMatchObject({ securedAt: 6_000, security: { advised: true, findings: 2, fixed: 1, dismissed: 1 } })
+  expect(relayForGroup(relay, groupOf(sent, 'B'), undefined)).toMatchObject({ securedAt: 6_000, security: { advised: true, findings: 2, fixed: 1, dismissed: 1 } })
   const back = applyReport(sent, { set: [{ id: 'b1', status: 'done' }], returned: ['B'] }, 8_000, { relay }).board
   expect(groupOf(back, 'B').security).toMatchObject({ isAdvised: true, ranAt: 6_000, findings: 2, fixed: 1, proposedDismissed: 1 })
   expect(isSecuritySettled(groupOf(back, 'B').security)).toBe(false)
@@ -192,7 +192,8 @@ test('un « dismissed » envoyé sans comptes est gardé et dit, sans trancher l
   mock.clock(on, { now: 97_000_000 })
   mock.store(on)
   const coaching = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
-  expect(coaching).toContain('when the user decides to leave a kept finding unfixed, on their confirmation, send {"security": {"group": "<id>", "dismissed": <total of findings left unfixed>}}')
+  // Sans groupes (ce parcours n'en a pas), l'envoi du lot, sans id de groupe.
+  expect(coaching).toContain('when the user decides to leave a kept finding unfixed, on their confirmation, send {"security": {"dismissed": <total of findings left unfixed>}}')
 })
 
 test('la ligne de sécurité dit « N laissée(s) » et passe au vert une fois tranchée ; l’état survit à un rechargement', { timeoutMs: 15000 }, async ($, on) => {

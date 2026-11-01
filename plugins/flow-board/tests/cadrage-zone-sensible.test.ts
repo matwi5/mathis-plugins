@@ -107,3 +107,66 @@ test('/to-spec et /to-tickets font lire le code avant un ticket sensible, et lis
     expect(text).toContain('concurrency, a command or path built from a value read elsewhere: a shared file, another session, a report)')
   }
 })
+
+// Les décisions d'un parcours avaient posé, ticket par ticket, des questions prévisibles au cadrage :
+// les étapes de /to-spec et /to-tickets listent les cas du cycle de vie d'un champ persisté.
+test('/to-spec et /to-tickets listent les cas du cycle de vie d’un champ persisté et les transitions de l’objet qui porte une marque', async ($, on) => {
+  mock.clock(on, { now: 53_000_000 })
+  mock.store(on)
+  world(on)
+  for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('a failed read, a failed write, its bounds (empty, too long, a date in the future or the past), the erasure of what must be kept, a forged copy')
+    expect(text).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back), with what the mark becomes at each one')
+  }
+})
+
+// Le découpage des pistes d'une rétro ne passe pas par /to-tickets : son étape porte les mêmes
+// consignes, et /to-tickets relit aussi les critères d'un ticket sensible avant la validation.
+test('/to-tickets et le découpage d’une rétro relisent chaque critère d’un ticket sensible contre son invariant, et le découpage pose le cycle de vie', async ($, on) => {
+  mock.clock(on, { now: 55_000_000 })
+  mock.store(on)
+  world(on)
+  for (const skill of ['mattpocock-skills:to-tickets', 'mattpocock-skills:retro']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    // En mode auto, la validation est sautée et déclarée : la relecture garde son moment.
+    expect(text).toContain('before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant')
+  }
+  const retro = (await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })).text as string
+  expect(retro).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back)')
+  // Le découpage d'une rétro reçoit aussi la logique d'une règle et la fusion en question.
+  expect(retro).toContain('a ticket that changes the common rules (config/rules), a reference file or a skill says « Logique : oui »')
+  expect(retro).toContain('a choice of how a persisted field merges (several discussions or sessions write it) is a concurrency question for the user')
+  // Et, comme /to-tickets, l'advisor avant la validation et la vérification d'une API du moteur.
+  expect(retro).toContain('consult the advisor (advisor tool), not a reviewer subagent, before the button question')
+  expect(retro).toContain('load the plugin-authoring skill and ask the explorer a question')
+})
+
+// À /to-tickets, l'étape explore avait été sautée (aucun code lu pour 8 tickets dont 5 sensibles), le
+// découpage validé sans advisor, un ticket de règles communes dit sans logique, et un choix de fusion
+// d'un champ persisté déclaré au lieu d'être posé.
+test('/to-tickets fait lire le code des tickets sensibles, consulter l’advisor avant la validation, dire la logique d’une règle et poser une fusion en question', async ($, on) => {
+  mock.clock(on, { now: 56_000_000 })
+  mock.store(on)
+  world(on)
+  const text = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
+  expect(text).toContain('read the code of each sensitive ticket (the functions it names, the paths that write, merge or erase its data) before writing it, even when the spec seems to say enough')
+  expect(text).toContain('consult the advisor (advisor tool), not a reviewer subagent, before the button question, or, when that validation is skipped, before declaring it skipped; without that tool, reread the breakdown yourself in this discussion')
+  expect(text).toContain('a ticket that changes the common rules (config/rules), a reference file or a skill says « Logique : oui », even when it makes Claude run no command: these texts steer what Claude does')
+  expect(text).toContain('a choice of how a persisted field merges (several discussions or sessions write it) is a concurrency question for the user, never a declared choice')
+})
+
+// Une spec avait écrit « $.prompt.submit » pour lancer une commande, que les types donnaient à
+// $.command.run, et supposé une notification du mod visible partout (no-surface sur l'app desktop).
+test('/to-spec et /to-tickets font vérifier une API du moteur par plugin-authoring et une question, et les surfaces d’une notification', async ($, on) => {
+  mock.clock(on, { now: 54_000_000 })
+  mock.store(on)
+  world(on)
+  for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('before writing a call of the Claude Code engine ($.…) into a spec or a ticket, load the plugin-authoring skill and ask the explorer a question (which call does it, and what does it return when it does not), never a hypothesis to confirm')
+    expect(text).toContain('before specifying a notification, check its surfaces in the engine types: $.ui.notify answers no-surface')
+    // Sans terminal (l'app desktop), les hooks Notification de la personne tournent encore ; non liée ou en fermeture, aucun.
+    expect(text).toContain('only the Notification hooks of the person then run, no channel writes) and, with no hook run at all, before a session is bound or while it is exiting')
+  }
+})

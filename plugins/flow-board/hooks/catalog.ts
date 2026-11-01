@@ -136,8 +136,9 @@ export const SECURITY_CRITERIA =
  * La seconde passe de sécurité, sur le seul diff des correctifs de la revue du groupe (lu par
  * Claude) : 33 min et 4 agents xhigh pour 0 faille sur 111 lignes (rétro de l'onglet Agents).
  */
-export const SECURITY_FIXES_PASS =
-  "no second pass on the diff of the group review's fixes, unless it touches a costly area of the method file (its section 1) or exceeds 150 changed lines outside tests; then a single pass at high effort, without verification subtasks"
+export const securityFixesPass = (unit: 'group' | 'lot'): string =>
+  `no second pass on the diff of the ${unit} review's fixes, unless it touches a costly area of the method file (its section 1) or exceeds 150 changed lines outside tests; then a single pass at high effort, without verification subtasks`
+export const SECURITY_FIXES_PASS = securityFixesPass('group')
 
 /**
  * La confiance d'un dossier, lue sans rien afficher d'autre de `~/.claude.json`, qui peut porter des
@@ -149,6 +150,51 @@ export const TRUST_COMMAND = `python3 -c 'import json, os, sys; p = json.load(op
 
 /** Les zones où un ticket passe aussi par la passe « bogues » (lu par Claude). */
 export const SENSITIVE_AREAS = "privacy, data deletion, encryption, concurrency, a command or path built from a value read elsewhere: a shared file, another session, a report"
+
+/**
+ * Les cas du cycle de vie d'un champ persisté, à poser au cadrage d'un changement sensible (lu par
+ * Claude) : un parcours avait posé ces questions, prévisibles, ticket par ticket pendant
+ * l'implémentation (lecture ratée, bornes, marque perdue à une annulation). Les skills /to-spec et
+ * /to-tickets recopient la même liste (consignes-coherentes.test.mjs les compare).
+ */
+export const LIFECYCLE_CASES =
+  'for a persisted field, a failed read, a failed write, its bounds (empty, too long, a date in the future or the past), the erasure of what must be kept, a forged copy, and each transition of the object that carries a mark (sent, cancelled, sent again, back), with what the mark becomes at each one'
+
+/** La consigne de cadrage d'un changement sensible, aux étapes explore de /to-spec et /to-tickets et au découpage d'une rétro. */
+const SENSITIVE_LIFECYCLE = `for a change in a sensitive area, its lifecycle question also covers every case that applies: ${LIFECYCLE_CASES}`
+
+/**
+ * Un critère d'un ticket sensible qui contredisait son invariant (« ramenée à maintenant » contre
+ * « une vraie date passée ») n'était vu qu'à l'implémentation, d'où une question de plus. Lu à
+ * /to-tickets et au découpage des pistes d'une rétro, qui ne passe pas par /to-tickets.
+ */
+const INVARIANT_REREAD =
+  'before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant, when it has one: a criterion that breaks it is rewritten, or becomes a question for the user now'
+
+/**
+ * Une API du moteur se vérifie avant d'entrer dans une spec ou un ticket (lu par Claude) : une spec
+ * avait écrit `$.prompt.submit` pour lancer une commande, que les types donnaient déjà à
+ * `$.command.run`, parce que le brief de l'explorateur posait l'hypothèse au lieu de la question ; et
+ * supposé une notification du mod visible partout, quand les types disent `no-surface` sur l'app
+ * desktop. Ce que le moteur refuse est dans docs/evenements-moteur.md, section « Ce que le moteur refuse ».
+ */
+const ENGINE_API_CHECK =
+  'before writing a call of the Claude Code engine ($.…) into a spec or a ticket, load the plugin-authoring skill and ask the explorer a question (which call does it, and what does it return when it does not), never a hypothesis to confirm: $.prompt.submit refuses a text beginning with /, a command runs by $.command.run; before specifying a notification, check its surfaces in the engine types: $.ui.notify answers no-surface without a terminal (the desktop app, a -p run, the SDK: only the Notification hooks of the person then run, no channel writes) and, with no hook run at all, before a session is bound or while it is exiting, and the spec says where the notification is seen and what happens elsewhere'
+
+/**
+ * Les étapes de /to-tickets que le découpage d'un lot avait sautées (lu par Claude) : aucun code lu
+ * pour huit tickets dont cinq sensibles, un découpage validé sans advisor, un ticket de règles communes
+ * dit « Logique : non », et l'union de deux champs persistés déclarée « décidé sans toi » alors que
+ * c'était un choix de concurrence.
+ */
+const SENSITIVE_CODE_READ =
+  'read the code of each sensitive ticket (the functions it names, the paths that write, merge or erase its data) before writing it, even when the spec seems to say enough'
+const BREAKDOWN_ADVISOR =
+  'consult the advisor (advisor tool), not a reviewer subagent, before the button question, or, when that validation is skipped, before declaring it skipped; without that tool, reread the breakdown yourself in this discussion'
+const RULE_LOGIC =
+  'a ticket that changes the common rules (config/rules), a reference file or a skill says « Logique : oui », even when it makes Claude run no command: these texts steer what Claude does'
+const MERGE_QUESTION =
+  'a choice of how a persisted field merges (several discussions or sessions write it) is a concurrency question for the user, never a declared choice'
 
 /** Où vit la règle des revues (modèle, effort, consignes, cible, écritures), citée par les consignes des relecteurs. */
 export const REVIEW_RULE = 'review rule, config/rules/agents.md and its detail config/reference/revues.md, once installed'
@@ -217,12 +263,13 @@ export const REVIEWER_NAMES =
   'give each reviewer subagent you launch a standard description, the name the Agents tab shows: "Standards+Spec · <ticket>" for the two axes of a ticket, <ticket> being the group letter and the ticket\'s rank in its group (E2), or the ticket id in a lot without groups; "Sécurité · groupe <letter>" for a security reviewer ("Sécurité · lot" without groups); never the level nor the effort, which the tab shows apart'
 
 /**
- * Un groupe sans logique ni zone sensible (des documents, une icône, une règle qui ne fait rien lancer) : les revues de ses
+ * Un groupe sans logique ni zone sensible (des documents, une icône, une règle qui ne fait rien lancer ;
+ * une règle commune, une référence ou un skill a toujours de la logique) : les revues de ses
  * tickets sont ses seules revues, sans revue du groupe ni revue de sécurité. Un ticket qui a de la
  * logique, une zone sensible, ou ne dit pas l'un des deux, les rend dues.
  */
 export const NO_LOGIC_GROUP =
-  'A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing) has neither a group review nor a security review: its ticket reviews are its only reviews, the dashboard shows it reviewed and its security settled, and no security advice is sent for it; a single ticket with logic, in a sensitive area, or that did not say, makes the group review and the security advice due'
+  'A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing; a common rule, a reference file or a skill always has logic) has neither a group review nor a security review: its ticket reviews are its only reviews, the dashboard shows it reviewed and its security settled, and no security advice is sent for it; a single ticket with logic, in a sensitive area, or that did not say, makes the group review and the security advice due'
 
 /**
  * L'instantané d'un ticket sensible avant sa passe « bogues » (Mathis, L2 a de la rétro de l'onglet
@@ -249,6 +296,17 @@ export const NO_GIT_TICKET_FIXED_POINT = "fixed point: the copy of its files tak
 export const NO_GIT_GROUP_FIXED_POINT = "fixed point: for each file, the oldest copy among the group's tickets, diffed against the current file (\"Without git\" below)"
 
 /**
+ * La règle de l'avis de sécurité d'un lot sans groupes (lu par Claude), une seule constante pour la
+ * description du champ `security` de l'outil flow et la note de la revue du lot : l'avis est daté à son
+ * arrivée (`isLotAdviceCurrent` de model.ts), et seul un envoi « advised » ouvre un nouveau passage.
+ */
+export const LOT_ADVICE_RULE =
+  'it counts only when it follows the last ticket finish and the last lot review (a /security-review typed before the lot review does not count, and is launched again), and only a send with "advised" opens a new pass of the lot (counts sent before it stay on the previous pass and settle nothing)'
+
+/** Sans git, le point fixe d'un lot sans groupes, comme celui d'un groupe : pour chaque fichier, la plus ancienne copie de ses tickets. */
+export const NO_GIT_LOT_FIXED_POINT = "fixed point: for each file, the oldest copy among the lot's tickets, diffed against the current file (\"Without git\" below)"
+
+/**
  * La méthode des copies, quand le projet n'est pas un dépôt git (lu par Claude) : sans commit, les
  * revues relisaient des fichiers entiers ; elles comparent la copie d'avant le ticket au fichier actuel.
  */
@@ -273,6 +331,47 @@ const TICKET_STEPS = [
     noGitHint: `${TICK_CRITERIA}; commit on the current branch, then the ticket in the tracker: done, with a comment citing the commit hash`,
   },
 ]
+
+/**
+ * Les sections de `reference/procedure-groupe.md` que suit la discussion du parcours qui fait elle-même
+ * un lot sans groupes (un seul texte pour la procédure), avec leur titre : la 6 (compte rendu) est remplacée par celui du
+ * parcours, la 10 (session autonome) par le bloc du mode auto. procedure-groupe.test.mjs compare ces
+ * titres à ceux du fichier.
+ */
+export const LOT_SECTIONS: readonly (readonly [number, string])[] = [
+  [1, 'Avant le premier ticket'],
+  [2, "Chaque ticket, un par un et dans l'ordre"],
+  [3, 'Règles de travail'],
+  [4, 'Revue du groupe'],
+  [5, 'Revue de sécurité'],
+  [7, 'La consigne des relecteurs'],
+  [8, 'Le fichier des choix déjà déclarés'],
+  [9, 'Sans git'],
+]
+
+/**
+ * Ce que la procédure dit et qui n'a de sens que pour une session liée : cinq exceptions, et
+ * rien d'autre. Ni « ; » ni « . » à l'intérieur d'une exception : la consigne les sépare par « ; ».
+ */
+export const LOT_EXCEPTIONS: readonly string[] = [
+  'the relay and SendMessage (nothing is deposited in a relay, no message goes to a main discussion)',
+  'the ban on button questions (the usual rules apply here, validations by a button question included)',
+  '« do not launch <implement> » (section 2, point 10): it is the skill you are following',
+  'section 10, replaced by the auto mode block of these instructions when the auto mode is on',
+  'a worktree of its own: you work in the folder of this discussion',
+]
+
+/**
+ * Les étapes d'un ticket d'un lot sans groupes : les mêmes ids, et leurs textes renvoient aux points
+ * de la section 2 de la procédure au lieu de les réécrire. Avec des groupes, `TICKET_STEPS`.
+ */
+export const LOT_STEP_HINTS: Readonly<Record<string, string>> = {
+  read: "procedure, section 2, points 1 and 2: the decision file and the ticket's « mise à jour du porteur » comments first, then the ticket to doing",
+  tdd: 'procedure, section 2, point 3: <tdd> by the Skill tool, skipped for a ticket with no testable behaviour',
+  checks: 'procedure, section 2, point 3: the project checks',
+  review: 'procedure, section 2, points 4 to 8: both axes in a single reviewer, the content and form review, the bug pass and the snapshot of a sensitive ticket, the instructions file, the findings to the flow tool',
+  commit: 'procedure, section 2, point 9: the criteria ticked, the commit before or after the review depending on the sensitive area, the ticket done in the tracker',
+}
 
 /**
  * Qui fait la revue d'un groupe (lu par Claude) : la session elle-même, par l'outil Skill.
@@ -421,7 +520,7 @@ export const SKILLS: Record<string, SkillDef> = {
     isUserOnly: true,
     steps: [
       step('config', 'Config du tracker', 'check the tracker config'),
-      step('explore', 'Explorer le dépôt', 'explore the repo with the glossary vocabulary'),
+      step('explore', 'Explorer le dépôt', `explore the repo with the glossary vocabulary; ${SENSITIVE_LIFECYCLE}; ${ENGINE_API_CHECK}`),
       step('seams', 'Seams validés', 'sketch the seams and get them confirmed'),
       SENSITIVE_STEP,
       step('write', 'Rédiger la spec', 'write the spec from the template; before showing or publishing it, consult the advisor (advisor tool), not a reviewer subagent; without that tool, reread it yourself in this discussion'),
@@ -443,9 +542,9 @@ export const SKILLS: Record<string, SkillDef> = {
     hasTickets: true,
     steps: [
       step('context', 'Contexte', 'gather the spec or conversation'),
-      step('explore', 'Explorer le code', 'look for prefactoring'),
-      step('slice', 'Tranches verticales', 'draft tracer-bullet slices with blocking edges'),
-      step('approve', 'Découpage validé', `iterate until the user approves the breakdown with ${BUTTON_QUESTION}`),
+      step('explore', 'Explorer le code', `look for prefactoring; ${SENSITIVE_CODE_READ}; ${SENSITIVE_LIFECYCLE}; ${ENGINE_API_CHECK}`),
+      step('slice', 'Tranches verticales', `draft tracer-bullet slices with blocking edges; ${RULE_LOGIC}; ${MERGE_QUESTION}`),
+      step('approve', 'Découpage validé', `${INVARIANT_REREAD}; ${BREAKDOWN_ADVISOR}; iterate until the user approves the breakdown with ${BUTTON_QUESTION}`),
       step('publish', 'Publier les tickets', 'publish them, blockers first'),
     ],
     flow: [phase('to-tickets'), IMPL, REPORT, phase('project:version', true), phase('project:pr', true)],
@@ -782,7 +881,7 @@ export const SKILLS: Record<string, SkillDef> = {
       step('read', 'Lire la session', 'read the session logs', 'Lecture'),
       step('find', 'Pistes (7 axes)', 'look for improvements in the seven categories', 'Pistes'),
       step('present', 'Par sévérité', 'present them by severity, those that touch another repository apart, as a correction list ready to hand to an agent of that repository; then wait: the user picks the improvements of this repository in the dashboard and clicks the splitting button, which puts the splitting request in the prompt; if the user names them in the chat instead, ask them to tick them and click that button: its request carries the splitting rules', 'Tri'),
-      step('split', 'Découpage', 'follow the splitting request the dashboard put in the prompt: settle the decisions with the user, write the tickets and the groups, have the user validate them, then send everything in one call', 'Découpage'),
+      step('split', 'Découpage', `follow the splitting request the dashboard put in the prompt: settle the decisions with the user (${SENSITIVE_LIFECYCLE}), write the tickets and the groups (${RULE_LOGIC}; ${MERGE_QUESTION}; ${ENGINE_API_CHECK}), ${INVARIANT_REREAD}, ${BREAKDOWN_ADVISOR}, have the user validate them, then send everything in one call`, 'Découpage'),
       // L'ancien chemin : une session liée lancée pour les pistes, avant la demande de découpage.
       {
         ...step(

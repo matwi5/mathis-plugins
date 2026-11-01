@@ -13,8 +13,12 @@ node_modules/
 *.bak-sync-*
 .env*
 
-# Propre à un poste : jamais versionné
-.claude/
+# Propre à un poste : jamais versionné, sauf .claude/settings.json, les réglages du dépôt quand il en
+# a (alors présents dans chaque worktree) ; les worktrees, settings.local.json et le .claude d'un
+# sous-dossier restent ignorés
+/.claude/*
+!/.claude/settings.json
+*/**/.claude/
 *.jsonl
 .machine
 claude-usage/

@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-01",
+  "note": "Valeurs relues du parcours (titre, id, raison) insérées brutes dans un texte des hooks de flow-board, admises, relevées ce jour-là, par fichier : à nettoyer, jamais à augmenter.",
+  "files": {
+    "flow-board/hooks/compaction.ts": 3,
+    "flow-board/hooks/erase-run.ts": 3,
+    "flow-board/hooks/history.ts": 1,
+    "flow-board/hooks/link.ts": 2,
+    "flow-board/hooks/model.ts": 50,
+    "flow-board/hooks/register.tsx": 10,
+    "flow-board/hooks/relay.ts": 9,
+    "flow-board/hooks/view.tsx": 15
+  }
+}

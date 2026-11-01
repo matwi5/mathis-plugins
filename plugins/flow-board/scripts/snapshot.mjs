@@ -5,16 +5,28 @@
 // d'un worktree laisse passer (cinq à sept appels du shell par instantané, chaque hash recopié à la main) :
 //
 //   node <dossier de flow-board>/scripts/snapshot.mjs <id du ticket> <fichier>…
+//   node <dossier de flow-board>/scripts/snapshot.mjs --staged <id du ticket> <fichier>…
+//   node <dossier de flow-board>/scripts/snapshot.mjs --remplace <fichier> <ancien> <nouveau>
 //
-// à lancer depuis la racine du worktree. Indexe les fichiers du ticket (suppressions comprises),
-// vérifie que l'index ne porte rien d'autre, écrit l'arbre et un commit hors branche, pose la
-// référence, puis imprime le hash et la plage que lisent les revues. Un id hors forme, un fichier
-// qui commence par « - », un index qui porte un autre fichier ou aucun changement : rien n'est posé,
-// le message dit pourquoi, code 1. Sans dépendance hors de Node.
+// à lancer depuis la racine du worktree. La première forme indexe les fichiers du ticket
+// (suppressions comprises), vérifie que l'index ne porte rien d'autre, écrit l'arbre et un commit
+// hors branche, pose la référence, puis imprime le hash et la plage que lisent les revues.
+// `--staged` pose l'instantané de l'index tel qu'il est préparé, sans rien indexer, après avoir
+// vérifié qu'il ne porte que les fichiers nommés : pour le correctif d'un ticket quand le ticket
+// suivant a déjà touché les mêmes fichiers dans l'arbre.
+// `--remplace` prépare un tel index : il écrit dans l'index la version indexée du fichier (celle de
+// HEAD si rien n'y est indexé) avec ce seul remplacement (l'ancien texte doit y paraître une fois),
+// et le reporte dans l'arbre de travail s'il y porte l'ancien texte une fois (s'il porte déjà le
+// nouveau, l'arbre ne change pas ; sinon rien n'est écrit), pour qu'un `git add` suivant du fichier
+// ne défasse pas le correctif ; chaque côté reçoit les textes à ses fins de ligne (LF ou CRLF). Ses textes suivent `scripts/patch.py` du dépôt : `@<fichier>` lu
+// dans ce fichier sans sa fin de ligne finale, `@@` pour un `@` littéral, `{{u}}` pour un
+// échappement « barre oblique inverse et u », `{{uu}}` pour `{{u}}`.
+// Un id hors forme, un fichier qui commence par « - », un index qui porte un autre fichier ou aucun
+// changement : rien n'est posé ni écrit, le message dit pourquoi, code 1. Sans dépendance hors de Node.
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, realpathSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** Un id de ticket qui nomme une référence git : lettres, chiffres, _ et -, sans « - » en tête. */
@@ -55,17 +67,106 @@ export const snapshot = (ticket, files, cwd = process.cwd()) => {
   const others = staged(cwd).filter(path => !ours.includes(path))
   if (others.length > 0) throw new SnapshotError(`l'index porte d'autres fichiers que ceux du ticket : ${others.join(', ')} ; les sortir de l'index (git restore --staged <chemin>), puis relancer`)
   if (ours.length === 0) throw new SnapshotError('aucun changement dans ces fichiers : rien à figer')
+  return pose(cwd, ticket, ours)
+}
+
+/** Écrit l'arbre de l'index et un commit hors branche, puis pose la référence du ticket. */
+const pose = (cwd, ticket, files) => {
   const tree = git(cwd, ['write-tree'])
   const commit = git(cwd, ['commit-tree', tree, '-p', 'HEAD', '-m', `flow-board snapshot ${ticket}`])
   const ref = `refs/worktree/flow-board/${ticket}`
   git(cwd, ['update-ref', ref, commit])
-  return { commit, ref, files: ours }
+  return { commit, ref, files }
+}
+
+/**
+ * Pose l'instantané de l'index tel qu'il est préparé, sans rien indexer ; l'index ne doit porter que
+ * des `files` (un fichier qu'un autre ticket ou une autre discussion a indexé le fait refuser).
+ */
+export const snapshotStaged = (ticket, files, cwd = process.cwd()) => {
+  if (!isSafeTicket(ticket)) throw new SnapshotError(`id de ticket hors forme : ${JSON.stringify(ticket)} (lettres, chiffres, _ et -, 64 au plus)`)
+  if (files.length === 0) throw new SnapshotError('aucun fichier : nommer les fichiers du correctif')
+  const option = files.find(f => f.startsWith('-'))
+  if (option !== undefined) throw new SnapshotError(`fichier qui commence par « - » : ${option}`)
+  const all = staged(cwd)
+  const others = all.filter(path => !files.includes(path))
+  if (others.length > 0) throw new SnapshotError(`l'index porte d'autres fichiers que ceux du correctif : ${others.join(', ')} ; les sortir de l'index (git restore --staged <chemin>), puis relancer`)
+  if (all.length === 0) throw new SnapshotError("l'index ne porte aucun changement face à HEAD : rien à figer (indexer d'abord le correctif, par exemple avec --remplace)")
+  return pose(cwd, ticket, all)
+}
+
+const BACKSLASH = String.fromCharCode(92)
+const U_MARKER = /\{\{(u+)\}\}/g
+
+/** Un texte de `--remplace` : lu dans un fichier après `@` (sans sa fin de ligne finale), `@@` pour un `@` littéral, marqueur `{{u}}` remplacé. */
+const textArg = (value, cwd) => {
+  let text = value
+  if (value.startsWith('@@')) text = value.slice(1)
+  else if (value.startsWith('@')) {
+    const path = resolve(cwd, value.slice(1))
+    if (!existsSync(path) || !statSync(path).isFile()) throw new SnapshotError(`fichier de texte introuvable : ${value.slice(1)}`)
+    text = readFileSync(path, 'utf8').replace(/\r?\n$/, '')
+  }
+  return text.replace(U_MARKER, (_, us) => (us === 'u' ? `${BACKSLASH}u` : `{{${us.slice(1)}}}`))
+}
+
+const count = (text, part) => text.split(part).length - 1
+
+/** Un texte aux fins de ligne de `target` : CRLF si `target` en porte, sinon LF. */
+const endings = (target, text) => {
+  const plain = text.replace(/\r\n/g, '\n')
+  return target.includes('\r\n') ? plain.replace(/\n/g, '\r\n') : plain
+}
+
+/**
+ * Écrit dans l'index la version indexée de `file` avec le seul remplacement de `oldArg` par `newArg`,
+ * et le reporte dans l'arbre de travail ; tout est vérifié avant la première écriture.
+ */
+export const replaceStaged = (file, oldArg, newArg, cwd = process.cwd()) => {
+  if (typeof file !== 'string' || file === '' || file.startsWith('-')) throw new SnapshotError(`fichier hors forme : ${JSON.stringify(file)}`)
+  const oldText = textArg(oldArg, cwd)
+  const newText = textArg(newArg, cwd)
+  if (oldText === '') throw new SnapshotError('ancien texte vide')
+  const entry = git(cwd, ['ls-files', '-s', '--', file])
+  const m = /^(\d+) ([0-9a-f]+) (\d)\t/.exec(entry)
+  if (!m || entry.includes('\n')) throw new SnapshotError(`${file} : absent de l'index (ou en conflit), rien à remplacer`)
+  if (m[3] !== '0') throw new SnapshotError(`${file} : en conflit dans l'index`)
+  const indexed = execFileSync('git', ['cat-file', 'blob', m[2]], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  // Chaque côté prend les textes à ses propres fins de ligne : l'index en LF, l'arbre en CRLF sous Windows.
+  const oldIndex = endings(indexed, oldText)
+  const found = count(indexed, oldIndex)
+  if (found !== 1) throw new SnapshotError(`${file} : l'ancien texte paraît ${found} fois dans la version indexée, il doit paraître exactement une fois ; rien n'est écrit`)
+  const line = count(indexed.slice(0, indexed.indexOf(oldIndex)), '\n') + 1
+  const path = join(cwd, file)
+  if (!existsSync(path) || !statSync(path).isFile()) throw new SnapshotError(`${file} : absent de l'arbre de travail ; rien n'est écrit`)
+  const worktree = readFileSync(path, 'utf8')
+  const oldTree = endings(worktree, oldText)
+  const newTree = endings(worktree, newText)
+  // L'ancien texte présent une fois se remplace, sauf quand il n'est que la partie d'un nouveau texte
+  // déjà là ; sinon un arbre qui porte déjà le nouveau texte ne change pas.
+  const carriesNew = newTree === '' ? count(worktree, oldTree) === 0 : worktree.includes(newTree)
+  let tree
+  if (count(worktree, oldTree) === 1 && !(newTree.includes(oldTree) && carriesNew)) tree = 'remplacé'
+  else if (carriesNew) tree = 'porte déjà le nouveau texte'
+  else throw new SnapshotError(`${file} : l'arbre de travail ne porte ni l'ancien texte une fois, ni le nouveau (il paraît ${count(worktree, oldTree)} fois) ; rien n'est écrit`)
+  const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd, input: indexed.replace(oldIndex, () => endings(indexed, newText)), encoding: 'utf8' }).trim()
+  git(cwd, ['update-index', '--cacheinfo', `${m[1]},${blob},${file}`])
+  if (tree === 'remplacé') writeFileSync(path, worktree.replace(oldTree, () => newTree))
+  return { file, line, tree }
 }
 
 const main = argv => {
-  const [ticket, ...files] = argv
   try {
-    const { commit, ref, files: kept } = snapshot(ticket, files)
+    if (argv[0] === '--remplace') {
+      if (argv.length !== 4) throw new SnapshotError('--remplace <fichier> <ancien> <nouveau>')
+      const { file, line, tree } = replaceStaged(argv[1], argv[2], argv[3])
+      console.log(`${file} : remplacement indexé (ligne ${line}) ; arbre de travail : ${tree}.`)
+      console.log('Instantané de cet index : snapshot.mjs --staged <id du ticket> <fichiers du correctif>.')
+      return 0
+    }
+    const isStaged = argv[0] === '--staged'
+    const [ticket, ...files] = isStaged ? argv.slice(1) : argv
+    const { commit, ref, files: kept } = isStaged ? snapshotStaged(ticket, files) : snapshot(ticket, files)
     console.log(`Instantané ${commit} posé sur ${ref} (${kept.length} fichier${kept.length > 1 ? 's' : ''} : ${kept.join(', ')}).`)
     console.log(`Plage des revues : ${ref}^..${ref} ; un fichier se lit par git show ${ref}:<chemin>.`)
     console.log(`Après la revue et le vrai commit du ticket : git update-ref -d ${ref}`)

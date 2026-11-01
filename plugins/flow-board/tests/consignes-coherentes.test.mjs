@@ -25,6 +25,9 @@ const SURFACES = {
   'hooks/register.tsx': read('hooks/register.tsx'),
   'hooks/catalog.ts': read('hooks/catalog.ts'),
   'hooks/view.tsx': read('hooks/view.tsx'),
+  'to-spec/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-spec/SKILL.md'),
+  'to-tickets/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-tickets/SKILL.md'),
+  'docs/evenements-moteur.md': repoFile('docs/evenements-moteur.md'),
 }
 
 /** Chaque consigne : ses mots-clés, et les surfaces qui la recopient (la procédure ne reçoit de la règle d'effort que la session autonome). */
@@ -98,22 +101,29 @@ const CONSIGNES = [
   },
   { name: 'les validations sautées du mode auto, en anglais', keywords: ['framing agreement, spec, ticket split, work plan', 'the tickets created, their statuses'], surfaces: ['hooks/register.tsx'] },
   {
-    // Les écritures Asana que le second clic accorde : la règle Asana et le premier clic sur « ⚡ Auto ».
+    // Les écritures Asana que le second clic accorde : la règle « Mode auto » des lots et le premier clic sur « ⚡ Auto ».
     name: 'les écritures Asana accordées en mode auto',
     keywords: ['création des tickets, statuts'],
-    surfaces: ['config/rules/asana-board.md', 'hooks/view.tsx'],
+    surfaces: ['config/rules/flow-board.md', 'hooks/view.tsx'],
   },
   {
-    // Les exceptions du mode auto des règles communes ne valent que là où l'auto agit, et renvoient à la règle des lots.
-    name: 'les exceptions du mode auto des règles communes',
-    keywords: ["dans la discussion d'où l'auto agit", 'règle « Mode auto » du plugin `flow-board`', '« Confirmer »'],
-    surfaces: ['config/rules/general.md', 'config/rules/asana-board.md'],
+    // Les règles chargées partout ne recopient pas les exceptions du mode auto : un renvoi au bloc de la consigne, qui les porte.
+    name: 'le renvoi au bloc « mode auto » des règles communes',
+    keywords: ["En mode auto, le bloc « mode auto » de la consigne flow-board l'emporte"],
+    surfaces: ['config/rules/general.md', 'config/rules/asana-board.md', 'config/rules/flow-board.md'],
   },
   {
-    // La session autonome et l'effort en mode auto : à tout effort, jamais xhigh proposé ; la vague suivante lancée par le mod.
+    // La session autonome et l'effort en mode auto : à tout effort, jamais xhigh proposé ; les groupes suivants lancés par le mod.
     name: 'la session autonome et l’effort en mode auto',
-    keywords: ['quel que soit son effort', 'ne propose jamais xhigh', 'le mod lance lui-même la vague suivante'],
+    keywords: ['quel que soit son effort', 'ne propose jamais xhigh', 'le mod lance lui-même les groupes suivants', 'jamais par une question à boutons'],
     surfaces: ['config/rules/flow-board.md'],
+  },
+  {
+    // Un ticket qui modifie une règle, une référence ou un skill a de la logique (étape slice de catalog.ts) :
+    // la règle des lots et la règle des revues le disent, et plus aucune surface ne dit qu'une règle n'en a pas.
+    name: 'la logique d’un ticket qui modifie une règle, une référence ou un skill',
+    keywords: ['ticket qui modifie les règles communes (`config/rules`), un fichier de référence ou un skill', 'ces textes guident ce que fait Claude'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md'],
   },
   { name: 'la session autonome en mode auto, au glossaire', keywords: ['quel que soit son effort', 'mode auto'], surfaces: ['GLOSSARY.md'] },
   {
@@ -128,6 +138,37 @@ const CONSIGNES = [
     keywords: ['a sensitive area', 'no defensible recommendation', 'contradicts DECISIONS.md', 'leaving a security finding unfixed', 'declare that xhigh was not offered', 'external action outside the run', '« reco prise »', '« validation sautée »'],
     surfaces: ['hooks/register.tsx'],
   },
+  {
+    // Les cas du cycle de vie d'un champ persisté, posés au cadrage plutôt que ticket par ticket pendant
+    // l'implémentation : les deux skills de cadrage et les étapes de /to-spec et /to-tickets (catalog.ts).
+    name: 'les cas du cycle de vie d’un champ persisté',
+    keywords: ['a failed read', 'a failed write', 'its bounds', 'the erasure of what must be kept', 'a forged copy', 'each transition of the object that carries a mark (sent, cancelled, sent again, back)'],
+    surfaces: ['to-spec/SKILL.md', 'to-tickets/SKILL.md', 'hooks/catalog.ts'],
+  },
+  {
+    // Un critère d'un ticket sensible qui contredisait son invariant n'était vu qu'à l'implémentation.
+    name: 'la relecture des critères d’un ticket sensible contre son invariant',
+    keywords: ['against its invariant'],
+    surfaces: ['to-tickets/SKILL.md', 'hooks/catalog.ts'],
+  },
+  {
+    // Deux constats importants d'un groupe venaient d'un texte écrit avant la mesure et jamais recoupé.
+    name: 'le ticket de mesure qui cite ses lignes de journal',
+    keywords: ['measurement ticket', 'quotes its log line'],
+    surfaces: ['to-tickets/SKILL.md'],
+  },
+  {
+    // Une API du moteur se vérifie avant d'entrer dans une spec : la consigne de cadrage (catalog.ts) et
+    // le document des événements, qui dit ce que le moteur refuse (le « / » de $.prompt.submit, no-surface).
+    name: 'ce que le moteur refuse, vérifié au cadrage',
+    keywords: ['plugin-authoring', '$.command.run', 'no-surface'],
+    surfaces: ['hooks/catalog.ts', 'docs/evenements-moteur.md'],
+  },
+  {
+    name: 'ce que le moteur refuse, avec ses sources',
+    keywords: ['## Ce que le moteur refuse', 'a text beginning with / would run a command as the user', 'UiNotifyResult', 'écrits par Claude Code 2.1.310', 'essai du 30/10/2026', 'With no terminal the hooks alone run; unbound or exiting, none'],
+    surfaces: ['docs/evenements-moteur.md'],
+  },
 ]
 
 for (const consigne of CONSIGNES) {
@@ -141,3 +182,31 @@ for (const consigne of CONSIGNES) {
     assert.deepEqual(missing, [], `mots-clés absents de ${consigne.name}`)
   })
 }
+
+// Hors de la règle « Mode auto » des lots, les règles chargées dans toutes les sessions ne parlent du mode auto
+// que par le renvoi au bloc de la consigne (et la définition d'une session autonome) : une exception recopiée
+// y ajoutait des centaines de mots qui ne valent que dans la discussion d'où l'auto agit.
+const AUTO_RULES = ['config/rules/general.md', 'config/rules/asana-board.md', 'config/rules/flow-board.md']
+const AUTO_ALLOWED = ["En mode auto, le bloc « mode auto » de la consigne flow-board l'emporte", 'ou par un parcours en mode auto quel que soit son effort']
+
+test('les règles communes ne recopient pas les exceptions du mode auto, hors de la règle « Mode auto »', () => {
+  const copied = []
+  for (const surface of AUTO_RULES) {
+    const text = SURFACES[surface]
+    if (text === null) continue
+    for (const line of text.split('\n')) {
+      if (line.startsWith('- **Mode auto**')) continue
+      let rest = line
+      for (const allowed of AUTO_ALLOWED) rest = rest.split(allowed).join('')
+      if (/mode auto|en auto\b|« ⚡ Auto »/.test(rest)) copied.push(`${surface} : ${line.slice(0, 80)}…`)
+    }
+  }
+  assert.deepEqual(copied, [], 'exceptions du mode auto recopiées hors de la règle « Mode auto »')
+})
+
+test('aucune surface ne dit qu’une règle qui ne fait rien lancer n’a pas de logique', () => {
+  const stale = ['config/rules/flow-board.md', 'config/reference/revues.md', 'README.md'].filter(
+    surface => SURFACES[surface] !== null && SURFACES[surface].includes('une règle qui ne fait rien lancer'),
+  )
+  assert.deepEqual(stale, [])
+})

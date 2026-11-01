@@ -98,8 +98,8 @@ test('la pastille d’un groupe confié compte aussi le rattaché, une fois sa s
   const run = activeRun(b)!
   const g = groupOf(b, 'A')
   // Le relais de la session ne connaît que a1 : 1/1 ; le rattaché, ouvert dans le parcours, s'y ajoute.
-  expect(relayForGroup(relay, g)).toMatchObject({ done: 1, total: 1 })
-  expect(groupProgress(run, g, relayForGroup(relay, g))).toEqual({ done: 1, total: 2 })
+  expect(relayForGroup(relay, g, undefined)).toMatchObject({ done: 1, total: 1 })
+  expect(groupProgress(run, g, relayForGroup(relay, g, undefined))).toEqual({ done: 1, total: 2 })
   expect(groupProgress(run, g, null)).toEqual(groupDone(run, g))
 })
 
@@ -149,7 +149,7 @@ test('revue du groupe D : un rattaché que la session relaie fait compte fait ; 
   // La session a reçu x1 dans son brief, l'a fait et l'a relayé : 2/2, pas 1/2.
   let relay = applyRelay(undefined, runId, 'sa', { kind: 'start', group: 'A' }, 3_400)!
   relay = applyRelay(relay, runId, 'sa', { kind: 'tickets', changes: [{ id: 'a1', status: 'done' }, { id: 'x1', status: 'done' }] }, 3_500)!
-  const relayed = relayForGroup(relay, g, g.linked, Infinity, attachedIdsOf(run, g))!
+  const relayed = relayForGroup(relay, g, undefined, g.linked, Infinity, attachedIdsOf(run, g))!
   expect(relayed).toMatchObject({ done: 1, total: 1 })
   expect(groupProgress(run, g, relayed)).toEqual({ done: 2, total: 2 })
   // Un groupe hors forme, rendu, avec un rattaché ouvert : la fermeture attend, et rien ne se fermera d'ici.

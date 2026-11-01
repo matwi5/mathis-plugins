@@ -140,7 +140,7 @@ export type SecurityCheck = {
   /**
    * Les failles gardées que la personne décide de laisser, sur sa confirmation : avec `fixed`, elles
    * rendent la sécurité tranchée. Un envoi de `dismissed` le change ; un envoi qui change `findings`
-   * sans lui le remet à 0 ; seul un envoi de la discussion du parcours le pose.
+   * sans lui le remet à 0 ; seul un envoi de la discussion du parcours le pose (pour le lot sans groupes, la fusion peut aussi reprendre celui de l'avis d'une autre copie, plus récent).
    */
   dismissed?: number
   /**
@@ -148,6 +148,16 @@ export type SecurityCheck = {
    * rien ; seul un envoi de `dismissed` par la discussion du parcours compte.
    */
   proposedDismissed?: number
+  /**
+   * La date de l'avis, pour le lot d'un parcours sans groupes seulement : posée à chaque envoi de
+   * sécurité du lot et au lancement de `/security-review` sans groupes ; un envoi sur l'avis d'un
+   * passage précédent garde la sienne. L'avis ne tranche la sécurité du lot que s'il est postérieur à
+   * la dernière fin de ticket et à la dernière revue du lot ; sans date (avis d'avant ce champ), il se date par la dernière revue du
+   * lot, et la revue suivante (`/code-review`) ou la fusion avec une revue plus récente lui pose
+   * d'abord celle de la revue d'avant (0 sans elle) ; une date au-delà de la tolérance se relit 0.
+   * Jamais effacé seul : il part avec le parcours.
+   */
+  at?: number
 }
 
 /** `cancelled` : lancement refusé (par la personne ou un hook), ou interrompu. */
@@ -604,7 +614,10 @@ export type Run = {
    * pour la règle de coupe des choix d'un parcours qui a été en auto (une clôture finit aussi la phase).
    */
   reportValidatedAt?: number
-  /** Quand `/code-review` a relu le lot entier (parcours sans groupes, tickets tous faits). */
+  /**
+   * Quand `/code-review` a relu le lot entier (parcours sans groupes, tickets tous faits). Une date à
+   * plus d'une minute dans le futur se relit en négatif : une revue à refaire, sa date gardée.
+   */
   reviewedAt?: number
   /** La revue de sécurité du lot entier, pour un parcours sans groupes. */
   security?: SecurityCheck

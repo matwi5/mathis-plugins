@@ -177,10 +177,10 @@ export const sameTicket = (a: string, b: string): boolean => {
 
 /**
  * Date UTC à la minute : `2026-10-06 10:40`. Une date relue (relais, tableau de bord) peut être
- * abîmée : hors des dates que `Date` sait écrire, « date inconnue » plutôt qu'une exception.
+ * abîmée : une date que `isTime` refuse (négative comprise) se dit « date inconnue » plutôt qu'une
+ * exception ou une date d'avant 1970.
  */
-export const isoMinute = (ms: number): string =>
-  typeof ms === 'number' && Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString().slice(0, 16).replace('T', ' ') : 'date inconnue'
+export const isoMinute = (ms: number): string => (isTime(ms) ? new Date(ms).toISOString().slice(0, 16).replace('T', ' ') : 'date inconnue')
 
 /**
  * Première ligne « Statut : » d'une tâche Asana -> statut du ticket ; un blocage garde le texte

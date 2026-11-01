@@ -1,6 +1,7 @@
 // Sonde des événements du moteur : journalise ceux qui servent à suivre une requête (prompt,
 // tours, appels, agents, arrêts et leurs tâches de fond, compactions, skills chargés, commandes, fin de
-// session) dans `journaux/<heure d'ouverture>.jsonl`, sous le dossier de la sonde, un fichier par processus,
+// session) dans `<SONDE_JOURNAUX>/<heure d'ouverture>.jsonl` (le dossier que `scripts/sonde.py` crée hors
+// du dépôt ; à défaut, `journaux/` sous le dossier de la sonde), un fichier par processus,
 // chaque ligne avec l'identifiant de session du moment. Jamais livrée : chargée par `--plugin-dir`
 // (scripts/sonde.py). Mode d'emploi et résultats : docs/evenements-moteur.md.
 //
@@ -12,13 +13,18 @@
 // très proches (moins d'une milliseconde) peut différer de celui d'un plugin sans attente.
 const lines: string[] = [];
 let t0 = 0;
-let file = "";
+// Le chemin du journal, posé au premier événement en même temps que t0 : une promesse, pour qu'aucun
+// `await` ne sépare le test de t0 de l'affectation (un événement voisin écrirait sinon sans chemin).
+let file: Promise<string> | null = null;
 
 async function log($: any, ev: string, data: object) {
   const now = await $.clock.now();
   if (!t0) {
     t0 = now;
-    file = `${$.plugin.root}/journaux/${new Date(now).toISOString().replace(/[:.]/g, "-")}.jsonl`;
+    // Le dossier des journaux : celui que `scripts/sonde.py` crée hors du dépôt (SONDE_JOURNAUX) ; sans
+    // lui (la sonde chargée à la main), `journaux/` sous le dossier de la sonde, ignoré par git.
+    const stamp = new Date(now).toISOString().replace(/[:.]/g, "-");
+    file = $.env.get("SONDE_JOURNAUX").then((dir: string | undefined) => `${dir || `${$.plugin.root}/journaux`}/${stamp}.jsonl`);
   }
   // Le chrono de session-tools tel qu'il est à cet instant (début relatif, fin posée ou non), s'il est installé.
   let chrono: unknown = null;
@@ -36,7 +42,7 @@ async function log($: any, ev: string, data: object) {
     // pas d'identifiant
   }
   lines.push(JSON.stringify({ t: now - t0, at: new Date(now).toISOString().slice(11, 23), ev, sid, chrono, ...data }));
-  await $.fs.write(file, lines.join("\n") + "\n");
+  await $.fs.write(await file!, lines.join("\n") + "\n");
 }
 
 async function logClassic($: any, name: string, e: any) {

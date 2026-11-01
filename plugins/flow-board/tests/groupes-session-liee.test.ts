@@ -127,11 +127,14 @@ test('les textes envoyés à Claude ne citent plus « ▶ Lancer » pour le grou
   mock.clock(on, { now: 74_000_000 })
   mock.store(on)
   engine(on)
+  // La consigne d'/implement d'un parcours à groupes (sans groupes, elle suit la procédure d'une session liée).
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Lot', tickets: TICKETS, groups: GROUPS } as any)
+  await $.tool.call({ tool: TOOL, complete: true } as any)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
   expect(note).toContain('the next group, which the user launches from the dashboard, in its linked session (↗ Session liée)')
   expect(note).not.toMatch(/▶ Lancer/)
   // La réponse qui refuse de clore la phase tant que des tickets restent ouverts.
-  await $.tool.call({ tool: TOOL, title: 'Lot', tickets: TICKETS, groups: GROUPS } as any)
   const answer = JSON.stringify(await $.tool.call({ tool: TOOL, complete: true } as any))
   expect(answer).toContain('in its linked session (↗ Session liée)')
   expect(answer).not.toMatch(/▶ Lancer/)

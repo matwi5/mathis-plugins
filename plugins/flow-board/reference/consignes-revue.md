@@ -1,6 +1,6 @@
 # Gabarit du fichier de consignes d'une revue (flow-board)
 
-Le fichier que la session écrit dans son dossier temporaire avant chaque revue (point 7 de la section 2 de `procedure-groupe.md`, dans le dossier de ce fichier) : son chemin suit la cible de `/code-review` (« consignes : <chemin> ») ou va dans le prompt du sous-agent relecteur. Copier le texte sous la ligne, remplir chaque `<…>`, retirer les lignes entre crochets qui ne s'appliquent pas (et les crochets des autres). La consigne des relecteurs, à la fin, reste telle quelle : c'est celle de la section 7 de la procédure.
+Le fichier que la session écrit dans son dossier temporaire avant chaque revue (point 7 de la section 2 de `procedure-groupe.md`, dans le dossier de ce fichier) : son chemin suit la cible de `/code-review` (« consignes : <chemin> ») ou va dans le prompt du sous-agent relecteur. Copier le texte sous la ligne, remplir chaque `<…>`, retirer les lignes entre crochets qui ne s'appliquent pas (et les crochets des autres). La consigne des relecteurs, à la fin, reste telle quelle : c'est celle de la section 7 de la procédure. Pour la revue d'un ticket, le script `scripts/consignes.mjs` (dans le dossier de flow-board) écrit ce fichier depuis ce gabarit, une commande simple au lieu d'une copie à la main (la procédure en donne la forme)  : il garde le texte de chaque ligne et en remplit les trous ; une ligne qu'il ne sait pas classer, ou un trou qu'il ne connaît pas, le fait échouer : l'ajouter aussi au script.
 
 ---
 

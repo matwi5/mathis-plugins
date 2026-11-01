@@ -4,6 +4,13 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.6 — 2026-11-01
+
+### Modifié
+- **`to-spec` et `to-tickets`** : la même liste des cas du cycle de vie d'un champ persisté (lecture et écriture ratées, bornes, effacement, copie forgée, transitions de l'objet marqué). `to-tickets` relit chaque critère d'un ticket sensible contre son invariant avant la validation, et demande qu'un ticket de mesure fasse citer à chaque résultat écrit sa ligne de journal.
+
+---
+
 ## 1.3.1-mathis.5 — 2026-10-31
 
 ### Modifié

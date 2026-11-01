@@ -18,6 +18,23 @@ const boardWith = (input: Record<string, unknown>): Board => {
   return applyReport(board, input, 2_000).board
 }
 
+/** La consigne d'/implement d'un parcours à deux groupes (sans groupes, elle suit la procédure d'une session liée). */
+const groupedImplement = async ($: any): Promise<string> => {
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await $.tool.call({
+    tool: TOOL,
+    tickets: [
+      { id: 'c1', name: 'Route' },
+      { id: 'z1', name: 'Autre' },
+    ],
+    groups: [
+      { id: 'C', name: 'Route', tickets: ['c1'] },
+      { id: 'Z', name: 'Autre', tickets: ['z1'] },
+    ],
+  } as any)
+  return (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
+}
+
 /** Un second groupe, pas fini : un plan d'un seul groupe serait ignoré. */
 const withOther = (input: { tickets: object[]; groups: object[] }) => ({
   tickets: [...input.tickets, { id: 'z1', name: 'Autre' }],
@@ -100,7 +117,7 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   mock.clock(on, { now: 61_000_000 })
   mock.store(on)
   world(on)
-  const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
+  const implement = await groupedImplement($)
   // Un seul relecteur pour les deux axes, quelle que soit la taille : il lit CODING_STANDARDS.md, compte ses Mineurs.
   expect(implement).toContain('both axes in a single reviewer subagent (Agent tool, model opus, effort medium, or high when the ticket touches a sensitive area, passed explicitly), whatever the size of the diff; it reads the CODING_STANDARDS.md whose path its instructions file gives ("Project judgement rules" below), besides CLAUDE.md, and gives its Nits as a count, without detail')
   expect(implement).not.toContain('under 100 changed lines')
@@ -114,7 +131,8 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   expect(implement).toContain('the search starts at once, without a reading of the diff beforehand')
   expect(implement).toContain('one verification subtask per finding of medium or high severity only')
   // Un groupe sans logique ni zone sensible n'a ni revue du groupe ni revue de sécurité.
-  expect(implement).toContain('A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing) has neither a group review nor a security review')
+  // Une règle commune, une référence ou un skill a toujours de la logique : l'exemple ne vise que les autres règles.
+  expect(implement).toContain('A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing; a common rule, a reference file or a skill always has logic) has neither a group review nor a security review')
   // Les constats sur du code antérieur au lot : à part, non corrigés, un groupe « durcissement » en fin de lot.
   expect(implement).toContain('findings on code older than the lot')
   expect(implement).toContain('« durcissement »')
@@ -154,7 +172,7 @@ test('un ticket hors zone sensible se commite avant sa revue ; un ticket sensibl
   mock.clock(on, { now: 63_000_000 })
   mock.store(on)
   world(on)
-  const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
+  const implement = await groupedImplement($)
   expect(implement).toContain('a ticket sent with "sensitive": false is committed once its checks pass, before its review')
   expect(implement).toContain('<commit before the ticket>..<the ticket\'s commit>, never ..HEAD')
   expect(implement).toContain('its findings go in "review" without "step"')

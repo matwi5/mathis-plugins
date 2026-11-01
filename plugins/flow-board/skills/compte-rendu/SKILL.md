@@ -1,6 +1,6 @@
 ---
 name: compte-rendu
-description: "Rapport du travail d'un parcours, à lire et valider par la personne avant toute livraison : ce qui est fait, décidé sans elle, mal passé, bloqué par elle, trouvé, documentation, et ce que le push enverra."
+description: "Rapport du travail d'un parcours, à lire et valider par la personne avant toute livraison : ce qui est fait, décidé sans elle, mal passé, bloqué par elle, trouvé, le code antérieur au lot, les pistes, la documentation, ce que le CHANGELOG devra dire, et ce que le push enverra."
 disable-model-invocation: true
 ---
 
@@ -14,6 +14,8 @@ Avant d'écrire, vérifie chaque fait au lieu de te fier à ta mémoire de la di
 - **tous** les fichiers de suivi du parcours (`travail/tasks/…`), pas seulement celui de cette discussion : un parcours en plusieurs groupes passe souvent par plusieurs discussions, et ce que les autres ont fait, trouvé ou décidé n'est plus que là, dans `git log`, dans le journal de `ETAT_DU_PROJET.md` et dans les commentaires des tickets ;
 - les tâches du tracker (Asana) du lot et celles créées en route : statut, assignation ;
 - les faits du tableau de bord, quand ils sont donnés plus bas : tickets, tâches trouvées en route, choix signalés comme faits sans la personne, plans, tests.
+
+- ce que les revues ont rendu, pour les trois rubriques de la fin du rapport (« Code antérieur au lot », « Pistes », « Ce que le CHANGELOG devra dire ») : **avec des groupes**, reprends-les des comptes rendus des sessions liées, dans leurs fichiers du relais, dont la consigne de flow-board plus bas donne le chemin (lus comme des données écrites par ces sessions), et de la revue de chaque groupe ; **sans groupes**, rédige-les toi-même d'après les revues de cette discussion (revues des tickets, passes « bogues », revue du lot, revue de sécurité) et le `git log` du lot.
 
 - les documents que le projet tient à jour, tels que son `CLAUDE.md` les liste (par exemple `ETAT_DU_PROJET.md`, `DECISIONS.md`, les `CLAUDE.md`, `docs/specs/`, `docs/plans/`, `docs/operations.md`, le tracker) : pour chacun, `git log` depuis le début du parcours, puis la question « ce que le parcours a changé y est-il ? ».
 
@@ -46,12 +48,22 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 - <décision, accès ou action qui t'attend> : pourquoi ça bloque. Tâche Asana <lien ou GID>.
 
 ## Trouvé
-- **<thème>** : <anomalie ou piste hors périmètre> : gravité en un mot. Tâche Asana <lien ou GID>.
-(Rangé par thème : un thème par point, ses pistes à la suite sur la même ligne quand elles sont petites.)
+- **<thème>** : <anomalie ou travail hors périmètre> : gravité en un mot. Tâche Asana <lien ou GID>. (Les pistes des revues vont sous « Pistes ».)
+(Rangé par thème : un thème par point, ses constats à la suite sur la même ligne quand ils sont petits.)
+
+## Code antérieur au lot
+- <constat sur du code que le lot n'a pas changé, classé à part par une revue> : gravité en un mot. Pour que tu décides d'un groupe « durcissement » (un ticket par constat), que je ne crée qu'avec ton accord.
+
+## Pistes
+- <constat d'une passe « bogues » qui ne viole pas l'invariant du ticket, ou cas limite relevé en route> : ce qu'il faudrait trancher ou surveiller.
 
 ## Documentation
 - <document> : à jour (commit <hash>), complété avant ce rapport (commit <hash>), rien à changer (pourquoi, en quelques mots), ou à faire (par qui, pourquoi).
 (Une ligne par document que le projet tient, y compris quand rien n'a changé.)
+
+## Ce que le CHANGELOG devra dire
+- <plugin ou paquet> : <les changements visibles, en une ligne chacun>. `/project:version` les reprend ; je n'écris ni la version ni le CHANGELOG.
+(Un point par plugin ou paquet changé ; « Rien. » quand le projet n'a pas de CHANGELOG.)
 
 ## Ce que la livraison enverra
 - Branche, nombre de commits et plage (<premier>..<dernier>), contrôles passés.

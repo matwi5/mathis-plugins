@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { branchCleanupText, reopenText } from '../hooks/closing.ts'
+import { branchCleanupText, readClosing, reopenText } from '../hooks/closing.ts'
 import { emptyBoard, mergeBoards, newRun } from '../hooks/model.ts'
 import { markCleanupSent } from '../hooks/link.ts'
 import type { Board, Closing, Run } from '../types'
@@ -446,4 +446,18 @@ test('la marque se pose, après l’envoi, sur chaque fermeture dont la branche 
   orphan.runs[0]!.phases.push(op)
   ;(orphan.runs[0]!.groups as unknown[]).push(null)
   expect(markCleanupSent(orphan, orphan.runs[0]!.id, ['worktree-pistes-boutique-2'], 9_000)).toBeNull()
+})
+
+test('la marque et le plan de la consigne lisent une fermeture relue par le même garde : un objet, tel quel, sinon aucune', () => {
+  // Le même objet, pas une copie : la marque se pose sur la fermeture du tableau de bord cloné.
+  const c = closed('worktree-groupe-boutique-A')
+  expect(readClosing(c)).toBe(c)
+  for (const bad of [null, undefined, 'closed', 42, true]) expect(readClosing(bad)).toBeUndefined()
+  // Une fermeture relue qui n'est pas un objet ne se marque pas, ni ne fait tomber la marque des autres.
+  const run = runWith({ A: closed('worktree-groupe-boutique-A'), B: closed('worktree-groupe-boutique-B') })
+  ;(run.groups![1]!.delegated as unknown as { closing: unknown }).closing = 'closed'
+  const board: Board = { ...emptyBoard(ROOT, 'proj'), runs: [run], activeId: run.id }
+  const out = markCleanupSent(board, run.id, ['worktree-groupe-boutique-A', 'worktree-groupe-boutique-B'], 9_000)!
+  expect(out.board.runs[0]!.groups![0]!.delegated!.closing!.cleanupAt).toBe(9_000)
+  expect(out.board.runs[0]!.groups![1]!.delegated!.closing as unknown).toBe('closed')
 })
