@@ -1,11 +1,12 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const world = (on: any) => {
@@ -29,7 +30,7 @@ const world = (on: any) => {
   return filled
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-/** Un parcours découpé en deux groupes : la consigne d'/implement avec groupes, celle d'avant le lot sans groupes. */
+/** Une mission découpé en deux groupes : la consigne d'/implement avec groupes, celle d'avant le lot sans groupes. */
 const grouped = async ($: any) => {
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
@@ -51,6 +52,7 @@ const LOT = {
 // un fichier dont le chemin suit la cible (forme essayée avec Claude Code 2.1.310), et la cible est une plage.
 test('dans la discussion, chaque revue reçoit ses consignes par un fichier, sur une plage, et le relecteur n’écrit pas', async ($, on) => {
   mock.clock(on, { now: 96_000_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   await grouped($)
@@ -81,10 +83,11 @@ test('dans la discussion, chaque revue reçoit ses consignes par un fichier, sur
 // hors du dépôt découverte en route, décisions sensibles nées des revues, skill cité sans son nom.
 test('le découpage borne les groupes à 5 tickets, range le ticket sensible, et fait trancher au cadrage', async ($, on) => {
   mock.clock(on, { now: 96_200_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
-  expect(tickets).toContain('A group holds 5 tickets at most: the context of a linked session reached 820 to 920k tokens, close to its ceiling of about 1M, for 6 tickets (the first ticket costs 375 to 500k, each next one 60 to 150k)')
+  expect(tickets).toContain('A group holds 5 tickets at most: its tickets share the same area of the code, so the worker reuses the context loaded by one ticket for the next, and an extra group (a new worker that rereads the area, its group reviews, the follow-up by the manager) costs far more than a compaction; the first ticket brings the context of the worker to 200 to 400k tokens depending on the project, each next one adds 20 to 150k, and past about 600k the automatic compaction is the safety net')
   expect(tickets).toContain('keep a sensitive ticket with other tickets rather than alone')
   expect(tickets).toContain('In a group, a sensitive ticket goes first only when it blocks the next one')
   expect(tickets).toContain('A write planned outside the repository (a file of another repository, of ~/.claude or anywhere else on the machine) is a decision to take with the user before the group is launched')
@@ -95,6 +98,7 @@ test('le découpage borne les groupes à 5 tickets, range le ticket sensible, et
 
 test('la spec fait trancher les cas sensibles et nomme le skill dont elle a besoin ; la passe « bogues » reçoit l’invariant', async ($, on) => {
   mock.clock(on, { now: 96_300_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   const spec = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text as string
@@ -107,8 +111,9 @@ test('la spec fait trancher les cas sensibles et nomme le skill dont elle a beso
   expect(implement).toContain("and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it")
 })
 
-test('dans une session liée, les consignes de revue sont celles de la procédure, citée par son chemin', async ($, on) => {
+test('dans un worker, les consignes de revue sont celles de la procédure, citée par son chemin', async ($, on) => {
   mock.clock(on, { now: 96_500_000 })
+  memoryDisk(on)
   const filled = world(on)
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -119,7 +124,7 @@ test('dans une session liée, les consignes de revue sont celles de la procédur
   const text = filled.at(-1)!
   // Les consignes de revue (fichier de consignes, cible en plage, instantané, invariant, consigne des
   // relecteurs) sont dans la procédure des sessions de groupe : tests/procedure-groupe.test.mjs.
-  expect(text).toMatch(/puis lire la procédure d'une session liée de groupe, \S*reference\/procedure-groupe\.md/)
+  expect(text).toMatch(/puis lire la procédure d'un worker de groupe, \S*reference\/procedure-groupe\.md/)
   expect(text).not.toContain('jamais un hash seul')
   expect(text).not.toContain('lui donner le nom de la branche')
   // La procédure cite la méthode de la relecture du fond et de la forme ; son chemin installé varie.
@@ -129,6 +134,7 @@ test('dans une session liée, les consignes de revue sont celles de la procédur
 // Relecture du fond et de la forme : la ligne « Lecteur » d'un ticket la déclenche (spec xhigh-groupe, Q11).
 test('le découpage fait porter une ligne « Lecteur » au ticket dont le livrable est un document lu par d’autres', async ($, on) => {
   mock.clock(on, { now: 96_600_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
@@ -139,6 +145,7 @@ test('le découpage fait porter une ligne « Lecteur » au ticket dont le livrab
 
 test('dans la discussion, la revue d’un ticket qui a une ligne « Lecteur » lance aussi la relecture du fond et de la forme, avec sa méthode', async ($, on) => {
   mock.clock(on, { now: 96_700_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   await grouped($)
@@ -161,16 +168,17 @@ test('dans la discussion, la revue d’un ticket qui a une ligne « Lecteur » l
   expect(spec).not.toContain('Content and form review:')
 })
 
-// La version se pose en fin de parcours par /project:version : le ticket de version d'un groupe était
-// entré en collision avec le même numéro publié par une autre discussion (rétro du parcours xhigh, r2).
-test('ni la spec ni le découpage ne prévoient de ticket de version : /project:version le fait en fin de parcours', async ($, on) => {
+// La version se pose en fin de mission par /project:version : le ticket de version d'un groupe était
+// entré en collision avec le même numéro publié par une autre discussion (rétro de la mission xhigh, r2).
+test('ni la spec ni le découpage ne prévoient de ticket de version : /project:version le fait en fin de mission', async ($, on) => {
   mock.clock(on, { now: 96_800_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   for (const skill of ['mattpocock-skills:to-tickets', 'mattpocock-skills:to-spec']) {
     const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
-    expect(text).toContain('No ticket for the version or the CHANGELOG: a linked session touches neither (its report lists what the CHANGELOG must say)')
-    expect(text).toContain("the version is set once, at the end of the run, by /project:version, which the user launches from the dashboard's Version button")
+    expect(text).toContain('No ticket for the version or the CHANGELOG: a worker touches neither (its report lists what the CHANGELOG must say)')
+    expect(text).toContain("the version is set once, at the end of the mission, by /project:version, which the user launches from the dashboard's Version button")
   }
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   expect(implement).not.toContain('No ticket for the version')
@@ -179,6 +187,7 @@ test('ni la spec ni le découpage ne prévoient de ticket de version : /project:
 // Le seul défaut important d'un groupe venait de la spec : l'effort figé au clic, lu après un changement (r7).
 test('la spec se demande si un texte écrit à un moment est lu plus tard, et ce qu’il dit si la valeur a changé', async ($, on) => {
   mock.clock(on, { now: 96_900_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   const spec = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text as string

@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -6,7 +7,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 const bandAt = (bodyColumns: number) =>
   ({
@@ -19,6 +20,7 @@ const BAND_KEYS = ['band-open', 'band-hide']
 
 /** Le moteur sous le plugin ; les demandes mises dans le prompt sont gardées dans l'ordre. */
 const world = (on: any) => {
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
@@ -107,14 +109,14 @@ test('en pleine étape, rien au bandeau ; l’étape finie, il reprend le bouton
   expect(await pressed($, filled, 'go-compte-rendu', 'band')).toBe(fromCard)
 })
 
-test('un groupe prêt : le bandeau propose sa session liée, sans « xhigh », la compaction ni la rétro', { timeoutMs: 15000 }, async ($, on) => {
+test('un groupe prêt : le bandeau propose son worker, sans « xhigh », la compaction ni la rétro', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 71_000_000 })
   const filled = world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: TOOL, ...CHAIN } as any)
-  await expectSameAsCard($, 'next-linked-A', /^↗.Groupe A · session liée$/)
+  await expectSameAsCard($, 'next-linked-A', /^↗.Groupe A · worker$/)
   // L'appui au bandeau lance le groupe comme au panneau : la demande va dans le prompt.
-  expect(await pressed($, filled, 'next-linked-A', 'band')).toMatch(/^Confie ce groupe à une session liée/)
+  expect(await pressed($, filled, 'next-linked-A', 'band')).toMatch(/^Confie ce groupe à un worker/)
 })
 
 test('des groupes indépendants : le bandeau propose le lot parallèle', { timeoutMs: 15000 }, async ($, on) => {
@@ -126,11 +128,11 @@ test('des groupes indépendants : le bandeau propose le lot parallèle', { timeo
     tickets: [{ id: 'x1', name: 'Un', files: ['app'] }, { id: 'y1', name: 'Deux', files: ['worker'] }],
     groups: [{ id: 'X', name: 'App', tickets: ['x1'] }, { id: 'Y', name: 'Worker', tickets: ['y1'] }],
   } as any)
-  await expectSameAsCard($, 'next-parallel-linked', /^⇉.X ∥ Y en parallèle · sessions liées$/)
-  expect(await pressed($, filled, 'next-parallel-linked', 'band')).toMatch(/sessions? liées?/)
+  await expectSameAsCard($, 'next-parallel-linked', /^⇉.X ∥ Y en parallèle · workers$/)
+  expect(await pressed($, filled, 'next-parallel-linked', 'band')).toMatch(/workers?/)
 })
 
-test('un groupe en cours ici, en session liée, ou des revues qui attendent : rien au bandeau', { timeoutMs: 15000 }, async ($, on) => {
+test('un groupe en cours ici, dans un worker, ou des revues qui attendent : rien au bandeau', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 73_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
@@ -143,7 +145,7 @@ test('un groupe en cours ici, en session liée, ou des revues qui attendent : ri
   await expectNoStepButton($)
 })
 
-test('un groupe en session liée et un autre prêt, sans rien en commun : le bandeau propose le second, comme la carte', { timeoutMs: 15000 }, async ($, on) => {
+test('un groupe dans un worker et un autre prêt, sans rien en commun : le bandeau propose le second, comme la carte', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 77_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -158,10 +160,10 @@ test('un groupe en session liée et un autre prêt, sans rien en commun : le ban
   await pane.unmount()
   await $.tool.call({ tool: START, title: 'Boutique > Groupe A · File' } as any)
   for (let i = 0; i < 6; i++) await clock.advance(1000)
-  await expectSameAsCard($, 'next-linked-C', /^↗.Groupe C · session liée$/)
-  // La pastille « ↗A 0/1 » et le compte « 0/2 » ne se coupent pas : le bouton (30 cellules) ne
-  // vient qu'une fois leur place gardée, 40 + 7 + 4 + 30 = 81 colonnes.
-  for (const [columns, hasStep] of [[80, false], [81, true]] as const) {
+  await expectSameAsCard($, 'next-linked-C', /^↗.Groupe C · worker$/)
+  // La pastille « ↗A 0/1 » et le compte « 0/2 » ne se coupent pas : le bouton (24 cellules) ne
+  // vient qu'une fois leur place gardée, 40 + 7 + 4 + 24 = 75 colonnes.
+  for (const [columns, hasStep] of [[74, false], [75, true]] as const) {
     const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...bandAt(columns) })
     await band.drawn()
     expect(await band.find({ type: 'Text', text: /^↗A.0\/1$/ })).toBeDefined()
@@ -172,7 +174,7 @@ test('un groupe en session liée et un autre prêt, sans rien en commun : le ban
   }
 })
 
-test('un groupe parti en session liée : rien au bandeau tant qu’il travaille', { timeoutMs: 15000 }, async ($, on) => {
+test('un groupe parti dans un worker : rien au bandeau tant qu’il travaille', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 74_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })

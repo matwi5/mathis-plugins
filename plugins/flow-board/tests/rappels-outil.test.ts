@@ -5,14 +5,14 @@ import { applyReport, closingText, emptyBoard, newRun, startLinkedGroups } from 
 import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
-// Les rappels de l'outil flow (rétro du parcours « Fermeture auto des sessions liées ») : un ticket
+// Les rappels de l'outil flow (rétro de la mission « Fermeture auto des workers ») : un ticket
 // était resté « bloqué » au tableau de bord après la décision qui le débloquait ; un `reviewed`
 // refusé tant qu'un ticket était ouvert n'avait jamais été rappelé ; un ticket passait « fait » sans
-// revue envoyée ; le paragraphe ListAgents revenait dans chaque réponse d'une session liée.
+// revue envoyée ; le paragraphe ListAgents revenait dans chaque réponse d'un worker.
 
 const T0 = 90_000_000
 
-/** Un parcours actif ici, trois tickets, sans groupes. */
+/** Une mission active ici, trois tickets, sans groupes. */
 const lot = (): Board => {
   const run = newRun('implement', T0, 'Rappels')
   const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
@@ -39,7 +39,7 @@ test('un ticket passé « fait » ici sans revue dans l’appel déclenche un ra
   expect(applyReport(done.board, { note: 'avance' }, T0 + 3).text).not.toContain('Done here without a review')
 })
 
-test('un ticket fait par une session liée ne déclenche pas ce rappel, même écrit autrement dans son groupe', () => {
+test('un ticket fait par un worker ne déclenche pas ce rappel, même écrit autrement dans son groupe', () => {
   let board = applyReport(lot(), { tickets: [{ id: '07', name: 'Sept' }] }, T0 + 2).board
   board = applyReport(board, { groups: [{ id: 'A', tickets: ['#7', 't1'] }, { id: 'B', tickets: ['t2', 't3'] }] }, T0 + 3).board
   board = startLinkedGroups(board, ['A'], T0 + 4)!.board
@@ -74,10 +74,10 @@ test('un groupe rendu sans revue : rappelé avec le « reviewed » à envoyer un
   expect(closingText(activeRun(refused.board)!, null, true)).toContain('lacks: its group review, once its tickets are done')
   // Le ticket fait : le rappel dit quoi envoyer.
   const finished = applyReport(refused.board, { set: [{ id: 't2', status: 'done' }] }, T0 + 6)
-  expect(finished.text).toContain('lacks: its group review (if its linked session ran it, send {"reviewed": ["A"]})')
+  expect(finished.text).toContain('lacks: its group review (if its worker ran it, send {"reviewed": ["A"]})')
 })
 
-test('une session liée : le paragraphe ListAgents à la déclaration, une seule ligne aux relais', () => {
+test('un worker : le paragraphe ListAgents à la déclaration, une seule ligne aux relais', () => {
   let board = applyReport(lot(), { groups: [{ id: 'A', tickets: ['t1'] }, { id: 'B', tickets: ['t2', 't3'] }] }, T0 + 2).board
   board = startLinkedGroups(board, ['A'], T0 + 3)!.board
   const loaded: Board = { ...board, session: 'fille' }
@@ -87,5 +87,5 @@ test('une session liée : le paragraphe ListAgents à la déclaration, une seule
   expect(declared.text).toContain(`a sensitive area (${SENSITIVE_AREAS}) is never declared`)
   const relayed = applyReport(declared.board, { set: [{ id: 't1', status: 'done' }] }, T0 + 5)
   expect(relayed.text).not.toContain('call ListAgents, find the row')
-  expect(relayed.text).toContain('The main discussion: "Rappels [0a1b2c]", reached by its [ref] in ListAgents, as the delegate answer says.')
+  expect(relayed.text).toContain('The manager: "Rappels [0a1b2c]", reached by its [ref] in ListAgents, as the delegate answer says.')
 })

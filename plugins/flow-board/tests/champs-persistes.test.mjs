@@ -1,6 +1,6 @@
 // Chaque champ des registres persistés est traité par l'effacement, l'historique et le rattrapage,
 // ou porte une exception motivée. La ligne `advisor` ajoutée au registre avait été oubliée par
-// l'historique d'un parcours, l'effacement et `isEmptyRebuilt` : trois revues et deux correctifs.
+// l'historique d'une mission, l'effacement et `isEmptyRebuilt` : trois revues et deux correctifs.
 //
 // Un test Node (node --test, lancé par scripts/check.sh) : il lit les sources. Un champ « traité »
 // par un fichier y paraît comme propriété (`.champ`, `champ:`, `{ champ }`) ; c'est un repère, pas
@@ -38,7 +38,7 @@ const FIELDS = {
   Rebuilt: [...keysOf(HISTORY, 'Rebuilt'), 'advisor'],
 }
 
-const IDENTITY = "identité ou format du fichier, jamais effacé seul : l'effacement retire la session ou le parcours entier"
+const IDENTITY = "identité ou format du fichier, jamais effacé seul : l'effacement retire la session ou la mission entière"
 const WRITE_META = 'réécrit à chaque écriture du registre (registry-file.ts), pas une donnée de la session'
 const TOTALS = "total de la piste, sans date : un effacement partiel ne retire que ce qui est daté (segments, repères) ; l'effacement entier retire la piste"
 const LIVE_ONLY = "écrit par la session vivante, que le transcript ne porte pas : le rattrapage n'a rien à reconstruire"
@@ -50,7 +50,7 @@ const EXCEPTIONS = {
     'SessionRegistry.root': IDENTITY,
     'SessionRegistry.title': "titre de la session, sans date : il part avec la session entière (forgetSession)",
     'SessionRegistry.transcript': 'chemin du transcript, sans date : il part avec la session entière',
-    'SessionRegistry.group': 'groupe de la session liée, sans date : il part avec la session entière',
+    'SessionRegistry.group': 'groupe du worker, sans date : il part avec la session entière',
     'SessionRegistry.updatedAt': WRITE_META,
     'SessionRegistry.parts': WRITE_META,
     'AgentLane.effort': TOTALS,
@@ -61,7 +61,7 @@ const EXCEPTIONS = {
   },
   'hooks/history.ts': {
     'SessionRegistry.transcript': "chemin du transcript : l'historique relit le registre, pas le transcript",
-    'SessionRegistry.group': "l'historique d'un parcours range les sessions par parcours (run), pas par groupe",
+    'SessionRegistry.group': "l'historique d'une mission range les sessions par mission (run), pas par groupe",
     'SessionRegistry.parts': WRITE_META,
     'SessionRegistry.carriedNotedAt': "date de suivi du portage, fusionnée par mergeRegistry (registry.ts) : l'historique ne montre que les périodes (carriedAt)",
     'AgentLane.effort': 'relu tel quel par cleanLane (registry.ts), que history.ts appelle',

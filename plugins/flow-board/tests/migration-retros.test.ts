@@ -17,8 +17,8 @@ import {
 } from '../hooks/basics.ts'
 import type { Board, FlowPhase, LinkedWork, Run } from '../types'
 
-// Un parcours de rétro créé avant que la Rétro ait sa suite n'a que la phase Rétro : à la lecture,
-// il reçoit la suite d'un parcours neuf (Implémentation, Compte rendu, Version, PR), une fois sa
+// Une mission de rétro créé avant que la Rétro ait sa suite n'a que la phase Rétro : à la lecture,
+// il reçoit la suite d'une mission neuve (Implémentation, Compte rendu, Version, PR), une fois sa
 // session de pistes fermée. Invariant : la migration n'ajoute que des phases après la rétro ; elle
 // ne retire ni ne réécrit jamais une phase, un lien de pistes ou une piste.
 
@@ -27,7 +27,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const PISTES = [
@@ -40,7 +40,7 @@ const OPEN: LinkedWork = { items: ['p1', 'p3'], at: 2_000, seq: 2, session: '9f9
 const shape = (run: Run) => run.phases.map(p => `${p.skill}${p.isOptional ? '?' : ''}:${p.status}`)
 
 /**
- * Une rétro d'avant sa suite, en cours, sur son étape de session liée, la session précédente fermée :
+ * Une rétro d'avant sa suite, en cours, sur son étape de worker, la session précédente fermée :
  * par défaut, p1 et p3 chez la session de pistes 9f9f9f9f (2e envoi) ; `link` la remplace.
  */
 const oldRetro = (link: unknown = OPEN, items: FlowPhase['items'] = PISTES): Run => {
@@ -49,7 +49,7 @@ const oldRetro = (link: unknown = OPEN, items: FlowPhase['items'] = PISTES): Run
   const retro: FlowPhase = {
     ...first,
     items,
-    // Les étapes d'avant le découpage : les quatre premières, puis l'étape de session liée.
+    // Les étapes d'avant le découpage : les quatre premières, puis l'étape de worker.
     steps: [...first.steps.slice(0, 4).map((s, i) => ({ id: s.id, status: 'done' as const, at: 1_100 + i })), { id: 'apply', status: 'active' as const, at: 2_000 }],
     linked: link as LinkedWork,
     linkedEarlier: { at: 1_200, session: '8e8e8e8e', seq: 1, closing: { state: 'closed', at: 1_800, branch: 'worktree-pistes-retrospective-1' } },
@@ -64,15 +64,15 @@ const closedRetro = (): Run =>
     PISTES.map(i => ({ ...i, status: i.id === 'p2' ? ('todo' as const) : ('done' as const) })),
   )
 
-/** Le tableau de bord d'un projet qui n'a que ce parcours ; actif dans la discussion `active` quand elle est donnée. */
+/** Le tableau de bord d'un projet qui n'a que cette mission ; actif dans la discussion `active` quand elle est donnée. */
 const board = (run: Run, active?: string): Board => ({ ...emptyBoard('/w/p', 'p'), session: active ?? 's', deleted: [], runs: [run], activeId: active ? run.id : null })
 
-test('une rétro d’avant sa suite, sa session de pistes fermée, reçoit Implémentation, Compte rendu, Version, PR, comme un parcours neuf', () => {
+test('une rétro d’avant sa suite, sa session de pistes fermée, reçoit Implémentation, Compte rendu, Version, PR, comme une mission neuve', () => {
   const old = closedRetro()
   const kept = JSON.parse(JSON.stringify(old.phases[0])) as FlowPhase
   const run = upgradeRun(old)
   expect(shape(run)).toEqual(['retro:active', 'implement?:pending', 'compte-rendu?:pending', 'project:version?:pending', 'project:pr?:pending'])
-  // Les phases ajoutées sont celles d'un parcours neuf, à faire, sans date.
+  // Les phases ajoutées sont celles d'une mission neuve, à faire, sans date.
   expect(run.phases.slice(1)).toEqual(newRun('retro', 9_000).phases.slice(1))
   expect(run.phases.slice(1).every(p => p.startedAt === undefined && p.steps.every(s => s.status === 'pending'))).toBe(true)
   // La Rétro, ses étapes, ses pistes et son lien de pistes ne bougent pas ; le curseur non plus.
@@ -126,7 +126,7 @@ test('une rétro tenue par sa session de pistes ne se quitte pas par /implement 
   const cut = applyReport(held, { items: PISTES, ...lot, decided: [{ what: 'un choix' }] }, 3_000)
   expect(cut.board).toBe(held)
   expect(cut.text).toContain('nothing of this call was recorded, whatever it carried')
-  expect(cut.text).toContain('the pistes session of this retro is not closed yet: its linked session is still applying items')
+  expect(cut.text).toContain('the pistes session of this retro is not closed yet: its worker is still applying items')
   const remedies: [unknown, FlowPhase['items'], string][] = [
     [{ items: ['p1', 'p3'], at: 2_000, seq: 2 }, PISTES, '« Redemander », « Annuler »'],
     [{ ...OPEN, closing: { state: 'stopped', at: 2_400 } }, closedRetro().phases[0]!.items, '« ↻ Relancer la fermeture »'],
@@ -144,7 +144,7 @@ test('une rétro tenue par sa session de pistes ne se quitte pas par /implement 
 
 test('la fermeture enregistrée donne sa suite à la rétro dans le même appel : un découpage, ou une fin sans lot', () => {
   const judged = applyReport(board(oldRetro(), 's'), { items: closedRetro().phases[0]!.items }, 3_000).board
-  // Fermeture et fin dans le même appel, sans lot : la suite arrive, puis le parcours se termine.
+  // Fermeture et fin dans le même appel, sans lot : la suite arrive, puis la mission se termine.
   const ended = applyReport(judged, { closed: [{ items: 'retro', state: 'closed' }], complete: true }, 3_100)
   const done = ended.board.runs[0]!
   expect(shape(done)).toEqual(['retro:done', 'implement?:pending', 'compte-rendu?:pending', 'project:version?:pending', 'project:pr?:pending'])
@@ -163,7 +163,7 @@ test('la fermeture enregistrée donne sa suite à la rétro dans le même appel 
   expect(nextLaunchFor(run)).toEqual({ kind: 'group', group: 'A', isDelegable: true })
 })
 
-test('relue deux fois, chargée, ou fusionnée de deux copies (migrée ou non), la rétro donne le même parcours', () => {
+test('relue deux fois, chargée, ou fusionnée de deux copies (migrée ou non), la rétro donne la même mission', () => {
   const migrated = upgradeRun(closedRetro())
   expect(upgradeRun(migrated)).toBe(migrated)
   expect(detachOnLoad(board(closedRetro()), 3_000, 's').runs[0]!.phases).toEqual(migrated.phases)
@@ -189,7 +189,7 @@ test('relue deux fois, chargée, ou fusionnée de deux copies (migrée ou non), 
   expect(shape(merged)).toHaveLength(5)
 })
 
-test('une rétro terminée, une rétro qui a déjà une phase après la Rétro, ou un parcours d’un autre skill ne sont pas touchés', () => {
+test('une rétro terminée, une rétro qui a déjà une phase après la Rétro, ou une mission d’un autre skill ne sont pas touchés', () => {
   const done: Run = { ...closedRetro(), status: 'done', finishedAt: 3_000 }
   expect(upgradeRun(done)).toBe(done)
   const extended = upgradeRun(closedRetro())
@@ -197,13 +197,13 @@ test('une rétro terminée, une rétro qui a déjà une phase après la Rétro, 
   expect(upgradeRun(cut)).toBe(cut)
   const design = newRun('codebase-design', 1_000)
   expect(upgradeRun(design)).toBe(design)
-  // Un parcours d'un autre skill dont la dernière phase serait une rétro (forme d'avant la 0.5.0) : pas une rétro.
+  // Une mission d'un autre skill dont la dernière phase serait une rétro (forme d'avant la 0.5.0) : pas une rétro.
   const lot = newRun('implement', 1_000)
   const withRetro: Run = { ...lot, phases: [{ ...lot.phases[0]!, status: 'done' }, closedRetro().phases[0]!], cursor: 1 }
   expect(upgradeRun(withRetro)).toBe(withRetro)
 })
 
-test('une phase dont les pistes sont chez une session liée pas encore fermée ne propose aucune suite', () => {
+test('une phase dont les pistes sont chez un worker pas encore fermée ne propose aucune suite', () => {
   // Une rétro à suite dont une session de pistes est ouverte (par une discussion d'une version antérieure) :
   // quitter la Rétro avant la note de fin la rangerait dans une autre phase.
   const fresh = newRun('retro', 1_000, 'Rétrospective · Fermeture auto')
@@ -247,7 +247,7 @@ test('chargée puis rechargée, une rétro en cours garde sa session de pistes, 
   for (const step of ['chargée', 'rechargée']) {
     if (step === 'rechargée') await start()
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-    expect(await ui.find({ type: 'Text', text: /Session.liée.au.travail/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Worker.au.travail/ })).toBeDefined()
     // La session est ouverte : la rétro garde sa seule phase, et la piste restée au choix attend sa fermeture.
     expect(await ui.find({ type: 'Text', text: /^Code\s*$/ })).toBeUndefined()
     expect(await ui.find({ key: 'item-pick-p2' })).toBeUndefined()
@@ -255,7 +255,7 @@ test('chargée puis rechargée, une rétro en cours garde sa session de pistes, 
   }
   // La note de fin : les pistes jugées, la session est à fermer, puis fermée.
   const judged = JSON.stringify(await $.tool.call({ tool: TOOL, items: PISTES.map(i => ({ ...i, status: i.id === 'p2' ? 'todo' : 'done' })) } as any))
-  expect(judged).toContain('Close now: the linked session of the Pistes')
+  expect(judged).toContain('Close now: the worker of the Pistes')
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Text', text: /fermer d.abord la session précédente/ })).toBeDefined()
   await ui.unmount()
@@ -265,7 +265,7 @@ test('chargée puis rechargée, une rétro en cours garde sa session de pistes, 
   expect(await ui.find({ type: 'Text', text: /^Code\s*$/ })).toBeDefined()
   expect(await ui.find({ key: 'item-pick-p2' })).toBeDefined()
   await ui.unmount()
-  // La Rétro terminée sans ticket finit le parcours.
+  // La Rétro terminée sans ticket finit la mission.
   await $.tool.call({ tool: TOOL, complete: true } as any)
-  expect(toasts).toContain('★ Parcours terminé : Rétrospective · Fermeture auto')
+  expect(toasts).toContain('★ Mission terminée : Rétrospective · Fermeture auto')
 })

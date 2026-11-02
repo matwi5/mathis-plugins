@@ -97,7 +97,7 @@ test('la pastille d’un groupe confié compte aussi le rattaché, une fois sa s
   const b = applyReport(sent, { tickets: [ATTACHED] }, 3_300).board
   const run = activeRun(b)!
   const g = groupOf(b, 'A')
-  // Le relais de la session ne connaît que a1 : 1/1 ; le rattaché, ouvert dans le parcours, s'y ajoute.
+  // Le relais de la session ne connaît que a1 : 1/1 ; le rattaché, ouvert dans la mission, s'y ajoute.
   expect(relayForGroup(relay, g, undefined)).toMatchObject({ done: 1, total: 1 })
   expect(groupProgress(run, g, relayForGroup(relay, g, undefined))).toEqual({ done: 1, total: 2 })
   expect(groupProgress(run, g, null)).toEqual(groupDone(run, g))
@@ -118,7 +118,7 @@ test('au retour d’un groupe dont un rattaché est ouvert, la réponse ne deman
   b = applyReport(b, { tickets: [ATTACHED] }, 3_500, REPO).board
   const out = applyReport(b, { set: [{ id: 'a1', status: 'done' }], returned: ['A'] }, 4_000, REPO)
   expect(out.text).toContain('returned with tickets the plan attaches to it still open: A (Rattaché [x1]): send {"reviewed": [...]} for it only once they are done')
-  expect(out.text).not.toContain('returned without a /code-review relayed by its linked session: A')
+  expect(out.text).not.toContain('returned without a /code-review relayed by its worker: A')
 })
 
 test('« closed » ou « app » est refusé tant qu’un rattaché est ouvert ; « stopped » reste noté', () => {

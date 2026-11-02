@@ -1,8 +1,8 @@
-// flow-board : l'effacement d'un parcours ou d'une discussion (fichiers, clés, traces).
+// flow-board : l'effacement d'une mission ou d'une discussion (fichiers, clés, traces).
 //
-// Supprimer un parcours efface ses agents, ceux de ses sessions liées, son relais et ses choix ;
-// « ✗ Oublier » efface une discussion et ses sessions liées sûres (S15). Une trace par id effacé
-// (session, parcours, sous-agent : S5, S22), dans le dossier du registre. Le fichier d'une session
+// Supprimer une mission efface ses agents, ceux de ses workers, son relais et ses choix ;
+// « ✗ Oublier » efface une discussion et ses workers sûrs (S15). Une trace par id effacé
+// (session, mission, spécialiste : S5, S22), dans le dossier du registre. Le fichier d'une session
 // fermée s'efface tout de suite (réécrit vide, puis supprimé : S4) ; celui d'une session ouverte
 // n'est jamais touché, elle se compacte elle-même d'après les traces (S6, S19). Les transcripts
 // de Claude Code ne sont jamais touchés.
@@ -15,7 +15,7 @@ import { carriedRunAt, runFileId, runWindow, runsCarriedBy } from './history.ts'
 import { isSameProject, isSureLink, linkedSessions } from './linked.ts'
 import { EMPTY_UI, dropRun } from './model.ts'
 import { relayFileSlug } from './relay.ts'
-import { type HistoryShown, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
+import { type HistoryShown, appliedKey, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, missionReportKey, missionReportPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
 import { commitRegistry, readRegistry, registryDir, registryKey, registryPath, writeRegistry } from './registry-file.ts'
 
 /** Les atomes lus ou mis à jour ici : le moteur veut leur déclaration dans le fichier qui les lit. */
@@ -81,19 +81,19 @@ export async function readTraces($: any): Promise<Trace[]> {
   return out
 }
 
-/** Les parcours effacés (leur trace), vus par les dernières lectures : une session liée les lâche (S23). */
+/** Les missions effacées (leur trace), vues par les dernières lectures : un worker les lâche (S23). */
 export const erasedRuns = new Set<string>()
 
 /** Une trace posée par un appel de writeTraces : son fichier, ou sa clé de `$.store`. */
 type PosedTrace = { path: string } | { key: string }
 
-/** Une trace de sous-agent ou de lancement (S22, S25) couvre quelle que soit sa date. */
+/** Une trace de spécialiste ou de lancement (S22, S25) couvre quelle que soit sa date. */
 const isUndatedTrace = (id: string): boolean => id.startsWith('agent:') || id.startsWith('call:') || id.startsWith('launch:')
 
 /**
  * Pose les traces (S5) : l'id et la date, rien d'autre, chacune dans un fichier à elle (D2 b) : une
  * trace existante n'est jamais réécrite, une plus récente s'ajoute à côté (la lecture prend la plus
- * récente). Une trace déjà là aussi récente, ou de sous-agent ou de lancement, ne se repose pas.
+ * récente). Une trace déjà là aussi récente, ou de spécialiste ou de lancement, ne se repose pas.
  * Toutes ou aucune (S29) : si l'une échoue, celles que cet appel vient de poser sont retirées.
  * `ok` : toutes posées ; `none` : aucune posée ; `retracted` : posées puis toutes retirées ;
  * `partial` : le retrait a échoué aussi.
@@ -131,7 +131,7 @@ async function writeTraces($: any, traces: readonly Trace[]): Promise<'ok' | 'no
         return (await removeTraces($, posed)) ? 'retracted' : 'partial'
       }
     }
-    // Le même id plus loin dans la liste (un sous-agent vu dans deux fichiers) ne se repose pas.
+    // Le même id plus loin dans la liste (un spécialiste vu dans deux fichiers) ne se repose pas.
     known.push(value)
   }
   return 'ok'
@@ -181,8 +181,8 @@ const tracesRefusedText = (result: 'none' | 'retracted' | 'partial'): string =>
       ? 'Effacement annulé : les traces n’ont pas pu s’écrire ; une session ouverte a pu en effacer une partie entre-temps.'
       : 'Effacement partiel : les traces n’ont pas toutes pu s’écrire ni se retirer ; une partie de l’historique est masquée, rien d’autre n’a été effacé.'
 
-/** Les comptes rendus entiers d'un parcours dans le dossier du relais : `<parcours>.<session>.report.md`. */
-async function reportFilesOf($: any, runId: string): Promise<string[]> {
+/** Les comptes rendus entiers d'une mission dans le dossier du relais : `<parcours>.<session>.report.md`. */
+export async function reportFilesOf($: any, runId: string): Promise<string[]> {
   const sample = reportPath($, runId, 'x')
   if (!sample) return []
   const dir = sample.slice(0, sample.lastIndexOf('/'))
@@ -264,7 +264,7 @@ async function eraseSession($: any, id: string) {
   })
   await eraseFile($, rebuiltPath($, id))
   await eraseKey($, rebuiltKey(id))
-  // Sa délégation gardée ne lui fait plus reprendre un parcours effacé (S23).
+  // Sa délégation gardée ne lui fait plus reprendre une mission effacée (S23).
   await eraseKey($, delegateKey(id))
   otherRegistries.delete(id)
   otherHeads.delete(id)
@@ -278,7 +278,7 @@ async function lastWriteOf($: any, head: SessionRegistry): Promise<number> {
 }
 
 /**
- * Le registre entier d'une session dont l'en-tête annonce des morceaux (R1) : ses sous-agents au
+ * Le registre entier d'une session dont l'en-tête annonce des morceaux (R1) : ses spécialistes au
  * travail et ce que les traces couvrent peuvent être dans un morceau suivant (les nouveaux vont au
  * dernier). L'en-tête seul quand il n'y a qu'un morceau, ou quand la relecture échoue.
  */
@@ -289,9 +289,9 @@ async function wholeOf($: any, head: SessionRegistry): Promise<SessionRegistry> 
 }
 
 /**
- * Supprimer un parcours (Q6 a1, S3, S14) : les traces d'abord (le parcours, ses sessions liées,
- * chacun de ses sous-agents), puis cette discussion se compacte, les orchestrateurs fermés sont
- * réécrits sans lui, ses sessions liées fermées s'effacent, et son relais, ses choix et son
+ * Supprimer une mission (Q6 a1, S3, S14) : les traces d'abord (la mission, ses workers,
+ * chacun de ses spécialistes), puis cette discussion se compacte, les managers fermés sont
+ * réécrits sans elle, ses workers fermés s'effacent, et son relais, ses choix et son
  * fichier à part s'effacent. Les sessions ouvertes se compactent elles-mêmes.
  */
 export async function eraseRun($: any, run: Run): Promise<boolean> {
@@ -330,10 +330,10 @@ async function whileErasing<T>($: any, key: string, title: string, work: () => P
 }
 
 /**
- * D4 (S34) : les sous-agents manqués d'un parcours qu'on supprime, relus dans les transcripts des
- * discussions qui l'ont porté (les sessions liées sont couvertes en entier par leur trace) : ceux
- * dont le départ tombe dans la période où elles le portaient (R3), sauf ceux qu'un registre ou un
- * fichier à part range ailleurs, dans un autre parcours ou suivis en direct sans parcours (S32).
+ * D4 (S34) : les spécialistes manqués d'une mission qu'on supprime, relus dans les transcripts des
+ * discussions qui l'ont portée (les workers sont couverts en entier par leur trace) : ceux
+ * dont le départ tombe dans la période où elles la portaient (R3), sauf ceux qu'un registre ou un
+ * fichier à part range ailleurs, dans une autre mission ou suivis en direct sans mission (S32).
  * `failed` : les transcripts qui n'ont pas pu se relire (S39).
  */
 async function missedAgentsOf($: any, run: Run, runs: readonly Run[], carriers: readonly SessionRegistry[]): Promise<{ agents: { key: string; agentId?: string }[]; failed: number }> {
@@ -348,7 +348,7 @@ async function missedAgentsOf($: any, run: Run, runs: readonly Run[], carriers: 
     const scanned = await scanTranscriptAgents($, reg.transcript, runWindow(run).s)
     failed += scanned.failed
     const carried = runsCarriedBy(runs, reg)
-    // Son fichier à part (Q14) range aussi des sous-agents, chacun avec son parcours.
+    // Son fichier à part (Q14) range aussi des spécialistes, chacun avec sa mission.
     const side = (await readRebuiltState($, reg.session)).value?.agents ?? []
     for (const a of scanned.agents) {
       if (a.lane.startedAt === undefined || carriedRunAt(carried, reg, a.lane.startedAt) !== run.id) continue
@@ -372,15 +372,15 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
   const linkedIds = new Set([...heads.filter(h => h.run === run.id).map(h => h.session), ...Object.keys(relay?.sessions ?? {})])
   if (self) linkedIds.delete(self.session)
   const orchestrators: SessionRegistry[] = []
-  // Les discussions qui l'ont porté (S27, S28), à relire pour D4.
+  // Les discussions qui l'ont portée (S27, S28), à relire pour D4.
   const carriers: SessionRegistry[] = []
-  // S39 : une discussion qui l'a porté dont le registre ne se relit pas en entier n'est pas relue : elle compte.
+  // S39 : une discussion qui l'a portée dont le registre ne se relit pas en entier n'est pas relue : elle compte.
   let unreadCarriers = 0
   const runs = board?.runs.some(r => r.id === run.id) ? board.runs : [...(board?.runs ?? []), run]
   for (const h of heads) {
     if (linkedIds.has(h.session)) continue
     const isMaybe = self !== null && (h.parts ?? 1) > 1 && h.updatedAt >= run.startedAt && isSameProject(self.root, h.root)
-    // R5 : une discussion qui l'a porté, même sans sous-agent de lui, perd aussi son id tout de suite.
+    // R5 : une discussion qui l'a portée, même sans spécialiste d'elle, perd aussi son id tout de suite.
     const isCarrier = runsCarriedBy([run], h).length > 0
     if (!h.agents.some(a => a.run === run.id) && !isMaybe && !isCarrier) continue
     const full = (await readRegistry($, h.session)).value
@@ -393,21 +393,21 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
     if (full.agents.some(a => a.run === run.id) || isFullCarrier) orchestrators.push(full)
   }
   if (self && runsCarriedBy([run], self).length > 0) carriers.unshift(self)
-  // S22 : une trace par sous-agent effacé, qu'il vive dans un registre, un fichier à part repris
-  // (Q14) ou le fichier du parcours (anciennes lignes).
+  // S22 : une trace par spécialiste effacé, qu'il vive dans un registre, un fichier à part repris
+  // (Q14) ou le fichier de la mission (anciennes lignes).
   const erased: { key: string; agentId?: string }[] = [...(self?.agents ?? []), ...orchestrators.flatMap(o => o.agents)].filter(a => a.run === run.id)
   const sideIds = (await rebuiltIds($)).filter(id => !id.startsWith('run-'))
   for (const id of sideIds) {
     for (const a of (await readRebuiltState($, id)).value?.agents ?? []) if (a.run === run.id) erased.push({ key: a.meta.toolUseId ?? `agent:${a.agentId}`, agentId: a.agentId })
   }
   for (const r of (await readRebuiltState($, runFileId(run.id), `run:${run.id}`)).value?.rows ?? []) erased.push(r)
-  // D4 (S34) : relus avant d'effacer, les sous-agents manqués partent aussi ; un transcript qui ne se relit pas n'arrête rien.
+  // D4 (S34) : relus avant d'effacer, les spécialistes manqués partent aussi ; un transcript qui ne se relit pas n'arrête rien.
   const missed = await missedAgentsOf($, run, runs, carriers)
   missed.failed += unreadCarriers
   erased.push(...missed.agents)
   // Les traces datent de leur pose : ce qui part pendant la relecture dans une session ouverte est couvert aussi.
   const at = await $.clock.now()
-  // S25 : les lancements de ses sessions liées, chez les orchestrateurs.
+  // S25 : les lancements de ses workers, chez les managers.
   const launches: string[] = []
   for (const o of [...(self ? [self] : []), ...orchestrators]) {
     for (const ls of linkedSessions({ self: o, run: run.id, relay, others: heads, now })) {
@@ -420,31 +420,31 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
     ...erased.flatMap(a => agentTraces(a, at)),
     ...launches.map(id => ({ id: `launch:${id}`, at })),
   ]
-  // S24, S29 : sans toutes les traces posées, rien n'est effacé, et le parcours reste.
+  // S24, S29 : sans toutes les traces posées, rien n'est effacé, et la mission reste.
   const posed = await writeTraces($, traces)
   if (posed !== 'ok') {
     await quietly(() => $.ui.toast(tracesRefusedText(posed)))
     return false
   }
-  // La pierre tombale prend la date des traces : un parcours mis à jour ailleurs pendant la relecture D4 ne revient pas par la fusion du board.
+  // La pierre tombale prend la date des traces : une mission mise à jour ailleurs pendant la relecture D4 ne revient pas par la fusion du board.
   await commit($, board => dropRun(board, run.id, at))
   const all = await readTraces($)
   // Cette discussion : tout de suite, dans son état ; son fichier suit à la prochaine écriture.
   if (self) await quietly(() => commitRegistry($, r => applyTraces(r, all)))
-  // Un orchestrateur fermé (jugé sans ce que les traces retirent) est réécrit sans le parcours
+  // Un manager fermé (jugé sans ce que les traces retirent) est réécrit sans la mission
   // (S14), s'il se relit en entier ; ouvert, il se compacte lui-même.
   for (const o of orchestrators) {
     const head = heads.find(h => h.session === o.session)!
     if (!isClosedSession(applyTraces(o, all) ?? o, await lastWriteOf($, head), now)) continue
     await rewriteCovered($, o.session, all)
   }
-  // Ses sessions liées fermées s'effacent ; les ouvertes, ou celles dont l'en-tête ne se lit pas
+  // Ses workers fermés s'effacent ; les ouverts, ou ceux dont l'en-tête ne se lit pas
   // (peut-être en pleine écriture), se compactent d'après la trace (S6).
   for (const id of linkedIds) {
     const head = heads.find(h => h.session === id)
     const isEnded = relay?.sessions[id]?.endedAt !== undefined
     if (head && isClosedSession(await wholeOf($, head), await lastWriteOf($, head), now, isEnded)) await eraseSession($, id)
-    // Ouverte aussi, sa délégation gardée part (S23) : rechargée, elle ne reprend pas le parcours effacé.
+    // Ouverte aussi, sa délégation gardée part (S23) : rechargée, elle ne reprend pas la mission effacée.
     else await eraseKey($, delegateKey(id))
   }
   // Les fichiers à part se compactent (seul le rattrapage les écrit : leur session ne le fera pas) ;
@@ -452,7 +452,7 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
   for (const id of sideIds) await updateRebuilt($, id, id, before => before)
   await eraseFile($, rebuiltPath($, runFileId(run.id)))
   await eraseKey($, rebuiltKey(runFileId(run.id)))
-  // Les comptes rendus entiers des sessions liées et la référence de la discussion principale :
+  // Les comptes rendus entiers des workers et la référence du manager :
   // leurs chemins se calculent d'après les ids, jamais lus dans le relais (un fichier d'une autre session).
   for (const id of Object.keys(relay?.sessions ?? {})) await eraseFile($, reportPath($, run.id, id))
   // Ceux que le relais ne nomme plus (relais illisible, entrée sortie du plafond, écrit après) : par le dossier.
@@ -461,7 +461,7 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
   await eraseKey($, mainRefKey(run.id))
   await eraseFile($, relayPath($, run.id))
   await eraseKey($, relayKey(run.id))
-  // L'entrée de chaque session, son fichier à elle (un fichier par session liée) : par son chemin calculé
+  // L'entrée de chaque session, son fichier à elle (un fichier par worker) : par son chemin calculé
   // d'après les ids, puis par le dossier et par les clés du store (celles que le relais ne nomme plus).
   for (const id of new Set([...linkedIds, ...Object.keys(relay?.sessions ?? {})])) {
     await eraseFile($, relayEntryPath($, run.id, id))
@@ -470,8 +470,13 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
   for (const path of await relayEntryFilesOf($, run.id)) await eraseFile($, path)
   for (const key of await relayEntryKeysOf($, run.id)) await eraseKey($, key)
   await eraseFile($, decidedPath($, run.id))
+  // Le rapport de son compte rendu, gardé pour le COO : par son chemin calculé d'après l'id.
+  await eraseFile($, missionReportPath($, run.id))
+  await eraseKey($, missionReportKey(run.id))
+  // Les consignes du COO appliquées à la mission (ids notés par son manager) partent avec elle.
+  await eraseKey($, appliedKey(run.id))
   await reportEraseFailures($)
-  if (missed.failed > 0) await quietly(() => $.ui.toast(`${missed.failed} ${missed.failed > 1 ? 'transcripts non relus' : 'transcript non relu'} : un sous-agent manqué pourrait revenir sans parcours.`))
+  if (missed.failed > 0) await quietly(() => $.ui.toast(`${missed.failed} ${missed.failed > 1 ? 'transcripts non relus' : 'transcript non relu'} : un spécialiste manqué pourrait revenir sans mission.`))
   await refreshHistory($)
   return true
 }
@@ -484,7 +489,7 @@ async function rewriteCovered($: any, id: string, traces: readonly Trace[]) {
 }
 
 /**
- * « ✗ Oublier » une discussion (S2) : sa trace et celles de ses sessions liées sûres (S15), puis
+ * « ✗ Oublier » une discussion (S2) : sa trace et celles de ses workers sûrs (S15), puis
  * l'effacement de leurs fichiers, tout de suite pour une session fermée ; une session ouverte se
  * compacte elle-même.
  */
@@ -499,8 +504,8 @@ async function forgetSessionNow($: any, id: string, heads: SessionRegistry[], sh
   const self: SessionRegistry | null = await read($, registryAtom)
   const sure = (shown?.linked ?? []).filter(l => isSureLink(l.session.how) && l.session.session !== undefined).map(l => l.session.session!)
   const ids = [id, ...sure]
-  // Q-b (comme S22) : une trace par sous-agent oublié, de son registre ou de son fichier à part ;
-  // un sous-agent de fond qui se réveille ensuite ne revient pas dans l'historique.
+  // Q-b (comme S22) : une trace par spécialiste oublié, de son registre ou de son fichier à part ;
+  // un spécialiste de fond qui se réveille ensuite ne revient pas dans l'historique.
   const erased: { key: string; agentId?: string }[] = []
   for (const x of ids) {
     const reg = self && x === self.session ? self : (await readRegistry($, x)).value
@@ -533,7 +538,7 @@ async function forgetSessionNow($: any, id: string, heads: SessionRegistry[], sh
 /**
  * S26 : à chaque relecture, une session fermée qu'une trace couvre et qui ne l'a pas encore
  * appliquée (trace plus récente que sa dernière écriture) est traitée comme à l'effacement :
- * effacée si une trace la couvre toute (la sienne, ou celle du parcours qu'elle servait),
+ * effacée si une trace la couvre toute (la sienne, ou celle de la mission qu'elle servait),
  * réécrite sans ce qu'elles couvrent sinon. Les fichiers à part se compactent quand les traces changent.
  */
 let reconciledTraces = ''

@@ -59,7 +59,7 @@ const check = (x: number, y: number, size: number, color: string): string =>
   `<path d="M${r1(x - size * 0.45)} ${r1(y + size * 0.02)} l${r1(size * 0.32)} ${r1(size * 0.32)} l${r1(size * 0.6)} ${r1(-size * 0.62)}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`
 
 /**
- * La feuille de route : une station par phase (ou par étape pour un parcours d'une
+ * La feuille de route : une station par phase (ou par étape pour une mission d'une
  * phase), reliées par une ligne. Station faite pleine et cochée, station en cours
  * pulsante, segment en cours animé vers la suite, suites facultatives en pointillé,
  * détours en bulles au-dessus de leur station.
@@ -242,7 +242,7 @@ export const dotsSvg = (runs: readonly { ok: boolean }[], width: number, green: 
   return { source: svg(w, h, dots.join('')), width: w, height: h }
 }
 
-/** Un arc qui tourne : un sous-agent au travail. */
+/** Un arc qui tourne : un spécialiste au travail. */
 export const spinnerSvg = (color: string, size = 14): Drawn => {
   const m = size / 2
   const r = m - 2

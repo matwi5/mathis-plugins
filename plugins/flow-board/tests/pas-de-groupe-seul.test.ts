@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { applyReport, emptyBoard, groupPlan, newRun, startLinkedGroups } from '../hooks/model.ts'
 import { activeRun } from '../hooks/basics.ts'
@@ -11,7 +12,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const boardWith = (input: Record<string, unknown>): Board => {
@@ -81,6 +82,7 @@ test('un plan en place dont un groupe est lancé n’est ni remplacé ni vidé p
 
 test('la consigne de /to-tickets : pas de groupes quand il n’y en aurait qu’un', async ($, on) => {
   mock.clock(on, { now: 80_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
@@ -90,6 +92,7 @@ test('la consigne de /to-tickets : pas de groupes quand il n’y en aurait qu’
 
 test('« ▶ Tout implémenter ici » lance /implement sur les tickets ouverts, dans l’ordre du lot', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 81_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
@@ -126,6 +129,7 @@ test('« ▶ Tout implémenter ici » lance /implement sur les tickets ouverts, 
 
 test('un lot à groupes n’a pas « Tout implémenter ici »', async ($, on) => {
   mock.clock(on, { now: 82_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)

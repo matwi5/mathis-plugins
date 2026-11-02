@@ -10,7 +10,7 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
 } as const
 const BANDS = ['terminal', 'desktop'] as const
-const WELCOME = /^Aucun.workflow.sélectionné$/
+const WELCOME = /^Aucune.mission.sélectionnée$/
 
 /** Le moteur sous le plugin, avec un stockage que le test remplit avant le démarrage de la discussion. */
 const world = (on: any, below: 'engine' | 'other' = 'engine') => {
@@ -32,7 +32,7 @@ const world = (on: any, below: 'engine' | 'other' = 'engine') => {
 
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
-/** Un parcours du projet laissé en pause par une discussion précédente. */
+/** Une mission du projet laissé en pause par une discussion précédente. */
 const paused = (mem: Record<string, unknown>, title: string, updatedAt: number) => {
   const base = (mem[KEY] as Board | undefined) ?? { ...emptyBoard('', 'projet'), deleted: [] }
   const run = { ...newRun('to-tickets', updatedAt - 1_000, title), status: 'paused' as const, updatedAt }
@@ -40,7 +40,7 @@ const paused = (mem: Record<string, unknown>, title: string, updatedAt: number) 
   return run
 }
 
-test('sans parcours dans le projet : « Aucun workflow sélectionné » et ▸ Ouvrir, sans reprise', async ($, on) => {
+test('sans mission dans le projet : « Aucune mission sélectionnée » et ▸ Ouvrir, sans reprise', async ($, on) => {
   mock.clock(on, { now: 100_000_000 })
   world(on)
   await start($)
@@ -57,7 +57,7 @@ test('sans parcours dans le projet : « Aucun workflow sélectionné » et ▸ O
   }
 })
 
-test('un parcours en pause : le plus récent est proposé, et « Reprendre » le reprend', async ($, on) => {
+test('une mission en pause : le plus récent est proposé, et « Reprendre » le reprend', async ($, on) => {
   mock.clock(on, { now: 101_000_000 })
   const mem = world(on)
   paused(mem, 'Ancien lot', 100_000_000)
@@ -75,7 +75,7 @@ test('un parcours en pause : le plus récent est proposé, et « Reprendre » le
   await ui.press({ key: 'band-resume' })
   await ui.unmount()
 
-  // Le parcours repris est actif ici : le bandeau normal reprend sa place.
+  // La mission reprise est actif ici : le bandeau normal reprend sa place.
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
   expect(await ui.find({ type: 'Text', text: WELCOME })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Tickets bugs SC/VSC' })).toBeDefined()
@@ -112,7 +112,7 @@ test('le bandeau d’accueil s’empile sous un autre bandeau', async ($, on) =>
   }
 })
 
-test('dès qu’un parcours démarre, le bandeau normal remplace l’accueil', async ($, on) => {
+test('dès qu’une mission démarre, le bandeau normal remplace l’accueil', async ($, on) => {
   mock.clock(on, { now: 104_000_000 })
   world(on)
   await start($)

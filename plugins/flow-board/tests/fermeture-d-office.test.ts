@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { closingProcedure, groupWorktree } from '../hooks/closing.ts'
 import { applyReport, emptyBoard, mergeBoards, newRun, startLinkedGroups } from '../hooks/model.ts'
@@ -19,7 +20,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const LOT = {
@@ -43,7 +44,7 @@ const boardWith = (input: Record<string, unknown>, session = 's'): Board => {
 const groupOf = (board: Board, id: string) => activeRun(board)!.groups!.find(g => g.id === id)!
 const REPO = { isRepo: true }
 
-/** A et B confiés à des sessions liées (ids relevés), puis rendus ; rien d'autre. */
+/** A et B confiés à des workers (ids relevés), puis rendus ; rien d'autre. */
 const returned = (): Board => {
   let b = startLinkedGroups(boardWith(LOT), ['A', 'B'], 3_000)!.board
   b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'] }, 4_000, REPO).board
@@ -72,7 +73,7 @@ test('un groupe rendu, relu, à la sécurité tranchée est listé « à fermer 
 test('un groupe rendu pas encore clos : une ligne dit ce qui lui manque', () => {
   let b = closable()
   const text = (board: Board) => applyReport(board, { note: 'point' }, 9_000, REPO).text
-  expect(text(b)).toContain('Not closed yet: group B (Bêta) lacks: its group review (if its linked session ran it, send {"reviewed": ["B"]}); the security advice.')
+  expect(text(b)).toContain('Not closed yet: group B (Bêta) lacks: its group review (if its worker ran it, send {"reviewed": ["B"]}); the security advice.')
   b = applyReport(b, { reviewed: ['B'] }, 6_000, REPO).board
   expect(text(b)).toContain('Not closed yet: group B (Bêta) lacks: the security advice.')
   b = applyReport(b, { security: { group: 'B', advised: true, why: 'chemins' } }, 6_100, REPO).board
@@ -93,7 +94,7 @@ test('une activité relayée après le compte rendu remet la fermeture à plus t
   relay = applyRelay(relay, runId, 'fa', { kind: 'command', commit: 'fix: F1' }, 7_000)!
   const later = applyReport(b, { note: 'point' }, 7_500, { ...REPO, relay }).text
   expect(later).not.toContain('Close now: group A')
-  expect(later).toContain('Not closed yet: group A (Alpha) — its linked session is still active (relayed activity after its final report): closing waits.')
+  expect(later).toContain('Not closed yet: group A (Alpha) — its worker is still active (relayed activity after its final report): closing waits.')
   // Un nouveau compte rendu, après ce travail, la rend de nouveau candidate.
   relay = applyRelay(relay, runId, 'fa', { kind: 'report', text: 'A fait, F1 corrigé' }, 8_000)!
   expect(applyReport(b, { note: 'point' }, 8_500, { ...REPO, relay }).text).toContain('Close now: group A')
@@ -114,7 +115,7 @@ test('« closed » retire le groupe de la liste ; « app » reste en une ligne ;
   const after = applyReport(app, { closed: [{ group: 'A', state: 'closed' }] }, 8_000, REPO).board
   expect(applyReport(after, { note: 'point' }, 9_000, REPO).text).not.toContain('group A (Alpha)')
   const refused = applyReport(b, { closed: [{ group: 'C', state: 'closed' }, { group: 'Z', state: 'closed' }, { group: 'A', state: 'nope' }] }, 6_000, REPO)
-  expect(refused.text).toContain('closed: refused for C (not returned by a linked session), Z (unknown group), A (state must be closed, app or stopped)')
+  expect(refused.text).toContain('closed: refused for C (not returned by a worker), Z (unknown group), A (state must be closed, app or stopped)')
   expect(groupOf(refused.board, 'A').delegated!.closing).toBeUndefined()
 })
 
@@ -182,7 +183,7 @@ test('un groupe fermé puis confié de nouveau : pas « à fermer » pendant que
   expect(back.text).toContain('Close now: group A')
   // La fusion avec la copie d'avant ne remet pas l'ancien état sur le nouveau lien.
   expect(groupOf(mergeBoards(back.board, closed), 'A').delegated!.closing).toBeUndefined()
-  // Une fermeture déjà notée revient d'une copie du même lien, même quand l'autre discussion a repris le parcours.
+  // Une fermeture déjà notée revient d'une copie du même lien, même quand l'autre discussion a repris la mission.
   const done = applyReport(back.board, { closed: [{ group: 'A', state: 'closed', sessionId: '00000000-0000-4000-8000-0000000000bb' }] }, 8_000, REPO).board
   const takenOver = { ...back.board, runs: back.board.runs.map(r => ({ ...r, owner: 'autre', status: 'active' as const, updatedAt: 9_000 })) }
   const merged = mergeBoards(done, takenOver)
@@ -197,7 +198,7 @@ test('un groupe re-confié dont la session précédente n’est pas fermée : l�
   // Re-confié : la nouvelle session travaille, l'ancienne est à fermer.
   const again = startLinkedGroups(short, ['A'], 5_000)!.board
   const during = applyReport(again, { note: 'point' }, 5_100, REPO)
-  expect(during.text).toContain('Close now: the previous linked session of group A (Alpha), replaced by a new send (sent at 1970-01-01 00:00 UTC):')
+  expect(during.text).toContain('Close now: the previous worker of group A (Alpha), replaced by a new send (sent at 1970-01-01 00:00 UTC):')
   expect(during.text).toContain(closingProcedure({ run: activeRun(during.board)!, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: true }))
   expect(during.text).toContain(`{"closed": [{"group": "A", "link": ${first.at}, "state": "closed"`)
   expect(during.text).not.toContain('Close now: group A (Alpha) is closed')
@@ -207,14 +208,14 @@ test('un groupe re-confié dont la session précédente n’est pas fermée : l�
   relay = applyRelay(relay, runId, 'fa', { kind: 'report', text: 'A rendu inachevé' }, 3_900)!
   relay = applyRelay(relay, runId, 'fb', { kind: 'start', group: 'A' }, 5_050)!
   relay = applyRelay(relay, runId, 'fb', { kind: 'note', text: 'au travail' }, 5_080)!
-  expect(applyReport(again, { note: 'point' }, 5_100, { ...REPO, relay }).text).toContain('Close now: the previous linked session of group A (Alpha)')
+  expect(applyReport(again, { note: 'point' }, 5_100, { ...REPO, relay }).text).toContain('Close now: the previous worker of group A (Alpha)')
   // La précédente qui reprend du travail après son compte rendu, elle, attend.
   const busy = applyRelay(relay, runId, 'fa', { kind: 'note', text: 'correctif' }, 4_500)!
-  expect(applyReport(again, { note: 'point' }, 5_100, { ...REPO, relay: busy }).text).not.toContain('Close now: the previous linked session of group A (Alpha)')
+  expect(applyReport(again, { note: 'point' }, 5_100, { ...REPO, relay: busy }).text).not.toContain('Close now: the previous worker of group A (Alpha)')
   // Rendue de nouveau : l'ancien lien passe dans « earlier », toujours à fermer.
   const back = applyReport(again, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false } }, 6_000, REPO)
   expect(groupOf(back.board, 'A').delegated!.earlier).toEqual([{ at: first.at }])
-  expect(back.text).toContain('Close now: the previous linked session of group A (Alpha)')
+  expect(back.text).toContain('Close now: the previous worker of group A (Alpha)')
   expect(back.text).toContain('Close now: group A (Alpha) is closed')
   // Fermée par son lien : notée sur l'ancien, le nouveau reste à fermer.
   const closedOld = applyReport(back.board, { closed: [{ group: 'A', link: first.at, state: 'closed', sessionId: '00000000-0000-4000-8000-0000000000aa' }] }, 6_100, REPO)
@@ -222,7 +223,7 @@ test('un groupe re-confié dont la session précédente n’est pas fermée : l�
   expect(groupOf(closedOld.board, 'A').delegated!.earlier).toEqual([{ at: first.at, closing: { state: 'closed', at: 6_100, sessionId: '00000000-0000-4000-8000-0000000000aa' } }])
   expect(groupOf(closedOld.board, 'A').delegated!.closing).toBeUndefined()
   const after = applyReport(closedOld.board, { note: 'point' }, 6_200, REPO).text
-  expect(after).not.toContain('previous linked session of group A')
+  expect(after).not.toContain('previous worker of group A')
   expect(after).toContain('Close now: group A (Alpha) is closed')
   // « closed » ne recule pas, ni par un nouvel envoi, ni par une fusion avec la copie d'avant.
   expect(applyReport(closedOld.board, { closed: [{ group: 'A', link: first.at, state: 'stopped', why: 'x' }] }, 6_300, REPO).text).toContain('already closed')
@@ -238,8 +239,8 @@ test('un groupe re-confié dont la session précédente n’est pas fermée : l�
   expect(groupOf(unreadable.board, 'A').delegated!.closing).toBeUndefined()
   // Une session précédente arrêtée se relance sur un appel qui touche le groupe, même quand la fermeture courante ne l'est pas.
   const stoppedOld = applyReport(back.board, { closed: [{ group: 'A', link: first.at, state: 'stopped', why: 'commits pas fusionnés' }] }, 6_500, REPO).board
-  expect(applyReport(stoppedOld, { note: 'point' }, 6_600, REPO).text).not.toContain('previous linked session of group A')
-  expect(applyReport(stoppedOld, { security: { group: 'A', advised: false } }, 6_700, REPO).text).toContain('Close now: the previous linked session of group A (Alpha)')
+  expect(applyReport(stoppedOld, { note: 'point' }, 6_600, REPO).text).not.toContain('previous worker of group A')
+  expect(applyReport(stoppedOld, { security: { group: 'A', advised: false } }, 6_700, REPO).text).toContain('Close now: the previous worker of group A (Alpha)')
 })
 
 test('un ticket rouvert dans un groupe rendu : pas « à fermer » ; une session terminée n’est plus active', () => {
@@ -263,7 +264,7 @@ test('une session encore active : la réponse dit comment la débloquer', () => 
   expect(applyReport(b, { note: 'point' }, 7_500, { ...REPO, relay }).text).toContain('ask it by SendMessage to leave its final report in the relay again')
 })
 
-test('dans une session liée déléguée, aucune section de fermeture', () => {
+test('dans un worker délégué, aucune section de fermeture', () => {
   const b = closable()
   const runId = activeRun(b)!.id
   const delegated = applyReport(b, { delegate: runId, group: 'B' }, 6_000, REPO).board
@@ -300,6 +301,7 @@ const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractiv
 
 test('la ligne d’un groupe rendu et relu : rien tant que rien n’est tenté, puis fermé, à archiver, ou arrêté avec « ↻ Relancer la fermeture »', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const { mem, filled } = world(on)
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -390,7 +392,7 @@ test('les envois d’un groupe sont numérotés : le premier garde son nom, les 
   const stopped2 = applyReport(back.board, { closed: [{ group: 'A', state: 'stopped', why: 'x' }] }, 6_100, REPO).board
   const third2 = startLinkedGroups(applyReport(stopped2, { set: [{ id: 'a1', status: 'todo' }] }, 6_200, REPO).board, ['A'], 7_000)!.board
   const during3 = applyReport(third2, { reviewed: ['A'] }, 7_100, REPO).text
-  expect(during3).toContain('Close now: the previous linked session of group A (Alpha)')
+  expect(during3).toContain('Close now: the previous worker of group A (Alpha)')
   expect(during3).toContain('worktree-groupe-lot-A-2 (lancée par le CLI)')
   expect(during3).toContain('« Lot > Groupe A (envoi 2) · »')
   expect(applyReport(third, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'] }, 8_000, REPO).board.runs[0]!.groups!.find(g => g.id === 'A')!.delegated!.earlier).toMatchObject([{ at: 3_000 }, { at: 5_000, seq: 2 }])
@@ -410,7 +412,7 @@ test('le numéro d’envoi d’un groupe ne recule jamais : un envoi annulé le 
   expect(groupWorktree(activeRun(first)!, 'A', 2.5)).toBe('groupe-lot-A')
 })
 
-test('La raison d’une fermeture relue du fichier de parcours entre bornée et neutralisée dans la réponse, sans ouvrir de ligne ni de section', () => {
+test('La raison d’une fermeture relue du fichier de mission entre bornée et neutralisée dans la réponse, sans ouvrir de ligne ni de section', () => {
   const NL = String.fromCodePoint(10)
   const app = applyReport(closable(), { closed: [{ group: 'A', state: 'app', why: 'à archiver' }] }, 6_000, REPO).board
   // L'effet d'abord : la raison est citée.

@@ -4,6 +4,14 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.11.0 — 2026-11-03
+
+### Changé
+- **Vocabulaire des missions** : le skill `suivi-asana` dit manager, worker et « une mission grilling → /to-spec → /to-tickets ».
+- **Anciens mots refusés** : `termes-retires.txt` ; `check.sh` refuse les anciens mots de flow-board dans le README, les consignes et les nouvelles entrées du CHANGELOG.
+
+---
+
 ## 0.10.0 — 2026-10-29
 
 ### Modifié

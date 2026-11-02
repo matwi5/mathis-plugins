@@ -7,6 +7,8 @@
 //   node <dossier de flow-board>/scripts/snapshot.mjs <id du ticket> <fichier>…
 //   node <dossier de flow-board>/scripts/snapshot.mjs --staged <id du ticket> <fichier>…
 //   node <dossier de flow-board>/scripts/snapshot.mjs --remplace <fichier> <ancien> <nouveau>
+//   node <dossier de flow-board>/scripts/snapshot.mjs --dossier <id du ticket, ou groupe-<id>, securite-<id>>
+//   node <dossier de flow-board>/scripts/snapshot.mjs --clean <id du ticket>
 //
 // à lancer depuis la racine du worktree. La première forme indexe les fichiers du ticket
 // (suppressions comprises), vérifie que l'index ne porte rien d'autre, écrit l'arbre et un commit
@@ -21,11 +23,25 @@
 // ne défasse pas le correctif ; chaque côté reçoit les textes à ses fins de ligne (LF ou CRLF). Ses textes suivent `scripts/patch.py` du dépôt : `@<fichier>` lu
 // dans ce fichier sans sa fin de ligne finale, `@@` pour un `@` littéral, `{{u}}` pour un
 // échappement « barre oblique inverse et u », `{{uu}}` pour `{{u}}`.
+// `--dossier` crée et imprime le dossier du relecteur, `git rev-parse --git-path flow-board/revue-<id>` :
+// le seul où un relecteur écrit (copies extraites, notes), propre au worktree, hors de l'arbre suivi
+// (la fermeture d'un groupe ne le voit pas) et effacé avec lui ; dans le clone principal, il est
+// `.git/flow-board/revue-<id>`, commun à ses discussions et jamais effacé ; des noms génériques de /tmp
+// avaient écrasé les copies d'une autre session. Les deux premières formes le créent et l'impriment aussi.
+// `--clean` supprime la référence du ticket nommé, et elle seule, une fois son vrai commit posé : un
+// commit de la première lignée de HEAD depuis le parent de l'instantané (`git rev-list --first-parent
+// <instantané>^..HEAD`, ce parent ancêtre de HEAD : un commit venu d'une fusion ne compte pas) doit porter chaque fichier que l'instantané change, à sa
+// version figée (suppressions comprises) ; le commit du ticket peut porter d'autres fichiers (son fichier
+// de ticket) et d'autres commits venir entre-temps. Sinon, ou sans référence, rien n'est supprimé.
+// L'invariant : une référence d'instantané n'est supprimée qu'une fois le commit de son ticket
+// (correctifs compris) dans la branche, et jamais celle d'un autre ticket.
 // Un id hors forme, un fichier qui commence par « - », un index qui porte un autre fichier ou aucun
-// changement : rien n'est posé ni écrit, le message dit pourquoi, code 1. Sans dépendance hors de Node.
+// changement : rien n'est posé ni écrit, le message dit pourquoi, code 1 ; un refus venu après
+// l'indexation de la première forme (instantané reposé, casse) laisse l'index tel que `git add` l'a fait,
+// sans commit ni référence. Sans dépendance hors de Node.
 
-import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -36,6 +52,21 @@ const SAFE_TICKET = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 export const isSafeTicket = value => typeof value === 'string' && SAFE_TICKET.test(value)
 
 export class SnapshotError extends Error {}
+
+/**
+ * Crée le dossier du relecteur de `id` (un ticket, `groupe-<id>` ou `securite-<id>`) dans le dossier git
+ * du worktree, et rend son chemin absolu ; un dossier déjà là garde ce qu'il porte.
+ */
+export const reviewDir = (id, cwd = process.cwd()) => {
+  if (!isSafeTicket(id)) throw new SnapshotError(`id hors forme : ${JSON.stringify(id)} (lettres, chiffres, _ et -, 64 au plus)`)
+  const path = resolve(cwd, git(cwd, ['rev-parse', '--git-path', `flow-board/revue-${id}`]))
+  try {
+    mkdirSync(path, { recursive: true })
+  } catch (err) {
+    throw new SnapshotError(`dossier du relecteur impossible à créer : ${path} (${err.code || err.message})`)
+  }
+  return path
+}
 
 /**
  * Le texte que rend une commande git dans `cwd`, sans fin de ligne finale. Les chemins y sont
@@ -76,17 +107,27 @@ export const snapshot = (ticket, files, cwd = process.cwd()) => {
  * relit `previous..commit`, ce qui a changé depuis, pas tout le ticket.
  */
 const pose = (cwd, ticket, files) => {
-  const tree = git(cwd, ['write-tree'])
-  const commit = git(cwd, ['commit-tree', tree, '-p', 'HEAD', '-m', `flow-board snapshot ${ticket}`])
   const ref = `refs/worktree/flow-board/${ticket}`
-  let previous = null
-  try {
-    previous = git(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
-  } catch {
-    previous = null
+  // Avant de poser quoi que ce soit (snapshot a déjà indexé les fichiers) : une référence d'un nom voisin
+  // par la casse fait refuser (pinned).
+  const previous = pinned(cwd, ref)
+  // Le dossier ensuite : un échec à le créer ne laisse ni commit ni référence posés.
+  const dir = reviewDir(ticket, cwd)
+  const tree = git(cwd, ['write-tree'])
+  if (previous !== null) {
+    // Reposé, l'instantané garde chaque fichier du précédent qui porte encore un changement (dans
+    // l'index ou l'arbre, face à HEAD) : --clean ne juge que le dernier, et un correctif d'un fichier
+    // perdu ici ne serait plus jamais vérifié. Un fichier sans changement en attente (commité, ou
+    // ramené à HEAD par un correctif) peut en sortir.
+    const top = topLevel(cwd)
+    const now = names(top, ['diff', '--no-renames', '--name-only', '-z', 'HEAD', tree])
+    const lost = names(top, ['diff', '--no-renames', '--name-only', '-z', `${previous}^`, previous])
+      .filter(f => !now.includes(f) && hasPending(top, f))
+    if (lost.length > 0) throw new SnapshotError(`l'instantané précédent de ${ticket} porte aussi ${lost.join(', ')}, que celui-ci ne porte pas et qui a encore un changement non commité : le reposer avec tous les fichiers du ticket (indexés), sinon --clean ne les vérifierait plus ; si ce changement est le travail d'un ticket suivant, ne pas l'indexer : attendre son commit ; rien n'est posé`)
   }
+  const commit = git(cwd, ['commit-tree', tree, '-p', 'HEAD', '-m', `flow-board snapshot ${ticket}`])
   git(cwd, ['update-ref', ref, commit])
-  return { commit, ref, files, previous }
+  return { commit, ref, files, previous, dir }
 }
 
 /**
@@ -103,6 +144,74 @@ export const snapshotStaged = (ticket, files, cwd = process.cwd()) => {
   if (others.length > 0) throw new SnapshotError(`l'index porte d'autres fichiers que ceux du correctif : ${others.join(', ')} ; les sortir de l'index (git restore --staged <chemin>), puis relancer`)
   if (all.length === 0) throw new SnapshotError("l'index ne porte aucun changement face à HEAD : rien à figer (indexer d'abord le correctif, par exemple avec --remplace)")
   return pose(cwd, ticket, all)
+}
+
+/** La liste que rend une commande git en `-z`. */
+const names = (cwd, args) => git(cwd, args).split('\0').filter(Boolean)
+
+/** La racine du worktree : les chemins que rend git en partent, ceux qu'on lui repasse aussi. */
+const topLevel = cwd => git(cwd, ['rev-parse', '--show-toplevel'])
+
+/**
+ * Vrai si `git diff --quiet <revs> -- <files>` ne voit aucune différence (`revs` : deux commits, `HEAD`
+ * seul pour l'arbre de travail, ou `--cached HEAD` pour l'index), présence comprise ; `cwd` est la racine
+ * du worktree, car les chemins viennent de git ; une erreur de git se lève.
+ */
+const sameFiles = (cwd, revs, files) => {
+  const out = spawnSync('git', ['diff', '--quiet', '--no-renames', ...revs, '--', ...files], { cwd, stdio: 'ignore', env: { ...process.env, GIT_LITERAL_PATHSPECS: '1' } })
+  if (out.status === 0) return true
+  if (out.status === 1) return false
+  throw new SnapshotError(`git diff ${revs.join(' ')} a échoué (code ${out.status})`)
+}
+
+/**
+ * Le hash de l'instantané que désigne `ref`, ou null quand la référence n'existe pas sous ce nom exact :
+ * sur un disque insensible à la casse, `t24` lirait sinon le fichier de la référence de `T24`.
+ */
+const pinned = (cwd, ref) => {
+  const listed = git(cwd, ['for-each-ref', '--format=%(refname)', 'refs/worktree/flow-board/']).split('\n').filter(Boolean)
+  // Une référence qui ne diffère que par la casse est le même fichier sur un disque insensible à la
+  // casse : la poser ou la supprimer sous l'autre nom toucherait celle d'un autre ticket.
+  const clash = listed.find(r => r !== ref && r.toLowerCase() === ref.toLowerCase())
+  if (clash !== undefined) throw new SnapshotError(`une autre référence ne diffère de ${ref} que par la casse : ${clash} ; nommer le ticket par l'id exact de sa référence ; rien n'est posé ni supprimé`)
+  return listed.includes(ref) ? git(cwd, ['rev-parse', '--verify', `${ref}^{commit}`]) : null
+}
+
+/** Vrai si l'index ou l'arbre de travail portent un changement de `file` face à HEAD (`cwd` : la racine). */
+const hasPending = (cwd, file) => !sameFiles(cwd, ['--cached', 'HEAD'], [file]) || !sameFiles(cwd, ['HEAD'], [file])
+
+/**
+ * Supprime la référence d'instantané de `ticket`, seulement si un commit de la branche porte chaque
+ * fichier que l'instantané change à sa version figée ; rend la référence, l'instantané et ce commit.
+ */
+export const clean = (ticket, cwd = process.cwd()) => {
+  if (!isSafeTicket(ticket)) throw new SnapshotError(`id de ticket hors forme : ${JSON.stringify(ticket)} (lettres, chiffres, _ et -, 64 au plus)`)
+  // Tout se lit depuis la racine : les chemins que rend git en partent (d'un sous-dossier, ils ne
+  // désigneraient rien, et le premier commit venu passerait pour celui du ticket).
+  const top = topLevel(cwd)
+  const ref = `refs/worktree/flow-board/${ticket}`
+  const snap = pinned(top, ref)
+  if (snap === null) throw new SnapshotError(`aucune référence d'instantané pour ${ticket} (${ref}) : rien à supprimer`)
+  const files = names(top, ['diff', '--no-renames', '--name-only', '-z', `${snap}^`, snap])
+  if (files.length === 0) throw new SnapshotError(`l'instantané ${snap} ne change aucun fichier : rien ne montre que son ticket est commité ; la référence reste`)
+  // Un correctif encore dans l'index ou l'arbre n'est pas commité : le commit égal à l'instantané ne suffit pas.
+  const pending = files.filter(f => hasPending(top, f))
+  if (pending.length > 0) throw new SnapshotError(`l'index ou l'arbre de travail portent encore un changement de ${pending.join(', ')} face à HEAD : un correctif du ticket pas encore commité (reposer son instantané sur la version à commiter, puis commiter), ou le travail d'un ticket suivant dans ces fichiers (relancer --clean après son commit, sans reposer l'instantané, qui l'y ferait entrer) ; la référence ${ref} (${snap}) reste`)
+  // Seule la première lignée de HEAD depuis le parent de l'instantané : un commit venu d'une fusion
+  // (une autre branche, où un fichier supprimé par le ticket n'a jamais existé) ne passe pas pour le sien.
+  if (spawnSync('git', ['merge-base', '--is-ancestor', `${snap}^`, 'HEAD'], { cwd: top, stdio: 'ignore' }).status !== 0) throw new SnapshotError(`le parent de l'instantané ${snap} n'est pas un ancêtre de HEAD (branche réécrite ou changée) : rien ne montre que le ticket y est commité ; la référence ${ref} reste`)
+  const commits = names(top, ['rev-list', '--first-parent', '-z', `${snap}^..HEAD`])
+  const found = commits.find(c => sameFiles(top, [c, snap], files))
+  if (found === undefined) {
+    const differ = names(top, ['diff', '--no-renames', '--name-only', '-z', 'HEAD', snap, '--', ...files])
+    throw new SnapshotError(`aucun commit de la branche depuis ${snap.slice(0, 12)}^ ne porte ensemble les fichiers de l'instantané à leur version figée (à HEAD, diffèrent : ${differ.join(', ') || 'aucun'}) ; si le ticket est commité avec un fichier changé après l'instantané (sa ligne Status:, un correctif), l'instantané n'a pas été reposé avant le commit : le dire au manager ; la référence ${ref} (${snap}) reste`)
+  }
+  // Supprimée seulement si elle désigne encore l'instantané vérifié : une référence déplacée entre-temps reste.
+  git(top, ['update-ref', '--no-deref', '-d', ref, snap])
+  // Relue après coup : seule une référence qui désigne encore l'instantané vérifié est un échec (une
+  // pose venue entre-temps en a posé une autre).
+  if (pinned(top, ref) === snap) throw new SnapshotError(`la référence ${ref} désigne toujours l'instantané ${snap} après sa suppression`)
+  return { ref, snap, commit: found, files }
 }
 
 const BACKSLASH = String.fromCharCode(92)
@@ -165,22 +274,40 @@ export const replaceStaged = (file, oldArg, newArg, cwd = process.cwd()) => {
   return { file, line, tree }
 }
 
+/** Le chemin de ce script, pour des commandes imprimées qui se lancent telles quelles. */
+const SELF = `'${fileURLToPath(import.meta.url).replace(/'/g, `'\\''`)}'`
+
+/** La ligne qui donne le dossier du relecteur, à recopier dans son fichier de consignes et son prompt. */
+const dirLine = dir => `Dossier du relecteur : ${dir} (propre à ce worktree, hors de l'arbre suivi : le seul où ses relecteurs écrivent).`
+
 const main = argv => {
   try {
+    if (argv[0] === '--clean') {
+      if (argv.length !== 2) throw new SnapshotError('--clean <id du ticket>')
+      const { ref, snap, commit, files } = clean(argv[1])
+      console.log(`Référence ${ref} supprimée (instantané ${snap}) : le commit ${commit} de la branche porte ${files.length > 1 ? `les ${files.length} fichiers` : 'le fichier'} de l'instantané à leur version figée.`)
+      return 0
+    }
+    if (argv[0] === '--dossier') {
+      if (argv.length !== 2) throw new SnapshotError('--dossier <id du ticket, ou groupe-<id>, securite-<id>>')
+      console.log(dirLine(reviewDir(argv[1])))
+      return 0
+    }
     if (argv[0] === '--remplace') {
       if (argv.length !== 4) throw new SnapshotError('--remplace <fichier> <ancien> <nouveau>')
       const { file, line, tree } = replaceStaged(argv[1], argv[2], argv[3])
       console.log(`${file} : remplacement indexé (ligne ${line}) ; arbre de travail : ${tree}.`)
-      console.log('Instantané de cet index : snapshot.mjs --staged <id du ticket> <fichiers du correctif>.')
+      console.log(`Instantané de cet index : node ${SELF} --staged <id du ticket> <fichiers du correctif>.`)
       return 0
     }
     const isStaged = argv[0] === '--staged'
     const [ticket, ...files] = isStaged ? argv.slice(1) : argv
-    const { commit, ref, files: kept, previous } = isStaged ? snapshotStaged(ticket, files) : snapshot(ticket, files)
+    const { commit, ref, files: kept, previous, dir } = isStaged ? snapshotStaged(ticket, files) : snapshot(ticket, files)
     console.log(`Instantané ${commit} posé sur ${ref} (${kept.length} fichier${kept.length > 1 ? 's' : ''} : ${kept.join(', ')}).`)
-    if (previous) console.log(`Passe après la passe « bogues » : plage ${previous}..${commit} (ce qui a changé depuis l'instantané précédent) ; un fichier se lit par git show ${ref}:<chemin>.`)
+    if (previous) console.log(`Instantané reposé : plage ${previous}..${commit} depuis le précédent, pour information ; la seule passe après la passe « bogues » relit <hash du premier instantané>..${commit}, une seule fois ; un fichier se lit par git show ${ref}:<chemin>.`)
     else console.log(`Plage des revues : ${ref}^..${ref} ; un fichier se lit par git show ${ref}:<chemin>.`)
-    console.log(`Après la revue et le vrai commit du ticket : git update-ref -d ${ref}`)
+    console.log(`Avant le vrai commit du ticket, si un de ses fichiers a changé depuis (sa ligne Status:, un correctif) : reposer l'instantané par la même commande ; après le commit : node ${SELF} --clean ${ticket}`)
+    console.log(dirLine(dir))
     return 0
   } catch (err) {
     const detail = err instanceof SnapshotError ? err.message : `git a échoué : ${String(err.stderr || err.message).trim()}`

@@ -1,6 +1,6 @@
 // Catalogue du plugin mattpocock-skills (écrit sur la 1.2.3 ; les 25 noms valent pour la 1.3.1-mathis.1,
 // copie figée dans plugins/mattpocock-skills, sans implement-spec ni wayfinder) : pour chaque skill, ses étapes,
-// sa couleur, le parcours qu'il ouvre et ses suites naturelles.
+// sa couleur, la mission qu'il ouvre et ses suites naturelles.
 //
 // Sources : les SKILL.md du plugin et la carte de routage d'ask-matt. Les libellés sont
 // pour l'interface (français) ; les `hint` sont lus par Claude (anglais, comme les skills).
@@ -26,7 +26,7 @@ export const C = {
   sky: '#56B4E9',
   /** Vert anis : la lecture de transcripts (B1), loin du bleu des hachures « attente d'une tâche de fond ». */
   anise: '#9BC53D',
-  /** Mauve : les pistes des sessions liées, plus loin du violet de l'orchestrateur que le lilas. */
+  /** Mauve : les pistes des workers, plus loin du violet du manager que le lilas. */
   mauve: '#C9A3F0',
   sand: '#C9A66B',
   /** Or : l'advisor, sa ligne et l'attente « consulte l'advisor », plus clair que l'ambre de « attend ta réponse ». */
@@ -42,7 +42,7 @@ export type StepDef = {
   /** Libellé affiché. */
   label: string
   /**
-   * Nom court de l'étape, pour la frise du terminal d'un parcours à une seule phase, dont les
+   * Nom court de l'étape, pour la frise du terminal d'une mission à une seule phase, dont les
    * stations sont les étapes ; `label` sinon.
    */
   shortLabel?: string
@@ -59,11 +59,11 @@ export type StepDef = {
 export type PhaseSpec = { skill: string; alts?: string[]; isOptional?: boolean }
 
 /**
- * `flow` : ouvre un parcours quand il ne prolonge pas l'actif.
- * `detour` : greffé sur la phase en cours quand il n'est pas dans le parcours.
+ * `flow` : ouvre une mission quand il ne prolonge pas l'active.
+ * `detour` : greffé sur la phase en cours quand il n'est pas dans la mission.
  * `event` : une simple ligne du journal.
- * `step` : une commande de livraison (plugin project) qui ne compte que dans un parcours en
- * cours (phase, étape ou ligne du journal) et n'en ouvre jamais un.
+ * `step` : une commande de livraison (plugin project) qui ne compte que dans une mission en
+ * cours (phase, étape ou ligne du journal) et n'en ouvre jamais une.
  */
 export type SkillRole = 'flow' | 'detour' | 'event' | 'step'
 
@@ -75,7 +75,7 @@ export type SkillDef = {
   shortLabel?: string
   /** Genre et nombre du libellé, pour accorder « terminée », « démarrés »… (masculin singulier par défaut). */
   gender?: 'f' | 'pl'
-  /** Nom du parcours quand ce skill l'ouvre. */
+  /** Nom de la mission quand ce skill l'ouvre. */
   flowLabel: string
   /** Ce que fait le skill, en une ligne. */
   verb: string
@@ -88,16 +88,16 @@ export type SkillDef = {
   /**
    * Ce que la phase suit comme éléments : hypothèses, candidats, décisions… Avec `linkedStep`, le
    * panneau permet de choisir des éléments et d'en demander le découpage en tickets ; cette étape est
-   * celle de l'ancien chemin, qu'ouvre le lancement d'une session liée déjà demandée pour eux.
+   * celle de l'ancien chemin, qu'ouvre le lancement d'un worker déjà demandé pour eux.
    */
   items?: { label: string; hint: string; linkedStep?: string }
   /** Étape d'une phase combinée : lancé seul, ce skill ouvre cette phase à cette étape. */
   partOf?: { skill: string; step: string }
   /** Sous-skills que ce skill appelle par l'outil Skill, et l'étape que chacun ouvre. */
   uses?: Record<string, string | null>
-  /** Les phases du parcours que ce skill ouvre (la première est lui-même). */
+  /** Les phases de la mission que ce skill ouvre (la première est lui-même). */
   flow?: PhaseSpec[]
-  /** Phases où ce skill de rôle `flow` se greffe en détour au lieu d'ouvrir son propre parcours. */
+  /** Phases où ce skill de rôle `flow` se greffe en détour au lieu d'ouvrir sa propre mission. */
   detourIn?: string[]
   /** Suites proposées quand la phase est finie. */
   next?: string[]
@@ -128,9 +128,12 @@ const step = (id: string, label: string, hint: string, shortLabel?: string): Ste
 /** Le hint d'une étape selon que le projet est un dépôt git ou non. */
 export const hintOf = (s: StepDef, isRepo: boolean): string => (isRepo ? s.hint : (s.noGitHint ?? s.hint))
 
-/** Ce qui justifie une revue de sécurité (lu par Claude). */
+/**
+ * Ce qui justifie une revue de sécurité (lu par Claude) : ce qui franchit la limite du compte de la personne,
+ * sa frontière de confiance (décision de Mathis du 02/11/2026, la méthode `reference/revue-securite.md` le dit).
+ */
 export const SECURITY_CRITERIA =
-  'authentication or permissions, secrets or tokens, a command or a path built from an input, data deletion, personal data or message content stored on disk; concurrency alone does not call for it'
+  "something that crosses the boundary of the user's account: secrets and tokens (masking included), dependencies and third-party code run, publishing, network or public export, file permissions and access (access includes authentication and an application's access rules, and network goes both ways); a file under ~/.claude written by another session of the account is not a hostile input, and neither a data deletion nor concurrency alone calls for it"
 
 /**
  * Pas de seconde passe de sécurité sur le diff des correctifs de la revue du groupe (lu par Claude) :
@@ -143,7 +146,7 @@ export const SECURITY_FIXES_PASS = securityFixesPass('group')
 
 /**
  * La confiance d'un dossier, lue sans rien afficher d'autre de `~/.claude.json`, qui peut porter des
- * jetons (une session avait écrit le geste fait sans le vérifier). La procédure d'une session liée
+ * jetons (une session avait écrit le geste fait sans le vérifier). La procédure d'un worker
  * de groupe recopie la même commande (procedure-groupe.test.mjs les compare) ; le texte de
  * lancement (`launchHow` de register.tsx) la cite.
  */
@@ -154,7 +157,7 @@ export const SENSITIVE_AREAS = "privacy, data deletion, encryption, concurrency,
 
 /**
  * Les cas du cycle de vie d'un champ persisté, à poser au cadrage d'un changement sensible (lu par
- * Claude) : un parcours avait posé ces questions, prévisibles, ticket par ticket pendant
+ * Claude) : une mission avait posé ces questions, prévisibles, ticket par ticket pendant
  * l'implémentation (lecture ratée, bornes, marque perdue à une annulation). Les skills /to-spec et
  * /to-tickets recopient la même liste (consignes-coherentes.test.mjs les compare).
  */
@@ -207,7 +210,7 @@ export const INSTRUCTIONS_IN_PROMPT = `its instructions in a file whose path goe
  * Les choix déjà déclarés, que les revues ne doivent pas resignaler (lu par Claude) : un fichier
  * tenu par flow-board, cité par son chemin, plutôt qu'une liste recopiée dans chaque consigne.
  */
-export const DECIDED_HINT = 'the path of the file of the choices already declared in this run (under "Declared choices" below), not to be undone out of preference, but with any case where one produces a defect reported with its scenario, and the reviewer brief given there'
+export const DECIDED_HINT = 'the path of the file of the choices already declared in this mission (under "Declared choices" below), not to be undone out of preference, but with any case where one produces a defect reported with its scenario, and the reviewer brief given there'
 
 /**
  * Ce que tout relecteur reçoit tel quel (lu par Claude) : un relecteur avait rendu son rapport
@@ -225,7 +228,15 @@ export const REVIEWER_BRIEF =
  * annoncé par « consignes : » après la cible, est lu d'abord et ne devient pas la cible.
  */
 export const reviewInstructions = (isRepo: boolean): string =>
-  `write each review's instructions in a file of your temporary folder: its scope, the path of the declared choices file, the points left to the user, what it must not do, and the reviewer brief; pass its path after the target, ${isRepo ? '/code-review <level> <base>..HEAD consignes : <path> (the target is always a range <base>..HEAD or a branch, never a commit hash alone; before a ticket\'s commit, the scope also names the uncommitted changes; when other runs commit on the same branch, git log <base>..HEAD shows commits that are not this run\'s: the scope is then limited to this run\'s paths, given in the file as a pathspec, git diff <base>..HEAD -- <paths>)' : '/code-review <level> consignes : <path> (the file lists the copies and files to compare)'}, and to a reviewer subagent in its prompt (${REVIEW_RULE})`
+  `write each review's instructions in a file of your temporary folder: its scope, the path of the declared choices file, the points left to the user, what it must not do, and the reviewer brief; pass its path after the target, ${isRepo ? '/code-review <level> <base>..HEAD consignes : <path> (the target is always a range <base>..HEAD or a branch, never a commit hash alone; before a ticket\'s commit, the scope also names the uncommitted changes; when other missions commit on the same branch, git log <base>..HEAD shows commits that are not this mission\'s: the scope is then limited to this mission\'s paths, given in the file as a pathspec, git diff <base>..HEAD -- <paths>)' : '/code-review <level> consignes : <path> (the file lists the copies and files to compare)'}, and to a reviewer subagent in its prompt (${REVIEW_RULE})`
+
+/**
+ * La ligne « sécurité » de la revue d'un groupe ou d'un lot (lu par Claude) : la revue de sécurité ne cherche plus une
+ * valeur relue qui entre dans une commande ou un chemin (le compte est sa frontière de confiance), la revue du groupe la
+ * signale ; `reference/consignes-revue.md` en porte la même ligne pour les workers.
+ */
+export const GROUP_REVIEW_SECURITY_LINE =
+  "security line of this review: a value read back (a file, another session, a report, a command's output) that reaches a shell command or a path is reported as a bug, Important, except where a check of the project already controls it (in the flow-board repository: check.sh, for its hooks); the security review no longer looks for it, since the user's account is its trust boundary"
 
 /** Une revue de groupe en zone sensible n'applique rien seule : son relecteur trie les constats. */
 export const SENSITIVE_NO_FIX = `when a ticket of the group touches a sensitive area (${SENSITIVE_AREAS}) or did not say, without --fix: the session applies itself only the findings it keeps`
@@ -250,7 +261,7 @@ export const TICK_CRITERIA =
  * `CODING_STANDARDS.md`. Ses Mineurs se rendent en un compte : leur détail ne servait pas. En medium
  * hors zone sensible (Mathis, 01/11/2026) : ces axes ne cherchent pas les bogues, et la revue du
  * groupe, en high, rattrape ce qui naît entre deux tickets ; high coûte environ 1,5 fois medium.
- * Un ticket sensible n'a que l'axe Spec, en high (Mathis, 01/11/2026) : sur 1 041 sous-agents relus,
+ * Un ticket sensible n'a que l'axe Spec, en high (Mathis, 01/11/2026) : sur 1 041 spécialistes relus,
  * l'axe Standards y refaisait la passe « bogues » (77 % de doublons), l'axe Spec gardait ses constats.
  */
 export const TICKET_REVIEWER =
@@ -275,22 +286,22 @@ export const REVIEWER_NAMES =
  * avis de sécurité reste dû.
  */
 export const NO_LOGIC_GROUP =
-  'A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing; a common rule, a reference file or a skill always has logic) has neither a group review nor a security review: its ticket reviews are its only reviews, the dashboard shows it reviewed and its security settled, and no security advice is sent for it; a single ticket with logic, in a sensitive area, or that did not say, makes the group review and the security advice due. A group of a single ticket (attached ones included) has no group review either, whatever its flags: the dashboard shows it reviewed by its ticket review and nothing sends its group review; when that ticket has logic, a sensitive area or did not say, its security advice is still due: its linked session (or you, for a group done in this discussion) judges it at the end of its ticket, against the list of the security method, and sends it in "security"'
+  'A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing; a common rule, a reference file or a skill always has logic) has neither a group review nor a security review: its ticket reviews are its only reviews, the dashboard shows it reviewed and its security settled, and no security advice is sent for it; a single ticket with logic, in a sensitive area, or that did not say, makes the group review and the security advice due. A group of a single ticket (attached ones included) has no group review either, whatever its flags: the dashboard shows it reviewed by its ticket review and nothing sends its group review; when that ticket has logic, a sensitive area or did not say, its security advice is still due: its worker (or you, for a group done in this discussion) judges it at the end of its ticket, against the list of the security method, and sends it in "security"'
 
 /**
  * L'instantané d'un ticket sensible avant sa passe « bogues » (Mathis, L2 a de la rétro de l'onglet
  * Agents) : la revue relisait un arbre qui bougeait, et la session attendait sans rien faire. Une
- * référence locale à part, propre au worktree (`refs/worktree/`, jamais partagée entre parcours),
+ * référence locale à part, propre au worktree (`refs/worktree/`, jamais partagée entre missions),
  * sans toucher à la branche ; des commandes simples, sans `$(…)`, que le garde-fou d'un worktree
  * accepte (essayé le 27/10/2026). Le ticket suivant n'avance pas dans un autre dossier : le garde-fou
  * y refuse git, et un HEAD détaché perdait ses commits au retrait du dossier (passe « bogues » du lot).
  */
 export const TICKET_SNAPSHOT =
-  'Before the bug pass of a sensitive ticket (its review runs before its commit), pin what both reviews read on a ref of this worktree, without touching the branch, each command alone and the printed hash copied into the next one: git add <the ticket\'s files, by path>, then git diff --cached --name-only must list the ticket\'s files and nothing else (unstage anything else first), git write-tree (prints <tree>), git commit-tree <tree> -p HEAD -m "flow-board snapshot <ticket id>" (prints <snapshot>), git update-ref refs/worktree/flow-board/<ticket id> <snapshot>. Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id> (the bug pass takes it as its target; the instructions file of the two axes gives that diff command) and files at that ref (git show refs/worktree/flow-board/<ticket id>:<path>), never the working tree. While they run, move on with work that touches none of the ticket\'s files (a next ticket that shares no file, the report, the delivery); a next ticket that touches the same files waits. The ticket\'s real commit still comes after its review: git add each of its files again (its fixes included), commit, then git update-ref -d refs/worktree/flow-board/<ticket id>'
+  'Before the bug pass of a sensitive ticket (its review runs before its commit), pin what both reviews read on a ref of this worktree, without touching the branch, each command alone and the printed hash copied into the next one: git add <the ticket\'s files, by path>, then git diff --cached --name-only must list the ticket\'s files and nothing else (unstage anything else first), git write-tree (prints <tree>), git commit-tree <tree> -p HEAD -m "flow-board snapshot <ticket id>" (prints <snapshot>), git update-ref refs/worktree/flow-board/<ticket id> <snapshot>. Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id> (the bug pass takes it as its target; the instructions file of the two axes gives that diff command) and files at that ref (git show refs/worktree/flow-board/<ticket id>:<path>), never the working tree. While they run, move on with work that touches none of the ticket\'s files (a next ticket that shares no file, the report, the delivery); a next ticket that touches the same files waits. The ticket\'s real commit still comes after its review: git add each of its files again (its fixes included), commit, then node <the installed flow-board plugin folder, the one that holds its scripts/ folder>/scripts/snapshot.mjs --clean <ticket id>, which deletes that ticket\'s ref only, and only once a commit of the branch carries every file of the snapshot at its pinned version (if a file of the ticket changed after the last snapshot, its Status: line or a fix, pin it again with all the ticket\'s files before the commit; without Node, git update-ref -d refs/worktree/flow-board/<ticket id> <snapshot> once that is checked by hand)'
 
 /** La consigne de la revue d'un ticket, pour un point fixe donné ; sans git, la passe « bogues » n'a pas de plage. */
 const ticketReviewHint = (fixedPoint: string, isRepo: boolean): string =>
-  `/mattpocock-skills:code-review on this ticket's changes only (Skill tool; ${fixedPoint}): ${TICKET_REVIEWER}; for a ticket with a « Lecteur » line, the content and form review too ("Content and form review" below). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), or the ticket did not say, launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the bug pass effort criterion of the security review method file decides (its section 1: the stakes, the size; high when in doubt), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. After the bug pass, a single further pass at high effort reads everything changed since its snapshot, its fixes and any code added after it (${isRepo ? "note the hash the bug pass's snapshot printed, pin a new snapshot once the fixes are in and both reviews of the ticket are back (the same command, which moves the ref and prints that range), and give that pass the range <first snapshot hash>..<new snapshot hash>" : "copy the ticket's files once more when its bug pass is launched; that pass reads the difference between that copy and the current files"}), skipped when nothing changed since the snapshot; what it finds without breaking the invariant goes to the report under « Pistes »; if that pass still finds a breach of the invariant, fix it, write the scenario as a test and ask the user, without another pass. Whatever the review, a defect class found a second time is searched everywhere: quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
+  `/mattpocock-skills:code-review on this ticket's changes only (not loaded through the Skill tool: its skill launches its own axes, which the single reviewer then contradicted; the reviewer follows the reviewer template, which gives it that skill's SKILL.md for its code smells list only; ${fixedPoint}): ${TICKET_REVIEWER}; for a ticket with a « Lecteur » line, the content and form review too ("Content and form review" below). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), or the ticket did not say, launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the bug pass effort criterion of the security review method file decides (its section 1: the stakes, the size; high when in doubt), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. After the bug pass, a single further pass at high effort reads everything changed since its snapshot, its fixes and any code added after it (${isRepo ? "note the hash the bug pass's snapshot printed, pin a new snapshot once the fixes are in and both reviews of the ticket are back (the same command, which moves the ref and prints its new hash), and give that pass the range <first snapshot hash>..<new snapshot hash>" : "copy the ticket's files once more when its bug pass is launched; that pass reads the difference between that copy and the current files"}), skipped when nothing changed since the snapshot; what it finds without breaking the invariant goes to the report under « Pistes »; if that pass still finds a breach of the invariant, fix it, write the scenario as a test and ask the user, without another pass. Whatever the review, a defect class found a second time is searched everywhere: quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
 
 /** Le point fixe d'une revue de ticket. */
 export const TICKET_FIXED_POINT = 'fixed point: the commit before the ticket'
@@ -339,9 +350,9 @@ const TICKET_STEPS = [
 ]
 
 /**
- * Les sections de `reference/procedure-groupe.md` que suit la discussion du parcours qui fait elle-même
- * un lot sans groupes (un seul texte pour la procédure), avec leur titre : la 6 (compte rendu) est remplacée par celui du
- * parcours, la 10 (session autonome) par le bloc du mode auto. procedure-groupe.test.mjs compare ces
+ * Les sections de `reference/procedure-groupe.md` que suit la discussion de la mission qui fait elle-même
+ * un lot sans groupes (un seul texte pour la procédure), avec leur titre : la 6 (compte rendu) est remplacée par celui de la
+ * mission, la 10 (worker autonome) par le bloc du mode auto. procedure-groupe.test.mjs compare ces
  * titres à ceux du fichier.
  */
 export const LOT_SECTIONS: readonly (readonly [number, string])[] = [
@@ -356,11 +367,11 @@ export const LOT_SECTIONS: readonly (readonly [number, string])[] = [
 ]
 
 /**
- * Ce que la procédure dit et qui n'a de sens que pour une session liée : cinq exceptions, et
+ * Ce que la procédure dit et qui n'a de sens que pour un worker : cinq exceptions, et
  * rien d'autre. Ni « ; » ni « . » à l'intérieur d'une exception : la consigne les sépare par « ; ».
  */
 export const LOT_EXCEPTIONS: readonly string[] = [
-  'the relay and SendMessage (nothing is deposited in a relay, no message goes to a main discussion)',
+  'the relay and SendMessage (nothing is deposited in a relay, no message goes to a manager)',
   'the ban on button questions (the usual rules apply here, validations by a button question included)',
   '« do not launch <implement> » (section 2, point 10): it is the skill you are following',
   'section 10, replaced by the auto mode block of these instructions when the auto mode is on',
@@ -382,14 +393,14 @@ export const LOT_STEP_HINTS: Readonly<Record<string, string>> = {
 /**
  * Qui fait la revue d'un groupe (lu par Claude) : la session elle-même, par l'outil Skill.
  * `/code-review` tourne en exécution dérivée de celui qui la lance, à l'effort de son niveau : le
- * sous-agent qui l'enveloppait refaisait une analyse, 38 à 46 % du coût d'une passe (rétro de l'onglet Agents).
+ * spécialiste qui l'enveloppait refaisait une analyse, 38 à 46 % du coût d'une passe (rétro de l'onglet Agents).
  */
 export const GROUP_REVIEWER =
   `this session itself, through the Skill tool, the path of its instructions file after the target: /code-review runs as a fork of whoever launches it, at the effort of its level, so no reviewer subagent wraps it (only a session that does not run on Opus hands it to a reviewer subagent with model opus, which launches it itself; ${REVIEW_RULE})`
 
 /** La consigne de la revue d'un groupe ; le point fixe ne se précise que sans git. */
 const groupReviewHint = (fixedPoint: string): string =>
-  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a linked session, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review); ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
+  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a worker, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review); ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
 
 /** Ce qui suit, par groupe, une fois ses tickets commités : revue du groupe, revue de sécurité, rendu. */
 const GROUP_STEPS = [
@@ -425,7 +436,7 @@ const SENSITIVE_STEP = step(
  * avant, d'où la phrase qui dit quoi valider et où le lire.
  */
 const BUTTON_QUESTION =
-  'a button question (AskUserQuestion): one sentence on what is validated and where to read it, then « Valider (Recommandé) » and « À reprendre » (none in a linked session: there the validation goes up to the main discussion)'
+  'a button question (AskUserQuestion): one sentence on what is validated and where to read it, then « Valider (Recommandé) » and « À reprendre » (none in a worker: there the validation goes up to the manager)'
 
 const GRILL_STEPS = [
   step('tree', 'Arbre des décisions', 'map the design tree of decisions', 'Arbre'),
@@ -441,8 +452,8 @@ const IMPL_OPT = phase('implement', true)
 /** Le compte rendu à valider avant toute livraison : jamais facultatif. */
 const REPORT = phase('compte-rendu')
 /**
- * Le compte rendu d'un parcours dont l'Implémentation est facultative : facultatif tant qu'on n'a
- * pas codé (le parcours peut s'arrêter au triage ou à l'examen de l'architecture), obligatoire dès que l'Implémentation
+ * Le compte rendu d'une mission dont l'Implémentation est facultative : facultatif tant qu'on n'a
+ * pas codé (la mission peut s'arrêter au triage ou à l'examen de l'architecture), obligatoire dès que l'Implémentation
  * démarre (moveTo, dans model.ts).
  */
 const REPORT_IF_CODE = phase('compte-rendu', true)
@@ -662,7 +673,7 @@ export const SKILLS: Record<string, SkillDef> = {
     items: { label: 'Hypothèses', hint: 'the hypotheses (doing = being tested, done = confirmed, dropped = refuted)' },
     flow: [phase('diagnosing-bugs'), phase('code-review', true), REPORT, phase('project:version', true), phase('project:pr', true)],
     // Un bug trouvé en codant ou en relisant reste dans le lot qui l'a fait apparaître ; ailleurs
-    // (cadrage, spec…), il ouvre sa « Chasse au bug ». Le bouton « 🐞 Bug · session liée » suit cette liste.
+    // (cadrage, spec…), il ouvre sa « Chasse au bug ». Le bouton « 🐞 Bug · worker » suit cette liste.
     detourIn: ['implement', 'tdd', 'code-review', 'compte-rendu'],
     next: ['code-review', 'compte-rendu', 'improve-codebase-architecture'],
   },
@@ -748,7 +759,7 @@ export const SKILLS: Record<string, SkillDef> = {
     shortLabel: 'Revue',
     gender: 'f',
     flowLabel: 'Revue du groupe',
-    verb: 'Le groupe relu par /code-review high --fix de Claude Code (sans --fix pour un groupe sensible), une fois ses tickets commités et relus, lancé par la session elle-même, sans sous-agent qui l’enveloppe : les bugs entre ses tickets, y compris avec les groupes déjà livrés ; un conflit entre la spec et une consigne n’est pas tranché, il remonte',
+    verb: 'Le groupe relu par /code-review high --fix de Claude Code (sans --fix pour un groupe sensible), une fois ses tickets commités et relus, lancé par la session elle-même, sans spécialiste qui l’enveloppe : les bugs entre ses tickets, y compris avec les groupes déjà livrés ; un conflit entre la spec et une consigne n’est pas tranché, il remonte',
     glyph: '◆',
     color: C.coral,
     // Pas une phase : un événement de l'Implémentation, qui marque les groupes finis comme relus.
@@ -770,8 +781,8 @@ export const SKILLS: Record<string, SkillDef> = {
     verb: 'Une branche ou une PR relue par /code-review de Claude Code : les bugs du diff, corrigés avec --fix ou commentés sur la PR avec --comment',
     glyph: '◆',
     color: C.coral,
-    // `/code-review` de Claude Code lancé sans parcours actif ici ouvre ce parcours (applySkill) ;
-    // pendant un parcours, la même commande reste la revue du groupe (`final-review`).
+    // `/code-review` de Claude Code lancé sans mission active ici ouvre cette mission (applySkill) ;
+    // pendant une mission, la même commande reste la revue du groupe (`final-review`).
     role: 'flow',
     isUserOnly: true,
     command: 'code-review',
@@ -785,11 +796,11 @@ export const SKILLS: Record<string, SkillDef> = {
     shortLabel: 'Sécurité',
     gender: 'f',
     flowLabel: 'Revue de sécurité',
-    verb: 'Après la revue du groupe, quand Claude la juge utile : un sous-agent relecteur qu’il lance lui-même, limité au diff du groupe, selon une méthode fixe ; chaque faille te revient avec un correctif prêt, tu décides de sa correction (« corrige F1 et F3 »)',
+    verb: 'Après la revue du groupe, quand Claude la juge utile : un spécialiste relecteur qu’il lance lui-même, limité au diff du groupe, selon une méthode fixe ; chaque faille te revient avec un correctif prêt, tu décides de sa correction (« corrige F1 et F3 »)',
     glyph: '⛨',
     color: C.red,
     // Comme la revue du groupe, un événement de l'Implémentation ; elle ne bloque jamais la livraison.
-    // Plus de commande : Claude lance un sous-agent (/security-review relit tout depuis la branche par
+    // Plus de commande : Claude lance un spécialiste (/security-review relit tout depuis la branche par
     // défaut). L'id reconnaît encore un /security-review tapé à la main.
     role: 'event',
     isUserOnly: false,
@@ -803,13 +814,13 @@ export const SKILLS: Record<string, SkillDef> = {
     verb: 'Le rapport du travail, à lire et valider avant de livrer : fait, décidé sans toi, mal passé, bloqué, trouvé, documentation',
     glyph: '◧',
     color: C.pink,
-    // Une étape du parcours, jamais un point de départ : sans parcours, le skill rédige seulement.
+    // Une étape de la mission, jamais un point de départ : sans mission, le skill rédige seulement.
     role: 'step',
     isUserOnly: true,
     command: 'flow-board:compte-rendu',
     steps: [
-      step('facts', 'Rassembler les faits', 'collect the facts: git log since the run started, git status, the tracking file, the tracker'),
-      step('write', 'Rédiger le rapport', 'write the report in the fixed sections, short and plain'),
+      step('facts', 'Rassembler les faits', 'collect the facts: git log since the mission started, git status, the tracking file, the tracker'),
+      step('write', 'Rédiger le rapport', 'write the report in the fixed sections, short and plain, then give it whole to the flow tool ({"report": "<the whole report>"}): it is kept for the COO, which shows it and lets the user validate that version'),
       step('validate', 'Ta validation', 'in one line of text, tell the user to click « ✓ Valider le rapport » in the dashboard, never with a button question; then wait for the user to validate the report from the dashboard: flow-board then sends you a message saying so'),
     ],
     next: ['project:version'],
@@ -888,12 +899,12 @@ export const SKILLS: Record<string, SkillDef> = {
       step('find', 'Pistes (7 axes)', 'look for improvements in the seven categories', 'Pistes'),
       step('present', 'Par sévérité', 'present them by severity, those that touch another repository apart, as a correction list ready to hand to an agent of that repository; then wait: the user picks the improvements of this repository in the dashboard and clicks the splitting button, which puts the splitting request in the prompt; if the user names them in the chat instead, ask them to tick them and click that button: its request carries the splitting rules', 'Tri'),
       step('split', 'Découpage', `follow the splitting request the dashboard put in the prompt: settle the decisions with the user (${SENSITIVE_LIFECYCLE}), write the tickets and the groups (${RULE_LOGIC}; ${MERGE_QUESTION}; ${ENGINE_API_CHECK}), ${INVARIANT_REREAD}, ${BREAKDOWN_ADVISOR}, have the user validate them, then send everything in one call`, 'Découpage'),
-      // L'ancien chemin : une session liée lancée pour les pistes, avant la demande de découpage.
+      // L'ancien chemin : un worker lancé pour les pistes, avant la demande de découpage.
       {
         ...step(
           'apply',
           'Modifications en cours',
-          'set by the dashboard once the linked session you launch for the improvements the user sent has started; the workflow stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then close the session when the answer lists it under « Close now » and send "closed", then complete unless some went back to todo',
+          'set by the dashboard once the worker you launch for the improvements the user sent has started; the mission stays here: never resume it there. At its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: back to the user\'s choice; dropped only when the user gives it up), then close the session when the answer lists it under « Close now » and send "closed", then complete unless some went back to todo',
           'Appliquer',
         ),
         isLegacy: true,
@@ -905,7 +916,7 @@ export const SKILLS: Record<string, SkillDef> = {
     hasTickets: true,
     flow: [phase('retro'), IMPL_OPT, REPORT_IF_CODE, phase('project:version', true), phase('project:pr', true)],
     // L'Implémentation se propose par la phase suivante, sans `next` : une rétro restée à sa seule phase
-    // (sa session de pistes ouverte) se finissait, et son parcours avec, sur un /implement.
+    // (sa session de pistes ouverte) se finissait, et sa mission avec, sur un /implement.
   },
 
   // ─── Santé du code et conception ────────────────────────────────────────
@@ -1150,7 +1161,7 @@ export const commandLineOf = (skill: string): string => {
   return args ? `${slashOf(skill)} ${args}` : slashOf(skill)
 }
 
-/** Les points d'entrée du lanceur, quand aucun parcours n'est en cours. */
+/** Les points d'entrée du lanceur, quand aucune mission n'est en cours. */
 export const LAUNCHERS: { skill: string; title: string; hint: string }[] = [
   // Dans l'ordre du flux : cadrer, spécifier, découper, implémenter ; puis les autres points d'entrée.
   { skill: 'grill-with-docs', title: 'Cadrer une fonctionnalité', hint: 'interview, glossaire et ADR' },
@@ -1167,7 +1178,7 @@ export const LAUNCHERS: { skill: string; title: string; hint: string }[] = [
 export const COMMAND_GROUPS: { title: string; skills: string[] }[] = [
   { title: 'Cadrer et planifier', skills: ['grill-me', 'to-questionnaire', 'ask-matt', 'setup-matt-pocock-skills'] },
   { title: 'Construire', skills: ['tdd', 'prototype', 'research', 'wizard'] },
-  // La revue de sécurité n'a plus de commande : Claude la lance lui-même (sous-agent relecteur).
+  // La revue de sécurité n'a plus de commande : Claude la lance lui-même (spécialiste relecteur).
   { title: 'Qualité', skills: ['code-review', 'compte-rendu', 'retro'] },
   { title: 'Livrer (plugin project)', skills: ['project:sync', 'project:version', 'project:push', 'project:pr'] },
   { title: 'Conception', skills: ['codebase-design', 'domain-modeling', 'writing-for-agents'] },
@@ -1180,12 +1191,12 @@ export const COMMAND_GROUPS: { title: string; skills: string[] }[] = [
  * (sujet, consignes) avant Entrée.
  */
 export type AnytimeTool =
-  /** `label` et `glyph` remplacent ceux du skill ; `withState` préremplit la question avec l'état du parcours. */
+  /** `label` et `glyph` remplacent ceux du skill ; `withState` préremplit la question avec l'état de la mission. */
   | { key: string; skill: string; asks: boolean; label?: string; glyph?: string; withState?: boolean }
   | { key: string; command: string; label: string; glyph: string; asks: boolean }
 
 /**
- * La barre du bas de la page Parcours, dans l'ordre d'usage : comprendre (le dernier message,
+ * La barre du bas de la page Mission, dans l'ordre d'usage : comprendre (le dernier message,
  * des faits, une décision qu'un tiers tranche), s'orienter (la suite, une décision mise à
  * l'épreuve, un terme précisé), puis gérer le contexte (l'alléger, passer la main).
  * Aucun de ces outils ne clôt la phase : les skills sont des détours ou des événements.
@@ -1221,15 +1232,16 @@ export const ANYTIME_GROUPS: { title: string; tools: AnytimeTool[] }[] = [
 
 /** Les commandes du tableau de bord lui-même. */
 export const FLOW_COMMANDS: { args: string; hint: string }[] = [
-  { args: '', hint: 'ouvre le panneau sur le parcours en cours' },
+  { args: '', hint: 'ouvre le panneau sur la mission en cours' },
   { args: 'activity', hint: 'chiffres, livrables et journal' },
-  { args: 'history', hint: 'tous les parcours du projet' },
+  { args: 'history', hint: 'toutes les missions du projet' },
   { args: 'commands', hint: 'cet onglet' },
   { args: 'hide', hint: 'cache le bandeau au-dessus du prompt (show le rend)' },
-  { args: 'pause', hint: 'met de côté le parcours en cours, sans le clore : « Reprendre » le rouvre tel quel' },
-  { args: 'done', hint: 'clôt le parcours en cours, gardé dans l’historique' },
-  { args: 'reset', hint: 'archive le parcours en cours' },
-  { args: 'rename <titre>', hint: 'renomme le parcours en cours' },
+  { args: 'pause', hint: 'met de côté la mission en cours, sans la clore : « Reprendre » la rouvre telle quelle' },
+  { args: 'done', hint: 'clôt la mission en cours, gardée dans l’historique' },
+  { args: 'reset', hint: 'archive la mission en cours' },
+  { args: 'rename <titre>', hint: 'renomme la mission en cours' },
+  { args: 'archive on|off', hint: 'donne (ou retire) d’avance ton accord pour archiver les sessions de l’app que la fermeture a vérifiées' },
 ]
 
 /** Les skills dont la phase modifie le code : /project:sync est demandé avant la première modification. */

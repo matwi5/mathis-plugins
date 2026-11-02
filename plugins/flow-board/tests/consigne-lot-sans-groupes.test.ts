@@ -1,10 +1,11 @@
-// La consigne d'/implement d'un lot sans groupes : la discussion du parcours fait le lot elle-même et
-// suit la procédure d'une session liée de groupe (reference/procedure-groupe.md), citée par son chemin,
+// La consigne d'/implement d'un lot sans groupes : la discussion de la mission fait le lot elle-même et
+// suit la procédure d'un worker de groupe (reference/procedure-groupe.md), citée par son chemin,
 // avec une correspondance de lecture et cinq exceptions, au lieu d'un texte à part. Avec des groupes,
 // la consigne reste celle d'avant. procedure-groupe.test.mjs vérifie, dans les sources, que les
 // sections citées existent et que les exceptions sont les cinq.
 
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 const TOOL = 'mcp__flow-board__flow'
 
@@ -34,9 +35,10 @@ const GROUPS = [
   { id: 'B', name: 'Autre', tickets: ['b1'] },
 ]
 
-/** Un parcours découpé, avec ou sans groupes, puis la consigne d'/implement. */
+/** Une mission découpé, avec ou sans groupes, puis la consigne d'/implement. */
 const implement = async ($: any, on: any, withGroups: boolean): Promise<string> => {
   mock.clock(on, { now: 96_000_000 })
+  memoryDisk(on)
   world(on)
   await $.session.start({ cwd: '', surface: null, isInteractive: true })
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -46,18 +48,18 @@ const implement = async ($: any, on: any, withGroups: boolean): Promise<string> 
 }
 
 /** Les textes réservés aux groupes, absents d'un lot sans groupes. */
-const GROUP_ONLY = ['for each group', '↗ Session liée', '"group": "<id>"', 'do not launch it yourself']
+const GROUP_ONLY = ['for each group', '↗ Worker', '"group": "<id>"', 'do not launch it yourself']
 
 test('sans groupes, la consigne d’/implement cite la procédure par son chemin, ses sections, la correspondance et les cinq exceptions', async ($, on) => {
   const text = await implement($, on, false)
   expect(text).toMatch(/\S+\/reference\/procedure-groupe\.md/)
   expect(text).toContain('sections 1 (« Avant le premier ticket »), 2 (« Chaque ticket, un par un et dans l\'ordre »), 3 (« Règles de travail »), 4 (« Revue du groupe »), 5 (« Revue de sécurité »), 7 (« La consigne des relecteurs »), 8 (« Le fichier des choix déjà déclarés ») and 9 (« Sans git »)')
   // La correspondance de lecture, la base du lot comprise.
-  expect(text).toContain('« la discussion principale » is you')
+  expect(text).toContain('« le manager » is you')
   expect(text).toContain('what the procedure sends to it (SendMessage, the relay) you tell the user directly')
   expect(text).toContain('questions go as text in your message')
-  expect(text).toContain('« au retour du groupe » reads « at the run\'s report »')
-  expect(text).toContain('the pause of the run seen by a linked session (section 3) does not concern you')
+  expect(text).toContain('« au retour du groupe » reads « at the mission\'s report »')
+  expect(text).toContain('the pause of the mission seen by a worker (section 3) does not concern you')
   expect(text).toContain('a visual to validate is shown and asked directly')
   expect(text).toContain('« le groupe » reads « the lot »; its <base> is the commit before the lot\'s first ticket')
   // Les cinq exceptions, et rien d'autre.
@@ -69,7 +71,7 @@ test('sans groupes, la consigne d’/implement cite la procédure par son chemin
   expect(exceptions![1]).toContain('« do not launch <implement> » (section 2, point 10)')
   expect(exceptions![1]).toContain('section 10, replaced by the auto mode block of these instructions')
   expect(exceptions![1]).toContain('a worktree of its own')
-  // Le compte rendu de la section 6 : celui du parcours.
+  // Le compte rendu de la section 6 : celui de la mission.
   expect(text).toContain('Section 6 (« Compte rendu ») is replaced by /flow-board:compte-rendu')
   // Les commandes de ce poste, que la procédure attend du prompt.
   expect(text).toContain('<tdd>: /mattpocock-skills:tdd')
@@ -107,12 +109,12 @@ test('sans groupes, les étapes de ticket gardent leurs ids et renvoient aux poi
 
 test('avec des groupes, la consigne d’/implement garde ses textes de groupe et ne cite pas la procédure', async ($, on) => {
   const withGroups = await implement($, on, true)
-  for (const old of ['for each group', '↗ Session liée', 'do not launch it yourself']) expect(withGroups).toContain(old)
+  for (const old of ['for each group', '↗ Worker', 'do not launch it yourself']) expect(withGroups).toContain(old)
   expect(withGroups).not.toContain('procedure-groupe.md')
   expect(withGroups).toContain('git write-tree')
 })
 
-test('le même parcours, sans puis avec des groupes : seules changent les lignes des groupes et celles du lot', async ($, on) => {
+test('la même mission, sans puis avec des groupes : seules changent les lignes des groupes et celles du lot', async ($, on) => {
   const without = (await implement($, on, false)).split('\n')
   await $.tool.call({ tool: TOOL, groups: GROUPS } as any)
   const withGroups = String((await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text).split('\n')

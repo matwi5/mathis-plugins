@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { canonicalModel, estimateUnknown, priceOf } from '../hooks/pricing.ts'
-import { OUTSIDE, activeMs, costed, endTurn, endWait, median, netSpans, noteTasks, openRequest, recordCall, relaunchOwner, requestFile, startWait, waitMsOf } from '../hooks/requests.ts'
+import { OUTSIDE, activeMs, attachAgent, costed, endLane, endTurn, endWait, extraMs, median, netSpans, noteTasks, openRequest, parallelPieces, recordCall, relaunchOwner, requestFile, startLane, startTurn, startWait, waitMsOf, withOpenLanes } from '../hooks/requests.ts'
 import type { Tracker } from '../types'
 
 const usage = (input: number, output: number, cacheWrite: number, cacheRead: number) => ({ input_tokens: input, output_tokens: output, cache_creation_input_tokens: cacheWrite, cache_read_input_tokens: cacheRead })
@@ -64,7 +64,7 @@ describe('requêtes', () => {
   })
 
   test('les attentes de l’utilisateur sortent des morceaux actifs, sauf les appels pendant ce temps', async () => {
-    // [0, 100], une question de 20 à 60, un sous-agent appelé de 30 à 35 : 20 + 5 + 40.
+    // [0, 100], une question de 20 à 60, un spécialiste appelé de 30 à 35 : 20 + 5 + 40.
     expect(netSpans({ sentAt: 0, waits: [[20, 60]], busy: [[30, 35]] }, 100)).toEqual([[0, 20], [30, 35], [60, 100]])
     // Une attente restée ouverte va jusqu'à la fin donnée, jamais au-delà ; un appel hors de la requête ne compte pas.
     expect(netSpans({ sentAt: 0, waits: [[80, null]], busy: [[150, 160]] }, 100)).toEqual([[0, 80]])
@@ -75,7 +75,7 @@ describe('requêtes', () => {
   test('une attente se pose sur sa requête, et les appels faits pendant elle restent actifs', async () => {
     let t = openRequest(empty, { session: 's1', project: null, at: T0, now: T0 })
     t = startWait(t, 1, T0 + 10_000)
-    // Un appel de sous-agent de T0+12 s à T0+16 s, pendant la question.
+    // Un appel de spécialiste de T0+12 s à T0+16 s, pendant la question.
     t = recordCall(t, 1, { ...call('claude-opus-5-5'), span: [T0 + 12_000, T0 + 16_000] })
     // Un appel d'avant la question ne devient pas « pendant ».
     t = recordCall(t, 1, { ...call('claude-opus-5-5'), span: [T0, T0 + 4000] })
@@ -124,5 +124,51 @@ describe('requêtes', () => {
     expect(relaunchOwner(t, { kind: 'task', id: 'constructor' })).toBe(1)
     expect(relaunchOwner(t, { kind: 'task', id: '__proto__' })).toBe(1)
     expect(t.log!.requests[0]!.tasks).toBe(3)
+  })
+})
+
+describe('temps cumulé : les fils en même temps', () => {
+  const T0 = Date.UTC(2026, 9, 26, 14, 0, 0)
+  const empty: Tracker = { log: null, current: null, turns: {} }
+
+  test('les moments à plusieurs fils, coupés aux morceaux actifs, sans les attentes du fil principal', async () => {
+    // Fil principal [0, 100], spécialistes [20, 60] et [40, 80] : 2 fils de 20 à 40, 3 de 40 à 60, 2 de 60 à 80.
+    const r = { turnSpans: [[0, 100]] as [number, number][], agentSpans: [[20, 60], [40, 80]] as [number, number][] }
+    expect(parallelPieces([r], [[0, 100]])).toEqual([[20, 40, 1], [40, 60, 2], [60, 80, 1]])
+    expect(extraMs(parallelPieces([r], [[0, 100]]))).toBe(20 + 40 + 20)
+    // Coupé aux morceaux actifs : rien hors de [0, 50].
+    expect(extraMs(parallelPieces([r], [[0, 50]]))).toBe(20 + 20)
+    // Le fil principal attend une réponse de 30 à 70 : il ne compte pas pendant ce temps.
+    expect(parallelPieces([{ ...r, waits: [[30, 70]] }], [[0, 100]])).toEqual([[20, 30, 1], [40, 60, 1], [70, 80, 1]])
+    // Un seul fil à la fois (le fil principal attend son spécialiste) : rien de gagné.
+    expect(parallelPieces([{ turnSpans: [[0, 10], [50, 60]], agentSpans: [[10, 50]] }], [[0, 60]])).toEqual([])
+    // Deux requêtes de la même discussion se croisent aussi.
+    expect(extraMs(parallelPieces([{ agentSpans: [[0, 30]] }, { turnSpans: [[10, 20]] }], [[0, 30]]))).toBe(10)
+    expect(parallelPieces([], [[0, 10]])).toEqual([])
+  })
+
+  test('les tours du fil principal et des spécialistes de fond vont à leur requête', async () => {
+    let t = openRequest(empty, { session: 's1', project: null, at: T0, now: T0 })
+    t = startTurn(t, 'm1', 1)
+    t = startLane(t, 'm1', T0, { request: 1 })
+    // Un spécialiste de fond, un qui bloque son parent, un agent interne (sans agent.spawn).
+    t = attachAgent(t, 'bg', { isSpawn: true, isParallel: true })
+    t = startLane(t, 'a1', T0 + 1000, { agent: 'bg' })
+    t = attachAgent(t, 'fg', { isSpawn: true })
+    t = startLane(t, 'a2', T0 + 2000, { agent: 'fg' })
+    t = startLane(attachAgent(t, 'inner', { isSpawn: false }), 'a3', T0 + 3000, { agent: 'inner' })
+    // Encore en cours : la vue et l'écriture les comptent jusqu'à maintenant, sans rien fermer.
+    const open = withOpenLanes(t, T0 + 5000)!.requests[0]!
+    expect(open.turnSpans).toEqual([[T0, T0 + 5000]])
+    expect(open.agentSpans).toEqual([[T0 + 1000, T0 + 5000]])
+    expect(t.log!.requests[0]!.turnSpans).toBeUndefined()
+    for (const id of ['a1', 'a2', 'a3', 'm1']) t = endLane(t, id, T0 + 10_000)
+    const r = t.log!.requests[0]!
+    expect(r.turnSpans).toEqual([[T0, T0 + 10_000]])
+    expect(r.agentSpans).toEqual([[T0 + 1000, T0 + 10_000]])
+    expect(Object.keys(t.lanes!)).toEqual([])
+    // Une fin sans début connu, ou un tour hors requête : rien.
+    expect(endLane(t, 'inconnu', T0)).toBe(t)
+    expect(startLane(t, 'm2', T0, { request: OUTSIDE })).toBe(t)
   })
 })

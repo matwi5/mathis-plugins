@@ -81,7 +81,7 @@ import {
   type Totals,
 } from './model.ts'
 import { EMPTY_DURATIONS, averageOf, combine, costPerActiveHour, measuresOf, periodOf, speedMedian, weightedSpeed, type Measures, type PeriodMeasures } from './durations.ts'
-import { activeMs, costed, isEstimated, mainModel, median, realMsOf, requestCost, requestTokens, spansOf, waitMsOf } from './requests.ts'
+import { activeMs, costed, extraMs, isEstimated, mainModel, median, parallelPieces, realMsOf, requestCost, requestTokens, spansOf, waitMsOf, withOpenLanes } from './requests.ts'
 import { DEFAULT, columnsCells, heatCells, heatLegendCells, pack, type RasterCells } from './raster.ts'
 import { barSvg, blockSvg, columnsSvg, donutSvg, flameSvg, heatGaugeSvg, heatmapSvg, heroSvg, ringSvg, sparkSvg, spinnerSvg, stackSvg, type BarPart, type HeatCell } from './svg.ts'
 
@@ -416,9 +416,16 @@ const isTracked = (ctx: Ctx, date: string): boolean => ctx.m.since !== null && d
 const durationText = (ms: number | null | undefined): string => (ms === null || ms === undefined ? '—' : fmtSeconds(ms))
 
 /**
- * Le temps cumulé d'un jour (la somme des temps actifs de ses discussions), ou d'un de ses projets ;
- * null quand il n'est pas mesuré : jour d'avant le suivi, filtre de modèle, ou un poste qui ne le
- * publie pas encore (d'avant la 0.11.0).
+ * Ce que dit le temps gagné : le facteur de parallélisme (temps cumulé ÷ temps actif), « ×1,4 en
+ * parallèle », ou « rien en parallèle » sous une seconde gagnée.
+ */
+const gainText = (active: number, cumul: number): string =>
+  active > 0 && cumul - active >= 1000 ? `×${(cumul / active).toFixed(1).replace('.', ',')} en parallèle` : 'rien en parallèle'
+
+/**
+ * Le temps cumulé d'un jour (le travail de ses discussions et de leurs spécialistes de fond), ou d'un
+ * de ses projets ; null quand il n'est pas mesuré : jour d'avant le suivi, filtre de modèle, ou un
+ * poste qui ne le publie pas encore (d'avant la 0.11.0).
  */
 function cumulOf(ctx: Ctx, day: string, project?: string): number | null {
   if (!isTracked(ctx, day) || !ctx.m.hasActive) return null
@@ -711,7 +718,7 @@ const heatGauge = (k: Kit, perHour: number, cells: number): unknown => {
 /**
  * Les chiffres de la discussion ouverte, une source chacun : le coût du moteur (comme /cost) ;
  * les tokens de ccusage (détail au dernier ↻, sinon la session du relevé), plus les tours finis
- * depuis, et ceux des sous-agents de workflow qu'elle a lancés.
+ * depuis, et ceux des spécialistes de workflow qu'elle a lancés.
  */
 export function figuresOf(view: View): { cost: number | null; tokens: number | null; own: SessionRow | null; children: SessionRow[] } {
   const d = view.discussion
@@ -748,7 +755,8 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
   const cacheShare = totals.input + totals.cacheWrite + totals.cacheRead > 0 ? totals.cacheRead / (totals.input + totals.cacheWrite + totals.cacheRead) : null
   const turns = live?.turns ?? 0
   // Les requêtes de cette discussion, suivies par le mod, au tarif de chaque modèle.
-  const log = view.requests.log
+  // Les tours encore en cours vont jusqu'à maintenant (temps cumulé).
+  const log = withOpenLanes(view.requests, view.now)
   const tracked = log && (!d.id || log.session === d.id) ? costed(log, live?.cost ?? null) : null
   const requestCard = requestsCard(k, view, ctx, act, tracked, when)
 
@@ -831,7 +839,7 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
     startedAt ? { key: 'd-duration', label: 'Ouverte depuis', value: fmtDuration(elapsed), sub: 'pauses comprises', color: C.slate } : null,
     ...requestTiles(view, tracked),
     entries.length ? { key: 'd-calls', label: 'Appels API', value: fmtInt(entries.length), sub: turns ? `${fmtInt(Math.round(entries.length / turns))} par tour` : 'sur la discussion', color: C.indigo } : null,
-    fig.children.length ? { key: 'd-agents', label: 'Sous-agents', value: fmtInt(fig.children.length), sub: `${fmtCost(fig.children.reduce((n, x) => n + x.cost, 0))} · workflows`, color: C.pink } : null,
+    fig.children.length ? { key: 'd-agents', label: 'Spécialistes', value: fmtInt(fig.children.length), sub: `${fmtCost(fig.children.reduce((n, x) => n + x.cost, 0))} · workflows`, color: C.pink } : null,
   ] as (Tile | null)[]).filter((x): x is Tile => x !== null)
 
   if (d.detail && entries.length === 0) {
@@ -972,7 +980,7 @@ const discussionTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
         )),
       ])}
       {fig.children.length > 0 &&
-        card(k, 'disc-agents', 'Sous-agents de workflow', C.pink, null, [
+        card(k, 'disc-agents', 'Spécialistes de workflow', C.pink, null, [
           ...fig.children.slice(0, 8).map((x, i) => (
             <Box key={`da-${x.id}`} flexDirection="row" marginTop={i === 0 ? 1 : 0}>
               <Box flexGrow={1} flexShrink={1}>
@@ -1002,19 +1010,23 @@ const REQUEST_SORTS: [RequestSort, string][] = [
 const requestCostText = (r: RequestRecord): string => `${isEstimated(r) ? '≈' : ''}${fmtCost(requestCost(r))}`
 
 /**
- * Les tuiles de durée de la discussion : temps actif, attente de l'utilisateur, temps API, coût par
- * heure active. Pas de temps cumulé : pour une seule discussion, il vaut son temps actif.
+ * Les tuiles de durée de la discussion : temps actif, temps cumulé (ses spécialistes de fond en même
+ * temps comptés chacun), temps gagné, attente de l'utilisateur, temps API, coût par heure active.
  */
 function requestTiles(view: View, tracked: RequestLog | null): Tile[] {
   const list = tracked?.requests ?? []
   if (!list.length) return []
-  const active = activeMs(list.flatMap((r) => spansOf(r, view.now)))
+  const spans = list.flatMap((r) => spansOf(r, view.now))
+  const active = activeMs(spans)
+  const gained = extraMs(parallelPieces(list, spans))
   const waited = list.reduce((n, r) => n + waitMsOf(r, view.now), 0)
   const asked = list.reduce((n, r) => n + (r.waits?.length ?? 0), 0)
   const api = list.reduce((n, r) => n + r.apiMs, 0)
   const cost = list.reduce((n, r) => n + requestCost(r), 0)
   return [
     { key: 'd-active', label: 'Temps actif', value: fmtSeconds(active), sub: `${plural(list.length, 'requête')}, pauses exclues`, color: C.lilac },
+    { key: 'd-cumul', label: 'Temps cumulé', value: fmtSeconds(active + gained), sub: 'fil principal et spécialistes', color: C.lilac },
+    { key: 'd-gain', label: 'Temps gagné', value: fmtSeconds(gained), sub: gainText(active, active + gained), color: C.green },
     { key: 'd-wait', label: 'Attente de ta réponse', value: fmtSeconds(waited), sub: asked ? `${plural(asked, 'question')} ou plans, hors temps actif` : 'questions et plans, hors temps actif', color: C.lilac },
     { key: 'd-api', label: 'Temps API', value: fmtSeconds(api), sub: active > 0 ? `${fmtPct(api / active)} du temps actif` : 'appels au modèle', color: C.indigo },
     { key: 'd-rate', label: 'Coût / h active', value: hourlyCostText(costPerActiveHour(cost, active)), sub: 'au tarif de chaque modèle', color: MONEY },
@@ -1056,7 +1068,7 @@ const requestsCard = (k: Kit, view: View, ctx: Ctx, act: Actions, tracked: Reque
         `réelle${NB}${fmtSeconds(realMsOf(r, view.now))}`,
         r.waits?.length ? `attente${NB}${fmtSeconds(waitMsOf(r, view.now))}` : null,
         `API${NB}${fmtSeconds(r.apiMs)}`,
-        r.agents ? plural(r.agents, 'sous-agent') : null,
+        r.agents ? plural(r.agents, 'spécialiste') : null,
         model ? modelName(model) : null,
       ]
         .filter(Boolean)
@@ -1205,14 +1217,15 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
   const dayDiscussions = ctx.m.sessions.get(day)?.size ?? 0
   const tiles: Tile[] = ([
     { key: 'day-active', label: 'Temps actif', value: durationText(dayActive), sub: dayActive !== null ? plural(ctx.m.requests.get(day) ?? 0, 'requête') : ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
-    { key: 'day-cumul', label: 'Temps cumulé', value: durationText(dayCumul), sub: dayCumul !== null ? `somme de ${plural(dayDiscussions, 'discussion')}` : dayActive !== null ? 'un poste ne le publie pas encore' : ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
+    { key: 'day-cumul', label: 'Temps cumulé', value: durationText(dayCumul), sub: dayCumul !== null ? `${plural(dayDiscussions, 'discussion')} et leurs spécialistes` : dayActive !== null ? 'un poste ne le publie pas encore' : ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
+    dayCumul !== null && dayActive !== null ? { key: 'day-gain', label: 'Temps gagné', value: durationText(Math.max(0, dayCumul - dayActive)), sub: gainText(dayActive, dayCumul), color: C.green } : null,
     { key: 'day-api', label: 'Temps API', value: durationText(dayApi), sub: dayApi !== null && dayActive ? `${fmtPct(dayApi / dayActive)} du temps actif` : 'appels au modèle', color: C.indigo },
     { key: 'day-tokens', label: 'Tokens', value: fmtTokens(t.tokens), sub: `entrée ${fmtTokens(t.input)} · sortie ${fmtTokens(t.output)}`, color: BRAND },
     { key: 'day-cache', label: 'Lu en cache', value: fmtPct(cacheRatio(t)), sub: `lu ${fmtTokens(t.cacheRead)} · écrit ${fmtTokens(t.cacheWrite)}`, color: C.teal },
     { key: 'day-previous', label: 'La veille', value: fmtCost(cmp.previous), sub: fmtDay(addDays(day, -1)), color: C.slate },
     cmp.average !== null ? { key: 'day-average', label: 'Moyenne sur 30 j', value: fmtCost(cmp.average), sub: `par jour actif · écart ${fmtDelta((t.cost - cmp.average) / cmp.average)}`, color: C.lilac } : null,
     cmp.rank !== null && cmp.activeDays > 1 ? { key: 'day-rank', label: 'Rang sur 30 j', value: cmp.rank === 1 ? 'record' : `n°${NB}${cmp.rank}`, sub: `sur ${plural(cmp.activeDays, 'jour actif', 'jours actifs')}`, color: cmp.rank === 1 ? C.coral : MONEY } : null,
-    !lacksSessions(ctx) ? { key: 'day-discussions', label: 'Discussions', value: fmtInt(discussions.length), sub: agents ? `avec ${plural(agents, 'sous-agent')}` : 'actives ce jour-là', color: C.violet } : null,
+    !lacksSessions(ctx) ? { key: 'day-discussions', label: 'Discussions', value: fmtInt(discussions.length), sub: agents ? `avec ${plural(agents, 'spécialiste')}` : 'actives ce jour-là', color: C.violet } : null,
     lead ? { key: 'day-model', label: 'Modèle principal', value: modelName(lead.model), sub: `${fmtPct(lead.share)} du coût`, color: ctx.colors[lead.model] ?? BRAND } : null,
     acts ? { key: 'day-messages', label: 'Messages (ce poste)', value: fmtInt(acts.messages), sub: `${fmtInt(acts.tools)} appels d’outils`, color: C.indigo } : null,
   ] as (Tile | null)[]).filter((x): x is Tile => x !== null)
@@ -1288,7 +1301,7 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
                     T(k, nameOf(ctx, groupOf(d.project, s.projects)), { bold: true }),
                     d.id === view.discussion.id ? T(k, `${NB}${NB}celle-ci`, { color: C.violet }) : '',
                     isMulti ? T(k, `${NB}·${NB}${d.machine}`, { dim: true }) : '',
-                    d.agents ? T(k, `${NB}·${NB}+${plural(d.agents, 'sous-agent')}`, { dim: true }) : '',
+                    d.agents ? T(k, `${NB}·${NB}+${plural(d.agents, 'spécialiste')}`, { dim: true }) : '',
                     T(k, `${NB}·${NB}actif${NB}${durationText(dayActive !== null ? (ctx.m.sessions.get(day)?.get(d.id) ?? (d.machine === s.machine ? 0 : null)) : null)}`, { color: C.lilac }),
                   ],
                   { wrap: 'truncate-end' },
@@ -1305,7 +1318,7 @@ const dayTab = (k: Kit, view: View, ctx: Ctx, act: Actions): unknown => {
             </Box>
           )),
           rest.length > 0 && say(k, `… ${plural(rest.length, 'autre discussion', 'autres discussions')} : ${fmtCost(rest.reduce((n, d) => n + d.cost, 0))}.`),
-          say(k, 'Coût de chaque discussion : son total, sous-agents et jours précédents compris (ccusage ne le découpe pas par jour). D’où un total qui peut dépasser celui du jour.'),
+          say(k, 'Coût de chaque discussion : son total, spécialistes et jours précédents compris (ccusage ne le découpe pas par jour). D’où un total qui peut dépasser celui du jour.'),
         ])
       : null
 
@@ -1455,10 +1468,14 @@ const overviewTab = (k: Kit, ctx: Ctx, act: Actions): unknown => {
   const cumulDays = [...ctx.m.cumul].filter(([d, v]) => d >= ctx.from && d <= ctx.today && isTracked(ctx, d) && v > 0)
   const cumulGaps = [...ctx.m.cumulGaps].filter((d) => d >= ctx.from && d <= ctx.today && isTracked(ctx, d)).length
   const cumulTotal = cumulDays.reduce((n, [, v]) => n + v, 0)
+  // Le temps gagné : sur les jours qui ont un temps cumulé, ce qu'il dépasse du temps actif.
+  const gainTotal = cumulDays.reduce((n, [d, v]) => n + Math.max(0, v - (ctx.m.active.get(d) ?? 0)), 0)
+  const gainBase = cumulDays.reduce((n, [d]) => n + (ctx.m.active.get(d) ?? 0), 0)
   const cumulSub = !ctx.m.hasActive ? 'pas par modèle' : cumulGaps ? `${plural(cumulGaps, 'jour')} sans mesure (poste pas à jour)` : cumulDays.length ? `moyenne ${fmtSeconds(cumulTotal / cumulDays.length)} par jour actif` : trackedText(ctx, ' ')
   const tiles: Tile[] = [
     { key: 'active', label: 'Temps actif', value: durationText(isMeasured ? activeTotal : null), sub: ctx.m.hasActive ? trackedText(ctx, ' ') : 'pas par modèle', color: C.lilac },
     { key: 'cumul', label: 'Temps cumulé', value: durationText(isMeasured && (cumulDays.length || !cumulGaps) ? cumulTotal : null), sub: cumulSub, color: C.lilac },
+    isMeasured && cumulDays.length ? { key: 'gain', label: 'Temps gagné', value: durationText(gainTotal), sub: gainText(gainBase, cumulTotal), color: C.green } : null,
     { key: 'active-average', label: 'Moyenne par jour actif', value: durationText(activeAverage), sub: isMeasured ? `sur ${plural(activeDays.length, 'jour suivi', 'jours suivis')}` : 'jours suivis seulement', color: C.lilac },
     { key: 'active-record', label: 'Jour record (temps)', value: activeRecord ? fmtDay(activeRecord[0]) : '—', sub: activeRecord ? fmtSeconds(activeRecord[1]) : 'jours suivis seulement', color: C.lilac },
     { key: 'tokens', label: 'Tokens', value: fmtTokens(t.tokens), sub: `entrée ${fmtTokens(t.input)} · sortie ${fmtTokens(t.output)}`, color: BRAND },
@@ -1640,7 +1657,7 @@ const durationKindToggle = (k: Kit, ctx: Ctx, act: Actions): unknown =>
 /** Ce que dit chaque durée des graphiques, sous leur bascule. */
 const DURATION_HELP = {
   active: 'Temps actif : le temps où au moins une discussion travaillait, chevauchements comptés une fois.',
-  cumul: 'Temps cumulé : la somme des temps actifs de chaque discussion ; deux discussions en même temps comptent deux fois.',
+  cumul: 'Temps cumulé : la somme du travail de chaque discussion et de ses spécialistes de fond ; deux fils en même temps comptent deux fois.',
 } as const
 
 /** L'Évolution en durée : le temps actif (ou cumulé) par jour, semaine ou mois ; moyennes sur les seuls jours suivis. */

@@ -1,12 +1,11 @@
 # agents
 
-Les trois sous-agents que le `CLAUDE.md` global fait utiliser à Claude. Un agent fourni par un plugin porte le nom du plugin en préfixe : on les appelle `agents:explorer`, `agents:researcher` et `agents:worker` (paramètre `subagent_type` de l'outil `Agent`, ou `@agent-agents:explorer` dans le prompt).
+Les deux spécialistes que le `CLAUDE.md` global fait utiliser à Claude. Un agent fourni par un plugin porte le nom du plugin en préfixe : on les appelle `agents:explorer` et `agents:researcher` (paramètre `subagent_type` de l'outil `Agent`, ou `@agent-agents:explorer` dans le prompt).
 
 | Agent | Rôle | Modèle | Effort | Outils |
 |---|---|---|---|---|
 | `agents:explorer` | Cartographier le code ou les fichiers d'un projet, en lecture seule, et en rendre une synthèse courte | Haiku | high | Read, Grep, Glob, Bash |
 | `agents:researcher` | Chercher la documentation (web, docs officielles, fichiers de référence) et répondre avec les sources | Sonnet | high | Read, Grep, Glob, WebFetch, WebSearch |
-| `agents:worker` | Exécuter une modification délimitée puis la vérifier par les tests ou contrôles du projet | Opus | medium | tous (hérités) |
 
 `agents:explorer` n'appelle pas l'advisor : un explorateur Haiku l'avait appelé alors que `tools:` ne le listait pas, et l'avis du modèle Fable avait coûté 15 fois son propre travail. Son en-tête le retire (`disallowedTools: advisor`, sans effet documenté sur un outil serveur, à confirmer) et sa consigne le lui interdit.
 

@@ -1,19 +1,20 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { branchCleanupText, readClosing, reopenText } from '../hooks/closing.ts'
 import { emptyBoard, mergeBoards, newRun } from '../hooks/model.ts'
 import { markCleanupSent } from '../hooks/link.ts'
 import type { Board, Closing, Run } from '../types'
 
-// La validation du compte rendu supprime les branches des sessions liées fermées du parcours
+// La validation du compte rendu supprime les branches des workers fermés de la mission
 // (série 18). Invariant : une validation du compte rendu ne supprime jamais une branche qui n'est
 // pas entièrement contenue dans la branche de travail, ni une branche qui n'est pas celle notée pour
-// un groupe fermé (`closing.state = closed`) du parcours ; elle n'emploie jamais `git branch -D` ni
+// un groupe fermé (`closing.state = closed`) de la mission ; elle n'emploie jamais `git branch -D` ni
 // `--force`, et une branche refusée par git reste, et elle est dite.
 
 const closed = (branch?: unknown): Closing => ({ state: 'closed', at: 5_000, ...(branch !== undefined ? { branch: branch as string } : {}) })
 
-/** Un parcours aux groupes rendus par leur session liée, chacun avec sa fermeture. */
+/** Une mission aux groupes rendus par leur worker, chacun avec sa fermeture. */
 const runWith = (closings: Record<string, Closing | undefined>): Run => {
   const run = newRun('implement', 1_000, 'Boutique')
   run.groups = Object.entries(closings).map(([id, closing]) => ({ id, name: `Nom ${id}`, tickets: [], delegated: { at: 2_000, ...(closing ? { closing } : {}) } }))
@@ -79,23 +80,23 @@ test('les envois précédents d’un groupe et la session des pistes d’une ré
   expect(text).toMatch(/pistes de la phase [^:]+, envoi 2 : fermeture arrêtée, branche gardée/)
 })
 
-test('sans git, ou sans session liée, rien ; sans branche à supprimer, le seul bilan des gardées, sans commande (série 23)', () => {
+test('sans git, ou sans worker, rien ; sans branche à supprimer, le seul bilan des gardées, sans commande (série 23)', () => {
   expect(branchCleanupText({ run: runWith({ A: closed('worktree-groupe-boutique-A') }), isRepo: false, root: ROOT })).toBeNull()
   expect(branchCleanupText({ run: newRun('implement', 1_000, 'Boutique'), isRepo: true, root: ROOT })).toBeNull()
   const text = branchCleanupText({ run: runWith({ B: { state: 'stopped', at: 1, branch: 'worktree-groupe-boutique-B' }, D: closed() }), isRepo: true, root: ROOT })!
-  expect(text).toBe('Aucune branche de session liée à supprimer pour ce parcours. Gardées, sans aucune commande : groupe B : fermeture arrêtée, branche gardée ; groupe D : fermé, branche inconnue, gardée. Redis-les-moi en une liste, avant la suite.')
-  // Un dossier du parcours hors forme (apostrophe, relatif, inconnu) : rien ne se supprime, et le bilan le dit.
+  expect(text).toBe('Aucune branche de worker à supprimer pour cette mission. Gardées, sans aucune commande : groupe B : fermeture arrêtée, branche gardée ; groupe D : fermé, branche inconnue, gardée. Redis-les-moi en une liste, avant la suite.')
+  // Un dossier de la mission hors forme (apostrophe, relatif, inconnu) : rien ne se supprime, et le bilan le dit.
   // « » encadrent les commandes de la consigne ; un « \\ » hors d'un chemin Windows est un caractère du nom, pas un séparateur.
   for (const root of ["/Users/m/l'autre", 'proj', '', undefined, '/Users/m/../x', '/Users/m/Projets « perso »', '/Users/m/a\\b', '/Users/m/<branche de travail>', '/Users/m/x ≪y≫']) {
     const kept = branchCleanupText({ run: runWith({ A: closed('worktree-groupe-boutique-A') }), isRepo: true, root })!
-    expect(kept).toContain('groupe A : fermé, dossier du parcours hors forme, branche gardée')
+    expect(kept).toContain('groupe A : fermé, dossier de la mission hors forme, branche gardée')
     expect(kept).not.toContain('branch -d')
   }
   // Un chemin Windows garde ses « \\ », écrits « / » pour git.
   expect(branchCleanupText({ run: runWith({ A: closed('worktree-groupe-boutique-A') }), isRepo: true, root: 'C:\\proj' })).toContain("git -C 'C:/proj' branch -d 'worktree-groupe-boutique-A'")
 })
 
-test('dans l’ordre, toutes par git -C sur le dossier du parcours : branche de travail, worktrees lus une fois, puis pour chaque branche trois commandes une à une sur refs/heads', () => {
+test('dans l’ordre, toutes par git -C sur le dossier de la mission : branche de travail, worktrees lus une fois, puis pour chaque branche trois commandes une à une sur refs/heads', () => {
   const text = branchCleanupText({ run: runWith({ A: closed('worktree-groupe-boutique-A'), B: closed('worktree-groupe-boutique-B') }), isRepo: true, root: ROOT })!
   const git = `git -C '${ROOT}'`
   let from = 0
@@ -114,7 +115,7 @@ test('dans l’ordre, toutes par git -C sur le dossier du parcours : branche de 
   expect(text).not.toContain('&&')
   expect(text).not.toMatch(/' ; git /)
   expect(text).toContain('chacune seulement si la précédente a rendu 0')
-  // Chaque commande git passe par le dossier du parcours.
+  // Chaque commande git passe par le dossier de la mission.
   expect(text.match(/git (?!-C)/g)).toEqual(['git ', 'git '])
 })
 
@@ -134,7 +135,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 const ROOT = '/Users/m/proj'
 const UUID = '178bd61c-0416-4d88-8317-cc583d9f0d47'
@@ -209,6 +210,7 @@ const atReport = async ($: any, clock: any) => {
 
 test('dans un dépôt git, « ✓ Valider le rapport » envoie la consigne de suppression ; « ↺ Rouvrir » disparaît ensuite', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const w = world(on, true)
   await atReport($, clock)
   // Avant la validation : le bouton est là, sur chaque surface.
@@ -222,7 +224,7 @@ test('dans un dépôt git, « ✓ Valider le rapport » envoie la consigne de su
   await ui.unmount()
   expect(w.submitted).toHaveLength(1)
   const text = w.submitted[0]!
-  // Avec une consigne, le titre du parcours (texte libre) n'entre pas dans le message.
+  // Avec une consigne, le titre de la mission (texte libre) n'entre pas dans le message.
   expect(text).toMatch(/^J'ai validé le compte rendu depuis le tableau de bord \(✓ Valider le rapport\)\. Ne me le redemande pas\. Le compte rendu validé, supprime /)
   expect(text).not.toContain('Boutique »')
   expect(text).toMatch(/Puis dis-moi la suite en une ligne, d'après la réponse de l'outil flow\.$/)
@@ -257,6 +259,7 @@ test('dans un dépôt git, « ✓ Valider le rapport » envoie la consigne de su
 
 test('un message refusé (`{ drop }`) ne marque rien : « ↺ Rouvrir » reste, aucune consigne n’étant arrivée', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const w = world(on, true, 'refused')
   await atReport($, clock)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
@@ -274,6 +277,7 @@ test('un message refusé (`{ drop }`) ne marque rien : « ↺ Rouvrir » reste, 
 
 test('un message entré qui porte `drop: undefined` compte comme entré : « ↺ Rouvrir » disparaît', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const w = world(on, true, 'entered-drop-undefined')
   await atReport($, clock)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
@@ -291,12 +295,13 @@ test('un message entré qui porte `drop: undefined` compte comme entré : « ↺
 
 test('sans git, « ✓ Valider le rapport » n’envoie que la validation', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const w = world(on, false)
   await atReport($, clock)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'report-ok' })
   await ui.unmount()
-  expect(w.submitted).toEqual(["J'ai validé le compte rendu du parcours « Boutique » depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas ; dis-moi la suite en une ligne, d'après la réponse de l'outil flow."])
+  expect(w.submitted).toEqual(["J'ai validé le compte rendu de la mission « Boutique » depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas ; dis-moi la suite en une ligne, d'après la réponse de l'outil flow."])
 })
 
 test('« ↺ Rouvrir » n’a plus de commande pour une fermeture marquée par la consigne de suppression (série 24), pour un groupe comme pour les pistes', () => {
@@ -309,7 +314,7 @@ test('« ↺ Rouvrir » n’a plus de commande pour une fermeture marquée par l
   run.phases.push({ ...run.phases[0]!, skill: 'compte-rendu', status: 'done', finishedAt: 6_000 })
   expect(reopenText({ run, target: group, closing: ofGroup, root: ROOT })).not.toBeNull()
   expect(reopenText({ run, target: items, closing: ofItems, root: ROOT })).not.toBeNull()
-  // Marquée : le bouton part, même après un retour en arrière de phase ou un renommage du parcours.
+  // Marquée : le bouton part, même après un retour en arrière de phase ou un renommage de la mission.
   expect(reopenText({ run, target: group, closing: { ...ofGroup, cleanupAt: 6_000 }, root: ROOT })).toBeNull()
   expect(reopenText({ run, target: items, closing: { ...ofItems, cleanupAt: 6_000 }, root: ROOT })).toBeNull()
   run.phases.at(-1)!.status = 'active'
@@ -326,7 +331,7 @@ test('seule une branche au nom que flow-board donne à la session de la cible se
     const text = branchCleanupText({ run, isRepo: true, root: ROOT })
     if (deleted) expect(text).toContain(`branch -d '${branch}'`)
     // Seule la branche de A est notée : gardée, le bilan la dit, sans commande.
-    else expect(text).toMatch(/^Aucune branche de session liée à supprimer pour ce parcours\. .*nom de branche inattendu/)
+    else expect(text).toMatch(/^Aucune branche de worker à supprimer pour cette mission\. .*nom de branche inattendu/)
   }
   for (const ok of ['worktree-groupe-boutique-A', 'groupe-boutique-A', 'claude/groupe-boutique-A-x7k2', 'groupe-A']) expectFate(ok, undefined, true)
   for (const ok of ['worktree-groupe-boutique-A-2', 'claude/groupe-boutique-A-2-ab']) expectFate(ok, 2, true)
@@ -338,7 +343,7 @@ test('seule une branche au nom que flow-board donne à la session de la cible se
   // Dite gardée à côté d'une branche supprimée.
   const run = runWith({ A: closed('worktree-groupe-boutique-A'), B: closed('main') })
   expect(branchCleanupText({ run, isRepo: true, root: ROOT })).toMatch(/groupe B : fermé, nom de branche inattendu \(pas celui de cette session\), gardée/)
-  // Les pistes : le libellé, le nom court du parcours, un numéro d'envoi.
+  // Les pistes : le libellé, le nom court de la mission, un numéro d'envoi.
   const retro = newRun('retro', 1_000, 'Boutique')
   const phase = retro.phases.find(p => p.skill === 'retro')!
   // La session suivie (envoi 3) : exactement le worktree de son envoi.
@@ -346,15 +351,15 @@ test('seule une branche au nom que flow-board donne à la session de la cible se
     phase.linked = { at: 2_000, items: [], session: 'local_P2', seq: 3, closing: closed(branch) }
     const text = branchCleanupText({ run: retro, isRepo: true, root: ROOT })
     if (ok) expect(text).toContain(`branch -d '${branch}'`)
-    else expect(text).toMatch(/^Aucune branche de session liée à supprimer pour ce parcours\. .*nom de branche inattendu/)
+    else expect(text).toMatch(/^Aucune branche de worker à supprimer pour cette mission\. .*nom de branche inattendu/)
   }
-  // La session gardée à côté du lien, sans numéro noté : tout numéro de ce parcours, ou le libellé seul.
+  // La session gardée à côté du lien, sans numéro noté : tout numéro de cette mission, ou le libellé seul.
   phase.linked = undefined
   for (const [branch, ok] of [['worktree-pistes-boutique-1', true], ['pistes', true], ['claude/pistes-boutique-2-z', true], ['claude/pistes-autre-1-z', false], ['worktree-pistes-1', false]] as const) {
     phase.linkedEarlier = { at: 1_000, closing: closed(branch) }
     const text = branchCleanupText({ run: retro, isRepo: true, root: ROOT })
     if (ok) expect(text).toContain(`branch -d '${branch}'`)
-    else expect(text).toMatch(/^Aucune branche de session liée à supprimer pour ce parcours\. .*nom de branche inattendu/)
+    else expect(text).toMatch(/^Aucune branche de worker à supprimer pour cette mission\. .*nom de branche inattendu/)
   }
 })
 
@@ -402,7 +407,7 @@ test('la marque se pose, après l’envoi, sur chaque fermeture dont la branche 
   expect(closingOf(out.board, 'C').cleanupAt).toBeUndefined()
   // Une marque déjà posée reste ; rien à marquer : rien ne change.
   expect(markCleanupSent(out.board, runId, ['worktree-groupe-boutique-A'], 12_000)).toBeNull()
-  // Une branche qui ne serait plus visée (le parcours renommé depuis) ne se marque pas.
+  // Une branche qui ne serait plus visée (la mission renommée depuis) ne se marque pas.
   const renamed = boardOf({ A: closed('worktree-groupe-boutique-A') })
   renamed.runs[0]!.title = 'Autre nom'
   expect(markCleanupSent(renamed, renamed.runs[0]!.id, ['worktree-groupe-boutique-A'], 9_000)).toBeNull()
@@ -424,7 +429,7 @@ test('la marque se pose, après l’envoi, sur chaque fermeture dont la branche 
   expect(closingOf(mergeBoards(theirs, mine), 'A').cleanupAt).toBe(9_000)
   // Même chose pour la session des pistes gardée à côté du lien, présente dans les deux copies.
   const earlierOfRetro = (b: Board) => b.runs[0]!.phases.at(-1)!.linkedEarlier!
-  // Deux copies d'un même parcours : le même id.
+  // Deux copies d'une même mission : le même id.
   const retroBase = boardOf({})
   const withEarlier = (cleanupAt?: number, updatedAt = 10_000): Board => {
     const b: Board = JSON.parse(JSON.stringify(retroBase))
@@ -436,7 +441,7 @@ test('la marque se pose, après l’envoi, sur chaque fermeture dont la branche 
   }
   expect(earlierOfRetro(mergeBoards(withEarlier(undefined, 20_000), withEarlier(9_000))).closing!.cleanupAt).toBe(9_000)
   expect(earlierOfRetro(mergeBoards(withEarlier(9_000), withEarlier(undefined, 20_000))).closing!.cleanupAt).toBe(9_000)
-  // La marque ne recule pas l'heure du parcours ; un lien de pistes sans session ne se marque pas ; une entrée hors forme ne fait rien tomber.
+  // La marque ne recule pas l'heure de la mission ; un lien de pistes sans session ne se marque pas ; une entrée hors forme ne fait rien tomber.
   const late = boardOf({ A: closed('worktree-groupe-boutique-A') })
   late.runs[0]!.updatedAt = 50_000
   expect(markCleanupSent(late, late.runs[0]!.id, ['worktree-groupe-boutique-A'], 9_000)!.board.runs[0]!.updatedAt).toBe(50_000)

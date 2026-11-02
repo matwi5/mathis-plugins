@@ -2,11 +2,11 @@
 
 Copie du plugin [`mattpocock-skills`](https://github.com/mattpocock/skills) de **Matt Pocock**, sous licence MIT (voir [`LICENSE`](LICENSE)), sans autre modification que les écarts listés plus bas. Tout le mérite de ces skills lui revient ; la section Summary du skill `pr` reprend le skill `show-me` de Dex Horthy (voir [`skills/engineering/pr/CREDITS.md`](skills/engineering/pr/CREDITS.md)).
 
-Version actuelle : **1.3.1-mathis.6**, commit amont `49dd158d1076134a641b33efb035946536778336` (9 octobre 2026). Historique : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **1.3.1-mathis.7**, commit amont `49dd158d1076134a641b33efb035946536778336` (9 octobre 2026). Historique : [CHANGELOG.md](CHANGELOG.md).
 
 ## Pourquoi une copie
 
-Le plugin `flow-board` suit les parcours de ces skills étape par étape : son catalogue (`plugins/flow-board/hooks/catalog.ts`) connaît leurs noms et leurs étapes. Une mise à jour de l'amont peut renommer un skill ou changer ses étapes et casser le tableau de bord. La copie fige la version que `flow-board` connaît ; elle garde le nom `mattpocock-skills`, que `flow-board` attend (`catalog.ts`, constante `PLUGIN`).
+Le plugin `flow-board` suit les missions de ces skills étape par étape : son catalogue (`plugins/flow-board/hooks/catalog.ts`) connaît leurs noms et leurs étapes. Une mise à jour de l'amont peut renommer un skill ou changer ses étapes et casser le tableau de bord. La copie fige la version que `flow-board` connaît ; elle garde le nom `mattpocock-skills`, que `flow-board` attend (`catalog.ts`, constante `PLUGIN`).
 
 Seuls les fichiers du plugin sont copiés : `.claude-plugin/plugin.json`, les skills qu'il déclare (25 sur les 27 de l'amont), `LICENSE`. La documentation, les scripts de développement et les skills non publiés de l'amont n'y sont pas.
 
@@ -16,7 +16,7 @@ Seuls les fichiers du plugin sont copiés : `.claude-plugin/plugin.json`, les sk
 
 Le 28/10/2026 (1.3.1-mathis.1), jamais lancés et couverts autrement par `flow-board` :
 
-- **`implement-spec`** : son dossier et sa ligne de `plugin.json`. Le parallèle passe par les groupes de tickets confiés à des sessions liées, chacune avec `/implement`, et la revue se fait par ticket et par groupe.
+- **`implement-spec`** : son dossier et sa ligne de `plugin.json`. Le parallèle passe par les groupes de tickets confiés à des workers, chacun avec `/implement`, et la revue se fait par ticket et par groupe.
 - **`wayfinder`** : son dossier et sa ligne de `plugin.json`. Un grand chantier passe par un ou plusieurs grillings, un `travail/<chantier>/DECISIONS.md`, puis `/to-spec` et `/to-tickets`.
 - Ce qui les citait : dans `ask-matt`, l'option `/implement-spec` de l'étape 3 (et sa phrase sur la revue), l'entrée `/wayfinder` des « On-ramps » et sa mention sous `/grilling` ; dans les trois fiches de tracker de `setup-matt-pocock-skills` (`issue-tracker-github.md`, `issue-tracker-gitlab.md`, `issue-tracker-local.md`), la section « Wayfinding operations ».
 

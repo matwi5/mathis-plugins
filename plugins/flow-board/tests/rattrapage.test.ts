@@ -37,7 +37,7 @@ const AGENT = lines(
   block(7_000, 'm4', { type: 'text', text: '' }),
 )
 
-test('un transcript de sous-agent devient une piste : réflexion estimée, appels d’outils datés, tokens comptés une fois par réponse', () => {
+test('un transcript de spécialiste devient une piste : réflexion estimée, appels d’outils datés, tokens comptés une fois par réponse', () => {
   const lane = laneFromTranscript(AGENT)
   expect(lane.segments!.map(s => `${s.k}${s.est ? '~' : ''}${s.f ? `/${s.f}` : ''}:${s.e! - s.s}${s.x ? ':x' : ''}`)).toEqual([
     'think~:800',
@@ -62,7 +62,7 @@ test('un transcript partiel ou illisible : les lignes coupées sont sautées, un
   expect(subagentsDirOf('/h/.claude/projects/-p/abc.jsonl')).toBe('/h/.claude/projects/-p/abc/subagents')
 })
 
-test('le rattrapage clôt une fin manquée, donne ses totaux à un sous-agent de fond, et ajoute un sous-agent jamais vu', () => {
+test('le rattrapage clôt une fin manquée, donne ses totaux à un spécialiste de fond, et ajoute un spécialiste jamais vu', () => {
   let reg = startCall(emptyRegistry('s1', '/p', 0), { key: 'call-1', name: 'Explorer', isBackground: true }, T0)!
   reg = endCall(reg, 'call-1', { agentId: 'a1', isFailed: false, isFinished: false }, T0 + 10)!
   const lane = laneFromTranscript(AGENT)
@@ -95,7 +95,7 @@ test('le direct garde ses segments (attentes d’autorisation comprises) et un a
   expect(a1.tokens?.output).toBe(1_200)
 })
 
-test('sans « finished » dans son .meta.json, un transcript resté muet 30 min dit son sous-agent fini ; récent, il reste au travail', () => {
+test('sans « finished » dans son .meta.json, un transcript resté muet 30 min dit son spécialiste fini ; récent, il reste au travail', () => {
   let reg = startCall(emptyRegistry('s1', '/p', 0), { key: 'call-1', name: 'Explorer', isBackground: true }, T0)!
   reg = endCall(reg, 'call-1', { agentId: 'a1', isFailed: false, isFinished: false }, T0 + 10)!
   const lane = laneFromTranscript(AGENT)
@@ -103,7 +103,7 @@ test('sans « finished » dans son .meta.json, un transcript resté muet 30 min 
   expect(catchUp(reg, [{ agentId: 'a1', lane, meta: { toolUseId: 'call-1' } }], T0 + 60_000)!.agents[0]!.status).toBe('running')
 })
 
-test('un registre illisible (point d’entrée 2) : reparti de zéro, le rattrapage rend ses sous-agents, imbrication comprise', () => {
+test('un registre illisible (point d’entrée 2) : reparti de zéro, le rattrapage rend ses spécialistes, imbrication comprise', () => {
   const lane = laneFromTranscript(AGENT)
   const rebuilt = catchUp(emptyRegistry('s1', '/p', 0), [
     { agentId: 'a1', lane, meta: { toolUseId: 'call-1', description: 'Relecteur du groupe', isFinished: true } },
@@ -120,7 +120,7 @@ test('un registre illisible (point d’entrée 2) : reparti de zéro, le rattrap
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 const META = JSON.stringify({ agentType: 'agents:explorer', isBuiltIn: false, description: 'Explorer le module', toolUseId: 'call-1', spawnDepth: 1, finished: true })
 const MAIN = lines(
@@ -163,7 +163,7 @@ const world = (on: any, seed: Record<string, unknown> = {}, extra: Record<string
 const prompt = ($: any) =>
   $.classic.UserPromptSubmit({ session_id: 's-rat', transcript_path: '/t/projects/-p/s-rat.jsonl', cwd: '/p', hook_event_name: 'UserPromptSubmit', prompt: 'x' })
 
-test('à l’ouverture de l’onglet, un sous-agent de fond reçoit ses chiffres de son transcript, et sa fin manquée se clôt', async ($, on) => {
+test('à l’ouverture de l’onglet, un spécialiste de fond reçoit ses chiffres de son transcript, et sa fin manquée se clôt', async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 60_000 })
   world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
@@ -180,7 +180,7 @@ test('à l’ouverture de l’onglet, un sous-agent de fond reçoit ses chiffres
   await ui.unmount()
 })
 
-test('à la fin d’un sous-agent dont les chiffres manquent, son transcript les donne', async ($, on) => {
+test('à la fin d’un spécialiste dont les chiffres manquent, son transcript les donne', async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 60_000 })
   const mem = world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
@@ -204,7 +204,7 @@ test('un fichier de registre illisible est reconstruit depuis le transcript par 
   expect(reg.main?.segments?.some(x => x.k === 'write')).toBe(true)
 })
 
-test('S13 : pour une session liée affichée, le rattrapage écrit son fichier à part, jamais le sien, et la frise en profite', async ($, on) => {
+test('S13 : pour un worker affichée, le rattrapage écrit son fichier à part, jamais le sien, et la frise en profite', async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 60_000 })
   const LINKED = '9f3e21aa-1111-2222-3333-444455556666'
   const linkedReg = { ...startCall({ ...emptyRegistry(LINKED, '/p', T0), title: 'Explorer le cache', transcript: '/t/projects/-p/lie.jsonl' }, { key: 'call-1', name: 'Explorer le module', isBackground: true }, T0 + 50)!, updatedAt: T0 + 59_000 }
@@ -222,7 +222,7 @@ test('S13 : pour une session liée affichée, le rattrapage écrit son fichier �
   await ui.press({ key: 'tab-agents' })
   await ui.press({ key: 'agents-session-9f3e21aa' })
   await clock.advance(200)
-  // Le fichier à part porte le rattrapage ; celui de la session liée n'a pas bougé (Q7).
+  // Le fichier à part porte le rattrapage ; celui du worker n'a pas bougé (Q7).
   expect((mem[`agents:${LINKED}:rebuilt`] as { agents: unknown[] }).agents).toHaveLength(1)
   expect(JSON.stringify(mem[`agents:${LINKED}`])).toBe(before)
   await clock.advance(1_000)
@@ -232,13 +232,13 @@ test('S13 : pour une session liée affichée, le rattrapage écrit son fichier �
   await ui.unmount()
 })
 
-test('pour une session liée affichée, ses propres appels à l’advisor se relisent dans son transcript, même sans sous-agent : leur coût s’affiche', async ($, on) => {
+test('pour un worker affichée, ses propres appels à l’advisor se relisent dans son transcript, même sans spécialiste : leur coût s’affiche', async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 60_000 })
   const LINKED = '9f3e21aa-1111-2222-3333-444455556666'
   const advised = { ...usage(300), iterations: [{ type: 'message', ...usage(300) }, { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 156_265, output_tokens: 6_473, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }] }
   const said = (ms: number, content: Record<string, unknown>) => ({ type: 'assistant', isSidechain: false, timestamp: iso(ms), message: { id: 'mL', model: 'claude-opus-5-5', role: 'assistant', content: [content], usage: advised } })
   const transcript = lines(req(0), said(1_000, { type: 'server_tool_use', id: 'srv-L', name: 'advisor', input: {} }), said(9_000, { type: 'advisor_tool_result', tool_use_id: 'srv-L', content: {} }), said(9_500, { type: 'text', text: '' }))
-  // Vu en direct par la session liée, jamais relu : elle n'a pas ouvert son onglet Agents.
+  // Vu en direct par le worker, jamais relu : elle n'a pas ouvert son onglet Agents.
   const linkedReg = { ...emptyRegistry(LINKED, '/p', T0), title: 'Explorer le cache', transcript: '/t/projects/-p/lie.jsonl', main: { segments: [{ k: 'write', s: T0, e: T0 + 10_000 }] }, advisor: { calls: [{ id: 'srv-L', s: T0 + 1_000, e: T0 + 9_000, by: 'main' }] }, updatedAt: T0 + 59_000 }
   const mem = world(on, { [`agents:${LINKED}`]: linkedReg }, { '/t/projects/-p/lie.jsonl': transcript })
   mem.agentPrices = { at: T0 + 60_000, triedAt: T0 + 60_000, prices: { 'claude-fable-5-1': { input: 10e-6, output: 50e-6, cacheRead: 1e-6, cacheWrite: 12.5e-6 } } }
@@ -255,7 +255,7 @@ test('pour une session liée affichée, ses propres appels à l’advisor se rel
   await ui.press({ key: 'tab-agents' })
   await ui.press({ key: 'agents-session-9f3e21aa' })
   await clock.advance(200)
-  // Le fichier à part porte les appels relus ; celui de la session liée n'a pas bougé (Q7).
+  // Le fichier à part porte les appels relus ; celui du worker n'a pas bougé (Q7).
   expect((mem[`agents:${LINKED}:rebuilt`] as { main?: { advisor?: { id: string; model?: string }[] } }).main?.advisor?.map(c => [c.id, c.model])).toEqual([['srv-L', 'claude-fable-5-1']])
   expect(JSON.stringify(mem[`agents:${LINKED}`])).toBe(before)
   await clock.advance(1_000)

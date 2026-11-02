@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Récap d'usage de la discussion et de la journée, ou d'un parcours, pour le skill /stats-board:recap.
+// Récap d'usage de la discussion et de la journée, ou d'une mission, pour le skill /stats-board:recap.
 // - Lancé par Claude : `node recap.mjs [<id de la discussion>]`. Écrit le récap en Markdown sur stdout.
-// - Récap d'un parcours : `node recap.mjs --parcours "<préfixe de titre>" | --worktrees <dossier du projet>
-//   [<id de la discussion principale>] [--since AAAA-MM-JJ] [--until AAAA-MM-JJ]` (60 jours par défaut).
+// - Récap d'une mission : `node recap.mjs --parcours "<préfixe de titre>" | --worktrees <dossier du projet>
+//   [<id du manager>] [--since AAAA-MM-JJ] [--until AAAA-MM-JJ]` (60 jours par défaut).
 // - Les chiffres viennent de ccusage (`npx ccusage@latest claude daily|session|blocks --json`),
 //   comme le panneau ; les autres postes, de `~/.claude/claude-usage/machines/*.json`, et les noms
 //   d'affichage des projets, de `~/.claude/claude-usage/names.json`.
@@ -10,10 +10,11 @@
 //   poste (`~/.claude/stats-board/requetes/*.json`, écrits par le mod depuis la 0.10.0). Le temps
 //   actif est l'union des intervalles des requêtes, sans double compte, comme `activeMs` de
 //   `hooks/requests.ts`, sans leurs attentes de l'utilisateur (`netSpans`) ; le temps cumulé, la
-//   somme des temps actifs de chaque discussion. Un fichier illisible (en cours d'écriture par sa session) est omis et signalé.
+//   somme des temps actifs de chaque discussion, plus ce que ses spécialistes de fond ont travaillé en
+//   même temps qu'un autre de ses fils (`parallelPieces`) ; le temps gagné, l'écart des deux. Un fichier illisible (en cours d'écriture par sa session) est omis et signalé.
 // - Script autonome, sans dépendance : les formats français, les niveaux de rythme et la lecture des noms
 //   d'affichage reprennent ceux de `hooks/model.ts` (fmtCost, fmtTokens, fmtSeconds, RATE_LEVELS, parseLabels et
-//   LABEL_MAX), et les durées ceux de `hooks/durations.ts` (spanOfRecord) et de `hooks/requests.ts` (activeMs, netSpans),
+//   LABEL_MAX), et les durées ceux de `hooks/durations.ts` (spanOfRecord, lanesOf) et de `hooks/requests.ts` (activeMs, netSpans, parallelPieces),
 //   à garder alignés à la main.
 
 import { execFile } from 'node:child_process'
@@ -99,7 +100,7 @@ export const localDay = (date, tz) => new Intl.DateTimeFormat('en-CA', { timeZon
 
 const clock = (ms, tz) => new Intl.DateTimeFormat('fr-FR', { timeZone: tz, hour: '2-digit', minute: '2-digit' }).format(new Date(ms))
 
-/** Une session (`ccusage claude session`) et ses sous-agents, rattachés comme dans `sessionsOf` (model.ts). */
+/** Une session (`ccusage claude session`) et ses spécialistes, rattachés comme dans `sessionsOf` (model.ts). */
 export function sessionInfo(row) {
   const path = String(row.projectPath ?? '').split(/[\\/]/)
   return {
@@ -150,7 +151,7 @@ const spanOf = (r) => [num(r.sentAt), num(r.sentAt) + Math.max(num(r.realMs), nu
 
 /**
  * Les morceaux actifs d'une requête relevée : son intervalle sans ses attentes de l'utilisateur, sauf
- * les appels de ses sous-agents pendant ces attentes (`netSpans` de `hooks/requests.ts`).
+ * les appels de ses spécialistes pendant ces attentes (`netSpans` de `hooks/requests.ts`).
  */
 function activeSpansOf(r) {
   const [start, end] = spanOf(r)
@@ -176,6 +177,71 @@ export function unionMs(spans) {
   return total
 }
 
+/**
+ * Les moments où plusieurs fils d'une discussion travaillent en même temps, coupés à ses morceaux actifs :
+ * [début, fin, fils en plus] (`parallelPieces` de `hooks/requests.ts`). Les fils : les tours du fil
+ * principal, sans les attentes de leur requête, et ceux de ses spécialistes de fond.
+ */
+export function parallelPieces(requests, active) {
+  const lanes = []
+  for (const r of requests) {
+    for (const span of r.turnSpans ?? []) lanes.push(...cutWaits(span, r.waits ?? []))
+    for (const [a, b] of r.agentSpans ?? []) lanes.push([a, b])
+  }
+  const events = lanes.filter(([a, b]) => b > a).flatMap(([a, b]) => [[a, 1], [b, -1]]).sort((x, y) => x[0] - y[0] || x[1] - y[1])
+  const crowded = []
+  let count = 0
+  let from = 0
+  for (const [at, step] of events) {
+    if (count >= 2 && at > from) crowded.push([from, at, count - 1])
+    count += step
+    from = at
+  }
+  const within = unionOf(active)
+  const out = []
+  for (const [a, b, extra] of crowded) {
+    for (const [x0, y0] of within) {
+      const [x, y] = [Math.max(a, x0), Math.min(b, y0)]
+      if (y > x) out.push([x, y, extra])
+    }
+  }
+  return out
+}
+
+/** Le temps gagné, entre parenthèses après le temps cumulé ; rien sous une seconde. */
+const gainNote = (cumul, active) => (cumul - active >= 1000 ? ` (gagné ${fmtSeconds(cumul - active)} en parallèle)` : '')
+
+/** Le temps gagné de morceaux parallèles : chaque fil en plus compte sa durée (`extraMs` de `hooks/requests.ts`). */
+const extraMs = (pieces) => sum(pieces, ([a, b, extra]) => (b - a) * extra)
+
+/** Un intervalle sans les attentes (fin null : jusqu'au bout). */
+function cutWaits([a, b], waits) {
+  let pieces = b > a ? [[a, b]] : []
+  for (const [from, to] of waits) {
+    const end = to ?? Infinity
+    if (end <= from) continue
+    pieces = pieces.flatMap(([x, y]) => (end <= x || from >= y ? [[x, y]] : [[x, from], [end, y]].filter(([p, q]) => q > p)))
+  }
+  return pieces
+}
+
+/** Des intervalles fusionnés, triés (`union` de `hooks/requests.ts`). */
+function unionOf(spans) {
+  const out = []
+  for (const [a, b] of spans.filter(([x, y]) => y > x).sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1]
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b)
+    else out.push([a, b])
+  }
+  return out
+}
+
+/** Le temps gagné du jour `day` d'une discussion (ses relevés `logs`) : ses morceaux parallèles coupés aux heures du jour. */
+function dayExtraMs(logs, day, tz) {
+  const requests = logs.flatMap((l) => l.requests ?? [])
+  return sum(parallelPieces(requests, requests.flatMap(activeSpansOf)), ([a, b, extra]) => extra * sum(piecesOfDay([[a, b]], day, tz), ([x, y]) => y - x))
+}
+
 /** Les morceaux d'intervalles du jour `day` (dans le fuseau `tz`), coupés à chaque heure pile. */
 function piecesOfDay(spans, day, tz) {
   const out = []
@@ -194,14 +260,18 @@ const isEstimated = (r) => Object.values(r.models ?? {}).some((m) => m.isEstimat
 
 /**
  * Les durées d'une liste de relevés : temps actif sans double compte, temps cumulé (la somme des temps
- * actifs de chaque discussion), temps API, requêtes, la plus chère.
+ * actifs de chaque discussion et de ce que ses spécialistes de fond ont travaillé en même temps), temps
+ * API, requêtes, la plus chère.
  */
 function durationsOf(logs) {
   const requests = logs.flatMap((l) => l.requests ?? [])
   const top = requests.reduce((best, r) => (!best || requestCost(r) > requestCost(best) ? r : best), null)
   const bySession = new Map()
-  for (const l of logs) bySession.set(l.session, [...(bySession.get(l.session) ?? []), ...(l.requests ?? []).flatMap(activeSpansOf)])
-  const cumulMs = sum([...bySession.values()], (spans) => unionMs(spans))
+  for (const l of logs) bySession.set(l.session, [...(bySession.get(l.session) ?? []), ...(l.requests ?? [])])
+  const cumulMs = sum([...bySession.values()], (list) => {
+    const spans = list.flatMap(activeSpansOf)
+    return unionMs(spans) + extraMs(parallelPieces(list, spans))
+  })
   return { activeMs: unionMs(requests.flatMap(activeSpansOf)), cumulMs, apiMs: sum(requests, (r) => num(r.apiMs)), requests: requests.length, top }
 }
 
@@ -225,7 +295,7 @@ export function render(data) {
   out.push('')
   out.push(`Coût équivalent API d'après ccusage${data.version ? ` ${data.version}` : ''}${data.isOffline ? ', prix hors ligne' : ''}. Le 💬 du bandeau vient du moteur (\`/cost\`) et peut différer un peu.`)
 
-  // La discussion : sa ligne et celles de ses sous-agents.
+  // La discussion : sa ligne et celles de ses spécialistes.
   const rows = (data.sessions ?? []).map(sessionInfo)
   const logs = data.requestLogs ?? []
   // Ceux de cette discussion, et ceux du jour (la fenêtre de lecture : modifiés depuis deux jours).
@@ -246,7 +316,7 @@ export function render(data) {
     out.push(`- **${fmtCost(cost)}** · ${fmtTokens(tokens)} tokens${tokens > 0 ? `, dont ${fmtPct(cacheRead / tokens)} lus en cache` : ''} · sortie ${fmtTokens(sum(all, (r) => r.output))}`)
     out.push(`- ${clock(first, tz)} → ${clock(last, tz)} (${fmtDuration(last - first)}) · projet ${nameOf((own ?? subs[0]).project)}`)
     out.push(`- Modèles : ${modelLine(byModel(all.flatMap((r) => r.models)), cost)}`)
-    if (subs.length) out.push(`- Dont ${subs.length} sous-agent${subs.length > 1 ? 's' : ''} de workflow : ${fmtCost(sum(subs, (r) => r.cost))}`)
+    if (subs.length) out.push(`- Dont ${subs.length} spécialiste${subs.length > 1 ? 's' : ''} de workflow : ${fmtCost(sum(subs, (r) => r.cost))}`)
     out.push(discussionTimes(logs.filter((l) => l.session === data.sessionId), tz))
     if (data.isGuessed) out.push('- ⚠ Discussion devinée (la plus récente du dossier) : l\'identifiant de session manquait.')
   }
@@ -260,10 +330,14 @@ export function render(data) {
   const dayLogs = logs.filter((l) => (l.requests ?? []).some((r) => piecesOfDay([spanOf(r)], today, tz).length || localDay(new Date(num(r.sentAt)), tz) === today))
   const sentToday = dayLogs.flatMap((l) => (l.requests ?? []).filter((r) => localDay(new Date(num(r.sentAt)), tz) === today))
   const dayActiveOf = (list) => unionMs(piecesOfDay(list.flatMap((l) => (l.requests ?? []).flatMap(activeSpansOf)), today, tz))
-  // Le temps cumulé : la somme des temps actifs du jour de chaque discussion.
-  const dayCumulOf = (list) => sum([...new Set(list.map((l) => l.session))], (session) => dayActiveOf(list.filter((l) => l.session === session)))
+  // Le temps cumulé : la somme des temps actifs du jour de chaque discussion, avec ses spécialistes de fond en même temps.
+  const dayCumulOf = (list) =>
+    sum([...new Set(list.map((l) => l.session))], (session) => {
+      const own = list.filter((l) => l.session === session)
+      return dayActiveOf(own) + dayExtraMs(own, today, tz)
+    })
   const dayTimes = dayLogs.length
-    ? `- Temps actif ${fmtSeconds(dayActiveOf(dayLogs))} · temps cumulé ${fmtSeconds(dayCumulOf(dayLogs))} · temps API ${fmtSeconds(sum(sentToday, (r) => num(r.apiMs)))} · ${plural(sentToday.length, 'requête')}`
+    ? `- Temps actif ${fmtSeconds(dayActiveOf(dayLogs))} · temps cumulé ${fmtSeconds(dayCumulOf(dayLogs))}${gainNote(dayCumulOf(dayLogs), dayActiveOf(dayLogs))} · temps API ${fmtSeconds(sum(sentToday, (r) => num(r.apiMs)))} · ${plural(sentToday.length, 'requête')}`
     : noTimes("aucune requête relevée aujourd'hui")
   out.push('', `### Aujourd'hui${data.machine ? ` sur ${data.machine}` : ''}`, '')
   if (!day.length) out.push('- Aucun usage enregistré aujourd\'hui.')
@@ -285,7 +359,7 @@ export function render(data) {
     }
   }
 
-  // Les discussions actives aujourd'hui (sous-agents rattachés à leur discussion).
+  // Les discussions actives aujourd'hui (spécialistes rattachés à leur discussion).
   const activeToday = rows.filter((r) => localDay(new Date(r.last), tz) === today)
   const parents = new Map()
   for (const r of activeToday) {
@@ -323,17 +397,17 @@ export function render(data) {
   return out.join('\n')
 }
 
-/** La ligne des durées d'une discussion : temps actif, temps API, requêtes et la plus chère ; « — » sans relevé. */
+/** La ligne des durées d'une discussion : temps actif, temps cumulé et gagné, temps API, requêtes et la plus chère ; « — » sans relevé. */
 function discussionTimes(logs, tz) {
   if (!logs.length) return noTimes("pas de relevé : discussion d'avant la 0.10.0")
   const d = durationsOf(logs)
   // L'attente de la réponse de l'utilisateur (questions, plans), hors temps actif.
   const waited = sum(logs.flatMap((l) => l.requests ?? []), (r) => spanOf(r)[1] - spanOf(r)[0] - unionMs(activeSpansOf(r)))
   const top = d.top ? ` · la plus chère : ${clock(num(d.top.sentAt), tz)}, ${isEstimated(d.top) ? '≈' : ''}${fmtCost(requestCost(d.top))}` : ''
-  return `- Temps actif ${fmtSeconds(d.activeMs)}${waited > 0 ? ` · attente de ta réponse ${fmtSeconds(waited)}` : ''} · temps API ${fmtSeconds(d.apiMs)} · ${plural(d.requests, 'requête')}${top}`
+  return `- Temps actif ${fmtSeconds(d.activeMs)}${gainNote(d.cumulMs, d.activeMs) ? ` · temps cumulé ${fmtSeconds(d.cumulMs)}${gainNote(d.cumulMs, d.activeMs)}` : ''}${waited > 0 ? ` · attente de ta réponse ${fmtSeconds(waited)}` : ''} · temps API ${fmtSeconds(d.apiMs)} · ${plural(d.requests, 'requête')}${top}`
 }
 
-// ─── Récap d'un parcours ────────────────────────────────────────────────────
+// ─── Récap d'une mission ────────────────────────────────────────────────────
 
 const TITLE_LINE = /"type":"(custom|ai)-title","(?:customTitle|aiTitle)":"((?:[^"\\]|\\.)*)"/g
 
@@ -359,12 +433,12 @@ const dayClock = (ms, tz) => new Intl.DateTimeFormat('fr-FR', { timeZone: tz, da
 /** Le marqueur des dossiers de projet des worktrees de groupe : `<clé du projet>--claude-worktrees-groupe-<id>`. */
 const GROUP_WORKTREES = '--claude-worktrees-groupe-'
 
-/** Un titre sans les signes que flow-board retire du titre d'une session liée (`linkedPrefix` de `hooks/register.tsx`). */
+/** Un titre sans les signes que flow-board retire du titre d'un worker (`linkedPrefix` de `hooks/register.tsx`). */
 const bareTitle = (s) => String(s ?? '').replace(/["`$\\«»]/g, '').replace(/\s+/g, ' ').trim()
 
 /**
- * Le titre `title` relève-t-il du parcours `prefix` ? Il commence par le préfixe, ou c'est celui d'une session
- * liée de flow-board, « <titre du parcours coupé à 28 signes>… > Groupe X · … », dont le début coupé
+ * Le titre `title` relève-t-il de la mission `prefix` ? Il commence par le préfixe, ou c'est celui d'un worker
+ * de flow-board, « <titre de la mission coupé à 28 signes>… > Groupe X · … », dont le début coupé
  * commence le préfixe. Jusqu'à flow-board 0.60.0, le séparateur était « › », que l'app affichait « ' ».
  */
 function titleMatches(title, prefix) {
@@ -376,15 +450,15 @@ function titleMatches(title, prefix) {
   return !!head && p.startsWith(head)
 }
 
-/** Une session du parcours : par son titre, ou par son dossier (worktree `groupe-*`, discussion principale). */
+/** Une session de la mission : par son titre, ou par son dossier (worktree `groupe-*`, manager). */
 const inParcours = (r, title, { prefix, worktreesKey, sessionId }) =>
   titleMatches(title, prefix) ||
   (!!worktreesKey && (r.project.startsWith(`${worktreesKey}${GROUP_WORKTREES}`) || r.id === sessionId))
 
 /**
- * Le récap d'un parcours en Markdown, sous-agents compris : les sessions dont le titre commence par `prefix`,
- * et celles des worktrees `groupe-*` du projet `worktreesKey` avec la discussion principale `sessionId`.
- * La durée d'une session va de sa première à sa dernière activité ; son temps actif et celui du parcours
+ * Le récap d'une mission en Markdown, spécialistes compris : les sessions dont le titre commence par `prefix`,
+ * et celles des worktrees `groupe-*` du projet `worktreesKey` avec le manager `sessionId`.
+ * La durée d'une session va de sa première à sa dernière activité ; son temps actif et celui de la mission
  * viennent des fichiers de relevé (`requestLogs`), sans double compte entre sessions qui tournent en même temps.
  * data : { tz, since, until (AAAA-MM-JJ, facultatif), prefix, worktreesKey, sessionId, sessions, titles, projectNames, requestLogs,
  *          unreadable (noms des fichiers de relevé illisibles) }
@@ -398,7 +472,7 @@ export function renderParcours(data) {
   const rows = (data.sessions ?? []).map(sessionInfo)
   const picked = rows.filter((r) => !r.parent && inParcours(r, titles[r.id], { prefix, worktreesKey: data.worktreesKey, sessionId: data.sessionId }))
   const ids = new Set(picked.map((r) => r.id))
-  // ccusage 20 compte déjà les sous-agents dans leur session ; une ligne `<projet>/<session>/subagents`
+  // ccusage 20 compte déjà les spécialistes dans leur session ; une ligne `<projet>/<session>/subagents`
   // (versions plus anciennes) s'ajoute à sa session.
   const subs = rows.filter((r) => r.parent && ids.has(r.parent))
   const all = [...picked, ...subs]
@@ -406,13 +480,13 @@ export function renderParcours(data) {
   const what = [prefix && `« ${prefix} »`, wt && `worktrees groupe-* de ${names[data.worktreesKey] ?? data.worktreesKey}`].filter(Boolean).join(' et ')
   const frDate = (d) => String(d).split('-').reverse().join('/')
   const period = data.until ? `du ${frDate(data.since)} au ${frDate(data.until)}` : `depuis le ${frDate(data.since)}`
-  const out = [`## Récap du parcours${prefix ? ' ' : ' · '}${what}`, '']
+  const out = [`## Récap de la mission${prefix ? ' ' : ' · '}${what}`, '']
   if (!picked.length) {
     out.push(`Aucune session retrouvée ${period}.`)
     return out.join('\n')
   }
-  out.push(`Coût équivalent API d'après ccusage, sous-agents compris, sessions retrouvées ${period}.`, '')
-  if (wt && !prefix && !data.sessionId) out.push('- ⚠ Discussion principale non comptée : son identifiant manque.')
+  out.push(`Coût équivalent API d'après ccusage, spécialistes compris, sessions retrouvées ${period}.`, '')
+  if (wt && !prefix && !data.sessionId) out.push('- ⚠ Manager non compté : son identifiant manque.')
   out.push(`- **${fmtCost(cost)}** · ${picked.length} session${picked.length > 1 ? 's' : ''} · ${fmtTokens(sum(all, (r) => r.tokens))} tokens`)
   out.push(`- Modèles : ${modelLine(byModel(all.flatMap((r) => r.models)), cost)}`)
   const logs = (data.requestLogs ?? []).filter((l) => ids.has(l.session))
@@ -420,14 +494,14 @@ export function renderParcours(data) {
   // Des sessions sans relevé (d'avant la 0.10.0) : le total ne les compte pas, et le dit.
   const missing = picked.filter((r) => !logs.some((l) => l.session === r.id)).length
   const partial = missing && logs.length ? `, sans ${plural(missing, 'session')} non relevée${missing > 1 ? 's' : ''}` : ''
-  out.push(logs.length ? `- Temps actif ${fmtSeconds(times.activeMs)} (sans double compte entre sessions${partial}) · temps cumulé ${fmtSeconds(times.cumulMs)} · temps API ${fmtSeconds(times.apiMs)} · ${plural(times.requests, 'requête')}` : noTimes("pas de relevé : sessions d'avant la 0.10.0"))
-  // Seuls les fichiers des sessions du parcours comptent.
+  out.push(logs.length ? `- Temps actif ${fmtSeconds(times.activeMs)} (sans double compte entre sessions${partial}) · temps cumulé ${fmtSeconds(times.cumulMs)}${gainNote(times.cumulMs, times.activeMs)} · temps API ${fmtSeconds(times.apiMs)} · ${plural(times.requests, 'requête')}` : noTimes("pas de relevé : sessions d'avant la 0.10.0"))
+  // Seuls les fichiers des sessions de la mission comptent.
   const warning = unreadableLine(data.unreadable, (name) => ids.has(sessionOfFile(name)))
   if (warning) out.push(`- ${warning}`)
   out.push('', '| Session | Projet | Heures | Durée | Actif | Coût |', '|---|---|---|---|---:|---:|')
   const cell = (s) => String(s).replace(/\|/g, '\\|')
   for (const r of picked.sort((a, b) => a.first - b.first)) {
-    // La session et ses sous-agents : heures et coût d'ensemble, comme pour la discussion du récap du jour.
+    // La session et ses spécialistes : heures et coût d'ensemble, comme pour la discussion du récap du jour.
     const own = [r, ...subs.filter((s) => s.parent === r.id)]
     const first = minOf(own.map((s) => s.first))
     const last = maxOf(own.map((s) => s.last))
@@ -619,7 +693,10 @@ export function plausibleRequest(r) {
   const pairs = (v) => (Array.isArray(v) ? v.filter((p) => Array.isArray(p) && p.length === 2) : [])
   const waits = pairs(r.waits).filter(([a, b]) => isIn(a) && (b === null || (isIn(b) && b >= a)))
   const busy = pairs(r.busy).filter(([a, b]) => isIn(a) && isIn(b) && b > a)
-  return { ...r, models, waits, busy }
+  // Les tours du fil principal et des spécialistes de fond (`lanesOf` de durations.ts).
+  const turnSpans = pairs(r.turnSpans).filter(([a, b]) => isIn(a) && isIn(b) && b > a)
+  const agentSpans = pairs(r.agentSpans).filter(([a, b]) => isIn(a) && isIn(b) && b > a)
+  return { ...r, models, waits, busy, turnSpans, agentSpans }
 }
 
 /** Un fichier de relevé illisible et inchangé depuis une heure n'est plus en cours d'écriture (`ABANDONED_MS` de durations.ts). */
@@ -670,7 +747,7 @@ const readMachineName = (usageDir) => {
   }
 }
 
-/** Les options du récap d'un parcours, ou `null` sans `--parcours` ni `--worktrees` (récap de la discussion). */
+/** Les options du récap d'une mission, ou `null` sans `--parcours` ni `--worktrees` (récap de la discussion). */
 function parcoursArgs(argv) {
   const out = { prefix: null, worktrees: null, since: null, until: null, sessionId: null }
   const unknown = []
@@ -689,13 +766,13 @@ function parcoursArgs(argv) {
     else if (a.trim()) unknown.push(a)
   }
   if (!isParcours) return null
-  // Un préfixe sans guillemets ou une option mal écrite (`--since=…`) changerait le parcours sans rien dire.
+  // Un préfixe sans guillemets ou une option mal écrite (`--since=…`) changerait la mission sans rien dire.
   if (unknown.length) throw new Error(`argument inconnu : ${unknown[0]} (préfixe entre guillemets, dates en « --since AAAA-MM-JJ »)`)
   return out
 }
 
 async function mainParcours(opts, { home, projectsDir, tz, now }) {
-  // Un parcours dure souvent plusieurs semaines : 60 jours par défaut.
+  // Une mission dure souvent plusieurs semaines : 60 jours par défaut.
   const since = opts.since ?? localDay(new Date(now - 60 * DAY_MS), tz)
   const until = opts.until ? ['--until', opts.until.replace(/-/g, '')] : []
   const report = await ccusage(['claude', 'session', '--since', since.replace(/-/g, ''), ...until, '--json', '--timezone', tz])
@@ -705,12 +782,12 @@ async function mainParcours(opts, { home, projectsDir, tz, now }) {
 
   const titles = {}
   const match = { prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId }
-  // Seuls les projets du parcours sont nommés : chaque nom manquant coûte des lectures de transcriptions.
+  // Seuls les projets de la mission sont nommés : chaque nom manquant coûte des lectures de transcriptions.
   const keys = new Set(worktreesKey ? [worktreesKey] : [])
   for (const s of sessions) {
     const info = sessionInfo(s)
     if (info.parent) continue
-    // Sans préfixe, seuls les titres des sessions des worktrees et de la discussion principale servent.
+    // Sans préfixe, seuls les titres des sessions des worktrees et du manager servent.
     if (!opts.prefix && !inParcours(info, null, match)) continue
     const title = readTitle(join(projectsDir, info.project, `${info.id}.jsonl`))
     if (title !== null) titles[info.id] = title
@@ -721,7 +798,7 @@ async function mainParcours(opts, { home, projectsDir, tz, now }) {
   const { projectNames } = readMachines(usageDir, readMachineName(usageDir), labels, localDay(new Date(now), tz))
   nameMissing(projectNames, keys, projectsDir, labels)
 
-  // Les relevés modifiés depuis le début du parcours : ceux de ses sessions en font partie.
+  // Les relevés modifiés depuis le début de la mission : ceux de ses sessions en font partie.
   const from = Date.parse(`${since}T00:00:00Z`) - DAY_MS
   const { logs, unreadable } = readRequestLogs(requestsDir(home), (_, mtimeMs) => mtimeMs >= from)
   process.stdout.write(`${renderParcours({ tz, since, until: opts.until, prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId, sessions, titles, projectNames, requestLogs: logs, unreadable })}\n`)

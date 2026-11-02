@@ -6,7 +6,7 @@
 // - `assistant` : un bloc de la réponse par ligne (`thinking`, `text`, `tool_use`), à l'heure où il
 //   finit ; les blocs d'une même réponse partagent `message.id` et répètent son `usage` ; `effort` ;
 // - `user` : les résultats d'outils (`tool_result`, `tool_use_id`, `is_error`) ;
-// - `.meta.json` d'un sous-agent : `agentType`, `description`, `toolUseId`, `finished`.
+// - `.meta.json` d'un spécialiste : `agentType`, `description`, `toolUseId`, `finished`.
 // - un appel à l'advisor (relevé le 27/10/2026) : un bloc `server_tool_use` nommé `advisor` (`id`),
 //   puis un bloc `advisor_tool_result` (`tool_use_id` ; son contenu, chiffré, n'est jamais lu) ;
 //   chaque ligne de la réponse répète `usage.iterations`, où l'appel a son entrée `advisor_message`
@@ -61,12 +61,12 @@ const advisorCallsOf = (messageId: string, ids: readonly { id: string; at: numbe
   }).flat()
 }
 
-/** Le `.meta.json` d'un sous-agent. */
+/** Le `.meta.json` d'un spécialiste. */
 export type TranscriptMeta = { agentType?: string; description?: string; toolUseId?: string; isFinished?: boolean; parentAgentId?: string }
 
 /**
  * Un transcript sans ligne depuis plus longtemps, sans `finished` dans son `.meta.json` : son
- * sous-agent a fini (processus planté, agent tué), comme une session fermée (S9, S19).
+ * spécialiste a fini (processus planté, agent tué), comme une session fermée (S9, S19).
  */
 export const TRANSCRIPT_QUIET_MS = 30 * 60_000
 
@@ -105,8 +105,8 @@ const push = (segs: AgentSegment[], seg: AgentSegment) => {
 }
 
 /**
- * La piste d'un transcript : celle d'un sous-agent (son fichier entier), ou celle de la session
- * (`isMain` : les lignes hors des sous-agents). Réflexion estimée, rédaction et appels d'outils
+ * La piste d'un transcript : celle d'un spécialiste (son fichier entier), ou celle de la session
+ * (`isMain` : les lignes hors des spécialistes). Réflexion estimée, rédaction et appels d'outils
  * datés ; tokens comptés une fois par réponse ; modèles, effort, lignes modifiées.
  */
 export const laneFromTranscript = (text: string, isMain = false): TranscriptLane => {
@@ -214,7 +214,7 @@ export const laneFromTranscript = (text: string, isMain = false): TranscriptLane
   return lane
 }
 
-/** Le `.meta.json` d'un sous-agent ; un fichier illisible n'apporte rien. */
+/** Le `.meta.json` d'un spécialiste ; un fichier illisible n'apporte rien. */
 export const metaFromText = (text: string): TranscriptMeta => {
   try {
     const raw = JSON.parse(text) as Record<string, unknown>
@@ -230,16 +230,16 @@ export const metaFromText = (text: string): TranscriptMeta => {
   }
 }
 
-/** Un sous-agent tel que son transcript le donne : son id, sa piste, son `.meta.json` ; `run` : le parcours repris auquel il appartient (Q14). */
+/** Un spécialiste tel que son transcript le donne : son id, sa piste, son `.meta.json` ; `run` : la mission reprise à laquelle il appartient (Q14). */
 export type TranscriptAgent = { agentId: string; lane: TranscriptLane; meta: TranscriptMeta; run?: string }
 
 /**
  * Le registre complété par les transcripts (le transcript fait foi pour les chiffres) :
- * - un sous-agent connu prend ses tokens, modèles, effort et lignes du transcript ; ses segments
+ * - un spécialiste connu prend ses tokens, modèles, effort et lignes du transcript ; ses segments
  *   du direct restent (ils portent les attentes d'autorisation), sauf s'il n'en a pas ;
- * - un sous-agent « au travail » que son transcript dit fini l'est, à l'heure de sa dernière ligne ;
+ * - un spécialiste « au travail » que son transcript dit fini l'est, à l'heure de sa dernière ligne ;
  *   une fin constatée après coup prend cette heure ;
- * - un sous-agent inconnu devient une entrée rattrapée (`source: 'transcript'`).
+ * - un spécialiste inconnu devient une entrée rattrapée (`source: 'transcript'`).
  * `inFlight` : les appels Agent de ce processus encore en vol, que le transcript ne clôt pas. Rend null
  * quand rien ne change.
  */
@@ -260,7 +260,7 @@ export const catchUp = (reg: SessionRegistry, found: readonly TranscriptAgent[],
       const row: RegistryAgent = {
         key: meta.toolUseId ?? `agent:${agentId}`,
         agentId,
-        name: (meta.description ?? '').trim() || 'Sous-agent',
+        name: (meta.description ?? '').trim() || 'Spécialiste',
         isBackground: true,
         status: isEnded ? 'done' : 'running',
         startedAt: lane.startedAt,
@@ -293,21 +293,21 @@ export const catchUp = (reg: SessionRegistry, found: readonly TranscriptAgent[],
     }
   }
   let next: SessionRegistry = isChanged ? { ...reg, agents: agents.sort((a, b) => a.startedAt - b.startedAt), updatedAt: now } : reg
-  // Les appels à l'advisor de chaque sous-agent : sur la ligne advisor, jamais sur sa piste.
+  // Les appels à l'advisor de chaque spécialiste : sur la ligne advisor, jamais sur sa piste.
   for (const { agentId, lane } of found) next = catchUpAdvisor(next, agentId, lane.advisor, now) ?? next
   return next === reg ? null : next
 }
 
-/** Le dossier des transcripts des sous-agents d'une session, d'après le chemin de son transcript. */
+/** Le dossier des transcripts des spécialistes d'une session, d'après le chemin de son transcript. */
 export const subagentsDirOf = (transcript: string): string | null => (/\.jsonl$/.test(transcript) ? `${transcript.replace(/\.jsonl$/, '')}/subagents` : null)
 
 // ─── Garde des chemins (F4) ───────────────────────────────────────────────
 //
 // Un chemin de transcript vient d'un en-tête de registre (écrit par une autre session) ou d'un
-// hook : il n'est lu que sous `<dossier Claude>/projects/`, sans `..`, et un fichier de sous-agent
+// hook : il n'est lu que sous `<dossier Claude>/projects/`, sans `..`, et un fichier de spécialiste
 // n'a qu'un nom strict.
 
-/** Le nom de fichier d'un transcript de sous-agent : `agent-<id>.jsonl`, l'id en lettres, chiffres, `_` et `-`. */
+/** Le nom de fichier d'un transcript de spécialiste : `agent-<id>.jsonl`, l'id en lettres, chiffres, `_` et `-`. */
 export const SUBAGENT_FILE = /^agent-([A-Za-z0-9_-]+)\.jsonl$/
 
 const isWindowsPath = (path: string): boolean => /^[a-z]:[\\/]/i.test(path)

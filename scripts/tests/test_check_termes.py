@@ -39,6 +39,57 @@ class RetiredTermsTest(unittest.TestCase):
         (self.root / "config" / "rules" / "autre.md").write_text("la vague suivante\n", encoding="utf-8")
         self.assertEqual(check.retired_terms(self.plugin), [])
 
+    def test_une_forme_retiree_dans_les_hooks_d_un_autre_plugin_que_flow_board_est_refusee(self):
+        plugin = self.root / "plugins" / "stats-board"
+        (plugin / "hooks").mkdir(parents=True)
+        (plugin / "termes-retires.txt").write_text("0.12.0\tsession liée\n", encoding="utf-8")
+        (plugin / "hooks" / "register.tsx").write_text("const a = 1\n// confié à une session liée\n", encoding="utf-8")
+        problems = check.retired_terms(plugin, self.root / "absent.json")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("stats-board/hooks/register.tsx:2", problems[0])
+        self.assertIn("« session liée »", problems[0])
+
+    def test_une_valeur_enregistree_admise_passe_a_son_compte_et_echoue_au_dela(self):
+        (self.plugin / "hooks").mkdir()
+        hook = self.plugin / "hooks" / "model.ts"
+        hook.write_text("const STOP = 'la vague suivante'\n", encoding="utf-8")
+        admitted = self.root / "termes-retires-admis.json"
+        admitted.write_text('{"files": {"essai/hooks/model.ts": 1}}\n', encoding="utf-8")
+        self.assertEqual(check.retired_terms(self.plugin, admitted), [])
+        hook.write_text("const STOP = 'la vague suivante'\n// lancer la vague suivante\n", encoding="utf-8")
+        problems = check.retired_terms(self.plugin, admitted)
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(all("essai/hooks/model.ts:" in p and "1 admis" in p for p in problems))
+
+    def test_un_test_range_sous_skills_peut_citer_une_forme_retiree(self):
+        (self.plugin / "skills" / "recap").mkdir(parents=True)
+        (self.plugin / "skills" / "recap" / "recap.test.mjs").write_text("assert.doesNotMatch(out, /vague suivante/)\n", encoding="utf-8")
+        (self.plugin / "skills" / "recap" / "recap.mjs").write_text("// la vague suivante\n", encoding="utf-8")
+        problems = check.retired_terms(self.plugin, self.root / "absent.json")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("essai/skills/recap/recap.mjs:1", problems[0])
+
+
+# Les anciens mots de flow-board (parcours, session liée, orchestrateur, sous-agent), retirés de chaque
+# plugin touché par le renommage ; la copie de mattpocock-skills (texte de l'amont) n'en a pas.
+RENAMED = ["flow-board", "stats-board", "agents", "project", "setup", "session-tools",
+           "asana-board", "git-board", "files-board"]
+OLD_FORMS = {"le parcours", "du parcours", "un parcours", "ce parcours", "Parcours", "session liée",
+             "sessions liées", "Session liée", "orchestrateur", "Orchestrateur", "sous-agent", "sous-agents",
+             "session autonome", "linked session", "main discussion"}
+
+
+class RenamedPluginsTest(unittest.TestCase):
+    def test_chaque_plugin_renomme_retire_les_anciennes_formes(self):
+        for name in RENAMED:
+            terms = {term for _, term in check.retired_list(check.PLUGINS / name)}
+            self.assertEqual(OLD_FORMS - terms, set(), name)
+        self.assertEqual(check.retired_list(check.PLUGINS / "mattpocock-skills"), [])
+
+    def test_les_plugins_renommes_passent_leurs_termes_retires(self):
+        for name in RENAMED:
+            self.assertEqual(check.retired_terms(check.PLUGINS / name), [], name)
+
 
 # Ces valeurs que l'export refuse s'écrivent par morceaux : ce fichier part dans la version publique.
 MAIL = "git" + "@" + "example.com"

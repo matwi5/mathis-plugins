@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -7,7 +8,7 @@ const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
   props: {
-    title: 'Parcours',
+    title: 'Mission',
     isFocused: false,
     bodyColumns: 92,
     placement: 'dock',
@@ -64,9 +65,10 @@ test('un skill de cadrage ouvre « Nouvelle fonctionnalité » et se dessine par
   }
 })
 
-test('le parcours avance de phase en phase et suit les tickets', async ($, on) => {
+test('la mission avance de phase en phase et suit les tickets', async ($, on) => {
   mock.clock(on, { now: 2_000_000 })
   mock.store(on)
+  memoryDisk(on)
   engine(on)
 
   await $.skill.prompt({ skill: 'mattpocock-skills:grill-with-docs', text: 'x' })
@@ -88,7 +90,7 @@ test('le parcours avance de phase en phase et suit les tickets', async ($, on) =
   expect(resultText(answer)).toMatch(/tickets 0\/2/)
 
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'w' })
-  // tdd chargé par implement : une étape de la phase, pas un nouveau parcours.
+  // tdd chargé par implement : une étape de la phase, pas une nouvelle mission.
   await $.skill.prompt({ skill: 'mattpocock-skills:tdd', text: 'v' })
   await $.tool.call({ tool: TOOL, set: [{ id: '#12', status: 'done' }] })
 
@@ -128,7 +130,7 @@ test('les tests rouge puis vert et le commit se lisent dans le panneau', { timeo
   }
 })
 
-test('un skill hors du parcours devient un détour, un autre point de départ un nouveau parcours', { timeoutMs: 15000 }, async ($, on) => {
+test('un skill hors de la mission devient un détour, un autre point de départ une nouvelle mission', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 4_000_000 })
   mock.store(on)
   engine(on)
@@ -142,7 +144,7 @@ test('un skill hors du parcours devient un détour, un autre point de départ un
     await ui.unmount()
   }
 
-  // Un bug en plein cadrage : nouveau parcours « Chasse au bug », le cadrage passe en pause.
+  // Un bug en plein cadrage : nouvelle mission « Chasse au bug », le cadrage passe en pause.
   await $.skill.prompt({ skill: 'mattpocock-skills:diagnosing-bugs', text: 'z' })
   await $.tool.call({
     tool: TOOL,
@@ -162,8 +164,8 @@ test('un skill hors du parcours devient un détour, un autre point de départ un
     await ui.unmount()
   }
 
-  // Relancer le cadrage reprend… un nouveau parcours (on ne revient pas en arrière) ;
-  // relancer to-spec reprend le parcours en pause, à la phase Spec.
+  // Relancer le cadrage reprend… une nouvelle mission (on ne revient pas en arrière) ;
+  // relancer to-spec reprend la mission en pause, à la phase Spec.
   const spec = await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'w' })
   expect(spec.text).toMatch(/flow-board/)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
@@ -193,7 +195,7 @@ test('les questions du grilling et la synthèse de revue sont relevées en fin d
   }
 })
 
-test('sans parcours, le panneau propose les points de départ', { timeoutMs: 15000 }, async ($, on) => {
+test('sans mission, le panneau propose les points de départ', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -205,7 +207,7 @@ test('sans parcours, le panneau propose les points de départ', { timeoutMs: 150
   }
 })
 
-test('une mise à jour Asana fait avancer les tickets du parcours (repris de ticket-board)', async ($, on) => {
+test('une mise à jour Asana fait avancer les tickets de la mission (repris de ticket-board)', async ($, on) => {
   mock.clock(on, { now: 6_000_000 })
   mock.store(on)
   engine(on)
@@ -238,7 +240,7 @@ test('le bandeau se masque, et /flow show le rend', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /TDD/ })).toBeUndefined()
     await ui.unmount()
     const shown = await $.command.run({ command: 'flow', args: 'show' } as any)
-    expect(String(shown.text)).toMatch(/Parcours : /)
+    expect(String(shown.text)).toMatch(/Mission : /)
   }
 })
 
@@ -249,10 +251,10 @@ test('/flow-board:flow, connu dès le premier message, répond comme /flow', asy
   on('command.run', { command: 'flow-board:flow' }, async (_$, e, next) => next(e))
 
   const empty = await $.command.run({ command: 'flow-board:flow', args: '' } as any)
-  expect(String(empty.text)).toMatch(/aucun parcours en cours/)
+  expect(String(empty.text)).toMatch(/aucune mission en cours/)
   await $.skill.prompt({ skill: 'mattpocock-skills:tdd', text: 'x' })
   const shown = await $.command.run({ command: 'flow-board:flow', args: 'history' } as any)
-  expect(String(shown.text)).toMatch(/Parcours : /)
+  expect(String(shown.text)).toMatch(/Mission : /)
 })
 
 test('/flow sort du menu, /flow-board:flow y reste', async ($, on) => {
@@ -263,7 +265,7 @@ test('/flow sort du menu, /flow-board:flow y reste', async ($, on) => {
   expect(full.isHidden).toBe(false)
 })
 
-test('les sous-agents apparaissent dans l’onglet Agents pendant leur travail, puis passent faits', async ($, on) => {
+test('les spécialistes apparaissent dans l’onglet Agents pendant leur travail, puis passent faits', async ($, on) => {
   mock.clock(on, { now: 8_000_000 })
   mock.store(on)
   engine(on)
@@ -276,14 +278,14 @@ test('les sous-agents apparaissent dans l’onglet Agents pendant leur travail, 
   await $.tool.call({ tool: 'Agent', description: 'Implement ticket #12', prompt: 'p', model: 'haiku', run_in_background: true } as any)
   for (const surface of ALL) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    // Dans Parcours, une ligne de résumé remplace l'encadré et mène à l'onglet.
+    // Dans Mission, une ligne de résumé remplace l'encadré et mène à l'onglet.
     expect(await ui.find({ type: 'Text', text: /1\sagent\sau\stravail/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Implement ticket #12/ })).toBeUndefined()
     // Implémentation : les étapes (« Implementers »…) ne s'affichent plus.
     expect(await ui.find({ type: 'Text', text: /Implementers/ })).toBeUndefined()
     await ui.press({ key: 'agents-open' })
-    expect(await ui.find({ type: 'Text', text: /Orchestrateur/ })).toBeDefined()
-    // Une rangée par sous-agent : son bouton porte son nom.
+    expect(await ui.find({ type: 'Text', text: /Manager/ })).toBeDefined()
+    // Une rangée par spécialiste : son bouton porte son nom.
     expect(await ui.find({ type: 'Button', text: /Implement ticket #12/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^au\stravail$/ })).toBeDefined()
     await ui.press({ key: 'tab-flow' })
@@ -298,7 +300,7 @@ test('les sous-agents apparaissent dans l’onglet Agents pendant leur travail, 
   await ui.unmount()
 })
 
-test('un sous-agent rendu « completed » est fini, même sans run_in_background', async ($, on) => {
+test('un spécialiste rendu « completed » est fini, même sans run_in_background', async ($, on) => {
   mock.clock(on, { now: 8_000_000 })
   mock.store(on)
   engine(on)
@@ -313,7 +315,7 @@ test('un sous-agent rendu « completed » est fini, même sans run_in_background
   await ui.unmount()
 })
 
-test('les fins de sous-agents manquées sont rattrapées par la liste des sous-agents de la session', async ($, on) => {
+test('les fins de spécialistes manquées sont rattrapées par la liste des spécialistes de la session', async ($, on) => {
   mock.clock(on, { now: 8_000_000 })
   mock.store(on)
   engine(on)
@@ -337,7 +339,7 @@ test('les fins de sous-agents manquées sont rattrapées par la liste des sous-a
   expect(await ui.find({ type: 'Text', text: /3\sagents\s·\s1\sau\stravail/ })).toBeDefined()
   await ui.press({ key: 'tab-flow' })
   await ui.unmount()
-  // Le tour d'un sous-agent qui se termine le marque fini.
+  // Le tour d'un spécialiste qui se termine le marque fini.
   await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, turnId: 't9', reason: 'answer', agentId: 'agent-3' } as any)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await after.press({ key: 'tab-agents' })
@@ -346,7 +348,7 @@ test('les fins de sous-agents manquées sont rattrapées par la liste des sous-a
   await after.unmount()
 })
 
-test('sans parcours, l’onglet Agents suit les sous-agents de la discussion', async ($, on) => {
+test('sans mission, l’onglet Agents suit les spécialistes de la discussion', async ($, on) => {
   mock.clock(on, { now: 8_100_000 })
   mock.store(on)
   engine(on)
@@ -363,7 +365,7 @@ test('sans parcours, l’onglet Agents suit les sous-agents de la discussion', a
   }
 })
 
-test("le tour d'un sous-agent de fond ne fait pas passer la main à Claude", async ($, on) => {
+test("le tour d'un spécialiste de fond ne fait pas passer la main à Claude", async ($, on) => {
   mock.clock(on, { now: 8_000_000 })
   mock.store(on)
   engine(on)
@@ -373,7 +375,7 @@ test("le tour d'un sous-agent de fond ne fait pas passer la main à Claude", asy
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.turn.start({ text: 'go', turnId: 't1' } as any)
   await $.turn.complete({ answer: 'fini', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer' })
-  // Un sous-agent lancé en arrière-plan démarre son tour : la main reste à la personne.
+  // Un spécialiste lancé en arrière-plan démarre son tour : la main reste à la personne.
   await $.turn.start({ text: 'explore', turnId: 't1', agentId: 'a1' } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui.find({ type: 'Text', text: /Claude travaille/ })).toBeUndefined()

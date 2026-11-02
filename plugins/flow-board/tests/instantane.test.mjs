@@ -3,7 +3,7 @@
 // lancent pour de vrai, dans un dépôt git temporaire.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -72,7 +72,7 @@ test('un second instantané du même ticket donne la plage de la passe qui suit 
     assert.equal(out.status, 0, out.stderr)
     const second = git(dir, 'rev-parse', 'refs/worktree/flow-board/T08')
     assert.notEqual(second, first)
-    assert.match(out.stdout, new RegExp(`Passe après la passe « bogues » : plage ${first}\\.\\.${second}`))
+    assert.match(out.stdout, new RegExp(`Instantané reposé : plage ${first}\\.\\.${second} depuis le précédent`))
     assert.doesNotMatch(out.stdout, /Plage des revues/)
     assert.equal(git(dir, 'diff', '--name-only', `${first}..${second}`), 'a.txt')
   } finally {
@@ -156,6 +156,21 @@ test('l’id du ticket passe le corpus hostile commun : chaque entrée le fait r
   assert.equal(isSafeTicket('T07'), true)
   const passing = Object.entries(CORPUS).filter(([, token]) => isSafeTicket(`T${token}7`)).map(([name]) => name)
   assert.deepEqual(passing, [])
+})
+
+test('un dossier du relecteur impossible à créer : ni instantané ni référence posés, et le message le dit', () => {
+  const dir = repo()
+  try {
+    // Un fichier « flow-board » dans le dossier git empêche d'y créer le dossier.
+    writeFileSync(join(dir, '.git', 'flow-board'), 'pas un dossier\n')
+    writeFileSync(join(dir, 'a.txt'), 'a modifié\n')
+    const out = snap(dir, 'T09', 'a.txt')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /ÉCHEC : dossier du relecteur impossible à créer/)
+    assert.ok(!hasRef(dir, 'refs/worktree/flow-board/T09'), 'la référence a été posée')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('lancé par un lien symbolique, le script tourne quand même (il ne sort pas en silence)', () => {
@@ -299,4 +314,400 @@ test('la procédure cite les deux modes du script d’instantané par une comman
   assert.ok(procedure.includes('node <dossier de flow-board>/scripts/snapshot.mjs --staged <id du ticket> <les fichiers du correctif>'), 'la procédure ne cite pas --staged')
   assert.ok(procedure.includes('node <dossier de flow-board>/scripts/snapshot.mjs --remplace <fichier> <ancien> <nouveau>'), 'la procédure ne cite pas --remplace')
   assert.ok(procedure.includes('le README et les tests partagés comptent comme fichiers du ticket'), 'la procédure ne dit pas que le README et les tests partagés sont du ticket')
+})
+
+/** Un worktree d'un dépôt neuf, comme celui d'un worker : rend le dossier du dépôt et celui du worktree. */
+const worktree = () => {
+  const dir = repo()
+  const wt = join(dir, '.claude', 'worktrees', 'groupe-A')
+  git(dir, 'worktree', 'add', '-q', '-b', 'groupe-A', wt)
+  return { dir, wt }
+}
+
+test('--dossier crée le dossier du relecteur dans le dossier git du worktree, et imprime son chemin', () => {
+  const { dir, wt } = worktree()
+  try {
+    const out = snap(wt, '--dossier', 'T07')
+    assert.equal(out.status, 0, out.stderr)
+    // Propre à ce worktree : sous son dossier git à lui, pas sous celui du dépôt commun.
+    const gitDir = git(wt, 'rev-parse', '--absolute-git-dir')
+    assert.notEqual(realpathSync(gitDir), realpathSync(git(dir, 'rev-parse', '--absolute-git-dir')))
+    const path = join(gitDir, 'flow-board', 'revue-T07')
+    assert.ok(existsSync(path) && statSync(path).isDirectory(), 'dossier absent')
+    const printed = /Dossier du relecteur : (.+?) \(/.exec(out.stdout)
+    assert.ok(printed, out.stdout)
+    assert.equal(realpathSync(printed[1]), realpathSync(path))
+    // La fermeture d'un groupe ne le voit pas comme un fichier inconnu : il est hors de l'arbre de travail.
+    writeFileSync(join(path, 'copie.txt'), 'copie extraite\n')
+    assert.equal(git(wt, 'status', '--porcelain', '--ignored', '--untracked-files=all'), '')
+    // Relancé, il garde ce qui y est.
+    assert.equal(snap(wt, '--dossier', 'T07').status, 0)
+    assert.ok(existsSync(join(path, 'copie.txt')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--dossier refuse un id hors forme, ou un nombre d’arguments faux, sans rien créer', () => {
+  const { dir, wt } = worktree()
+  try {
+    const gitDir = git(wt, 'rev-parse', '--absolute-git-dir')
+    // Le corpus hostile, sauf NUL, qu'un argument de commande ne peut pas porter.
+    for (const id of ['../T07', '-T07', 'T 07', '', 'a/b', ...Object.values(CORPUS).filter(c => !c.includes(String.fromCharCode(0))).map(c => `T${c}07`)]) {
+      const out = snap(wt, '--dossier', id)
+      assert.equal(out.status, 1, `accepté : ${JSON.stringify(id)}`)
+      assert.match(out.stderr, /ÉCHEC : id hors forme/)
+    }
+    assert.equal(snap(wt, '--dossier').status, 1)
+    assert.equal(snap(wt, '--dossier', 'T07', 'T08').status, 1)
+    assert.ok(!existsSync(join(gitDir, 'flow-board')), 'un dossier a été créé')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// --clean : son invariant, « une référence d'instantané n'est supprimée qu'une fois le commit
+// de son ticket (correctifs compris) dans la branche, et jamais celle d'un autre ticket ».
+const T = ticket => `refs/worktree/flow-board/${ticket}`
+const commitAll = (cwd, message, ...files) => {
+  git(cwd, 'add', '-A', '--', ...files)
+  git(cwd, 'commit', '-q', '-m', message)
+}
+
+test('--clean supprime la référence une fois le ticket commité, fichier de ticket et commit voisin compris', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'c.txt'), 'nouveau\n')
+    assert.equal(snap(dir, 'T20', 'a.txt', 'c.txt').status, 0)
+    // Pendant la revue, un ticket suivant sans fichier commun se commite : HEAD bouge.
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket suivant\n')
+    git(dir, 'commit', '-q', '-m', 'ticket suivant', '--', 'b.txt')
+    // Le vrai commit du ticket porte en plus son fichier de ticket (Status:, cases cochées).
+    writeFileSync(join(dir, 'ticket.md'), 'Status: done\n')
+    commitAll(dir, 'ticket T20', 'a.txt', 'c.txt', 'ticket.md')
+    const out = snap(dir, '--clean', 'T20')
+    assert.equal(out.status, 0, out.stderr)
+    assert.match(out.stdout, /refs\/worktree\/flow-board\/T20 supprimée/)
+    assert.ok(!hasRef(dir, T('T20')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean refuse une référence absente, ou un id hors forme, sans rien supprimer', () => {
+  const dir = repo()
+  try {
+    const out = snap(dir, '--clean', 'T21')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /ÉCHEC : aucune référence d'instantané pour T21/)
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T22', 'a.txt').status, 0)
+    commitAll(dir, 'ticket T22', 'a.txt')
+    for (const id of ['T22/../T22', '-T22', 'T22 ', '', '*', 'T2*']) {
+      const bad = snap(dir, '--clean', id)
+      assert.equal(bad.status, 1, `accepté : ${JSON.stringify(id)}`)
+    }
+    assert.equal(snap(dir, '--clean').status, 1)
+    assert.equal(snap(dir, '--clean', 'T22', 'T23').status, 1)
+    assert.ok(hasRef(dir, T('T22')), 'la référence a été supprimée')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean refuse tant que le ticket n’est pas commité, ou commité sans ses correctifs, et nomme les fichiers', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T23', 'a.txt', 'b.txt').status, 0)
+    // Commit absent : rien dans la branche.
+    let out = snap(dir, '--clean', 'T23')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /ÉCHEC : l'index ou l'arbre de travail portent encore un changement de a\.txt, b\.txt face à HEAD/)
+    assert.ok(hasRef(dir, T('T23')))
+    // Un seul des deux fichiers commité : refusé, et seul l'autre est nommé.
+    git(dir, 'commit', '-q', '-m', 'moitié', '--', 'a.txt')
+    out = snap(dir, '--clean', 'T23')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /changement de b\.txt face à HEAD/)
+    // Le reste commité avec un correctif venu après l'instantané : la version figée n'est pas dans la branche.
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket, corrigé après l’instantané\n')
+    commitAll(dir, 'reste', 'b.txt')
+    out = snap(dir, '--clean', 'T23')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /diffèrent : b\.txt\)/)
+    assert.ok(hasRef(dir, T('T23')), 'la référence a été supprimée')
+    // Une fois le ticket commité, l'instantané ne se repose plus (plus rien à figer) : il se repose avant le commit.
+    assert.equal(snap(dir, 'T23', 'b.txt').status, 1, 'plus rien à figer : le correctif est déjà commité')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean ne touche jamais la référence d’un autre ticket, même au nom voisin', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a de T24\n')
+    assert.equal(snap(dir, 'T24', 'a.txt').status, 0)
+    commitAll(dir, 'ticket T24', 'a.txt')
+    writeFileSync(join(dir, 'b.txt'), 'b de T24-x\n')
+    assert.equal(snap(dir, 'T24-x', 'b.txt').status, 0)
+    writeFileSync(join(dir, 'c.txt'), 'c de T2\n')
+    git(dir, 'restore', '--staged', 'b.txt')
+    assert.equal(snap(dir, 'T2', 'c.txt').status, 0)
+    // T24-x et T2 ne sont pas commités : leur --clean refuse ; celui de T24 ne supprime que T24.
+    assert.equal(snap(dir, '--clean', 'T24-x').status, 1)
+    assert.equal(snap(dir, '--clean', 'T2').status, 1)
+    assert.equal(snap(dir, '--clean', 'T24').status, 0)
+    assert.ok(!hasRef(dir, T('T24')))
+    assert.ok(hasRef(dir, T('T24-x')) && hasRef(dir, T('T2')), 'la référence d’un autre ticket a été supprimée')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean d’un instantané qui supprime un fichier : accepté une fois la suppression commitée', () => {
+  const dir = repo()
+  try {
+    unlinkSync(join(dir, 'b.txt'))
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T25', 'a.txt', 'b.txt').status, 0)
+    // Le fichier recréé dans un commit : la suppression n'est pas dans la branche.
+    git(dir, 'restore', '--staged', 'b.txt')
+    writeFileSync(join(dir, 'b.txt'), 'b\n')
+    commitAll(dir, 'a seul', 'a.txt')
+    assert.equal(snap(dir, '--clean', 'T25').status, 1)
+    unlinkSync(join(dir, 'b.txt'))
+    commitAll(dir, 'b supprimé', 'b.txt')
+    const out = snap(dir, '--clean', 'T25')
+    assert.equal(out.status, 0, out.stderr)
+    assert.ok(!hasRef(dir, T('T25')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean sur le parcours réel : instantané, correctif et ligne Status: reposés par la même commande, commit, suppression', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'ticket.md'), 'Status: ready-for-agent\n')
+    assert.equal(snap(dir, 'T26', 'a.txt', 'ticket.md').status, 0)
+    // Le correctif de la passe « bogues » et la ligne Status: du ticket, puis l'instantané reposé avant le commit.
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé\n')
+    writeFileSync(join(dir, 'ticket.md'), 'Status: done\n')
+    const again = snap(dir, 'T26', 'a.txt', 'ticket.md')
+    assert.equal(again.status, 0, again.stderr)
+    assert.match(again.stdout, /Instantané reposé : plage [0-9a-f]+\.\.[0-9a-f]+ depuis le précédent, pour information ; la seule passe après la passe « bogues » relit <hash du premier instantané>\.\./)
+    const pinned = git(dir, 'rev-parse', T('T26'))
+    commitAll(dir, 'ticket T26', 'a.txt', 'ticket.md')
+    const out = snap(dir, '--clean', 'T26')
+    assert.equal(out.status, 0, out.stderr)
+    // Le hash de l'instantané supprimé reste dans la sortie : aucun journal ne le garde sous refs/worktree.
+    assert.ok(out.stdout.includes(pinned), out.stdout)
+    assert.ok(!hasRef(dir, T('T26')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean lancé d’un sous-dossier juge les mêmes fichiers que depuis la racine', () => {
+  const dir = repo()
+  try {
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'sub', 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T27', 'sub/a.txt').status, 0)
+    // Un commit voisin qui ne touche pas sub/a.txt : depuis sub/, --clean ne le prend pas pour le commit du ticket.
+    writeFileSync(join(dir, 'b.txt'), 'b voisin\n')
+    git(dir, 'commit', '-q', '-m', 'voisin', '--', 'b.txt')
+    const sub = join(dir, 'sub')
+    assert.equal(snap(sub, '--clean', 'T27').status, 1)
+    assert.ok(hasRef(dir, T('T27')), 'supprimée avant le commit du ticket')
+    commitAll(dir, 'ticket T27', 'sub/a.txt')
+    const out = snap(sub, '--clean', 'T27')
+    assert.equal(out.status, 0, out.stderr)
+    assert.ok(!hasRef(dir, T('T27')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean refuse quand l’index ou l’arbre portent encore un changement des fichiers de l’instantané', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T28', 'a.txt').status, 0)
+    // Un correctif fait après l'instantané, sans le reposer ; le commit prend l'index tel quel (la version figée).
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé après l’instantané\n')
+    git(dir, 'commit', '-q', '-m', 'ticket sans son correctif')
+    const out = snap(dir, '--clean', 'T28')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /a\.txt/)
+    assert.ok(hasRef(dir, T('T28')), 'supprimée alors que le correctif n’est pas commité')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('un instantané reposé sur une partie des fichiers du précédent est refusé : --clean ne les verrait plus', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T29', 'a.txt', 'b.txt').status, 0)
+    const first = git(dir, 'rev-parse', T('T29'))
+    git(dir, 'restore', '--staged', 'a.txt', 'b.txt')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket, corrigé\n')
+    const out = snap(dir, 'T29', 'b.txt')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /a\.txt/)
+    assert.equal(git(dir, 'rev-parse', T('T29')), first, 'la référence a bougé')
+    // Un fichier du précédent déjà commité à sa version figée ne bloque pas.
+    git(dir, 'add', 'a.txt')
+    git(dir, 'restore', '--staged', 'b.txt')
+    git(dir, 'commit', '-q', '-m', 'a seul', '--', 'a.txt')
+    assert.equal(snap(dir, 'T29', 'b.txt').status, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('un instantané reposé sans un fichier déjà commité mais corrigé depuis est refusé (correctif hors de --clean)', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T31', 'a.txt', 'b.txt').status, 0)
+    const first = git(dir, 'rev-parse', T('T31'))
+    git(dir, 'commit', '-q', '-m', 'ticket T31')
+    // Deux correctifs après le commit ; l'instantané reposé sur b.txt seul laisserait celui de a.txt hors de --clean.
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket, corrigé\n')
+    const out = snap(dir, 'T31', 'b.txt')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /porte aussi a\.txt, que celui-ci ne porte pas et qui a encore un changement non commité/)
+    assert.equal(git(dir, 'rev-parse', T('T31')), first, 'la référence a bougé')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('un correctif qui ramène un fichier du ticket à HEAD n’empêche pas de reposer l’instantané', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T32', 'a.txt', 'b.txt').status, 0)
+    writeFileSync(join(dir, 'a.txt'), 'a\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket, corrigé\n')
+    const out = snap(dir, 'T32', 'a.txt', 'b.txt')
+    assert.equal(out.status, 0, out.stderr)
+    commitAll(dir, 'ticket T32', 'a.txt', 'b.txt')
+    assert.equal(snap(dir, '--clean', 'T32').status, 0)
+    assert.ok(!hasRef(dir, T('T32')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('poser un instantané sous un id qui ne diffère que par la casse d’un autre est refusé, sans toucher l’autre', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a de T33\n')
+    assert.equal(snap(dir, 'T33', 'a.txt').status, 0)
+    const pinnedT33 = git(dir, 'rev-parse', T('T33'))
+    git(dir, 'restore', '--staged', 'a.txt')
+    writeFileSync(join(dir, 'b.txt'), 'b de t33\n')
+    const out = snap(dir, 't33', 'b.txt')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /ne diffère de refs\/worktree\/flow-board\/t33 que par la casse/)
+    assert.equal(git(dir, 'rev-parse', T('T33')), pinnedT33)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean ne prend pas un commit venu d’une fusion pour celui du ticket, ni une branche réécrite', () => {
+  const dir = repo()
+  try {
+    const base = git(dir, 'rev-parse', 'HEAD')
+    // Sur la branche du groupe, x.txt est créé ; le ticket le supprime.
+    writeFileSync(join(dir, 'x.txt'), 'x\n')
+    commitAll(dir, 'x créé', 'x.txt')
+    unlinkSync(join(dir, 'x.txt'))
+    assert.equal(snap(dir, 'T34', 'x.txt').status, 0)
+    // La suppression est perdue (l'arbre la défait), puis une branche partie d'avant x.txt est fusionnée.
+    git(dir, 'restore', '--staged', 'x.txt')
+    git(dir, 'checkout', '--', 'x.txt')
+    git(dir, 'branch', 'cote', base)
+    git(dir, 'checkout', '-q', 'cote')
+    writeFileSync(join(dir, 'c.txt'), 'c\n')
+    commitAll(dir, 'côté', 'c.txt')
+    git(dir, 'checkout', '-q', '-')
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'fusion', 'cote')
+    const out = snap(dir, '--clean', 'T34')
+    assert.equal(out.status, 1, out.stdout)
+    assert.ok(hasRef(dir, T('T34')), 'supprimée sur un commit de l’autre branche')
+    // Une branche réécrite sous l'instantané : son parent n'est plus un ancêtre de HEAD.
+    git(dir, 'reset', '-q', '--hard', base)
+    const rewritten = snap(dir, '--clean', 'T34')
+    assert.equal(rewritten.status, 1)
+    assert.match(rewritten.stderr, /n'est pas un ancêtre de HEAD/)
+    assert.ok(hasRef(dir, T('T34')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean ne prend jamais la référence d’un autre ticket par la casse', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T30', 'a.txt').status, 0)
+    commitAll(dir, 'ticket T30', 'a.txt')
+    const out = snap(dir, '--clean', 't30')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /une autre référence ne diffère de refs\/worktree\/flow-board\/t30 que par la casse : refs\/worktree\/flow-board\/T30/)
+    assert.ok(hasRef(dir, T('T30')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('la procédure fait supprimer la référence par --clean, plus par update-ref -d seul', () => {
+  assert.ok(procedure.includes('le commit, puis `node <dossier de flow-board>/scripts/snapshot.mjs --clean <id du ticket>`, qui ne supprime que la référence de ce ticket'), 'la procédure ne cite pas --clean')
+  assert.ok(!procedure.includes('le commit, puis `git update-ref -d refs/worktree/flow-board/<id du ticket>`.'), 'la suppression à la main reste la voie normale')
+})
+
+test('les trois gabarits nomment le dossier du relecteur comme seul lieu d’écriture, jamais /tmp', () => {
+  const ref = file => readFileSync(new URL(`../reference/${file}`, import.meta.url), 'utf8')
+  const consignes = ref('consignes-revue.md')
+  assert.ok(consignes.includes('- [Où écrire : seulement `<dossier du relecteur>` (copies extraites, notes)'), 'consignes-revue.md')
+  assert.ok(consignes.includes('jamais `/tmp`'))
+  const prompt = ref('prompt-relecteur.md')
+  const line = '- Où écrire : tes seules écritures (copies extraites, notes) vont dans `<dossier du relecteur>`'
+  // Les deux variantes du prompt, deux axes et axe Spec seul.
+  assert.equal(prompt.split(line).length - 1, 2, 'prompt-relecteur.md : une variante sans la ligne')
+  assert.ok(prompt.includes('jamais dans `/tmp`, l\'arbre de travail ni ailleurs'))
+  const securite = ref('revue-securite.md')
+  assert.ok(securite.includes('Tes seules écritures (copies extraites, notes) vont dans le dossier du relecteur que donne ton fichier de consignes'), 'revue-securite.md')
+  assert.ok(securite.includes('`snapshot.mjs --dossier securite-<id du groupe>`'))
+  assert.ok(procedure.includes('`--relecteur <id du ticket>`, qui crée le dossier du relecteur'), 'la procédure ne cite pas --relecteur')
+  assert.ok(procedure.includes('`node <dossier de flow-board>/scripts/snapshot.mjs --dossier groupe-<id du groupe>`'), 'la procédure ne cite pas --dossier')
+})
+
+test('l’instantané crée aussi le dossier du relecteur du ticket et imprime son chemin', () => {
+  const { dir, wt } = worktree()
+  try {
+    writeFileSync(join(wt, 'a.txt'), 'a modifié\n')
+    const out = snap(wt, 'T08', 'a.txt')
+    assert.equal(out.status, 0, out.stderr)
+    const path = join(git(wt, 'rev-parse', '--absolute-git-dir'), 'flow-board', 'revue-T08')
+    assert.ok(existsSync(path), 'dossier absent')
+    assert.match(out.stdout, /Dossier du relecteur : .+revue-T08 \(/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

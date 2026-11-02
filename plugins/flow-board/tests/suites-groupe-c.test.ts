@@ -21,9 +21,9 @@ const row = (key: string, startedAt: number, source: RegistryAgent['source'], ru
   ...(run !== undefined ? { run } : {}),
 })
 
-// ─── S31 : les parcours portés gardent leurs deux dates ───────────────────────
+// ─── S31 : les missions portées gardent leurs deux dates ───────────────────────
 
-test('S31 : l’en-tête garde, pour chaque parcours porté, la première et la dernière date où la discussion le portait', () => {
+test('S31 : l’en-tête garde, pour chaque mission portée, la première et la dernière date où la discussion le portait', () => {
   const reg = noteCarried(emptyRegistry('s-d', '/p', T0), ['r1'], T0)!
   expect(reg.carried).toEqual(['r1'])
   expect(reg.carriedAt).toEqual({ r1: [{ from: T0, to: T0 }] })
@@ -41,11 +41,11 @@ test('S31 : l’en-tête garde, pour chaque parcours porté, la première et la 
     JSON.stringify({ ...later, carriedAt: { r1: [{ from: T0, to: T0 + 5 * MIN }, { from: T0 + 9 * MIN, to: T0 + 8 * MIN }], autre: [{ from: 1, to: 2 }], r2: [{ from: 'x', to: 3 }] } }),
   )
   expect(parsed?.carriedAt).toEqual({ r1: [{ from: T0, to: T0 + 5 * MIN }] })
-  // Le parcours supprimé quitte aussi les dates.
+  // La mission supprimée quitte aussi les dates.
   expect(applyTraces(later, [{ id: 'run:r1', at: T0 + 6 * MIN }])?.carriedAt).toBeUndefined()
 })
 
-test('S37 : une discussion qui reprend un parcours après plus de 10 min sans le porter ouvre une nouvelle période ; 20 au plus', () => {
+test('S37 : une discussion qui reprend une mission après plus de 10 min sans le porter ouvre une nouvelle période ; 20 au plus', () => {
   const run = { ...newRun('implement', T0, 'Repris'), status: 'done', updatedAt: T0 + 50 * MIN, finishedAt: T0 + 50 * MIN } as Run
   let reg = noteCarried(emptyRegistry('s-d', '/p', T0), [run.id], T0)!
   reg = noteCarried(reg, [run.id], T0 + 10 * MIN)!
@@ -59,7 +59,7 @@ test('S37 : une discussion qui reprend un parcours après plus de 10 min sans le
       { from: T0 + 40 * MIN, to: T0 + 45 * MIN },
     ],
   })
-  // Le sous-agent manqué de l'écart (T0 + 25 min, hors des marges) ne va pas au parcours.
+  // Le spécialiste manqué de l'écart (T0 + 25 min, hors des marges) ne va pas à la mission.
   const out = withCarriedRuns([seen('ecart', T0 + 25 * MIN), seen('apres-reprise', T0 + 42 * MIN)], reg, [run])
   expect(out.map(a => [a.agentId, a.run])).toEqual([
     ['ecart', undefined],
@@ -72,14 +72,14 @@ test('S37 : une discussion qui reprend un parcours après plus de 10 min sans le
   expect(many.carriedAt!.r1![0]!.from).toBe(T0)
 })
 
-test('S40 : une discussion qui porte un parcours sans rien écrire pendant plus de 10 min garde une seule période, trou compris', () => {
+test('S40 : une discussion qui porte une mission sans rien écrire pendant plus de 10 min garde une seule période, trou compris', () => {
   const run = { ...newRun('implement', T0, 'Porté sans écrire'), status: 'done', updatedAt: T0 + 60 * MIN, finishedAt: T0 + 60 * MIN } as Run
   let reg = noteCarried(emptyRegistry('s-d', '/p', T0), [run.id], T0)!
-  // Aucune écriture entre T0 + 5 min et T0 + 50 min (mod rechargé, long tour) : le parcours restait porté.
+  // Aucune écriture entre T0 + 5 min et T0 + 50 min (mod rechargé, long tour) : la mission restait porté.
   reg = noteCarried(reg, [run.id], T0 + 5 * MIN)!
   reg = noteCarried(reg, [run.id], T0 + 50 * MIN)!
   expect(reg.carriedAt).toEqual({ [run.id]: [{ from: T0, to: T0 + 50 * MIN }] })
-  // Le sous-agent manqué pendant le trou va au parcours.
+  // Le spécialiste manqué pendant le trou va à la mission.
   expect(withCarriedRuns([seen('trou', T0 + 30 * MIN)], reg, [run])[0]!.run).toBe(run.id)
   // Une écriture sans lui note la date ; elle survit à la relecture et à la fusion.
   const left = noteCarried(reg, [], T0 + 52 * MIN)!
@@ -89,10 +89,10 @@ test('S40 : une discussion qui porte un parcours sans rien écrire pendant plus 
   expect(mergeRegistry(reg, left).carriedNotedAt).toBe(T0 + 52 * MIN)
 })
 
-// ─── R3 : le rattachement est borné par la période où la discussion portait le parcours ──
+// ─── R3 : le rattachement est borné par la période où la discussion portait la mission ──
 
-test('R3 : un sous-agent rattrapé ne rejoint un parcours porté puis rendu que dans la période où la discussion le portait', () => {
-  // La discussion s-d a porté le parcours de T0 à T0 + 20 min, puis l'a rendu ; une autre l'a repris jusqu'à T0 + 2 h.
+test('R3 : un spécialiste rattrapé ne rejoint une mission portée puis rendu que dans la période où la discussion le portait', () => {
+  // La discussion s-d a porté la mission de T0 à T0 + 20 min, puis l'a rendu ; une autre l'a repris jusqu'à T0 + 2 h.
   const run = { ...newRun('implement', T0, 'Rendu'), owner: 's-autre', updatedAt: T0 + 120 * MIN } as Run
   const reg = noteCarried(noteCarried(emptyRegistry('s-d', '/p', T0), [run.id], T0)!, [run.id], T0 + 20 * MIN)!
   const carried = runsCarriedBy([run], reg)
@@ -105,17 +105,17 @@ test('R3 : un sous-agent rattrapé ne rejoint un parcours porté puis rendu que 
     // Pendant que l'autre discussion le portait : aucun.
     ['apres', undefined],
   ])
-  // Portée encore ici (propriétaire) : pas de borne de fin, la période du parcours seule.
+  // Portée encore ici (propriétaire) : pas de borne de fin, la période de la mission seule.
   const mine = { ...run, owner: 's-d' } as Run
   expect(withCarriedRuns([seen('apres', T0 + 60 * MIN)], reg, [mine])[0]!.run).toBe(mine.id)
-  // Un en-tête sans dates (d'avant) : la période du parcours seule, comme avant.
+  // Un en-tête sans dates (d'avant) : la période de la mission seule, comme avant.
   const undated: SessionRegistry = { ...emptyRegistry('s-d', '/p', T0), carried: [run.id] }
   expect(withCarriedRuns([seen('apres', T0 + 60 * MIN)], undated, [run])[0]!.run).toBe(run.id)
 })
 
-// ─── R2 : une entrée rattrapée sans parcours est rattachée à chaque rattrapage ──
+// ─── R2 : une entrée rattrapée sans mission est rattachée à chaque rattrapage ──
 
-test('R2 : à chaque rattrapage, une entrée venue des transcripts sans parcours est rattachée ; une entrée suivie en direct sans parcours ne l’est pas', () => {
+test('R2 : à chaque rattrapage, une entrée venue des transcripts sans mission est rattachée ; une entrée suivie en direct sans mission ne l’est pas', () => {
   const run = { ...newRun('implement', T0, 'Porté'), status: 'done', updatedAt: T0 + 30 * MIN, finishedAt: T0 + 30 * MIN } as Run
   const base = noteCarried(noteCarried(emptyRegistry('s-d', '/p', T0), [run.id], T0)!, [run.id], T0 + 30 * MIN)!
   const reg: SessionRegistry = {
@@ -167,7 +167,7 @@ test('D2 (a) : sous Windows, un chemin absolu à « \\ » ou à « / » est acce
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 const BOARD_KEY = 'board:/p'
 const PROJECTS = '/h/.claude/projects/-p'
@@ -184,7 +184,7 @@ const world = (
   const mem: Record<string, unknown> = { ...seed }
   const files: Record<string, string> = { ...opts.files }
   const reads: string[] = []
-  // `mtimes` : la date d'un fichier (sinon bien après le parcours) ; `ghosts` : listés, mais absents à la lecture.
+  // `mtimes` : la date d'un fichier (sinon bien après la mission) ; `ghosts` : listés, mais absents à la lecture.
   const mtimeOf = (path: string) => opts.mtimes?.[path] ?? T0 + 3 * 60 * MIN
   const sets: string[] = []
   const toasts: string[] = []
@@ -250,7 +250,7 @@ const traceIds = (mem: Record<string, unknown>): string[] =>
     .map(([, v]) => (v as { id: string }).id)
     .sort()
 
-/** Le transcript d'un sous-agent qui travaille à `at`. */
+/** Le transcript d'un spécialiste qui travaille à `at`. */
 const agentTranscript = (at: number): string =>
   [
     { type: 'api-request', timestamp: new Date(at).toISOString() },
@@ -259,10 +259,10 @@ const agentTranscript = (at: number): string =>
     .map(l => JSON.stringify(l))
     .join('\n')
 
-/** Un parcours archivé et fini, de `T0` à `T0 + 30 min`. */
+/** Une mission archivée et fini, de `T0` à `T0 + 30 min`. */
 const archivedRun = (title: string): Run => ({ ...newRun('implement', T0, title), status: 'done', updatedAt: T0 + 30 * MIN, finishedAt: T0 + 30 * MIN, archivedAt: T0 + 40 * MIN }) as Run
 
-/** Supprime un parcours archivé depuis l'onglet Historique. */
+/** Supprime une mission archivée depuis l'onglet Historique. */
 const dropRun = async ($: any, clock: { advance: (ms: number) => Promise<void> }, run: Run) => {
   const ui = await $.ui.mount({ plugin: 'flow-board', surface: 'terminal', ...PANE })
   await ui.press({ key: 'tab-history' })
@@ -304,7 +304,7 @@ test('D2 (b) par le mod : un nouvel effacement pose sa trace dans une entrée à
   expect(mem['agents:s-deux']).toBeUndefined()
 })
 
-test('R1 par le mod : de la première trace à la fin de « Supprimer », l’onglet dit « effacement en cours » pour ce parcours', async ($, on) => {
+test('R1 par le mod : de la première trace à la fin de « Supprimer », l’onglet dit « effacement en cours » pour cette mission', async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 4 * 60 * MIN })
   const run = archivedRun('Lot à jeter')
   // La première trace attend qu'on la laisse passer : l'effacement est en cours pendant ce temps.
@@ -324,14 +324,14 @@ test('R1 par le mod : de la première trace à la fin de « Supprimer », l’on
     await isReached
     const during = await $.ui.mount({ plugin: 'flow-board', surface: 'desktop', ...PANE })
     await during.press({ key: 'tab-history' })
-    expect(await during.find({ type: 'Text', text: /Effacement\sen\scours\sdu\sparcours\s« Lot à jeter »/ })).toBeDefined()
-    // S36 : un second « Supprimer » du même parcours pendant le premier ne fait rien.
+    expect(await during.find({ type: 'Text', text: /Effacement\sen\scours\sde\sla\smission\s« Lot à jeter »/ })).toBeDefined()
+    // S36 : un second « Supprimer » de la même mission pendant le premier ne fait rien.
     const before = sets.filter(k => k.endsWith(':erased')).length
     await during.press({ key: `drop-${run.id}` })
     await during.press({ key: `drop-yes-${run.id}` })
     expect(sets.filter(k => k.endsWith(':erased')).length).toBe(before)
     await during.press({ key: 'tab-agents' })
-    expect(await during.find({ type: 'Text', text: /Effacement\sen\scours\sdu\sparcours\s« Lot à jeter »/ })).toBeDefined()
+    expect(await during.find({ type: 'Text', text: /Effacement\sen\scours\sde\sla\smission\s« Lot à jeter »/ })).toBeDefined()
     await during.unmount()
   } finally {
     release()
@@ -345,7 +345,7 @@ test('R1 par le mod : de la première trace à la fin de « Supprimer », l’on
   await ui.unmount()
 })
 
-test('R5 par le mod : « Supprimer » réécrit tout de suite une discussion fermée qui portait le parcours, même sans sous-agent de lui', async ($, on) => {
+test('R5 par le mod : « Supprimer » réécrit tout de suite une discussion fermée qui portait la mission, même sans spécialiste de lui', async ($, on) => {
   const NOW = T0 + 4 * 60 * MIN
   const clock = mock.clock(on, { now: NOW })
   const run = archivedRun('Lot porté ailleurs')
@@ -364,17 +364,17 @@ test('R5 par le mod : « Supprimer » réécrit tout de suite une discussion fer
   const after = parseRegistry(mem['agents:orch-porte'])!
   expect(after.carried).toEqual(['autre'])
   expect(after.carriedAt).toEqual({ autre: [{ from: T0 + 60 * MIN, to: T0 + 70 * MIN }] })
-  // Son sous-agent hors du parcours reste.
+  // Son spécialiste hors de la mission reste.
   expect(after.agents.map(a => a.key)).toEqual(['hors'])
 })
 
-test('D4 (a) par le mod : « Supprimer » relit les transcripts des discussions qui ont porté le parcours ; un sous-agent manqué de sa période part aussi, un transcript illisible se dit', async ($, on) => {
+test('D4 (a) par le mod : « Supprimer » relit les transcripts des discussions qui ont porté la mission ; un spécialiste manqué de sa période part aussi, un transcript illisible se dit', async ($, on) => {
   const NOW = T0 + 4 * 60 * MIN
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { CLAUDE_CONFIG_DIR: '/h/.claude' })
   const run = archivedRun('Lot relu')
   const old = NOW - 2 * 60 * MIN
-  // Une discussion fermée l'a porté de T0 à T0 + 10 min ; deux sous-agents manquent à son registre.
+  // Une discussion fermée l'a porté de T0 à T0 + 10 min ; deux spécialistes manquent à son registre.
   const carrier: SessionRegistry = {
     ...emptyRegistry('orch-relu', '/p', old),
     transcript: `${PROJECTS}/orch-relu.jsonl`,
@@ -393,7 +393,7 @@ test('D4 (a) par le mod : « Supprimer » relit les transcripts des discussions 
         [`${PROJECTS}/orch-relu.jsonl`]: '',
         [`${sub}/agent-manque.jsonl`]: agentTranscript(T0 + 5 * MIN),
         [`${sub}/agent-manque.meta.json`]: JSON.stringify({ description: 'Manqué', toolUseId: 'call-manque', finished: true }),
-        // Pendant le parcours, mais après que cette discussion l'a rendu (marge comprise) : pas à lui.
+        // Pendant la mission, mais après que cette discussion l'a rendu (marge comprise) : pas à lui.
         [`${sub}/agent-apres.jsonl`]: agentTranscript(T0 + 25 * MIN),
         [`${sub}/agent-apres.meta.json`]: JSON.stringify({ description: 'Après', toolUseId: 'call-apres', finished: true }),
         '/ailleurs/orch-ailleurs.jsonl': '',
@@ -410,7 +410,7 @@ test('D4 (a) par le mod : « Supprimer » relit les transcripts des discussions 
   expect(ids).not.toContain('call:call-apres')
   // S34 : l'effacement s'est fait, et le transcript refusé se dit.
   expect((mem[BOARD_KEY] as Board).runs.some(r => r.id === run.id)).toBe(false)
-  expect(toasts.some(t => t.includes('1 transcript non relu : un sous-agent manqué pourrait revenir sans parcours'))).toBe(true)
+  expect(toasts.some(t => t.includes('1 transcript non relu : un spécialiste manqué pourrait revenir sans mission'))).toBe(true)
 })
 
 test('S33 par le mod : un « Supprimer » dont une trace ne s’écrit pas est annulé, et le message dit qu’une session ouverte a pu en effacer une partie', async ($, on) => {
@@ -479,12 +479,12 @@ test('R1 par le mod : « ✗ Oublier » dit aussi « effacement en cours » pour
   await ui.unmount()
 })
 
-test('R3 et S35 par le mod : la reprise d’un ancien parcours par transcripts ne lui donne que les sous-agents de la période où la discussion le portait', async ($, on) => {
+test('R3 et S35 par le mod : la reprise d’un ancien parcours par transcripts ne lui donne que les spécialistes de la période où la discussion le portait', async ($, on) => {
   const NOW = T0 + 4 * 60 * MIN
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { CLAUDE_CONFIG_DIR: '/h/.claude' })
   const run = { ...newRun('implement', T0, 'Ancien lot'), status: 'done', updatedAt: T0 + 30 * MIN, finishedAt: T0 + 30 * MIN } as Run
-  // La discussion l'a porté de T0 à T0 + 5 min, puis l'a rendu ; un sous-agent vu en direct la fait relire.
+  // La discussion l'a porté de T0 à T0 + 5 min, puis l'a rendu ; un spécialiste vu en direct la fait relire.
   const holder: SessionRegistry = {
     ...emptyRegistry('sess-q14', '/p', T0),
     transcript: `${PROJECTS}/sess-q14.jsonl`,
@@ -502,7 +502,7 @@ test('R3 et S35 par le mod : la reprise d’un ancien parcours par transcripts n
         [`${PROJECTS}/sess-q14.jsonl`]: '',
         [`${sub}/agent-pendant.jsonl`]: agentTranscript(T0 + 2 * MIN),
         [`${sub}/agent-pendant.meta.json`]: JSON.stringify({ description: 'Pendant', toolUseId: 'call-pendant', finished: true }),
-        // Dans la période du parcours, mais après que la discussion l'a rendu (marge comprise).
+        // Dans la période de la mission, mais après que la discussion l'a rendu (marge comprise).
         [`${sub}/agent-apres.jsonl`]: agentTranscript(T0 + 20 * MIN),
         [`${sub}/agent-apres.meta.json`]: JSON.stringify({ description: 'Après', toolUseId: 'call-apres', finished: true }),
       },
@@ -525,7 +525,7 @@ test('D2 (a) et I3 : sous Windows, un dossier Claude UNC ou en chemin long garde
   expect(isTranscriptPath('\\\\srv\\autre\\x.jsonl', '\\\\srv\\profil\\.claude')).toBe(false)
 })
 
-test('S39 par le mod : « Supprimer » compte comme non relue une discussion porteuse sans transcript, pas un fichier disparu ni un vieux fichier d’avant le parcours', async ($, on) => {
+test('S39 par le mod : « Supprimer » compte comme non relue une discussion porteuse sans transcript, pas un fichier disparu ni un vieux fichier d’avant la mission', async ($, on) => {
   const NOW = T0 + 4 * 60 * MIN
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { CLAUDE_CONFIG_DIR: '/h/.claude' })
@@ -549,5 +549,5 @@ test('S39 par le mod : « Supprimer » compte comme non relue une discussion por
   await dropRun($, clock, run)
   // Le vieux fichier n'est même pas lu ; seul le porteur sans transcript compte.
   expect(reads.filter(p => p.endsWith('agent-vieux.jsonl'))).toEqual([])
-  expect(toasts.some(t => t.includes('1 transcript non relu : un sous-agent manqué pourrait revenir sans parcours'))).toBe(true)
+  expect(toasts.some(t => t.includes('1 transcript non relu : un spécialiste manqué pourrait revenir sans mission'))).toBe(true)
 })

@@ -1,4 +1,4 @@
-// La procédure d'une session liée de groupe (reference/procedure-groupe.md) : le texte de délégation
+// La procédure d'un worker de groupe (reference/procedure-groupe.md) : le texte de délégation
 // la cite par son chemin au lieu de la recopier. Ces tests lisent le fichier, ce que `claude plugin
 // test` ne permet pas ; ceux du texte de délégation (groupes.test.ts, brief-sessions-liees.test.ts)
 // vérifient qu'il la cite.
@@ -34,11 +34,11 @@ test('la procédure a chaque étape : questions, tickets, règles, revue du grou
     '7. La consigne des relecteurs',
     '8. Le fichier des choix déjà déclarés',
     '9. Sans git',
-    '10. Session autonome',
+    '10. Worker autonome',
   ])
 })
 
-// Un lot sans groupes fait dans la discussion du parcours suit la même procédure : sa consigne cite
+// Un lot sans groupes fait dans la discussion de la mission suit la même procédure : sa consigne cite
 // des sections qui existent, avec leur titre, et ses exceptions sont les cinq décidées au cadrage.
 const catalog = read('hooks/catalog.ts')
 
@@ -61,19 +61,19 @@ test('lot sans groupes : exactement cinq exceptions, celles du cadrage, qui renv
   // Elles se joignent par « ; » dans la consigne : aucune n'en porte.
   for (const e of exceptions) assert.ok(!e.includes('; ') && !e.includes('. '), `exception coupée : « ${e} »`)
   has(section(2), '10. Ne pas lancer `<implement>`')
-  has(section(10), 'Seulement quand le prompt dit que la session est une session autonome')
+  has(section(10), 'Seulement quand le prompt dit que la session est un worker autonome')
 })
 
-test('l’en-tête de la procédure nomme la discussion du parcours qui fait un lot sans groupes', () => {
+test('l’en-tête de la procédure nomme la discussion de la mission qui fait un lot sans groupes', () => {
   const head = procedure.slice(0, procedure.indexOf('## 1. '))
-  has(head, 'La discussion principale qui fait elle-même un lot sans groupes suit aussi cette procédure, avec les exceptions que lui donne sa consigne')
+  has(head, 'Le manager qui fait lui-même un lot sans groupes suit aussi cette procédure, avec les exceptions que lui donne sa consigne')
 })
 
-test('session autonome : seulement sur le dire du prompt, choix tranchés après l’advisor et déclarés, le sensible ou douteux posé, revues à leur effort', () => {
+test('worker autonome : seulement sur le dire du prompt, choix tranchés après l’advisor et déclarés, le sensible ou douteux posé, revues à leur effort', () => {
   const s = section(10)
   has(
     s,
-    'Seulement quand le prompt dit que la session est une session autonome',
+    'Seulement quand le prompt dit que la session est un worker autonome',
     'la session le tranche elle-même, sans attendre ma réponse',
     "elle consulte l'advisor quand elle a l'outil `advisor` ; sans lui, elle relit elle-même son choix",
     'puis le déclare aussitôt dans `{"decided": …}` avec sa raison',
@@ -83,17 +83,17 @@ test('session autonome : seulement sur le dire du prompt, choix tranchés après
   )
   // Les règles se citent, elles ne se recopient pas.
   assert.doesNotMatch(s, /effort high, passés explicitement|Standards et Spec dans un seul/)
-  // Hors d'une session autonome, les choix de conception attendent toujours la réponse.
-  has(section(1), "Seules les questions sensibles et les choix de conception attendent ma réponse (sauf dans une session autonome : section 10)")
+  // Hors d'un worker autonome, les choix de conception attendent toujours la réponse.
+  has(section(1), "Seules les questions sensibles et les choix de conception attendent ma réponse (sauf dans un worker autonome : section 10)")
   // Le texte de délégation la cite par la procédure, quand l'effort est xhigh.
-  assert.match(register, /elle applique la section « Session autonome » de la procédure\"/)
+  assert.match(register, /elle applique la section « Worker autonome » de la procédure\"/)
 })
 
 test('le texte de délégation cite la procédure par son chemin installé, à côté de la méthode de sécurité', () => {
   assert.match(register, /const PROCEDURE_FILE = 'reference\/procedure-groupe\.md'/)
   assert.match(register, /procedurePath = `\$\{root\}\/\$\{PROCEDURE_FILE\}`/)
   assert.match(register, /const procedure = isSource \? `\$\{MOD_SOURCE\}\/\$\{PROCEDURE_FILE\} du dossier de travail \(source du dépôt, qui fait foi ; sinon \$\{procedurePath\}\)` : procedurePath/)
-  assert.match(register, /2\) puis lire la procédure d'une session liée de groupe, \$\{procedure\}, et la suivre jusqu'au bout/)
+  assert.match(register, /2\) puis lire la procédure d'un worker de groupe, \$\{procedure\}, et la suivre jusqu'au bout/)
   // La procédure n'est plus recopiée dans le texte de délégation.
   assert.doesNotMatch(register, /const (TICKET_SNAPSHOT_FR|COMMIT_BEFORE_REVIEW_FR|REVIEWER_BRIEF_FR|LONG_COMMANDS) =/)
 })
@@ -103,7 +103,7 @@ test('relecture du fond et de la forme : la revue d’un ticket « Lecteur » la
   has(
     section(2),
     'pour un ticket qui a une ligne « Lecteur : <qui> », lancer dans le même message, sur la même cible, la relecture du fond et de la forme',
-    'un sous-agent relecteur (outil Agent, type general-purpose, modèle opus, effort high, passés explicitement), en lecture seule',
+    'un spécialiste relecteur (outil Agent, type general-purpose, modèle opus, effort high, passés explicitement), en lecture seule',
     'le chemin du fichier de méthode de la relecture du fond et de la forme dans son prompt, à côté de son fichier de consignes',
     'nommer soi-même le lecteur et le déclarer dans `{"decided": …}`',
     'son fichier de consignes donne le lecteur visé (la ligne « Lecteur », ou celui que la session a nommé)',
@@ -146,14 +146,14 @@ test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un r
     'Relire d\'abord le fichier de décisions du projet et les commentaires « mise à jour du porteur » du ticket',
     'Avant d\'écrire du code, reposer les trois questions du classement sur le texte du ticket et le code qu\'il touche',
     'Un seul oui rend le ticket au moins sensible ; un oui à la deuxième ou à la troisième le rend très sensible',
-    'corriger la ligne « Zone sensible » du ticket, suivre aussitôt les revues du nouveau niveau, et le dire à la discussion principale par une note de l\'outil flow (`{"note": …}`) et dans le compte rendu',
+    'corriger la ligne « Zone sensible » du ticket, suivre aussitôt les revues du nouveau niveau, et le dire au manager par une note de l\'outil flow (`{"note": …}`) et dans le compte rendu',
     'jamais redescendre un niveau',
     'un ticket devenu très sensible sans invariant dans son texte est une question sensible (section 3) avant d\'être commencé',
     'le relais y reconnaît la passe « bogues » d\'un ticket en cours',
     'n\'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) », jamais « blocked » au tableau de bord',
     '`<tdd>` par l\'outil Skill (le sauter pour un ticket sans comportement testable : une ressource visuelle, un document)',
-    'sur les seuls changements du ticket (point fixe : le commit d\'avant le ticket). Pour un ticket hors zone sensible, les deux axes dans un seul sous-agent relecteur (outil Agent, modèle opus, effort medium, passés explicitement), quelle que soit la taille du diff',
-    'Pour un ticket sensible ou très sensible (un ticket muet compte comme sensible), l\'axe Spec seul, sans l\'axe Standards que sa passe « bogues » refait, dans un seul sous-agent relecteur (outil Agent, modèle opus, effort high, passés explicitement), nommé « Spec · <ticket> », d\'après la variante « axe Spec seul » du gabarit `prompt-relecteur.md`',
+    'sur les seuls changements du ticket (point fixe : le commit d\'avant le ticket). Pour un ticket hors zone sensible, les deux axes dans un seul spécialiste relecteur (outil Agent, modèle opus, effort medium, passés explicitement), quelle que soit la taille du diff',
+    'Pour un ticket sensible ou très sensible (un ticket muet compte comme sensible), l\'axe Spec seul, sans l\'axe Standards que sa passe « bogues » refait, dans un seul spécialiste relecteur (outil Agent, modèle opus, effort high, passés explicitement), nommé « Spec · <ticket> », d\'après la variante « axe Spec seul » du gabarit `prompt-relecteur.md`',
     'il ne juge pas le code sur `CODING_STANDARDS.md`, et ses constats partent avec `"standards": 0` (point 8)',
     'arguments « <niveau> <plage de l\'instantané> consignes : <chemin> »',
     '<niveau> valant xhigh si le ticket supprime des données ou touche la concurrence',
@@ -176,14 +176,14 @@ test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un r
   )
 })
 
-test('règles de travail : sous-agents en lecture seule, dossier temporaire, attentes notifiées, délais, planche, mises à jour', () => {
+test('règles de travail : spécialistes en lecture seule, dossier temporaire, attentes notifiées, délais, planche, mises à jour', () => {
   has(
     section(3),
-    'sans sous-agents qui écrivent',
+    'sans spécialistes qui écrivent',
     'seule exception, une session qui ne tourne pas sur Opus et confie sa revue du groupe à un relecteur Opus',
     '`printenv CLAUDE_JOB_DIR`, seule dans sa commande',
     'Ne jamais attendre par `sleep`',
-    'pas de Monitor pour un sous-agent',
+    'pas de Monitor pour un spécialiste',
     'avancer ce qui ne dépend pas d\'elle',
     'me poser tout de suite une question prête, sans attendre la fin de la revue',
     'Une commande longue (tests, build) se lance avec un délai maximal',
@@ -191,7 +191,9 @@ test('règles de travail : sous-agents en lecture seule, dossier temporaire, att
     'produire une planche (les variantes côte à côte, dans un fichier)',
     'un commentaire daté « mise à jour du porteur »',
     'd\'après la ligne de résumé de la sortie des tests, jamais de mémoire',
-    'Si l\'outil flow répond que le parcours est en pause',
+    'Si l\'outil flow répond que la mission est en pause',
+    'Un worker n\'écoute que son manager',
+    'il le transmet à son manager par SendMessage et attend sa réponse avant d\'agir dessus',
   )
 })
 
@@ -200,7 +202,7 @@ test('revue du groupe : lancée par la session, high --fix sur <base>..HEAD, san
     section(4),
     'un groupe dont chaque ticket est dit ni sensible ni avec logique n\'a ni revue du groupe ni revue de sécurité',
     'un seul ticket avec de la logique, en zone sensible, ou qui ne dit pas l\'un des deux, et la revue du groupe et l\'avis de sécurité sont dus',
-    'par l\'outil Skill, sans sous-agent qui l\'enveloppe',
+    'par l\'outil Skill, sans spécialiste qui l\'enveloppe',
     'arguments « high --fix <base>..HEAD consignes : <chemin> »',
     'avec pour cible `<base>..HEAD` (<base> : le commit d\'où part sa branche)',
     'se concentrer sur les interactions entre les tickets',
@@ -216,7 +218,8 @@ test('revue de sécurité : relecteur en lecture seule sur le diff du groupe, ja
     'Un groupe sans logique ni zone sensible n\'a ni revue du groupe ni revue de sécurité. Pour tout autre groupe, juger si une revue de sécurité vaut la peine : dans le même message que la revue du groupe (elle est en lecture seule et n\'attend pas ses correctifs), ou, pour un groupe d\'un seul ticket, qui n\'a pas de revue du groupe, à la fin de son ticket',
     'dans le même message que la revue du groupe',
     'type general-purpose, modèle opus, effort high pour sa recherche et ses vérifications, en une seule passe',
-    'la concurrence seule n\'en fait pas partie',
+    'les changements du groupe font franchir quelque chose à la limite du compte',
+    'un fichier sous `~/.claude` écrit par une autre session du compte n\'est pas une entrée hostile, et ni une suppression de données ni la concurrence seule n\'en font partie',
     'avec pour seul périmètre `git diff <base>..<lancement>`',
     '<lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes',
     'Ne pas lancer `/security-review`',
@@ -226,7 +229,7 @@ test('revue de sécurité : relecteur en lecture seule sur le diff du groupe, ja
   )
 })
 
-test('compte rendu : complet au relais, une ligne à la discussion principale', () => {
+test('compte rendu : complet au relais, une ligne au manager', () => {
   has(
     section(6),
     'les fichiers modifiés, sa branche, les contrôles lancés et leur résultat',
@@ -260,7 +263,7 @@ test('sans git : copies avant chaque ticket, points fixes et périmètres par ce
   )
 })
 
-// Les pistes de la rétro du parcours « Frise, groupes et titres ».
+// Les pistes de la rétro de la mission « Frise, groupes et titres ».
 
 test('une lecture d’une décision hors zone sensible se code, se déclare et la session continue', () => {
   has(
@@ -281,7 +284,7 @@ test('le fichier de consignes donne CODING_STANDARDS.md et, pour un ticket, les 
   has(section(4), 'le chemin de `CODING_STANDARDS.md` s\'il existe')
 })
 
-// Rétro du parcours « Lancer un groupe en xhigh » : trois fichiers de consignes presque identiques
+// Rétro de la mission « Lancer un groupe en xhigh » : trois fichiers de consignes presque identiques
 // écrits à la main (r11), un commit de statut seul pour le hash du ticket (r12), un ticket de version
 // en collision avec une autre discussion (r2).
 
@@ -292,11 +295,11 @@ test('gabarit : le fichier de consignes se remplit d’après un gabarit, qui po
   has(
     template,
     'Cible : `<base>..<fin>`, jamais un hash seul',
-    '`git diff <base>..<fin> -- <chemins du parcours>`',
+    '`git diff <base>..<fin> -- <chemins de la mission>`',
     'Les choix déjà déclarés : `<chemin du fichier des choix>`',
     'l\'invariant du ticket',
     'le lecteur visé',
-    'Réservé au porteur du parcours',
+    'Réservé au porteur de la mission',
     'À ne pas faire',
   )
   // La consigne des relecteurs : la même, mot pour mot, que la section 7.
@@ -312,7 +315,7 @@ test('statut : la ligne Status: dit « fait » sans hash, jamais dans un commit 
   )
 })
 
-test('version : une session liée ne touche ni aux versions ni aux CHANGELOG, et liste ce que le CHANGELOG devra dire', () => {
+test('version : un worker ne touche ni aux versions ni aux CHANGELOG, et liste ce que le CHANGELOG devra dire', () => {
   has(
     section(3),
     'Ne toucher ni aux versions (fichiers de version, entrée d\'une marketplace) ni aux CHANGELOG, même si un ticket le demande',
@@ -339,12 +342,12 @@ test('les règles de travail disent ce que le garde-fou refuse vraiment, sans cd
   assert.ok(!s.includes('jamais par une boucle cat ou head'), 'l\'ancienne consigne de lecture est restée')
 })
 
-test('après le compte rendu, un correctif suit la procédure du ticket, une question se tranche dans la discussion principale', () => {
+test('après le compte rendu, un correctif suit la procédure du ticket, une question se tranche dans le manager', () => {
   has(
     section(6),
     'Après le compte rendu, un correctif appliqué par la session',
     'suit la procédure du ticket (section 2 : contrôles, revue, passe « bogues » s\'il touche une zone sensible, commit)',
-    'Une question du compte rendu se tranche dans la discussion principale ; la session n\'applique rien d\'autre sans un message de celle-ci',
+    'Une question du compte rendu se tranche dans le manager ; la session n\'applique rien d\'autre sans un message de celui-ci',
   )
 })
 
@@ -359,7 +362,7 @@ test('un choix déclaré ne se défait pas par préférence, mais un défaut qu�
   }
 })
 
-// Les pistes de la rétro du parcours « Fermeture auto des sessions liées ».
+// Les pistes de la rétro de la mission « Fermeture auto des workers ».
 
 test('un constat de passe « bogues » qui ne viole pas l’invariant va aux pistes, sans question', () => {
   has(
@@ -374,7 +377,7 @@ test('un constat de passe « bogues » qui ne viole pas l’invariant va aux pis
 test('une question sensible née en cours de ticket part tout de suite, le commit attend la réponse', () => {
   has(
     section(3),
-    'Une question sensible née en cours de ticket part tout de suite à la discussion principale par SendMessage (ses options, la recommandée en tête), sans attendre le compte rendu',
+    'Une question sensible née en cours de ticket part tout de suite au manager par SendMessage (ses options, la recommandée en tête), sans attendre le compte rendu',
     'le commit du ticket attend la réponse, et la session avance ce qui n\'en dépend pas',
   )
 })
@@ -405,6 +408,38 @@ test('pas d’appel final à l’advisor quand les revues du groupe ont tourné'
   has(section(6), 'Pas d\'appel final à l\'advisor quand les revues du groupe ont tourné : elles en tiennent lieu')
 })
 
+test('revue du ticket : la session ne charge pas le skill de revue, que le relecteur unique contredisait', () => {
+  has(
+    section(2),
+    'La session ne charge pas `<revue du ticket>` par l\'outil Skill',
+    'le relecteur unique suit le gabarit `prompt-relecteur.md`',
+  )
+  assert.ok(!section(2).includes('`<revue du ticket>` par l\'outil Skill sur les seuls changements du ticket'), 'le point 4 fait encore charger le skill de revue')
+})
+
+test('worker autonome : l’advisor à deux moments nommés, avant le premier choix déclaré d’un ticket et avant le compte rendu', () => {
+  has(
+    section(10),
+    'avant le premier choix de conception qu\'elle déclare dans un ticket, et avant son compte rendu sauf quand les revues du groupe ont tourné (section 6)',
+  )
+  assert.ok(!section(10).includes('Avant chaque grand choix'), 'la section 10 garde le moment flou « avant chaque grand choix »')
+})
+
+test('une deuxième question née des correctifs sur un même invariant propose une option qui traite la classe entière', () => {
+  has(
+    section(2),
+    'Quand une deuxième question naît des correctifs sur un même invariant',
+    'à côté de l\'option ponctuelle qui bouche ce scénario, une option qui traite la classe entière (par exemple dater l\'événement et le comparer au début de l\'objet)',
+  )
+})
+
+test('les tests écrits d’avance pour un ticket suivant attendent hors du dossier des tests', () => {
+  has(
+    section(2),
+    'Un test écrit d\'avance pour un ticket suivant attend dans le dossier temporaire de la session (section 3), hors du dossier des tests du projet (`tests/`), jusqu\'au tour de son ticket',
+  )
+})
+
 test('les phrases jamais suivies sont retirées', () => {
   for (const old of ['se cochent par l\'outil Edit, sans script', 'sans nouvelles depuis 10 à 15 minutes']) assert.ok(!procedure.includes(old), `reste : « ${old} »`)
 })
@@ -424,7 +459,7 @@ test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer 
   const prompt = read('reference/prompt-relecteur.md')
   has(
     prompt,
-    'N\'invoque pas le skill code-review et ne lance aucun sous-agent : fais toi-même les deux axes',
+    'N\'invoque pas le skill code-review et ne lance aucun spécialiste : fais toi-même les deux axes',
     '`<chemin du fichier de consignes>`',
     '**Axe Standards**',
     '**Axe Spec**',
@@ -433,15 +468,15 @@ test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer 
   has(read('README.md'), '├── reference/prompt-relecteur.md')
 })
 
-test('une session liée ne demande jamais d’envoyer "sensitive" elle-même : elle corrige la ligne et prévient', () => {
-  // L'outil ne relaie pas "tickets" depuis une session liée : aucun point de la section 2 ne doit lui faire envoyer "sensitive".
-  assert.ok(!section(2).includes('(`"sensitive"` à l\'outil flow)'), 'le point 5 fait encore envoyer "sensitive" par la session liée')
+test('un worker ne demande jamais d’envoyer "sensitive" lui-même : il corrige la ligne et prévient', () => {
+  // L'outil ne relaie pas "tickets" depuis un worker : aucun point de la section 2 ne doit lui faire envoyer "sensitive".
+  assert.ok(!section(2).includes('(`"sensitive"` à l\'outil flow)'), 'le point 5 fait encore envoyer "sensitive" par le worker')
   assert.ok(!/se corrige \(`"sensitive"`/.test(section(2)))
 })
 
-test('un ticket reclassé par une session liée : la description de l’outil fait renvoyer "sensitive" par la discussion principale', () => {
-  // L'outil ne relaie pas "tickets" depuis une session liée : au retour du groupe, la discussion principale renvoie le ticket.
-  assert.ok(register.includes('and resend in "tickets", with "sensitive": true, every ticket its report says it reclassified (a linked session cannot send it)'))
+test('un ticket reclassé par un worker : la description de l’outil fait renvoyer "sensitive" par le manager', () => {
+  // L'outil ne relaie pas "tickets" depuis un worker : au retour du groupe, le manager renvoie le ticket.
+  assert.ok(register.includes('and resend in "tickets", with "sensitive": true, every ticket its report says it reclassified (a worker cannot send it)'))
 })
 
 test('la passe « bogues » d’un ticket sensible cite le critère d’effort qui lui est propre, dans la méthode de sécurité', () => {

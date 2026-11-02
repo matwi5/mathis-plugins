@@ -25,7 +25,7 @@ test('les segments d’une piste s’ouvrent et se ferment ; deux outils courts 
   r = openSegment(r, 'a1', { k: 'tool', s: 4_000, f: 'run', t: 'Bash' }, 4_000)!
   const lane = r.agents[0]!.segments!
   expect(lane.map(s => `${s.k}:${s.s}-${s.e ?? '…'}${s.n ? `×${s.n}` : ''}`)).toEqual(['think:1000-3000', 'tool:3000-3900×2', 'tool:4000-…'])
-  // La piste de l'orchestrateur existe toujours ; une piste inconnue ne change rien.
+  // La piste du manager existe toujours ; une piste inconnue ne change rien.
   expect(openSegment(r, MAIN, { k: 'think', s: 5_000 }, 5_000)!.main!.segments).toHaveLength(1)
   expect(openSegment(r, 'inconnu', { k: 'think', s: 5_000 }, 5_000)).toBeNull()
   expect(addMark(r, 'a1', { k: 'fail', at: 4_500 }, 4_500)!.agents[0]!.marks).toEqual([{ k: 'fail', at: 4_500 }])
@@ -56,7 +56,7 @@ const agentAt = (key: string, s: number, e: number | undefined, segments: Regist
   segments,
 })
 
-/** Les pauses compressées d'un axe bâti sur l'activité de pistes et de sous-agents, en minutes. */
+/** Les pauses compressées d'un axe bâti sur l'activité de pistes et de spécialistes, en minutes. */
 const pausesOf = (lanes: Parameters<typeof activityOf>[0], agents: RegistryAgent[], start: number, end: number): number[] =>
   buildAxis(activityOf(lanes, agents, end), start, end).pieces.filter(p => p.pause !== undefined).map(p => p.pause! / MIN)
 
@@ -67,7 +67,7 @@ test('une pause de plus d’une minute se compresse ; une minute ou moins reste 
   expect(pausesOf([{ segments: [work(0, MIN), work(2 * MIN, 3 * MIN)] }], [], 0, 3 * MIN)).toEqual([])
 })
 
-test('attendre la réponse de Mathis est une pause ; attendre un sous-agent ou une tâche de fond est du travail', () => {
+test('attendre la réponse de Mathis est une pause ; attendre un spécialiste ou une tâche de fond est du travail', () => {
   const lane = (k: 'waitPerson' | 'waitAgent' | 'waitBg') => ({ segments: [{ k: 'think' as const, s: 0, e: MIN }, { k, s: MIN, e: 60 * MIN }, { k: 'write' as const, s: 60 * MIN, e: 61 * MIN }] })
   expect(pausesOf([lane('waitPerson')], [], 0, 61 * MIN)).toEqual([59])
   expect(pausesOf([lane('waitAgent')], [], 0, 61 * MIN)).toEqual([])
@@ -75,7 +75,7 @@ test('attendre la réponse de Mathis est une pause ; attendre un sous-agent ou u
   expect(WORKING_KINDS).toEqual(new Set(['think', 'write', 'tool', 'waitAgent', 'waitBg', 'waitAdvisor']))
 })
 
-test('un sous-agent compte par ses segments, pas par toute sa période ; tout juste lancé sans segment, il bloque', () => {
+test('un spécialiste compte par ses segments, pas par toute sa période ; tout juste lancé sans segment, il bloque', () => {
   const main = { segments: [{ k: 'write' as const, s: 0, e: MIN }, { k: 'write' as const, s: 60 * MIN, e: 61 * MIN }] }
   // Au travail les 2 premières minutes, puis en attente de Mathis jusqu'à sa fin.
   const idle = agentAt('a', 0, 61 * MIN, [{ k: 'think', s: 0, e: 2 * MIN }, { k: 'waitPerson', s: 2 * MIN, e: 61 * MIN }])
@@ -87,7 +87,7 @@ test('un sous-agent compte par ses segments, pas par toute sa période ; tout ju
   expect(pausesOf([main], [agentAt('c', 5 * MIN, undefined)], 0, 61 * MIN)).toEqual([4])
 })
 
-test('quand les sessions liées et les sous-agents attendent eux aussi Mathis, le temps se compresse quand même', () => {
+test('quand les workers et les spécialistes attendent eux aussi Mathis, le temps se compresse quand même', () => {
   const main = { segments: [{ k: 'write' as const, s: 0, e: MIN }, { k: 'waitPerson' as const, s: MIN, e: 120 * MIN }, { k: 'write' as const, s: 120 * MIN, e: 121 * MIN }] }
   const linked = { segments: [{ k: 'tool' as const, s: 0, e: 2 * MIN }, { k: 'waitPerson' as const, s: 2 * MIN, e: 121 * MIN }] }
   const agent = agentAt('a', 0, 121 * MIN, [{ k: 'write', s: 0, e: 3 * MIN }, { k: 'waitPerson', s: 3 * MIN, e: 121 * MIN }])
@@ -114,7 +114,7 @@ test('le gain par rapport à une exécution en série compte l’union des péri
   const s = summaryOf([agent('a', 0, 10 * MIN), agent('b', 0, 10 * MIN), agent('c', 180 * MIN, 190 * MIN)], 200 * MIN)
   expect(s).toMatchObject({ agents: 3, running: 0, activeMs: 20 * MIN, serialMs: 30 * MIN })
   expect(Math.abs(s.gain! - 1.5)).toBeLessThan(1e-9)
-  // Un sous-agent sans fin vue court jusqu'à maintenant.
+  // Un spécialiste sans fin vue court jusqu'à maintenant.
   expect(summaryOf([agent('d', 0)], 4 * MIN)).toMatchObject({ running: 1, activeMs: 4 * MIN })
 })
 
@@ -151,7 +151,7 @@ test('un tour fini ou interrompu ferme tout ce qui restait ouvert ; une attente 
   expect(closeOpen(r, MAIN, 11, s => s.k === 'waitBg')).toBeNull()
 })
 
-test('S12 : la piste de l’orchestrateur de deux processus se fusionne, sans doublon', () => {
+test('S12 : la piste du manager de deux processus se fusionne, sans doublon', () => {
   const base = openSegment(emptyRegistry('s1', '/p', 0), MAIN, { k: 'think', s: 1 }, 1)!
   const here = addMark(closeSegment(base, MAIN, () => true, 5)!, MAIN, { k: 'commit', at: 4 }, 5)!
   const there = addMark(openSegment(base, MAIN, { k: 'tool', s: 6, f: 'run' }, 6)!, MAIN, { k: 'msg', at: 6 }, 6)!

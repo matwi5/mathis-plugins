@@ -4,6 +4,15 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.24.0 — 2026-11-03
+
+### Changé
+- **Vocabulaire des missions** dans le README et la consigne de Réécrire (« ni spécialistes »).
+- **Anciens mots refusés** : `termes-retires.txt` ; `check.sh` refuse les anciens mots de flow-board dans le README, les consignes et les nouvelles entrées du CHANGELOG.
+- La commande slash gardée en tête et la phrase ambiguë jamais tranchée, décrites sous la 0.23.0, arrivent avec cette version : elles avaient été poussées après elle, sans nouvelle version.
+
+---
+
 ## 0.23.0 — 2026-10-28
 
 ### Changé

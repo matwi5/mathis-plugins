@@ -714,7 +714,7 @@ async function runFind($: any, query: string) {
   await update($, findAtom, () => ({ query, results, total, isLoading: false }))
 }
 
-/** Les chemins du dossier : `git ls-files` dans un dépôt, sinon un parcours du disque. */
+/** Les chemins du dossier : `git ls-files` dans un dépôt, sinon une lecture du disque. */
 async function indexOf($: any): Promise<string[]> {
   const root = await rootOf($)
   if (fileIndex && fileIndex.root === root) return fileIndex.paths

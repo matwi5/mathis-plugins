@@ -18,11 +18,11 @@ const T0 = 150_000_000
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
 /** Le début du message de consigne que le mod envoie à Claude quand l'auto s'allume au repos. */
-const BRIEF = '⚡ flow-board: the auto mode instructions for this run'
+const BRIEF = '⚡ flow-board: the auto mode instructions for this mission'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
 } as const
 
 const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
@@ -169,7 +169,7 @@ test('relu, sécurité conseillée et pas lancée : elle part une fois ; tranch�
   await $.tool.call({ tool: TOOL, security: { advised: true, why: 'un chemin lu ailleurs' } } as any)
   await turnEnd($, clock)
   expect(w.texts.length).toBe(1)
-  expect(w.texts[0]).toMatch(/^Avant de la lancer, envoie à l'outil flow \{"security": \{"advised": true, "why": "<raison>"\}\} : l'avis de ce passage\. Lance la revue de sécurité de ce parcours/)
+  expect(w.texts[0]).toMatch(/^Avant de la lancer, envoie à l'outil flow \{"security": \{"advised": true, "why": "<raison>"\}\} : l'avis de ce passage\. Lance la revue de sécurité de cette mission/)
   expect(marksOf(w)).toEqual([`review:lot@0~${T0}`, `security:lot@${reviewedAt}`])
   await turnEnd($, clock)
   expect(w.texts.length).toBe(1)

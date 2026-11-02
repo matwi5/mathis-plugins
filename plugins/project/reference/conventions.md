@@ -53,7 +53,7 @@ Chargement : `CLAUDE.md` est chargé à chaque session. `BRIEF.md` peut y être 
 | Procédure répétable (release, synchronisation de base) | Skill dans `.claude/skills/`, invocable par `/<nom>` |
 | Action qui doit se produire à chaque fois, sans exception (lint après édition, blocage d'un dossier) | Hook dans `.claude/settings.json` : une instruction en prose reste un conseil |
 | Préférences et apprentissages de Claude | Mémoire automatique (native) |
-| Tâche qui lit beaucoup de fichiers | Sous-agent, pour garder le contexte principal propre |
+| Tâche qui lit beaucoup de fichiers | Spécialiste, pour garder le contexte principal propre |
 
 Critère pour chaque ligne de `CLAUDE.md` : « Est-ce que la retirer ferait faire une erreur à Claude ? » Sinon, la retirer.
 
@@ -86,8 +86,8 @@ Ces règles s'appliquent à `CLAUDE.md`, aux règles, aux skills et aux agents. 
 - **Vérification** : donner à Claude une commande qui renvoie réussite ou échec (tests, build, lint) et l'écrire dans la section « Commandes » de `CLAUDE.md`. C'est ce qui permet de le laisser travailler sans surveiller chaque étape.
 - **Explorer, planifier, coder** : mode plan pour les changements qui touchent plusieurs fichiers ou une approche incertaine ; pas de plan pour ce qui se décrit en une phrase.
 - **Spec avant les grosses fonctionnalités** : faire interviewer le porteur, écrire la spec dans `docs/`, puis implémenter dans une session neuve.
-- **Contexte** : `/clear` entre deux tâches sans rapport ; sous-agents pour les recherches qui lisent beaucoup de fichiers.
-- **Revue** : `/code-review` pendant le développement ; `/code-review ultra` avant de fusionner un changement important ; `/security-review` sur ce qui touche l'authentification ou les données. Modèle, effort, consignes et cible des revues : section « Revues dans un sous-agent Opus, effort selon l'enjeu » de `config/rules/agents.md`, quand elle est installée.
+- **Contexte** : `/clear` entre deux tâches sans rapport ; spécialistes pour les recherches qui lisent beaucoup de fichiers.
+- **Revue** : `/code-review` pendant le développement ; `/code-review ultra` avant de fusionner un changement important ; `/security-review` sur ce qui touche l'authentification ou les données. Modèle, effort, consignes et cible des revues : section « Revues dans un spécialiste Opus, effort selon l'enjeu » de `config/rules/agents.md`, quand elle est installée.
 - **Déléguer la tâche entière** : donner la tâche complète avec ce que « fini » veut dire et les cas où Claude doit s'arrêter pour demander (en tête du fichier `travail/tasks/`). À la fin d'une exécution longue, lire d'abord ce qu'il attend du porteur : c'est la rubrique « Bloqué par moi » du compte rendu.
 - **Cache et contexte** : choisir le modèle au début de la session plutôt qu'en cours de route, compacter avant de s'absenter plutôt qu'après, vérifier avec `/usage` la part de lectures en cache. Ne fournir que le contexte nécessaire.
 - **Effort** : sur Opus 5.5, l'effort est le réglage principal de la profondeur de raisonnement (le raisonnement est toujours actif). La documentation API conseille de partir de `medium` et de réserver `xhigh` et `max` aux tâches où un gain a été mesuré. Pour réduire le raisonnement, baisser l'effort plutôt qu'ajouter des consignes en prose.

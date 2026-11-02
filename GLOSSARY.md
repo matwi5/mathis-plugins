@@ -30,8 +30,12 @@ Le temps, sur une période (discussion, jour, projet), pendant lequel au moins u
 _Avoid_: durée de session, durée de la discussion
 
 **Temps cumulé** :
-La somme des temps actifs de chaque discussion d'une période : deux discussions qui travaillent en même temps comptent deux fois. Pour une seule discussion, il vaut son temps actif.
+Le travail de tous les fils d'une période, chacun compté : la somme des temps actifs de chaque discussion, plus, dans chaque discussion, chaque fil en plus du premier qui travaille en même temps (son fil principal pendant un tour, ses spécialistes de fond pendant le leur). Deux discussions, ou deux spécialistes de fond, en même temps comptent deux fois ; un spécialiste qui bloque son parent ne compte pas à part.
 _Avoid_: temps total, temps additionné
+
+**Temps gagné** :
+Le temps cumulé moins le temps actif d'une même période : ce que le parallélisme (entre discussions et dans une discussion) a fait en plus du temps passé.
+_Avoid_: temps économisé, gain de parallélisme
 
 **Vitesse** :
 Les tokens générés par un modèle divisés par le temps passé à les générer, du premier morceau de réponse au dernier, sur l'ensemble de ses appels.
@@ -131,12 +135,16 @@ _Avoid_: bouton Ensuite, bouton suivant
 L'état d'une mission que l'utilisateur a allumé par un clic de sa part (« ⚡ Auto » puis « Confirmer » dans la mission, ou « Lancer en auto » chez le COO) : la mission avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour cette mission seulement, depuis la discussion où il a été allumé ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto »), et le mod le met en pause dans certains cas (une lecture ratée, plus rien qui puisse avancer sans l'utilisateur). Une mission qui n'est pas en auto est en manuel.
 _Avoid_: pilote automatique, mode autonome
 
+**Choix d'expérience** :
+Une décision sur ce que l'utilisateur voit et fait (mise en page, maquette, libellés, boutons, notifications), ou toute question où les options se valent techniquement et ne diffèrent que par sa préférence. En mode auto, c'est la première des décisions qui restent des questions bloquantes.
+_Avoid_: choix de goût, choix perso
+
 **Question bloquante** :
 Une décision qui reste à l'utilisateur même en mode auto, déclarée avec ce qu'elle bloque (une phase, un groupe ou un ticket) : seule cette partie de la mission l'attend, le reste avance. Elle se retire une fois répondue.
 _Avoid_: question en attente, blocage
 
 **Validation sautée** :
-Une validation à boutons (accord du cadrage, spec, découpage, plan, écritures Asana du parcours) que le mode auto ne demande pas, déclarée dans « Décidé sans toi » avec le chemin ou le lien du texte validé, pour que l'utilisateur la relise au rapport.
+Une validation à boutons (accord du cadrage, spec, découpage, plan, écritures Asana de la mission) que le mode auto ne demande pas, déclarée dans « Décidé sans toi » avec le chemin ou le lien du texte validé, pour que l'utilisateur la relise au rapport.
 _Avoid_: validation automatique, accord implicite
 
 ## Lots de tickets
@@ -190,7 +198,7 @@ Une tâche à la consigne explicite, dont le résultat se vérifie tout de suite
 _Avoid_: tâche simple
 
 **Worker autonome** :
-Un worker de groupe qui tranche lui-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur : celui lancé à l'effort le plus haut (xhigh), pour les tâches de jugement, et, quel que soit son effort, celui d'une mission en mode auto.
+Un worker de groupe qui tranche lui-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur : celui lancé à l'effort le plus haut (xhigh), pour les tâches de jugement, et, quel que soit son effort, celui d'une mission en mode auto, qui tranche aussi un choix en zone sensible quand la recommandation respecte l'invariant déjà validé (quand il y en a un) et qu'elle est la plus prudente.
 _Avoid_: session autonome, mode xhigh, session xhigh
 
 **Relecture du fond et de la forme** :

@@ -4,6 +4,13 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.7 — 2026-11-03
+
+### Modifié
+- **`retro` et `tdd`** disent « worker » là où ils parlaient de flow-board ; README au vocabulaire des missions. Le texte de Matt Pocock ne change pas.
+
+---
+
 ## 1.3.1-mathis.6 — 2026-11-01
 
 ### Modifié

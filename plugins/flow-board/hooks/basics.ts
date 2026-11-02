@@ -26,10 +26,10 @@ export const LIMITS = {
   /** Autres lots parallèles proposés, en plus du lot principal. */
   otherBatches: 3,
   found: 40,
-  /** Parcours archivés gardés par projet, au-delà des 15 parcours vivants. */
+  /** Missions archivées gardées par projet, au-delà des 15 missions vivantes. */
   archived: 100,
   decided: 30,
-  /** Les choix gardés d'un parcours qui a été en auto, une fois son rapport validé. */
+  /** Les choix gardés d'une mission qui a été en auto, une fois son rapport validé. */
   autoDecided: 200,
 } as const
 
@@ -95,7 +95,7 @@ export const isSecurityCount = (v: unknown): v is number => typeof v === 'number
 
 /**
  * Un compte de bogues en forme (`review.bugs`, la passe « bogues ») : la règle d'un compte de sécurité,
- * la même à l'envoi (discussion du parcours, relais) et à la lecture du relais. Hors forme, il est ignoré,
+ * la même à l'envoi (discussion de la mission, relais) et à la lecture du relais. Hors forme, il est ignoré,
  * jamais lu 0 : 0 dirait une passe faite sans bogue.
  */
 export const isBugCount = isSecurityCount
@@ -241,30 +241,30 @@ export const shownGroupName = (name: unknown): string => (typeof name === 'strin
 /** Un id de groupe dans une réponse de l'outil : tel quel en forme, sinon échappé en JSON (exact, distinct, sans rien glisser). */
 export const shownGroupId = (id: unknown): string => (isGroupId(id) ? id : asciiJson(id))
 
-/** Les choix gardés d'un parcours qui a été en auto, une fois son rapport validé ; le seuil de la pause de l'auto. */
+/** Les choix gardés d'une mission qui a été en auto, une fois son rapport validé ; le seuil de la pause de l'auto. */
 export const AUTO_CHOICES_MAX = LIMITS.autoDecided
 
 /** Les origines d'un choix, telles que le rapport et le fichier des choix les disent. */
 export const ORIGIN_LABELS: Record<DecisionOrigin, string> = {
   recommendation: 'reco prise',
   'skipped-validation': 'validation sautée',
-  'linked-session': 'choix de session liée',
+  'linked-session': 'choix de worker',
 }
 
 /** L'origine relue d'un choix : une des trois, sinon aucune. */
 export const originOf = (value: unknown): DecisionOrigin | undefined =>
   typeof value === 'string' && Object.prototype.hasOwnProperty.call(ORIGIN_LABELS, value) ? (value as DecisionOrigin) : undefined
 
-/** Le parcours a été en auto : son état auto est là, même éteint, et même abîmé (dans le doute, rien n'est coupé). */
+/** La mission a été en auto : son état auto est là, même éteint, et même abîmé (dans le doute, rien n'est coupé). */
 export const hasBeenAuto = (run: Run): boolean => run.auto !== undefined
 
 /**
- * Le compte rendu du parcours est validé par la personne (« ✓ Valider le rapport ») : sa marque, que
+ * Le compte rendu de la mission est validé par la personne (« ✓ Valider le rapport ») : sa marque, que
  * seule la validation pose (une clôture ou une suite proposée finit aussi la phase, sans elle), égale
  * à la fin de la dernière phase de compte rendu (rouverte, puis finie autrement, son rapport est à
  * valider de nouveau).
  */
-const isReportValidated = (run: Run): boolean => {
+export const isReportValidated = (run: Run): boolean => {
   const report = run.phases.filter(p => p.skill === 'compte-rendu').at(-1)
   // La marque est la fin même de la phase que « ✓ Valider le rapport » a finie : rouverte, puis finie
   // autrement (une clôture), sa fin change et la marque ne vaut plus, quelle que soit l'horloge.
@@ -272,8 +272,8 @@ const isReportValidated = (run: Run): boolean => {
 }
 
 /**
- * La place des choix d'un parcours, la règle de toutes les coupes : les 30 plus récents hors auto ;
- * pour un parcours qui a été en auto, aucune coupe avant la validation du rapport (null), les 200 plus
+ * La place des choix d'une mission, la règle de toutes les coupes : les 30 plus récents hors auto ;
+ * pour une mission qui a été en auto, aucune coupe avant la validation du rapport (null), les 200 plus
  * récents ensuite.
  */
 export const choiceRoom = (run: Run): number | null => (!hasBeenAuto(run) ? LIMITS.decided : isReportValidated(run) ? AUTO_CHOICES_MAX : null)

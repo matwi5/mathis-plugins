@@ -423,11 +423,11 @@ describe("session-tools", () => {
       await send("bonjour");
       await clock.advance(5_000);
       expect(await ui.find({ type: "Text", text: "0:05" })).toBeDefined();
-      // Le début du tour d'un sous-agent ne remet pas le chrono à zéro.
+      // Le début du tour d'un spécialiste ne remet pas le chrono à zéro.
       await $.turn.start({ text: "explore le code", turnId: "t1", agentId: "a1" } as any);
       await clock.advance(1_000);
       expect(await ui.find({ type: "Text", text: "0:06" })).toBeDefined();
-      // La fin du tour d'un sous-agent n'arrête pas le chrono.
+      // La fin du tour d'un spécialiste n'arrête pas le chrono.
       await complete("t1", { agentId: "a1" });
       await clock.advance(79_000);
       expect(await ui.find({ type: "Text", text: "1:25" })).toBeDefined();
@@ -440,7 +440,7 @@ describe("session-tools", () => {
       await submit("tâche finie", { kind: "task-notification" });
       await clock.advance(2_000);
       expect(await ui.find({ type: "Text", text: "1:25 ✓" })).toBeDefined();
-      // Un sous-agent de fond qui démarre au repos non plus.
+      // Un spécialiste de fond qui démarre au repos non plus.
       await $.turn.start({ text: "vérifie les tests", turnId: "t2", agentId: "a2" } as any);
       await clock.advance(2_000);
       expect(await ui.find({ type: "Text", text: "1:25 ✓" })).toBeDefined();
@@ -490,7 +490,7 @@ describe("session-tools", () => {
       ui,
       shows: async (text: string | RegExp) => (await ui.find({ type: "Text", text })) !== undefined,
       send: (text: string) => relaunch(text, { kind: surface === "terminal" ? "composer" : "sdk" }),
-      // La notification de fin d'une commande shell de fond, et le message de retour d'un sous-agent.
+      // La notification de fin d'une commande shell de fond, et le message de retour d'un spécialiste.
       shellDone: (id: string) => relaunch(`<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>`, { kind: "task-notification" }),
       agentDone: (id: string) => relaunch(`<agent-message from="${id}">\n[Subagent hand-back] OK`, { kind: "peer" }),
       // Fin normale d'un tour du fil principal : la liste des tâches de fond, puis la fin du tour.
@@ -525,7 +525,7 @@ describe("session-tools", () => {
   for (const surface of ["terminal", "desktop"] as const) {
     test(`chrono : il attend les tâches de fond de la requête et les compte (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const engine = await realEngine($, on, surface);
-      const t1 = await engine.send("lance un sous-agent et un shell de fond");
+      const t1 = await engine.send("lance un spécialiste et un shell de fond");
       await engine.clock.advance(5_000);
       await engine.finish(t1, [
         { id: "a1", type: "subagent" },
@@ -548,9 +548,9 @@ describe("session-tools", () => {
       expect(await engine.shows(/en fond/)).toBe(false);
     });
 
-    test(`chrono : un sous-agent peut aussi revenir par une task-notification (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+    test(`chrono : un spécialiste peut aussi revenir par une task-notification (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const engine = await realEngine($, on, surface);
-      const t1 = await engine.send("lance un sous-agent de fond");
+      const t1 = await engine.send("lance un spécialiste de fond");
       await engine.clock.advance(3_000);
       await engine.finish(t1, [{ id: "a1", type: "subagent" }]);
       await engine.clock.advance(20_000);
@@ -561,9 +561,9 @@ describe("session-tools", () => {
       expect(await engine.shows("0:25 ✓")).toBe(true);
     });
 
-    test(`chrono : le retour d'un sous-agent déjà sorti de la liste prolonge sa requête (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
+    test(`chrono : le retour d'un spécialiste déjà sorti de la liste prolonge sa requête (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const engine = await realEngine($, on, surface);
-      const t1 = await engine.send("lance un sous-agent de fond");
+      const t1 = await engine.send("lance un spécialiste de fond");
       await engine.clock.advance(2_000);
       await engine.finish(t1, [{ id: "a1", type: "subagent" }]);
       await engine.clock.advance(10_000);
@@ -694,7 +694,7 @@ describe("session-tools", () => {
 
     test(`chrono : un agent encore actif retient une requête interrompue (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const engine = await realEngine($, on, surface);
-      const t1 = await engine.send("lance un sous-agent de fond");
+      const t1 = await engine.send("lance un spécialiste de fond");
       await engine.clock.advance(2_000);
       engine.setAgents([{ id: "a1", status: "running", type: "general-purpose", description: "x" }]);
       await $.turn.complete({ answer: "", durationMs: 1, turnId: t1, reason: "aborted", isAborted: true } as any);
@@ -733,7 +733,7 @@ describe("session-tools", () => {
 
     test(`chrono : sans liste des tâches de fond, il se rabat sur les agents actifs (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const engine = await realEngine($, on, surface);
-      const t1 = await engine.send("lance un sous-agent de fond");
+      const t1 = await engine.send("lance un spécialiste de fond");
       await engine.clock.advance(2_000);
       engine.setAgents([{ id: "a1", status: "running", type: "general-purpose", description: "x" }]);
       // Une version de Claude Code sans `background_tasks`.
@@ -785,7 +785,7 @@ describe("session-tools", () => {
 
     test(`chrono : une erreur d'API, sans \`classic.Stop\`, garde les agents encore actifs (${surface})`, { timeoutMs: 30_000 }, async ($, on) => {
       const engine = await realEngine($, on, surface);
-      const t1 = await engine.send("lance un sous-agent de fond");
+      const t1 = await engine.send("lance un spécialiste de fond");
       await engine.clock.advance(2_000);
       engine.setAgents([{ id: "a1", status: "running", type: "general-purpose", description: "x" }]);
       await $.turn.complete({ answer: "", durationMs: 1, turnId: t1, reason: "error" } as any);
@@ -849,7 +849,7 @@ describe("session-tools", () => {
       // Deuxième requête du même tour : moyenne sur l'ensemble, 700 tokens en 5 s.
       await step({ wait: 1_000, generate: 1_000, tokens: 300 });
       expect(await ui.find({ type: "Text", text: "140 tok/s" })).toBeDefined();
-      // Un sous-agent génère en parallèle : il n'entre pas dans la moyenne.
+      // Un spécialiste génère en parallèle : il n'entre pas dans la moyenne.
       await step({ wait: 0, generate: 1_000, tokens: 5_000 }, "a1");
       expect(await ui.find({ type: "Text", text: "140 tok/s" })).toBeDefined();
 

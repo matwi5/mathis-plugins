@@ -1,8 +1,25 @@
-# Termes retirés de flow-board, un par ligne : la version qui l'a retiré, une tabulation, le terme.
-# scripts/check.py les refuse dans le README, les consignes (hooks/, skills/, commands/, reference/),
-# la règle config/rules/flow-board.md et les
-# entrées du CHANGELOG plus récentes que cette version ; les tests peuvent les citer (pour vérifier
-# qu'ils ont disparu).
+# Termes retirés de flow-board, un par ligne : une version, une tabulation, le terme ;
+# son entrée du CHANGELOG et les plus anciennes peuvent le citer (la version qui l'a retiré, ou celle d'avant).
+# scripts/check.py les refuse dans le README, les consignes (hooks/, skills/, commands/, reference/,
+# hors fichiers de test), la règle config/rules/flow-board.md
+# et les entrées du CHANGELOG plus récentes que cette version ; les tests peuvent les citer. Les sites
+# gardés exprès sont admis, fichier par fichier, par scripts/termes-retires-admis.json.
 0.60.0	▶ Lancer
 0.60.0	Lancer le prêt
 0.60.0	vague suivante
+# Les anciens mots de flow-board, remplacés par « mission », « worker », « manager », « spécialiste » :
+0.78.0	le parcours
+0.78.0	du parcours
+0.78.0	un parcours
+0.78.0	ce parcours
+0.78.0	Parcours
+0.78.0	session liée
+0.78.0	sessions liées
+0.78.0	Session liée
+0.78.0	orchestrateur
+0.78.0	Orchestrateur
+0.78.0	sous-agent
+0.78.0	sous-agents
+0.78.0	session autonome
+0.78.0	linked session
+0.78.0	main discussion

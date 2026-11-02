@@ -1,9 +1,9 @@
-// Registre des agents : ce que chaque session tient de ses sous-agents, pour l'onglet Agents.
+// Registre des agents : ce que chaque session tient de ses spécialistes, pour l'onglet Agents.
 //
 // - Un fichier par session, écrit par elle seule (Q7) ; les fonctions d'ici sont pures, le
 //   chargement et l'écriture vivent dans register.tsx.
 // - Une même session peut tourner dans deux processus (reprise) : chaque écriture relit le
-//   fichier et fusionne, l'état le plus avancé de chaque sous-agent l'emporte (S7).
+//   fichier et fusionne, l'état le plus avancé de chaque spécialiste l'emporte (S7).
 // - Un fichier illisible est réécrit avec ce que la session sait (S8) ; le rattrapage par
 //   transcript (catch-up.ts) rendra ce qui manque.
 // - Sur le disque, jamais de rapport ni de texte de message : la description, le prompt (Q8), des chiffres.
@@ -11,7 +11,7 @@
 import type { AdvisorCall, AdvisorFigures, AdvisorLane, AgentLane, AgentMark, AgentSegment, AgentStatus, AgentType, CarrySpan, LinkedLaunch, RegistryAgent, RegistryPart, Run, SessionRegistry } from '../types'
 import { maskSecrets } from './timeline.ts'
 
-/** Longueur gardée d'un prompt (S11) : environ 300 sous-agents tiennent sous la limite de 4 Mio d'une écriture. */
+/** Longueur gardée d'un prompt (S11) : environ 300 spécialistes tiennent sous la limite de 4 Mio d'une écriture. */
 export const PROMPT_MAX = 8_000
 /** Ce qui est lu au-delà de PROMPT_MAX pour masquer un jeton coupé par la tranche (S16). */
 const PROMPT_MARGIN = 400
@@ -31,7 +31,7 @@ export const emptyRegistry = (session: string, root: string, now: number): Sessi
 // ─── Lecture validée (F3) ─────────────────────────────────────────────────
 //
 // Un fichier se relit entrée par entrée : un en-tête abîmé le rend illisible (S8), une entrée de
-// sous-agent, un segment ou un repère abîmé est seulement ignoré, sans casser l'onglet.
+// spécialiste, un segment ou un repère abîmé est seulement ignoré, sans casser l'onglet.
 
 const SEGMENT_KINDS: readonly string[] = ['think', 'write', 'tool', 'waitAgent', 'waitPerson', 'waitBg', 'waitAdvisor']
 const FAMILIES: readonly string[] = ['read', 'edit', 'run', 'web', 'agent', 'other']
@@ -173,7 +173,7 @@ export const cleanRegistry = (value: unknown): SessionRegistry | null => {
   if (Array.isArray(value.carried)) {
     const carried = value.carried.filter(isText).slice(0, CARRIED_MAX)
     if (carried.length > 0) reg.carried = carried
-    // S31, S37 : les périodes des seuls parcours notés, deux nombres chacune, la fin après le début.
+    // S31, S37 : les périodes des seules missions notées, deux nombres chacune, la fin après le début.
     if (isObject(value.carriedAt)) {
       const spans: Record<string, CarrySpan[]> = {}
       for (const id of carried) {
@@ -189,12 +189,12 @@ export const cleanRegistry = (value: unknown): SessionRegistry | null => {
   return reg
 }
 
-/** Au plus tant d'ids de parcours portés dans un en-tête (S28) : un nombre lu au-delà est abîmé (F3). */
+/** Au plus tant d'ids de mission portées dans un en-tête (S28) : un nombre lu au-delà est abîmé (F3). */
 const CARRIED_MAX = 500
 
-/** S37 : une nouvelle période de portage s'ouvre après plus de tant sans porter le parcours (la marge Q14). */
+/** S37 : une nouvelle période de portage s'ouvre après plus de tant sans porter la mission (la marge Q14). */
 export const CARRY_GAP_MS = 10 * 60_000
-/** S37 : au plus tant de périodes par parcours ; au-delà, les deux plus anciennes se fondent. */
+/** S37 : au plus tant de périodes par mission ; au-delà, les deux plus anciennes se fondent. */
 const SPANS_MAX = 20
 
 /** Des périodes triées, celles qui se recouvrent fondues, SPANS_MAX au plus. */
@@ -210,9 +210,9 @@ const normalizeSpans = (spans: readonly CarrySpan[]): CarrySpan[] => {
 }
 
 /**
- * S28 : les parcours que la session porte, ajoutés à ceux de l'en-tête ; rien quand ils y sont déjà.
- * S31, S37, S40 : avec `now`, un parcours nouveau ouvre sa première période ; un parcours déjà daté
- * en ouvre une nouvelle s'il n'était plus porté par une écriture faite depuis sa dernière période
+ * S28 : les missions que la session porte, ajoutées à celles de l'en-tête ; rien quand elles y sont déjà.
+ * S31, S37, S40 : avec `now`, une mission nouvelle ouvre sa première période ; une mission déjà datée
+ * en ouvre une nouvelle si elle n'était plus portée par une écriture faite depuis sa dernière période
  * (`carriedNotedAt`) et plus de CARRY_GAP_MS après elle ; sinon sa dernière période s'allonge
  * jusqu'à `now`. Un id noté sans dates (en-tête d'avant) le reste.
  */
@@ -232,7 +232,7 @@ export const noteCarried = (reg: SessionRegistry, runs: readonly string[], now?:
       else spans[id] = [...list.slice(0, -1), { ...last, to: now }]
       isSpanChanged = true
     }
-    // La première écriture qui ne porte plus un parcours daté, après sa dernière période, est notée.
+    // La première écriture qui ne porte plus une mission datée, après sa dernière période, est notée.
     const isLeft = Object.entries(spans).some(([id, list]) => !ids.includes(id) && (list.at(-1)?.to ?? Infinity) >= (notedAt ?? -Infinity) && (list.at(-1)?.to ?? Infinity) < now)
     if (isLeft) {
       notedAt = now
@@ -287,8 +287,8 @@ export const parseOwnRegistry = (text: unknown, id: string): SessionRegistry | n
 }
 
 /**
- * Q-c : les sous-agents en échec d'un parcours, dans les registres de toutes les discussions qui
- * l'ont servi (cette discussion et ses sessions liées), chacun compté une fois par session.
+ * Q-c : les spécialistes en échec d'une mission, dans les registres de toutes les discussions qui
+ * l'ont servie (cette discussion et ses workers), chacun compté une fois par session.
  */
 export const failedAgentsOf = (run: string, regs: readonly (SessionRegistry | null | undefined)[]): number => {
   const seen = new Set<string>()
@@ -316,12 +316,12 @@ export type CallStart = {
   asked?: AgentType
 }
 
-/** Un appel Agent part : un sous-agent au travail, sans limite de nombre. Un appel déjà connu ne change rien. */
+/** Un appel Agent part : un spécialiste au travail, sans limite de nombre. Un appel déjà connu ne change rien. */
 export const startCall = (reg: SessionRegistry, start: CallStart, now: number): SessionRegistry | null => {
   if (reg.agents.some(a => a.key === start.key)) return null
   const row: RegistryAgent = {
     key: start.key,
-    name: cut(start.name.trim() || 'Sous-agent', NAME_MAX),
+    name: cut(start.name.trim() || 'Spécialiste', NAME_MAX),
     isBackground: start.isBackground,
     status: 'running',
     startedAt: now,
@@ -347,7 +347,7 @@ export const startCall = (reg: SessionRegistry, start: CallStart, now: number): 
 }
 
 /**
- * Les segments d'un sous-agent qui finit, fermés à `now` (comme closeOpen sur sa piste) : une fin
+ * Les segments d'un spécialiste qui finit, fermés à `now` (comme closeOpen sur sa piste) : une fin
  * vue par l'appel ou rattrapée par la liste du moteur ne laisse rien s'allonger sans fin. Rien
  * quand aucun n'est ouvert.
  */
@@ -357,7 +357,7 @@ const closedSegments = (a: RegistryAgent, now: number): Pick<RegistryAgent, 'seg
 export type CallEnd = { agentId?: string; model?: string; isFailed: boolean; isFinished: boolean; isCancelled?: boolean }
 
 /**
- * L'appel Agent rend : l'id du sous-agent est connu ; il est fini s'il a rendu « completed »,
+ * L'appel Agent rend : l'id du spécialiste est connu ; il est fini s'il a rendu « completed »,
  * échoué ou annulé si l'appel l'est. Une entrée créée entre-temps pour le même id (son
  * `agent.spawn`, vu avant le retour de l'appel) se fond dans celle de l'appel.
  */
@@ -449,7 +449,7 @@ export const spawnAgent = (reg: SessionRegistry, spawn: Spawn, inFlight: Readonl
 }
 
 /**
- * Fin d'un tour du sous-agent (`classic.SubagentStop`, `turn.complete` portant son id) : il est
+ * Fin d'un tour du spécialiste (`classic.SubagentStop`, `turn.complete` portant son id) : il est
  * fini, jusqu'à un éventuel réveil. Une fin seulement constatée (liste du moteur) prend l'heure
  * de cette vraie fin. Un id inconnu est un agent interne du moteur : ignoré.
  */
@@ -461,15 +461,15 @@ export const stopAgent = (reg: SessionRegistry, agentId: string, now: number): S
   return change(reg, reg.agents.map(a => (a === known ? stopped : a)), now)
 }
 
-/** Un sous-agent tel que `$.agent.list()` le donne. */
+/** Un spécialiste tel que `$.agent.list()` le donne. */
 export type LiveAgentInfo = { id: string; description: string; status: string }
 
 const ENDED: Record<string, AgentStatus> = { completed: 'done', failed: 'failed', killed: 'cancelled' }
 
 /**
- * Rattrape les fins manquées, dans toute session : un sous-agent « au travail » absent de la
+ * Rattrape les fins manquées, dans toute session : un spécialiste « au travail » absent de la
  * liste, ou qu'elle dit fini, est fini (fin constatée après coup). `inFlight` garde les appels pas
- * encore rendus ; `own` limite le rattrapage aux sous-agents que ce processus connaît (pas ceux
+ * encore rendus ; `own` limite le rattrapage aux spécialistes que ce processus connaît (pas ceux
  * qu'un autre processus de la même session a écrits et que la fusion a apportés).
  */
 export const reconcileAgents = (
@@ -493,7 +493,7 @@ export const reconcileAgents = (
   return moved === 0 ? null : change(reg, agents, now)
 }
 
-/** Où en est un sous-agent : ses réveils d'abord, puis fini plutôt qu'au travail, puis une vraie fin plutôt qu'une fin constatée. */
+/** Où en est un spécialiste : ses réveils d'abord, puis fini plutôt qu'au travail, puis une vraie fin plutôt qu'une fin constatée. */
 const progress = (a: RegistryAgent): number =>
   (a.wakes ?? 0) * 10 + (a.status === 'running' ? 0 : a.isEndUnseen === true ? 1 : 2)
 
@@ -508,7 +508,7 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
   const byKey = new Map(local.agents.map(a => [a.key, a]))
   for (const theirs of stored.agents) {
     const mine = byKey.get(theirs.key)
-    // À égalité, celui d'ici, sauf si seul le fichier sait déjà quel sous-agent l'appel a lancé.
+    // À égalité, celui d'ici, sauf si seul le fichier sait déjà quel spécialiste l'appel a lancé.
     const isTieWithId = mine !== undefined && progress(theirs) === progress(mine) && mine.agentId === undefined && theirs.agentId !== undefined
     if (mine === undefined || progress(theirs) > progress(mine) || isTieWithId) {
       byKey.set(theirs.key, theirs)
@@ -516,7 +516,7 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
     }
   }
   // Une entrée née d'un `agent.spawn` (clé `agent:<id>`) qu'un appel a absorbée, d'un côté ou de
-  // l'autre, ne revient pas : le même sous-agent ne compte qu'une fois.
+  // l'autre, ne revient pas : le même spécialiste ne compte qu'une fois.
   const called = new Set([...byKey.values()].filter(a => a.agentId !== undefined && a.key !== `agent:${a.agentId}`).map(a => `agent:${a.agentId}`))
   for (const key of called) {
     if (!byKey.has(key)) continue
@@ -530,11 +530,11 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
     group: local.group ?? stored.group,
   }
   const isHeaderChanged = (Object.keys(header) as (keyof typeof header)[]).some(k => header[k] !== local[k])
-  // Les sessions liées lancées par l'un ou l'autre processus (S7) : union par id de lancement.
+  // Les workers lancés par l'un ou l'autre processus (S7) : union par id de lancement.
   const launches = [...(local.linked ?? [])]
   for (const l of stored.linked ?? []) if (!launches.some(x => x.id === l.id)) launches.push(l)
   const isLinkedChanged = launches.length !== (local.linked ?? []).length
-  // Les parcours portés, notés par l'un ou l'autre processus (S28) : union.
+  // Les missions portées, notées par l'un ou l'autre processus (S28) : union.
   const carried = [...new Set([...(local.carried ?? []), ...(stored.carried ?? [])])]
   const spans = mergeSpans(local.carriedAt, stored.carriedAt)
   const notedAt = Math.max(local.carriedNotedAt ?? -Infinity, stored.carriedNotedAt ?? -Infinity)
@@ -542,7 +542,7 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
     carried.length !== (local.carried ?? []).length ||
     Object.entries(spans).some(([id, s]) => !sameSpans(local.carriedAt?.[id], s)) ||
     (Number.isFinite(notedAt) && notedAt !== local.carriedNotedAt)
-  // La piste de l'orchestrateur se fusionne aussi (S12), et la ligne advisor.
+  // La piste du manager se fusionne aussi (S12), et la ligne advisor.
   const main = mergeLane(local.main, stored.main)
   const advisor = mergeAdvisor(local.advisor, stored.advisor)
   if (!isChanged && !isHeaderChanged && !isLinkedChanged && !isCarriedChanged && main === local.main && advisor === local.advisor) return local
@@ -565,7 +565,7 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
 }
 
 /**
- * La piste de l'orchestrateur de deux processus de la même session (S12) : union des segments
+ * La piste du manager de deux processus de la même session (S12) : union des segments
  * (même sorte et même début : un seul, fermé de préférence) et des repères, sans doublon. Rend
  * `mine` tel quel quand l'autre n'apporte rien.
  */
@@ -576,7 +576,7 @@ const mergeLane = (mine: AgentLane | undefined, theirs: AgentLane | undefined): 
   // La clé d'union (sorte et début) d'un segment change après coup, et une écriture d'avant le
   // changement garde l'ancienne copie, ouverte, qui s'allongerait jusqu'à la fin du tour :
   // - un appel court réuni à l'appel court qui le précède (closeSegment, essai point 13) ;
-  // - l'appel Agent qui a attendu son sous-agent, passé de « tool » à « waitAgent » à son retour.
+  // - l'appel Agent qui a attendu son spécialiste, passé de « tool » à « waitAgent » à son retour.
   // Cette copie ne revient pas, d'un côté comme de l'autre.
   const all = [...(mine.segments ?? []), ...(theirs.segments ?? [])]
   const fused = all.filter(f => f.k === 'tool' && f.e !== undefined && (f.n ?? 1) > 1)
@@ -670,7 +670,7 @@ export const catchUpAdvisor = (reg: SessionRegistry, by: string, found: readonly
 //
 // Une lecture ou une écriture de plus de 4 Mio est refusée : au-delà de PART_MAX_BYTES, le
 // registre d'une session se découpe en morceaux numérotés, sans rien compacter ni perdre.
-// - L'unité est un sous-agent, un segment ou un repère de la piste de l'orchestrateur.
+// - L'unité est un spécialiste, un segment ou un repère de la piste du manager.
 // - Chacune garde le morceau où elle a été lue ; une nouvelle va au dernier ; le trop-plein d'un
 //   morceau (ses unités les plus récentes) monte au suivant, jamais l'inverse. Écrits du dernier au
 //   premier, les morceaux ne perdent rien si une écriture se coupe : une unité qui monte est en
@@ -803,8 +803,8 @@ export const splitRegistry = (
 }
 
 /**
- * Les lignes de l'ancien champ des sous-agents d'un parcours (S1), en entrées du registre
- * rattachées à ce parcours ; aucune pour un parcours qui ne l'a pas.
+ * Les lignes de l'ancien champ des spécialistes d'une mission (S1), en entrées du registre
+ * rattachées à cette mission ; aucune pour une mission qui ne l'a pas.
  */
 export const rowsFromRun = (run: Run): RegistryAgent[] =>
   (Array.isArray(run.agents) ? run.agents : []).flatMap(a => {
@@ -814,7 +814,7 @@ export const rowsFromRun = (run: Run): RegistryAgent[] =>
     return [row]
   })
 
-/** Une session liée lancée par cette session (`start_session`, `claude --bg`) ; un lancement déjà connu ne change rien. */
+/** Un worker lancé par cette session (`start_session`, `claude --bg`) ; un lancement déjà connu ne change rien. */
 export const noteLaunch = (reg: SessionRegistry, launch: LinkedLaunch, now: number): SessionRegistry | null =>
   (reg.linked ?? []).some(l => l.id === launch.id) ? null : { ...reg, linked: [...(reg.linked ?? []), launch], updatedAt: now }
 
@@ -832,9 +832,9 @@ export const withHeader = (
 
 // ─── Pistes de la frise ───────────────────────────────────────────────────
 //
-// Une piste est celle d'un sous-agent (son agentId) ou celle de la session elle-même (MAIN).
+// Une piste est celle d'un spécialiste (son agentId) ou celle de la session elle-même (MAIN).
 
-/** La piste de la session elle-même : l'orchestrateur. */
+/** La piste de la session elle-même : le manager. */
 export const MAIN = 'main'
 
 /** Deux outils consécutifs d'une même famille, chacun de moins de SHORT_MS, se réunissent (essai, point 13). */
@@ -932,7 +932,7 @@ export const addAdvisorCalls = (reg: SessionRegistry, lane: string, uses: readon
 
 /**
  * L'heure de la dernière compaction de la discussion : le plus récent repère ⇣ de la piste de
- * l'orchestrateur, que seule une vraie compaction pose ; null sans repère ni registre.
+ * le manager, que seule une vraie compaction pose ; null sans repère ni registre.
  */
 export const lastCompactionAt = (reg: SessionRegistry | null | undefined): number | null => {
   const ats = (reg?.main?.marks ?? []).filter(m => m.k === 'compact').map(m => m.at)
@@ -945,13 +945,13 @@ export const addMark = (reg: SessionRegistry, lane: string, mark: AgentMark, now
   return l ? withLane(reg, lane, { marks: [...(l.marks ?? []), mark] }, now) : null
 }
 
-/** La piste d'un sous-agent par sa clé d'appel : son id, pour poser segments et repères. */
+/** La piste d'un spécialiste par sa clé d'appel : son id, pour poser segments et repères. */
 export const laneIdOf = (reg: SessionRegistry, key: string): string | undefined => reg.agents.find(a => a.key === key)?.agentId
 
 export type ToolEnd = {
   /** Fin de l'appel. */
   end: number
-  /** Ce que le retour ajoute au segment (argument court, erreur, sorte : attente d'un sous-agent au premier plan). */
+  /** Ce que le retour ajoute au segment (argument court, erreur, sorte : attente d'un spécialiste au premier plan). */
   patch?: Partial<AgentSegment>
   /**
    * L'outil a attendu une autorisation (`classic.PermissionRequest` à `at`) et n'a tourné que
@@ -982,22 +982,23 @@ export const closeToolCall = (reg: SessionRegistry, lane: string, tool: string, 
   return withLane(waiting, lane, { segments: [...(laneOf(waiting, lane)?.segments ?? []), tail] }, done.end)
 }
 
-// ─── Types et chiffres d'un sous-agent ────────────────────────────────────
+// ─── Types et chiffres d'un spécialiste ────────────────────────────────────
 
 const BY_SUBAGENT_TYPE: Record<string, AgentType> = {
   'agents:explorer': 'explore',
   explore: 'explore',
   'agents:researcher': 'research',
   'claude-code-guide': 'research',
+  // Agent retiré du plugin agents : gardé pour que ses anciens lancements restent lisibles.
   'agents:worker': 'implement',
   plan: 'plan',
   teammate: 'other',
 }
 
 /**
- * Le type d'un sous-agent (Q9), dans l'ordre : son `subagent_type` ; ce que flow-board a lui-même
- * demandé (`asked` : revue de sécurité, revue du groupe, implémenteur, merger, rétro des sessions
- * liées) ; des mots-clés de sa description ; sinon « Autre » (coéquipiers d'une équipe d'agents compris).
+ * Le type d'un spécialiste (Q9), dans l'ordre : son `subagent_type` ; ce que flow-board a lui-même
+ * demandé (`asked` : revue de sécurité, revue du groupe, implémenteur, merger, rétro des
+ * workers) ; des mots-clés de sa description ; sinon « Autre » (coéquipiers d'une équipe d'agents compris).
  */
 export const agentTypeOf = (subagentType: string | undefined, asked: AgentType | undefined, description: string): AgentType => {
   const byType = subagentType !== undefined ? BY_SUBAGENT_TYPE[subagentType.toLowerCase()] : undefined

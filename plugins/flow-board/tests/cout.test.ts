@@ -7,7 +7,7 @@ const PLUGIN = 'flow-board'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 /** Des discussions dont le coût suit des prix connus (en $ par million de tokens) : la vérité du test. */
@@ -32,7 +32,7 @@ test('les prix unitaires d’un modèle se tirent des coûts de ccusage, discuss
   const prices = pricesFromCcusage(SESSIONS)
   const opus = prices['claude-opus-5-5']!
   for (const k of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) expect(Math.abs(opus[k] * 1e6 - TRUE[k])).toBeLessThan(1e-6)
-  // Le coût d'un sous-agent : ses tokens aux prix de son modèle, toujours « ≈ ».
+  // Le coût d'un spécialiste : ses tokens aux prix de son modèle, toujours « ≈ ».
   const usd = costOf({ input: 10, output: 2_000, cacheRead: 400_000, cacheWrite: 30_000 }, pricesFor(prices, 'claude-opus-5-5'))!
   expect(Math.abs(usd - (10 * 5 + 2_000 * 25 + 400_000 * 0.5 + 30_000 * 6.25) / 1e6)).toBeLessThan(1e-9)
   expect(costText(usd)).toBe('≈ 0,44 $')
@@ -77,7 +77,7 @@ const launchAndWork = async ($: any) => {
   await playStep($, { turnId: 'ta', model: 'claude-opus-5-5', agentId: 'a1' })
 }
 
-test('le coût estimé « ≈ » de chaque sous-agent dans sa carte, et le total dans le résumé', { timeoutMs: 15000 }, async ($, on) => {
+test('le coût estimé « ≈ » de chaque spécialiste dans sa carte, et le total dans le résumé', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 60_000_000 })
   // npx peut écrire avant le JSON : la sortie se lit quand même.
   const { calls } = world(on, argv => ({ value: { exitCode: 0, stdout: `npm warn exec The following package was not found and will be installed: ccusage\n${JSON.stringify(SESSIONS)}`, stderr: '' } }))

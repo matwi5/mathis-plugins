@@ -1,8 +1,8 @@
 // flow-board : le rattrapage du registre par les transcripts de Claude Code.
 //
 // Les transcripts de Claude Code font foi pour les chiffres. Le rattrapage tourne à l'ouverture de
-// l'onglet sur la session affichée, et à la fin d'un sous-agent dont les chiffres manquent. Pour
-// cette session, il complète son propre registre ; pour une session liée affichée, il écrit son
+// l'onglet sur la session affichée, et à la fin d'un spécialiste dont les chiffres manquent. Pour
+// cette session, il complète son propre registre ; pour un worker affiché, il écrit son
 // fichier à part, `<session>.rebuilt.json`, que seule le rattrapage écrit (S13).
 
 import { atom, read } from 'claude-code'
@@ -30,9 +30,9 @@ export let needsRebuild = false
 export const markRebuildNeeded = () => {
   needsRebuild = true
 }
-/** Les transcripts de sous-agents déjà lus, par chemin, avec leur date : relus seulement quand elle change. */
+/** Les transcripts de spécialistes déjà lus, par chemin, avec leur date : relus seulement quand elle change. */
 const transcriptCache = new Map<string, { mtime: number; agent: TranscriptAgent }>()
-/** Au-delà, un transcript ne se relit pas en entier (la piste de la session seulement : ses sous-agents ont chacun le leur). */
+/** Au-delà, un transcript ne se relit pas en entier (la piste de la session seulement : ses spécialistes ont chacun le leur). */
 const TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
 
 /** Au-delà, la lecture en flux d'un transcript est abandonnée (F6 : un délai sur chaque commande). */
@@ -87,7 +87,7 @@ export async function readTranscript($: any, path: string): Promise<string | nul
   }
 }
 
-/** Un sous-agent d'après son transcript et son `.meta.json` (à côté) ; relu seulement quand le fichier change. */
+/** Un spécialiste d'après son transcript et son `.meta.json` (à côté) ; relu seulement quand le fichier change. */
 async function transcriptAgent($: any, path: string, mtime: number): Promise<TranscriptAgent | null> {
   const agentId = SUBAGENT_FILE.exec(path.split(/[\\/]/).pop() ?? '')?.[1]
   if (!agentId) return null
@@ -116,11 +116,11 @@ async function isPresent($: any, path: string): Promise<boolean> {
 }
 
 /**
- * Les sous-agents d'une session d'après leurs transcripts (`<session>/subagents/agent-<id>.jsonl`),
+ * Les spécialistes d'une session d'après leurs transcripts (`<session>/subagents/agent-<id>.jsonl`),
  * et le nombre de transcripts qui n'ont pas pu se relire (S34, S39) : refusé par la garde, dossier
- * illisible, trop gros, délai dépassé. Un dossier ou un fichier absent (pas de sous-agent, nettoyé
+ * illisible, trop gros, délai dépassé. Un dossier ou un fichier absent (pas de spécialiste, nettoyé
  * par Claude Code) n'est pas un échec. `since` : les fichiers modifiés pour la dernière fois avant
- * ne sont pas relus (ils ne peuvent pas tenir un sous-agent parti après).
+ * ne sont pas relus (ils ne peuvent pas tenir un spécialiste parti après).
  */
 export async function scanTranscriptAgents($: any, transcript: string, since = -Infinity): Promise<{ agents: TranscriptAgent[]; failed: number }> {
   const dir = subagentsDirOf(transcript)
@@ -145,7 +145,7 @@ export async function scanTranscriptAgents($: any, transcript: string, since = -
   return { agents, failed }
 }
 
-/** Les sous-agents d'une session d'après leurs transcripts. */
+/** Les spécialistes d'une session d'après leurs transcripts. */
 export async function transcriptAgents($: any, transcript: string): Promise<TranscriptAgent[]> {
   return (await scanTranscriptAgents($, transcript)).agents
 }
@@ -164,11 +164,11 @@ const isToSeek = (sought: Sought, key: string, now: number): boolean => {
 }
 const noteSought = (sought: Sought, key: string, now: number) => sought.set(key, { n: (sought.get(key)?.n ?? 0) + 1, at: now })
 
-/** Les appels à l'advisor de l'orchestrateur, cherchés dans le transcript de la session. */
+/** Les appels à l'advisor du manager, cherchés dans le transcript de la session. */
 const advisorSought: Sought = new Map()
 
 /**
- * Le rattrapage de cette session : ses sous-agents d'après leurs transcripts ; reconstruit
+ * Le rattrapage de cette session : ses spécialistes d'après leurs transcripts ; reconstruit
  * (`isRebuild`, fichier illisible), aussi la piste de la session d'après son propre transcript.
  */
 export async function catchUpOwn($: any, isRebuild = false) {
@@ -177,7 +177,7 @@ export async function catchUpOwn($: any, isRebuild = false) {
   if (!transcript) return
   const found = await transcriptAgents($, transcript)
   // Le transcript de la session se relit pour une reconstruction, ou quand un appel à l'advisor de
-  // l'orchestrateur n'y a pas encore été relu (le direct ne donne ni modèle ni tokens).
+  // le manager n'y a pas encore été relu (le direct ne donne ni modèle ni tokens).
   const now = await $.clock.now()
   const unread = (reg?.advisor?.calls ?? []).filter(c => c.by === MAIN && isAdvisorUnsettled(c) && isToSeek(advisorSought, c.id, now)).map(c => c.id)
   const mainText = isRebuild || unread.length > 0 ? await readTranscript($, transcript) : null
@@ -187,11 +187,11 @@ export async function catchUpOwn($: any, isRebuild = false) {
   const inFlight = new Set(agentCalls)
   const traces = await readTraces($)
   const board: Board | null = await read($, boardAtom)
-  // Une session liée n'est pas concernée (S27) : sa suppression l'efface déjà en entier.
+  // Un worker n'est pas concerné (S27) : sa suppression l'efface déjà en entier.
   const runs = board && !board.delegate ? board.runs : []
   await commitRegistry($, r => {
-    // Q-a (S27) : un sous-agent qui manquait au registre rejoint le parcours que la discussion portait à son départ ;
-    // R2 (S32) : une entrée rattrapée plus tôt sans parcours aussi, à chaque rattrapage.
+    // Q-a (S27) : un spécialiste qui manquait au registre rejoint la mission que la discussion portait à son départ ;
+    // R2 (S32) : une entrée rattrapée plus tôt sans mission aussi, à chaque rattrapage.
     let next = catchUp(r, withCarriedRuns(found, r, runsCarriedBy(runs, r)), now, inFlight) ?? r
     next = attachCarried(next, runsCarriedBy(runs, next)) ?? next
     // Une session effacée en partie ne reprend pas les totaux de tout son transcript.
@@ -216,7 +216,7 @@ export async function catchUpOwn($: any, isRebuild = false) {
 }
 
 /**
- * Le fichier à part d'une session reconstruite (S13), `<session>.rebuilt.json`, ou d'un parcours
+ * Le fichier à part d'une session reconstruite (S13), `<session>.rebuilt.json`, ou d'une mission
  * (S18), `run-<parcours>.rebuilt.json` ; sa clé de `$.store` en repli.
  */
 export function rebuiltPath($: any, id: string): string | null {
@@ -280,7 +280,7 @@ async function writeRebuilt($: any, id: string, rebuilt: Rebuilt): Promise<boole
   }
 }
 
-/** Un fichier à part qui ne tient rien : ni sous-agent, ni ligne recopiée, ni parcours repris, ni piste, ni appel à l'advisor. */
+/** Un fichier à part qui ne tient rien : ni spécialiste, ni ligne recopiée, ni mission reprise, ni piste, ni appel à l'advisor. */
 const isEmptyRebuilt = (r: Rebuilt): boolean =>
   r.agents.length === 0 &&
   (r.rows ?? []).length === 0 &&
@@ -322,14 +322,14 @@ export function updateRebuilt(
     })
 }
 
-/** Les appels à l'advisor des sessions liées, cherchés dans leur transcript (`<session>|<appel>`). */
+/** Les appels à l'advisor des workers, cherchés dans leur transcript (`<session>|<appel>`). */
 const linkedAdvisorSought: Sought = new Map()
 
 /**
- * Le rattrapage d'une session liée affichée : d'après le transcript que son en-tête relève, son
+ * Le rattrapage d'un worker affiché : d'après le transcript que son en-tête relève, son
  * fichier à part se fusionne (S13, S20) ; son propre fichier n'est jamais touché (Q7). Ses propres
- * appels à l'advisor se relisent ici aussi : une session liée n'ouvre presque jamais son onglet
- * Agents, seul endroit où elle les relit elle-même (catchUpOwn), et sans relecture leur coût restait vide.
+ * appels à l'advisor se relisent ici aussi : un worker n'ouvre presque jamais son onglet
+ * Agents, seul endroit où il les relit lui-même (catchUpOwn), et sans relecture leur coût restait vide.
  */
 async function catchUpLinked($: any, session: string) {
   const reg = otherRegistries.get(session)?.reg
@@ -349,7 +349,7 @@ async function catchUpLinked($: any, session: string) {
   await refreshLinked($)
 }
 
-/** Le rattrapage de ce que l'onglet montre : cette session, ou la session liée choisie. */
+/** Le rattrapage de ce que l'onglet montre : cette session, ou le worker choisi. */
 export async function catchUpShown($: any) {
   const ui = await read($, uiAtom)
   if (ui.tab !== 'agents') return
@@ -359,7 +359,7 @@ export async function catchUpShown($: any) {
 }
 
 /**
- * La fin d'un sous-agent dont les chiffres manquent (aucun token relevé) : son transcript, donné
+ * La fin d'un spécialiste dont les chiffres manquent (aucun token relevé) : son transcript, donné
  * par la fin elle-même (`agent_transcript_path`), les apporte.
  */
 export async function catchUpAgent($: any, agentId: string, path: unknown) {

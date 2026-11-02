@@ -7,8 +7,8 @@ import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board } from '../types'
 import { withItemsLink } from './lien-pistes.ts'
 
-// La session liée des pistes d'une rétro se ferme comme un groupe, une fois chacune de ses pistes
-// jugée. Invariants : l'état de fermeture d'une session liée n'est jamais perdu ni reculé par un
+// Le worker des pistes d'une rétro se ferme comme un groupe, une fois chacune de ses pistes
+// jugée. Invariants : l'état de fermeture d'un worker n'est jamais perdu ni reculé par un
 // renvoi, une reprise ou une fusion de copies (une session notée fermée ne redevient jamais à
 // fermer, seul un nouvel envoi de `closed` pour elle le change) ; l'id d'une session de pistes non
 // fermée n'est jamais écrasé par un nouvel envoi.
@@ -19,7 +19,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 const REPO = { isRepo: true }
 
@@ -44,7 +44,7 @@ test('la session de pistes est à fermer une fois chacune de ses pistes jugée, 
   expect(applyReport(running(), { note: 'point' }, 3_000, REPO).text).not.toContain('Close now')
   const out = applyReport(judged(), { note: 'point' }, 5_000, REPO)
   const run = activeRun(out.board)!
-  expect(out.text).toContain('Close now: the linked session of the Pistes of phase Rétro (session 9f9f9f9f) is closed (every item judged).')
+  expect(out.text).toContain('Close now: the worker of the Pistes of phase Rétro (session 9f9f9f9f) is closed (every item judged).')
   expect(out.text).toContain(closingProcedure({ run, target: { kind: 'items', skill: 'retro' }, isRepo: true, session: '9f9f9f9f', seq: 1 }))
   expect(out.text).toContain('{"closed": [{"items": "retro", "state": "closed"')
   // Une piste revenue au choix ne fait pas oublier la session : son id reste.
@@ -52,7 +52,7 @@ test('la session de pistes est à fermer une fois chacune de ses pistes jugée, 
   // Toutes revenues au choix : la session reste à fermer.
   const allBack = applyReport(running(), { items: PISTES }, 4_000, REPO).board
   expect(linkOf(allBack)).toMatchObject({ session: '9f9f9f9f', items: [] })
-  expect(applyReport(allBack, { note: 'point' }, 5_000, REPO).text).toContain('Close now: the linked session of the Pistes')
+  expect(applyReport(allBack, { note: 'point' }, 5_000, REPO).text).toContain('Close now: the worker of the Pistes')
 })
 
 test('« closed » avec « items » : noté sur le lien des pistes, ne recule jamais ; « stopped » attend un envoi des pistes', () => {
@@ -73,11 +73,11 @@ test('« closed » avec « items » : noté sur le lien des pistes, ne recule ja
   expect(linkOf(fromEarlier)!.closing?.state).toBe('closed')
   expect(applyReport(fromEarlier, { note: 'point' }, 99_999_000, REPO).text).not.toContain('Close now')
   // Une session de pistes inconnue est refusée.
-  expect(applyReport(retro(), { closed: [{ items: 'retro', state: 'closed' }] }, 5_000, REPO).text).toContain('closed: refused for Pistes of phase Rétro (no linked session to close)')
+  expect(applyReport(retro(), { closed: [{ items: 'retro', state: 'closed' }] }, 5_000, REPO).text).toContain('closed: refused for Pistes of phase Rétro (no worker to close)')
   // Arrêtée : plus proposée, jusqu'à un envoi des pistes de la phase.
   const stopped = applyReport(judged(), { closed: [{ items: 'retro', state: 'stopped', why: '.env ignoré' }] }, 5_000, REPO).board
   expect(applyReport(stopped, { note: 'point' }, 6_000, REPO).text).not.toContain('Close now')
-  expect(applyReport(stopped, { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], PISTES[2]] }, 6_000, REPO).text).toContain('Close now: the linked session of the Pistes')
+  expect(applyReport(stopped, { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], PISTES[2]] }, 6_000, REPO).text).toContain('Close now: the worker of the Pistes')
 })
 
 test('une session de pistes non fermée tient la phase ; fermée, ses pistes se choisissent de nouveau et elle reste notée', () => {
@@ -95,7 +95,7 @@ test('une session de pistes non fermée tient la phase ; fermée, ses pistes se 
   expect(currentPhase(activeRun(cancelled)!).linkedEarlier?.closing?.sessionId).toBe('9f9f9f9f-0000-4000-8000-000000000000')
 })
 
-test('un worktree unique par envoi de pistes, au nom du parcours : pistes-<parcours>-1, puis -2', () => {
+test('un worktree unique par envoi de pistes, au nom de la mission : pistes-<parcours>-1, puis -2', () => {
   const launched = linkSession(withItemsLink(retro(), ['p1', 'p3'], 2_000), '9f9f9f9f', 2_200)!.board
   const judgedOnce = applyReport(launched, { items: [{ ...PISTES[0], status: 'done' }, PISTES[1], { ...PISTES[2], status: 'done' }] }, 3_000, REPO)
   // La procédure de fermeture nomme la branche de cet envoi.
@@ -108,9 +108,9 @@ test('un worktree unique par envoi de pistes, au nom du parcours : pistes-<parco
 
 test('la rétro ne se clôt pas avant que la session des pistes soit fermée (ou sa fermeture tentée)', () => {
   const early = applyReport(judged(), { complete: true }, 5_000, REPO)
-  expect(early.text).toContain('not finished: the linked session of the items is not closed yet')
+  expect(early.text).toContain('not finished: the worker of the items is not closed yet')
   expect(activeRun(early.board)?.status).toBe('active')
-  expect(early.text).toContain('Close now: the linked session of the Pistes')
+  expect(early.text).toContain('Close now: the worker of the Pistes')
   // Le résultat et la clôture dans le même appel : la rétro se clôt.
   expect(applyReport(judged(), { closed: [{ items: 'retro', state: 'closed' }], complete: true }, 5_000, REPO).board.runs[0]!.status).toBe('done')
   expect(applyReport(judged(), { closed: [{ items: 'retro', state: 'stopped', why: 'x' }], complete: true }, 5_000, REPO).board.runs[0]!.status).toBe('done')
@@ -176,7 +176,7 @@ test('le panneau de la rétro : « fermer d’abord la session précédente », 
   await p.u.unmount()
   expect(filled.at(-1)).toContain('Ferme la session des pistes de la phase Rétro')
   expect(filled.at(-1)).toContain('{"closed": [{"items": "retro", "state": "closed"')
-  expect(JSON.stringify(await $.tool.call({ tool: TOOL, note: 'point' } as any))).toContain('Close now: the linked session of the Pistes')
+  expect(JSON.stringify(await $.tool.call({ tool: TOOL, note: 'point' } as any))).toContain('Close now: the worker of the Pistes')
   await $.tool.call({ tool: TOOL, closed: [{ items: 'retro', state: 'app', why: 'session de l’app' }] } as any)
   p = await panel('terminal')
   expect(p.app).toBeDefined()
@@ -207,9 +207,9 @@ test('le texte du bug fait arrêter la session à la fin, seulement si elle ne t
   const text = filled.at(-1)!
   // Après un correctif vérifié comme après un échec : la session s'arrête, au repos et sans question en attente.
   expect(text).toContain(
-    'Dans les deux cas, arrêter la session, seulement si elle ne travaille plus (claude agents --json : "status": "idle", pas "state": "working" ; ListAgents pour une session de l’app) et qu’aucune question de sa part n’attend : claude stop <id> (sa conversation est gardée) ; dans l’app, l’archiver par l’outil de session de l’app, sinon me dire le geste',
+    'Dans les deux cas, arrêter la session, seulement si elle ne travaille plus (claude agents --json : "status": "idle", pas "state": "working" ; ListAgents pour une session de l’app) et qu’aucune question de sa part n’attend : claude stop <id> (sa conversation est gardée) ; dans l’app, me demander mon accord pour cette session, puis l’archiver par l’outil archive_session (l’accord donné d’avance par /flow archive on ne vaut que pour la fermeture d’un groupe ou des pistes, relue à chaque fois), sinon me dire le geste',
   )
-  expect(text).toContain('après un échec, avant de me proposer la deuxième tentative (une nouvelle session ; le transcript de la première reste) ou de replanifier ; après un correctif vérifié et commité, une fois le parcours repris ici')
+  expect(text).toContain('après un échec, avant de me proposer la deuxième tentative (une nouvelle session ; le transcript de la première reste) ou de replanifier ; après un correctif vérifié et commité, une fois la mission reprise ici')
   expect(text.indexOf('arrêter la session')).toBeGreaterThan(text.indexOf('si le bug est toujours là'))
   expect(text.indexOf('arrêter la session')).toBeLessThan(text.indexOf('Bug : '))
 })

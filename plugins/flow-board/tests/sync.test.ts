@@ -4,7 +4,7 @@ const PLUGIN = 'flow-board'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 const BAND = {
   component: 'AbovePrompt',
@@ -327,23 +327,23 @@ test('origin ailleurs que sur GitHub : ni phase ni suggestion « Pull request »
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ key: 'go-project:pr' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Pull request/ })).toBeUndefined()
-    // Plus rien d'obligatoire : le parcours peut être clos.
+    // Plus rien d'obligatoire : la mission peut être clos.
     expect(await ui.find({ key: 'finish' })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('le parcours bouclé : le bandeau propose « ✓ Clore le parcours », jamais la rétro', async ($, on) => {
+test('la mission bouclé : le bandeau propose « ✓ Clore la mission », jamais la rétro', async ($, on) => {
   const clock = mock.clock(on, { now: 46_500_000 })
   world(on, { branch: 'main', mainSha: 'm1', behindMain: 0, upSha: 'u1', behindUp: 0, hasUpstream: true, url: 'git@gitlab.com:me/proj.git' })
   await delivered($, clock)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: 'Parcours bouclé' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'Mission bouclé' })).toBeDefined()
     // La rétro vient en tête de la carte ; le bandeau, lui, propose la clôture.
     expect(await pane.find({ key: 'go-retro' })).toBeDefined()
     const inCard = (await pane.find({ key: 'finish' }))?.props.label
-    expect(inCard).toBe('✓ Clore le parcours')
+    expect(inCard).toBe('✓ Clore la mission')
     await pane.unmount()
     const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
     const finish = await band.find({ key: 'finish' })

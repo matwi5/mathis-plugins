@@ -13,11 +13,11 @@ const T0 = 160_000_000
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
 /** Le début du message de consigne que le mod envoie à Claude quand l'auto s'allume au repos. */
-const BRIEF = '⚡ flow-board: the auto mode instructions for this run'
+const BRIEF = '⚡ flow-board: the auto mode instructions for this mission'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 200 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 200 }, view: {} },
 } as const
 
 const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
@@ -136,6 +136,9 @@ const implementing = async ($: any, on: any, o: { isAuto?: boolean } = {}) => {
   }
   await $.tool.call({ tool: TOOL, complete: true } as any)
   await turnEnd($, clock)
+  // Le découpage fini sous l'auto : une compaction, une fois, avant la première vague (compaction stratégique).
+  expect(w.commands).toEqual(o.isAuto !== false ? ['compact'] : [])
+  w.commands.length = 0
   return { clock, ...w }
 }
 
@@ -155,7 +158,7 @@ test('Le retrait par Claude d’une question « relance: » est refusé tant que
   expect((w.stored()!.runs[0]!.waiting ?? []).map(q => q.id)).toEqual(['relance:A#3'])
   const refused = String((await $.tool.call({ tool: TOOL, waiting: [{ id: 'relance:A#3', answered: true }] } as any)).result)
   expect(refused).toContain('"relance:A#3": the group still waits for its relaunch')
-  expect(refused).toContain('relaunch the group (« ↗ Session liée »)')
+  expect(refused).toContain('relaunch the group (« ↗ Worker »)')
   await settle(clock, 2)
   expect((w.stored()!.runs[0]!.waiting ?? []).map(q => q.id)).toEqual(['relance:A#3'])
   // Ses tickets faits à la main : le groupe n'attend plus de relance, le retrait est accepté.
@@ -174,7 +177,7 @@ test('Un groupe relu sans avis de sécurité envoyé : l’auto ne reste pas en 
   expect(autoOf(w)?.offAt).toBeUndefined()
   await settle(clock, 35)
   expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
-  expect(w.notices).toContain('Parcours Boutique : auto en pause (plus rien ne peut avancer sans toi)')
+  expect(w.notices).toContain('Mission Boutique : auto en pause (plus rien ne peut avancer sans toi)')
   expect(w.commands).toEqual([])
 })
 
@@ -243,9 +246,9 @@ test('Un groupe gardé vide après un envoi annulé retient le lot : sans rien e
   expect(isGroupLotStuck(kept, true)).toBe(false)
 })
 
-test('« ◆ Revue du groupe · session liée » pose la marque de l’auto, démarrée : rallumé, l’auto demande la revue de B, pas celle de A', { timeoutMs: 60000 }, async ($, on) => {
+test('« ◆ Revue du groupe · worker » pose la marque de l’auto, démarrée : rallumé, l’auto demande la revue de B, pas celle de A', { timeoutMs: 60000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on)
-  // L'auto coupé : le parcours a été en auto. A et B rendus finis, sans revue.
+  // L'auto coupé : la mission a été en auto. A et B rendus finis, sans revue.
   await press($, 'auto-off')
   await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['A', 'B'] } as any)
   await press($, 'review-linked-A')
@@ -284,7 +287,7 @@ test('« ⛨ Revue de sécurité » pose la marque de l’auto, démarrée : ral
 
 test('« ◆ Revue du groupe » des groupes finis ici pose la marque du /code-review de l’auto, démarrée : rallumé, l’auto ne le relance pas', { timeoutMs: 60000 }, async ($, on) => {
   const { clock, ...w } = await implementing($, on, { isAuto: false })
-  // Allumé puis coupé : le parcours a été en auto, rien n'est fini.
+  // Allumé puis coupé : la mission a été en auto, rien n'est fini.
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await press($, 'auto-off')
@@ -338,7 +341,7 @@ test('Un groupe renvoyé est relu sur son dernier envoi : la revue et la sécuri
   expect(w.stored()!.runs[0]!.log.some(l => l.text.includes('envoi 1') && l.text.includes('revue') && l.text.includes('sécurité'))).toBe(true)
   // Un avis de sécurité qui arrive pendant le nouvel envoi (celui de l'envoi précédent, en retard) ne se pose pas sur lui.
   const late = String((await $.tool.call({ tool: TOOL, security: { group: 'A', advised: false, why: 'du premier envoi' } } as any)).result)
-  expect(late).toContain('security: group A is in a linked session again (send 2), not returned yet')
+  expect(late).toContain('security: group A is in a worker again (send 2), not returned yet')
   await settle(clock, 2)
   expect(groupOf(w, 'A').security).toBeUndefined()
   // Rendu fini : sa revue part, sous la clé de cet envoi, une fois.
@@ -359,7 +362,7 @@ test('Un groupe renvoyé est relu sur son dernier envoi : la revue et la sécuri
   expect(w.texts.length).toBe(afterSecurity)
 })
 
-/** Un lot mêlé : C fini ici, pas relu ; A rendu fini de sa session liée, pas relu ; B confié, en vol. */
+/** Un lot mêlé : C fini ici, pas relu ; A rendu fini de son worker, pas relu ; B confié, en vol. */
 const mixedBoard = (): Board => {
   const run = newRun('implement', T0, 'Boutique')
   let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
@@ -388,7 +391,7 @@ const mixedBoard = (): Board => {
   return b
 }
 
-test('Un /code-review lancé ici ne marque relus que les groupes finis ici : jamais un groupe rendu par sa session liée ni un groupe en vol', () => {
+test('Un /code-review lancé ici ne marque relus que les groupes finis ici : jamais un groupe rendu par son worker ni un groupe en vol', () => {
   const b = mixedBoard()
   const reviewed = applySkill(b, 'code-review', { now: T0 + 4, isMain: true })!.board
   const groups = activeRun(reviewed)!.groups!
@@ -407,15 +410,15 @@ test('« reviewed » et un avis de sécurité pour un groupe confié de nouveau 
   b = startLinkedGroups(b, ['A'], T0 + 5)!.board
   b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] }, T0 + 6).board
   const out = applyReport(b, { reviewed: ['A'], security: { group: 'A', advised: false, why: 'du premier envoi' } }, T0 + 7)
-  expect(out.text).toContain('group A is in a linked session again (send 2), not returned yet: send its review with its return')
-  expect(out.text).toContain('security: group A is in a linked session again (send 2), not returned yet')
+  expect(out.text).toContain('group A is in a worker again (send 2), not returned yet: send its review with its return')
+  expect(out.text).toContain('security: group A is in a worker again (send 2), not returned yet')
   const g = activeRun(out.board)!.groups!.find(x => x.id === 'A')!
   expect(g.reviewedAt).toBeUndefined()
   expect(g.security).toBeUndefined()
   // Sans « group », l'avis irait au groupe fini retenu par défaut : A, seul fini ; refusé de même.
   const alone = applyReport(b, { set: [{ id: 'c1', status: 'todo' }] }, T0 + 8).board
   const unnamed = applyReport(alone, { security: { advised: false, why: 'du premier envoi' } }, T0 + 9)
-  expect(unnamed.text).toContain('security: group A is in a linked session again (send 2), not returned yet')
+  expect(unnamed.text).toContain('security: group A is in a worker again (send 2), not returned yet')
   expect(activeRun(unnamed.board)!.groups!.find(x => x.id === 'A')!.security).toBeUndefined()
 })
 
@@ -457,7 +460,7 @@ test('Un groupe relu ici puis confié pour la première fois perd sa revue et sa
   b = applySkill(b, 'code-review', { now: T0 + 4, isMain: true })!.board
   b = applyReport(b, { security: { group: 'A', advised: false, why: 'rien' } }, T0 + 5).board
   expect(activeRun(b)!.groups!.find(g => g.id === 'A')!.reviewedAt).toBe(T0 + 4)
-  // Un ticket de suite rouvre A ; A est confié à une session liée : sa revue et sa sécurité d'ici ne valent plus.
+  // Un ticket de suite rouvre A ; A est confié à un worker : sa revue et sa sécurité d'ici ne valent plus.
   b = applyReport(b, { set: [{ id: 'a1', status: 'todo' }] }, T0 + 6).board
   b = startLinkedGroups(b, ['A'], T0 + 7)!.board
   const a = activeRun(b)!.groups!.find(g => g.id === 'A')!
@@ -492,7 +495,7 @@ const expectLateAdviceRefused = (b: Board, now: number) => {
 }
 
 test('Un groupe relu ici puis confié : une revue ou un avis arrivés pendant l’envoi sont refusés jusqu’à son retour, qui efface la marque', () => {
-  // A part en session liée : remise à zéro, le groupe le dit jusqu'au retour d'un envoi.
+  // A part dans un worker : remise à zéro, le groupe le dit jusqu'au retour d'un envoi.
   let b = startLinkedGroups(reviewedThenReopened(), ['A', 'B'], T0 + 6)!.board
   expect(groupIn(b, 'A').isReset).toBe(true)
   expect(groupIn(b, 'A').security).toBeUndefined()
@@ -520,7 +523,7 @@ test('La marque de la remise à zéro survit à une annulation puis une relance,
   expect(groupIn(relaunched, 'A').linked).toMatchObject({ seq: 2 })
   expectLateAdviceRefused(relaunched, T0 + 9)
   // Une vague restée sans suite, « ↻ Renvoyer », puis la vague de nouveau : la marque reste aussi.
-  const wave = { kind: 'groups' as const, groups: ['A'], key: 'groups:A#1', what: 'groupe A en session liée', blocks: { kind: 'group' as const, id: 'A' } }
+  const wave = { kind: 'groups' as const, groups: ['A'], key: 'groups:A#1', what: 'groupe A dans un worker', blocks: { kind: 'group' as const, id: 'A' } }
   const marked = markAutoSent(reviewedThenReopened(), wave, T0 + 6)!.board
   const waved = startLinkedGroups(marked, ['A'], T0 + 6)!.board
   const stale = raiseStaleAutoSends(waved, T0 + 7, true)!.board

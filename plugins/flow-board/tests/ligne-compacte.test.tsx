@@ -27,7 +27,7 @@ test('la ligne compacte dit en mots courts ce que l’appel enregistre', () => {
   expect(flowCallLabel({ set: [{ id: 'a', status: 'done' }, { id: 'b', status: 'done' }] })).toBe('flow-board · 2 tickets faits')
   expect(flowCallLabel({ decided: [{ what: 'x' }] })).toBe('flow-board · 1 décision')
   expect(flowCallLabel({ set: [{ id: 'a', status: 'doing' }], note: 'n', complete: true })).toBe('flow-board · 1 ticket en cours · note · phase terminée')
-  expect(flowCallLabel({ open: { title: 'Lot SC' }, tickets: [{ id: 'a', name: 'A' }] })).toBe('flow-board · parcours ouvert « Lot SC » · 1 ticket')
+  expect(flowCallLabel({ open: { title: 'Lot SC' }, tickets: [{ id: 'a', name: 'A' }] })).toBe('flow-board · mission ouverte « Lot SC » · 1 ticket')
   expect(flowCallLabel({ title: 'Lot' })).toBe('flow-board · titre')
   expect(flowCallLabel({ reviewed: ['A', 'B'], returned: ['A'] })).toBe('flow-board · relu A, B · rendu A')
   // Une entrée vide ou mal formée ne casse rien.

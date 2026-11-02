@@ -71,7 +71,7 @@ const SESSIONS = {
   sessions: [
     { sessionId: 's1', projectPath: HERE_KEY, firstActivity: '2026-10-06T08:00:00.000Z', lastActivity: '2026-10-07T12:00:00.000Z', totalCost: 20.6, totalTokens: 151260, outputTokens: 3100, modelsUsed: ['claude-opus-5-5', 'claude-haiku-4-5-20251001'] },
     { sessionId: 's2', projectPath: OTHER_KEY, firstActivity: '2026-09-20T10:00:00.000Z', lastActivity: '2026-09-20T11:30:00.000Z', totalCost: 3, totalTokens: 9530, outputTokens: 400, modelsUsed: ['claude-fable-5-1'] },
-    // Un sous-agent de workflow lancé par la discussion s1.
+    // Un spécialiste de workflow lancé par la discussion s1.
     { sessionId: 'w1', projectPath: `${HERE_KEY}\\s1\\subagents\\workflows`, firstActivity: '2026-10-07T11:00:00.000Z', lastActivity: '2026-10-07T11:20:00.000Z', totalCost: 1.2, totalTokens: 5000, outputTokens: 300, modelsUsed: ['claude-haiku-4-5-20251001'] },
   ],
   totals: {},
@@ -443,7 +443,7 @@ describe('stats-board', () => {
       const band = await mountBand($, surface, 160)
       const text = await drawn(band)
       // Dans l'ordre : rythme du bloc (4,2 $/h, calme), discussion (21,50 $ du moteur ; 151 260 +
-      // 5 000 tokens du sous-agent), aujourd'hui (8,10 $ ; 54 325 tokens), octobre (22,60 $).
+      // 5 000 tokens du spécialiste), aujourd'hui (8,10 $ ; 54 325 tokens), octobre (22,60 $).
       const at = (s: string) => text.indexOf(s)
       // Le terminal, compact : 💬 discussion, 🌞 jour, 📅 mois et « tok » ; le desktop, en mots.
       const isTerminal = surface === 'terminal'
@@ -502,10 +502,10 @@ describe('stats-board', () => {
       await pane.press({ key: 'discussion-refresh' })
       expect(seen.details().map((c) => c.slice(c.indexOf('ccusage@latest') + 1).join(' '))).toEqual(['claude session --id s1 --json'])
       all = await drawn(pane)
-      // Le détail : frise, modèles, appels les plus chers, sous-agent, et le rythme de la dernière heure.
+      // Le détail : frise, modèles, appels les plus chers, spécialiste, et le rythme de la dernière heure.
       expect(all).toContain('Appels les plus chers')
       expect(all).toContain('Modèles de la discussion')
-      expect(all).toContain('Sous-agents de workflow')
+      expect(all).toContain('Spécialistes de workflow')
       expect(all).toContain('estimé')
       expect(all).toContain(`21${NB}$/h${NB}·${NB}soutenu`)
       expect(all).toContain('calme')
@@ -563,7 +563,7 @@ describe('stats-board', () => {
       /** La notification de fin d'une commande de fond (ou d'un agent), et le message de retour d'un agent. */
       shellDone: (id: string) => relaunch(`<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>`, 'task-notification'),
       agentDone: (id: string) => relaunch(`<agent-message from="${id}">\n[Subagent hand-back] OK`, 'peer'),
-      /** Un sous-agent de fond lancé (par le fil principal, ou par l'agent `parent`), puis son premier tour. */
+      /** Un spécialiste de fond lancé (par le fil principal, ou par l'agent `parent`), puis son premier tour. */
       spawn: async (id: string, parent?: string) => {
         spawning = id
         await $.agent.spawn({ prompt: 'x', description: id, subagentType: 'general-purpose', parentModel: 'claude-opus-5-5', background: true, fork: false, ...(parent ? { parentAgentId: parent } : {}) } as any)
@@ -697,11 +697,11 @@ describe('stats-board', () => {
   }
 
   for (const surface of SURFACES) {
-    test(`requêtes : une question à boutons sort du temps actif, sauf les appels d'un sous-agent pendant ce temps (${surface})`, async ($, on) => {
+    test(`requêtes : une question à boutons sort du temps actif, sauf les appels d'un spécialiste pendant ce temps (${surface})`, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const seen = world(on)
       const engine = requestEngine(on, clock)(surface, $)
-      // Sous le plugin : la question attend la réponse de l'utilisateur, ici 10 min, pendant lesquelles un sous-agent appelle le modèle.
+      // Sous le plugin : la question attend la réponse de l'utilisateur, ici 10 min, pendant lesquelles un spécialiste appelle le modèle.
       let during: () => Promise<void> = async () => {}
       on('tool.call', { tool: 'AskUserQuestion' }, async () => {
         await clock.advance(2 * 60_000)
@@ -721,7 +721,7 @@ describe('stats-board', () => {
       await engine.step(t1, OPUS(1000, 3000))
       await engine.finish(t1)
       await clock.advance(6000)
-      // Le relevé garde l'attente et l'appel du sous-agent pendant l'attente.
+      // Le relevé garde l'attente et l'appel du spécialiste pendant l'attente.
       const log = Object.values(logsOf(seen))[0]
       const r = log.requests[0]
       expect(r.waits).toEqual([[asked, answered]])
@@ -730,11 +730,46 @@ describe('stats-board', () => {
       const pane = await mountPane($, surface, 100)
       await pane.press({ key: 'tab-discussion' })
       const all = await drawn(pane)
-      // 4 s avant la question, 4 s d'appel du sous-agent, 4 s après : 12 s actives ; 10 min moins 4 s d'attente.
+      // 4 s avant la question, 4 s d'appel du spécialiste, 4 s après : 12 s actives ; 10 min moins 4 s d'attente.
       expect(all).toMatch(new RegExp(`"Temps actif".{0,300}12${NB}s`))
       expect(all).toContain('Attente de ta réponse')
       expect(all).toMatch(new RegExp(`"Attente de ta réponse".{0,300}9${NB}min${NB}56`))
       expect(all).toContain(`attente${NB}9${NB}min${NB}56`)
+    })
+  }
+
+  for (const surface of SURFACES) {
+    test(`requêtes : deux spécialistes de fond en même temps que le fil principal, temps cumulé et temps gagné (${surface})`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const seen = world(on)
+      const engine = requestEngine(on, clock)(surface, $)
+      await start($, clock, surface)
+      const sentAt = clock.now()
+      const t1 = await engine.send('Lance deux spécialistes')
+      await engine.step(t1, OPUS(1000, 3000))
+      await engine.spawn('a1')
+      await engine.spawn('a2')
+      await clock.advance(56_000)
+      await engine.finish(t1, ['a1', 'a2'])
+      // Les deux spécialistes travaillent encore 4 min, le fil principal attend.
+      await clock.advance(4 * 60_000)
+      await engine.agentFinish('a1')
+      await engine.agentFinish('a2')
+      const t2 = await engine.agentDone('a1')
+      await clock.advance(60_000)
+      await engine.finish(t2)
+      await clock.advance(6000)
+      const r = Object.values(logsOf(seen))[0].requests[0]
+      expect(r.turnSpans).toEqual([[sentAt, sentAt + 60_000], [sentAt + 300_000, sentAt + 360_000]])
+      expect(r.agentSpans).toEqual([[sentAt + 4000, sentAt + 300_000], [sentAt + 4000, sentAt + 300_000]])
+      const pane = await mountPane($, surface, 100)
+      await pane.press({ key: 'tab-discussion' })
+      const all = await drawn(pane)
+      // 6 min actives ; trois fils pendant 56 s, deux pendant 4 min : 2 × 56 + 240 = 352 s gagnées.
+      expect(all).toMatch(new RegExp(`"Temps actif".{0,300}6${NB}min${NB}00`))
+      expect(all).toMatch(new RegExp(`"Temps cumulé".{0,300}11${NB}min${NB}52`))
+      expect(all).toMatch(new RegExp(`"Temps gagné".{0,300}5${NB}min${NB}52`))
+      expect(all).toContain('×2,0 en parallèle')
     })
   }
 
@@ -814,18 +849,18 @@ describe('stats-board', () => {
   const requestOf = (seen: ReturnType<typeof world>, id = 1) => (Object.values(logsOf(seen))[0] as any).requests.find((r: any) => r.id === id)
 
   for (const surface of SURFACES) {
-    test(`requêtes : un sous-agent de fond, puis sa notification ; ses appels comptent dans la requête (${surface})`, async ($, on) => {
+    test(`requêtes : un spécialiste de fond, puis sa notification ; ses appels comptent dans la requête (${surface})`, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const seen = world(on)
       const engine = requestEngine(on, clock)(surface, $)
       await start($, clock, 'terminal')
-      const t1 = await engine.send('Lance un sous-agent')
+      const t1 = await engine.send('Lance un spécialiste')
       await engine.step(t1, OPUS(500, 1500))
       await engine.spawn('a1')
       await engine.agentStep('a1', OPUS(1000, 3000))
       await engine.finish(t1, ['a1'])
       await clock.advance(1000)
-      // Le fil principal a fini, le sous-agent tourne encore.
+      // Le fil principal a fini, le spécialiste tourne encore.
       expect(requestOf(seen)).toMatchObject({ isOpen: false, tasks: 1, agents: 1, realMs: 6000 })
       await clock.advance(9000)
       await engine.agentFinish('a1')
@@ -957,7 +992,7 @@ describe('stats-board', () => {
       const seen = world(on)
       const engine = requestEngine(on, clock)(surface, $)
       await start($, clock, 'terminal')
-      const t1 = await engine.send('Lance un sous-agent')
+      const t1 = await engine.send('Lance un spécialiste')
       await engine.spawn('a1')
       engine.setAgents([{ id: 'a1', status: 'running', type: 'general-purpose', description: 'a1' }])
       await engine.abort(t1)
@@ -965,16 +1000,16 @@ describe('stats-board', () => {
       expect(requestOf(seen)).toMatchObject({ isOpen: false, tasks: 1, agents: 1 })
     })
 
-    test(`requêtes : un sous-agent de sous-agent compte pour la requête de son parent (${surface})`, async ($, on) => {
+    test(`requêtes : un spécialiste de spécialiste compte pour la requête de son parent (${surface})`, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const seen = world(on)
       const engine = requestEngine(on, clock)(surface, $)
       await start($, clock, 'terminal')
-      const t1 = await engine.send('Lance un sous-agent')
+      const t1 = await engine.send('Lance un spécialiste')
       await engine.spawn('a1')
       await engine.finish(t1, ['a1'])
       await clock.advance(2000)
-      // Un autre message ; puis l'agent a1 lance son propre sous-agent.
+      // Un autre message ; puis l'agent a1 lance son propre spécialiste.
       const t2 = await engine.send('autre chose')
       await engine.finish(t2, ['a1'])
       await engine.spawn('a2', 'a1')
@@ -1044,7 +1079,7 @@ describe('stats-board', () => {
       const seen = world(on)
       const engine = requestEngine(on, clock)(surface, $)
       await start($, clock, surface)
-      const t1 = await engine.send('Lance un sous-agent')
+      const t1 = await engine.send('Lance un spécialiste')
       await engine.spawn('a1')
       engine.setAgents([{ id: 'a1', status: 'running', type: 'general-purpose', description: 'a1' }])
       // Une version de Claude Code sans `background_tasks`.
@@ -1371,6 +1406,8 @@ describe('stats-board', () => {
       // Le Mac ne publie pas encore de temps cumulé (d'avant la 0.11.0) : le 7 n'est pas mesuré, et c'est dit.
       expect(all).toMatch(new RegExp(`"Temps cumulé".{0,300}1${NB}h${NB}00`))
       expect(all).toMatch(/1.jour sans mesure \(poste pas à jour\)/)
+      // Le temps gagné, sur les seuls jours mesurés : le 6, une discussion seule, rien en parallèle.
+      expect(all).toMatch(/"Temps gagné".{0,300}rien en parallèle/)
       await pane.press({ key: 'tab-rhythm' })
       all = await drawn(pane)
       expect(all).toContain(`tous${NB}les${NB}postes`)
@@ -1408,13 +1445,13 @@ describe('stats-board', () => {
       expect(all).toContain(`4,10${NB}$`)
       expect(all).toContain(`n°${NB}2`)
       expect(all).toContain(`sur 6${NB}jours actifs`)
-      // Les projets du jour, ce projet en tête ; la discussion s1 et son sous-agent, celle-ci.
+      // Les projets du jour, ce projet en tête ; la discussion s1 et son spécialiste, celle-ci.
       expect(all).toContain('Projets du jour')
       expect(all).toContain('ce projet')
       expect(all).toContain('Discussions du jour')
       expect(all).toContain(`6${NB}oct.–14:00`)
       expect(all).toContain('celle-ci')
-      expect(all).toContain(`+1${NB}sous-agent`)
+      expect(all).toContain(`+1${NB}spécialiste`)
       expect(all).toContain(`21,80${NB}$`)
       for (const name of ['Opus', 'Haiku', 'Sonnet']) expect(all).toContain(name)
       expect(all).not.toContain('Fable')

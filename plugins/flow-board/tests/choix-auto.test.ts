@@ -1,5 +1,5 @@
 // « Décidé sans toi » en mode auto : chaque choix peut porter son origine (reco prise, validation
-// sautée, choix de session liée) ; un parcours qui a été en auto ne coupe aucun choix avant la
+// sautée, choix de worker) ; une mission qui a été en auto ne coupe aucun choix avant la
 // validation du rapport (invariant : en auto, aucun choix déclaré n'est coupé avant la validation du
 // rapport), se met en pause à 200, refuse un nouveau choix au-delà de 1 000, puis garde les 200 plus
 // récents une fois le rapport validé. Hors auto, rien ne change : les 30 plus récents.
@@ -12,7 +12,7 @@ import type { Board, Relay, Run } from '../types'
 
 const T0 = 97_000_000
 
-/** Un parcours en Implémentation actif dans la discussion « sa », avec un groupe confié (B) et un compte rendu à venir. */
+/** Une mission en Implémentation actif dans la discussion « sa », avec un groupe confié (B) et un compte rendu à venir. */
 const lot = (): Board => {
   const run: Run = { ...newRun('implement', T0, 'Boutique'), owner: 'sa' }
   const board: Board = { ...emptyBoard('', 'p'), session: 'sa', deleted: [], runs: [run], activeId: run.id }
@@ -74,12 +74,12 @@ test('En auto, aucun choix n’est coupé ; à 200, l’auto se met en pause («
   expect(runOf(at200).decided).toHaveLength(200)
   expect(isAutoOn(runOf(at200))).toBe(false)
   expect(runOf(at200).auto).toMatchObject({ offWhy: 'limite de 200 choix atteinte' })
-  // L'auto éteint, le parcours a été en auto : rien n'est coupé, ni retour à 30.
+  // L'auto éteint, la mission a été en auto : rien n'est coupé, ni retour à 30.
   const at201 = declare(at200, 1, 200, T0 + 5)
   expect(runOf(at201).decided).toHaveLength(201)
   expect(runOf(at201).decided![0]!.what).toBe('Choix 0')
   // La pause à la limite se notifie, au texte fixé.
-  expect(autoNotices(at199, at200)).toEqual(['Parcours Boutique : auto en pause (limite de 200 choix atteinte)'])
+  expect(autoNotices(at199, at200)).toEqual(['Mission Boutique : auto en pause (limite de 200 choix atteinte)'])
   // Coupé par la personne : pareil.
   const cut = declare(switchOffAuto(declare(on, 40, 0, T0 + 3), T0 + 4)!.board, 5, 40, T0 + 5)
   expect(runOf(cut).decided).toHaveLength(45)
@@ -99,7 +99,7 @@ test('La pause vient au passage des 200 choix : rallumé ensuite par deux clics,
   expect(runOf(more).decided).toHaveLength(201)
 })
 
-test('Un état auto abîmé dans les deux copies reste au parcours : il a été en auto, et la fusion ne coupe aucun de ses choix', () => {
+test('Un état auto abîmé dans les deux copies reste à la mission : il a été en auto, et la fusion ne coupe aucun de ses choix', () => {
   const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
   const many = declare(on, 300, 0, T0 + 3)
   for (const auto of [{ onAt: 'bad' }, 'x', null]) {
@@ -123,10 +123,10 @@ test('Au-delà de 1 000 choix avant le rapport, un nouveau choix est refusé ave
   expect(refused.text).toContain('1000 choices at most')
 })
 
-test('Une fois le rapport validé, un parcours qui a été en auto garde les 200 choix les plus récents', () => {
+test('Une fois le rapport validé, une mission qui a été en auto garde les 200 choix les plus récents', () => {
   const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
   const many = declare(on, 250, 0, T0 + 3)
-  // Le parcours arrive au compte rendu, que la personne valide.
+  // La mission arrive au compte rendu, que la personne valide.
   const atReport = applyReport(many, { fix: { phase: 'compte-rendu', step: 'validate' } }, T0 + 4).board
   const validated = validateReport(atReport, T0 + 5)!.board
   expect(runOf(validated).decided).toHaveLength(250)
@@ -142,14 +142,14 @@ const relayedFromB = (board: Board, items: { what: string; why?: string }[], at 
   return { sent, relay }
 }
 
-test('En auto, les choix venus du relais d’une session liée prennent l’origine « choix de session liée », affichés comme gardés ; hors auto, aucune origine', () => {
+test('En auto, les choix venus du relais d’un worker prennent l’origine « choix de worker », affichés comme gardés ; hors auto, aucune origine', () => {
   const { sent, relay } = relayedFromB(switchOnAuto(lot(), 'sa', T0 + 2)!.board, [{ what: 'Choix de B', why: 'raison' }])
   const file = decidedFileText(runOf(sent), relay)
-  expect(file).toContain('Choix de B — raison (choix de session liée, groupe B')
-  // Rendu, le groupe verse ses choix dans le parcours, avec leur origine.
+  expect(file).toContain('Choix de B — raison (choix de worker, groupe B')
+  // Rendu, le groupe verse ses choix dans la mission, avec leur origine.
   const back = applyReport(sent, { set: [{ id: 't2', status: 'done' }], returned: ['B'] }, T0 + 6, { relay }).board
   expect(runOf(back).decided!.find(d => d.what === 'Choix de B')).toMatchObject({ origin: 'linked-session' })
-  // Un parcours qui n'a jamais été en auto : rien ne change, ni origine ni regroupement.
+  // Une mission qui n'a jamais été en auto : rien ne change, ni origine ni regroupement.
   const plain = relayedFromB(lot(), [{ what: 'Choix de B', why: 'raison' }])
   expect(decidedFileText(runOf(plain.sent), plain.relay)).toContain('Choix de B — raison (groupe B,')
   const plainBack = applyReport(plain.sent, { set: [{ id: 't2', status: 'done' }], returned: ['B'] }, T0 + 6, { relay: plain.relay }).board
@@ -166,7 +166,7 @@ test('Au retour d’un groupe, tous ses choix relayés sont gardés, même au-de
   expect(runOf(back).decided!.some(d => d.what === 'Relayé deux')).toBe(true)
 })
 
-test('« ✓ Clore le parcours » avant la validation du rapport ne vaut pas validation : aucun choix n’est coupé', () => {
+test('« ✓ Clore la mission » avant la validation du rapport ne vaut pas validation : aucun choix n’est coupé', () => {
   const many = declare(switchOnAuto(lot(), 'sa', T0 + 2)!.board, 250, 0, T0 + 3)
   const atReport = applyReport(many, { fix: { phase: 'compte-rendu', step: 'validate' } }, T0 + 4).board
   const closed = finishActive(atReport, T0 + 5)!.board
@@ -187,7 +187,7 @@ test('Un rapport validé puis rouvert (retour en arrière) n’est plus validé 
   expect(runOf(mergeBoards(more, validated)).decided).toHaveLength(250)
 })
 
-test('Un rapport validé, rouvert puis fini par « ✓ Clore le parcours » n’est plus validé : aucun choix n’est coupé', () => {
+test('Un rapport validé, rouvert puis fini par « ✓ Clore la mission » n’est plus validé : aucun choix n’est coupé', () => {
   const many = declare(switchOnAuto(lot(), 'sa', T0 + 2)!.board, 250, 0, T0 + 3)
   const atReport = applyReport(many, { fix: { phase: 'compte-rendu', step: 'validate' } }, T0 + 4).board
   const validated = validateReport(atReport, T0 + 5)!.board
@@ -231,10 +231,18 @@ test('Au plafond, un retrait avec remplaçant laisse le choix d’origine en vig
 test('Au-delà de 40 choix, les faits du compte rendu en donnent les comptes par origine, les 40 plus récents et le chemin du fichier des choix', () => {
   const board = declare(declare(switchOnAuto(lot(), 'sa', T0 + 2)!.board, 30, 0, T0 + 3, 'recommendation'), 30, 30, T0 + 4, 'skipped-validation')
   const facts = reportFacts(runOf(board), 0, '/h/.claude/flow-board/choix/r.md').join('\n')
-  expect(facts).toContain('60 choices reported as made without the user (30 « reco prise », 30 « validation sautée », 0 « choix de session liée », 0 without origin)')
+  expect(facts).toContain('60 choices reported as made without the user (30 « reco prise », 30 « validation sautée », 0 « choix de worker », 0 without origin)')
   expect(facts).toContain('read them all in the file of declared choices, /h/.claude/flow-board/choix/r.md')
   expect(facts).not.toContain('Choix 19 [origin')
   expect(facts).toContain('Choix 59 [origin: validation sautée]')
+})
+
+test('Les choix en zone sensible tranchés en auto sont tous donnés à part aux faits du compte rendu, même hors des 40 plus récents', () => {
+  const first = applyReport(switchOnAuto(lot(), 'sa', T0 + 2)!.board, { decided: [{ what: 'Zone sensible : garder la copie', why: 'la plus prudente', origin: 'recommendation' }] }, T0 + 3).board
+  const facts = reportFacts(runOf(declare(first, 50, 0, T0 + 4, 'recommendation'))).join('\n')
+  expect(facts).toContain('- Sensitive choices settled in auto (1), to list first and apart in « Décidé sans toi », under « Zone sensible, tranché en auto », and nowhere else: Zone sensible : garder la copie (because la plus prudente).')
+  // Sans choix sensible, la ligne n'est pas là.
+  expect(reportFacts(runOf(declare(lot(), 3, 0, T0 + 4, 'recommendation'))).join('\n')).not.toContain('Sensitive choices settled in auto')
 })
 
 test('Le fichier des choix et les faits du compte rendu gardent l’origine, et demandent le regroupement par origine', () => {

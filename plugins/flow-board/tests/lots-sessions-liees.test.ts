@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import {
   applyReport,
@@ -38,14 +39,14 @@ const KEY = 'board:'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 const BAND = {
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} },
 } as const
 
-/** Un parcours actif dans la discussion `session`, après un appel de l'outil `flow`. */
+/** Une mission active dans la discussion `session`, après un appel de l'outil `flow`. */
 const boardWith = (input: Record<string, unknown>, session = 's'): Board => {
   const run = { ...newRun('implement', 1_000, 'Lot'), owner: session }
   const board: Board = { ...emptyBoard('', 'p'), session, deleted: [], runs: [run], activeId: run.id }
@@ -77,7 +78,7 @@ const VENTES = {
 
 /**
  * Un disque vide où rien ne s'écrit, pour un test qui relaie sans simuler de disque : le relais (un
- * fichier par session liée) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
+ * fichier par worker) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
  */
 const emptyDisk = (on: any) => {
   on('fs.exists', () => ({ value: false }) as any)
@@ -99,7 +100,7 @@ test('les fichiers des tickets comptent : le lot garde A ∥ E, et chaque groupe
     ['C', 'E'],
     ['D', 'E'],
   ])
-  // B attend C (son export n'attend rien, mais le groupe part entier, en session liée).
+  // B attend C (son export n'attend rien, mais le groupe part entier, dans un worker).
   expect(viewOf(board, 'B').state).toBe('waiting')
   // Un ticket fait ne retient plus personne : A fini, D n'est plus retenu que par C (même page).
   const later = applyReport(board, { set: [{ id: 'a1', status: 'done' }, { id: 'a2', status: 'done' }] }, 3_000).board
@@ -148,7 +149,7 @@ const THREE = {
   ],
 }
 
-test('un groupe confié à une session liée : hors des lots, il retient ceux qui touchent ses fichiers', () => {
+test('un groupe confié à un worker : hors des lots, il retient ceux qui touchent ses fichiers', () => {
   const sent = startLinkedGroups(boardWith(THREE), ['P'], 3_000)!.board
   const plan = planOf(sent)
   expect(plan.delegated).toEqual(['P'])
@@ -165,7 +166,7 @@ test('un groupe confié à une session liée : hors des lots, il retient ceux qu
   expect(linkGroupSession(both, 'Revue', 'local_x', 3_300)).toBeNull()
   const linked = linkGroupSession(both, 'Groupe Q · Qu', 'local_q', 3_300)!.board
   expect(activeRun(linked)!.groups!.find(g => g.id === 'Q')!.linked).toEqual({ at: 3_200, session: 'local_q' })
-  // Le titre du parcours en tête peut nommer un autre groupe : seule compte la partie après « › ».
+  // Le titre de la mission en tête peut nommer un autre groupe : seule compte la partie après « › ».
   const prefixed = linkGroupSession(both, 'Revue du groupe P › Groupe Q · Qu', 'local_q2', 3_300)!.board
   expect(activeRun(prefixed)!.groups!.find(g => g.id === 'Q')!.linked?.session).toBe('local_q2')
   expect(activeRun(prefixed)!.groups!.find(g => g.id === 'P')!.linked?.session).toBeUndefined()
@@ -179,12 +180,12 @@ test('un groupe confié à une session liée : hors des lots, il retient ceux qu
   const undone = cancelLinkedGroup(both, 'P', 3_500)!.board
   expect(viewOf(undone, 'P').isDelegated).toBe(false)
 
-  // Un plan renvoyé garde les sessions liées ; « returned » rend le groupe.
+  // Un plan renvoyé garde les workers ; « returned » rend le groupe.
   const resent = applyReport(all, { groups: THREE.groups }, 4_000).board
   expect(viewOf(resent, 'Q').isDelegated).toBe(true)
   const back = applyReport(resent, { set: [{ id: 'q1', status: 'done' }], returned: ['Q', 'Z'] }, 5_000)
   expect(activeRun(back.board)!.groups!.find(g => g.id === 'Q')!.linked).toBeUndefined()
-  expect(back.text).toMatch(/returned: no group in a linked session among Z/)
+  expect(back.text).toMatch(/returned: no group in a worker among Z/)
 })
 
 test('un continuesHere reçu est ignoré : aucun groupe ne se garde pour la discussion du découpage', () => {
@@ -193,32 +194,32 @@ test('un continuesHere reçu est ignoré : aucun groupe ne se garde pour la disc
   expect(viewOf(board, 'A').group).not.toHaveProperty('continuesIn')
 })
 
-test('une session déléguée n’ouvre ni ne reprend aucun parcours, et n’écrit rien', () => {
+test('une session déléguée n’ouvre ni ne reprend aucune mission, et n’écrit rien', () => {
   const main = boardWith(THREE, 'main')
   const runId = activeRun(main)!.id
-  // La session liée lit le stockage : le parcours y est actif dans la discussion principale.
+  // Le worker lit le stockage : la mission y est actif dans le manager.
   const loaded = detachOnLoad({ ...main, session: 'main' }, 3_000, 'linked')
-  // Un parcours absent d'ici (session dans un worktree, qui a son propre fichier) : déléguée quand même.
+  // Une mission absent d'ici (session dans un worktree, qui a son propre fichier) : déléguée quand même.
   const away = applyReport(loaded, { delegate: 'inconnu' }, 3_100, { delegateTitle: 'Boutique' })
   expect(away.board.delegate).toEqual({ run: 'inconnu', at: 3_100, title: 'Boutique' })
-  expect(away.text).toMatch(/works for the workflow "Boutique".*not on this folder's dashboard/)
-  expect(applyReport(loaded, { delegate: 'inconnu' }, 3_100).text).toMatch(/works for the workflow "inconnu"/)
+  expect(away.text).toMatch(/works for the mission "Boutique".*not on this folder's dashboard/)
+  expect(applyReport(loaded, { delegate: 'inconnu' }, 3_100).text).toMatch(/works for the mission "inconnu"/)
   const out = applyReport(loaded, { delegate: runId }, 3_100)
   expect(out.board.delegate).toEqual({ run: runId, at: 3_100 })
-  expect(out.text).toMatch(/This discussion works for the workflow "Lot", which stays in the main discussion/)
+  expect(out.text).toMatch(/This discussion works for the mission "Lot", which stays in the manager/)
   const delegated = out.board
-  // Ses skills ne touchent à rien, même longtemps après (pas de reprise d'un parcours « abandonné »).
+  // Ses skills ne touchent à rien, même longtemps après (pas de reprise d'une mission « abandonné »).
   expect(applySkill(delegated, 'mattpocock-skills:implement', { now: 99_000_000, isMain: true })).toBeNull()
   expect(applySkill(delegated, 'mattpocock-skills:code-review', { now: 99_000_000, isMain: true })).toBeNull()
   // Ses rapports non plus.
   const report = applyReport(delegated, { step: 'read', tickets: [{ id: 'x9', name: 'Nouveau' }] }, 3_200)
   expect(report.board).toBe(delegated)
-  expect(report.text).toMatch(/relayed to the main discussion's dashboard on its own/)
+  expect(report.text).toMatch(/relayed to the manager's dashboard on its own/)
   expect(report.text).not.toMatch(/Do not call this tool again/)
-  // Un `set` part au relais (écrit par l'enregistrement), jamais sur le parcours.
+  // Un `set` part au relais (écrit par l'enregistrement), jamais sur la mission.
   const relayed = applyReport(delegated, { set: [{ id: 'p1', status: 'done' }] }, 3_250)
   expect(relayed.board).toBe(delegated)
-  expect(relayed.text).toMatch(/^Relayed to the main discussion's dashboard: 1 ticket status/)
+  expect(relayed.text).toMatch(/^Relayed to the manager's dashboard: 1 ticket status/)
   // Le groupe déclaré est gardé avec la délégation.
   expect(applyReport(loaded, { delegate: runId, group: 'P' }, 3_100).board.delegate).toEqual({ run: runId, at: 3_100, group: 'P' })
   // Propre à la discussion : gardé à la fusion, jamais repris du stockage.
@@ -226,22 +227,22 @@ test('une session déléguée n’ouvre ni ne reprend aucun parcours, et n’éc
   expect(detachOnLoad(delegated, 3_300, 'other').delegate).toBeUndefined()
 })
 
-test('une session déléguée garde l’adresse de la discussion principale et la rappelle à chaque réponse', () => {
+test('une session déléguée garde l’adresse du manager et la rappelle à chaque réponse', () => {
   const main = boardWith(THREE, 'main')
   const runId = activeRun(main)!.id
   const loaded = detachOnLoad({ ...main, session: 'main' }, 3_000, 'linked')
   // Sans adresse : la réponse renvoie au nom et à la référence du brief, sans rien inventer.
   const bare = applyReport(loaded, { delegate: runId, group: 'P' }, 3_100)
-  expect(bare.text).toMatch(/Reach the main discussion by the \[ref\] your brief gives/)
+  expect(bare.text).toMatch(/Reach the manager by the \[ref\] your brief gives/)
   // Avec l'adresse « <nom> [ref] » : gardée, et rappelée à la déclaration comme aux relais.
   const out = applyReport(loaded, { delegate: runId, group: 'P', main: 'Lot SC [05e2f6]' }, 3_100)
   expect(out.board.delegate).toEqual({ run: runId, at: 3_100, group: 'P', main: 'Lot SC [05e2f6]' })
-  expect(out.text).toMatch(/Reach the main discussion, "Lot SC \[05e2f6\]"/)
+  expect(out.text).toMatch(/Reach the manager, "Lot SC \[05e2f6\]"/)
   expect(out.text).toMatch(/call ListAgents, find the row whose \[ref\] is that one, and send to that row's "<name> \[ref\]" exactly as listed/)
   const relayed = applyReport(out.board, { set: [{ id: 'p1', status: 'done' }] }, 3_200)
   expect(relayed.board).toBe(out.board)
   // Aux relais, une seule ligne : le paragraphe ListAgents n'est que dans la réponse à delegate.
-  expect(relayed.text).toContain('Nothing else of this call was recorded. The main discussion: "Lot SC [05e2f6]", reached by its [ref] in ListAgents, as the delegate answer says.')
+  expect(relayed.text).toContain('Nothing else of this call was recorded. The manager: "Lot SC [05e2f6]", reached by its [ref] in ListAgents, as the delegate answer says.')
   expect(relayed.text).not.toContain('call ListAgents, find the row')
 })
 
@@ -261,7 +262,7 @@ const world = (on: any, opts: { repo: boolean }) => {
   })
   on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('command.list', () => ({ value: [] }))
-  // L'app répond au lancement d'une session liée avec son id, tiré du groupe que le titre nomme.
+  // L'app répond au lancement d'un worker avec son id, tiré du groupe que le titre nomme.
   on('tool.call', { tool: START }, (_$: unknown, e: { title: string }) => ({
     result: { text: `Started session local_${/Groupe (\w+)/.exec(e.title)?.[1] ?? 'x'}42.` },
   }))
@@ -274,8 +275,9 @@ const world = (on: any, opts: { repo: boolean }) => {
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
-test('sans git : les lots partent en sessions liées ; raisons et autres lots affichés', { timeoutMs: 15000 }, async ($, on) => {
+test('sans git : les lots partent dans des workers ; raisons et autres lots affichés', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 70_000_000 })
+  memoryDisk(on)
   const { mem, filled } = world(on, { repo: false })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -283,20 +285,20 @@ test('sans git : les lots partent en sessions liées ; raisons et autres lots af
 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
-  expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ E en parallèle · sessions liées$/)
+  expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ E en parallèle · workers$/)
   expect(await ui.find({ type: 'Text', text: /\/implement-spec/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /^∦.A.:.tables$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Autres lots possibles :$/ })).toBeDefined()
-  expect(String((await ui.find({ key: 'launch-parallel-linked-1' }))?.props.label)).toMatch(/^⇉.C ∥ E en parallèle · sessions liées$/)
+  expect(String((await ui.find({ key: 'launch-parallel-linked-1' }))?.props.label)).toMatch(/^⇉.C ∥ E en parallèle · workers$/)
   expect(await ui.find({ key: 'launch-parallel-1' })).toBeUndefined()
-  // Un groupe se fait en session liée : ni « cette discussion », ni tickets prêts lancés ici.
+  // Un groupe se fait dans un worker : ni « cette discussion », ni tickets prêts lancés ici.
   expect(await ui.find({ type: 'Text', text: /cette.discussion/ })).toBeUndefined()
   expect(await ui.find({ key: 'launch-ready-B' })).toBeUndefined()
 
-  // Un autre lot, en sessions liées : une session par groupe, le parcours reste ici.
+  // Un autre lot, dans des workers : une session par groupe, la mission reste ici.
   await ui.press({ key: 'launch-parallel-linked-1' })
   const text = filled.at(-1)!
-  expect(text).toMatch(/^Confie chacun de ces groupes à sa session liée, en parallèle, pour le parcours « Boutique » : Groupe C \(Statut de commande\) : 1\) c1 — Statut de commande ∥ Groupe E \(Enquêtes\) : 1\) e1 — Enquête transporteur\./)
+  expect(text).toMatch(/^Confie chacun de ces groupes à son worker, en parallèle, pour la mission « Boutique » : Groupe C \(Statut de commande\) : 1\) c1 — Statut de commande ∥ Groupe E \(Enquêtes\) : 1\) e1 — Enquête transporteur\./)
   expect(text).toMatch(/Puis lance une session par groupe, avec un titre qui commence par « Boutique > Groupe <id> · »/)
   expect(text).toMatch(/start_session une fois par groupe, avec initiation user_asked/)
   expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n 'Boutique > Groupe <id> · <thème>' --effort <effort>/)
@@ -308,7 +310,7 @@ test('sans git : les lots partent en sessions liées ; raisons et autres lots af
   expect(text).toContain("Jamais pour une tâche d'exécution")
   expect(text).toContain('Tu ne choisis jamais xhigh toi-même')
   expect(text).toContain('question à boutons « xhigh (Recommandé) / high » par groupe concerné, quatre au plus par encadré (au-delà de quatre groupes concernés, plusieurs encadrés)')
-  expect(text).toContain('si son effort est xhigh, qu\'elle est une session autonome')
+  expect(text).toContain('si son effort est xhigh, qu\'elle est un worker autonome')
   expect(text).toMatch(/use_worktree false \(ce dossier n’a pas de git\)/)
   expect(text).toMatch(/, ce que font les autres sessions en même temps/)
   expect(text).toMatch(/suivre les sessions sans les attendre activement/)
@@ -320,10 +322,10 @@ test('sans git : les lots partent en sessions liées ; raisons et autres lots af
   await $.tool.call({ tool: START, title: 'Groupe E · Enquêtes', prompt: 'x' } as any)
   await $.tool.call({ tool: START, title: 'Groupe C · Statut de commande', prompt: 'x' } as any)
   const answer = await $.tool.call({ tool: TOOL } as any)
-  expect(JSON.stringify(answer)).not.toMatch(/works for the workflow/)
+  expect(JSON.stringify(answer)).not.toMatch(/works for the mission/)
   const ui2 = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui2.find({ type: 'Text', text: /C, E en session liée/ })).toBeDefined()
-  expect(await ui2.find({ type: 'Text', text: /session.liée.à.lancer/ })).toBeUndefined()
+  expect(await ui2.find({ type: 'Text', text: /C, E dans un worker/ })).toBeDefined()
+  expect(await ui2.find({ type: 'Text', text: /worker.à.lancer/ })).toBeUndefined()
   await ui2.unmount()
   // Enregistré (l'écriture est différée de quelques secondes).
   for (let i = 0; i < 6; i++) await clock.advance(1000)
@@ -331,8 +333,9 @@ test('sans git : les lots partent en sessions liées ; raisons et autres lots af
   expect(run?.groups?.filter(g => g.linked).map(g => `${g.id}:${g.linked!.session}`)).toEqual(['C:local_C42', 'E:local_E42'])
 })
 
-test('dans un dépôt git aussi, chaque lot part en sessions liées, jamais par /implement-spec', { timeoutMs: 15000 }, async ($, on) => {
+test('dans un dépôt git aussi, chaque lot part dans des workers, jamais par /implement-spec', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 71_000_000 })
+  memoryDisk(on)
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -342,27 +345,28 @@ test('dans un dépôt git aussi, chaque lot part en sessions liées, jamais par 
   expect(await ui.find({ key: 'launch-parallel-2' })).toBeUndefined()
   await ui.press({ key: 'launch-parallel-linked-2' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^Confie chacun de ces groupes à sa session liée, en parallèle, pour le parcours « Boutique » : Groupe D \(Commandes\) : 1\) d1 — Délai de livraison ∥ Groupe E \(Enquêtes\)/)
+  expect(filled.at(-1)).toMatch(/^Confie chacun de ces groupes à son worker, en parallèle, pour la mission « Boutique » : Groupe D \(Commandes\) : 1\) d1 — Délai de livraison ∥ Groupe E \(Enquêtes\)/)
 })
 
-test('la session liée se déclare : son panneau le dit, ses skills ne lancent aucun parcours', { timeoutMs: 15000 }, async ($, on) => {
+test('le worker se déclare : son panneau le dit, ses skills ne lancent aucune mission', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 72_000_000 })
+  memoryDisk(on)
   const { mem } = world(on, { repo: false })
-  // La discussion principale (B) a écrit son parcours, actif chez elle.
+  // Le manager (B) a écrit sa mission, actif chez elle.
   const main = boardWith({ title: 'Boutique', ...VENTES }, 'session-B')
   mem[KEY] = main
   const runId = activeRun(main)!.id
   await start($)
 
   const answer = await $.tool.call({ tool: TOOL, delegate: runId } as any)
-  expect(JSON.stringify(answer)).toMatch(/works for the workflow/)
+  expect(JSON.stringify(answer)).toMatch(/works for the mission/)
   // Le skill chargé ensuite n'ouvre rien : pas de consigne du tableau de bord ajoutée.
   const note = await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'brief' })
   expect(note.text).toBe('brief')
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /Session.liée du parcours « Lot »/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Worker de la mission « Lot »/ })).toBeDefined()
   await ui.unmount()
-  // Après l'écriture différée : toujours le seul parcours de la discussion principale.
+  // Après l'écriture différée : toujours la seule mission du manager.
   await $.tool.call({ tool: TOOL, tickets: [{ id: 'x9', name: 'Nouveau' }] } as any)
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   const stored = mem[KEY] as Board
@@ -370,8 +374,9 @@ test('la session liée se déclare : son panneau le dit, ses skills ne lancent a
   expect(stored.runs[0]!.tickets.some(t => t.id === 'x9')).toBe(false)
 })
 
-test('un ancien groupe « continue ici », repris ailleurs, n’a plus d’effet : il garde sa session liée', { timeoutMs: 15000 }, async ($, on) => {
+test('un ancien groupe « continue ici », repris ailleurs, n’a plus d’effet : il garde son worker', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 73_000_000 })
+  memoryDisk(on)
   const { mem } = world(on, { repo: false })
   const elsewhere = boardWith({ title: 'Boutique', ...VENTES }, 'session-B')
   // Un fichier d'avant la 0.60.0, mis de côté dans la discussion de découpage : une autre peut le reprendre.
@@ -385,7 +390,7 @@ test('un ancien groupe « continue ici », repris ailleurs, n’a plus d’effet
   await ui.unmount()
 })
 
-// ─── Sessions liées lancées par le CLI (claude --bg) ──────────────────────
+// ─── Workers lancés par le CLI (claude --bg) ──────────────────────
 
 test('claude --bg : l’id et le titre affichés sont relevés, seulement pour un vrai lancement', () => {
   const out = 'Starting background service…\nbackgrounded · 60481870 · Groupe A · Synchro\r\n  claude agents             list sessions\n  claude attach 60481870    open in this terminal\n'
@@ -404,6 +409,7 @@ test('claude --bg : l’id et le titre affichés sont relevés, seulement pour u
 
 test('dans le CLI : la session lancée par claude --bg va au groupe que son titre nomme, et « Annuler » disparaît', async ($, on) => {
   const clock = mock.clock(on, { now: 74_000_000 })
+  memoryDisk(on)
   const { mem, filled } = world(on, { repo: true })
   // Le shell répond comme claude --bg : une ligne par session lancée.
   on('tool.call', { tool: 'Bash' }, (_$: unknown, e: { command: string }) => ({
@@ -428,15 +434,16 @@ test('dans le CLI : la session lancée par claude --bg va au groupe que son titr
   await $.tool.call({ tool: 'Bash', command: 'claude --bg -n "Boutique › Groupe E · Enquêtes" -w groupe-e "$(cat /tmp/brief-e.txt)"' } as any)
   ui2 = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await ui2.find({ key: 'group-linked-cancel-E' })).toBeUndefined()
-  expect(await ui2.find({ type: 'Text', text: /E en session liée/ })).toBeDefined()
+  expect(await ui2.find({ type: 'Text', text: /E dans un worker/ })).toBeDefined()
   await ui2.unmount()
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   const run = (mem[KEY] as Board).runs.find(r => r.title === 'Boutique')
   expect(run?.groups?.find(g => g.id === 'E')?.linked?.session).toBe('9f3e21aa')
 })
 
-test('le titre d’une session liée commence par le titre du parcours, raccourci et sans guillemets', async ($, on) => {
+test('le titre d’un worker commence par le titre de la mission, raccourci et sans guillemets', async ($, on) => {
   mock.clock(on, { now: 74_000_000 })
+  memoryDisk(on)
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -453,6 +460,7 @@ test('le titre d’une session liée commence par le titre du parcours, raccourc
 
 test('la commande du CLI cite pour le shell le titre et le worktree, apostrophe comprise', async ($, on) => {
   mock.clock(on, { now: 74_000_000 })
+  memoryDisk(on)
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -467,10 +475,10 @@ test('la commande du CLI cite pour le shell le titre et le worktree, apostrophe 
   expect(filled.at(-1)).toContain('branch_name "groupe-l-atelier-<id>"')
 })
 
-test('une session liée dans un worktree se déclare quand même : le titre vient du board du dépôt principal', async ($, on) => {
+test('un worker dans un worktree se déclare quand même : le titre vient du board du dépôt principal', async ($, on) => {
   mock.clock(on, { now: 75_000_000 })
   const { mem } = world(on, { repo: true })
-  // Sa racine est celle du worktree ; le parcours vit dans le board du dépôt principal.
+  // Sa racine est celle du worktree ; la mission vit dans le board du dépôt principal.
   on('session.root', () => ({ value: 'C:/proj/.claude/worktrees/groupe-e' }))
   const main = { ...boardWith({ title: 'Boutique', ...VENTES }, 'session-B'), root: 'C:/proj' }
   mem['board:c:/proj'] = main
@@ -478,13 +486,13 @@ test('une session liée dans un worktree se déclare quand même : le titre vien
   await start($)
 
   const answer = JSON.stringify(await $.tool.call({ tool: TOOL, delegate: runId } as any))
-  expect(answer).toMatch(/works for the workflow \\"Lot\\"/)
+  expect(answer).toMatch(/works for the mission \\"Lot\\"/)
   expect(answer).toMatch(/not on this folder's dashboard/)
-  // Ses skills n'ouvrent aucun parcours dans le board du worktree.
+  // Ses skills n'ouvrent aucune mission dans le board du worktree.
   const note = await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'brief' })
   expect(note.text).toBe('brief')
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /Session.liée du parcours « Lot »/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Worker de la mission « Lot »/ })).toBeDefined()
   await ui.unmount()
   // Le board du dépôt principal n'a pas été touché.
   expect(mem['board:c:/proj']).toEqual(main)
@@ -523,7 +531,7 @@ test('un push avant l’implémentation ne la ferme pas : confier un groupe, ou 
   expect(run.phases.find(p => p.skill === 'project:version')!.status).toBe('pending')
   expect(viewOf(sent, 'E').isDelegated).toBe(true)
 
-  // Lancer /implement ici : le même parcours revient à l'implémentation, aucun autre n'est ouvert.
+  // Lancer /implement ici : la même mission revient à l'implémentation, aucun autre n'est ouvert.
   const local = applySkill(pushed, 'mattpocock-skills:implement', { now: 5_000, isMain: true })!.board
   expect(local.runs.map(r => r.id)).toEqual([activeRun(pushed)!.id])
   expect(currentPhase(activeRun(local)!)).toMatchObject({ skill: 'implement', status: 'active' })
@@ -533,8 +541,9 @@ test('un push avant l’implémentation ne la ferme pas : confier un groupe, ou 
   expect(currentPhase(direct)).toMatchObject({ skill: 'implement', status: 'active' })
 })
 
-test('dans la session liée, le bandeau dit pour quel parcours elle travaille, pas « Aucun workflow »', async ($, on) => {
+test('dans le worker, le bandeau dit pour quelle mission elle travaille, pas « Aucun workflow »', async ($, on) => {
   mock.clock(on, { now: 76_000_000 })
+  memoryDisk(on)
   const { mem } = world(on, { repo: false })
   const main = boardWith({ title: 'Boutique', ...VENTES }, 'session-B')
   mem[KEY] = main
@@ -542,19 +551,19 @@ test('dans la session liée, le bandeau dit pour quel parcours elle travaille, p
   await $.tool.call({ tool: TOOL, delegate: activeRun(main)!.id } as any)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
-    expect(await ui.find({ type: 'Text', text: /Aucun.workflow/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /Session.liée/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Aucune.mission/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /↗.Worker/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /« Lot »/ })).toBeDefined()
     expect(await ui.find({ key: 'band-resume' })).toBeUndefined()
     await ui.unmount()
   }
 })
 
-// ─── Relais : l'avancement d'une session liée, affiché dans la discussion principale ──────
+// ─── Relais : l'avancement d'un worker, affiché dans le manager ──────
 
 const ASANA = 'mcp__claude_ai_Asana__update_tasks'
 
-test('la session liée relaie ses tickets (Asana, set), ses commits et ses tests, sans toucher au parcours', async ($, on) => {
+test('le worker relaie ses tickets (Asana, set), ses commits et ses tests, sans toucher à la mission', async ($, on) => {
   emptyDisk(on)
   const clock = mock.clock(on, { now: 77_000_000 })
   const { mem } = world(on, { repo: false })
@@ -570,7 +579,7 @@ test('la session liée relaie ses tickets (Asana, set), ses commits et ses tests
   await clock.advance(1000)
   await $.tool.call({ tool: ASANA, tasks: [{ task: 'e1', completed: true }] } as any)
   await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }], note: 'Banc prêt' } as any)
-  // L'entrée de la session, dans sa clé à elle (un fichier par session liée).
+  // L'entrée de la session, dans sa clé à elle (un fichier par worker).
   const entry = (mem[`relay:${runId}:session-A`] as any).entry
   expect(entry).toMatchObject({ group: 'E', commits: 1, lastCommit: 'Add the bench', test: { ok: true } })
   expect(entry.tickets.e1.status).toBe('done')
@@ -591,13 +600,13 @@ test('la session liée relaie ses tickets (Asana, set), ses commits et ses tests
   expect(reviewed.reviewedAt).toBeDefined()
   expect(reviewed.securedAt).toBeDefined()
   expect(reviewed.last).toMatchObject({ kind: 'review', text: 'revue /security-review' })
-  // Le parcours de la discussion principale n'a pas bougé.
+  // La mission du manager n'a pas bougé.
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   const stored = mem[KEY] as Board
   expect(stored.runs.find(r => r.id === runId)!.tickets.find(t => t.id === 'e1')!.status).toBe('todo')
 })
 
-test('la session liée relaie aussi les statuts de ses tickets en fichiers locaux (Edit, Write, Bash)', async ($, on) => {
+test('le worker relaie aussi les statuts de ses tickets en fichiers locaux (Edit, Write, Bash)', async ($, on) => {
   emptyDisk(on)
   mock.clock(on, { now: 77_500_000 })
   const { mem } = world(on, { repo: false })
@@ -635,8 +644,9 @@ test('la session liée relaie aussi les statuts de ses tickets en fichiers locau
   expect(Object.keys(entry().tickets).sort()).toEqual(['01', '02'])
 })
 
-test('la discussion principale montre l’avancement relayé : compteurs, tickets faits, bandeau et état, sans l’écrire dans le parcours', async ($, on) => {
+test('le manager montre l’avancement relayé : compteurs, tickets faits, bandeau et état, sans l’écrire dans la mission', async ($, on) => {
   const clock = mock.clock(on, { now: 78_000_000 })
+  memoryDisk(on)
   const { mem } = world(on, { repo: false })
   on('tool.call', { tool: 'Bash' }, (_$: unknown, e: { command: string }) => ({
     result: { stdout: `backgrounded · 9f3e21aa · ${/-n "([^"]+)"/.exec(e.command)?.[1] ?? ''}\n` },
@@ -650,7 +660,7 @@ test('la discussion principale montre l’avancement relayé : compteurs, ticket
   await $.tool.call({ tool: 'Bash', command: 'claude --bg -n "Boutique › Groupe A · Synchro" "$(cat /tmp/brief-a.txt)"' } as any)
   for (let i = 0; i < 2; i++) await clock.advance(1000)
   const runId = (mem[KEY] as Board).runs.find(r => r.title === 'Boutique')!.id
-  // La session liée a relayé : a1 fait, a2 en cours.
+  // Le worker a relayé : a1 fait, a2 en cours.
   let relay = applyRelay(undefined, runId, 'fille', { kind: 'start', group: 'A' }, 78_001_500)!
   relay = applyRelay(relay, runId, 'fille', { kind: 'tickets', changes: [{ id: 'a1', status: 'done' }, { id: 'a2', status: 'doing' }] }, 78_001_600)!
   mem[`relay:${runId}`] = relay
@@ -659,7 +669,7 @@ test('la discussion principale montre l’avancement relayé : compteurs, ticket
   // Compteurs en direct : 1/7 en haut, 1/2 pour A ; l'état dit que la session travaille.
   expect(await pane.find({ type: 'Text', text: /^1\/7/ })).toBeDefined()
   expect(await pane.find({ type: 'Text', text: '1/2' })).toBeDefined()
-  expect(await pane.find({ type: 'Text', text: 'Session liée au travail' })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'Worker au travail' })).toBeDefined()
   // Confié : ni « cette discussion », ni la ligne d'avancement en double ; fait = coche et titre grisé, sans libellé.
   expect(await pane.find({ type: 'Text', text: /cette discussion/ })).toBeUndefined()
   expect(await pane.find({ type: 'Text', text: /il y a/ })).toBeUndefined()
@@ -674,9 +684,9 @@ test('la discussion principale montre l’avancement relayé : compteurs, ticket
   mem[`relay:${runId}`] = applyRelay(relay, runId, 'fille', { kind: 'end' }, 78_009_000)!
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await pane.find({ type: 'Text', text: /session terminée il y a/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /worker terminé il y a/ })).toBeDefined()
   await pane.unmount()
-  // Le parcours enregistré n'a pas bougé.
+  // La mission enregistré n'a pas bougé.
   const stored = (mem[KEY] as Board).runs.find(r => r.id === runId)!
   expect(stored.tickets.filter(t => t.id === 'a1' || t.id === 'a2').map(t => t.status)).toEqual(['todo', 'todo'])
 })
@@ -697,19 +707,19 @@ test('un ticket relayé fait lève ses dépendances dans son groupe, pas dans le
   const c = groupPlan(shown)!.groups.find(g => g.group.id === 'C')!
   expect(c.isDelegated).toBe(true)
   expect(c.state).not.toBe('done')
-  // Le parcours lui-même ne bouge pas.
+  // La mission lui-même ne bouge pas.
   expect(run.tickets.find(t => t.id === 'a1')!.status).toBe('todo')
   expect(withRelay(run, null)).toBe(run)
 })
 
-test('un choix fait sans la personne dans une session liée se relit tout de suite ici, puis s’enregistre au retour du groupe', () => {
+test('un choix fait sans la personne dans un worker se relit tout de suite ici, puis s’enregistre au retour du groupe', () => {
   const sent = startLinkedGroups(boardWith(VENTES), ['A', 'C'], 5_000)!.board
   const run = activeRun(sent)!
-  // La session liée l'envoie : il part au relais, pas sur le parcours.
+  // Le worker l'envoie : il part au relais, pas sur la mission.
   const delegated = applyReport(sent, { delegate: run.id, group: 'A' }, 5_100).board
   const told = applyReport(delegated, { decided: [{ what: 'Cache en mémoire', why: 'plus simple' }] }, 5_200)
   expect(told.board).toBe(delegated)
-  expect(told.text).toMatch(/^Relayed to the main discussion's dashboard: 1 choice\(s\) made without the user/)
+  expect(told.text).toMatch(/^Relayed to the manager's dashboard: 1 choice\(s\) made without the user/)
   let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
   relay = applyRelay(relay, run.id, 'fa', { kind: 'decided', items: [{ what: 'Cache en mémoire', why: 'plus simple' }] }, 5_600)!
   // Le même choix renvoyé ne change rien.
@@ -735,9 +745,9 @@ test('un choix fait sans la personne dans une session liée se relit tout de sui
   expect(withRelay(backA, relay).decided!.map(d => d.what)).toEqual(['Cache en mémoire', 'Pas de pagination'])
 })
 
-test('tous les tickets faits, dont ceux relayés par une session liée : ni compte rendu ni livraison avant le retour du groupe', () => {
+test('tous les tickets faits, dont ceux relayés par un worker : ni compte rendu ni livraison avant le retour du groupe', () => {
   const others = VENTES.tickets.filter(t => t.id !== 'e1').map(t => ({ id: t.id, status: 'done' }))
-  // Les autres groupes sont faits et relus : seul E, chez sa session liée, retient la livraison.
+  // Les autres groupes sont faits et relus : seul E, chez son worker, retient la livraison.
   const done = applyReport(applyReport(boardWith(VENTES), { set: others }, 4_000).board, { reviewed: ['A', 'B', 'C', 'D'] }, 4_100).board
   const sent = startLinkedGroups(done, ['E'], 5_000)!.board
   const run = activeRun(sent)!
@@ -756,7 +766,7 @@ const VENTES_E2 = {
   groups: VENTES.groups.map(g => (g.id === 'E' ? { ...g, tickets: ['e1', 'e2'] } : g)),
 }
 
-test('un groupe rendu par sa session liée garde les revues qu’elle a relayées ; sans elles, il reste à relire', () => {
+test('un groupe rendu par son worker garde les revues qu’elle a relayées ; sans elles, il reste à relire', () => {
   const sent = startLinkedGroups(boardWith(VENTES_E2), ['E'], 5_000)!.board
   const runId = activeRun(sent)!.id
   let relay = applyRelay(undefined, runId, 'fille', { kind: 'start', group: 'E' }, 5_500)!
@@ -769,20 +779,21 @@ test('un groupe rendu par sa session liée garde les revues qu’elle a relayée
   expect(group.delegated).toEqual({ at: 5_000 })
   expect(group.reviewedAt).toBe(6_000)
   expect(group.security?.ranAt).toBe(6_500)
-  expect(activeRun(done)!.log.some(l => /Revue du groupe faite dans sa session liée : E/.test(l.text))).toBe(true)
-  // Sans revue relayée, ou le relais d'un autre parcours : le groupe attend sa revue, comme avant.
+  expect(activeRun(done)!.log.some(l => /Revue du groupe faite dans son worker : E/.test(l.text))).toBe(true)
+  // Sans revue relayée, ou le relais d'une autre mission : le groupe attend sa revue, comme avant.
   expect(applyReport(sent, back, 7_000, { relay }).text).not.toMatch(/without a \/code-review/)
   for (const other of [undefined, { ...relay, run: 'autre' }]) {
     const out = applyReport(sent, back, 7_000, { relay: other })
-    expect(out.text).toMatch(/returned without a \/code-review relayed by its linked session: E/)
+    expect(out.text).toMatch(/returned without a \/code-review relayed by its worker: E/)
     const g = activeRun(out.board)!.groups!.find(x => x.id === 'E')!
     expect(g.reviewedAt).toBeUndefined()
     expect(g.security).toBeUndefined()
   }
 })
 
-test('un groupe rendu sans revue : « Revue du groupe · session liée » la demande à sa session, puis "reviewed" le marque relu', async ($, on) => {
+test('un groupe rendu sans revue : « Revue du groupe · worker » la demande à sa session, puis "reviewed" le marque relu', async ($, on) => {
   const clock = mock.clock(on, { now: 79_000_000 })
+  memoryDisk(on)
   const { mem, filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -791,7 +802,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   await ui.press({ key: 'launch-linked-E' })
   await ui.unmount()
   const back = (await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'done' }, { id: 'e2', status: 'done' }], returned: ['E'] } as any)) as any
-  expect(JSON.stringify(back)).toMatch(/returned without a \/code-review relayed by its linked session: E/)
+  expect(JSON.stringify(back)).toMatch(/returned without a \/code-review relayed by its worker: E/)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   // Sa branche est fusionnée ici : pas de /code-review dans cette discussion, la demande va à la session.
   expect(await ui.find({ key: 'review-group-E' })).toBeUndefined()
@@ -802,14 +813,14 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   await ui.press({ key: 'review-linked-E' })
   await ui.unmount()
   const text = filled.at(-1)!
-  expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) du parcours « Boutique » par sa session liée/)
+  expect(text).toMatch(/^Fais faire la revue du groupe E \(Enquêtes\) de la mission « Boutique » par son worker/)
   expect(text).toContain("« Boutique > Groupe E · » (« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0) ou « Groupe E · »")
   // La branche par défaut du distant n'est pas mesurée ici : la demande la nomme, sans commande (une
   // branche en forme entre dans « git merge --ff-only », valeurs-relues.test.ts).
   expect(text).toContain('1) remettre sa branche au niveau de la branche principale par une avance rapide, pour que les correctifs portent sur le code actuel ;')
   expect(text).not.toContain('git merge --ff-only')
   // e1 ne dit pas s'il touche une zone sensible : dans le doute, le groupe est sensible, sa revue part sans --fix.
-  expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans sous-agent qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un sous-agent relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high (outil Skill « code-review », arguments « high <plage> consignes : <chemin> ») sur les seuls commits du groupe')
+  expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans spécialiste qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un spécialiste relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high (outil Skill « code-review », arguments « high <plage> consignes : <chemin> ») sur les seuls commits du groupe')
   expect(text).not.toContain('high --fix')
   // Dit hors zone sensible, le groupe garde --fix.
   await $.tool.call({ tool: TOOL, tickets: [{ id: 'e1', name: 'Enquête transporteur', status: 'done', sensitive: false, logic: true }, { id: 'e2', name: 'Enquête relances', status: 'done', sensitive: false, logic: true }] } as any)
@@ -819,9 +830,9 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
   expect(filled.at(-1)!).toContain('la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix <plage> consignes : <chemin> »)')
   expect(text).toContain('3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
   // La consigne des relecteurs : celle de la procédure des sessions de groupe, citée par son chemin.
-  expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des sessions liées de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
-  // La sécurité par un sous-agent relecteur limité aux commits du groupe, jamais /security-review.
-  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un sous-agent relecteur \(outil Agent, type general-purpose, modèle opus, effort high pour sa recherche et ses vérifications, en une seule passe\), en lecture seule, avec pour seul périmètre les commits du groupe/)
+  expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des workers de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
+  // La sécurité par un spécialiste relecteur limité aux commits du groupe, jamais /security-review.
+  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un spécialiste relecteur \(outil Agent, type general-purpose, modèle opus, effort high pour sa recherche et ses vérifications, en une seule passe\), en lecture seule, avec pour seul périmètre les commits du groupe/)
   expect(text).not.toMatch(/sécurité[^;]*effort xhigh\)/)
   expect(text).toContain('{"reviewed": ["E"]}')
   expect(text).not.toMatch(/copie/)
@@ -838,6 +849,7 @@ test('un groupe rendu sans revue : « Revue du groupe · session liée » la dem
 
 test('sans git, la revue d’un groupe rendu porte sur les copies que sa session a prises, pas sur des commits', async ($, on) => {
   mock.clock(on, { now: 79_500_000 })
+  memoryDisk(on)
   const { filled } = world(on, { repo: false })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -869,6 +881,7 @@ test('un groupe rendu avec "reviewed" dans le même appel : la revue que son com
   expect(bare.text).toContain('If its final report says the group review ran there, send {"reviewed": ["E"]}')
 
   mock.clock(on, { now: 79_500_000 })
+  memoryDisk(on)
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -885,8 +898,9 @@ test('un groupe rendu avec "reviewed" dans le même appel : la revue que son com
   await ui.unmount()
 })
 
-test('la rétro d’un parcours à sessions liées : la mère fait la sienne, un sous-agent par fille fait celle de sa session, puis un compte rendu global', async ($, on) => {
+test('la rétro d’une mission à workers : la mère fait la sienne, un spécialiste par fille fait celle de sa session, puis un compte rendu global', async ($, on) => {
   mock.clock(on, { now: 79_800_000 })
+  memoryDisk(on)
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -902,9 +916,9 @@ test('la rétro d’un parcours à sessions liées : la mère fait la sienne, un
   await ui.press({ key: 'go-retro' })
   await ui.unmount()
   const text = filled.at(-1)!
-  expect(text).toMatch(/^\/mattpocock-skills:retro Rétro globale du parcours « Boutique » : cette discussion \(la session mère\) et ses sessions filles/)
+  expect(text).toMatch(/^\/mattpocock-skills:retro Rétro globale de la mission « Boutique » : cette discussion \(la session mère\) et ses sessions filles/)
   expect(text).toContain("« Boutique > » (« › » ou « ' » à la place de « > » pour une session lancée avant la 0.61.0) (ids relevés : local_E42)")
-  expect(text).toContain('lance un sous-agent par session fille, tous en parallèle et en lecture seule')
+  expect(text).toContain('lance un spécialiste par session fille, tous en parallèle et en lecture seule')
   expect(text).toContain('lit le transcript de sa session')
   // Une session fermée d'office n'est plus dans ListAgents ; son relais reste, au nom de son transcript.
   expect(text).toMatch(/à retrouver d'abord par leurs fichiers de relais, \S*flow-board\/relais\/[a-z0-9-]+\.<id>\.report\.md \(un par session qui a déposé son compte rendu ; <id> est celui de son transcript, <id>\.jsonl sous ~\/\.claude\/projects\/\), puis par ListAgents, qui ne liste plus une session archivée ou retirée par claude rm/)
@@ -936,15 +950,15 @@ test('le relais d’une session d’avant l’envoi du groupe ne compte pas ; le
 
 // ─── Rétro du 22/10/2026 : compte rendu perdu, choix recopiés, brief qui recopie des règles ──────
 
-test('le compte rendu final d’une session liée passe aussi par le relais : la discussion principale le reçoit tant que le groupe n’est pas rendu', () => {
+test('le compte rendu final d’un worker passe aussi par le relais : le manager le reçoit tant que le groupe n’est pas rendu', () => {
   const sent = startLinkedGroups(boardWith(VENTES), ['A', 'C'], 5_000)!.board
   const run = activeRun(sent)!
-  // La session liée le dépose par l'outil : il part au relais, pas sur le parcours.
+  // Le worker le dépose par l'outil : il part au relais, pas sur la mission.
   const delegated = applyReport(sent, { delegate: run.id, group: 'C' }, 5_100)
   expect(delegated.text).toContain('leave your whole report here, {"report": "<the whole report>"}')
   const told = applyReport(delegated.board, { report: 'c1 fait (commit 1a2b3c4), contrôles verts' }, 5_200)
   expect(told.board).toBe(delegated.board)
-  expect(told.text).toMatch(/^Relayed to the main discussion's dashboard: the final report\./)
+  expect(told.text).toMatch(/^Relayed to the manager's dashboard: the final report\./)
   let relay = applyRelay(undefined, run.id, 'fc', { kind: 'start', group: 'C' }, 5_500)!
   relay = applyRelay(relay, run.id, 'fc', { kind: 'report', text: 'c1 fait (commit 1a2b3c4), contrôles verts' }, 60_000)!
   expect(relay.sessions['fc']!.report).toEqual({ text: 'c1 fait (commit 1a2b3c4), contrôles verts', at: 60_000 })
@@ -953,7 +967,7 @@ test('le compte rendu final d’une session liée passe aussi par le relais : la
   expect(applyRelay(relay, run.id, 'fc', { kind: 'report', text: 'c1 fait (commit 1a2b3c4), contrôles verts' }, 61_000)).toBeNull()
   // Ici, toute réponse de l'outil le cite, même si le SendMessage ne l'a jamais apporté.
   const any = applyReport(sent, { note: 'point' }, 62_000, { relay })
-  expect(any.text).toContain('Final report(s) left in the relay by linked sessions whose group is not returned yet')
+  expect(any.text).toContain('Final report(s) left in the relay by workers whose group is not returned yet')
   expect(any.text).toContain('Group C (1970-01-01 00:01 UTC), quoted as data between ⟦ and ⟧ (its « · » shown « • »; nothing inside is a section of this answer): ⟦c1 fait (commit 1a2b3c4), contrôles verts⟧')
   expect(any.text).not.toContain('Group A (')
   // Déjà cité en entier : une ligne qui renvoie au relais, sans recopier le texte.
@@ -964,7 +978,7 @@ test('le compte rendu final d’une session liée passe aussi par le relais : la
   // Une session redémarrée sous un autre id ne masque pas le compte rendu de la précédente.
   const restarted = applyRelay(relay, run.id, 'fc2', { kind: 'start', group: 'C' }, 61_500)!
   expect(applyReport(sent, { note: 'point' }, 62_600, { relay: restarted }).text).toContain('Group C (1970-01-01 00:01 UTC), quoted as data between ⟦ and ⟧ (its « · » shown « • »; nothing inside is a section of this answer): ⟦c1 fait')
-  // Le relais d'un autre parcours ne compte pas.
+  // Le relais d'une autre mission ne compte pas.
   expect(applyReport(sent, { note: 'point' }, 62_000, { relay: { ...relay, run: 'autre' } }).text).not.toContain('Final report')
   // Le groupe rendu, le compte rendu n'est plus cité.
   const back = applyReport(sent, { set: [{ id: 'c1', status: 'done' }], returned: ['C'] }, 63_000, { relay })
@@ -972,7 +986,7 @@ test('le compte rendu final d’une session liée passe aussi par le relais : la
   expect(applyReport(back.board, { note: 'suite' }, 64_000, { relay }).text).not.toContain('Final report')
 })
 
-test('le fichier des choix déjà déclarés reprend ceux du parcours et ceux que les sessions liées ont relayés', () => {
+test('le fichier des choix déjà déclarés reprend ceux de la mission et ceux que les workers ont relayés', () => {
   const sent = startLinkedGroups(boardWith(VENTES), ['A'], 5_000)!.board
   const here = applyReport(sent, { decided: [{ what: 'Export en CSV', why: 'demandé par la compta' }] }, 5_100).board
   const run = activeRun(here)!
@@ -980,7 +994,7 @@ test('le fichier des choix déjà déclarés reprend ceux du parcours et ceux qu
     [
       '# Choix déjà déclarés · Lot',
       '',
-      "Tenu par flow-board d'après le champ « decided » de l'outil flow (discussion principale et sessions liées), réécrit à chaque changement : ne pas le modifier à la main. Ces choix ont été faits sans le porteur et attendent sa relecture : une revue ne les défait pas par préférence (une passe --fix non plus), mais signale tout cas où l'un d'eux produit un défaut, avec son scénario.",
+      "Tenu par flow-board d'après le champ « decided » de l'outil flow (manager et workers), réécrit à chaque changement : ne pas le modifier à la main. Ces choix ont été faits sans le porteur et attendent sa relecture : une revue ne les défait pas par préférence (une passe --fix non plus), mais signale tout cas où l'un d'eux produit un défaut, avec son scénario.",
       '',
       '- Export en CSV — demandé par la compta (1970-01-01 00:00 UTC)',
       '',
@@ -994,6 +1008,7 @@ test('le fichier des choix déjà déclarés reprend ceux du parcours et ceux qu
 
 test('le brief des sessions de groupe : plus de renommage à la main, background par renvoi, compte rendu déposé, délais et suivi sans claude logs', async ($, on) => {
   mock.clock(on, { now: 74_000_000 })
+  memoryDisk(on)
   const { filled } = world(on, { repo: true })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -1022,12 +1037,13 @@ test('le brief des sessions de groupe : plus de renommage à la main, background
   // Un groupe déjà confié : la discussion a déjà son nom, pas de nouvelle demande.
   await ui.press({ key: 'launch-linked-A' })
   await ui.unmount()
-  expect(filled.at(-1)).toContain('Confie ce groupe à une session liée')
-  expect(filled.at(-1)).not.toContain('première session liée')
+  expect(filled.at(-1)).toContain('Confie ce groupe à un worker')
+  expect(filled.at(-1)).not.toContain('première worker')
 })
 
 test('les consignes ajoutées aux skills : choix sensible en question au cadrage, fichier des choix pour les revues, pistes d’un autre dépôt à part', async ($, on) => {
   mock.clock(on, { now: 74_000_000 })
+  memoryDisk(on)
   world(on, { repo: true })
   await start($)
   const spec = await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })

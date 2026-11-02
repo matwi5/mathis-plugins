@@ -1,8 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 
-// Un groupe ne se lance qu'en session liée (spec « Groupes et vagues », série 1 Q10) : plus de
+// Un groupe ne se lance que dans un worker (spec « Groupes et vagues », série 1 Q10) : plus de
 // lancement ici ni par /implement-spec ; les tickets choisis à la main gardent leurs lancements.
 
 const PLUGIN = 'flow-board'
@@ -10,7 +11,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const engine = (on: any) => {
@@ -45,8 +46,9 @@ const start = async ($: any) => {
   return $.tool.call({ tool: TOOL, title: 'Lot', tickets: TICKETS, groups: GROUPS } as any)
 }
 
-test('un groupe ne se lance qu’en session liée, sur chaque surface', { timeoutMs: 15000 }, async ($, on) => {
+test('un groupe ne se lance qu’dans un worker, sur chaque surface', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 70_000_000 })
+  memoryDisk(on)
   mock.store(on)
   engine(on)
   inRepo(on)
@@ -62,17 +64,18 @@ test('un groupe ne se lance qu’en session liée, sur chaque surface', { timeou
     expect(await ui.find({ key: 'next-parallel' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /cette discussion|discussion de découpage|nouvelle discussion/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /\/implement-spec/ })).toBeUndefined()
-    // Restent : la session liée de chaque groupe prêt, et le lot en sessions liées.
+    // Restent : le worker de chaque groupe prêt, et le lot dans des workers.
     expect(await ui.find({ key: 'launch-linked-A' })).toBeDefined()
     expect(await ui.find({ key: 'launch-linked-B' })).toBeDefined()
-    expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ B en parallèle · sessions liées$/)
-    expect(String((await ui.find({ key: 'next-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ B en parallèle · sessions liées$/)
+    expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ B en parallèle · workers$/)
+    expect(String((await ui.find({ key: 'next-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ B en parallèle · workers$/)
     await ui.unmount()
   }
 })
 
-test('« Ensuite » propose la session liée du prochain groupe, jamais un lancement ici, même pour un ancien continuesHere', async ($, on) => {
+test('« Ensuite » propose le worker du prochain groupe, jamais un lancement ici, même pour un ancien continuesHere', async ($, on) => {
   mock.clock(on, { now: 71_000_000 })
+  memoryDisk(on)
   mock.store(on)
   engine(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
@@ -89,7 +92,7 @@ test('« Ensuite » propose la session liée du prochain groupe, jamais un lance
   } as any)
   for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect((await ui.find({ key: 'next-linked-A' }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.Groupe A · session liée$/), variant: 'primary' })
+    expect((await ui.find({ key: 'next-linked-A' }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.Groupe A · worker$/), variant: 'primary' })
     expect(await ui.find({ key: 'next-group-A' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Lancer A ici/ })).toBeUndefined()
     await ui.unmount()
@@ -98,6 +101,7 @@ test('« Ensuite » propose la session liée du prochain groupe, jamais un lance
 
 test('les tickets choisis à la main gardent /implement, sans lancement en parallèle', async ($, on) => {
   mock.clock(on, { now: 72_000_000 })
+  memoryDisk(on)
   mock.store(on)
   const filled = engine(on)
   inRepo(on)
@@ -111,37 +115,40 @@ test('les tickets choisis à la main gardent /implement, sans lancement en paral
   await ui.unmount()
 })
 
-test('la consigne de /to-tickets : un groupe se fait en session liée, sans groupe qui continue ici', async ($, on) => {
+test('la consigne de /to-tickets : un groupe se fait dans un worker, sans groupe qui continue ici', async ($, on) => {
   mock.clock(on, { now: 73_000_000 })
+  memoryDisk(on)
   mock.store(on)
   engine(on)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text
   expect(note).toMatch(/"groups": \[\{"id": "A"/)
   expect(note).not.toMatch(/continuesHere/)
   expect(note).not.toMatch(/context of this discussion/)
-  expect(note).toMatch(/Each group runs in a linked session, never in this discussion/)
+  expect(note).toMatch(/Each group runs in a worker, never in this discussion/)
   expect(note).not.toMatch(/\/implement-spec, one subagent per group/)
 })
 
 test('les textes envoyés à Claude ne citent plus « ▶ Lancer » pour le groupe suivant', async ($, on) => {
   mock.clock(on, { now: 74_000_000 })
+  memoryDisk(on)
   mock.store(on)
   engine(on)
-  // La consigne d'/implement d'un parcours à groupes (sans groupes, elle suit la procédure d'une session liée).
+  // La consigne d'/implement d'une mission à groupes (sans groupes, elle suit la procédure d'un worker).
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Lot', tickets: TICKETS, groups: GROUPS } as any)
   await $.tool.call({ tool: TOOL, complete: true } as any)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
-  expect(note).toContain('the next group, which the user launches from the dashboard, in its linked session (↗ Session liée)')
+  expect(note).toContain('the next group, which the user launches from the dashboard, in its worker (↗ Worker)')
   expect(note).not.toMatch(/▶ Lancer/)
   // La réponse qui refuse de clore la phase tant que des tickets restent ouverts.
   const answer = JSON.stringify(await $.tool.call({ tool: TOOL, complete: true } as any))
-  expect(answer).toContain('in its linked session (↗ Session liée)')
+  expect(answer).toContain('in its worker (↗ Worker)')
   expect(answer).not.toMatch(/▶ Lancer/)
 })
 
-test('« ↗ Session liée » : la règle d’effort propose xhigh pour une tâche de jugement, sans jamais le choisir seule', async ($, on) => {
+test('« ↗ Worker » : la règle d’effort propose xhigh pour une tâche de jugement, sans jamais le choisir seule', async ($, on) => {
   mock.clock(on, { now: 75_000_000 })
+  memoryDisk(on)
   mock.store(on)
   const filled = engine(on)
   inRepo(on)
@@ -162,8 +169,8 @@ test('« ↗ Session liée » : la règle d’effort propose xhigh pour une tâc
   // Une question à boutons, jamais xhigh choisi seul.
   expect(text).toContain('question à boutons « xhigh (Recommandé) / high »')
   expect(text).toContain('Tu ne choisis jamais xhigh toi-même')
-  // Si xhigh est retenu : session autonome, plafond de l'app, rappel de redescendre.
-  expect(text).toMatch(/session autonome : elle applique la section « Session autonome » de la procédure\. Ici : /)
+  // Si xhigh est retenu : worker autonome, plafond de l'app, rappel de redescendre.
+  expect(text).toMatch(/worker autonome : elle applique la section « Worker autonome » de la procédure\. Ici : /)
   expect(text).toContain('start_session ne donne jamais à une session un effort plus haut que celui de cette discussion')
   expect(text).toContain("que je peux redescendre l'effort de cette discussion")
   // Le lancement passe toujours l'effort choisi.
@@ -173,11 +180,12 @@ test('« ↗ Session liée » : la règle d’effort propose xhigh pour une tâc
 })
 
 /**
- * Un parcours à groupes prêts dans une discussion démarrée, avec son registre des agents : une
+ * Une mission à groupes prêts dans une discussion démarrée, avec son registre des agents : une
  * réponse du modèle à l'effort `effort` (aucune si absent) le relève sur la piste de la discussion.
  */
 const xhighWorld = async ($: any, on: any, effort?: string) => {
   mock.clock(on, { now: 76_000_000 })
+  memoryDisk(on)
   mock.store(on)
   const filled = engine(on)
   inRepo(on)
@@ -196,16 +204,16 @@ const xhighWorld = async ($: any, on: any, effort?: string) => {
   return { filled, toasts }
 }
 
-const XHIGH_TOAST = 'Session liée pour B en xhigh : la demande est dans le prompt, Entrée pour la lancer'
+const XHIGH_TOAST = 'Worker pour B en xhigh : la demande est dans le prompt, Entrée pour la lancer'
 
-test('« ↗ xhigh » suit « ↗ Session liée » sur chaque groupe prêt, jamais sur le lot parallèle', { timeoutMs: 15000 }, async ($, on) => {
+test('« ↗ xhigh » suit « ↗ Worker » sur chaque groupe prêt, jamais sur le lot parallèle', { timeoutMs: 15000 }, async ($, on) => {
   await xhighWorld($, on)
   for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     for (const id of ['A', 'B']) {
       expect((await ui.find({ key: `launch-xhigh-${id}` }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.xhigh$/), plain: true, dimColor: true })
     }
-    // C attend A : ni session liée, ni xhigh.
+    // C attend A : ni worker, ni xhigh.
     expect(await ui.find({ key: 'launch-xhigh-C' })).toBeUndefined()
     // « Prochaine étape » propose le lot parallèle : pas de xhigh.
     expect(await ui.find({ key: 'next-parallel-linked' })).toBeDefined()
@@ -215,8 +223,9 @@ test('« ↗ xhigh » suit « ↗ Session liée » sur chaque groupe prêt, jama
   }
 })
 
-test('« Prochaine étape » : « ↗ xhigh » suit la session liée du groupe proposé', { timeoutMs: 15000 }, async ($, on) => {
+test('« Prochaine étape » : « ↗ xhigh » suit le worker du groupe proposé', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 77_000_000 })
+  memoryDisk(on)
   mock.store(on)
   const filled = engine(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
@@ -242,21 +251,21 @@ test('« Prochaine étape » : « ↗ xhigh » suit la session liée du groupe p
   await ui.unmount()
 })
 
-test('l’appui sur « ↗ xhigh » : xhigh imposé sans suggestion, session autonome, plafond avec l’effort relevé ; avertissement sur desktop', { timeoutMs: 15000 }, async ($, on) => {
+test('l’appui sur « ↗ xhigh » : xhigh imposé sans suggestion, worker autonome, plafond avec l’effort relevé ; avertissement sur desktop', { timeoutMs: 15000 }, async ($, on) => {
   const { filled, toasts } = await xhighWorld($, on, 'high')
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'launch-xhigh-B' })
   const text = filled.at(-1)!
-  expect(text).toMatch(/^Confie ce groupe à une session liée, pour le parcours « Lot » : Groupe B \(App\)/)
+  expect(text).toMatch(/^Confie ce groupe à un worker, pour la mission « Lot » : Groupe B \(App\)/)
   expect(text).toContain("Effort de la session (<effort>) : xhigh, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort.")
   expect(text).not.toContain('Tu ne choisis jamais xhigh toi-même')
   expect(text).not.toContain('medium par défaut')
-  expect(text).toMatch(/et qu'elle est une session autonome : elle applique la section « Session autonome » de la procédure\. Ici : /)
+  expect(text).toMatch(/et qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure\. Ici : /)
   expect(text).toContain("start_session ne donne jamais à une session un effort plus haut que celui de cette discussion (son effort relevé à l'écriture de cette demande : high ; je l'ai peut-être monté depuis, avant Entrée)")
   expect(text).toContain("que je peux redescendre l'effort de cette discussion")
   expect(text).toContain('effort "<effort>"')
   expect(text).toContain('--effort <effort>')
-  // Même chemin que « ↗ Session liée » : le groupe attend son lancement.
+  // Même chemin que « ↗ Worker » : le groupe attend son lancement.
   expect(await ui.find({ key: 'group-linked-cancel-B' })).toBeDefined()
   expect(toasts.at(-1)).toBe(`${XHIGH_TOAST}. Avant Entrée, passe cette discussion en xhigh (elle est en high) : l'app ne donne jamais à la session un effort plus haut`)
   await ui.unmount()

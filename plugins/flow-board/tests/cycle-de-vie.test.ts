@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { closingProcedure } from '../hooks/closing.ts'
 import { applyReport, emptyBoard, newRun, restoreDelegate } from '../hooks/model.ts'
@@ -10,7 +11,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 const BAND = {
   component: 'AbovePrompt',
@@ -55,7 +56,7 @@ const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractiv
 
 /**
  * Un disque vide où rien ne s'écrit, pour un test qui relaie sans simuler de disque : le relais (un
- * fichier par session liée) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
+ * fichier par worker) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
  */
 const emptyDisk = (on: any) => {
   on('fs.exists', () => ({ value: false }) as any)
@@ -67,6 +68,7 @@ const emptyDisk = (on: any) => {
 // Après /reload-plugins, la discussion avait tout renvoyé par précaution alors que l'état était là.
 test('après un rechargement, la première réponse de l’outil dit l’état retrouvé, une fois', async ($, on) => {
   mock.clock(on, { now: 90_000_000 })
+  memoryDisk(on)
   world(on)
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -79,9 +81,10 @@ test('après un rechargement, la première réponse de l’outil dit l’état r
   expect(second).not.toContain('State found after a plugin reload')
 })
 
-// Le mode délégué se perdait au rechargement du mod dans la session liée.
-test('le mode délégué d’une session liée est gardé par session et revient au chargement', async ($, on) => {
+// Le mode délégué se perdait au rechargement du mod dans le worker.
+test('le mode délégué d’un worker est gardé par session et revient au chargement', async ($, on) => {
   mock.clock(on, { now: 91_000_000 })
+  memoryDisk(on)
   const { mem } = world(on, 'linked')
   await start($)
   await $.tool.call({ tool: TOOL, delegate: 'run-1', group: 'E', main: '[e5eb08]' } as any)
@@ -92,13 +95,13 @@ test('le mode délégué d’une session liée est gardé par session et revient
   expect(restoreDelegate(loaded, mem['delegate:linked']).delegate).toMatchObject({ run: 'run-1', group: 'E' })
   expect(restoreDelegate(loaded, { foo: 1 }).delegate).toBeUndefined()
   expect(restoreDelegate(loaded, undefined)).toBe(loaded)
-  // Bornée : ni ancienne de plus de trois jours, ni sur un parcours fini.
+  // Bornée : ni ancienne de plus de trois jours, ni sur une mission finie.
   expect(restoreDelegate(loaded, { run: 'run-1', at: 1_000 }, 1_000 + 4 * 24 * 3_600_000).delegate).toBeUndefined()
   const finished = { ...loaded, runs: [{ ...run, id: 'run-1', status: 'done' as const }] }
   expect(restoreDelegate(finished, { run: 'run-1', at: 1_000 }, 2_000).delegate).toBeUndefined()
 })
 
-test('une session liée qui redémarre retrouve sa délégation par le vrai chargement, et le rechargement la rappelle', async ($, on) => {
+test('un worker qui redémarre retrouve sa délégation par le vrai chargement, et le rechargement la rappelle', async ($, on) => {
   emptyDisk(on)
   mock.clock(on, { now: 91_500_000 })
   const { mem } = world(on, 'linked')
@@ -106,16 +109,17 @@ test('une session liée qui redémarre retrouve sa délégation par le vrai char
   await start($)
   // Le board vient du stockage (rien en mémoire) : la délégation gardée revient, ses appels partent au relais.
   const relayed = JSON.stringify(await $.tool.call({ tool: TOOL, set: [{ id: 'e1', status: 'doing' }] } as any))
-  expect(relayed).toContain("Relayed to the main discussion's dashboard")
+  expect(relayed).toContain("Relayed to the manager's dashboard")
   // Puis le mod se recharge : la première réponse dit la délégation retrouvée.
   await start($)
   const after = JSON.stringify(await $.tool.call({ tool: TOOL, note: 'reprise' } as any))
-  expect(after).toContain('State found after a plugin reload: delegate mode kept for the workflow')
+  expect(after).toContain('State found after a plugin reload: delegate mode kept for the mission')
   expect(after).toContain('group E')
 })
 
 test('une discussion sans délégation n’écrit rien pour elle dans le magasin', async ($, on) => {
   mock.clock(on, { now: 91_800_000 })
+  memoryDisk(on)
   const { mem } = world(on, 'plain')
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -125,6 +129,7 @@ test('une discussion sans délégation n’écrit rien pour elle dans le magasin
 
 test('un groupe confié est « en cours » dès que l’id de sa session est relevé, au panneau comme au bandeau', async ($, on) => {
   const clock = mock.clock(on, { now: 92_000_000 })
+  memoryDisk(on)
   const { filled } = world(on)
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -136,7 +141,7 @@ test('un groupe confié est « en cours » dès que l’id de sa session est rel
   await $.tool.call({ tool: START, title: 'Boutique › Groupe E · Enquêtes' } as any)
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /^↗.en cours · session liée$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^↗.en cours · worker$/ })).toBeDefined()
   await ui.unmount()
   const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...BAND })
   expect(await band.find({ type: 'Text', text: /↗E.0\/1/ })).toBeDefined()
@@ -144,8 +149,9 @@ test('un groupe confié est « en cours » dès que l’id de sa session est rel
   await band.unmount()
 })
 
-test('un groupe rendu par sa session liée propose de fermer sa session et son worktree, sans rien forcer', async ($, on) => {
+test('un groupe rendu par son worker propose de fermer sa session et son worktree, sans rien forcer', async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const { mem, filled } = world(on)
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -182,7 +188,7 @@ test('un groupe rendu par sa session liée propose de fermer sa session et son w
   expect(text).toContain('Then send {"closed": [{"group": "E", "state": "closed"')
   expect(text).toContain('Vérifie d’abord, n’arrête et ne retire qu’ensuite')
   // Une session de l'app (id local_…) : archivée par l'outil de l'app, sinon le geste écrit à la personne.
-  expect(text).toContain('c’est une session de l’app Desktop : archive-la par l’outil de session de l’app')
+  expect(text).toContain('c’est une session de l’app Desktop : si l’app te donne l’outil archive_session, l’outil d’archivage de l’app demande mon accord pour cette session')
   expect(text).toContain('à défaut, l’un des noms connus : worktree-groupe-boutique-E (lancée par le CLI), groupe-boutique-E ou claude/groupe-boutique-E-<suffixe> (lancée par l’app, avec ou sans branch_name), groupe-E pour un groupe lancé avant la 0.59.0')
   // Plus le texte d'avant, qui disait « jamais claude rm, qui l'efface ».
   expect(text).not.toContain("qui l'efface")

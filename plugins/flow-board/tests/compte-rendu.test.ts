@@ -8,7 +8,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 const engine = (on: any) => {
@@ -99,7 +99,7 @@ test('« ✓ Valider le rapport » le dit à Claude par un message ; « ✎ À r
   expect(submitted).toHaveLength(0)
   await ui.press({ key: 'report-ok' })
   expect(submitted).toHaveLength(1)
-  expect(submitted[0]!.text).toMatch(/^J'ai validé le compte rendu du parcours « Lot xhigh » depuis le tableau de bord \(✓ Valider le rapport\)\./)
+  expect(submitted[0]!.text).toMatch(/^J'ai validé le compte rendu de la mission « Lot xhigh » depuis le tableau de bord \(✓ Valider le rapport\)\./)
   // Le message vient du mod, pas des mots de la personne.
   expect(submitted[0]!.origin?.kind).toBe('plugin')
   expect(submitted[0]!.origin?.asUser).toBeUndefined()
@@ -178,18 +178,18 @@ test('plusieurs groupes, plusieurs discussions : le compte rendu reçoit les gro
   const note = (await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'r' })).text
   expect(note).toMatch(/Groups, each usually run in its own discussion: A \(Worker SC\): 1\/1 done, reviewed by its ticket review \(a group of one ticket\), its security advice still due; B \(App SC\): 1\/1 done, reviewed by its ticket review/)
   expect(note).toMatch(/write « Fait » group by group/)
-  expect(note).toMatch(/Tracking files of this run .*travail\/tasks\/2026-10-05_sc-vsc-worker\.md \(groupe A/)
-  // Les comptes rendus des sessions liées : leurs fichiers du relais, d'où viennent les trois rubriques.
-  expect(note).toMatch(/- The linked sessions' final reports, for the sections « Code antérieur au lot », « Pistes » and « Ce que le CHANGELOG devra dire »: \S*\/flow-board\/relais\/\S+\.<id>\.report\.md/)
+  expect(note).toMatch(/Tracking files of this mission .*travail\/tasks\/2026-10-05_sc-vsc-worker\.md \(groupe A/)
+  // Les comptes rendus des workers : leurs fichiers du relais, d'où viennent les trois rubriques.
+  expect(note).toMatch(/- The workers' final reports, for the sections « Code antérieur au lot », « Pistes » and « Ce que le CHANGELOG devra dire »: \S*\/flow-board\/relais\/\S+\.<id>\.report\.md/)
 })
 
-test('sans groupes, la consigne du compte rendu ne renvoie à aucun compte rendu de session liée', async ($, on) => {
+test('sans groupes, la consigne du compte rendu ne renvoie à aucun compte rendu de worker', async ($, on) => {
   mock.clock(on, { now: 94_500_000 })
   mock.store(on)
   engine(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: TOOL, tickets: [{ id: 'a1', name: 'Seul', status: 'done', sensitive: false, logic: false }], complete: true } as any)
   const note = (await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'r' })).text
-  expect(note).toContain('What the dashboard knows about this run')
-  expect(note).not.toContain("The linked sessions' final reports")
+  expect(note).toContain('What the dashboard knows about this mission')
+  expect(note).not.toContain("The workers' final reports")
 })

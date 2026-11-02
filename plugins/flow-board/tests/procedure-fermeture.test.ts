@@ -3,9 +3,9 @@ import { expect, test } from 'claude-code/testing'
 import { closingProcedure } from '../hooks/closing.ts'
 import { newRun } from '../hooks/model.ts'
 
-// La procédure de fermeture d'une session liée : vérifier d'abord, n'arrêter et ne retirer
+// La procédure de fermeture d'un worker : vérifier d'abord, n'arrêter et ne retirer
 // qu'ensuite. Invariant : une fermeture ne fait jamais perdre un commit, un fichier modifié ou non
-// suivi, ni la conversation d'une session liée ; la branche n'est jamais supprimée ; une session qui
+// suivi, ni la conversation d'un worker ; la branche n'est jamais supprimée ; une session qui
 // travaille encore n'est jamais arrêtée.
 
 const run = { ...newRun('implement', 1_000, 'Fermeture auto') }
@@ -109,7 +109,7 @@ test('les reports et les arrêts : session qui travaille, déjà fait, commits p
 
 test('la ligne « commits dans la branche de travail » et la conversation gardée, dans chaque compte rendu', () => {
   for (const text of [cli, app, unknown, pistes]) {
-    expect(text).toContain('« les N commits de <branche> sont dans <branche de travail> (vérifié) ; ils partiront au push de fin de parcours »')
+    expect(text).toContain('« les N commits de <branche> sont dans <branche de travail> (vérifié) ; ils partiront au push de fin de mission »')
     expect(text).toContain('claude --resume <sessionId>')
   }
 })
@@ -120,9 +120,10 @@ test('le refus de claude rm pour commits non poussés, et le geste dans l’app 
   )
   // Une session de l'app : archivée par l'outil de l'app s'il existe, sinon le geste écrit à la personne.
   expect(app).toContain('c’est une session de l’app Desktop')
-  expect(app).toContain('archive-la par l’outil de session de l’app s’il t’en donne un (stop_session n’interrompt qu’un tour, il ne l’archive pas)')
+  expect(app).toContain('si l’app te donne l’outil archive_session, l’outil d’archivage de l’app demande mon accord pour cette session')
+  expect(app).toContain('(stop_session n’interrompt qu’un tour, il ne l’archive pas)')
   expect(app).toContain(
-    'écris-moi en clair, sans attendre ma réponse pour continuer le reste du parcours (les autres groupes, pas les points 8 à 10 de cette fermeture, qui attendent « archivée ») : « Archive dans la liste des sessions de l’app Claude Desktop la session dont le titre commence par « Fermeture auto > Groupe B · »',
+    'écris-moi en clair, sans attendre ma réponse pour continuer le reste de la mission (les autres groupes, pas les points 8 à 10 de cette fermeture, qui attendent « archivée ») : « Archive dans la liste des sessions de l’app Claude Desktop la session dont le titre commence par « Fermeture auto > Groupe B · »',
   )
   expect(app).toContain('ses N commits sont tous dans <branche de travail> (vérifié), rien n’est perdu même si l’app parle de changements ; dis-moi « archivée » et je retire son worktree. »')
   expect(app).toContain('pour l’app, archivée, ce qui vaut « montrée arrêtée »), refais d’abord les deux vérifications de core.fsmonitor')

@@ -1,11 +1,12 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { reopenText } from '../hooks/closing.ts'
 import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, Closing } from '../types'
 import { withItemsLink } from './lien-pistes.ts'
 
-// Rouvrir une session liée fermée : le bouton « ↺ Rouvrir » copie une commande qui recrée son
+// Rouvrir un worker fermé : le bouton « ↺ Rouvrir » copie une commande qui recrée son
 // worktree sur sa branche gardée, sans rien forcer, puis reprend sa conversation dans ce worktree ;
 // une session de l'app se désarchive dans l'app. Le bouton ne change aucune donnée enregistrée :
 // l'état « closed » ne recule jamais.
@@ -16,7 +17,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const ROOT = '/Users/m/proj'
@@ -82,7 +83,7 @@ const UNARCHIVE = 'Puis désarchive dans l’app Claude Desktop la session dont 
 test('session de l’app : seule la commande qui recrée le worktree se copie ; la consigne de la désarchiver va dans le toast', () => {
   const out = reopenText({ run, target: group, closing: closed(), session: 'local_A42', root: ROOT })!
   expect(out.isApp).toBe(true)
-  // Rien que la commande (série 14, Q2.3) : le titre du parcours, non cité, n'entre jamais dans le presse-papiers.
+  // Rien que la commande (série 14, Q2.3) : le titre de la mission, non cité, n'entre jamais dans le presse-papiers.
   expect(out.text).toBe(ADD)
   expect(out.text).not.toContain('Boutique')
   // L'app reprend la conversation elle-même : pas de claude --resume, quel que soit le sessionId noté.
@@ -181,6 +182,7 @@ const mount = async ($: any, clock: any, surface: 'terminal' | 'desktop') => {
 
 test('le bouton « ↺ Rouvrir » : absent sans sessionId, présent une fois fermé avec lui ; il copie la commande et le dit, sans rien changer', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const w = world(on, 'abcd1234')
   await returnedA($, clock, 'abcd1234')
   // Arrêtée, puis fermée sans sessionId : pas de bouton.
@@ -224,6 +226,7 @@ test('le bouton « ↺ Rouvrir » : absent sans sessionId, présent une fois fer
 
 test('session de l’app : le bouton copie la seule commande qui recrée son worktree ; le toast dit de la désarchiver', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const w = world(on, 'local_A42')
   await returnedA($, clock, 'local_A42')
   await $.tool.call({ tool: TOOL, closed: [{ group: 'A', state: 'closed', sessionId: UUID, branch: 'worktree-groupe-boutique-A', worktree: WT }] } as any)
@@ -238,6 +241,7 @@ test('session de l’app : le bouton copie la seule commande qui recrée son wor
 
 test('la session des pistes d’une rétro, fermée avec son sessionId : « ↺ Rouvrir » sur sa ligne, qui copie la commande et dit de la désarchiver', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 90_000_000 })
+  memoryDisk(on)
   const w = world(on, 'local_abc123')
   const PISTES = [
     { id: 'p1', label: 'Contrôles', status: 'todo' },
@@ -272,6 +276,7 @@ test('la session des pistes d’une rétro, fermée avec son sessionId : « ↺ 
 
 test('le bouton survit à un champ hors forme envoyé ensuite : le champ refusé ne remplace pas celui noté', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
+  memoryDisk(on)
   const w = world(on, 'abcd1234')
   await returnedA($, clock, 'abcd1234')
   await $.tool.call({ tool: TOOL, closed: [{ group: 'A', state: 'closed', sessionId: UUID, branch: 'worktree-groupe-boutique-A', worktree: WT }] } as any)

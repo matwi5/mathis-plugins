@@ -6,14 +6,14 @@ import { linkGroupSession } from '../hooks/link.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
-// Les pistes de la rétro du parcours « Frise, groupes et titres » qui changent les consignes du mod.
+// Les pistes de la rétro de la mission « Frise, groupes et titres » qui changent les consignes du mod.
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const LOT = {
@@ -101,7 +101,7 @@ test('branch_name au lancement depuis l’app ; au retour, la branche lue avant 
   expect(brief).toContain("avant d'appliquer ici un correctif que son compte rendu propose, lire sa branche (git log et git diff de son worktree) : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici")
 })
 
-test('le titre d’une session liée sépare le parcours par « > » ; les anciens titres se relient encore', async ($, on) => {
+test('le titre d’un worker sépare la mission par « > » ; les anciens titres se relient encore', async ($, on) => {
   const { brief } = await texts($, on, false)
   expect(brief).toContain('avec un titre qui commence par « Boutique > Groupe <id> · »')
   expect(brief).toContain('jamais une session dont le titre commence par « Boutique > » (ses sœurs)')

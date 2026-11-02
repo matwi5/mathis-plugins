@@ -9,7 +9,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 
 /** Le moteur sous le plugin : un projet `C:/proj` dans un dépôt git, et des éditions qui réussissent. */
@@ -30,7 +30,7 @@ const world = (on: any) => {
   return mem
 }
 
-test('le parcours d’implémentation passe par le Compte rendu, puis Version et push, puis Pull request (/project:pr)', { timeoutMs: 15000 }, async ($, on) => {
+test('la mission d’implémentation passe par le Compte rendu, puis Version et push, puis Pull request (/project:pr)', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 30_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
@@ -94,7 +94,7 @@ test('/project:version puis /project:push : une seule phase, sans nouveau tour',
   await ui.unmount()
 })
 
-test('une commande de livraison seule n’ouvre aucun parcours', async ($, on) => {
+test('une commande de livraison seule n’ouvre aucune mission', async ($, on) => {
   mock.clock(on, { now: 33_000_000 })
   world(on)
   for (const skill of ['project:pr', 'project:push', 'project:sync', 'project:version']) {
@@ -118,7 +118,7 @@ test('la fin de /project:version ne clôt pas « Version et push » : la suite e
   await $.tool.call({ tool: TOOL, step: 'tag' })
   const answer = await $.tool.call({ tool: TOOL, complete: true })
   expect(JSON.stringify(answer)).toMatch(/stays open until \/project:push/)
-  expect(JSON.stringify(answer)).toMatch(/Clore le parcours/)
+  expect(JSON.stringify(answer)).toMatch(/Clore la mission/)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect((await ui.find({ key: 'go-project:push' }))?.props).toMatchObject({ variant: 'primary' })
   // /project:version reste à côté du push.
@@ -221,7 +221,7 @@ test('la frise du terminal donne aux phases leur nom court : Code, Rapport, Push
   await ui.unmount()
 })
 
-test('la frise du terminal d’un parcours à une phase donne aux étapes leur nom court : le design de module', { timeoutMs: 15000 }, async ($, on) => {
+test('la frise du terminal d’une mission à une phase donne aux étapes leur nom court : le design de module', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 34_000_000 })
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:codebase-design', text: 'x' })
@@ -243,10 +243,10 @@ test('la frise du terminal d’une rétro montre ses phases, comme le Triage : R
   await ui.unmount()
 })
 
-test('chaque station de la frise du terminal tient en 9 caractères, dans tous les parcours', () => {
+test('chaque station de la frise du terminal tient en 9 caractères, dans toutes les missions', () => {
   const long: string[] = []
   for (const def of Object.values(SKILLS)) {
-    // Seuls les skills qui ouvrent un parcours ont une frise ; un parcours à une phase montre ses étapes.
+    // Seuls les skills qui ouvrent une mission ont une frise ; une mission à une phase montre ses étapes.
     if (def.role !== 'flow' && def.role !== 'detour') continue
     const flow = def.flow ?? [{ skill: def.id }]
     const stations =

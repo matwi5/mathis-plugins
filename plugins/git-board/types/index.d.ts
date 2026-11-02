@@ -174,8 +174,8 @@ export type Expanded = { files: boolean; branches: boolean; remotes: boolean; co
 
 /**
  * Ce que git-board lit de la valeur `board` de flow-board, sans dépendre de flow-board : la
- * forme minimale qui dit si un parcours est actif dans la discussion (`activeId` désigne un
- * parcours au statut `active`). Absente quand flow-board n'est pas installé.
+ * forme minimale qui dit si une mission est active dans la discussion (`activeId` désigne une
+ * mission au statut `active`). Absente quand flow-board n'est pas installé.
  */
 export type FlowBoardSeen = { activeId: string | null; runs: { id: string; status: string }[] } | null
 

@@ -33,7 +33,7 @@ export type SessionRow = {
   /** Le poste où elle a eu lieu. */
   machine: string
   project: string
-  /** Sous-agent de workflow : la discussion qui l'a lancé (son dossier est `<projet>\<parent>\subagents\…`). */
+  /** Spécialiste de workflow : la discussion qui l'a lancé (son dossier est `<projet>\<parent>\subagents\…`). */
   parent: string | null
   /** Première et dernière activité, en ms ; publiées à la minute depuis la 0.10.0 (`publishedOf`). */
   first: number
@@ -303,11 +303,11 @@ export type RequestRecord = {
   realMs: number
   /** Encore en cours : le fil principal n'a pas fini pour elle (durées provisoires). */
   isOpen: boolean
-  /** Ses tâches de fond encore en cours (sous-agents, shells, Monitor) ; elles n'allongent sa durée réelle que si elles relancent un tour. */
+  /** Ses tâches de fond encore en cours (spécialistes, shells, Monitor) ; elles n'allongent sa durée réelle que si elles relancent un tour. */
   tasks: number
   /** Durée API : la somme des durées de ses appels, en ms. */
   apiMs: number
-  /** Nombre de sous-agents rattachés, sous-agents de sous-agents compris. */
+  /** Nombre de spécialistes rattachés, spécialistes de spécialistes compris. */
   agents: number
   /** Ses appels, par modèle (l'identifiant que l'API donne). */
   models: Record<string, CallStats>
@@ -317,8 +317,19 @@ export type RequestRecord = {
    * actif. Absent sans attente.
    */
   waits?: [number, number | null][]
-  /** Depuis la 0.11.0 : les appels de ses sous-agents pendant ses attentes, [début, fin] en ms, fusionnés ; eux restent actifs. */
+  /** Depuis la 0.11.0 : les appels de ses spécialistes pendant ses attentes, [début, fin] en ms, fusionnés ; eux restent actifs. */
   busy?: [number, number][]
+  /**
+   * Depuis la 0.13.0 : les tours finis du fil principal pour elle, [début, fin] en ms. Avec `agentSpans`,
+   * ils comptent les fils qui travaillent en même temps (temps cumulé). Absent sans tour relevé.
+   */
+  turnSpans?: [number, number][]
+  /**
+   * Depuis la 0.13.0 : les tours finis de ses spécialistes de fond (ou de workflow), [début, fin] en ms,
+   * un par tour, non fusionnés : deux spécialistes en même temps se chevauchent. Un spécialiste qui
+   * bloque son parent n'y est pas : il ne travaille pas en parallèle. Absent sans tour relevé.
+   */
+  agentSpans?: [number, number][]
 }
 
 /** Le relevé d'une ouverture de session, écrit dans `~/.claude/stats-board/requetes/<session>_<ouverture>.json`. */
@@ -344,14 +355,19 @@ export type Tracker = {
   turns: Record<string, number>
   /** Le tour du fil principal en cours, s'il y en a un. */
   active?: string
-  /** Les agents de la session et leur requête ; `isSpawned` : rattaché par son premier `agent.spawn`. */
-  agents?: Record<string, { request: number; isSpawned: boolean }>
+  /** Les agents de la session et leur requête ; `isSpawned` : rattaché par son premier `agent.spawn` ; `isParallel` : lancé en fond ou par un workflow, il travaille en même temps que son parent. */
+  agents?: Record<string, { request: number; isSpawned: boolean; isParallel?: boolean }>
   /** Les tâches de fond vues dans une liste `background_tasks`, et leur requête. */
   tasks?: Record<string, number>
   /** Les tâches de fond encore en cours, d'après la dernière liste. */
   running?: string[]
   /** Les requêtes finies par une interruption ou une erreur : seules à se rouvrir pour une tâche inconnue. */
   interrupted?: number[]
+  /**
+   * Les tours en cours, par `turnId` : leur début, et la requête d'un tour du fil principal ou le
+   * spécialiste d'un tour d'agent (sa requête se lit à la fin). Fermés, ils vont dans `turnSpans` ou `agentSpans`.
+   */
+  lanes?: Record<string, { at: number; request?: number; agent?: string }>
 }
 
 export type RequestSort = 'cost' | 'real' | 'api'

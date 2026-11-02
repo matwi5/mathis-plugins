@@ -4,6 +4,14 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.3.0 — 2026-11-03
+
+### Changé
+- **Catalogue de `/setup:install`** : « Missions de tickets », « Tableau de bord des missions », et le plugin `agents` sans son agent `worker` (« Spécialistes routés par coût »).
+- **Anciens mots refusés** : `termes-retires.txt` ; `check.sh` refuse les anciens mots de flow-board dans le README, les consignes et les nouvelles entrées du CHANGELOG.
+
+---
+
 ## 0.2.0 — 2026-10-24
 
 ### Ajouté

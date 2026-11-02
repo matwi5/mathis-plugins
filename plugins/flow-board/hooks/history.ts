@@ -1,11 +1,11 @@
-// Historique de l'onglet Agents : retrouver les agents d'un parcours passé ou d'une
+// Historique de l'onglet Agents : retrouver les agents d'une mission passée ou d'une
 // ancienne discussion. Fonctions pures ; la lecture des fichiers vit dans register.tsx.
 //
-// - Le sélecteur liste « Ici, maintenant », les parcours du projet (archivés compris), puis les
-//   discussions sans parcours qui ont lancé au moins un sous-agent ou une session liée (Q12).
+// - Le sélecteur liste « Ici, maintenant », les missions du projet (archivées comprises), puis les
+//   discussions sans mission qui ont lancé au moins un spécialiste ou un worker (Q12).
 // - Ce que la reprise reconstruit pour une autre session va dans son fichier à part,
-//   `<session>.rebuilt.json` (S13) ; les lignes de l'ancien champ d'un parcours dont la session est
-//   introuvable vont dans celui du parcours, `run-<parcours>.rebuilt.json` (S18).
+//   `<session>.rebuilt.json` (S13) ; les lignes de l'ancien champ d'une mission dont la session est
+//   introuvable vont dans celui de la mission, `run-<parcours>.rebuilt.json` (S18).
 
 import type { AdvisorFigures, AgentLane, AgentSegment, Board, RegistryAgent, Run, SessionRegistry } from '../types'
 import { isSameProject } from './linked.ts'
@@ -13,22 +13,22 @@ import { MAIN, catchUpAdvisor, cleanAdvisorFigures, cleanAdvisorList, cleanAgent
 import { minOf } from './timeline.ts'
 import { catchUp, type TranscriptAgent } from './transcript.ts'
 
-/** Le fichier à part d'une session (ou d'un parcours) : ce que le rattrapage et la reprise ont reconstruit. */
+/** Le fichier à part d'une session (ou d'une mission) : ce que le rattrapage et la reprise ont reconstruit. */
 export type Rebuilt = {
   v: 1
-  /** L'id de la session, ou `run:<parcours>` pour le fichier d'un parcours (S18). */
+  /** L'id de la session, ou `run:<parcours>` pour le fichier d'une mission (S18). */
   session: string
-  /** Les sous-agents relus dans les transcripts. */
+  /** Les spécialistes relus dans les transcripts. */
   agents: TranscriptAgent[]
-  /** Les lignes de l'ancien champ des sous-agents d'un parcours (S1), en entrées du registre. */
+  /** Les lignes de l'ancien champ des spécialistes d'une mission (S1), en entrées du registre. */
   rows?: RegistryAgent[]
-  /** La piste de la session relue dans son transcript, sur les périodes des parcours repris, et ses appels à l'advisor. */
+  /** La piste de la session relue dans son transcript, sur les périodes des missions reprises, et ses appels à l'advisor. */
   main?: AgentLane & { advisor?: AdvisorFigures[] }
-  /** Les parcours repris dans ce fichier. */
+  /** Les missions reprises dans ce fichier. */
   runs?: string[]
 }
 
-/** L'id du fichier à part d'un parcours (S18). */
+/** L'id du fichier à part d'une mission (S18). */
 export const runFileId = (run: string): string => `run-${run.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`
 
 const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x)
@@ -63,7 +63,7 @@ export const cleanRebuilt = (raw: unknown, session: string): Rebuilt | null => {
 }
 
 /**
- * Le registre d'une session complété par son fichier à part : sous-agents, lignes recopiées, piste.
+ * Le registre d'une session complété par son fichier à part : spécialistes, lignes recopiées, piste.
  * `inFlight` : les appels Agent encore en vol dans ce processus, que le transcript ne clôt pas.
  */
 export const applyRebuilt = (reg: SessionRegistry, rebuilt: Rebuilt | null, now: number, inFlight?: ReadonlySet<string>): SessionRegistry => {
@@ -82,7 +82,7 @@ export const applyRebuilt = (reg: SessionRegistry, rebuilt: Rebuilt | null, now:
   return catchUpAdvisor(next, MAIN, rebuilt.main?.advisor, now) ?? next
 }
 
-/** La période d'un parcours, une marge comprise après sa dernière activité. */
+/** La période d'une mission, une marge comprise après sa dernière activité. */
 export const runWindow = (run: Run): { s: number; e: number } => ({ s: run.startedAt - BEFORE_MS, e: (run.finishedAt ?? run.updatedAt) + AFTER_MS })
 
 /** Les segments d'une piste (et ses appels à l'advisor) qui touchent la période. */
@@ -97,14 +97,14 @@ export const clipLane = <L extends AgentLane & { advisor?: AdvisorFigures[] }>(l
 }
 
 /**
- * Les sous-agents relus d'une session qui ont travaillé pendant le parcours, rattachés à lui (Q14).
- * Deux parcours dont les périodes se recouvrent (l'un mis en pause pendant l'autre) : un sous-agent
- * va à celui des deux qui a commencé le plus tard avant lui.
+ * Les spécialistes relus d'une session qui ont travaillé pendant la mission, rattachés à elle (Q14).
+ * Deux missions dont les périodes se recouvrent (l'une mise en pause pendant l'autre) : un spécialiste
+ * va à celle des deux qui a commencé le plus tard avant lui.
  */
 export const agentsOfRun = (found: readonly TranscriptAgent[], run: Run, runs: readonly Run[] = [run]): TranscriptAgent[] =>
   found.filter(a => a.lane.startedAt !== undefined && runAt(runs, a.lane.startedAt) === run.id).map(a => ({ ...a, run: run.id }))
 
-/** Le parcours dont la période contient `at` ; deux qui se recouvrent : celui qui a commencé le plus tard. */
+/** La mission dont la période contient `at` ; deux qui se recouvrent : celle qui a commencé le plus tard. */
 export const runAt = (runs: readonly Run[], at: number): string | undefined => {
   let best: Run | undefined
   for (const r of runs) {
@@ -115,8 +115,8 @@ export const runAt = (runs: readonly Run[], at: number): string | undefined => {
 }
 
 /**
- * Les parcours qu'une discussion a portés (S27, S28) : ceux dont elle est propriétaire, dont elle a
- * des sous-agents suivis en direct, dont elle a un ticket « en cours », ou que son en-tête a notés.
+ * Les missions qu'une discussion a portées (S27, S28) : celles dont elle est propriétaire, dont elle a
+ * des spécialistes suivis en direct, dont elle a un ticket « en cours », ou que son en-tête a notés.
  */
 export const runsCarriedBy = (runs: readonly Run[], self: Pick<SessionRegistry, 'session' | 'agents' | 'carried'>): Run[] =>
   runs.filter(
@@ -128,11 +128,11 @@ const BEFORE_MS = 60_000
 const AFTER_MS = 10 * 60_000
 
 /**
- * Le parcours porté par la discussion dont la période contient `at` (S27) ; deux qui se recouvrent :
- * celui qui a commencé le plus tard. R3 (S31, S37) : `at` doit aussi tomber dans une des périodes où
- * la discussion le portait, marge Q14 comprise ; la dernière sans fin tant qu'elle le porte encore
+ * La mission portée par la discussion dont la période contient `at` (S27) ; deux qui se recouvrent :
+ * celle qui a commencé le plus tard. R3 (S31, S37) : `at` doit aussi tomber dans une des périodes où
+ * la discussion la portait, marge Q14 comprise ; la dernière sans fin tant qu'elle la porte encore
  * (propriétaire, ou un ticket « en cours » par elle) ; sans dates notées (en-tête d'avant), la
- * période du parcours seule.
+ * période de la mission seule.
  */
 export const carriedRunAt = (carried: readonly Run[], reg: Pick<SessionRegistry, 'session' | 'carriedAt'>, at: number): string | undefined => {
   let best: Run | undefined
@@ -148,8 +148,8 @@ export const carriedRunAt = (carried: readonly Run[], reg: Pick<SessionRegistry,
 }
 
 /**
- * Q-a (S27) : les sous-agents relus dans les transcripts de cette discussion qui manquent à son
- * registre se rattachent au parcours qu'elle portait à leur départ ; les autres ne changent pas.
+ * Q-a (S27) : les spécialistes relus dans les transcripts de cette discussion qui manquent à son
+ * registre se rattachent à la mission qu'elle portait à leur départ ; les autres ne changent pas.
  */
 export const withCarriedRuns = (found: readonly TranscriptAgent[], reg: SessionRegistry, carried: readonly Run[]): TranscriptAgent[] =>
   found.map(a => {
@@ -159,9 +159,9 @@ export const withCarriedRuns = (found: readonly TranscriptAgent[], reg: SessionR
   })
 
 /**
- * R2 (S32) : à chaque rattrapage, une entrée venue des transcripts sans parcours (rattrapée plus tôt)
- * rejoint le parcours porté dont la période contient son départ. Une entrée suivie en direct sans
- * parcours le reste. Null quand rien ne change.
+ * R2 (S32) : à chaque rattrapage, une entrée venue des transcripts sans mission (rattrapée plus tôt)
+ * rejoint la mission portée dont la période contient son départ. Une entrée suivie en direct sans
+ * mission le reste. Null quand rien ne change.
  */
 export const attachCarried = (reg: SessionRegistry, carried: readonly Run[]): SessionRegistry | null => {
   let isChanged = false
@@ -176,9 +176,9 @@ export const attachCarried = (reg: SessionRegistry, carried: readonly Run[]): Se
 }
 
 /**
- * Deux versions d'un fichier à part réunies (S20) : rien ne se retire par une fusion. Les sous-agents
- * s'unissent par id (les chiffres du plus récent, le parcours déjà rattaché garde le sien), les
- * parcours repris, les lignes recopiées (par clé) et les segments de la piste aussi.
+ * Deux versions d'un fichier à part réunies (S20) : rien ne se retire par une fusion. Les spécialistes
+ * s'unissent par id (les chiffres du plus récent, la mission déjà rattachée garde la sienne), les
+ * missions reprises, les lignes recopiées (par clé) et les segments de la piste aussi.
  */
 export const unionRebuilt = (before: Rebuilt | null, next: Rebuilt): Rebuilt => {
   if (!before) return next
@@ -208,7 +208,7 @@ export const unionRebuilt = (before: Rebuilt | null, next: Rebuilt): Rebuilt => 
   return out
 }
 
-/** Ce que la reprise d'un parcours apporte au fichier à part d'une session : ses sous-agents, sa piste et ses appels à l'advisor, le parcours. */
+/** Ce que la reprise d'une mission apporte au fichier à part d'une session : ses spécialistes, sa piste et ses appels à l'advisor, la mission. */
 export const withRun = (before: Rebuilt | null, session: string, run: Run, agents: readonly TranscriptAgent[], main: (AgentLane & { advisor?: AdvisorFigures[] }) | null): Rebuilt =>
   unionRebuilt(before, {
     v: 1,
@@ -223,15 +223,15 @@ export const withRun = (before: Rebuilt | null, session: string, run: Run, agent
 export type HistoryEntry = { key: string; kind: 'now' | 'run' | 'session'; title: string; at?: number; isArchived?: boolean; agents?: number }
 
 /**
- * Le sélecteur de l'onglet : « Ici, maintenant », les parcours du projet, archivés compris (les
- * plus récents d'abord), puis les discussions sans parcours du projet qui ont lancé au moins un
- * sous-agent ou une session liée, les plus récentes d'abord. `heads` : les en-têtes du dossier.
+ * Le sélecteur de l'onglet : « Ici, maintenant », les missions du projet, archivées comprises (les
+ * plus récents d'abord), puis les discussions sans mission du projet qui ont lancé au moins un
+ * spécialiste ou un worker, les plus récentes d'abord. `heads` : les en-têtes du dossier.
  */
 export const historyEntries = (board: Board | null, self: { session: string; root: string }, heads: readonly SessionRegistry[]): HistoryEntry[] => {
   const runs = [...(board?.runs ?? [])].sort((a, b) => (b.finishedAt ?? b.updatedAt) - (a.finishedAt ?? a.updatedAt))
   // Le projet ou ses worktrees seulement (dans l'esprit de S17) ; sans racine connue, aucune.
   const isMine = (o: SessionRegistry) => isSameProject(self.root, o.root)
-  // Sans parcours : ni session liée d'un parcours, ni discussion qui en a porté un.
+  // Sans mission : ni worker d'une mission, ni discussion qui en a porté un.
   const discussions = heads
     .filter(o => o.session !== self.session && o.run === undefined && isMine(o) && !o.agents.some(a => a.run !== undefined))
     .filter(o => o.agents.length > 0 || (o.linked ?? []).length > 0)
@@ -244,8 +244,8 @@ export const historyEntries = (board: Board | null, self: { session: string; roo
 }
 
 /**
- * La vue d'orchestrateur d'un parcours passé : les registres des discussions qui l'ont porté, leurs
- * sous-agents de ce parcours et leur piste sur sa période, complétés par les fichiers à part ;
+ * La vue de manager d'une mission passée : les registres des discussions qui l'ont portée, leurs
+ * spécialistes de cette mission et leur piste sur sa période, complétés par les fichiers à part ;
  * sans aucune, un registre fait des seules lignes recopiées.
  */
 export const runRegistry = (run: Run, regs: readonly SessionRegistry[], runFile: Rebuilt | null, now: number): SessionRegistry => {
@@ -254,7 +254,7 @@ export const runRegistry = (run: Run, regs: readonly SessionRegistry[], runFile:
   for (const reg of regs) {
     const own = reg.agents.filter(a => a.run === run.id)
     const main = clipLane(reg.main, w)
-    // Les appels à l'advisor du parcours : ceux de ses sous-agents, et ceux de la discussion dans sa période.
+    // Les appels à l'advisor de la mission : ceux de ses spécialistes, et ceux de la discussion dans sa période.
     const ids = new Set(own.flatMap(a => (a.agentId !== undefined ? [a.agentId] : [])))
     const calls = (reg.advisor?.calls ?? []).filter(c => (c.by === MAIN ? (c.e ?? c.s) >= w.s && c.s <= w.e : ids.has(c.by)))
     if (own.length === 0 && (main.segments ?? []).length === 0 && calls.length === 0) continue
@@ -265,8 +265,8 @@ export const runRegistry = (run: Run, regs: readonly SessionRegistry[], runFile:
 }
 
 /**
- * La vue d'un parcours qui ne tourne plus ne s'allonge plus : ses segments restés ouverts se
- * ferment à sa fin, et un sous-agent resté « au travail » (fin jamais vue) y est fini, sans durée.
+ * La vue d'une mission qui ne tourne plus ne s'allonge plus : ses segments restés ouverts se
+ * ferment à sa fin, et un spécialiste resté « au travail » (fin jamais vue) y est fini, sans durée.
  */
 const settledRun = (reg: SessionRegistry, end: number): SessionRegistry => {
   const close = (segs: readonly AgentSegment[] | undefined) => (segs ?? []).map(x => (x.e === undefined ? { ...x, e: Math.max(x.s, end) } : x))

@@ -52,12 +52,12 @@ const base = {
   others: [{ machine: 'Portable', updatedAt: now, cost: 5, tokens: 1e6 }],
 }
 
-test('la discussion compte ses sous-agents et ses modèles', () => {
+test('la discussion compte ses spécialistes et ses modèles', () => {
   const out = render(base)
   assert.match(out, /### Cette discussion\n\n- \*\*12,00 \$\*\* · 12 M tokens, dont 90 % lus en cache/)
   assert.match(out, /14:00 → 17:30 \(3 h 30\) · projet app/)
   assert.match(out, /Opus 5.5 10,00 \$ \(83 %\) · Sonnet 5.5 2,00 \$ \(17 %\)/)
-  assert.match(out, /Dont 1 sous-agent de workflow : 2,00 \$/)
+  assert.match(out, /Dont 1 spécialiste de workflow : 2,00 \$/)
 })
 
 test('la journée ne prend que les lignes du jour, et les autres postes s\'y ajoutent', () => {
@@ -80,7 +80,7 @@ test('une discussion devinée est signalée', () => {
   assert.match(render({ ...base, isGuessed: true }), /Discussion devinée/)
 })
 
-test('noms de modèles, rythme et rattachement des sous-agents', () => {
+test('noms de modèles, rythme et rattachement des spécialistes', () => {
   assert.equal(modelName('claude-opus-5-5'), 'Opus 5.5')
   assert.equal(modelName('claude-sonnet-4-5-20250929'), 'Sonnet 4.5')
   assert.equal(heatOf(6.9), 'calme')
@@ -101,7 +101,7 @@ test('noms d’affichage de names.json : par nom de dossier, sans la casse, work
   assert.equal(labelOf('/Users/m/autre/.claude/worktrees/dev', labels), null)
 })
 
-// ─── Récap d'un parcours ────────────────────────────────────────────────────
+// ─── Récap d'une mission ────────────────────────────────────────────────────
 
 test('le titre d’une session est le dernier de sa transcription', () => {
   const text = [
@@ -138,9 +138,10 @@ const parcours = {
   projectNames: { '-Users-m-app': 'app', [WT]: 'app · groupe-A' },
 }
 
-test('le parcours par préfixe de titre somme ses sessions et leurs sous-agents', () => {
+test('la mission par préfixe de titre somme ses sessions et leurs spécialistes', () => {
   const out = renderParcours({ ...parcours, prefix: 'Refonte UI' })
-  assert.match(out, /^## Récap du parcours « Refonte UI »/)
+  assert.match(out, /^## Récap de la mission « Refonte UI »/)
+  assert.match(out, /Coût équivalent API d'après ccusage, spécialistes compris,/)
   assert.match(out, /- \*\*17,00 \$\*\* · 2 sessions · /)
   assert.match(out, /Opus 5.5 12,00 \$ \(71 %\) · Sonnet 5.5 5,00 \$ \(29 %\)/)
   assert.match(out, /^\| Refonte UI \| app \| 12\/10 10:00 → 14\/10 17:00 \| 2 j 7 h \| — \| 10,00 \$ \|$/m)
@@ -148,21 +149,21 @@ test('le parcours par préfixe de titre somme ses sessions et leurs sous-agents'
   assert.doesNotMatch(out, /Autre chose|40,00/)
 })
 
-test('le parcours par worktrees groupe-* prend leurs sessions, et la discussion principale si elle est donnée', () => {
+test('la mission par worktrees groupe-* prend leurs sessions, et le manager s’il est donné', () => {
   const out = renderParcours({ ...parcours, worktreesKey: '-Users-m-app', sessionId: MAIN })
-  assert.match(out, /^## Récap du parcours · worktrees groupe-\* de app/)
+  assert.match(out, /^## Récap de la mission · worktrees groupe-\* de app/)
   assert.match(out, /- \*\*24,00 \$\*\* · 3 sessions · /)
   assert.match(out, /^\| \(sans titre\) \| app · groupe-A \| 01\/10 10:00 → 01\/10 11:00 \| 1 h 00 \| — \| 7,00 \$ \|$/m)
   assert.match(out, /\| Refonte UI \| app \|/)
-  assert.doesNotMatch(out, /Autre chose|40,00|non comptée/)
+  assert.doesNotMatch(out, /Autre chose|40,00|non compté/)
 
   const alone = renderParcours({ ...parcours, worktreesKey: '-Users-m-app' })
   assert.match(alone, /- \*\*14,00 \$\*\* · 2 sessions · /)
-  assert.match(alone, /Discussion principale non comptée/)
+  assert.match(alone, /Manager non compté : son identifiant manque/)
   assert.doesNotMatch(renderParcours({ ...parcours, worktreesKey: '-Users-m-ap' }), /groupe-A/)
 })
 
-test('le titre complet d’un parcours retrouve aussi les sessions liées au titre raccourci', () => {
+test('le titre complet d’une mission retrouve aussi ses workers au titre raccourci', () => {
   const long = 'Cloisonnement « espace » privé, file et saisie'
   const titles = { [MAIN]: long, [LINKED]: 'Cloisonnement espace… › Groupe A · Saisie', other: 'Cloisonnement… autre' }
   const out = renderParcours({ ...parcours, titles, prefix: long })
@@ -181,7 +182,7 @@ test('une période bornée à la fin est rappelée', () => {
   assert.match(out, /sessions retrouvées du 15\/08\/2026 au 20\/10\/2026\./)
 })
 
-test('un parcours sans session retrouvée le dit', () => {
+test('une mission sans session retrouvée le dit', () => {
   const out = renderParcours({ ...parcours, prefix: 'Inconnu' })
   assert.match(out, /Aucune session retrouvée depuis le 15\/08\/2026/)
   assert.doesNotMatch(out, /\| Session \|/)
@@ -230,12 +231,29 @@ test('la journée : temps actif, temps cumulé et temps API du jour, par projet'
   // Une discussion de plus en même temps (14:10–14:40) : le temps actif ne bouge pas, le temps cumulé l'ajoute.
   const busy = [...LOGS, requestLog('lie', '-Users-m-app', [['2026-10-14T12:10:00Z', 30, 60, 1]])]
   const both = render({ ...base, requestLogs: busy })
-  assert.match(both, /- Temps actif 1 h 10 · temps cumulé 1 h 40 · temps API 9 min 00 · 4 requêtes/)
+  assert.match(both, /- Temps actif 1 h 10 · temps cumulé 1 h 40 \(gagné 30 min 00 en parallèle\) · temps API 9 min 00 · 4 requêtes/)
   assert.match(both, /\| app \| 30,00 \$ \| 100 % \| 50 M \| 50 min 00 \| 1 h 20 \|/)
 })
 
-test('une question à boutons : son attente sort du temps actif, sauf les appels des sous-agents pendant ce temps', () => {
-  // 14:00–14:30, une question de 14:05 à 14:25, un sous-agent appelé de 14:10 à 14:12 : 5 + 2 + 5 = 12 min actives.
+test('des spécialistes de fond en même temps : le temps cumulé compte chaque fil, le temps actif ne bouge pas', () => {
+  // 14:00–14:30 (heure de Paris) : le fil principal à 14:00–14:05 et 14:25–14:30, un spécialiste de 14:05 à
+  // 14:25, un autre de 14:10 à 14:20 : deux fils en même temps pendant 10 min.
+  const at = (hhmm) => Date.parse(`2026-10-14T${hhmm}:00Z`)
+  const log = requestLog(ID, '-Users-m-app', [['2026-10-14T12:00:00Z', 30, 60, 1]])
+  log.requests[0].turnSpans = [[at('12:00'), at('12:05')], [at('12:25'), at('12:30')]]
+  log.requests[0].agentSpans = [[at('12:05'), at('12:25')], [at('12:10'), at('12:20')]]
+  const out = render({ ...base, requestLogs: [log] })
+  // La discussion (suivie de sa requête la plus chère), puis la journée.
+  assert.match(out, /- Temps actif 30 min 00 · temps cumulé 40 min 00 \(gagné 10 min 00 en parallèle\) · temps API 1 min 00 · 1 requête · la plus chère/)
+  assert.match(out, /- Temps actif 30 min 00 · temps cumulé 40 min 00 \(gagné 10 min 00 en parallèle\) · temps API 1 min 00 · 1 requête\n/)
+  assert.match(out, /\| app \| 30,00 \$ \| 100 % \| 50 M \| 30 min 00 \| 40 min 00 \|/)
+  // Un spécialiste seul pendant que le fil principal attend : rien en parallèle, pas de temps gagné.
+  log.requests[0].agentSpans = [[at('12:05'), at('12:25')]]
+  assert.match(render({ ...base, requestLogs: [log] }), /- Temps actif 30 min 00 · temps API 1 min 00 · 1 requête/)
+})
+
+test('une question à boutons : son attente sort du temps actif, sauf les appels des spécialistes pendant ce temps', () => {
+  // 14:00–14:30, une question de 14:05 à 14:25, un spécialiste appelé de 14:10 à 14:12 : 5 + 2 + 5 = 12 min actives.
   const at = (hhmm) => Date.parse(`2026-10-14T${hhmm}:00Z`)
   const log = requestLog(ID, '-Users-m-app', [['2026-10-14T12:00:00Z', 30, 120, 1.5]])
   log.requests[0].waits = [[at('12:05'), at('12:25')]]
@@ -282,15 +300,15 @@ test('fichiers de relevé lus sur le disque : récents ou de la discussion ; un 
   assert.deepEqual(readRequestLogs(join(dir, 'absent'), () => true), { logs: [], unreadable: [] })
 })
 
-test('le parcours : temps actif sans double compte entre sessions qui tournent en même temps, et temps API total', () => {
+test('la mission : temps actif sans double compte entre sessions qui tournent en même temps, et temps API total', () => {
   const sessions = [session(ID, '-Users-m-app', '2026-10-14T12:00:00Z', '2026-10-14T12:50:00Z', 10), session('lie', '-Users-m-app--claude-worktrees-groupe-A', '2026-10-14T12:40:00Z', '2026-10-14T13:10:00Z', 4)]
   const logs = [LOGS[0], requestLog('lie', '-Users-m-app--claude-worktrees-groupe-A', [['2026-10-14T12:40:00Z', 30, 240, 2]])]
   const out = renderParcours({ tz, since: '2026-10-01', worktreesKey: '-Users-m-app', sessionId: ID, sessions, titles: {}, projectNames: {}, requestLogs: logs })
   // 14:00–14:50 et 14:40–15:10 : 1 h 10 actives, 1 h 20 cumulées ; 2 + 5 + 4 min d'API.
-  assert.match(out, /- Temps actif 1 h 10 \(sans double compte entre sessions\) · temps cumulé 1 h 20 · temps API 11 min 00 · 3 requêtes/)
+  assert.match(out, /- Temps actif 1 h 10 \(sans double compte entre sessions\) · temps cumulé 1 h 20 \(gagné 10 min 00 en parallèle\) · temps API 11 min 00 · 3 requêtes/)
   assert.match(out, /\| Session \| Projet \| Heures \| Durée \| Actif \| Coût \|/)
   assert.match(out, /\| 30 min 00 \| 4,00 \$ \|/)
-  // Une session du parcours sans relevé : le total le dit ; un fichier illisible d'une autre session ne compte pas.
+  // Une session de la mission sans relevé : le total le dit ; un fichier illisible d'une autre session ne compte pas.
   const partial = renderParcours({ tz, since: '2026-10-01', worktreesKey: '-Users-m-app', sessionId: ID, sessions, titles: {}, projectNames: {}, requestLogs: [LOGS[0]], unreadable: ['ailleurs_1.json'] })
   assert.match(partial, /\(sans double compte entre sessions, sans 1 session non relevée\)/)
   assert.doesNotMatch(partial, /illisible/)

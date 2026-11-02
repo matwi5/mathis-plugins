@@ -103,7 +103,7 @@ for (const file of FILES) {
 }
 
 // Les teintes des attentes de la frise (gris, ambre, bleu, or) restent distinctes : l'or de l'advisor et
-// l'ambre de « attend ta réponse » se confondaient sur la planche (rétro du parcours « Frise, groupes
+// l'ambre de « attend ta réponse » se confondaient sur la planche (rétro de la mission « Frise, groupes
 // et titres »). Distance ΔE76 (CIE Lab, sRGB D65) : au moins 10 entre les teintes pleines, et au moins
 // 15 entre les motifs tels qu'ils se voient (hachures ou pointillés fondus sur le fond foncé du terminal
 // et sur un fond blanc). Un or ramené vers l'ambre (#DCAA28, ΔE 2) échoue.

@@ -3,7 +3,7 @@
 // le comparent au gabarit, dont il garde les titres et la consigne des relecteurs mot pour mot.
 
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,7 +62,7 @@ test('sans invariant : un fichier conforme au gabarit, sans trou ni ligne entre 
     assert.ok(text.includes(`Les règles de jugement : \`${join(dir, 'CODING_STANDARDS.md')}\``), 'CODING_STANDARDS.md manque')
     assert.ok(!text.includes('Passe « bogues »'), 'une ligne d’invariant sans invariant')
     assert.ok(!text.includes('Relecture du fond'), 'une ligne de lecteur sans lecteur')
-    assert.ok(!text.includes("D'autres parcours"), 'une ligne de chemins sans --chemins')
+    assert.ok(!text.includes("D'autres missions"), 'une ligne de chemins sans --chemins')
     assert.match(out.stdout, /consignes-05\.md/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -83,12 +83,40 @@ test('avec invariant, lecteur, chemins, tickets faits et choix de la session : c
     assert.ok(text.includes("« un fichier de totaux n'est jamais réécrit vide »"), 'l’invariant manque')
     assert.ok(!text.includes('« «'), 'des guillemets doublés')
     assert.match(text, /le lecteur visé : Mathis\./)
-    assert.ok(text.includes("- D'autres parcours commitent sur la branche : seulement `git diff refs/worktree/flow-board/06^..refs/worktree/flow-board/06 -- scripts CLAUDE.md`."))
+    assert.ok(text.includes("- D'autres missions commitent sur la branche : seulement `git diff refs/worktree/flow-board/06^..refs/worktree/flow-board/06 -- scripts CLAUDE.md`."))
     assert.ok(text.includes('05 : Premier critère (test). ; 05 : Deuxième critère.'), 'les critères des tickets faits manquent')
     assert.match(text, /plus ceux de la session qui n'y sont pas encore : motif littéral de show\.py ; option --quick\./)
     assert.match(text, /Les choix déjà déclarés : aucun fichier des choix/)
     assert.ok(!/<[^>\n]+>/.test(text))
     assert.ok(!text.split('\n').some(l => l.startsWith('- [')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--relecteur crée le dossier du relecteur dans le dossier git et le nomme comme seul lieu d’écriture ; sans lui, ni dossier ni /tmp', () => {
+  const dir = project()
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd: dir }).status, 0)
+    const out = run(dir, 'travail/chantier/issues/05-outil.md', 'a..b', 'c.md', '--relecteur', '05')
+    assert.equal(out.status, 0, out.stderr)
+    const text = readFileSync(join(dir, 'c.md'), 'utf8')
+    const path = join(dir, '.git', 'flow-board', 'revue-05')
+    assert.ok(existsSync(path), 'dossier absent')
+    assert.ok(text.includes(`- Où écrire : seulement \`${path}\``), text)
+    assert.ok(!/<[^>\n]+>/.test(text))
+    // Sans --relecteur, la ligne part, et « À ne pas faire » interdit toujours /tmp.
+    assert.equal(run(dir, 'travail/chantier/issues/05-outil.md', 'a..b', 'd.md').status, 0)
+    const plain = readFileSync(join(dir, 'd.md'), 'utf8')
+    assert.ok(!plain.includes('Où écrire'))
+    assert.match(plain, /À ne pas faire : écrire dans l'arbre de travail, dans l'index ou dans `\/tmp`/)
+    // Un id hors forme : rien n'est écrit.
+    for (const id of ['../05', '-05', 'a/b']) {
+      const bad = run(dir, 'travail/chantier/issues/05-outil.md', 'a..b', 'e.md', '--relecteur', id)
+      assert.equal(bad.status, 1, id)
+      assert.match(bad.stderr, /^ÉCHEC : id hors forme/)
+    }
+    assert.ok(!existsSync(join(dir, 'e.md')))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { applyReport, emptyBoard, newRun, nextLaunchFor, startLinkedGroups, suggestionsFor, upgradeRun } from '../hooks/model.ts'
 import { activeRun } from '../hooks/basics.ts'
@@ -9,7 +10,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const boardWith = (input: Record<string, unknown>): Board => {
@@ -35,10 +36,10 @@ const SHARED = {
   ],
 }
 
-test('la suite recommandée suit les groupes : le prochain, l’attente d’une session liée, puis les revues', () => {
+test('la suite recommandée suit les groupes : le prochain, l’attente d’un worker, puis les revues', () => {
   let board = boardWith(SHARED)
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'group', group: 'A', isDelegable: true })
-  // A part en session liée : C est prêt, mais partage le service avec A ; B attend A.
+  // A part dans un worker : C est prêt, mais partage le service avec A ; B attend A.
   board = startLinkedGroups(board, ['A'], 3_000)!.board
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'linked', groups: ['A'] })
   // A rendu sans revue : le suivant est prêt, et la revue de A ne se propose pas à sa place.
@@ -66,7 +67,7 @@ test('des groupes indépendants : la suite recommandée est le lot parallèle', 
   expect(nextLaunchFor(runOf(board))).toEqual({ kind: 'parallel', groups: ['X', 'Y'] })
 })
 
-test('un groupe rendu par sa session liée avant la 0.39.0 retrouve sa trace dans le journal', () => {
+test('un groupe rendu par son worker avant la 0.39.0 retrouve sa trace dans le journal', () => {
   const board = report(boardWith(SHARED), { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'c0', status: 'done' }, { id: 'c1', status: 'done' }] }, 3_000)
   const run: Run = runOf(board)
   run.log.push(
@@ -82,8 +83,19 @@ test('un groupe rendu par sa session liée avant la 0.39.0 retrouve sa trace dan
   expect(upgradeRun(run).groups!.find(g => g.id === 'A')!.delegated).toBeUndefined()
 })
 
+test('le journal écrit dans le nouveau vocabulaire (« worker ») se relit aussi', () => {
+  const board = report(boardWith(SHARED), { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }, { id: 'c0', status: 'done' }, { id: 'c1', status: 'done' }] }, 3_000)
+  const run: Run = runOf(board)
+  run.log.push(
+    { at: 2_500, glyph: '↗', text: 'Groupe A confié à un worker', tone: 'info' },
+    { at: 3_000, glyph: '↩', text: 'Groupe A rendu par son worker', tone: 'ok' },
+  )
+  expect(upgradeRun(run).groups!.find(g => g.id === 'A')!.delegated).toEqual({ at: 2_500 })
+})
+
 test('le panneau : « Ensuite » propose le groupe suivant, sans /code-review ni /implement', async ($, on) => {
   mock.clock(on, { now: 99_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
@@ -97,19 +109,19 @@ test('le panneau : « Ensuite » propose le groupe suivant, sans /code-review ni
   await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }] } as any)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    // A, fait ici, garde sa revue sur sa ligne ; la carte propose B (ou C), par session liée seulement.
+    // A, fait ici, garde sa revue sur sa ligne ; la carte propose B (ou C), par worker seulement.
     expect(await ui.find({ key: 'review-group-A' })).toBeDefined()
     expect(await ui.find({ key: 'go-final-review' })).toBeUndefined()
     expect(await ui.find({ key: 'go-implement' })).toBeUndefined()
     expect(await ui.find({ key: 'go-retro' })).toBeDefined()
-    expect((await ui.find({ key: 'next-linked-B' }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.Groupe B · session liée$/), variant: 'primary' })
+    expect((await ui.find({ key: 'next-linked-B' }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.Groupe B · worker$/), variant: 'primary' })
     expect(await ui.find({ key: 'next-group-B' })).toBeUndefined()
     await ui.unmount()
   }
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'next-linked-B' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^Confie ce groupe à une session liée/)
+  expect(filled.at(-1)).toMatch(/^Confie ce groupe à un worker/)
 })
 
 test('des revues qui manquent, tickets faits : pas de skill pour suite (ni /implement ni compte rendu)', () => {

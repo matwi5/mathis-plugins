@@ -1,4 +1,4 @@
-// Chaque champ du lien d'une session liée (GroupLink d'un groupe, LinkedWork des pistes, Closing de
+// Chaque champ du lien d'un worker (GroupLink d'un groupe, LinkedWork des pistes, Closing de
 // sa fermeture, ClosedLink d'un envoi remplacé), sur chaque chemin qui réécrit ou fusionne le
 // parcours : la classe « donnée du lien perdue à la réécriture ou à la fusion » était sortie dans
 // quatre passes « bogues » (sessions précédentes, compteur d'envois, envoi en cours) et avait demandé
@@ -77,7 +77,7 @@ const lost = (type, after, exceptions = {}) => {
 const T0 = 10_000
 const PLAN = [{ id: 'A', tickets: ['t1'] }, { id: 'B', tickets: ['t2'] }]
 
-/** Un parcours à deux groupes ; A porte le lien complet, encore confié (`linked`) ou rendu (`delegated`). */
+/** Une mission à deux groupes ; A porte le lien complet, encore confié (`linked`) ou rendu (`delegated`). */
 const groups = where => {
   const run = model.newRun('implement', T0, 'Essai')
   let board = { ...model.emptyBoard('/r', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }

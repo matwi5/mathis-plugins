@@ -75,7 +75,7 @@ test('une Implémentation rendue due par un lot redevient facultative quand ses 
   const run = out.board.runs.find(r => r.id === due.id)!
   expect(implementOf(run).isOptional).toBe(true)
   expect(isPhaseOptional(run, implementOf(run))).toBe(true)
-  // Comme une rétro sans ticket : le parcours est terminé, pas en pause.
+  // Comme une rétro sans ticket : la mission est terminée, pas en pause.
   expect(run.status).toBe('done')
   expect(run.finishedAt).toBe(4_000)
 })
@@ -115,7 +115,7 @@ test('les tickets d’un groupe se calculent une fois par état du lot, rattach�
   expect(second.get('B')).toEqual(['b1'])
 })
 
-test('le retrait d’un ticket déjà fait, dans un lot fini, ne termine pas le parcours', () => {
+test('le retrait d’un ticket déjà fait, dans un lot fini, ne termine pas la mission', () => {
   const board = retroWithLot()
   const id = activeRun(board)!.id
   // Le lot entier fait : plus rien d'ouvert, l'Implémentation n'est plus retenue par lui.

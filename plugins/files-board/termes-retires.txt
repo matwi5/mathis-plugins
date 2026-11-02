@@ -1,0 +1,22 @@
+# Termes retirés de files-board, un par ligne : une version, une tabulation, le terme ;
+# son entrée du CHANGELOG et les plus anciennes peuvent le citer (la version qui l'a retiré, ou celle d'avant).
+# scripts/check.py les refuse dans le README, les consignes (hooks/, skills/, commands/, reference/,
+# hors fichiers de test)
+# et les entrées du CHANGELOG plus récentes que cette version ; les tests peuvent les citer. Les sites
+# gardés exprès sont admis, fichier par fichier, par scripts/termes-retires-admis.json.
+# Les anciens mots de flow-board, remplacés par « mission », « worker », « manager », « spécialiste » :
+0.3.4	le parcours
+0.3.4	du parcours
+0.3.4	un parcours
+0.3.4	ce parcours
+0.3.4	Parcours
+0.3.4	session liée
+0.3.4	sessions liées
+0.3.4	Session liée
+0.3.4	orchestrateur
+0.3.4	Orchestrateur
+0.3.4	sous-agent
+0.3.4	sous-agents
+0.3.4	session autonome
+0.3.4	linked session
+0.3.4	main discussion

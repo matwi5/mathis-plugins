@@ -4,6 +4,7 @@
 //
 //   node <dossier de flow-board>/scripts/consignes.mjs <fichier de ticket> <base>..<fin> <sortie>
 //        [--chemins <chemin>…] [--choix <fichier des choix>] [--faits <fichier de ticket>…] [--declares <fichier>]
+//        [--relecteur <id du ticket>]
 //
 // à lancer depuis la racine du worktree. Le ticket donne son id et son titre (sa première ligne,
 // « # <id>: <titre> »), son invariant (ligne « Invariant … : « … » », ou la liste qui suit une ligne
@@ -11,10 +12,12 @@
 // comprises. `CODING_STANDARDS.md` se prend à la racine du dépôt ; le fichier de décisions à côté du
 // ticket (son dossier, puis le dossier au-dessus, puis la racine), lu dans le clone principal quand il
 // y est : la copie d'un worktree date du départ de sa branche. `--chemins` limite le diff aux chemins
-// du parcours quand d'autres commitent sur la branche ; `--choix` donne le fichier des choix déjà
-// déclarés du parcours ; `--faits` les tickets déjà faits du groupe qui touchent les mêmes fichiers,
+// de la mission quand d'autres commitent sur la branche ; `--choix` donne le fichier des choix déjà
+// déclarés de la mission ; `--faits` les tickets déjà faits du groupe qui touchent les mêmes fichiers,
 // dont les critères sont recopiés ; `--declares` un fichier des choix de la session pas encore dans
-// le fichier des choix, un par ligne. Le texte de chaque ligne est celui du gabarit, ses trous `<…>`
+// le fichier des choix, un par ligne ; `--relecteur` crée le dossier du relecteur de ce ticket (celui de
+// `snapshot.mjs --dossier`, dans le dossier git du worktree) et le nomme comme le seul où il écrit : l'id
+// vient de la session, jamais du fichier de ticket, et passe la forme d'un id de `snapshot.mjs`. Le texte de chaque ligne est celui du gabarit, ses trous `<…>`
 // remplis ; le script ne choisit que les lignes entre crochets qui s'appliquent : un trou qu'il ne
 // connaît pas, ou une ligne qu'il ne sait pas classer, le fait échouer (code 1) au lieu d'écrire un
 // fichier faux. La plage et les chemins, qui entrent dans une commande `git diff` du relecteur,
@@ -25,14 +28,16 @@ import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { reviewDir, SnapshotError } from './snapshot.mjs'
+
 export class ConsignesError extends Error {}
 
 const TEMPLATE = fileURLToPath(new URL('../reference/consignes-revue.md', import.meta.url))
-const OPTIONS = { '--chemins': 'many', '--faits': 'many', '--choix': 'one', '--declares': 'one' }
+const OPTIONS = { '--chemins': 'many', '--faits': 'many', '--choix': 'one', '--declares': 'one', '--relecteur': 'one' }
 
 /** Une révision git d'une plage : lettres, chiffres et `_ / . ^ ~ -`, sans « - » en tête ni « .. ». */
 const SAFE_REV = /^[A-Za-z0-9_][A-Za-z0-9_/.^~-]{0,199}$/
-/** Un chemin du parcours pour `git diff -- <chemins>` : la même liste blanche, sans « .. ». */
+/** Un chemin de la mission pour `git diff -- <chemins>` : la même liste blanche, sans « .. ». */
 const SAFE_PATH = /^[A-Za-z0-9_.][A-Za-z0-9_/.-]{0,199}$/
 
 /** Une plage `<base>..<fin>` dont chaque bout passe la liste blanche. */
@@ -120,8 +125,8 @@ export const render = (template, data) => {
     } else if (item === null) throw new ConsignesError(`ligne du gabarit inconnue du script : « ${line.slice(0, 80)} »`)
     else if (item.startsWith('Cible')) keep(line, { '<base>..<fin>': range })
     else if (item.startsWith('Avant le commit du ticket')) continue
-    else if (item.startsWith("D'autres parcours")) {
-      if (paths.length) keep(line, { '<base>..<fin>': range, '<chemins du parcours>': paths.join(' ') })
+    else if (item.startsWith("D'autres missions")) {
+      if (paths.length) keep(line, { '<base>..<fin>': range, '<chemins de la mission>': paths.join(' ') })
     } else if (item.startsWith('Le ticket')) keep(line, { '<chemin du fichier de ticket>': ticket.path, '<sections>': 'celles que le ticket nomme' })
     else if (item.startsWith("Revue d'un ticket")) {
       if ((data.done || []).length) keep(line, { '<id> : <critère> ; …': data.done.join(' ; ') })
@@ -142,7 +147,9 @@ export const render = (template, data) => {
     } else if (item.startsWith('Réservé au porteur')) {
       keep(line, { '<une décision, un geste, un accès>': 'les choix de conception et les questions sensibles, les versions et les CHANGELOG' })
     } else if (item.startsWith('À ne pas faire')) {
-      keep(line, { '<ce que ce relecteur ne doit pas faire, en plus de la consigne ci-dessous>': "écrire dans l'arbre de travail ou dans l'index, lancer une commande qui écrit dans le dépôt" })
+      keep(line, { '<ce que ce relecteur ne doit pas faire, en plus de la consigne ci-dessous>': "écrire dans l'arbre de travail, dans l'index ou dans `/tmp`, lancer une commande qui écrit dans le dépôt" })
+    } else if (item.startsWith('Où écrire')) {
+      if (data.reviewDir) keep(line, { '`<dossier du relecteur>`': `\`${data.reviewDir}\`` })
     } else throw new ConsignesError(`ligne du gabarit inconnue du script : « ${line.slice(0, 80)} »`)
   }
   return out.join('\n')
@@ -151,7 +158,7 @@ export const render = (template, data) => {
 /** Les arguments : trois positionnels, puis les options. */
 const parse = argv => {
   const positional = []
-  const options = { '--chemins': [], '--faits': [], '--choix': null, '--declares': null }
+  const options = { '--chemins': [], '--faits': [], '--choix': null, '--declares': null, '--relecteur': null }
   let current = null
   for (const arg of argv) {
     if (arg.startsWith('--')) {
@@ -212,9 +219,19 @@ export const writeConsignes = (argv, cwd = process.cwd()) => {
     return criteria(text, readTicket(text, p).id)
   })
   const declared = options['--declares'] ? lf(readFile(cwd, options['--declares'], 'fichier des choix de la session')).split('\n').map(l => l.trim()).filter(Boolean) : []
-  const text = render(readFileSync(TEMPLATE, 'utf8'), {
-    ticket, range, paths: options['--chemins'], choix: options['--choix'], declared, done, decisions, standards,
-  })
+  // Vérifié avant de créer le dossier : un gabarit ou une option fausse n'en laisse aucun.
+  const template = readFileSync(TEMPLATE, 'utf8')
+  const data = { ticket, range, paths: options['--chemins'], choix: options['--choix'], declared, done, decisions, standards }
+  render(template, data)
+  let dir = null
+  if (options['--relecteur'] !== null) {
+    try {
+      dir = reviewDir(options['--relecteur'], cwd)
+    } catch (err) {
+      throw err instanceof SnapshotError ? new ConsignesError(err.message) : err
+    }
+  }
+  const text = render(template, { ...data, reviewDir: dir })
   const target = resolve(cwd, output)
   writeFileSync(target, text)
   return target

@@ -9,7 +9,7 @@ const KEY = 'board:'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 
 /**
@@ -34,10 +34,10 @@ const world = (on: any) => {
 /** session.start pose la minuterie qui relit le stockage toutes les 5 s. */
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
-/** Ce que la discussion B a écrit : son parcours actif « Parcours de B ». */
+/** Ce que la discussion B a écrit : sa mission active « Mission de B ». */
 const writtenByB = (mem: Record<string, unknown>, now: number, status: 'active' | 'paused' = 'active') => {
   const base = (mem[KEY] as Board | undefined) ?? emptyBoard('', 'projet')
-  const run = { ...newRun('diagnosing-bugs', now, 'Parcours de B'), status, owner: status === 'active' ? 'session-B' : undefined }
+  const run = { ...newRun('diagnosing-bugs', now, 'Mission de B'), status, owner: status === 'active' ? 'session-B' : undefined }
   mem[KEY] = { ...base, runs: [run, ...base.runs], activeId: run.id, session: 'session-B' }
   return run
 }
@@ -46,13 +46,13 @@ const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds
   for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
-test('la discussion A voit, en quelques secondes, le parcours lancé dans la discussion B', { timeoutMs: 15000 }, async ($, on) => {
+test('la discussion A voit, en quelques secondes, la mission lancée dans la discussion B', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 20_000_000 })
   const mem = world(on)
   await start($)
 
   await $.skill.prompt({ skill: 'mattpocock-skills:grill-with-docs', text: 'x' })
-  await $.tool.call({ tool: TOOL, title: 'Parcours de A' })
+  await $.tool.call({ tool: TOOL, title: 'Mission de A' })
   // A a fini d'enregistrer : seule sa relecture périodique peut lui montrer ce que B écrit ensuite.
   await settle(clock, 1)
   writtenByB(mem, 20_001_500)
@@ -60,18 +60,18 @@ test('la discussion A voit, en quelques secondes, le parcours lancé dans la dis
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    // A garde son parcours actif…
-    expect(await ui.find({ type: 'Text', text: /^Parcours de A$/ })).toBeDefined()
+    // A garde sa mission active…
+    expect(await ui.find({ type: 'Text', text: /^Mission de A$/ })).toBeDefined()
     await ui.press({ key: 'tab-history' })
     // … et voit celui de B, marqué comme tenu par une autre discussion.
-    expect(await ui.find({ type: 'Text', text: /^Parcours de B$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Mission de B$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /autre discussion/ })).toBeDefined()
     await ui.press({ key: 'tab-flow' })
     await ui.unmount()
   }
 })
 
-test('une sauvegarde de A n’efface plus le parcours de B', { timeoutMs: 15000 }, async ($, on) => {
+test('une sauvegarde de A n’efface plus la mission de B', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 21_000_000 })
   const mem = world(on)
   await start($)
@@ -84,12 +84,12 @@ test('une sauvegarde de A n’efface plus le parcours de B', { timeoutMs: 15000 
   await settle(clock, 1)
 
   const stored = mem[KEY] as Board
-  expect(stored.runs.map(r => r.title).sort()).toEqual(['Parcours de B', 'TDD'])
-  // Le parcours de B reste actif chez B : A ne l'a pas mis en pause.
-  expect(stored.runs.find(r => r.title === 'Parcours de B')?.status).toBe('active')
+  expect(stored.runs.map(r => r.title).sort()).toEqual(['Mission de B', 'TDD'])
+  // La mission de B reste actif chez B : A ne l'a pas mis en pause.
+  expect(stored.runs.find(r => r.title === 'Mission de B')?.status).toBe('active')
 })
 
-test('un parcours archivé dans A le reste, même quand B réécrit son ancienne copie', async ($, on) => {
+test('une mission archivée dans A le reste, même quand B réécrit son ancienne copie', async ($, on) => {
   const clock = mock.clock(on, { now: 22_000_000 })
   const mem = world(on)
   await start($)
@@ -127,7 +127,7 @@ test('un parcours archivé dans A le reste, même quand B réécrit son ancienne
   await again.unmount()
 })
 
-test('reprendre ici le parcours de B en fait le parcours actif de A', async ($, on) => {
+test('reprendre ici la mission de B en fait la mission active de A', async ($, on) => {
   const clock = mock.clock(on, { now: 23_000_000 })
   const mem = world(on)
   await start($)
@@ -139,7 +139,7 @@ test('reprendre ici le parcours de B en fait le parcours actif de A', async ($, 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'tab-history' })
   await ui.press({ key: `resume-${b.id}` })
-  expect(await ui.find({ type: 'Text', text: /^Parcours de B$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Mission de B$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Dans une autre discussion/ })).toBeUndefined()
   await ui.unmount()
   await settle(clock, 1)

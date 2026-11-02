@@ -26,9 +26,9 @@ test('Santé du code et Triage finissent comme les autres : compte rendu, versio
   expect(shape(boardWith('triage'))).toEqual(['triage', 'implement?', 'compte-rendu?', 'project:version?', 'project:pr?'])
 })
 
-test('sans code, le parcours se clôt au triage ; dès que l’Implémentation démarre, le compte rendu devient obligatoire', () => {
+test('sans code, la mission se clôt au triage ; dès que l’Implémentation démarre, le compte rendu devient obligatoire', () => {
   const board = boardWith('triage')
-  // Le triage est fait, rien n'a été codé : le parcours peut se clore.
+  // Le triage est fait, rien n'a été codé : la mission peut se clore.
   const mapped = structuredClone(board)
   const run = activeRun(mapped)!
   run.phases[0]!.status = 'done'
@@ -43,6 +43,6 @@ test('sans code, le parcours se clôt au triage ; dès que l’Implémentation d
   expect(isRunComplete(activeRun(coding)!)).toBe(false)
 })
 
-test('le parcours « Nouvelle fonctionnalité » garde son compte rendu obligatoire dès le départ', () => {
+test('la mission « Nouvelle fonctionnalité » garde son compte rendu obligatoire dès le départ', () => {
   expect(shape(boardWith('grill-with-docs'))).toContain('compte-rendu')
 })

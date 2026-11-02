@@ -23,7 +23,7 @@ import {
 } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
-// Les pistes choisies d'une rétro deviennent des tickets groupés, et le parcours de la rétro
+// Les pistes choisies d'une rétro deviennent des tickets groupés, et la mission de la rétro
 // enchaîne sur une phase Implémentation, comme le Triage.
 
 const PLUGIN = 'flow-board'
@@ -31,19 +31,19 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const phases = (run: Run) => run.phases.map(p => `${p.skill}${p.isOptional ? '?' : ''}:${p.status}`)
 
-/** Un tableau de bord dont le parcours actif est un lot, puis la rétro lancée par /retro. */
+/** Un tableau de bord dont la mission active est un lot, puis la rétro lancée par /retro. */
 const retroBoard = (): Board => {
   const lot = { ...newRun('implement', 1_000, 'Fermeture auto'), owner: 's' }
   const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [lot], activeId: lot.id }
   return applySkill(board, 'mattpocock-skills:retro', { now: 2_000, isMain: true })!.board
 }
 
-test('/retro crée un parcours Rétro, Implémentation, Compte rendu, Version, PR, et /implement le suit', () => {
+test('/retro crée une mission Rétro, Implémentation, Compte rendu, Version, PR, et /implement le suit', () => {
   const board = retroBoard()
   const retro = activeRun(board)!
   expect(retro.title).toBe('Rétrospective · Fermeture auto')
@@ -82,12 +82,12 @@ test('un seul appel porte pistes jugées, tickets, groupes et complete : la Rét
   expect(phases(run)).toEqual(['retro:done', 'implement:pending', 'compte-rendu?:pending', 'project:version?:pending', 'project:pr?:pending'])
   expect(currentPhase(run).skill).toBe('retro')
   expect(nextLaunchFor(run)).toEqual({ kind: 'parallel', groups: ['A', 'B'] })
-  // La discussion finie (ou abandonnée) avant le premier groupe : le parcours passe en pause, jamais « terminé ».
+  // La discussion finie (ou abandonnée) avant le premier groupe : la mission passe en pause, jamais « terminé ».
   const later = detachOnLoad(out.board, 3_000 + 31 * 60_000, 'autre')
   expect(later.runs.find(r => r.id === run.id)!.status).toBe('paused')
 })
 
-test('un plan d’un seul groupe est gardé dans un parcours de rétro, et son groupe est lançable', () => {
+test('un plan d’un seul groupe est gardé dans une mission de rétro, et son groupe est lançable', () => {
   const out = applyReport(retroBoard(), { items: ITEMS, tickets: TICKETS, groups: [{ id: 'A', name: 'Pistes', tickets: ['06', '07'] }], complete: true }, 3_000)
   const run = activeRun(out.board)!
   expect((run.groups ?? []).map(g => `${g.id}:${g.tickets.join(',')}`)).toEqual(['A:06,07'])
@@ -119,21 +119,21 @@ test('une issue publiée sur un autre dépôt pendant la Rétro reste une trouva
   const run = activeRun(published)!
   expect(run.tickets).toEqual([])
   expect(run.found?.map(f => f.id)).toEqual(['#7'])
-  // La Rétro finie sans ticket termine donc toujours le parcours.
+  // La Rétro finie sans ticket termine donc toujours la mission.
   const ended = applyReport(published, { items: ITEMS.map(i => ({ ...i, status: 'dropped' })), complete: true }, 3_000).board
   expect(ended.runs.find(r => r.entry === 'retro')!.status).toBe('done')
 })
 
-test('une Rétro terminée sans ticket termine le parcours, malgré les phases facultatives qui suivent', () => {
+test('une Rétro terminée sans ticket termine la mission, malgré les phases facultatives qui suivent', () => {
   const out = applyReport(retroBoard(), { items: ITEMS.map(i => ({ ...i, status: 'dropped' })), complete: true }, 3_000)
   const run = out.board.runs.find(r => r.entry === 'retro')!
   expect(run.status).toBe('done')
   expect(run.finishedAt).toBe(3_000)
-  expect(run.log[0]!.text).toBe('Parcours terminé')
-  expect(out.fx.toasts).toContain('★ Parcours terminé : Rétrospective · Fermeture auto')
+  expect(run.log[0]!.text).toBe('Mission terminée')
+  expect(out.fx.toasts).toContain('★ Mission terminée : Rétrospective · Fermeture auto')
 })
 
-/** Un parcours ouvert par `skill`, seul au tableau de bord. */
+/** Une mission ouverte par `skill`, seul au tableau de bord. */
 const boardOf = (skill: string): Board => applySkill({ ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [], activeId: null }, skill, { now: 1_000, isMain: true })!.board
 
 // Le Triage et « Santé du code » ont aussi une Implémentation facultative : un lot pas lancé la rend due.
@@ -152,7 +152,7 @@ test('un lot envoyé après la fin du Triage le met aussi en pause à la fin de 
   expect(later.runs[0]!.status).toBe('paused')
 })
 
-test('un lot arrivé après la fin du Triage rend l’Implémentation due partout : avancement, « Clore le parcours »', () => {
+test('un lot arrivé après la fin du Triage rend l’Implémentation due partout : avancement, « Clore la mission »', () => {
   const finished = applyReport(boardOf('mattpocock-skills:triage'), { complete: true }, 2_000).board
   const before = activeRun(finished)!
   expect(suggestionsFor(before).canFinish).toBe(true)
@@ -162,7 +162,7 @@ test('un lot arrivé après la fin du Triage rend l’Implémentation due partou
   expect(runProgress(run)).toBeLessThan(1)
 })
 
-test('un parcours « Santé du code » dont /to-tickets laisse un lot pas lancé passe en pause, son Implémentation due', () => {
+test('une mission « Santé du code » dont /to-tickets laisse un lot pas lancé passe en pause, son Implémentation due', () => {
   const board = applySkill(boardOf('mattpocock-skills:improve-codebase-architecture'), 'mattpocock-skills:to-tickets', { now: 1_500, isMain: true })!.board
   const out = applyReport(board, { tickets: TICKETS, complete: true }, 2_000)
   const run = activeRun(out.board)!
@@ -180,7 +180,7 @@ test('un Triage sans ticket, ou dont tous les tickets sont faits, se termine com
   }
 })
 
-test('les worktrees des groupes d’une rétro se nomment sur le sujet étudié, distincts de ceux du parcours étudié et d’une autre rétro', () => {
+test('les worktrees des groupes d’une rétro se nomment sur le sujet étudié, distincts de ceux de la mission étudié et d’une autre rétro', () => {
   const board = retroBoard()
   const studied = board.runs.find(r => r.entry === 'implement')!
   const retro = activeRun(board)!
@@ -223,7 +223,7 @@ test('le lancement d’un groupe passe la rétro à l’Implémentation, puis co
   expect(suggestionsFor(activeRun(board)!).primary).toBe('project:version')
 })
 
-test('le panneau : après l’appel du découpage, la carte « Ensuite » lance le groupe seul en session liée', async ($, on) => {
+test('le panneau : après l’appel du découpage, la carte « Ensuite » lance le groupe seul dans un worker', async ($, on) => {
   mock.clock(on, { now: 90_000_000 })
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
@@ -238,7 +238,7 @@ test('le panneau : après l’appel du découpage, la carte « Ensuite » lance 
   await $.tool.call({ tool: TOOL, items: ITEMS, groups: [{ id: 'A', name: 'Pistes', tickets: ['06', '07'] }], complete: true } as any)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(String((await ui.find({ key: 'next-linked-A' }))?.props.label)).toMatch(/Groupe A · session liée$/)
+    expect(String((await ui.find({ key: 'next-linked-A' }))?.props.label)).toMatch(/Groupe A · worker$/)
     await ui.unmount()
   }
 })

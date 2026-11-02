@@ -268,7 +268,7 @@ describe('model : projets', () => {
     expect(labels.get('C--Users-moi--claude-mods')).toBe('.claude-mods')
     expect(projectLabels(['C--dev-Pole--claude-worktrees-promo-478bbe', 'C--dev-Pole'], {}, 'C--Users-moi').get('C--dev-Pole--claude-worktrees-promo-478bbe')).toBe('promo-478bbe')
     expect(projectLabels(['C--dev-Pole'], {}, 'C--Users-moi').get('C--dev-Pole')).toBe('dev-Pole')
-    // Un sous-agent de workflow compte pour le projet de sa session et s'y rattache.
+    // Un spécialiste de workflow compte pour le projet de sa session et s'y rattache.
     expect(sessionsOf({ sessions: [{ sessionId: 'w', projectPath: 'C--a\\d24c\\subagents\\workflows', lastActivity: '2026-10-01T09:00:00.000Z' }] }, 'Portable')[0]).toMatchObject({ project: 'C--a', parent: 'd24c' })
     expect(sessionsOf({ sessions: [{ sessionId: 's', projectPath: 'C--a', lastActivity: '2026-10-01T09:00:00.000Z' }] }, 'Portable')[0]!.parent).toBeNull()
   })
@@ -454,10 +454,10 @@ describe('model : journée', () => {
   const at = (day: string, hour: number) => Date.parse(`${day}T${String(hour).padStart(2, '0')}:00:00.000Z`)
   const sess = (id: string, first: number, last: number, cost: number, parent: string | null = null): SessionRow => ({ id, machine: 'Portable', project: 'C--a', parent, first, last, cost, tokens: 10, output: 1, models: parent ? ['claude-haiku-4-5-20251001'] : ['claude-opus-5-5'] })
 
-  test('discussions du jour : commencées ou finies ce jour-là, sous-agents réunis à leur discussion', async () => {
+  test('discussions du jour : commencées ou finies ce jour-là, spécialistes réunis à leur discussion', async () => {
     const list = discussionsOfDay(
       [
-        // Commencée la veille, finie le 7 : comptée avec ses deux sous-agents, dont un de la veille.
+        // Commencée la veille, finie le 7 : comptée avec ses deux spécialistes, dont un de la veille.
         sess('a', at('2026-10-06', 8), at('2026-10-07', 10), 5),
         sess('a1', at('2026-10-06', 9), at('2026-10-06', 9), 1, 'a'),
         sess('a2', at('2026-10-07', 9), at('2026-10-07', 9), 2, 'a'),

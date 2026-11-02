@@ -17,9 +17,10 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    en gardant le commentaire de chaque ligne existante) : un fichier absent est signalé sans couper
    les contrôles suivants, et la commande échoue à la fin ;
    les termes retirés du plugin (`termes-retires.txt`, une version et un terme par ligne) sont absents
-   de son README, de ses consignes (`hooks/`, `skills/`, `commands/`, `reference/`), de sa règle
-   (`config/rules/<plugin>.md`) et des entrées de son CHANGELOG plus récentes que la version qui les
-   a retirés ;
+   de son README, de ses consignes (`hooks/`, `skills/`, `commands/`, `reference/`, hors fichiers de
+   test), de sa règle (`config/rules/<plugin>.md`) et des entrées de son CHANGELOG plus récentes que la
+   version qui les a retirés, au-delà des sites gardés exprès, admis fichier par fichier
+   (`scripts/termes-retires-admis.json`) ;
    ses fichiers (tests compris) passent les termes de l'export public (`scripts/export_public.py` :
    adresses mail hors de la liste permise, dossiers personnels, termes de la liste privée), contrôle
    sans objet sans ce script ;
@@ -59,7 +60,7 @@ passent ; puis chaque ticket indexé (`travail/<sujet>/issues/*.md`) qui dit « 
 ligne « Recherche » avec une commande et son résultat (sur la ligne, ou dans le bloc de code qui la suit),
 sauf un ticket que `HEAD` portait déjà sensible sans elle ;
 puis, même pour un commit de documentation seule, une liste d'admis indexée (`scripts/renvois-admis.json`,
-`scripts/interpolations-admises.json`) qui augmente un compte face à `HEAD` (une clé nouvelle comprise) est
+`scripts/interpolations-admises.json`, `scripts/termes-retires-admis.json`) qui augmente un compte face à `HEAD` (une clé nouvelle comprise) est
 refusée, et chaque plugin dont la règle (`config/rules/<plugin>.md`) est indexée, ou dont une liste d'admis
 indexée change un compte, passe sur la copie de l'index les contrôles statiques qui les lisent (termes
 retirés, renvois admis, valeurs relues brutes ; ni `tsc` ni tests) : un commit de la règle seule passait
@@ -155,6 +156,10 @@ FAIL_MAX = 40
 TAIL = 60
 # La liste des termes retirés d'un plugin, à sa racine.
 RETIRED_FILE = "termes-retires.txt"
+# Les termes retirés gardés exprès, fichier par fichier, à leur nombre : des valeurs enregistrées que
+# relisent des copies plus anciennes d'un mod, une décision, des identifiants du code (jamais renommés).
+# Comme les autres listes d'admis, jamais à augmenter (le pre-commit le refuse).
+ADMITTED_RETIRED = Path(__file__).resolve().parent / "termes-retires-admis.json"
 # Les dossiers des consignes d'un plugin (le texte que Claude lit), où un terme retiré ne revient pas.
 INSTRUCTION_DIRS = ("hooks", "skills", "commands", "reference")
 # La liste privée des termes que la version publique refuse (absente de celle-ci, comme le script
@@ -509,26 +514,34 @@ def changelog_versions(lines):
         yield current
 
 
-def retired_terms(plugin):
+def retired_terms(plugin, admitted_path=None):
     """Les termes retirés encore présents dans le README, les consignes, ou une entrée du CHANGELOG
     plus récente que la version qui les a retirés (les entrées d'avant, et la sienne, les racontent)."""
     terms = retired_list(plugin)
     if not terms:
         return []
     problems = []
+    admitted = admitted_counts(admitted_path or ADMITTED_RETIRED)
     # La règle du plugin (`config/rules/<plugin>.md`) aussi : un terme retiré du mod y était resté.
     rule = plugin.parent.parent / "config" / "rules" / f"{plugin.name}.md"
+    # Un test rangé à côté de ses consignes (`skills/<skill>/<nom>.test.mjs`) reste libre, comme `tests/` :
+    # il peut citer un terme retiré pour vérifier qu'il a disparu.
     sources = [(path, f"{plugin.name}/{rel}", rel == "CHANGELOG.md") for path, rel in files_of(plugin)
-               if rel in ("README.md", "CHANGELOG.md") or rel.split("/")[0] in INSTRUCTION_DIRS]
+               if rel in ("README.md", "CHANGELOG.md")
+               or (rel.split("/")[0] in INSTRUCTION_DIRS and ".test." not in path.name)]
     if rule.is_file():
         sources.append((rule, f"config/rules/{plugin.name}.md", False))
     for path, where, is_changelog in sources:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         versions = list(changelog_versions(lines)) if is_changelog else [None] * len(lines)
-        for n, (line, at) in enumerate(zip(lines, versions), 1):
-            for retired_in, term in terms:
-                if term in line and not (is_changelog and (at is None or at <= retired_in)):
-                    problems.append(f"{where}:{n} : terme retiré en {'.'.join(map(str, retired_in))} « {term} »")
+        found = [f"{where}:{n} : terme retiré en {'.'.join(map(str, retired_in))} « {term} »"
+                 for n, (line, at) in enumerate(zip(lines, versions), 1) for retired_in, term in terms
+                 if term in line and not (is_changelog and (at is None or at <= retired_in))]
+        # Une valeur enregistrée ou une décision gardée exprès est admise, fichier par fichier, à son
+        # compte : au-delà, chaque occurrence du fichier est montrée, l'admise comprise.
+        allowed = admitted.get(where, 0)
+        if len(found) > allowed:
+            problems += [f"{p} ({allowed} admis dans le fichier, {ADMITTED_RETIRED.name})" if allowed else p for p in found]
     return problems
 
 
@@ -549,8 +562,10 @@ def export_terms(plugin):
         except SystemExit as err:
             raise Failed(str(err))
     # Ce qui partira : les fichiers suivis et les nouveaux non ignorés, pas ceux que git ignore (un
-    # réglage local ou un journal de débogage, que l'export ne lit pas).
-    listed = git(["ls-files", "--cached", "--others", "--exclude-standard", "--", plugin.as_posix()], 60)
+    # réglage local ou un journal de débogage, que l'export ne lit pas). La copie de l'index du hook
+    # pre-commit, hors du dépôt, ne porte que des fichiers suivis : tous se lisent.
+    inside = plugin.resolve().is_relative_to(REPO.resolve())
+    listed = git(["ls-files", "--cached", "--others", "--exclude-standard", "--", plugin.as_posix()], 60) if inside else None
     kept = None if listed is None else {(REPO / p).resolve() for p in listed.splitlines()}
     problems = []
     for path, rel in files_of(plugin):
@@ -1459,20 +1474,43 @@ def is_plugin(name):
     return bool(re.fullmatch(r"[\w-]+", name)) and (REPO / "plugins" / name / ".claude-plugin" / "plugin.json").is_file()
 
 
+def ruled_problems(copy, tree):
+    """Les défauts que relèvent les contrôles statiques qui lisent la règle d'un plugin et les listes
+    d'admis (termes retirés, renvois admis, valeurs relues brutes), sur la copie de l'index `tree`."""
+    return retired_terms(copy, tree / "scripts" / ADMITTED_RETIRED.name) + ticket_refs(copy, tree / "scripts" / ADMITTED_REFS.name) \
+        + raw_interpolations(copy, tree / "scripts" / ADMITTED_INTERPOLATIONS.name)
+
+
+def refuse(name, problems):
+    """L'échec du hook sur les défauts d'un plugin, chacun avec son fichier et sa ligne ; « ok » sans défaut."""
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{name} : {len(problems)} défaut(s) : " + " ; ".join(problems))
+    log("  ok")
+
+
 def check_rules(names, tree):
-    """Les contrôles statiques qui lisent la règle d'un plugin et les listes d'admis (termes retirés,
-    renvois admis, valeurs relues brutes), sur la copie de l'index, avec ses listes d'admis."""
+    """Les contrôles statiques qui lisent la règle d'un plugin et les listes d'admis, sur la copie de
+    l'index, avec ses listes d'admis."""
     for name in names:
         copy = tree / "plugins" / name
         if not (copy / ".claude-plugin" / "plugin.json").is_file():
             continue
         log(f"→ plugins/{name} : termes retirés, renvois admis, valeurs relues brutes (règle ou liste d'admis indexée)")
-        problems = retired_terms(copy) + ticket_refs(copy, tree / "scripts" / ADMITTED_REFS.name) \
-            + raw_interpolations(copy, tree / "scripts" / ADMITTED_INTERPOLATIONS.name)
-        if problems:
-            log("\n".join(f"  {p}" for p in problems))
-            raise Failed(f"{name} : {len(problems)} défaut(s) : " + " ; ".join(problems))
-        log("  ok")
+        refuse(name, ruled_problems(copy, tree))
+
+
+def check_code(name, tree, ruled):
+    """Des contrôles statiques de check.sh sur la copie de l'index d'un plugin dont un fichier de code
+    est indexé : ceux de la règle et des listes d'admis (sauf s'ils viennent de tourner, `ruled`), les
+    termes de l'export public, les règles du code ; ni l'arbre « Architecture » ni les appels du moteur,
+    qui restent à `check.sh`. Quatre commits de code étaient entrés dans `main` avec ce que seul
+    `check.sh` relevait."""
+    copy = tree / "plugins" / name
+    log(f"→ plugins/{name} : renvois, termes retirés, valeurs relues brutes, termes de l'export public, règles du code")
+    problems = [] if name in ruled else ruled_problems(copy, tree)
+    problems += (export_terms(copy) or []) + code_rules(copy) + invisible_chars(copy)
+    refuse(name, problems)
 
 
 def staged():
@@ -1532,6 +1570,7 @@ def staged():
             if passed_already(plugin):
                 log(f"→ plugins/{name} : identique au dernier check.sh vert, contrôles sautés")
             else:
+                check_code(name, tree, ruled)
                 staged_types(plugin, copy)
                 validate(copy, claude)
                 typecheck(copy)

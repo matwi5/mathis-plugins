@@ -30,18 +30,32 @@ import type {
   UiState,
   VersionCommit,
   VersionUnit,
+  GestureKind,
   WaitTarget,
   WaitingQuestion,
   AutoMark,
+  ForcedHold,
+  WaitsUser,
+  RunLaunch,
 } from '../types'
-import { SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
+import { CODE_SKILLS, SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
 import { GROUP_ID_FORM, asciiJson, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isQuestionIdForm, isSafeId, sendNumber } from './closing.ts'
 import { maxOf, minOf } from './timeline.ts'
+import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
+import { soundRunLaunch } from './launch.ts'
+import type { PlanUnit, PlanWait } from './plan-projet.ts'
 import { activeRun, asanaChange, asList, AUTO_CHOICES_MAX, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
 import { type GroupRelay, ignoredOrigins, inForce, isRelay, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
 import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, keepClosings, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
 
 export const emptyBoard = (root: string, name: string): Board => ({ v: 1, root, name, runs: [], activeId: null })
+
+/** Cette discussion tient le siège du COO du projet (`hooks/seat.ts`) : aucune mission ne s'y ouvre ni ne s'y reprend. */
+export const isCooDiscussion = (board: Board, now: number): boolean => board.cooHere !== undefined && seatState(board.coo, board.cooHere, now) === 'mine'
+
+/** La réponse à une mission demandée dans la discussion du COO. */
+export const COO_NO_MISSION =
+  'This discussion holds the COO seat: no mission opens or resumes here (the COO coordinates missions, it never carries one). Nothing was recorded. Launch the mission in another discussion; the COO will offer a launch card for it.'
 
 export const isBoard = (value: unknown): value is Board =>
   typeof value === 'object' &&
@@ -66,7 +80,7 @@ export const stepRatio = (steps: readonly FlowStep[]): number =>
     ? 0
     : (steps.filter(s => s.status === 'done' || s.status === 'skipped').length + (steps.some(s => s.status === 'active') ? 0.5 : 0)) / steps.length
 
-/** Avancement du parcours, de 0 à 1 : phases faites, plus la part d'étapes de la phase en cours. */
+/** Avancement de la mission, de 0 à 1 : phases faites, plus la part d'étapes de la phase en cours. */
 export const runProgress = (run: Run): number => {
   if (run.status === 'done') return 1
   if (run.phases.length === 1) {
@@ -91,21 +105,21 @@ export const isPhaseOptional = (run: Run, p: FlowPhase): boolean => p.isOptional
 /**
  * Un lot dont un ticket n'est pas fait : l'Implémentation qui suit n'est plus facultative (Rétro, Triage,
  * « Santé du code »), qu'il soit arrivé avant la fin de la phase ou après. Sinon, toutes les phases
- * suivantes facultatives, le parcours passait « terminé » à la fin de la discussion, avant le premier groupe.
+ * suivantes facultatives, la mission passait « terminé » à la fin de la discussion, avant le premier groupe.
  */
 const hasOpenLot = (run: Run): boolean => run.tickets.some(t => t.status !== 'done')
 
-/** Ce que la définition du parcours (celle de son skill d'entrée) dit d'une phase : facultative ou non. */
+/** Ce que la définition de la mission (celle de son skill d'entrée) dit d'une phase : facultative ou non. */
 const isDefinedOptional = (run: Run, p: FlowPhase): boolean => (SKILLS[run.entry]?.flow ?? []).find(s => s.skill === p.skill)?.isOptional === true
 
-/** Un parcours ouvert par /retro, à côté du parcours qu'il étudie : ses pistes choisies deviennent son lot. */
+/** Une mission ouverte par /retro, à côté de la mission qu'elle étudie : ses pistes choisies deviennent son lot. */
 export const isRetroRun = (run: Run): boolean => run.entry === 'retro'
 
 export type Suggestions = {
-  /** La suite logique : la prochaine phase du parcours, sinon la première suite du skill. */
+  /** La suite logique : la prochaine phase de la mission, sinon la première suite du skill. */
   primary: string | null
   others: string[]
-  /** Toutes les phases requises sont faites (ou on en est à « Version et push ») : le parcours peut se clore. */
+  /** Toutes les phases requises sont faites (ou on en est à « Version et push ») : la mission peut se clore. */
   canFinish: boolean
   /** À la livraison, ce que la mesure des versions dit de /project:version (déjà posée, ou à poser). */
   versionNote?: string
@@ -121,8 +135,8 @@ export type Suggestions = {
 export type SuggestOpts = { hasPullRequests?: boolean; isVersionSet?: boolean | null; versionUnits?: readonly VersionUnit[] | null }
 
 /**
- * Sans GitHub (distant ailleurs, ou aucun), la PR par /project:pr n'a pas de sens : le parcours
- * montré à l'écran perd sa phase « Pull request » à venir. Le parcours stocké, lui, la garde.
+ * Sans GitHub (distant ailleurs, ou aucun), la PR par /project:pr n'a pas de sens : la mission
+ * montrée à l'écran perd sa phase « Pull request » à venir. La mission stockée, elle, la garde.
  */
 export const withoutPullRequest = (run: Run): Run => {
   const phases = run.phases.filter((p, i) => !(i > run.cursor && p.status === 'pending' && p.skill === 'project:pr'))
@@ -136,7 +150,7 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
   const add = (skill: string) => {
     if (skill in SKILLS && !list.includes(skill)) list.push(skill)
   }
-  // Des éléments chez une session liée pas encore fermée : quitter la phase rangerait sa note de fin
+  // Des éléments chez un worker pas encore fermé : quitter la phase rangerait sa note de fin
   // dans une autre, et la session ne serait plus attendue ni fermée. Aucune suite avant sa fermeture.
   if (holdsItemsSession(phase)) return { primary: null, others: [], canFinish: false }
   if (next) {
@@ -146,14 +160,14 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
   ;(SKILLS[phase.skill]?.next ?? []).forEach(add)
   // Livrer (ou en rendre compte) avant d'avoir fini les tickets n'a pas de sens : tout attend le dernier.
   const t = countTickets(run.tickets)
-  // Un groupe encore confié à une session liée n'est pas fini ici, même ses tickets relayés faits (affichage).
+  // Un groupe encore confié à un worker n'est pas fini ici, même ses tickets relayés faits (affichage).
   const isUnfinished = (t.total > t.done || (run.groups ?? []).some(g => g.linked !== undefined)) && SKILLS[phase.skill]?.hasTickets === true
   // Un groupe fini attend sa revue (/code-review) ; la livraison attend qu'elles soient toutes faites.
   const isReviewDue = SKILLS[phase.skill]?.hasTickets === true && needsReview(run)
   // Un compte rendu ouvert attend la validation de la personne : pas de livraison avant.
   const isReportOpen = phase.skill === 'compte-rendu' && phase.status !== 'done'
-  // Avec des groupes, la revue se lance depuis la ligne du groupe (/code-review ici, ou sa session
-  // liée pour un groupe qu'elle a fait) : la suite proposée reste le lancement des groupes.
+  // Avec des groupes, la revue se lance depuis la ligne du groupe (/code-review ici, ou son
+  // worker pour un groupe qu'il a fait) : la suite proposée reste le lancement des groupes.
   const isReviewHere = isReviewDue && (run.groups ?? []).length === 0
   // Sans groupes, le lot relu attend encore sa sécurité tranchée, comme un groupe pas clos : le compte
   // rendu ne se propose pas avant (la ligne de sécurité du lot porte la suite).
@@ -173,7 +187,7 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
     kept.splice(0, kept.length, 'project:push', 'project:version', ...rest)
     isDelivery = true
   }
-  // Version et push toujours côte à côte, au choix (Mathis, V1 de la rétro du parcours xhigh) :
+  // Version et push toujours côte à côte, au choix (Mathis, V1 de la rétro de la mission xhigh) :
   // Version en tête tant qu'une partie changée n'a pas sa nouvelle version ; Push en tête quand la
   // version est déjà posée (chaque plugin ou paquet changé en a une nouvelle face au distant) ou que
   // le projet n'a pas de fichier de version. Pas encore mesuré : Version en tête, comme avant.
@@ -193,7 +207,7 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
     }
   }
   const preview = isDelivery ? versionPreview(opts.versionUnits ?? []) : []
-  // La rétro n'est plus une étape du parcours, mais reste à portée de main.
+  // La rétro n'est plus une étape de la mission, mais reste à portée de main.
   if (opts.hasPullRequests === false) kept.splice(0, kept.length, ...kept.filter(skill => skill !== 'project:pr'))
   const others = kept.slice(1, 4).filter(skill => skill !== 'retro')
   if (phase.skill !== 'retro' && kept[0] !== 'retro') others.push('retro')
@@ -207,12 +221,12 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
 }
 
 /**
- * La suite recommandée pendant l'Implémentation d'un parcours à groupes, à la place des skills :
- * - `parallel` : le lot de groupes à lancer ensemble (sessions liées) ;
+ * La suite recommandée pendant l'Implémentation d'une mission à groupes, à la place des skills :
+ * - `parallel` : le lot de groupes à lancer ensemble (workers) ;
  * - `group` : le prochain groupe, le groupe commencé ici d'abord, sinon le premier prêt sans
  *   fichier ni ressource en commun avec un groupe en cours ;
  * - `busy` : un ticket est en cours ici, rien d'autre ne part ;
- * - `linked` : il ne reste qu'à attendre les groupes confiés à des sessions liées ;
+ * - `linked` : il ne reste qu'à attendre les groupes confiés à des workers ;
  * - `review` : tout est fait, il manque la revue de ces groupes (bouton sur leur ligne).
  * Null hors d'une phase à tickets, sans groupes, ou quand la suite est un skill (compte rendu).
  */
@@ -220,11 +234,12 @@ export type NextLaunch =
   | { kind: 'parallel'; groups: string[] }
   | { kind: 'group'; group: string; isDelegable: boolean }
   | { kind: 'busy' | 'linked' | 'review'; groups: string[] }
+  | { kind: 'held'; groups: string[]; holds: OutsideHold[] }
 
-export const nextLaunchFor = (run: Run): NextLaunch | null => {
+export const nextLaunchFor = (run: Run, outside?: ReadonlyMap<string, readonly OutsideHold[]>): NextLaunch | null => {
   const phase = currentPhase(run)
   if (SKILLS[phase.skill]?.hasTickets !== true) return null
-  const plan = groupPlan(run)
+  const plan = groupPlan(run, outside)
   if (!plan) return null
   if (plan.parallelBatch.length >= 2) return { kind: 'parallel', groups: plan.parallelBatch }
   const declared = plan.groups.filter(g => !g.isFallback && g.state !== 'done')
@@ -238,6 +253,9 @@ export const nextLaunchFor = (run: Run): NextLaunch | null => {
     .sort((a, b) => a.wave - b.wave)[0]
   if (ready) return { kind: 'group', group: ready.group.id, isDelegable: isDelegable(ready) }
   if (plan.delegated.length > 0) return { kind: 'linked', groups: plan.delegated }
+  // Retenus par une autre mission : rien ne part, la suite attend que le groupe attendu soit clos (ou un forçage).
+  const retained = declared.filter(g => g.waitsElsewhere.length > 0)
+  if (retained.length > 0) return { kind: 'held', groups: retained.map(g => g.group.id), holds: retained.flatMap(g => g.waitsElsewhere) }
   const unreviewed = (run.groups ?? []).filter(g => g.linked === undefined && awaitsReview(run, g))
   if (unreviewed.length > 0 && run.tickets.every(t => t.status === 'done')) return { kind: 'review', groups: unreviewed.map(g => g.id) }
   return null
@@ -246,10 +264,14 @@ export const nextLaunchFor = (run: Run): NextLaunch | null => {
 /**
  * Le skill dont la commande se propose, grisée dans le prompt vide, à la fin d'un tour : celui du
  * bouton principal de la carte « Ensuite ». Null quand la suite n'est pas une commande (lancer un
- * groupe, attendre une session liée, revue sur la ligne d'un groupe) ou qu'il n'y a pas de suite.
+ * groupe, attendre un worker, revue sur la ligne d'un groupe) ou qu'il n'y a pas de suite.
  */
-export const nextCommandSkill = (run: Run, opts: SuggestOpts = {}): string | null =>
-  nextLaunchFor(run) !== null ? null : suggestionsFor(run, opts).primary
+export const nextCommandSkill = (run: Run, opts: SuggestOpts = {}, outside?: ReadonlyMap<string, readonly OutsideHold[]>): string | null => {
+  if (nextLaunchFor(run, outside) !== null) return null
+  const primary = suggestionsFor(run, opts).primary
+  // Le lot sans groupes retenu par une autre mission : sa phase de code ne se propose pas.
+  return primary !== null && CODE_SKILLS.has(primary) && outside?.has(LOT_KEY) === true ? null : primary
+}
 
 /** Les manifestes qui portent la version d'un plugin ou d'un paquet. */
 export const VERSION_MANIFESTS = ['.claude-plugin/plugin.json', 'package.json', 'pyproject.toml', 'Cargo.toml']
@@ -359,9 +381,9 @@ export const flowCallLabel = (input: unknown): string => {
   const list = (key: string): unknown[] => (Array.isArray(at[key]) ? (at[key] as unknown[]) : [])
   const parts: string[] = []
   const open = at.open as { title?: unknown } | undefined
-  if (open && typeof open === 'object') parts.push(str(open.title) ? `parcours ouvert « ${clip(str(open.title), 40)} »` : 'parcours ouvert')
-  if (str(at.resume)) parts.push('reprise du parcours')
-  if (str(at.delegate)) parts.push(str(at.group) ? `session liée · groupe ${clip(str(at.group), 12)}` : 'session liée')
+  if (open && typeof open === 'object') parts.push(str(open.title) ? `mission ouverte « ${clip(str(open.title), 40)} »` : 'mission ouverte')
+  if (str(at.resume)) parts.push('reprise de la mission')
+  if (str(at.delegate)) parts.push(str(at.group) ? `worker · groupe ${clip(str(at.group), 12)}` : 'worker')
   if (at.fix && typeof at.fix === 'object') parts.push('correction')
   if (str(at.title) && parts.length === 0 && Object.keys(at).length === 1) parts.push('titre')
   if (str(at.step)) parts.push(`étape ${clip(str(at.step), 30)}`)
@@ -394,13 +416,13 @@ export const flowCallLabel = (input: unknown): string => {
 }
 
 /** Ce qui vient après les tickets : version, push, pull request, corps de PR. */
-const DELIVERY = new Set(['project:version', 'project:push', 'project:pr', 'pr'])
+export const DELIVERY = new Set(['project:version', 'project:push', 'project:pr', 'pr'])
 
 /** Ce qui attend que les tickets soient faits et relus : la livraison, et le compte rendu qui la précède. */
 const AFTER_TICKETS = new Set([...DELIVERY, 'compte-rendu'])
 
 /**
- * Remet un parcours créé par une version antérieure à la forme actuelle, sans toucher à ce qui est
+ * Remet une mission créée par une version antérieure à la forme actuelle, sans toucher à ce qui est
  * fait ou en cours : la rétro à venir disparaît des étapes, un « Corps de PR » à venir laisse la
  * place à « Version et push » puis « Pull request » (/project:pr), et une rétro qui n'avait que sa
  * phase reçoit la suite d'une rétro neuve (`extendRetro`).
@@ -412,7 +434,7 @@ export const upgradeRun = (run: Run): Run => repairRun(upgradePhases(extendRetro
  * Compte rendu, Version, PR), à faire, sans date : ses pistes choisies peuvent devenir des tickets
  * sans relancer /retro. Invariant : rien que des phases ajoutées après la rétro ; aucune phase, aucun
  * lien de pistes ni aucune piste n'est retiré ou réécrit. Seulement une rétro pas terminée dont la
- * Rétro est la dernière phase : relue deux fois, ou fusionnée de deux copies, elle donne le même parcours.
+ * Rétro est la dernière phase : relue deux fois, ou fusionnée de deux copies, elle donne la même mission.
  * Pas tant que sa session de pistes n'est pas fermée : une phase suivante permettrait de quitter la
  * Rétro avant la note de fin (un lancement, /implement, une discussion d'une version antérieure), qui
  * se rangerait ailleurs, et la session ne serait plus attendue ni fermée. La suite vient dès que la
@@ -426,9 +448,9 @@ const extendRetro = (run: Run): Run => {
 }
 
 /**
- * Le parcours actif d'un board cloné reçoit tout de suite la suite d'une rétro dont la session de
+ * La mission active d'un board cloné reçoit tout de suite la suite d'une rétro dont la session de
  * pistes vient de se fermer (ou de s'annuler) : sans attendre la lecture suivante, un `complete` du
- * même appel aurait fini un parcours à une seule phase. Les phases d'avant gardent leurs objets.
+ * même appel aurait fini une mission à une seule phase. Les phases d'avant gardent leurs objets.
  */
 const extendActive = (run: Run) => {
   const extended = extendRetro(run)
@@ -437,7 +459,7 @@ const extendActive = (run: Run) => {
 
 /**
  * Les skills retirés de la copie mattpocock-skills (1.3.1-mathis.1), et celui qui les remplace dans
- * un parcours enregistré avant : /implement-spec par /implement (mêmes tickets), /wayfinder par
+ * une mission enregistrée avant : /implement-spec par /implement (mêmes tickets), /wayfinder par
  * /grill-with-docs (même suite ; ses éléments restent des décisions).
  */
 const RETIRED = new Map([
@@ -459,7 +481,7 @@ const retiredPhase = (p: FlowPhase): FlowPhase => {
   return { ...p, skill, alts, detours, steps }
 }
 
-/** Un parcours ouvert par un skill retiré, ou qui en a une phase : sans lui, le panneau ne le dessinerait pas. */
+/** Une mission ouverte par un skill retiré, ou qui en a une phase : sans lui, le panneau ne la dessinerait pas. */
 const retireSkills = (run: Run): Run => {
   const phases = run.phases.map(retiredPhase)
   const entry = RETIRED.get(run.entry) ?? run.entry
@@ -514,13 +536,14 @@ const repairRun = (run: Run): Run => {
   return { ...run, phases, ...(groups ? { groups } : {}) }
 }
 
-const SENT = /^Groupes? (.+?) confiés? à (?:une session liée|des sessions liées)$/
-const RETURNED = /^Groupes? (.+?) rendus? par (?:sa session liée|leurs sessions liées)$/
+// Le journal enregistré garde l'ancien libellé des envois et des retours : les deux se relisent.
+const SENT = /^Groupes? (.+?) confiés? à (?:un worker|des workers|une session liée|des sessions liées)$/
+const RETURNED = /^Groupes? (.+?) rendus? par (?:son worker|leurs workers|sa session liée|leurs sessions liées)$/
 const idsIn = (text: string, pattern: RegExp): string[] => pattern.exec(text)?.[1]!.split(', ') ?? []
 
 /**
- * Les groupes rendus par leur session liée avant la 0.39.0, qui n'en gardaient pas la trace
- * (`delegated`) : le journal du parcours le dit (« ↩ Groupe A rendu par sa session liée »). Sans
+ * Les groupes rendus par leur worker avant la 0.39.0, qui n'en gardaient pas la trace
+ * (`delegated`) : le journal de la mission le dit (« ↩ Groupe A rendu par son worker »). Sans
  * elle, leur revue se proposait par /code-review ici, sur une branche déjà fusionnée. Par groupe
  * fini, pas relu et pas confié : quand il a été confié (« ↗ Groupe A confié… »), sinon rendu.
  */
@@ -695,7 +718,7 @@ export const lastTicketFinishOf = (run: Run): number | undefined => {
 
 /** Un plan de groupes arrivé pendant l'Implémentation d'un lot jusque-là sans groupes (réponse de l'outil, une fois). */
 export const LOT_PLAN_NOTICE =
-  'this Implementation ran without groups until now: the no-groups procedure of the /implement instructions no longer applies (procedure-groupe.md followed in this discussion, the lot review launched by you); the groups go to linked sessions, as the dashboard plans them'
+  'this Implementation ran without groups until now: the no-groups procedure of the /implement instructions no longer applies (procedure-groupe.md followed in this discussion, the lot review launched by you); the groups go to workers, as the dashboard plans them'
 
 /**
  * Un lot sans groupes dispensé de revue et de sécurité : chacun de ses tickets dit ni sensible ni avec
@@ -788,12 +811,12 @@ export const isBugPass = (run: Run, session?: string): boolean => {
 /**
  * `/code-review` vient d'être lancé : les groupes finis ici et pas encore relus le sont, en priorité
  * ceux de la file lancée dans cette discussion, et toujours ceux que nomme une revue lancée (la marque
- * démarrée de l'auto ou d'un bouton) ; jamais un groupe confié à une session liée (sa revue se fait
+ * démarrée de l'auto ou d'un bouton) ; jamais un groupe confié à un worker (sa revue se fait
  * là-bas, puis `reviewed`), en vol ou rendu. Rend leurs noms.
  */
 const markReviewed = (run: Run, now: number): string[] => {
   const queue = run.queue ?? []
-  // Seulement les groupes finis ici : la revue d'un groupe confié se fait dans sa session liée (sa branche
+  // Seulement les groupes finis ici : la revue d'un groupe confié se fait dans son worker (sa branche
   // est fusionnée ici), et un groupe en vol n'est pas fini ; sinon un groupe renvoyé serait clos sans la
   // revue de son dernier envoi.
   const due = (run.groups ?? []).filter(g => g.linked === undefined && g.delegated === undefined && awaitsReview(run, g))
@@ -981,7 +1004,7 @@ const activeStepId = (target: { steps: FlowStep[] }): string | undefined => targ
 
 /**
  * Une étape du skill que la phase n'a pas, ouverte avant que l'étape existe (le découpage d'une
- * rétro qui finit par l'ancienne étape de session liée) : elle prend sa place dans l'ordre du skill,
+ * rétro qui finit par l'ancienne étape de worker) : elle prend sa place dans l'ordre du skill,
  * avant les étapes qui la suivent. Une étape de l'ancien chemin n'est jamais ajoutée ainsi.
  */
 const addSkillStep = (target: { skill: string; steps: FlowStep[] }, id: string) => {
@@ -1024,7 +1047,7 @@ const finishPhase = (phase: FlowPhase, now: number) => {
 const findPhase = (run: Run, id: string, from: number): number =>
   run.phases.findIndex((p, i) => i >= from && (p.skill === id || p.alts.includes(id)))
 
-/** Met le parcours de côté : terminé si ses phases requises sont faites, sinon en pause. */
+/** Met la mission de côté : terminé si ses phases requises sont faites, sinon en pause. */
 const shelve = (run: Run, now: number) => {
   closeDetours(currentPhase(run), now)
   if (isRunComplete(run)) {
@@ -1037,10 +1060,46 @@ const shelve = (run: Run, now: number) => {
   }
   run.owner = undefined
   run.updatedAt = now
+  // Mise en pause ou close : la mission n'attend plus la personne dans une discussion.
+  delete run.waitsUser
+}
+
+/** Les catégories du signal « t'attend » : une liste fermée. */
+const WAITS_KINDS = new Set(['question', 'validation', 'step', 'report'])
+
+/** Le signal relu d'une mission : seulement en forme (une valeur hors forme ne se montre ni ne se notifie). */
+export const soundWaitsUser = (v: unknown): WaitsUser | null =>
+  v !== null && typeof v === 'object' && isTime((v as WaitsUser).since) && WAITS_KINDS.has((v as WaitsUser).kind) ? { since: (v as WaitsUser).since, kind: (v as WaitsUser).kind } : null
+
+/**
+ * Pose le signal « t'attend » sur la mission active ici, à la fin d'un tour dont la suite demande la
+ * personne, à la pause de l'auto hors d'un tour, ou le temps d'une question à boutons. Rien quand il y
+ * est déjà pour la même chose (sa date reste celle du début de l'attente).
+ */
+export const setWaitsUser = (board: Board, kind: WaitsUser['kind'], now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || run0.status !== 'active') return null
+  if (soundWaitsUser(run0.waitsUser)?.kind === kind) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  run.waitsUser = { since: now, kind }
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/** Efface le signal « t'attend » de la mission active ici : la personne a repris le travail (un tour commence). */
+export const clearWaitsUser = (board: Board, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || run0.waitsUser === undefined) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  delete run.waitsUser
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
 }
 
 const prune = (board: Board) => {
-  // Les archives ne comptent pas : on ne les perd pas parce que d'autres parcours arrivent.
+  // Les archives ne comptent pas : on ne les perd pas parce que d'autres missions arrivent.
   const live = board.runs.filter(r => r.archivedAt === undefined)
   const archived = board.runs
     .filter(r => r.archivedAt !== undefined)
@@ -1079,7 +1138,7 @@ const moveTo = (run: Run, at: number, id: string, now: number, fx: Effects) => {
     phase.finishedAt = undefined
     phase.startedAt = phase.startedAt ?? now
     phase.round = isAgain ? phase.round + 1 : 1
-    // Une phase qui suit encore la session liée d'un ancien envoi garde son étape.
+    // Une phase qui suit encore le worker d'un ancien envoi garde son étape.
     phase.steps = stepsFor(id, now, holdsItemsSession(phase))
     log(run, now, def.glyph, isAgain ? `${def.label} ${agree(def, 'relancé')} (tour ${phase.round})` : `${def.label} ${agree(def, 'démarré')}`, 'accent')
     fx.toasts.push(isAgain ? `${def.glyph} ${def.label} · tour ${phase.round}` : `${def.glyph} ${def.label}`)
@@ -1155,8 +1214,8 @@ const reopenSkipped = (run: Run, id: string, now: number, fx: Effects): boolean 
 }
 
 /**
- * Des tickets partent en implémentation hors de cette discussion (sessions liées) : la phase
- * Implémentation devient la phase en cours, si le parcours n'y est pas déjà.
+ * Des tickets partent en implémentation hors de cette discussion (workers) : la phase
+ * Implémentation devient la phase en cours, si la mission n'y est pas déjà.
  */
 const enterImplementation = (run: Run, now: number, fx: Effects) => {
   const at = run.phases.findIndex(p => p.skill === 'implement')
@@ -1166,7 +1225,7 @@ const enterImplementation = (run: Run, now: number, fx: Effects) => {
   else if (at < run.cursor) reopenSkipped(run, phase.skill, now, fx)
 }
 
-/** Les groupes et les tickets du parcours que nomment les arguments d'une commande (« groupe B », un id de ticket). */
+/** Les groupes et les tickets de la mission que nomment les arguments d'une commande (« groupe B », un id de ticket). */
 const namedInArgs = (run: Run, args: string): string[] => {
   const groups = (run.groups ?? []).filter(g => /[A-Za-z0-9]/.test(g.id) && new RegExp(`\\b(?:groupe?|group)\\s+${g.id.replace(/[^A-Za-z0-9]/g, '')}\\b`, 'i').test(args)).map(g => `groupe ${g.id}`)
   const tokens = new Set(args.split(/[\s,;:()[\]«»"']+/).filter(Boolean))
@@ -1175,10 +1234,21 @@ const namedInArgs = (run: Run, args: string): string[] => {
 }
 
 /**
- * `/implement` lancé pour un groupe ou des tickets du parcours de cette discussion, une fois
- * l'implémentation passée (compte rendu en cours ou fait) : le parcours revient à son
+ * Les unités qu'une commande de code nomme dans ses arguments (« groupe A », un id de ticket, aux mêmes formes
+ * que `namedInArgs`) : les groupes nommés, et ceux qui portent les tickets nommés pas encore faits.
+ */
+export const unitsNamedInArgs = (run: Run, args: string): string[] => {
+  const named = namedInArgs(run, args)
+  const groups = named.filter(x => x.startsWith('groupe ')).map(x => x.slice('groupe '.length))
+  const tickets = run.tickets.filter(t => t.status !== 'done' && named.includes(t.id)).map(t => t.id)
+  return [...new Set([...groups, ...(tickets.length > 0 ? unitsOfTickets(run, tickets) : [])])]
+}
+
+/**
+ * `/implement` lancé pour un groupe ou des tickets de la mission de cette discussion, une fois
+ * l'implémentation passée (compte rendu en cours ou fait) : la mission revient à son
  * implémentation, et son compte rendu, comme les phases d'après, est à refaire. Lancé pour un
- * groupe d'un parcours en phase compte rendu, il en ouvrait un second. Faux quand rien ne s'applique.
+ * groupe d'une mission en phase compte rendu, il en ouvrait une seconde. Faux quand rien ne s'applique.
  */
 const backToImplementation = (run: Run, id: string, args: string, now: number, fx: Effects): boolean => {
   if (id !== 'implement') return false
@@ -1222,21 +1292,23 @@ const startDetour = (run: Run, phase: FlowPhase, id: string, now: number, fx: Ef
 
 export type SkillContext = {
   now: number
-  /** Chargé dans la boucle principale (un skill chargé par un sous-agent ne bouge rien). */
+  /** Chargé dans la boucle principale (un skill chargé par un spécialiste ne bouge rien). */
   isMain: boolean
   /** Arguments de la commande ou de l'outil Skill. */
   args?: string
+  /** Le premier message d'une mission lancée par le COO (il porte l'id d'un lancement) : une mission neuve s'ouvre, aucune en pause n'est reprise. */
+  isLaunched?: boolean
 }
 
 /**
  * Un skill du plugin vient d'être chargé. Dans l'ordre : sous-skill de la phase en cours,
- * phase suivante du parcours, détour, reprise d'un parcours en pause, nouveau parcours.
+ * phase suivante de la mission, détour, reprise d'une mission en pause, nouvelle mission.
  */
 export const applySkill = (board: Board, name: string, ctx: SkillContext): Outcome => {
   const raw = skillIdOf(name)
-  // Une session liée qui travaille pour un parcours resté ailleurs n'en ouvre ni n'en reprend aucun.
-  if (!raw || !ctx.isMain || board.delegate) return null
-  // `/code-review` de Claude Code sans parcours actif ici : la relecture d'une branche, pas la revue d'un groupe.
+  // Un worker qui travaille pour une mission restée ailleurs n'en ouvre ni n'en reprend aucune.
+  if (!raw || !ctx.isMain || board.delegate || isCooDiscussion(board, ctx.now)) return null
+  // `/code-review` de Claude Code sans mission active ici : la relecture d'une branche, pas la revue d'un groupe.
   const id = raw === 'final-review' && !activeRun(board) ? 'branch-review' : raw
   const def = SKILLS[id]!
   const b = clone(board)
@@ -1322,11 +1394,11 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
       return { board: b, fx }
     }
   }
-  // Une commande de livraison n'ouvre jamais de parcours à elle seule.
+  // Une commande de livraison n'ouvre jamais de mission à elle seule.
   if (def.role === 'step') return null
 
-  // Une suite proposée par la phase en cours la clôt, même quand elle ouvre un autre parcours :
-  // le parcours quitté est alors terminé, plus seulement en pause, s'il ne lui reste rien d'obligatoire.
+  // Une suite proposée par la phase en cours la clôt, même quand elle ouvre une autre mission :
+  // la mission quittée est alors terminée, plus seulement en pause, s'il ne lui reste rien d'obligatoire.
   const followed = run && (SKILLS[currentPhase(run).skill]?.next ?? []).includes(id) ? run : null
   if (run) {
     const phase = currentPhase(run)
@@ -1336,16 +1408,16 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
     }
   }
 
-  // La suite du parcours de cette discussion, et la rétro lancée pendant qu'il est actif ici, portent
-  // son titre et ne reprennent pas un autre parcours en pause qui aurait la même phase : une rétro
-  // lancée dans la discussion « Onglet Agents » avait repris le parcours « Durée des requêtes ».
+  // La suite de la mission de cette discussion, et la rétro lancée pendant qu'elle est active ici, portent
+  // son titre et ne reprennent pas une autre mission en pause qui aurait la même phase : une rétro
+  // lancée dans la discussion « Onglet Agents » avait repris la mission « Durée des requêtes ».
   const parent = followed ?? (id === 'retro' ? run : null)
   // Jamais les arguments de la commande (souvent un long prompt) : Claude envoie un titre réfléchi.
   const title = parent ? clip(`${def.flowLabel} · ${parent.title}`, 70) : undefined
-  const paused = parent
+  const paused = parent || ctx.isLaunched
     ? undefined
     : b.runs
-    // Un parcours mis de côté ne revient qu'à la demande de la personne : un skill ouvre alors le sien.
+    // Une mission mise de côté ne revient qu'à la demande de la personne : un skill ouvre alors la sienne.
     .filter(r => r.archivedAt === undefined && r.asideAt === undefined)
     .filter(r => r.status === 'paused' || (r.status === 'active' && r.id !== b.activeId && now - r.updatedAt > ORPHAN_MS))
     .sort((x, y) => y.updatedAt - x.updatedAt)
@@ -1354,8 +1426,9 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
     if (run) shelve(run, now)
     paused.status = 'active'
     paused.owner = b.session
+    delete paused.waitsUser
     b.activeId = paused.id
-    log(paused, now, '↻', 'Parcours repris', 'accent')
+    log(paused, now, '↻', 'Mission reprise', 'accent')
     const at = findPhase(paused, id, paused.cursor)
     const resumed = paused.phases[at]!
     if (at === paused.cursor && resumed.status === 'active' && resumed.skill === id) {
@@ -1376,8 +1449,8 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
   created.bornIn = b.session
   b.runs.unshift(created)
   b.activeId = created.id
-  log(created, now, def.glyph, `Parcours lancé par /${id}`, 'accent')
-  fx.toasts.push(`${def.glyph} ${def.flowLabel} : parcours lancé`)
+  log(created, now, def.glyph, `Mission lancée par /${id}`, 'accent')
+  fx.toasts.push(`${def.glyph} ${def.flowLabel} : mission lancée`)
   fx.openPane = true
   fx.note = 'phase'
   prune(b)
@@ -1422,7 +1495,7 @@ export const derivedItemId = (raw: string, rank = 0): string => {
  * suivant : jamais l'id d'une autre piste de la liste (une piste sortie de la liste libère le sien : rien
  * d'autre n'est enregistré). Une piste renvoyée sous son id d'origine retrouve donc son id tant que son
  * libellé ne change pas (changé, elle en reçoit un autre). Invariant : un id déjà
- * enregistré dans le parcours (éléments d'une phase ou d'un détour, liste d'un lien de pistes) n'est
+ * enregistré dans la mission (éléments d'une phase ou d'un détour, liste d'un lien de pistes) n'est
  * jamais réécrit, même hors forme : la piste renvoyée sous cet id s'y retrouve, comme celle renvoyée
  * sous la forme que la demande en a montrée (`neutralInPrompt`), quand un seul id enregistré la donne ;
  * une forme montrée commune à plusieurs n'en choisit aucun : la piste prend un id généré, et la réponse
@@ -1581,9 +1654,9 @@ const restartTicketSteps = (run: Run, before: readonly Ticket[], now: number) =>
 }
 
 /**
- * Où en est le compte rendu du parcours, pour que Claude le lise au lieu de le deviner. Une phase
- * de compte rendu « faite » sur le parcours actif ne vient que de « ✓ Valider le rapport » : Claude
- * ne peut pas la clore, un saut vers la livraison la passe « sautée », et clore le parcours le
+ * Où en est le compte rendu de la mission, pour que Claude le lise au lieu de le deviner. Une phase
+ * de compte rendu « faite » sur la mission active ne vient que de « ✓ Valider le rapport » : Claude
+ * ne peut pas la clore, un saut vers la livraison la passe « sautée », et clore la mission le
  * retire de la discussion. Sans phase de compte rendu, rien.
  */
 const reportStateOf = (run: Run): string => {
@@ -1609,7 +1682,7 @@ export const summaryOf = (run: Run): string => {
   const stepLabel = skill.steps.find(s => s.id === stepId)?.label
   const t = countTickets(run.tickets)
   return [
-    // Le titre, relu du fichier partagé pour un parcours repris, cité neutralisé : il n'ouvre aucune section.
+    // Le titre, relu du fichier partagé pour une mission reprise, cité neutralisé : il n'ouvre aucune section.
     `Dashboard: ${shownText(run.title)}`,
     `${skill.label}${stepLabel ? ` > ${stepLabel}` : ''} (${target.status === 'done' ? 'done' : 'in progress'})`,
     t.total > 0 ? `tickets ${t.done}/${t.total} done` : '',
@@ -1621,7 +1694,7 @@ export const summaryOf = (run: Run): string => {
 
 /**
  * Le groupe qui s'exécute : celui d'un ticket « en cours », sinon du premier ticket ouvert de la
- * file ; aucun s'il y en a plusieurs ou si le parcours n'a pas de groupes.
+ * file ; aucun s'il y en a plusieurs ou si la mission n'a pas de groupes.
  */
 const runningGroupOf = (run: Run, tickets: readonly Ticket[]): TicketGroup | undefined => {
   if (!run.groups || run.groups.length === 0) return undefined
@@ -1675,19 +1748,20 @@ const catalogId = (value: string): string | null => {
 }
 
 /**
- * Ouvre un parcours à la demande de Claude (outil `flow`, champ `open`), sans qu'un skill soit
- * lancé, même si un autre est actif ici : celui-ci est mis en pause comme quand un autre skill de
- * départ ouvre un parcours (terminé s'il ne lui reste rien d'obligatoire), avec tout ce qu'il a.
- * Le parcours prend la forme de `entry` (un skill de départ du catalogue), `implement` sinon.
+ * Ouvre une mission à la demande de Claude (outil `flow`, champ `open`), sans qu'un skill soit
+ * lancé, même si une autre est active ici : celle-ci est mise en pause comme quand un autre skill de
+ * départ ouvre une mission (terminée s'il ne lui reste rien d'obligatoire), avec tout ce qu'elle a.
+ * La mission prend la forme de `entry` (un skill de départ du catalogue), `implement` sinon.
  */
 export const openRun = (board: Board, ask: { entry?: string; title?: string }, now: number): { board: Board; fx: Effects; text: string } => {
+  if (isCooDiscussion(board, now)) return { board, fx: noFx(), text: COO_NO_MISSION }
   const b = clone(board)
   const fx = noFx()
   const wanted = str(ask.entry)
   const found = catalogId(wanted)
   const role = found ? SKILLS[found]!.role : null
   const entry = found && (role === 'flow' || role === 'detour') ? found : 'implement'
-  const fallback = wanted !== '' && entry !== found ? ` "${wanted}" is not a starting skill: the workflow follows /implement.` : ''
+  const fallback = wanted !== '' && entry !== found ? ` "${wanted}" is not a starting skill: the mission follows /implement.` : ''
   const previous = activeRun(b)
   if (previous) shelve(previous, now)
   const title = clip(str(ask.title), 70)
@@ -1696,17 +1770,17 @@ export const openRun = (board: Board, ask: { entry?: string; title?: string }, n
   run.bornIn = b.session
   b.runs.unshift(run)
   b.activeId = run.id
-  log(run, now, '✚', `Parcours ouvert par Claude${previous ? ` (« ${previous.title} » ${previous.status === 'done' ? 'terminé' : 'en pause'})` : ''}`, 'accent')
-  fx.toasts.push(`✚ Parcours ouvert : ${run.title}`)
+  log(run, now, '✚', `Mission ouverte par Claude${previous ? ` (« ${previous.title} » ${previous.status === 'done' ? 'terminée' : 'en pause'})` : ''}`, 'accent')
+  fx.toasts.push(`✚ Mission ouverte : ${run.title}`)
   fx.openPane = true
   prune(b)
   const left = previous ? ` ${JSON.stringify(shownText(previous.title))} was ${previous.status === 'done' ? 'closed (nothing required left)' : 'paused'}, untouched; the user resumes it from the History tab.` : ''
   const named = title ? nameDiscussion(b, run, fx) : ' Send {"fix": {"title": "..."}} to name it.'
-  return { board: b, fx, text: `New workflow "${run.title}" (${SKILLS[entry]!.flowLabel}) opened in this discussion; the rest of this call went to it.${left}${fallback}${named}` }
+  return { board: b, fx, text: `New mission "${run.title}" (${SKILLS[entry]!.flowLabel}) opened in this discussion; the rest of this call went to it.${left}${fallback}${named}` }
 }
 
 /**
- * Corrige un parcours (champ `fix`), à la demande de la personne ou après une erreur : le titre,
+ * Corrige une mission (champ `fix`), à la demande de la personne ou après une erreur : le titre,
  * même déjà posé ; la phase en cours, en avant comme en arrière ; l'étape, en arrière comprise.
  * Revenir en arrière remet à faire les phases d'après ; avancer saute ou clôt celles d'avant,
  * sauf le compte rendu, qui reste réservé à la personne et passe « sauté ».
@@ -1728,7 +1802,7 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
     const id = catalogId(wantedPhase)
     const at = id ? run.phases.findIndex(p => p.skill === id || p.alts.includes(id)) : -1
     if (at < 0) {
-      notes.push(`phase "${wantedPhase}" is not in this workflow (phases: ${run.phases.map(p => p.skill).join(', ')})`)
+      notes.push(`phase "${wantedPhase}" is not in this mission (phases: ${run.phases.map(p => p.skill).join(', ')})`)
     } else if (at !== run.cursor) {
       if (at < run.cursor) {
         // En arrière : les phases d'après redeviennent à faire.
@@ -1779,7 +1853,7 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
   }
   if (done.length > 0) {
     log(run, now, '✎', `Corrigé : ${done.join(', ')}`, 'info')
-    fx.toasts.push(`✎ Parcours corrigé : ${done.join(', ')}`)
+    fx.toasts.push(`✎ Mission corrigée : ${done.join(', ')}`)
   }
   run.status = 'active'
   run.finishedAt = undefined
@@ -1787,8 +1861,8 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
 }
 
 /**
- * Un appel de l'outil `flow`. `resume` reprend d'abord un parcours du projet dans cette discussion,
- * comme « ↻ Reprendre ici » : une session liée lancée pour un groupe n'a pas de bouton à cliquer.
+ * Un appel de l'outil `flow`. `resume` reprend d'abord une mission du projet dans cette discussion,
+ * comme « ↻ Reprendre ici » : un worker lancé pour un groupe n'a pas de bouton à cliquer.
  */
 export const applyReport = (
   board: Board,
@@ -1810,7 +1884,7 @@ export const applyReport = (
 }
 
 /**
- * Les tickets bloqués, rappelés à chaque réponse dans la discussion du parcours : un ticket était
+ * Les tickets bloqués, rappelés à chaque réponse dans la discussion de la mission : un ticket était
  * resté « bloqué » au tableau de bord après la décision qui le débloquait.
  */
 const blockedText = (run: Run): string => {
@@ -1821,7 +1895,7 @@ const blockedText = (run: Run): string => {
   return ` · Still blocked: ${list}. Once what blocks one is settled, send its new status in "set".`
 }
 
-/** Un ticket fait par une session liée : sa revue est relayée par elle, pas envoyée ici. */
+/** Un ticket fait par un worker : sa revue est relayée par lui, pas envoyée ici. */
 const isLinkedTicket = (run: Run, id: string): boolean => (run.groups ?? []).some(g => g.tickets.some(x => sameTicket(x, id)) && (g.linked !== undefined || g.delegated !== undefined))
 
 /**
@@ -1845,7 +1919,7 @@ const reportOnce = (
   now: number,
   opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean },
 ): { board: Board; fx: Effects; text: string } => {
-  // Une session liée qui travaille pour un groupe d'un parcours resté ailleurs : rien ne s'écrit ici.
+  // Un worker qui travaille pour un groupe d'une mission restée ailleurs : rien ne s'écrit ici.
   const delegateId = str(input.delegate)
   if (delegateId !== '') {
     const out = delegateHere(board, delegateId, now, opts.delegateTitle, str(input.group) || undefined, str(input.main) || undefined)
@@ -1855,19 +1929,21 @@ const reportOnce = (
     return { ...out, text: `${out.text}${sentence !== '' ? ` ${sentence}` : ''}${refusedRelayText(input)}` }
   }
   if (board.delegate) return { board, fx: noFx(), text: delegatedReportText(board, input) }
-  // `open` passe avant tout : le reste de l'appel va au parcours qu'il ouvre.
+  // La discussion du COO ne porte jamais de mission : ni ouverture, ni reprise, ni compte d'une mission.
+  if (isCooDiscussion(board, now)) return { board, fx: noFx(), text: COO_NO_MISSION }
+  // `open` passe avant tout : le reste de l'appel va à la mission qu'elle ouvre.
   const open = input.open !== null && typeof input.open === 'object' ? (input.open as Record<string, unknown>) : null
   if (open || input.open === true) {
     const opened = openRun(board, { entry: str(open?.entry), title: str(open?.title) || str(input.title) }, now)
     const { open: _, resume: __, ...rest } = input
     const out = reportHere(opened.board, rest, now, opts)
-    const ignored = str(input.resume) !== '' ? ' "resume" was ignored: "open" starts a new workflow.' : ''
+    const ignored = str(input.resume) !== '' ? ' "resume" was ignored: "open" starts a new mission.' : ''
     return { board: out.board, fx: { ...out.fx, openPane: true, toasts: [...opened.fx.toasts, ...out.fx.toasts], ...(opened.fx.discussionTitle !== undefined && out.fx.discussionTitle === undefined ? { discussionTitle: opened.fx.discussionTitle } : {}) }, text: `${opened.text}${ignored} ${out.text}` }
   }
   const resumeId = str(input.resume)
   if (resumeId === '' || resumeId === board.activeId) return reportHere(board, input, now, opts)
   const resumed = resumeRun(board, resumeId, now)
-  if (!resumed) return { board, fx: noFx(), text: `No workflow "${resumeId}" in this project: nothing was resumed nor recorded. ${noActiveText(board)}` }
+  if (!resumed) return { board, fx: noFx(), text: `No mission "${resumeId}" in this project: nothing was resumed nor recorded. ${noActiveText(board)}` }
   const out = reportHere(resumed.board, input, now, opts)
   // Le titre, relu du fichier partagé, cité neutralisé comme dans `summaryOf`.
   const title = resumed.board.runs.find(r => r.id === resumeId)?.title ?? resumeId
@@ -1885,8 +1961,8 @@ export const groupDone = (run: Run, group: TicketGroup): { done: number; total: 
 
 /**
  * L'avancement d'un groupe confié, pour sa pastille du bandeau : ses tickets enregistrés d'après le
- * relais de sa session, plus ceux que le plan lui rattache d'après le parcours (sa session ne les
- * relaie pas) ; sans relais, celui du parcours (`groupDone`).
+ * relais de sa session, plus ceux que le plan lui rattache d'après la mission (sa session ne les
+ * relaie pas) ; sans relais, celui de la mission (`groupDone`).
  */
 export const groupProgress = (run: Run, g: TicketGroup, relay: GroupRelay | null): { done: number; total: number } => {
   if (!relay) return groupDone(run, g)
@@ -1894,21 +1970,21 @@ export const groupProgress = (run: Run, g: TicketGroup, relay: GroupRelay | null
     .filter(id => !g.tickets.some(x => sameTicket(x, id)))
     .map(id => ticketOf(run, id))
     .filter((t): t is Ticket => t !== undefined)
-  // Un rattaché que la session a reçu dans son brief se relaie : son statut relayé vaut, sinon celui du parcours.
+  // Un rattaché que la session a reçu dans son brief se relaie : son statut relayé vaut, sinon celui de la mission.
   const isDone = (t: Ticket) => t.status === 'done' || relay.tickets[t.id]?.status === 'done'
   return { done: relay.done + attached.filter(isDone).length, total: relay.total + attached.length }
 }
 
 /**
  * La délégation gardée pour cette session (`$.store`, clé `delegate:<session>`), remise sur un board
- * chargé du stockage : sans elle, un rechargement du mod dans une session liée la perdait, et ses
- * skills pouvaient ouvrir un parcours. Une forme inconnue est ignorée.
+ * chargé du stockage : sans elle, un rechargement du mod dans un worker la perdait, et ses
+ * skills pouvaient ouvrir une mission. Une forme inconnue est ignorée.
  */
 export const restoreDelegate = (board: Board, kept: unknown, now?: number): Board => {
   if (board.delegate || kept === null || typeof kept !== 'object') return board
   const d = kept as Record<string, unknown>
   if (typeof d.run !== 'string' || d.run === '' || typeof d.at !== 'number') return board
-  // Une délégation ancienne ou sur un parcours fini ne revient pas : sinon la session ne la quitterait jamais.
+  // Une délégation ancienne ou sur une mission finie ne revient pas : sinon la session ne la quitterait jamais.
   if ((now !== undefined && now - d.at > DELEGATE_KEEP_MS) || board.runs.some(r => r.id === d.run && r.status === 'done')) return board
   const text = (key: string) => (typeof d[key] === 'string' && d[key] !== '' ? { [key]: d[key] as string } : {})
   return { ...board, activeId: null, delegate: { run: d.run, at: d.at, ...text('title'), ...text('group'), ...text('main') } }
@@ -1916,12 +1992,12 @@ export const restoreDelegate = (board: Board, kept: unknown, now?: number): Boar
 
 /**
  * La première réponse de l'outil après un rechargement du mod : l'état retrouvé. Le 22/10, la
- * discussion avait tout renvoyé par précaution alors que rien n'était perdu. Vide sans parcours actif.
+ * discussion avait tout renvoyé par précaution alors que rien n'était perdu. Vide sans mission active.
  */
 export const reloadText = (board: Board): string => {
   if (board.delegate) {
     const group = board.delegate.group ? `, group ${board.delegate.group}` : ''
-    return `State found after a plugin reload: delegate mode kept for the workflow ${JSON.stringify(shownText(delegatedTitle(board)))}${group}; nothing to send again.`
+    return `State found after a plugin reload: delegate mode kept for the mission ${JSON.stringify(shownText(delegatedTitle(board)))}${group}; nothing to send again.`
   }
   const run = activeRun(board)
   if (!run) return ''
@@ -1929,12 +2005,12 @@ export const reloadText = (board: Board): string => {
   return `State found after a plugin reload: ${run.tickets.length} tickets, ${(run.groups ?? []).length} groups, phase ${phaseLabel(phase.skill)}; nothing to send again.`
 }
 
-/** Le titre du parcours pour lequel la discussion travaille : dans ce board, sinon celui relevé à la déclaration. */
+/** Le titre de la mission pour lequel la discussion travaille : dans ce board, sinon celui relevé à la déclaration. */
 export const delegatedTitle = (board: Board): string =>
   board.runs.find(r => r.id === board.delegate?.run)?.title ?? board.delegate?.title ?? board.delegate?.run ?? ''
 
 /**
- * Comment joindre la discussion principale : son nom peut changer (renommage), pas sa référence
+ * Comment joindre le manager : son nom peut changer (renommage), pas sa référence
  * `[ref]`. SendMessage ne résout une référence que lue à l'instant dans ListAgents : la session
  * relit donc la liste et envoie à la ligne de cette référence, sous son nom du moment.
  */
@@ -1944,8 +2020,8 @@ const reachText = (board: Board): string => {
   const isFollowed = board.delegate?.mainAt !== undefined
   const how = `call ListAgents, find the row whose [ref] is ${main ? 'that one' : 'the one your brief gives'}, and send to that row's "<name> [ref]" exactly as listed (its name can change, its [ref] does not); if no row has it, say so in the first line of your final message.`
   return main
-    ? `Reach the main discussion, ${asciiJson(main)} ${isFollowed ? '(its reference of the moment, newer than your brief\'s)' : 'in your brief'}, by its [ref]: ${how}`
-    : `Reach the main discussion by the [ref] your brief gives: ${how}`
+    ? `Reach the manager, ${asciiJson(main)} ${isFollowed ? '(its reference of the moment, newer than your brief\'s)' : 'in your brief'}, by its [ref]: ${how}`
+    : `Reach the manager by the [ref] your brief gives: ${how}`
 }
 
 /** Le rappel court de l'adresse, aux relais : le paragraphe entier n'est que dans la réponse à `delegate`. */
@@ -1953,43 +2029,43 @@ const reachLine = (board: Board): string => {
   const main = board.delegate?.main
   const isFollowed = board.delegate?.mainAt !== undefined
   return main
-    ? `The main discussion: ${asciiJson(main)}${isFollowed ? " (its reference of the moment, newer than your brief's)" : ''}, reached by its [ref] in ListAgents, as the delegate answer says.`
-    : 'The main discussion: reached by the [ref] your brief gives, in ListAgents, as the delegate answer says.'
+    ? `The manager: ${asciiJson(main)}${isFollowed ? " (its reference of the moment, newer than your brief's)" : ''}, reached by its [ref] in ListAgents, as the delegate answer says.`
+    : 'The manager: reached by the [ref] your brief gives, in ListAgents, as the delegate answer says.'
 }
 
 const delegateText = (board: Board): string => {
   const title = delegatedTitle(board)
   return (
-    `This discussion works for the workflow ${JSON.stringify(shownText(title))}, which stays in the main discussion: nothing is recorded on it from here (skills, steps, phases). ` +
-    'Your progress is relayed to the main discussion\'s dashboard on its own: ticket statuses from your Asana updates (« Statut : » line, completion), your commits and your test runs. ' +
+    `This discussion works for the mission ${JSON.stringify(shownText(title))}, which stays in the manager: nothing is recorded on it from here (skills, steps, phases). ` +
+    'Your progress is relayed to the manager\'s dashboard on its own: ticket statuses from your Asana updates (« Statut : » line, completion), your commits and your test runs. ' +
     'Only if a ticket\'s status changes without an Asana update, send it here with {"set": [{"id": "<ticket id>", "status": "doing|done|blocked", "why": "<if blocked>"}]}. ' +
     'Each choice you make that the user neither asked for nor approved goes here at once, in {"decided": [{"what": "<the choice>", "why": "<why>"}]}: the main dashboard shows it for review right away; a choice that touches a sensitive area (' +
     SENSITIVE_AREAS +
-    ') is never declared: ask the user. ' +
-    'End with your report, one line per ticket (done, or not done and why): leave your whole report here, {"report": "<the whole report>"}: it is kept in your relay file, next to the run\'s, which the main discussion reads; then send the main discussion one line that points to it with SendMessage (that message wakes it up), and end on that same line. The main discussion checks your work and records the statuses. Nothing else is accepted. ' +
+    ') is never declared: ask the user; except when your prompt says you are a worker of a mission in auto mode: there section « Worker autonome » of your procedure says when it is settled by its recommended option and declared. ' +
+    'End with your report, one line per ticket (done, or not done and why): leave your whole report here, {"report": "<the whole report>"}: it is kept in your relay file, next to the mission\'s, which the manager reads; then send the manager one line that points to it with SendMessage (that message wakes it up), and end on that same line. The manager checks your work and records the statuses. Nothing else is accepted. ' +
     reachText(board)
   )
 }
 
 /**
- * La réponse à un appel de l'outil dans une session liée : seuls `set`, `decided`, `withdrawn`,
+ * La réponse à un appel de l'outil dans un worker : seuls `set`, `decided`, `withdrawn`,
  * `review`, `security`, `report` et `note` partent au relais (écrit par l'enregistrement, qui remplace
  * `relayedSentence(input)` par `relayedSentence(input, lost)` quand une part n'a pas été gardée).
  */
 const delegatedReportText = (board: Board, input: Readonly<Record<string, unknown>>): string => {
   const sentence = relayedSentence(input)
-  // Une session liée ne déclare pas de question bloquante : la discussion principale la déclare.
-  const waiting = input.waiting !== undefined ? ' · "waiting" is not recorded in a linked session: send your question to the main discussion by SendMessage, which declares it there.' : ''
+  // Un worker ne déclare pas de question bloquante : le manager la déclare.
+  const waiting = input.waiting !== undefined ? ' · "waiting" is not recorded in a worker: send your question to the manager by SendMessage, which declares it there.' : ''
   return sentence === '' ? `${delegateText(board)}${refusedRelayText(input)}${waiting}` : `${sentence} ${reachLine(board)}${refusedRelayText(input)}${waiting}`
 }
 
 /**
- * La session liée d'un groupe se déclare (`delegate`) : elle travaille pour un parcours qui reste
- * dans la discussion principale. Ses skills n'ouvrent ni ne reprennent aucun parcours, et ses
- * rapports ne s'écrivent pas : un seul écrivain par parcours.
+ * Le worker d'un groupe se déclare (`delegate`) : il travaille pour une mission qui reste
+ * dans le manager. Ses skills n'ouvrent ni ne reprennent aucune mission, et ses
+ * rapports ne s'écrivent pas : un seul écrivain par mission.
  *
- * Un parcours absent de ce board ne l'empêche pas : une session lancée dans un worktree a son
- * propre fichier (sa racine est celle du worktree), où le parcours n'est pas. Ne rien enregistrer
+ * Une mission absente de ce board ne l'empêche pas : une session lancée dans un worktree a son
+ * propre fichier (sa racine est celle du worktree), où la mission n'est pas. Ne rien enregistrer
  * reste le plus sûr ; `title` est alors lu dans le board du dépôt principal, s'il l'a.
  */
 const delegateHere = (board: Board, runId: string, now: number, title?: string, group?: string, main?: string): { board: Board; fx: Effects; text: string } => {
@@ -1999,11 +2075,11 @@ const delegateHere = (board: Board, runId: string, now: number, title?: string, 
   if (here && here.id !== runId) shelve(here, now)
   b.activeId = null
   b.delegate = { run: runId, at: now, ...(!target && title ? { title } : {}), ...(group ? { group: clip(group, 20) } : {}), ...(main ? { main: clip(main, 120) } : {}) }
-  const elsewhere = target ? '' : ' (The workflow is not on this folder\'s dashboard, e.g. a worktree has its own: that changes nothing for you.)'
+  const elsewhere = target ? '' : ' (The mission is not on this folder\'s dashboard, e.g. a worktree has its own: that changes nothing for you.)'
   return { board: b, fx: noFx(), text: `${delegateText(b)}${elsewhere}` }
 }
 
-/** Un appel de l'outil `flow` sur le parcours actif ici : titre, étape, éléments, tickets, note, fin de phase. */
+/** Un appel de l'outil `flow` sur la mission active ici : titre, étape, éléments, tickets, note, fin de phase. */
 const reportHere = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
@@ -2015,7 +2091,7 @@ const reportHere = (
   const tickets = parseTickets(input.tickets)
   let run = activeRun(b)
   if (!run) {
-    // Un parcours en pause ou suivi par une autre discussion : ne rien écrire, et le dire à Claude
+    // Une mission en pause ou suivie par une autre discussion : ne rien écrire, et le dire à Claude
     // plutôt que de le laisser deviner un autre lot (il était allé chercher d'autres tickets).
     if (tickets.length === 0 || resumable(b).length > 0) return { board, fx, text: noActiveText(b) }
     // Un lot de tickets sans skill chargé : suivi comme une implémentation (l'usage de ticket-board).
@@ -2066,13 +2142,13 @@ const reportHere = (
     if (isOnTarget && target === phase && phase.skill === 'compte-rendu' && stepId === 'validate') stopAuto(run, now, AUTO_STOPS.report)
   }
 
-  // Les éléments qu'une session liée lancée rend « à faire » dans cet appel : ils reviennent au choix.
+  // Les éléments qu'un worker lancé rend « à faire » dans cet appel : ils reviennent au choix.
   let backToChoice = 0
   let itemsText = ''
   if (Array.isArray(input.items)) {
     const before = target.items
     const sent = parseItems(input.items)
-    // Les pistes (éléments confiés à une session liée) : un id nouveau hors forme prend un id généré.
+    // Les pistes (éléments confiés à un worker) : un id nouveau hors forme prend un id généré.
     const renamed = def.items?.linkedStep ? formItemIds(run, sent) : []
     // Une piste en cours, ou confiée sans verdict, que l'envoi omet reste telle quelle (D3) : sinon la
     // session qui la traite ne serait plus attendue, ni sa fermeture retenue.
@@ -2092,7 +2168,7 @@ const reportHere = (
       itemsText += ` · items: ids out of form (${GROUP_ID_FORM}) recorded under new ids: ${moved.map(r => `${JSON.stringify(neutralRelayed(clip(r.raw, 40)))} (label ${JSON.stringify(neutralRelayed(r.label))}) → ${r.id}${r.candidates.length > 0 ? ` (the shown form of several recorded items, send each under its exact id: ${asciiJson(r.candidates)})` : ''}`).join(', ')}; send these items under these ids from now on`
     if (kept.length > 0) {
       log(run, now, '!', `Pistes gardées, omises de l'envoi : ${kept.map(i => i.label).join(' ; ')}`, 'warn')
-      itemsText += ` · items: kept (in progress, or given to the linked session without a verdict yet): ${kept.map(i => neutralRelayed(i.label)).join('; ')}; send them with their status`
+      itemsText += ` · items: kept (in progress, or given to the worker without a verdict yet): ${kept.map(i => neutralRelayed(i.label)).join('; ')}; send them with their status`
     }
     for (const item of target.items) {
       const was = before.find(x => x.id === item.id)
@@ -2112,7 +2188,7 @@ const reportHere = (
         // La session reste notée même sans élément : elle se ferme une fois ses éléments jugés.
         phase.linked = withItems(linked, left)
         const names = back.map(id => (phase.items.find(i => i.id === id) ?? sent.find(i => i.id === id))?.label ?? id)
-        log(run, now, '↩', `À choisir de nouveau, pas fait par la session liée : ${names.join(' ; ')}`, 'info')
+        log(run, now, '↩', `À choisir de nouveau, pas fait par le worker : ${names.join(' ; ')}`, 'info')
       }
     }
     // Un envoi des éléments touche la session : une fermeture arrêtée redevient à faire.
@@ -2121,7 +2197,7 @@ const reportHere = (
 
   const ticketsBefore = run.tickets
   let removeText = ''
-  // Un retrait qui laisse le lot sans ticket ouvert : le parcours peut finir, une fois l'appel entier lu.
+  // Un retrait qui laisse le lot sans ticket ouvert : la mission peut finir, une fois l'appel entier lu.
   let isLotRemoved = false
   const removing = (Array.isArray(input.remove) ? input.remove : []).map(x => String(x).trim()).filter(Boolean)
   if (removing.length > 0) {
@@ -2131,7 +2207,7 @@ const reportHere = (
     if (goneFound.length > 0) run.found = run.found!.filter(f => !goneFound.includes(f))
     if (gone.length > 0) {
       // Un lot ouvert avant ce retrait : seul son retrait rend l'Implémentation facultative et peut finir
-      // le parcours (le retrait d'un ticket fait, dans un lot déjà fini, ne change rien).
+      // la mission (le retrait d'un ticket fait, dans un lot déjà fini, ne change rien).
       const wasLotOpen = hasOpenLot(run)
       run.tickets = run.tickets
         .filter(t => !isGone(t.id))
@@ -2141,7 +2217,7 @@ const reportHere = (
       const names = gone.map(t => t.name)
       log(run, now, '−', `${gone.length} ticket${gone.length > 1 ? 's retirés' : ' retiré'} : ${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''}`, 'warn')
       // Plus aucun lot ouvert : l'Implémentation que la fin d'une phase avait rendue due (miroir de
-      // cette écriture, plus bas) redevient ce que la définition du parcours en dit.
+      // cette écriture, plus bas) redevient ce que la définition de la mission en dit.
       if (wasLotOpen && !hasOpenLot(run)) {
         for (const p of run.phases.slice(run.cursor + 1)) if (p.skill === 'implement' && p.status === 'pending') p.isOptional = isDefinedOptional(run, p)
         isLotRemoved = true
@@ -2203,7 +2279,7 @@ const reportHere = (
   const parsed = Array.isArray(input.groups) ? parseGroups(run, input.groups) : null
   // Un seul groupe n'apporte rien (série 1, Q11) : le plan est ignoré avant d'être enregistré, et
   // celui en place, lancé ou non, reste tel quel (série 2, Q5). Les tickets restés hors du groupe
-  // ne font pas un deuxième groupe. Le lot d'une rétro, lui, part toujours en session liée : un
+  // ne font pas un deuxième groupe. Le lot d'une rétro, lui, part toujours dans un worker : un
   // seul groupe y suffit.
   const isPlanKept = parsed !== null && parsed.invalid.length === 0 && parsed.groups.length >= (isRetroRun(run) ? 1 : 2)
   // Le découpage d'une rétro part en un seul appel (pistes jugées, tickets, groupes, fin de phase) :
@@ -2225,7 +2301,7 @@ const reportHere = (
           ? ` · groups: one group only, so no groups: ${rest}`
           : ` · groups: an empty plan is ignored: ${rest}`
   } else if (parsed) {
-    // Ce que les revues ont marqué sur un groupe, et sa session liée, survivent à un plan renvoyé.
+    // Ce que les revues ont marqué sur un groupe, et son worker, survivent à un plan renvoyé.
     // `parseGroups` a déjà ramené chaque id à celui qui est enregistré : la reprise se fait à l'id exact.
     const before = new Map((run.groups ?? []).map(g => [g.id, g]))
     // La consigne d'/implement a figé « sans groupes » à son chargement (texte écrit à un moment et lu
@@ -2238,7 +2314,7 @@ const reportHere = (
       const was = before.get(g.id)
       return { ...g, ...keptGroupFields(was) }
     })
-    // Un groupe déjà confié à une session liée (en cours, rendu, fermé, ou à l'envoi annulé) n'est
+    // Un groupe déjà confié à un worker (en cours, rendu, fermé, ou à l'envoi annulé) n'est
     // jamais retiré : omis, il reste à la fin (D2 (a), série 16, Q2 (b)), avec son lien et son compteur
     // d'envois (un envoi suivant au même id ne reprend pas le nom d'une branche gardée). Seul un groupe
     // en cours, ou rendu sans être fermé, garde aussi ses tickets contre le plan : sa session les
@@ -2266,10 +2342,10 @@ const reportHere = (
     if (omitted.length > 0) {
       const why = (g: TicketGroup) =>
         g.linked !== undefined ? 'in flight' : g.delegated === undefined ? 'send cancelled, its number kept' : isClosedLink(g.delegated) ? 'returned and closed' : 'returned, not closed'
-      log(run, now, '!', `Groupes gardés hors du nouveau plan, déjà confiés à une session liée : ${omitted.map(g => g.id).join(', ')}`, 'warn')
-      groupText += ` · groups: kept at the end of the plan, as they were sent to a linked session: ${omitted.map(g => `${shownGroupId(g.id)} (${why(g)})`).join(', ')}`
+      log(run, now, '!', `Groupes gardés hors du nouveau plan, déjà confiés à un worker : ${omitted.map(g => g.id).join(', ')}`, 'warn')
+      groupText += ` · groups: kept at the end of the plan, as they were sent to a worker: ${omitted.map(g => `${shownGroupId(g.id)} (${why(g)})`).join(', ')}`
     }
-    if (moved.size > 0) groupText += ` · groups: tickets kept with a group whose linked session is in flight or not closed: ${[...moved].join(', ')}`
+    if (moved.size > 0) groupText += ` · groups: tickets kept with a group whose worker is in flight or not closed: ${[...moved].join(', ')}`
     if (parsed.merged.length > 0) groupText += ` · groups: ids that differ only by case name one group, tickets merged: ${parsed.merged.join(', ')}`
     if (parsed.unknown.length > 0) {
       log(run, now, '!', `Groupes : tickets inconnus ignorés (${parsed.unknown.slice(0, 3).join(', ')})`, 'warn')
@@ -2278,6 +2354,10 @@ const reportHere = (
     const wide = wideFolders(run, run.groups)
     if (wide.length > 0) {
       groupText += ` · groups: ${wide.slice(0, 3).join('; ')}${wide.length > 3 ? '…' : ''}. A folder blocks every group that names a file inside it: list the files the group really touches instead, unless it creates files in that folder`
+    }
+    const disorder = lettersOutOfOrder(run)
+    if (disorder.length > 0) {
+      groupText += ` · groups: letters out of execution order: ${disorder.join('; ')}; letter the groups in the order they run (A first) and send the plan again with the new ids`
     }
   }
   if (addedIds.length > 0 && !isPlanKept) placeInRunningGroup(run, addedIds, ticketsBeforeAdd, now)
@@ -2288,16 +2368,16 @@ const reportHere = (
   if (changes.length > 0 && (run.found ?? []).length > 0) setFound(run, changes, now)
   restartTicketSteps(run, ticketsBefore, now)
 
-  // Les groupes que leurs sessions liées ont rendus (leurs statuts arrivent dans `set`).
+  // Les groupes que leurs workers ont rendus (leurs statuts arrivent dans `set`).
   let returnText = ''
   const returned: string[] = []
   if (input.returned !== undefined) {
     const back = returnGroups(run, input.returned, now, opts.relay)
-    if (back.unknown.length > 0) returnText = ` · returned: no group in a linked session among ${back.unknown.join(', ')}`
+    if (back.unknown.length > 0) returnText = ` · returned: no group in a worker among ${back.unknown.join(', ')}`
     returned.push(...back.back)
   }
 
-  // Des groupes finis relus ailleurs (leur session liée, après leur retour) : la revue vaut ici.
+  // Des groupes finis relus ailleurs (leur worker, après leur retour) : la revue vaut ici.
   let reviewedText = ''
   if (input.reviewed !== undefined) {
     const ids = (Array.isArray(input.reviewed) ? input.reviewed : []).filter(x => String(x).trim() !== '')
@@ -2333,7 +2413,7 @@ const reportHere = (
     returnText += ` · returned with tickets the plan attaches to it still open: ${waitingAttached.map(id => `${shownGroupId(id)} (${openAttachedOf(run, run.groups!.find(x => x.id === id)!).join(', ')})`).join('; ')}: send {"reviewed": [...]} for it only once they are done, if its final report says the group review ran there`
   if (unreviewed.some(id => !waitingAttached.includes(id))) {
     const ids = unreviewed.filter(id => !waitingAttached.includes(id)).map(id => asciiJson(id)).join(', ')
-    returnText += ` · returned without a /code-review relayed by its linked session: ${unreviewed.filter(id => !waitingAttached.includes(id)).map(shownGroupId).join(', ')}. If its final report says the group review ran there, send {"reviewed": [${ids}]}: the review button then goes away. Otherwise the group still needs its review, in its linked session (its branch is merged here): tell the user, the dashboard's « Revue du groupe · session liée » button asks for it`
+    returnText += ` · returned without a /code-review relayed by its worker: ${unreviewed.filter(id => !waitingAttached.includes(id)).map(shownGroupId).join(', ')}. If its final report says the group review ran there, send {"reviewed": [${ids}]}: the review button then goes away. Otherwise the group still needs its review, in its worker (its branch is merged here): tell the user, the dashboard's « Revue du groupe · worker » button asks for it`
   }
 
   const review = input.review !== null && typeof input.review === 'object' ? (input.review as Record<string, unknown>) : null
@@ -2371,9 +2451,9 @@ const reportHere = (
     securityReply = ` · security: "group" must be a group id (a string), not ${JSON.stringify(sentGroup)}; nothing recorded`
   } else if (security && isUnknownGroup) {
     const ids = (run.groups ?? []).map(g => shownGroupId(g.id))
-    securityReply = ` · security: no group ${asciiJson(typeof sentGroup === 'string' ? sentGroup : named)} in this workflow (${ids.length > 0 ? `groups: ${ids.join(', ')}` : 'no groups: send it without "group" for the whole lot'}); nothing recorded`
+    securityReply = ` · security: no group ${asciiJson(typeof sentGroup === 'string' ? sentGroup : named)} in this mission (${ids.length > 0 ? `groups: ${ids.join(', ')}` : 'no groups: send it without "group" for the whole lot'}); nothing recorded`
   } else if (security && named === '' && (run.groups ?? []).length > 0 && securityGroupOf(run, '') === null) {
-    // Un parcours à groupes sans groupe fini (rattachés compris) : l'avis n'irait qu'au lot, que rien ne lit alors.
+    // Une mission à groupes sans groupe fini (rattachés compris) : l'avis n'irait qu'au lot, que rien ne lit alors.
     securityReply = ` · security: no finished group to give it to (groups: ${run.groups!.map(g => shownGroupId(g.id)).join(', ')}); send it with "group"; nothing recorded`
   } else if (security && outOfRange.length > 0) {
     securityReply = ` · security: refused, counts out of range (${outOfRange.join(', ')}): each is a whole number from 0 to ${BUGS_MAX}; nothing recorded`
@@ -2428,7 +2508,7 @@ const reportHere = (
     // qu'il ne nomme pas : aucune faille laissée, comme la réponse le dit. Un « findings » ou un
     // « fixed » illisible non renvoyé le reste (jamais écrit 0), et la réponse le redemande.
     if (hasCounts && next.dismissed !== undefined && !isSecurityCount(next.dismissed)) delete next.dismissed
-    // Seul un envoi d'ici tranche : la proposition d'une session liée tombe, comme après d'autres failles.
+    // Seul un envoi d'ici tranche : la proposition d'un worker tombe, comme après d'autres failles.
     if (dismissed !== undefined || isNewFindings) delete next.proposedDismissed
     if (group) group.security = next
     else run.security = next
@@ -2470,14 +2550,14 @@ const reportHere = (
   // La session de pistes fermée par cet appel : la suite de la rétro arrive avant son `complete`.
   extendActive(run)
   // Le découpage d'une rétro attend la fermeture de sa session de pistes (celle de cet appel compte) :
-  // un lot reçu avant finirait, avec un parcours resté à sa seule phase, dans un parcours « terminé ».
+  // un lot reçu avant finirait, avec une mission restée à sa seule phase, dans une mission « terminée ».
   if (isRetroRun(run) && phase.skill === 'retro' && holdsItemsSession(phase) && (tickets.length > 0 || Array.isArray(input.groups))) {
     return refusedCut(board, `tickets and groups: refused, the pistes session of this retro is not closed yet: ${heldRemedy(phase)}. Once it is closed, send the whole call again`)
   }
 
   let withdrawnText = ''
   for (const w of reportedWithdrawals(input)) {
-    // Un choix relayé par une session liée et pas encore gardé ici se garde, retiré. Il est gardé
+    // Un choix relayé par un worker et pas encore gardé ici se garde, retiré. Il est gardé
     // neutralisé, et son retrait peut arriver tel que la session l'a écrit : les deux formes comptent.
     const isIt = (what: string) => isSameRelayedChoice(what, w.what)
     const relayed = relayedDecisions(run, isRelay(opts.relay, run.id) ? opts.relay : null).find(d => isIt(d.what))
@@ -2532,10 +2612,10 @@ const reportHere = (
   const isTicketGate = input.complete === true && !detour && phase.skill === 'implement' && stillOpen.length > 0
   // « Version et push » est une seule phase : la fin de /project:version n'en est que la moitié.
   const isPushGate = input.complete === true && !detour && phase.skill === 'project:version' && !isPushed(phase)
-  // Des pistes confiées à une session liée et pas encore rendues : la phase attend sa note de fin.
+  // Des pistes confiées à un worker et pas encore rendues : la phase attend sa note de fin.
   const inFlight = !detour ? linkedInFlight(phase) : []
   // Rendus au choix dans le même appel : la personne les rechoisit avant toute clôture.
-  // La session des éléments, ses éléments jugés, se ferme avant la clôture : après, plus de parcours actif pour la noter.
+  // La session des éléments, ses éléments jugés, se ferme avant la clôture : après, plus de mission active pour la noter.
   const isClosingGate = input.complete === true && !detour && (isItemsCloseCandidate(phase) || phase.linked?.closing?.state === 'app')
   const isLinkedGate = input.complete === true && (inFlight.length > 0 || backToChoice > 0 || isClosingGate)
   if (input.complete === true && !isReportGate && !isTicketGate && !isPushGate && !isLinkedGate) {
@@ -2553,58 +2633,60 @@ const reportHere = (
       if (isLast) {
         run.status = 'done'
         run.finishedAt = now
+        delete run.waitsUser
         stopAuto(run, now, AUTO_STOPS.finished)
-        log(run, now, '★', 'Parcours terminé', 'ok')
-        fx.toasts.push(`★ Parcours terminé : ${run.title}`)
+        log(run, now, '★', 'Mission terminée', 'ok')
+        fx.toasts.push(`★ Mission terminée : ${run.title}`)
       } else {
         const next = suggestionsFor(run, opts).primary
         fx.toasts.push(`✓ ${def.label} ${agree(def, 'terminé')}${next ? ` · suite : ${SKILLS[next]!.label}` : ''}`)
       }
     }
   }
-  // Le lot retiré en entier, la phase en cours faite et plus rien de dû : le parcours se termine comme
+  // Le lot retiré en entier, la phase en cours faite et plus rien de dû : la mission se termine comme
   // une rétro sans ticket (un lot ajouté par le même appel le retient).
   if (isLotRemoved && run.status === 'active' && phase.status === 'done' && !hasOpenLot(run) && isRunComplete(run)) {
     run.status = 'done'
     run.finishedAt = now
+    delete run.waitsUser
     stopAuto(run, now, AUTO_STOPS.finished)
-    log(run, now, '★', 'Parcours terminé', 'ok')
-    fx.toasts.push(`★ Parcours terminé : ${run.title}`)
+    log(run, now, '★', 'Mission terminée', 'ok')
+    fx.toasts.push(`★ Mission terminée : ${run.title}`)
   }
 
   run.updatedAt = now
   const gateText = isReportGate
     ? ' · the report is validated by the user from the dashboard (✓ Valider le rapport), not by you: wait for it'
     : isTicketGate
-      ? ` · not finished: ${stillOpen.length} ticket(s) of the lot still open (${stillOpen.slice(0, 4).map(t => t.name).join('; ')}${stillOpen.length > 4 ? '…' : ''}). A finished group is not the end of the phase: tell the user to launch the next group from the dashboard, in its linked session (↗ Session liée), not /flow-board:compte-rendu nor the delivery`
+      ? ` · not finished: ${stillOpen.length} ticket(s) of the lot still open (${stillOpen.slice(0, 4).map(t => t.name).join('; ')}${stillOpen.length > 4 ? '…' : ''}). A finished group is not the end of the phase: tell the user to launch the next group from the dashboard, in its worker (↗ Worker), not /flow-board:compte-rendu nor the delivery`
       : isPushGate
-        ? ' · version done; the phase stays open until /project:push, which the user runs: tell them to run it, or to close the run from the dashboard (✓ Clore le parcours) if they deliver no further'
+        ? ' · version done; the phase stays open until /project:push, which the user runs: tell them to run it, or to close the mission from the dashboard (✓ Clore la mission) if they deliver no further'
         : isLinkedGate
           ? inFlight.length === 0 && backToChoice === 0
-            ? ' · not finished: the linked session of the items is not closed yet. Close it first by the procedure under « Close now » below (or, once the user archived it in the app, by the line « To archive in the app »), send {"closed": [...]} with its result, then complete (a stopped closing lets you complete)'
+            ? ' · not finished: the worker of the items is not closed yet. Close it first by the procedure under « Close now » below (or, once the user archived it in the app, by the line « To archive in the app »), send {"closed": [...]} with its result, then complete (a stopped closing lets you complete)'
             : inFlight.length === 0
             ? ` · not finished: ${backToChoice} item(s) just went back to the user's choice (todo). Do not complete: tell the user, who sends them again or decides to give them up`
             : phase.linked?.session === undefined
-            ? ` · not finished: ${inFlight.length} item(s) sent to a linked session that was never launched (${inFlight.slice(0, 4).map(i => i.label).join('; ')}${inFlight.length > 4 ? '…' : ''}). Do not mark them done or dropped: launch the session, or tell the user, who resends the request or cancels the send from the dashboard (« Redemander », « Annuler »)`
-            : ` · not finished: ${inFlight.length} item(s) still being applied by the linked session (${inFlight.slice(0, 4).map(i => i.label).join('; ')}${inFlight.length > 4 ? '…' : ''}). Wait for its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: it goes back to the user's choice; dropped only when the user gives it up), then complete unless some went back to todo`
+            ? ` · not finished: ${inFlight.length} item(s) sent to a worker that was never launched (${inFlight.slice(0, 4).map(i => i.label).join('; ')}${inFlight.length > 4 ? '…' : ''}). Do not mark them done or dropped: launch the session, or tell the user, who resends the request or cancels the send from the dashboard (« Redemander », « Annuler »)`
+            : ` · not finished: ${inFlight.length} item(s) still being applied by the worker (${inFlight.slice(0, 4).map(i => i.label).join('; ')}${inFlight.length > 4 ? '…' : ''}). Wait for its final note, check its work, send the full items list with each status (done if done and checked; todo if not done: it goes back to the user's choice; dropped only when the user gives it up), then complete unless some went back to todo`
           : ''
   // Une session lancée a des éléments : Claude ne les voit pas passer « doing », il le lit ici.
   const withSession = !isLinkedGate && phase.linked?.session !== undefined ? inFlight : []
   const linkedText =
     withSession.length > 0
-      ? ` · with the linked session until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
+      ? ` · with the worker until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
       : ''
   return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${itemsText}${groupText}${returnText}${reviewedText}${reviewReply}${securityReply}${closedText}${gateText}${linkedText}${withdrawnText}${decidedText}${waitingText}` }
 }
 
-// ─── Groupes confiés à des sessions liées ─────────────────────────────────
+// ─── Groupes confiés à des workers ─────────────────────────────────
 
-/** Un groupe qu'une session liée peut prendre : prêt, pas déjà confié, sans ticket en cours ici. */
+/** Un groupe qu'un worker peut prendre : prêt, pas déjà confié, sans ticket en cours ici. */
 export const isDelegable = (v: GroupView): boolean =>
   !v.isFallback && v.state === 'ready' && !v.isDelegated && v.open.length > 0 && !v.open.some(t => t.status === 'doing')
 
 /**
- * Le panneau confie des groupes prêts à des sessions liées, une par groupe : le parcours reste
+ * Le panneau confie des groupes prêts à des workers, un par groupe : la mission reste
  * dans cette discussion, qui suit les sessions et rend les statuts de leurs tickets à leur note de
  * fin. Un groupe commencé ici peut partir pour ses tickets restants, pas avec un ticket en cours.
  */
@@ -2657,7 +2739,7 @@ const closeMissing = (run: Run, g: TicketGroup): string[] => {
   const missing: string[] = []
   if (!isGroupReviewed(run, g)) {
     // Un `reviewed` refusé tant qu'un ticket était ouvert : rappelé une fois le groupe fini.
-    missing.push(isGroupDone(run, g) ? `its group review (if its linked session ran it, send {"reviewed": [${asciiJson(g.id)}]})` : 'its group review, once its tickets are done')
+    missing.push(isGroupDone(run, g) ? `its group review (if its worker ran it, send {"reviewed": [${asciiJson(g.id)}]})` : 'its group review, once its tickets are done')
   }
   const sec = g.security
   // Sans logique ni zone sensible et sans aucun envoi de sécurité, sa sécurité est réputée tranchée ;
@@ -2670,7 +2752,7 @@ const closeMissing = (run: Run, g: TicketGroup): string[] => {
   } else if (!isSecuritySettled(sec)) {
     if (sec?.findings !== undefined) {
       const open = sec.findings - (sec.fixed ?? 0) - (sec.dismissed ?? 0)
-      const proposal = sec.proposedDismissed !== undefined ? ` — its linked session proposes ${sec.proposedDismissed} dismissed: confirm with the user, then send {"security": {"group": ${asciiJson(g.id)}, "dismissed": <n>}}` : ''
+      const proposal = sec.proposedDismissed !== undefined ? ` — its worker proposes ${sec.proposedDismissed} dismissed: confirm with the user, then send {"security": {"group": ${asciiJson(g.id)}, "dismissed": <n>}}` : ''
       missing.push(`a decision on ${open} kept security finding(s) (fixed or dismissed)${proposal}`)
     } else if (sec?.ranAt !== undefined) missing.push('the counts of its security review (findings, fixed)')
     else if (sec?.isAdvised === true) missing.push('the security review it was advised')
@@ -2701,7 +2783,7 @@ export const isCloseCandidate = (run: Run, g: TicketGroup, relay: Relay | null =
   return link.closing === undefined || (link.closing !== null && typeof link.closing === 'object' && link.closing.state === 'stopped' && isRetried(link))
 }
 
-/** Ce que la réponse de l'outil ajoute, dans la discussion du parcours : les groupes à fermer, et ce qui manque aux autres. */
+/** Ce que la réponse de l'outil ajoute, dans la discussion de la mission : les groupes à fermer, et ce qui manque aux autres. */
 export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): string => {
   const parts: string[] = []
   // Une session archivée dans l'app : son worktree se retire par la procédure, sans git il n'y en a pas.
@@ -2730,12 +2812,12 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
         if (!isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) parts.push(` · Do not close: ${procedure} ${closedHint(target, key)}`)
         continue
       }
-      const name = `the previous linked session of group ${shownGroupId(g.id)} (${shownGroupName(g.name)}), replaced by a new send (sent at ${isoMinute(prev.at)} UTC)`
+      const name = `the previous worker of group ${shownGroupId(g.id)} (${shownGroupName(g.name)}), replaced by a new send (sent at ${isoMinute(prev.at)} UTC)`
       if (prev.closing?.state === 'app') {
         parts.push(` · To archive in the app: ${name}${closingWhy(prev.closing.why)}; ${archived(procedure)} ${closedHint(target, key)}`)
       } else if ((prev.closing === undefined || retried) && !isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) {
         parts.push(
-          ` · Close now: ${name}: its work came back with its group, a new session took its place. Only in the discussion that leads the workflow, never in a linked session (a bug-diagnosis session that resumed the workflow included: there, ignore this section). The new session of the group may work in a worktree of the same name: the worktree to close is the one of this previous session only, found by its branch and its session's cwd; if that worktree is the new session's (its cwd, or the new session's branch), stop the closing and tell the user. ${procedure} ${closedHint(target, key)}`,
+          ` · Close now: ${name}: its work came back with its group, a new session took its place. Only in the discussion that leads the mission, never in a worker (a bug-diagnosis session that resumed the mission included: there, ignore this section). The new session of the group may work in a worktree of the same name: the worktree to close is the one of this previous session only, found by its branch and its session's cwd; if that worktree is the new session's (its cwd, or the new session's branch), stop the closing and tell the user. ${procedure} ${closedHint(target, key)}`,
         )
       }
     }
@@ -2766,7 +2848,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     if (isCloseCandidate(run, g, relay)) {
       const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}) })
       parts.push(
-        ` · Close now: ${name} is closed (returned, reviewed, security settled). Only in the discussion that leads the workflow, never in a linked session (a bug-diagnosis session that resumed the workflow included: there, ignore this section). ${procedure} ${closedHint({ kind: 'group', id: g.id, name: g.name })}`,
+        ` · Close now: ${name} is closed (returned, reviewed, security settled). Only in the discussion that leads the mission, never in a worker (a bug-diagnosis session that resumed the mission included: there, ignore this section). ${procedure} ${closedHint({ kind: 'group', id: g.id, name: g.name })}`,
       )
       continue
     }
@@ -2774,7 +2856,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     if (link.closing?.state === 'stopped' && !isRetried(link)) continue
     if (isStillActive(relay, g, run.groups) && closeMissing(run, g).length === 0) {
       parts.push(
-        ` · Not closed yet: ${name} — its linked session is still active (relayed activity after its final report): closing waits. Once its work is done and checked, ask it by SendMessage to leave its final report in the relay again, updated with that work (its procedure says so after any later fix; the same text again is ignored): ${isGroupId(g.id) ? 'the next call then closes it' : 'the next call then gives its refusal to report (its id is out of form: nothing is closed from here)'}.`,
+        ` · Not closed yet: ${name} — its worker is still active (relayed activity after its final report): closing waits. Once its work is done and checked, ask it by SendMessage to leave its final report in the relay again, updated with that work (its procedure says so after any later fix; the same text again is ignored): ${isGroupId(g.id) ? 'the next call then closes it' : 'the next call then gives its refusal to report (its id is out of form: nothing is closed from here)'}.`,
       )
       continue
     }
@@ -2787,12 +2869,12 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     if (!link?.session || !def?.items || link.closing?.state === 'closed') continue
     const target = { kind: 'items', skill: phase.skill } as const
     // Relu du tableau de bord : l'id n'est cité que s'il a une forme sûre, comme dans la procédure.
-    const name = `the linked session of the ${def.items.label} of phase ${def.label} (session ${isSafeId(link.session) ? link.session : 'id de session hors forme'})`
+    const name = `the worker of the ${def.items.label} of phase ${def.label} (session ${isSafeId(link.session) ? link.session : 'id de session hors forme'})`
     const procedure = closingProcedure({ run, target, isRepo, session: link.session, ...(link.seq !== undefined ? { seq: link.seq } : {}) })
     if (link.closing?.state === 'app') {
       parts.push(` · To archive in the app: ${name}${closingWhy(link.closing.why)}; ${archived(procedure)} ${closedHint(target)}`)
     } else if (isItemsCloseCandidate(phase)) {
-      parts.push(` · Close now: ${name} is closed (every item judged). Only in the discussion that leads the workflow, never in a linked session (a bug-diagnosis session that resumed the workflow included: there, ignore this section). Before completing the phase. ${procedure} ${closedHint(target)}`)
+      parts.push(` · Close now: ${name} is closed (every item judged). Only in the discussion that leads the mission, never in a worker (a bug-diagnosis session that resumed the mission included: there, ignore this section). Before completing the phase. ${procedure} ${closedHint(target)}`)
     }
   }
   return parts.join('')
@@ -2820,7 +2902,7 @@ const applyClosed = (run: Run, value: unknown, now: number, root: string): strin
       const skill = skillIdOf(str(e.items)) ?? str(e.items)
       const phase = [...run.phases].reverse().find(p => p.skill === skill && SKILLS[p.skill]?.items)
       const name = phase ? `${SKILLS[skill]!.items!.label} of phase ${SKILLS[skill]!.label}` : `items of ${str(e.items)}`
-      if (!phase?.linked?.session) refused.push(`${name} (no linked session to close)`)
+      if (!phase?.linked?.session) refused.push(`${name} (no worker to close)`)
       else if (linkedInFlight(phase).length > 0) refused.push(`${name} (items still in progress: send their verdicts first)`)
       else if (!CLOSE_STATES.includes(state)) refused.push(`${name} (state must be closed, app or stopped)`)
       else if (phase.linked.closing?.state === 'closed' && state !== 'closed') refused.push(`${name} (already closed: a closed session never goes back)`)
@@ -2856,7 +2938,7 @@ const applyClosed = (run: Run, value: unknown, now: number, root: string): strin
       continue
     }
     if (!g) refused.push(`${id ? shownGroupId(e.group) : '?'} (unknown group)`)
-    else if (!g.delegated) refused.push(`${shownGroupId(g.id)} (not returned by a linked session)`)
+    else if (!g.delegated) refused.push(`${shownGroupId(g.id)} (not returned by a worker)`)
     else if (!CLOSE_STATES.includes(state)) refused.push(`${shownGroupId(g.id)} (state must be closed, app or stopped)`)
     else if (g.delegated.closing?.state === 'closed' && state !== 'closed') refused.push(`${shownGroupId(g.id)} (already closed: a closed group never goes back)`)
     // Un id hors forme : rien ne se ferme d'ici, seul l'arrêt se note (décision de Mathis du 31/10/2026).
@@ -2880,9 +2962,9 @@ const applyClosed = (run: Run, value: unknown, now: number, root: string): strin
   ].join('')
 }
 
-// ─── Parcours à reprendre, dates futures et traces relues ──────────────────
+// ─── Mission à reprendre, dates futures et traces relues ──────────────────
 
-/** Les parcours du projet qu'une discussion peut reprendre : en pause, ou suivis ailleurs. */
+/** Les missions du projet qu'une discussion peut reprendre : en pause, ou suivies ailleurs. */
 export const resumable = (board: Board): Run[] =>
   board.runs.filter(r => r.id !== board.activeId && r.archivedAt === undefined && (r.status === 'active' || r.status === 'paused'))
 
@@ -2891,11 +2973,11 @@ const ticketCount = (run: Run): string => {
   return t.total > 0 ? `${t.done}/${t.total} tickets` : 'no tickets'
 }
 
-/** L'id d'un parcours relu du fichier partagé, dans une réponse de l'outil : tel quel en forme, sinon échappé (JSON). */
+/** L'id d'une mission relue du fichier partagé, dans une réponse de l'outil : tel quel en forme, sinon échappé (JSON). */
 const shownRunId = (id: unknown): string => (isSafeId(id) ? id : asciiJson(id))
 
 /**
- * Un texte relu du fichier partagé (titre d'un parcours, phase), dans une réponse de l'outil :
+ * Un texte relu du fichier partagé (titre d'une mission, phase), dans une réponse de l'outil :
  * neutralisé comme un texte relayé, il n'y ouvre aucune section (« · ») ni ligne.
  */
 const shownText = (text: unknown): string => neutralRelayed(typeof text === 'string' ? text : '')
@@ -2910,34 +2992,34 @@ const shownInNote = (text: unknown): string => neutralLine(typeof text === 'stri
 /** Le nom d'une phase relue : son libellé connu, sinon son id neutralisé. */
 const phaseLabel = (skill: unknown): string => (typeof skill === 'string' ? SKILLS[skill]?.label : undefined) ?? shownText(skill)
 
-/** Pour Claude, quand cette discussion n'a pas de parcours actif : titres et ids des parcours relus neutralisés. */
+/** Pour Claude, quand cette discussion n'a pas de mission active : titres et ids des missions relues neutralisés. */
 export const noActiveText = (board: Board): string => {
   const waiting = resumable(board)
-  if (waiting.length === 0) return 'No workflow is running on the dashboard: it starts when a mattpocock skill loads.'
+  if (waiting.length === 0) return 'No mission is running on the dashboard: it starts when a mattpocock skill loads.'
   const state = (r: Run) => (r.status === 'active' ? 'in progress in another discussion' : r.asideAt !== undefined ? 'set aside by the user' : 'paused')
   const list = waiting
     .map(r => `${JSON.stringify(shownText(r.title))} (${state(r)}, ${ticketCount(r)}, phase ${phaseLabel(currentPhase(r).skill)}, id ${shownRunId(r.id)})`)
     .join('; ')
-  return `No workflow is active in this discussion, so nothing was recorded. This project already has: ${list}. Do not start another lot nor look for tickets elsewhere: ask the user which one to resume (/flow-board:flow, History tab, "↻ Reprendre ici"), then send your report again. Only if the user asks for a new workflow, send {"open": {"title": "..."}} with the report.`
+  return `No mission is active in this discussion, so nothing was recorded. This project already has: ${list}. Do not start another lot nor look for tickets elsewhere: ask the user which one to resume (/flow-board:flow, History tab, "↻ Reprendre ici"), then send your report again. Only if the user asks for a new mission, send {"open": {"title": "..."}} with the report.`
 }
 
-/** Pour la personne (réponse de /flow), quand cette discussion n'a pas de parcours actif. */
+/** Pour la personne (réponse de /flow), quand cette discussion n'a pas de mission active. */
 export const noActiveFrench = (board: Board): string => {
   const waiting = resumable(board)
-  if (waiting.length === 0) return 'Tableau de bord ouvert : aucun parcours en cours.'
+  if (waiting.length === 0) return 'Tableau de bord ouvert : aucune mission en cours.'
   const list = waiting
     .map(r => {
       const t = countTickets(r.tickets)
       return `« ${neutralInPrompt(typeof r.title === 'string' ? r.title : '')} » (${r.status === 'active' ? 'suivi dans une autre discussion' : r.asideAt !== undefined ? 'mis de côté' : 'en pause'}${t.total > 0 ? `, ${t.done}/${t.total} tickets` : ''})`
     })
     .join(', ')
-  return `Aucun parcours actif dans cette discussion. À reprendre (onglet Historique, « ↻ Reprendre ici ») : ${list}.`
+  return `Aucune mission active dans cette discussion. À reprendre (onglet Historique, « ↻ Reprendre ici ») : ${list}.`
 }
 
 /**
  * Une date d'activité dans le futur (fichier retouché à la main, horloge d'une autre machine)
  * gagnerait toutes les fusions et annulerait chaque reprise : elle est ramenée à la dernière
- * activité réelle du parcours ; de même l'état auto et les traces de retrait. Le seul point où une
+ * activité réelle de la mission ; de même l'état auto et les traces de retrait. Le seul point où une
  * trace de suppression datée à plus d'une minute dans le futur tombe : jamais appliquée (`mergeBoards`
  * et `dropRun` ne relisent que la forme, et écartent une trace mal formée ; `detachOnLoad` passe par ici). La lecture qui en fait tomber une fait réécrire le fichier
  * (`hasUnsoundTombstones`), pour qu'une lecture plus tardive, l'horloge rattrapant la date, ne l'applique pas.
@@ -2958,8 +3040,12 @@ export const clampFuture = (board: Board, now: number): Board => {
   // en négatif (rien n'est effacé), illisible comme date de revue ; le lot redevient à relire, sous une clé
   // de passage qui la nomme (jamais `lot@0`), et la revue suivante la remplace.
   const isReviewAhead = (r: Run) => isTime(r.reviewedAt) && r.reviewedAt > now + 60_000
-  if (isDeletedSound && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || isReviewAhead(r))) return board
+  // Un siège du COO daté au-delà de la tolérance : ses dates sont ramenées à maintenant (il ne gagne plus
+  // toute prise), jamais effacées.
+  const isSeatFuture = isSeatAhead(board.coo, now)
+  if (isDeletedSound && !isSeatFuture && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || isReviewAhead(r))) return board
   const b = clone(board)
+  if (isSeatFuture) b.coo = soundSeat(board.coo, now)
   // Une trace de suppression datée dans le futur, ou mal formée, tombe à la lecture : jamais appliquée.
   if (!isDeletedSound) b.deleted = soundTombstones(b.deleted, now)
   for (const r of b.runs) {
@@ -2978,10 +3064,10 @@ export const clampFuture = (board: Board, now: number): Board => {
 
 /**
  * Les traces de suppression relues, bornées ici : un id texte non vide et une vraie date (`isTime`) ;
- * avec `now`, une date à plus d'une minute dans le futur aussi écartée (les fichiers de parcours sont
+ * avec `now`, une date à plus d'une minute dans le futur aussi écartée (les fichiers de mission sont
  * propres au poste : une telle date vient d'une retouche ou d'un recul de l'horloge ; la minute de
- * tolérance est celle de toutes les dates relues). Invariant : un parcours
- * n'est effacé par une trace de suppression que si cette trace est une vraie date (au plus une minute
+ * tolérance est celle de toutes les dates relues). Invariant : une mission
+ * n'est effacée par une trace de suppression que si cette trace est une vraie date (au plus une minute
  * dans le futur), postérieure à sa dernière modification. Une liste qui n'en est pas une n'a aucune trace.
  */
 export const soundTombstones = (list: unknown, now?: number): Tombstone[] =>
@@ -2999,7 +3085,7 @@ export const hasUnsoundTombstones = (board: Board, now: number): boolean =>
 const isTraceAhead = (t: unknown, now: number): boolean =>
   t !== null && typeof t === 'object' && isTime((t as { at?: unknown }).at) && (t as { at: number }).at > now + 60_000
 
-/** Le parcours porte une trace « ↻ Renvoyer » ou « répondue » datée dans le futur (fichier retouché, horloge recalée). */
+/** La mission porte une trace « ↻ Renvoyer » ou « répondue » datée dans le futur (fichier retouché, horloge recalée). */
 const areTracesAhead = (run: Run, now: number): boolean =>
   [run.autoResent, run.answered].some(list => Array.isArray(list) && (list as unknown[]).some(t => isTraceAhead(t, now)))
 
@@ -3200,7 +3286,7 @@ const BG_OUT = /^\s*backgrounded\s+\S+\s+([0-9a-f]{6,})\s+\S+\s+(.+?)\s*$/gim
 
 /**
  * Les sessions de fond lancées par `claude --bg` (le CLI, qui n'a pas `start_session`) : l'id et
- * le titre que la commande affiche, pour relier chaque session liée à son groupe.
+ * le titre que la commande affiche, pour relier chaque worker à son groupe.
  */
 export const backgroundLaunches = (command: string, out: string): { id: string; title: string }[] => {
   const heads = withVariables(splitCommand(command)).map(seg => head(seg.text))
@@ -3209,7 +3295,7 @@ export const backgroundLaunches = (command: string, out: string): { id: string; 
 }
 
 /**
- * Ce qu'une commande dit pour le relais d'une session liée : un commit (son message, vide sans
+ * Ce qu'une commande dit pour le relais d'un worker : un commit (son message, vide sans
  * `-m`), le verdict de tests ou de vérifications. Les mêmes règles que `applyCommand`.
  */
 export const commandSignals = (command: string, ok: boolean, out: string): { commit?: string; test?: boolean } => {
@@ -3587,7 +3673,7 @@ const createdTasks = (result: unknown): { id: string; name: string }[] => {
 }
 
 /**
- * Des tâches créées dans Asana pendant le parcours (hors des skills qui publient le lot) : elles
+ * Des tâches créées dans Asana pendant la mission (hors des skills qui publient le lot) : elles
  * vont dans « Trouvé en route », avec le statut de leur ligne « Statut : ».
  */
 export const applyCreatedTasks = (board: Board, tasks: unknown, result: unknown, now: number): Outcome => {
@@ -3660,7 +3746,7 @@ export const applyAsana = (board: Board, tasks: unknown, now: number): Outcome =
   return { board: b, fx: noFx() }
 }
 
-// ─── Sous-agents ──────────────────────────────────────────────────────────
+// ─── Spécialistes ──────────────────────────────────────────────────────────
 
 export type AgentStart = {
   key: string
@@ -3672,8 +3758,8 @@ export type AgentStart = {
 }
 
 /**
- * Un appel Agent part pendant le parcours actif : ses étapes avancent (relecteurs, alternatives,
- * exploration, sources). Le sous-agent lui-même vit dans le registre de la session, plus dans le parcours (S1).
+ * Un appel Agent part pendant la mission active : ses étapes avancent (relecteurs, alternatives,
+ * exploration, sources). Le spécialiste lui-même vit dans le registre de la session, plus dans la mission (S1).
  */
 export const applyAgentStart = (board: Board, start: AgentStart, now: number): Outcome => {
   if (!activeRun(board)) return null
@@ -3690,12 +3776,12 @@ export const applyAgentStart = (board: Board, start: AgentStart, now: number): O
   return { board: b, fx: noFx() }
 }
 
-/** Un sous-agent tel que `$.agent.list()` le donne : son id, sa description, où en est sa boucle. */
+/** Un spécialiste tel que `$.agent.list()` le donne : son id, sa description, où en est sa boucle. */
 export type LiveAgent = { id: string; description: string; status: string }
 
 /**
- * Le board dont l'ancien champ des sous-agents est vidé (S1, S21 : une liste vide, qu'une version
- * d'avant lit sans casser), seulement pour les parcours dont toutes les lignes sont déjà recopiées
+ * Le board dont l'ancien champ des spécialistes est vidé (S1, S21 : une liste vide, qu'une version
+ * d'avant lit sans casser), seulement pour les missions dont toutes les lignes sont déjà recopiées
  * (`isCopied`) ; null quand aucun ne change.
  */
 export const stripRunAgents = (board: Board, isCopied: (run: Run) => boolean = () => true): Board | null => {
@@ -3704,7 +3790,7 @@ export const stripRunAgents = (board: Board, isCopied: (run: Run) => boolean = (
   return { ...board, runs: board.runs.map(r => (isDue(r) ? { ...r, agents: [] } : r)) }
 }
 
-/** Un sous-agent du parcours actif a fini : le parcours a vécu (son seuil d'abandon repart). */
+/** Un spécialiste de la mission active a fini : la mission a vécu (son seuil d'abandon repart). */
 export const applyAgentActivity = (board: Board, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
@@ -3714,13 +3800,17 @@ export const applyAgentActivity = (board: Board, now: number): Outcome => {
 
 // ─── Mode auto ────────────────────────────────────────────────────────────
 //
-// L'auto d'un parcours tient en deux dates : « allumé à », posée seulement par le second clic de la
-// personne, et « éteint à ». Il est actif quand la première est plus récente que la seconde. Chaque
+// L'auto d'une mission tient en deux dates : « allumé à », posée seulement par un clic de la personne
+// (« Confirmer », ou « Lancer en auto » sur une carte du COO, que la discussion lancée applique), et « éteint à ». Il est actif quand la première est plus récente que la seconde. Chaque
 // date se fusionne à la plus récente des deux copies (`keepAuto`), jamais par la copie la plus récente
-// du parcours : une copie en retard ne rallume rien. Une date hors forme le dit éteint. L'état relu
+// de la mission : une copie en retard ne rallume rien. Une date hors forme le dit éteint. L'état relu
 // passe par un seul point de bornage (`readAuto`) : chaque lecture le reçoit propre.
 
-/** Les raisons d'un arrêt de l'auto, telles que le bandeau les dit (« ⚡ Auto en pause : <raison> »). */
+/**
+ * Les raisons d'un arrêt de l'auto, telles qu'elles s'enregistrent (`offWhy`) : un champ enregistré,
+ * relu par des copies plus anciennes du mod, qui ne change pas avec le vocabulaire. Le bandeau les dit
+ * par `stopLabel` (« ⚡ Auto en pause : <raison> »).
+ */
 export const AUTO_STOPS = {
   click: 'coupé par toi',
   aside: 'parcours mis de côté',
@@ -3738,16 +3828,29 @@ export const AUTO_STOPS = {
   unbriefed: 'Claude pas prévenu',
 } as const
 
+/** Ce que le bandeau et les notifications disent d'une raison enregistrée dans l'ancien vocabulaire. */
+const STOP_LABELS: Readonly<Record<string, string>> = {
+  [AUTO_STOPS.aside]: 'mission mise de côté',
+  [AUTO_STOPS.closed]: 'mission close',
+  [AUTO_STOPS.finished]: 'mission terminée',
+  [AUTO_STOPS.archived]: 'mission archivée',
+  [AUTO_STOPS.unreadable]: 'lecture de la mission ratée',
+  [AUTO_STOPS.unwritten]: 'écriture de la mission ratée',
+}
+
+/** Le libellé d'une raison d'arrêt : la raison elle-même, sauf celles que `STOP_LABELS` renomme. */
+export const stopLabel = (why: string): string => STOP_LABELS[why] ?? why
+
 /** Les pauses déduites, sans écriture : l'auto reste allumé, mais cette discussion n'envoie pas. */
 export const AUTO_PAUSES = {
   changed: 'discussion changée',
-  paused: 'parcours en pause',
+  paused: 'mission en pause',
   /** Allumé au nom de cette discussion, sans la date de son clic gardée ici : un fichier seul ne rallume rien. */
   unconfirmed: 'allumage non confirmé ici',
 } as const
 
 /**
- * Les arrêts qui ne sont pas des pauses : un geste de la personne, ou le parcours qui se termine.
+ * Les arrêts qui ne sont pas des pauses : un geste de la personne, ou la mission qui se termine.
  * L'auto est éteint, et ni le bandeau ni une notification n'en disent rien.
  */
 const QUIET_STOPS: ReadonlySet<string> = new Set([AUTO_STOPS.click, AUTO_STOPS.aside, AUTO_STOPS.closed, AUTO_STOPS.finished, AUTO_STOPS.archived])
@@ -3767,7 +3870,7 @@ export const groupFailStop = (id: string): string => `${GROUP_FAIL_PREFIX}${id}`
 const isKnownStop = (why: string): boolean => KNOWN_STOPS.has(why) || (why.startsWith(GROUP_FAIL_PREFIX) && isGroupId(why.slice(GROUP_FAIL_PREFIX.length)))
 
 /**
- * L'état auto relu d'un parcours, borné ici et nulle part ailleurs : des dates lisibles, l'id de la
+ * L'état auto relu d'une mission, borné ici et nulle part ailleurs : des dates lisibles, l'id de la
  * discussion qui l'a allumé, une raison prise dans `AUTO_STOPS`. `isDamaged` : l'état est là mais
  * abîmé (pas un objet, une date hors forme). Un « éteint à » hors forme est ramené au dernier
  * « allumé à » lisible, pour que l'auto se lise éteint ; sans « allumé à » lisible, l'état n'a plus de
@@ -3793,8 +3896,8 @@ const readAuto = (raw: unknown): { auto?: RunAuto; isDamaged: boolean } => {
 
 const autoOf = (run: Run): RunAuto | undefined => readAuto(run.auto).auto
 
-/** Un état éteint par une pause posée par le mod ou la fin de la discussion : ni un geste de la personne, ni la fin du parcours. */
-const isStoredPause = (auto: RunAuto | undefined): boolean => !isAutoOnIn(auto) && auto?.offWhy !== undefined && !QUIET_STOPS.has(auto.offWhy)
+/** Un état éteint par une pause posée par le mod ou la fin de la discussion : ni un geste de la personne, ni la fin de la mission. */
+export const isStoredPause = (auto: RunAuto | undefined): boolean => !isAutoOnIn(auto) && auto?.offWhy !== undefined && !QUIET_STOPS.has(auto.offWhy)
 
 /** L'auto est actif : « allumé à » plus récent que « éteint à ». */
 const isAutoOnIn = (auto: RunAuto | undefined): boolean => auto?.onAt !== undefined && (auto.offAt === undefined || auto.onAt > auto.offAt)
@@ -3802,24 +3905,24 @@ const isAutoOnIn = (auto: RunAuto | undefined): boolean => auto?.onAt !== undefi
 export const isAutoOn = (run: Run): boolean => isAutoOnIn(autoOf(run))
 
 /**
- * Ce que l'auto d'un parcours fait vu de la discussion `here` (son id du moment, lu après un `/clear`) :
+ * Ce que l'auto d'une mission fait vu de la discussion `here` (son id du moment, lu après un `/clear`) :
  * la seule fonction qui dit s'il envoie ici (`on`). Il envoie quand il est actif, que cette discussion
- * est celle qui l'a allumé, et que le parcours y est actif. Sinon : `elsewhere`, allumé sur un parcours
- * suivi par une autre discussion (rien n'y dit si elle est celle qui l'a allumé) ; `paused`, une pause
- * déduite (discussion changée, parcours en pause) ou posée par un arrêt qui n'est ni un geste de la
- * personne ni la fin du parcours ; `off`, éteint.
+ * est celle qui l'a allumé, et que la mission y est active. Sinon : `elsewhere`, allumé sur une mission
+ * suivie par une autre discussion (rien n'y dit si elle est celle qui l'a allumé) ; `paused`, une pause
+ * déduite (discussion changée, mission en pause) ou posée par un arrêt qui n'est ni un geste de la
+ * personne ni la fin de la mission ; `off`, éteint.
  */
 export type AutoView = { kind: 'off' } | { kind: 'on' } | { kind: 'elsewhere' } | { kind: 'paused'; why: string }
 
 /**
  * `confirmedAt` : la date du second clic que cette discussion garde à part (`$.store`), null sans clic
- * gardé ; l'auto n'envoie d'ici que si l'« allumé à » fusionné la vaut : un fichier de parcours seul,
+ * gardé ; l'auto n'envoie d'ici que si l'« allumé à » fusionné la vaut : un fichier de mission seule,
  * forgé ou rejoué, ne le rallume jamais. Absent : pas vérifié (une lecture qui n'envoie rien).
  */
 export const autoStateOf = (run: Run, board: Board, here: string, confirmedAt?: number | null): AutoView => {
   const auto = autoOf(run)
   if (!auto) return { kind: 'off' }
-  if (!isAutoOnIn(auto)) return isStoredPause(auto) ? { kind: 'paused', why: auto.offWhy! } : { kind: 'off' }
+  if (!isAutoOnIn(auto)) return isStoredPause(auto) ? { kind: 'paused', why: stopLabel(auto.offWhy!) } : { kind: 'off' }
   const isHere = board.delegate === undefined && board.activeId === run.id && run.status === 'active'
   if (!isHere) return run.status === 'active' ? { kind: 'elsewhere' } : { kind: 'paused', why: AUTO_PAUSES.paused }
   if (auto.onBy === undefined || auto.onBy !== clip(str(here), AUTO_ID_MAX)) return { kind: 'paused', why: AUTO_PAUSES.changed }
@@ -3827,10 +3930,10 @@ export const autoStateOf = (run: Run, board: Board, here: string, confirmedAt?: 
 }
 
 /**
- * L'auto d'un parcours est allumé au nom de la discussion `here`, avec la date de son clic gardée ici
- * (`confirmedAt`) : il envoie d'ici, ou y reprendra sans nouveau clic (pause déduite : le parcours mis
- * en pause par l'ouverture d'un autre). Pour la fusion d'ici, seules les traces de retrait écrites ici
- * s'appliquent alors à ce parcours ; l'union revient dès que l'auto s'éteint. `unread` : la date du clic
+ * L'auto d'une mission est allumé au nom de la discussion `here`, avec la date de son clic gardée ici
+ * (`confirmedAt`) : il envoie d'ici, ou y reprendra sans nouveau clic (pause déduite : la mission mise
+ * en pause par l'ouverture d'une autre). Pour la fusion d'ici, seules les traces de retrait écrites ici
+ * s'appliquent alors à cette mission ; l'union revient dès que l'auto s'éteint. `unread` : la date du clic
  * ne s'est pas lue ce coup-ci ; dans le doute, l'auto compte allumé d'ici (sens sûr : une trace
  * d'ailleurs ne retire rien pendant une lecture ratée).
  */
@@ -3850,7 +3953,7 @@ export const nextAutoOnAt = (run: Run, now: number): number => {
 }
 
 /**
- * Éteint l'auto d'un parcours actif : « éteint à » après « allumé à » (et après la coupure d'avant),
+ * Éteint l'auto d'une mission active : « éteint à » après « allumé à » (et après la coupure d'avant),
  * même quand l'horloge le place avant (date venue d'ailleurs), pour que l'arrêt tienne. Éteint, il
  * n'écrit rien, sauf pour remplacer la raison d'une pause par celle d'un geste de la personne. Rend
  * vrai s'il a écrit.
@@ -3862,12 +3965,12 @@ const stopAuto = (run: Run, now: number, why: string): boolean => {
   const isRelabel = isStoredPause(auto) && QUIET_STOPS.has(why)
   if (!isAutoOnIn(auto) && !isRelabel) return false
   run.auto = { ...auto, offAt: Math.max(now, (auto!.onAt ?? -1) + 1, (auto!.offAt ?? -1) + 1), offWhy: why }
-  log(run, now, '⚡', `Mode auto éteint : ${why}`, 'info')
+  log(run, now, '⚡', `Mode auto éteint : ${stopLabel(why)}`, 'info')
   return true
 }
 
 /**
- * Le second clic de la personne (« Confirmer ») sur le parcours actif ici : « allumé à » et « allumé
+ * Le second clic de la personne (« Confirmer ») sur la mission active ici : « allumé à » et « allumé
  * par » (`here`, l'id de la discussion du clic). « Allumé à » passe après « éteint à » et après
  * l'allumage précédent, même quand l'horloge les place avant ; l'état est réécrit borné.
  */
@@ -3880,27 +3983,28 @@ export const switchOnAuto = (board: Board, here: string, now: number, confirmedA
   const was = autoOf(run)
   const onAt = nextAutoOnAt(run, now)
   run.auto = { onAt, onBy: clip(str(here), AUTO_ID_MAX), ...(was?.offAt !== undefined ? { offAt: was.offAt, ...(was.offWhy !== undefined ? { offWhy: was.offWhy } : {}) } : {}) }
+  delete run.waitsUser
   run.updatedAt = now
   log(run, now, '⚡', 'Mode auto allumé', 'accent')
   return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto allumé : ${run.title}`] } }
 }
 
 /**
- * Le fichier de parcours ne s'est pas lu (une lecture ratée éteint l'auto, jamais l'inverse), au
+ * Le fichier de mission ne s'est pas lu (une lecture ratée éteint l'auto, jamais l'inverse), au
  * chargement, à la sauvegarde ou à la relecture périodique : la copie de cette discussion éteint l'auto
- * de chacun de ses parcours, raison « lecture du parcours ratée ». Null quand aucun n'était allumé.
+ * de chacune de ses missions, raison « lecture de la mission ratée ». Null quand aucun n'était allumé.
  */
 export const stopAutoUnread = (board: Board, now: number): Board | null => {
   if (!board.runs.some(isAutoOn)) return null
   const b = clone(board)
-  // Sans toucher à `updatedAt` : la copie, peut-être périmée, ne doit pas l'emporter pour le reste du
-  // parcours ; la coupure, elle, passe par la fusion date par date.
+  // Sans toucher à `updatedAt` : la copie, peut-être périmée, ne doit pas l'emporter pour le reste de la
+  // mission ; la coupure, elle, passe par la fusion date par date.
   for (const run of b.runs) stopAuto(run, now, AUTO_STOPS.unreadable)
   return b
 }
 
 /**
- * Le clic de coupure sur le parcours actif ici, en auto, qu'il envoie d'ici ou soit en pause déduite
+ * Le clic de coupure sur la mission active ici, en auto, qu'il envoie d'ici ou soit en pause déduite
  * (allumé par une autre discussion) : « éteint à », raison « coupé par toi ». Sur une pause posée par
  * le mod (fin de discussion, lecture ratée, limite), le même clic remplace sa raison : le bandeau n'en
  * dit plus rien.
@@ -3915,10 +4019,10 @@ export const switchOffAuto = (board: Board, now: number): Outcome => {
   return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto coupé : ${run.title}`] } }
 }
 
-/** L'auto est éteint par une pause du mod (ni un geste de la personne ni la fin du parcours) : le bandeau la montre. */
+/** L'auto est éteint par une pause du mod (ni un geste de la personne ni la fin de la mission) : le bandeau la montre. */
 export const isAutoPauseStored = (run: Run): boolean => isStoredPause(autoOf(run))
 
-/** Éteint l'auto du parcours actif ici, pour une raison du mod (`AUTO_STOPS`) ; null quand il n'était pas allumé. */
+/** Éteint l'auto de la mission active ici, pour une raison du mod (`AUTO_STOPS`) ; null quand il n'était pas allumé. */
 export const stopActiveAuto = (board: Board, why: string, now: number): Outcome => {
   const run0 = activeRun(board)
   if (!run0 || !isAutoOn(run0)) return null
@@ -3931,11 +4035,11 @@ export const stopActiveAuto = (board: Board, why: string, now: number): Outcome 
 
 // ─── Envois du mode auto ──────────────────────────────────────────────────
 //
-// Chaque action que l'auto envoie a une clé stable et une marque dans le parcours, posée avant l'envoi :
+// Chaque action que l'auto envoie a une clé stable et une marque dans la mission, posée avant l'envoi :
 // « envoyée », puis « démarrée » quand son tour commence. Invariant : une même action auto (phase,
 // vague, groupe, revue) n'est jamais envoyée deux fois. Les marques ne se coupent jamais : seuls
 // « ↻ Renvoyer », le retrait d'une marque qui n'est pas partie (écriture ratée, auto éteint avant
-// l'envoi) et l'effacement du parcours en retirent. Deux copies s'unissent marque par marque, l'état le
+// l'envoi) et l'effacement de la mission en retirent. Deux copies s'unissent marque par marque, l'état le
 // plus avancé gagnant, et chaque retrait laisse une trace datée (les 100 plus récentes) qu'une copie en
 // retard ne défait pas. Une liste relue abîmée bloque tout envoi (le sens sûr).
 
@@ -3954,16 +4058,50 @@ export const AUTO_PHASES: ReadonlySet<string> = new Set(['to-spec', 'to-tickets'
 /** Le préfixe de l'id de la question « envoi resté sans suite » d'une marque : suivi de sa clé. */
 export const STALE_PREFIX = 'sans-suite:'
 
+/** Le début de l'id de la question d'une opposition entre missions, posée par le mod. */
+export const OPPOSITION_PREFIX = 'opposition:'
+
+/**
+ * Les pistes non cochées chez le COO d'une rétro portée ici, une fois écrites dans la boîte « À reprendre » :
+ * écartées de sa phase de rétro en cours (ni découpées, ni recopiées une seconde fois à sa clôture). Seulement
+ * des pistes encore à faire.
+ */
+export const setAsidePistes = (board: Board, runId: string, ids: readonly string[], now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || run0.id !== runId || currentPhase(run0).skill !== 'retro' || !currentPhase(run0).items.some(i => ids.includes(i.id) && i.status === 'todo')) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const phase = currentPhase(run)
+  const moved = phase.items.filter(i => ids.includes(i.id) && i.status === 'todo').map(i => i.id)
+  phase.items = phase.items.map(i => (moved.includes(i.id) ? { ...i, status: 'dropped' as const } : i))
+  run.updatedAt = now
+  log(run, now, '↺', `Pistes non cochées chez le COO, parties dans « À reprendre » : ${moved.join(', ')}`, 'info')
+  return { board: b, fx: noFx() }
+}
+
+/** Retire, par le mod, la question d'une opposition une fois la réponse relayée par le COO entrée dans la discussion. */
+export const withdrawOpposition = (board: Board, runId: string, id: string, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || run0.id !== runId || !id.startsWith(OPPOSITION_PREFIX) || !readWaiting(run0).some(q => q.id === id)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  withdrawQuestion(run, id, now)
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
 /**
  * Une action que l'auto peut envoyer : sa clé, ce qu'elle est en mots, ce qu'elle bloque ; la commande
  * d'une phase (ou `/code-review` d'un lot sans groupes), ou un texte : les groupes d'une vague confiés à
- * leurs sessions liées, la revue d'un groupe rendu, sa revue de sécurité (celle du lot, groupe « lot »).
+ * leurs workers, la revue d'un groupe rendu, sa revue de sécurité (celle du lot, groupe « lot ») ; ou la
+ * compaction d'après un découpage (`/compact`, lancée par le mod, sans texte).
  */
 export type AutoAction = { key: string; what: string; blocks: WaitTarget } & (
   | { kind: 'command'; skill: string }
   | { kind: 'groups'; groups: string[] }
   | { kind: 'review'; group: string }
   | { kind: 'security'; group: string }
+  | { kind: 'compact' }
 )
 
 /** Une marque relue : bornée ici et nulle part ailleurs ; `raw`, l'entrée telle qu'elle est enregistrée. */
@@ -3990,7 +4128,7 @@ const readMark = (raw: unknown): ReadMark => {
   return { mark, raw }
 }
 
-/** Les marques relues d'un parcours ; `isDamaged` : la liste n'est pas un tableau, ou une entrée ne se lit pas. */
+/** Les marques relues d'une mission ; `isDamaged` : la liste n'est pas un tableau, ou une entrée ne se lit pas. */
 const readMarks = (run: Run): { marks: AutoMark[]; entries: ReadMark[]; isDamaged: boolean } => {
   const raw: unknown = run.autoSent
   if (raw === undefined) return { marks: [], entries: [], isDamaged: false }
@@ -4014,7 +4152,7 @@ const readResent = (list: readonly unknown[]): { key: string; at: number }[] => 
 
 const resentOf = (run: Run): { key: string; at: number }[] => readResent(Array.isArray(run.autoResent) ? (run.autoResent as unknown[]) : [])
 
-/** Les marques d'envoi du parcours, lues : pour l'affichage et les tests. */
+/** Les marques d'envoi de la mission, lues : pour l'affichage et les tests. */
 export const autoMarksOf = (run: Run): AutoMark[] => readMarks(run).marks
 
 /** L'action de cette clé est déjà partie (ou la liste des marques est abîmée : rien ne part). */
@@ -4026,7 +4164,7 @@ const isMarked = (run: Run, key: string): boolean => {
 /** Une marque « envoyée » dont le tour n'a pas commencé : tant qu'il y en a une, rien d'autre ne part. */
 export const pendingAutoMarks = (run: Run): AutoMark[] => readMarks(run).marks.filter(m => m.startedAt === undefined)
 
-/** La clé d'une phase envoyée : son skill et son rang parmi les phases de ce skill du parcours, stable quand d'autres s'insèrent. */
+/** La clé d'une phase envoyée : son skill et son rang parmi les phases de ce skill de la mission, stable quand d'autres s'insèrent. */
 const phaseKey = (run: Run, at: number): string => {
   const skill = run.phases[at]!.skill
   const rank = run.phases.slice(0, at + 1).filter(p => p.skill === skill).length
@@ -4038,10 +4176,10 @@ const phaseKey = (run: Run, at: number): string => {
  * une fois la phase en cours finie (ou un lot de groupes clos, `isGroupLotOver`), quand c'est une des phases que l'auto lance. Null sinon (pas finie,
  * une suite qui n'est pas une commande, la livraison, la rétro, la clôture).
  */
-export const autoActionOf = (run: Run, opts: SuggestOpts = {}): AutoAction | null => {
+export const autoActionOf = (run: Run, opts: SuggestOpts = {}, outside?: ReadonlyMap<string, readonly OutsideHold[]>): AutoAction | null => {
   const phase = currentPhase(run)
   if ((phase.status !== 'done' && !isGroupLotOver(run)) || run.status !== 'active') return null
-  const skill = nextCommandSkill(run, opts)
+  const skill = nextCommandSkill(run, opts, outside)
   if (skill === null || !AUTO_PHASES.has(skill)) return null
   const at = run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending' && (p.skill === skill || p.alts.includes(skill)))
   const key = at >= 0 ? phaseKey(run, at) : `phase:${skill}#next-${run.cursor}`
@@ -4049,7 +4187,7 @@ export const autoActionOf = (run: Run, opts: SuggestOpts = {}): AutoAction | nul
 }
 
 /**
- * Revenu ce nombre de fois de sa session liée (`returnsOf`, un envoi annulé ne compte pas), un groupe
+ * Revenu ce nombre de fois de son worker (`returnsOf`, un envoi annulé ne compte pas), un groupe
  * aux tickets ouverts ne repart plus seul : il est renvoyé une fois, puis une question le bloque.
  */
 export const AUTO_GROUP_SENDS = 2
@@ -4069,12 +4207,12 @@ const isGroupSendMarked = (run: Run, unit: string): boolean => isUnitMarked(run,
 /**
  * Ce que l'auto ferait pour les groupes d'une phase à tickets, la suite des boutons de la ligne d'un
  * groupe et de la carte « Ensuite » : la revue d'un groupe rendu fini qui l'attend (texte de « ◆ Revue
- * du groupe · session liée »), puis sa revue de sécurité conseillée et pas encore lancée ; sinon, quand
+ * du groupe · worker »), puis sa revue de sécurité conseillée et pas encore lancée ; sinon, quand
  * aucun groupe n'est en vol ni rendu fini sans être clos (la vague en cours close), la vague prête (le
  * lot parallèle, ou le seul groupe prêt), sans les groupes bloqués par une question ; `relaunch` : les
  * groupes revenus trop de fois pour repartir seuls, que l'auto ne lance pas (une question les bloque).
  */
-export const autoGroupActionOf = (run: Run): { action: AutoAction | null; relaunch: string[] } => {
+export const autoGroupActionOf = (run: Run, outside?: ReadonlyMap<string, readonly OutsideHold[]>): { action: AutoAction | null; relaunch: string[] } => {
   const none = { action: null, relaunch: [] as string[] }
   const phase = currentPhase(run)
   // L'implémentation, ou le découpage une fois fini (la carte « Ensuite » propose alors les groupes) ;
@@ -4084,7 +4222,7 @@ export const autoGroupActionOf = (run: Run): { action: AutoAction | null; relaun
   const groups = run.groups ?? []
   if (!groupPlan(run)) return none
   const finished = groups.filter(x => x.linked === undefined && isGroupDone(run, x) && isGroupId(x.id) && !isBlocked(run, { kind: 'group', id: x.id }))
-  // Finis ici, sans session liée : un seul /code-review les relit tous (« ◆ Revue du groupe »), une fois.
+  // Finis ici, sans worker : un seul /code-review les relit tous (« ◆ Revue du groupe »), une fois.
   // Un groupe déjà nommé par une marque de revue n'en reçoit pas d'autre, même si cette revue ne l'a pas marqué relu.
   const here = finished.filter(g => g.delegated === undefined && !isGroupReviewed(run, g) && !isUnitMarked(run, 'review:', hereUnitOf(g)))
   const hereKey = `review:${here.map(g => hereUnitOf(g)).join('+')}`
@@ -4095,7 +4233,7 @@ export const autoGroupActionOf = (run: Run): { action: AutoAction | null; relaun
     const seq = sendNumber(g.delegated?.seq) ?? 1
     const blocks: WaitTarget = { kind: 'group', id: g.id }
     if (!isGroupReviewed(run, g)) {
-      // Rendu par sa session liée : sa revue se fait là-bas (« ◆ Revue du groupe · session liée »).
+      // Rendu par son worker : sa revue se fait là-bas (« ◆ Revue du groupe · worker »).
       const key = `review:${g.id}#${seq}`
       if (!isMarked(run, key)) return { action: { kind: 'review', group: g.id, key, what: `revue du groupe ${g.id}`, blocks }, relaunch: [] }
       continue
@@ -4109,7 +4247,7 @@ export const autoGroupActionOf = (run: Run): { action: AutoAction | null; relaun
   // Une nouvelle vague attend que celle en cours soit close : rien en vol, rien de fini sans être clos.
   const returned = groups.filter(g => g.linked === undefined && g.delegated !== undefined && isGroupDone(run, g))
   if (groups.some(g => g.linked !== undefined) || returned.some(g => closeMissing(run, g).length > 0)) return none
-  const rec = nextLaunchFor(run)
+  const rec = nextLaunchFor(run, outside)
   const picked = rec?.kind === 'parallel' ? rec.groups : rec?.kind === 'group' && rec.isDelegable ? [rec.group] : []
   const relaunch: string[] = []
   const units: string[] = []
@@ -4128,12 +4266,12 @@ export const autoGroupActionOf = (run: Run): { action: AutoAction | null; relaun
   // autre groupe prêt part seul. Jamais quand rien n'était proposé (un ticket en cours ici, rien de prêt).
   const isHeldOnly = picked.length > 0 && picked.every(id => isBlocked(run, { kind: 'group', id }))
   if (units.length === 0 && relaunch.length === 0 && isHeldOnly) {
-    const other = groupPlan(run)!.groups.find(v => isDelegable(v) && !v.isCyclic && isGroupId(v.group.id) && !picked.includes(v.group.id) && !isBlocked(run, { kind: 'group', id: v.group.id }) && returnsOf(v.group) < AUTO_GROUP_SENDS)
+    const other = groupPlan(run, outside)!.groups.find(v => isDelegable(v) && !v.isCyclic && isGroupId(v.group.id) && !picked.includes(v.group.id) && !isBlocked(run, { kind: 'group', id: v.group.id }) && returnsOf(v.group) < AUTO_GROUP_SENDS)
     if (other && !isGroupSendMarked(run, `${other.group.id}#${groupSendSeq(other.group)}`)) units.push(`${other.group.id}#${groupSendSeq(other.group)}`)
   }
   if (units.length === 0) return { action: null, relaunch }
   const ids = units.map(u => u.replace(/#\d+$/, ''))
-  const what = `${ids.length > 1 ? 'groupes' : 'groupe'} ${ids.join(', ')} en session liée`
+  const what = `${ids.length > 1 ? 'groupes' : 'groupe'} ${ids.join(', ')} dans un worker`
   return { action: { kind: 'groups', groups: ids, key: `groups:${units.join('+')}`, what, blocks: { kind: 'group', id: ids[0]! } }, relaunch }
 }
 
@@ -4182,7 +4320,7 @@ const doneTicketsPrint = (run: Run): string => {
  * (`security:lot@<date de la dernière revue, celle du passage relu>`), une fois par revue du lot : un
  * `/code-review` rechargé fait tomber l'avis (il doit suivre la dernière revue), et l'avis de cette
  * revue fait relancer la sécurité sous sa clé. Rien tant qu'une tâche de fond tourne (`inFlight` :
- * un sous-agent que Claude a lancé ne pose aucune date de lancement), ni quand une question bloque la
+ * un spécialiste que Claude a lancé ne pose aucune date de lancement), ni quand une question bloque la
  * phase, ni pour un lot dispensé, même avec un avis explicite. Invariant : une revue du lot n'est jamais
  * envoyée deux fois par l'auto pour le même passage, et une marque d'un passage précédent n'empêche
  * jamais la revue d'un passage suivant (la clé change avec la date de la revue et les tickets faits).
@@ -4208,7 +4346,7 @@ const autoLotActionOf = (run: Run, inFlight: boolean): AutoAction | null => {
 /**
  * Un groupe à l'id hors forme (relu du fichier partagé) que l'auto aurait encore à faire avancer, dans
  * une phase où il agit sur les groupes : confié, pas fini, ou fini sans être clos. Son id n'entre dans
- * aucun texte : rien ne part, et l'auto se met en pause « lecture du parcours ratée » au lieu de
+ * aucun texte : rien ne part, et l'auto se met en pause « lecture de la mission ratée » au lieu de
  * l'écarter en silence. Un tel groupe fini et clos ne retient rien.
  */
 const hasUnsafeOpenGroup = (run: Run): boolean => {
@@ -4235,7 +4373,7 @@ const isRelaunchAwaited = (run: Run, id: string): boolean => {
 /** Une marque d'envoi que poserait l'auto pour une revue : sa clé, ce qu'elle est en mots, ce qu'elle bloque. */
 export type AutoMarkSpec = { key: string; what: string; blocks: WaitTarget }
 
-/** La marque de la revue d'un groupe rendu par sa session liée (« ◆ Revue du groupe · session liée »), sous la clé de son dernier envoi. */
+/** La marque de la revue d'un groupe rendu par son worker (« ◆ Revue du groupe · worker »), sous la clé de son dernier envoi. */
 export const linkedReviewMark = (run: Run, groupId: string): AutoMarkSpec | null => {
   const g = (run.groups ?? []).find(x => x.id === groupId)
   if (!g?.delegated || !isGroupId(g.id)) return null
@@ -4252,7 +4390,7 @@ export const securityReviewMark = (run: Run, groupId: string): AutoMarkSpec | nu
 }
 
 /**
- * L'unité d'une revue faite ici, sur un groupe jamais rendu par une session liée : `<groupe>#<n>`, n les
+ * L'unité d'une revue faite ici, sur un groupe jamais rendu par un worker : `<groupe>#<n>`, n les
  * envois commencés (0 pour un groupe jamais confié, un envoi annulé gardant son numéro). Relu ici puis
  * confié, le groupe demande la revue de cet envoi (`#<n+1>`, celle de sa session) ; confié, annulé puis fini
  * ici, une nouvelle revue d'ici (`#<n>`, que l'envoi annulé n'a jamais eue : sa revue suit son retour).
@@ -4271,7 +4409,7 @@ export const hereReviewMark = (run: Run): AutoMarkSpec | null => {
 /**
  * Un bouton (« ◆ Revue du groupe », « ⛨ Revue de sécurité ») lance à la main une revue que l'auto
  * enverrait : sa marque, sous la même clé, se pose déjà démarrée (le mod ne voit pas l'Entrée de la
- * personne), sur un parcours qui a été en auto ; l'auto ne redemande jamais cette revue. Null sans
+ * personne), sur une mission qui a été en auto ; l'auto ne redemande jamais cette revue. Null sans
  * marque à poser (pas d'auto, déjà marquée, liste de marques illisible).
  */
 export const markAutoLaunched = (board: Board, mark: AutoMarkSpec | null, now: number): Outcome => {
@@ -4328,13 +4466,13 @@ export const isGroupLotStuck = (run: Run, inFlight: boolean): boolean => {
   return !isAwaiting
 }
 
-/** Les envois d'un groupe revenus de leur session liée (le dernier et les précédents gardés) ; un envoi annulé n'en est pas un. */
+/** Les envois d'un groupe revenus de leur worker (le dernier et les précédents gardés) ; un envoi annulé n'en est pas un. */
 export const returnsOf = (g: TicketGroup): number => (g.delegated !== undefined && g.delegated !== null && typeof g.delegated === 'object' ? 1 + earlierOf(g.delegated).length : 0)
 
 /**
  * Les questions bloquantes d'un groupe revenu trop de fois pour repartir seul (`<groupe>#<envoi>`), posées
  * par le mod une fois chacune (une question déjà répondue ne revient pas) : l'auto ne le relance pas.
- * `own` : les traces de retrait écrites par cette discussion ; pour un parcours dont l'auto est allumé au nom de cette discussion (`isAutoLitBy`),
+ * `own` : les traces de retrait écrites par cette discussion ; pour une mission dont l'auto est allumé au nom de cette discussion (`isAutoLitBy`),
  * seule une réponse donnée ici empêche de la reposer (une trace d'ailleurs ne la retire pas). Reposée,
  * elle est datée après la trace de son id, qu'aucune fusion ne l'efface.
  */
@@ -4352,7 +4490,7 @@ export const raiseRelaunchQuestions = (board: Board, units: readonly string[], n
     const id = u.replace(/#\d+$/, '')
     const returns = returnsOf(run.groups?.find(g => g.id === id) ?? { id, name: '', tickets: [] })
     const traceAt = traces.find(t => t.id === `${RELAUNCH_PREFIX}${u}`)?.at
-    return { id: `${RELAUNCH_PREFIX}${u}`, blocks: { kind: 'group', id }, text: `Le groupe ${id} est revenu ${returns} fois de sa session liée avec des tickets ouverts : l'auto ne le renvoie plus. Relance-le toi-même (« ↗ Session liée »), ou dis à Claude quoi en faire.`, at: Math.max(now, (traceAt ?? -1) + 1) }
+    return { id: `${RELAUNCH_PREFIX}${u}`, blocks: { kind: 'group', id }, text: `Le groupe ${id} est revenu ${returns} fois de son worker avec des tickets ouverts : l'auto ne le renvoie plus. Relance-le toi-même (« ↗ Worker »), ou dis à Claude quoi en faire.`, at: Math.max(now, (traceAt ?? -1) + 1) }
   })
   run.waiting = [...readWaiting(run).map(q => q.raw as WaitingQuestion), ...added]
   for (const u of fresh) {
@@ -4380,29 +4518,33 @@ const isGroupLotOver = (run: Run): boolean => {
 export type AutoDecision = ({ kind: 'send'; action: AutoAction } | { kind: 'stop'; why: string } | { kind: 'none' }) & { relaunch: string[] }
 
 /**
- * La décision de l'auto à la fin d'un tour, sur le parcours relu : rien tant qu'une marque attend son
+ * La décision de l'auto à la fin d'un tour, sur la mission relue : rien tant qu'une marque attend son
  * démarrage ; l'action des groupes, sinon celle d'un lot sans groupes (sa revue, sa revue de sécurité),
  * sinon celle de la phase, si elle n'est ni marquée ni bloquée par une
  * question ; sinon, quand des questions attendent et que rien n'est en vol (`inFlight` : une tâche de
- * fond ; une session liée au travail compte aussi), la pause « plus rien ne peut avancer sans toi », ou
+ * fond ; un worker au travail compte aussi), la pause « plus rien ne peut avancer sans toi », ou
  * « deuxième échec du groupe <id> » quand c'est la question d'un renvoi de trop qui retient. Une liste
- * de marques abîmée : la pause « lecture du parcours ratée », rien ne part.
+ * de marques abîmée : la pause « lecture de la mission ratée », rien ne part.
  */
-export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean): AutoDecision => {
+export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean, outside?: ReadonlyMap<string, readonly OutsideHold[]>): AutoDecision => {
   const read = readMarks(run)
   if (read.isDamaged) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
   if (read.marks.some(m => m.startedAt === undefined)) return { kind: 'none', relaunch: [] }
   if (hasUnsafeOpenGroup(run)) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
-  const grouped = autoGroupActionOf(run)
+  const grouped = autoGroupActionOf(run, outside)
   if (grouped.action) return { kind: 'send', action: grouped.action, relaunch: grouped.relaunch }
+  // Une retenue entre missions : seule la branche retenue attend, sans pause ; elle repart quand la retenue tombe.
+  const isHeldElsewhere = (outside?.size ?? 0) > 0
   // Un lot sans groupes : sa revue, puis sa revue de sécurité, avant la phase suivante.
   const lot = autoLotActionOf(run, inFlight)
   if (lot) return { kind: 'send', action: lot, relaunch: grouped.relaunch }
-  const action = autoActionOf(run, opts)
+  const action = autoActionOf(run, opts, outside)
   const phase = currentPhase(run)
-  const isHeld = action !== null && (isBlocked(run, action.blocks) || isBlocked(run, { kind: 'phase', id: phase.skill }))
+  // Le lot sans groupes retenu : sa phase de code ne part pas.
+  const isLotHeld = action !== null && action.kind === 'command' && CODE_SKILLS.has(action.skill) && outside?.has(LOT_KEY) === true
+  const isHeld = action !== null && (isLotHeld || isBlocked(run, action.blocks) || isBlocked(run, { kind: 'phase', id: phase.skill }))
   if (action && !isHeld && !isMarked(run, action.key)) return { kind: 'send', action, relaunch: grouped.relaunch }
-  const isAway = inFlight || (run.groups ?? []).some(g => g.linked !== undefined)
+  const isAway = inFlight || isHeldElsewhere || (run.groups ?? []).some(g => g.linked !== undefined)
   const open = readWaiting(run)
   if (!isAway && open.length > 0) {
     const relaunched = open.find(q => q.id.startsWith(RELAUNCH_PREFIX))
@@ -4411,7 +4553,7 @@ export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean): Au
   }
   return { kind: 'none', relaunch: grouped.relaunch }
 }
-/** La marque « envoyée » d'une action, posée sur le parcours actif ici avant l'envoi. Null quand elle y est déjà. */
+/** La marque « envoyée » d'une action, posée sur la mission active ici avant l'envoi. Null quand elle y est déjà. */
 export const markAutoSent = (board: Board, action: AutoAction, now: number): Outcome => {
   const run0 = activeRun(board)
   if (!run0 || isMarked(run0, action.key)) return null
@@ -4497,13 +4639,30 @@ export const raiseStaleAutoSends = (board: Board, now: number, isNow = false): O
 }
 
 /**
+ * La question d'une contradiction relevée par le COO, posée par le mod sur la phase en cours de la mission
+ * portée ici (seule cette partie attend) : une fois, jamais une question déjà ouverte ni déjà répondue (sa trace).
+ */
+export const poseContradiction = (board: Board, runId: string, id: string, text: string, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || run0.id !== runId) return null
+  if (readWaiting(run0).some(q => q.id === id) || readAnswered(run0).some(t => t.id === id)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  const added: WaitingQuestion = { id, blocks: { kind: 'phase', id: currentPhase(run).skill }, text, at: now }
+  run.waiting = [...readWaiting(run).map(q => q.raw as WaitingQuestion), added]
+  log(run, now, '❓', 'Décision opposée à celle d’une autre mission : question posée', 'warn')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
  * « ↻ Renvoyer » sur la question « envoi resté sans suite » d'une marque : la marque s'efface, avec une
  * trace datée qu'une copie en retard ne défait pas, et la question se retire ; l'auto peut renvoyer
  * l'action. Seulement une marque qui attend encore son démarrage.
  */
 export const resendAutoMark = (board: Board, runId: string, key: string, now: number): Outcome => {
   const run0 = activeRun(board)
-  // Le parcours du bouton, actif ici : une clé (`phase:to-tickets#1`) se retrouve dans d'autres parcours.
+  // La mission du bouton, active ici : une clé (`phase:to-tickets#1`) se retrouve dans d'autres missions.
   if (!run0 || run0.id !== runId || !pendingAutoMarks(run0).some(m => m.key === key && m.staleAt !== undefined)) return null
   const b = clone(board)
   const run = activeRun(b)!
@@ -4521,18 +4680,18 @@ export const resendAutoMark = (board: Board, runId: string, key: string, now: nu
 }
 
 /**
- * Le parcours gardé par la fusion reçoit les marques des deux copies : chaque entrée face à la trace de
+ * La mission gardée par la fusion reçoit les marques des deux copies : chaque entrée face à la trace de
  * sa clé d'abord (une trace efface les marques en attente posées avant elle, jamais une démarrée), puis une marque par clé et date, la
  * plus avancée (« démarrée » l'emporte, la question « sans suite » aussi) ; une entrée abîmée gardée
  * telle quelle ; l'union des traces, les 100 plus récentes. Rendu tel quel quand rien ne change.
- * `own` : pour un parcours dont l'auto est allumé au nom de cette discussion (`isAutoLitBy`), les traces que cette discussion a écrites, seules
+ * `own` : pour une mission dont l'auto est allumé au nom de cette discussion (`isAutoLitBy`), les traces que cette discussion a écrites, seules
  * à retirer une marque (une trace d'ailleurs, forgée ou rejouée, ne fait rien repartir).
  */
 const keepAutoSent =(kept: Run, other: Run | undefined, own?: OwnTraces['resent']): Run => {
   if (!other || (other.autoSent === undefined && other.autoResent === undefined)) return kept
   const traces = readResent([...(Array.isArray(kept.autoResent) ? kept.autoResent : []), ...(Array.isArray(other.autoResent) ? other.autoResent : [])])
-  // Pour un parcours dont l'auto est allumé d'ici, seules les traces écrites ici retirent une marque ; les traces gardées restent l'union.
-  // Une trace d'ici ne compte jamais plus tard que celle du parcours de même clé, ramenée à maintenant à la lecture.
+  // Pour une mission dont l'auto est allumé d'ici, seules les traces écrites ici retirent une marque ; les traces gardées restent l'union.
+  // Une trace d'ici ne compte jamais plus tard que celle de la mission de même clé, ramenée à maintenant à la lecture.
   const unionAt = new Map(traces.map(t => [t.key, t.at]))
   const traceAt = new Map((own ? readResent(own) : traces).map(t => [t.key, Math.min(t.at, unionAt.get(t.key) ?? t.at)]))
   const autoResent = traces.sort((p, q) => q.at - p.at).slice(0, AUTO_RESENT_MAX)
@@ -4596,21 +4755,21 @@ const mergeAuto = (ours: unknown, theirs: unknown): RunAuto | undefined => {
 }
 
 /**
- * Le parcours gardé par la fusion de deux copies reçoit l'état auto fusionné des deux (`mergeAuto`) ;
+ * La mission gardée par la fusion de deux copies reçoit l'état auto fusionné des deux (`mergeAuto`) ;
  * rendu tel quel quand rien ne change, pour que la relecture ne croie pas à un changement.
  */
 const keepAuto = (kept: Run, other: Run | undefined): Run => {
   if (kept.auto === undefined && other?.auto === undefined) return kept
   const merged = mergeAuto(kept.auto, other?.auto)
   // Rien de lisible (deux états abîmés) : l'état présent reste tel quel, jamais retiré. Il se lit
-  // éteint, et le parcours reste « a été en auto », pour que ses choix ne soient pas coupés à 30.
+  // éteint, et la mission reste « a été en auto », pour que ses choix ne soient pas coupés à 30.
   if (merged === undefined) return kept.auto !== undefined ? kept : { ...kept, auto: other!.auto }
   return JSON.stringify(merged) === JSON.stringify(kept.auto) ? kept : { ...kept, auto: merged }
 }
 
 /**
  * La marque de validation du rapport d'une copie ou de l'autre : une validation faite ne se perd pas
- * à la fusion (le plafond de 200 d'un parcours en auto vient après elle). Rendu tel quel sans changement.
+ * à la fusion (le plafond de 200 d'une mission en auto vient après elle). Rendu tel quel sans changement.
  */
 const keepReportMark = (kept: Run, other: Run | undefined): Run => {
   const theirs = other && isTime(other.reportValidatedAt) ? other.reportValidatedAt : undefined
@@ -4672,13 +4831,62 @@ const keepLotReview = (kept: Run, other: Run | undefined): Run => {
 }
 
 /**
- * La fusion de deux copies d'un même parcours : la plus récente, avec les champs qui se fusionnent à
- * part. `own` : les traces de retrait écrites par cette discussion, pour chaque parcours dont l'auto est
+ * La fusion de deux copies d'une même mission : la plus récente, avec les champs qui se fusionnent à
+ * part. `own` : les traces de retrait écrites par cette discussion, pour chaque mission dont l'auto est
  * allumé en son nom (celui qu'elles nomment) ; seules elles y retirent une marque ou une question.
  */
 const keepRun = (kept: Run, other: Run | undefined, own: readonly OwnTraces[] = [], isKeptLocal = true): Run => {
   const mine = own.find(o => o.runId === kept.id)
-  return keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent)
+  return keepLaunch(keepForced(keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent), other), other)
+}
+
+/**
+ * La fusion du rattachement à une carte de lancement (`Run.launch`) : posé une fois, jamais changé. La
+ * copie gardée sans rattachement en forme reprend celui de l'autre ; deux rattachements en forme : le
+ * plus ancien clic l'emporte (le même, d'ordinaire).
+ */
+const keepLaunch = (kept: Run, other: Run | undefined): Run => {
+  const ours = soundRunLaunch(kept.launch)
+  const theirs = soundRunLaunch(other?.launch)
+  if (!theirs) return kept
+  // Le même lancement : sa perte (une autre mission l'a emporté) ne se défait jamais.
+  if (ours && ours.id === theirs.id) {
+    const lostAt = ours.lostAt ?? theirs.lostAt
+    return lostAt === ours.lostAt ? kept : { ...kept, launch: { ...ours, lostAt: lostAt! } }
+  }
+  if (ours && ours.at <= theirs.at) return kept
+  return { ...kept, launch: theirs }
+}
+
+/**
+ * Une autre mission, qui la précède, porte le même lancement, la même carte ou le même dossier : le
+ * rattachement de la mission active ici est marqué perdu (son id reste, il ne se consomme plus jamais).
+ */
+export const loseLaunch = (board: Board, runId: string, now: number): Outcome => {
+  const run0 = board.runs.find(r => r.id === runId)
+  const was = run0 ? soundRunLaunch(run0.launch) : null
+  if (!run0 || board.delegate || !was || was.lostAt !== undefined) return null
+  const b = clone(board)
+  const run = b.runs.find(r => r.id === runId)!
+  run.launch = { ...was, lostAt: now }
+  run.updatedAt = now
+  log(run, now, '◆', 'Lancement du COO déjà pris par une autre mission : celle-ci reste en manuel, sans carte', 'warn')
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * Rattache la mission active ici à la carte de lancement dont elle est née, une seule fois : rien quand
+ * elle l'est déjà, ou que le rattachement est hors forme.
+ */
+export const attachLaunch = (board: Board, launch: RunLaunch, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || board.delegate || run0.launch !== undefined || !soundRunLaunch(launch)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  run.launch = { ...launch }
+  run.updatedAt = now
+  log(run, now, '◆', `Mission lancée par le COO (carte ${launch.card}, mode ${launch.mode === 'auto' ? 'auto' : 'manuel'})`, 'info')
+  return { board: b, fx: noFx() }
 }
 
 // ─── Traces de retrait écrites ici ────────────────────────────────────────
@@ -4686,22 +4894,22 @@ const keepRun = (kept: Run, other: Run | undefined, own: readonly OwnTraces[] = 
 // Invariant : une trace lue dans le fichier partagé, que la discussion d'où l'auto agit n'a pas écrite,
 // ne fait jamais repartir une action ni retirer une question pour l'auto de cette discussion. La
 // discussion garde à part (`$.store`, avec son id et celui du processus, comme la date du clic) les
-// traces qu'elle écrit ; tant que l'auto d'un parcours est allumé en son nom, la date du clic gardée ici (même mis en pause par l'ouverture d'un autre parcours), la fusion ne lui applique qu'elles. Les traces
-// gardées dans le parcours restent l'union : les autres discussions les appliquent toutes.
+// traces qu'elle écrit ; tant que l'auto d'une mission est allumé en son nom, la date du clic gardée ici (même mis en pause par l'ouverture d'une autre mission), la fusion ne lui applique qu'elles. Les traces
+// gardées dans la mission restent l'union : les autres discussions les appliquent toutes.
 
-/** Les traces de retrait qu'une discussion a écrites pour un parcours : « ↻ Renvoyer » (`resent`), questions retirées (`answered`). */
+/** Les traces de retrait qu'une discussion a écrites pour une mission : « ↻ Renvoyer » (`resent`), questions retirées (`answered`). */
 export type OwnTraces = {
   runId: string
   resent: readonly { key: string; at: number }[]
   answered: readonly { id: string; at: number; isUndated?: true }[]
 }
 
-/** Les traces gardées ici au plus, les plus récentes de chaque sorte, comme celles du parcours. */
+/** Les traces gardées ici au plus, les plus récentes de chaque sorte, comme celles de la mission. */
 export const OWN_TRACES_MAX = 100
 
 /**
- * Les traces de retrait qu'un changement local du board a écrites sur le parcours actif : celles qui
- * apparaissent, ou dont la date avance, entre `before` et `after`. Null sans parcours actif.
+ * Les traces de retrait qu'un changement local du board a écrites sur la mission active : celles qui
+ * apparaissent, ou dont la date avance, entre `before` et `after`. Null sans mission active.
  * Seulement pour un changement fait ici (une transition, pas une fusion) : une fusion apporterait les
  * traces des autres copies.
  */
@@ -4733,7 +4941,7 @@ export const addOwnTraces = (kept: OwnTraces, added: OwnTraces): OwnTraces => ({
 //
 // Claude déclare chaque question qui attend la personne (`waiting` de l'outil), avec ce qu'elle bloque,
 // et la retire une fois répondue (`answered`). Invariant : une question ne disparaît jamais par une
-// fusion ou une reconstruction ; seuls son retrait ou l'effacement du parcours la font disparaître.
+// fusion ou une reconstruction ; seuls son retrait ou l'effacement de la mission la font disparaître.
 // Les copies se fusionnent question par question (union), et chaque retrait laisse une trace datée.
 
 /**
@@ -4774,7 +4982,29 @@ const fingerprint = (value: unknown): string => {
  * illisible : aucune trace de retrait ne l'efface alors, seul un retrait explicite). `raw` : l'entrée
  * telle qu'elle est enregistrée, réécrite telle quelle à la fusion et par l'outil, jamais reconstruite.
  */
-export type OpenQuestion = { id: string; blocks: WaitTarget | null; text: string; at: number | null; raw: unknown }
+export type OpenQuestion = { id: string; blocks: WaitTarget | null; text: string; at: number | null; raw: unknown; gesture?: QuestionGesture }
+
+/** Le geste d'une question relue : son genre, et pour une faille le total des failles laissées. */
+export type QuestionGesture = { kind: GestureKind; dismissed?: number }
+
+const GESTURES: readonly GestureKind[] = ['spend', 'external', 'flaw']
+
+/** Le geste relu d'une question : un genre connu (une faille, avec son total en forme) ; sinon aucun. */
+const readGesture = (x: Record<string, unknown>): QuestionGesture | undefined => {
+  const kind = GESTURES.find(k => k === x.gesture)
+  if (!kind) return undefined
+  if (kind !== 'flaw') return { kind }
+  return isSecurityCount(x.dismissed) ? { kind, dismissed: x.dismissed } : undefined
+}
+
+/**
+ * L'empreinte d'une question telle que la personne la voit : son texte, sa cible et son geste, et la date
+ * de sa pose (une question reformulée la garde ; retirée puis reposée sous le même id, elle en a une
+ * neuve). Un geste ou une réponse porte celle de la version lue : une question changée depuis, ou reposée
+ * depuis, a une autre empreinte et n'est pas répondue (invariant des gestes chez le COO).
+ */
+export const questionPrint = (q: Pick<OpenQuestion, 'text' | 'blocks' | 'gesture' | 'at'>): string =>
+  `q${fingerprint({ t: q.text, b: q.blocks ? [q.blocks.kind, q.blocks.id] : null, g: q.gesture ? [q.gesture.kind, q.gesture.dismissed ?? null] : null, a: q.at })}`
 
 /** Le rang d'une question parmi celles du même id : la plus récente ; une date illisible passe après toute date lisible. */
 const questionRank = (q: OpenQuestion): number => q.at ?? -1
@@ -4808,11 +5038,12 @@ const readQuestion = (raw: unknown): OpenQuestion => {
   const kind = WAIT_KINDS.find(k => k === b.kind)
   const targetId = idText(b.id)
   const target = kind && targetId !== '' && targetId.length <= WAIT_READ_MAX ? { kind, id: targetId } : null
-  return { id, blocks: target, text: clip(str(x.text), TEXT_MAX), at: isTime(x.at) ? x.at : null, raw }
+  const gesture = readGesture(x)
+  return { id, blocks: target, text: clip(str(x.text), TEXT_MAX), at: isTime(x.at) ? x.at : null, raw, ...(gesture ? { gesture } : {}) }
 }
 
 /**
- * Les questions relues d'un parcours, une par id (la plus récente). Une liste qui n'est pas un tableau
+ * Les questions relues d'une mission, une par id (la plus récente). Une liste qui n'est pas un tableau
  * (fichier abîmé) se lit comme une seule question sans cible ni date, qui bloque tout et garde la
  * valeur entière (`damaged`) : réécrite par la fusion ou l'outil, rien n'en est perdu.
  */
@@ -4829,7 +5060,7 @@ const readEntries = (run: Run): OpenQuestion[] => {
   return raw.map(readQuestion)
 }
 
-/** Les questions ouvertes du parcours. */
+/** Les questions ouvertes de la mission. */
 export const openQuestions = (run: Run): OpenQuestion[] => readWaiting(run)
 
 /** Les traces de retrait relues : un id et une date lisibles, la plus récente par id ; `isUndated` d'une seule suffit. */
@@ -4887,23 +5118,23 @@ export const waitTargetLabel = (run: Run, q: OpenQuestion): string => {
   return `la phase ${SKILLS[b.id]?.label ?? b.id}`
 }
 
-/** La cible d'une question envoyée, telle que le parcours la connaît, ou pourquoi elle est refusée. */
+/** La cible d'une question envoyée, telle que la mission la connaît, ou pourquoi elle est refusée. */
 const waitTargetOf = (run: Run, kind: WaitTarget['kind'], raw: string): WaitTarget | string => {
   if (kind === 'ticket') {
     const t = ticketOf(run, raw)
-    return t ? { kind, id: t.id } : `no ticket "${clip(raw, WAIT_ID_MAX)}" in this workflow`
+    return t ? { kind, id: t.id } : `no ticket "${clip(raw, WAIT_ID_MAX)}" in this mission`
   }
   if (kind === 'group') {
     const g = recordedGroup(run, raw)
-    return g ? { kind, id: g.id } : `no group "${clip(raw, WAIT_ID_MAX)}" in this workflow`
+    return g ? { kind, id: g.id } : `no group "${clip(raw, WAIT_ID_MAX)}" in this mission`
   }
   const id = catalogId(raw)
   const phase = id ? run.phases.find(p => p.skill === id || p.alts.includes(id)) : undefined
-  return phase ? { kind, id: phase.skill } : `no phase "${clip(raw, WAIT_ID_MAX)}" in this workflow (phases: ${run.phases.map(p => p.skill).join(', ')})`
+  return phase ? { kind, id: phase.skill } : `no phase "${clip(raw, WAIT_ID_MAX)}" in this mission (phases: ${run.phases.map(p => p.skill).join(', ')})`
 }
 
 /**
- * Retire la question ouverte `id` du parcours, avec la trace datée de son retrait (une copie en retard
+ * Retire la question ouverte `id` de la mission, avec la trace datée de son retrait (une copie en retard
  * ne la fait pas revenir) : la réponse de Claude (`answered`), ou le mod pour une question qu'il a posée
  * (« envoi resté sans suite »). Rend faux quand aucune question ouverte ne porte cet id.
  */
@@ -4920,7 +5151,7 @@ const withdrawQuestion = (run: Run, id: string, now: number): boolean => {
 }
 
 /**
- * Les questions envoyées par `waiting` sur le parcours actif ici : `{ id, phase | group | ticket, text }`
+ * Les questions envoyées par `waiting` sur la mission active ici : `{ id, phase | group | ticket, text }`
  * en ajoute une (ou met à jour la question ouverte du même id), `{ id, answered: true }` la retire et en
  * garde la trace. Une entrée hors forme, une cible inconnue, une question de plus que la borne : refusées,
  * et la réponse le dit. Rend la phrase de la réponse.
@@ -4941,10 +5172,17 @@ const applyWaiting = (run: Run, value: unknown, now: number): string => {
     if (x.answered === true) {
       // La question « envoi resté sans suite » est celle du mod : « ↻ Renvoyer », ou l'étape lancée à la main, y répond.
       if (id.startsWith(STALE_PREFIX) && was) refused.push(`"${id}": a question of the mod; the user answers it with « ↻ Renvoyer » on the dashboard, or by launching the step: do not withdraw it`)
+      // La question d'une opposition entre missions ne se retire qu'à l'application de la réponse relayée par le COO.
+      else if (id.startsWith(OPPOSITION_PREFIX) && was) refused.push(`"${id}": opposed decisions of two missions; the user answers at the COO, and the dashboard withdraws this question itself once that answer is applied: do not withdraw it`)
       // La question d'un renvoi de trop tient tant que le groupe attend sa relance : la retirer laisserait le groupe écarté sans question.
       else if (id.startsWith(RELAUNCH_PREFIX) && was && isRelaunchAwaited(run, id))
-        refused.push(`"${id}": the group still waits for its relaunch: relaunch the group (« ↗ Session liée »), or answer otherwise (its open tickets set done, or removed from the lot with "remove"); then withdraw the question`)
+        refused.push(`"${id}": the group still waits for its relaunch: relaunch the group (« ↗ Worker »), or answer otherwise (its open tickets set done, or removed from the lot with "remove"); then withdraw the question`)
       else if (!withdrawQuestion(run, id, now)) missed.push(id)
+      continue
+    }
+    // Posée par le mod seul : Claude ne la pose ni ne la change (une autre cible ou un autre texte la ferait cesser de bloquer).
+    if (id.startsWith(OPPOSITION_PREFIX)) {
+      refused.push(`"${id}": a question of opposed decisions, posed by the dashboard itself: never posed nor changed here`)
       continue
     }
     if (!was && id.length > WAIT_ID_MAX) {
@@ -4970,10 +5208,24 @@ const applyWaiting = (run: Run, value: unknown, now: number): string => {
       refused.push(`"${id}": ${WAITING_MAX} open questions at most; withdraw an answered one first`)
       continue
     }
+    // Un geste que la personne peut faire d'un clic chez le COO : un genre connu, et pour une faille le total laissé.
+    if (x.gesture !== undefined && x.gesture !== null && !GESTURES.some(k => k === x.gesture)) {
+      refused.push(`"${id}": "gesture" is one of ${GESTURES.map(k => `"${k}"`).join(', ')}`)
+      continue
+    }
+    if (x.gesture === 'flaw' && !isSecurityCount(x.dismissed)) {
+      refused.push(`"${id}": a "flaw" gesture needs "dismissed", the total of kept findings left unfixed once the user agrees (a whole number)`)
+      continue
+    }
+    if (x.gesture === 'flaw' && (kinds[0] === 'ticket' || (kinds[0] === 'phase' && (run.groups ?? []).length > 0))) {
+      refused.push(`"${id}": a "flaw" gesture blocks its group ("group"), or this phase in a mission without groups ("phase"), never a ticket`)
+      continue
+    }
     // Une question reposée passe après la trace de son retrait, même dans le même appel ou face à une
     // trace datée d'une horloge en avance : la fusion ne l'efface pas.
     const traceAt = readAnswered(run).find(t => t.id === id)?.at
-    const question: WaitingQuestion = { id, blocks: target, text, at: was?.at ?? Math.max(now, (traceAt ?? -1) + 1) }
+    const gesture = readGesture(x)
+    const question: WaitingQuestion = { id, blocks: target, text, at: was?.at ?? Math.max(now, (traceAt ?? -1) + 1), ...(gesture ? { gesture: gesture.kind, ...(gesture.dismissed !== undefined ? { dismissed: gesture.dismissed } : {}) } : {}) }
     run.waiting = was ? open.map(q => (q.id === id ? question : (q.raw as WaitingQuestion))) : [...open.map(q => q.raw as WaitingQuestion), question]
     if (!was) log(run, now, '❓', `Question en attente (${id}) : bloque ${waitTargetLabel(run, readQuestion(question))}`, 'warn')
   }
@@ -4986,10 +5238,10 @@ const applyWaiting = (run: Run, value: unknown, now: number): string => {
 }
 
 /**
- * Le parcours gardé par la fusion reçoit les questions des deux copies : l'union, une par id (la
+ * La mission gardée par la fusion reçoit les questions des deux copies : l'union, une par id (la
  * plus récente), moins celles qu'une trace de retrait, d'une copie ou de l'autre, a retirées après leur
  * pose ; et l'union des traces, les plus récentes. Rendu tel quel quand rien ne change. `own` : pour
- * un parcours dont l'auto est allumé au nom de cette discussion, les traces qu'elle a écrites, seules à retirer
+ * une mission dont l'auto est allumé au nom de cette discussion, les traces qu'elle a écrites, seules à retirer
  * une question (une trace d'ailleurs, forgée ou rejouée, ne retire rien), et l'entrée ouverte d'ici d'une
  * question l'emporte sur celle de même id de l'autre copie, même plus récente (une copie forgée ne la recible
  * pas) ; les ids qui ne sont pas ouverts ici s'ajoutent. `isKeptLocal` : `kept` est la copie d'ici.
@@ -4997,7 +5249,7 @@ const applyWaiting = (run: Run, value: unknown, now: number): string => {
 const keepWaiting = (kept: Run, other: Run | undefined, own?: OwnTraces['answered'], isKeptLocal = true): Run => {
   if (!other || (other.waiting === undefined && other.answered === undefined)) return kept
   const merged = mergeTraces([...readAnswered(kept), ...readAnswered(other)])
-  // Une trace d'ici ne compte jamais plus tard que celle du parcours de même id, ramenée à maintenant à la lecture.
+  // Une trace d'ici ne compte jamais plus tard que celle de la mission de même id, ramenée à maintenant à la lecture.
   const unionAt = new Map(merged.map(t => [t.id, t.at]))
   const traces = new Map((own ? mergeTraces(own) : merged).map(t => [t.id, { ...t, at: Math.min(t.at, unionAt.get(t.id) ?? t.at) }]))
   const answered = merged.sort((p, q) => q.at - p.at).slice(0, ANSWERED_MAX)
@@ -5016,8 +5268,8 @@ const keepWaiting = (kept: Run, other: Run | undefined, own?: OwnTraces['answere
 
 /**
  * Les notifications d'un changement du board, au texte fixé, sans texte de question ni code : une
- * question qui apparaît sur un parcours en auto (« Parcours <titre> : N question(s) t'attendent ») ;
- * un auto qui s'éteint sans un geste de la personne ni la fin du parcours (« Parcours <titre> : auto
+ * question qui apparaît sur une mission en auto (« Mission <titre> : N question(s) t'attendent ») ;
+ * un auto qui s'éteint sans un geste de la personne ni la fin de la mission (« Mission <titre> : auto
  * en pause (<raison>) »). Rien hors auto, rien pour une question retirée ou redéclarée.
  */
 export const autoNotices = (before: Board, after: Board): string[] => {
@@ -5026,7 +5278,7 @@ export const autoNotices = (before: Board, after: Board): string[] => {
     const was = before.runs.find(r => r.id === run.id)
     if (!was) continue
     const why = autoOf(run)?.offWhy
-    if (isAutoOn(was) && !isAutoOn(run) && why !== undefined && !QUIET_STOPS.has(why)) out.push(autoPauseNotice(run.title, why))
+    if (isAutoOn(was) && !isAutoOn(run) && why !== undefined && !QUIET_STOPS.has(why)) out.push(autoPauseNotice(run.title, stopLabel(why)))
     const known = new Set(readWaiting(was).map(q => q.id))
     const open = readWaiting(run)
     if (isAutoOn(run) && open.some(q => !known.has(q.id))) out.push(autoQuestionsNotice(run.title, open.length))
@@ -5038,16 +5290,16 @@ export const autoNotices = (before: Board, after: Board): string[] => {
  * Le texte fixé de la notification d'une question bloquante, le seul : le mod (`$.ui.notify`) et la
  * consigne de Claude (`PushNotification`) le tirent d'ici, le titre neutralisé de la même façon.
  */
-export const autoQuestionsNotice = (title: string, count: number | string): string => `Parcours ${neutralInPrompt(title)} : ${count} question(s) t'attendent`
+export const autoQuestionsNotice = (title: string, count: number | string): string => `Mission ${neutralInPrompt(title)} : ${count} question(s) t'attendent`
 
 /** Le texte fixé de la notification d'une pause de l'auto. */
-export const autoPauseNotice = (title: string, why: string): string => `Parcours ${neutralInPrompt(title)} : auto en pause (${why})`
+export const autoPauseNotice = (title: string, why: string): string => `Mission ${neutralInPrompt(title)} : auto en pause (${why})`
 
 // ─── Décidé sans toi : plafond et origine ─────────────────────────────────
 //
 // Une seule règle coupe les choix, partout où une liste de choix s'écrit (`keepChoices`, avec `choiceRoom`,
 // dans basics.ts ; l'origine d'un choix aussi, `ORIGIN_LABELS` et `originOf`). Invariant :
-// en auto, aucun choix déclaré n'est coupé avant la validation du rapport. Un parcours qui a été en
+// en auto, aucun choix déclaré n'est coupé avant la validation du rapport. Une mission qui a été en
 // auto (son état auto est là, même éteint ou abîmé) ne coupe rien avant « ✓ Valider le rapport » ; au
 // passage des 200 choix, son auto se met en pause ; au-delà de 1 000, un nouveau choix déclaré ici est
 // refusé, jamais un ancien coupé (les choix relayés se gardent tous, le relais les borne à 200 par
@@ -5055,18 +5307,20 @@ export const autoPauseNotice = (title: string, why: string): string => `Parcours
 
 /** Les choix listés au plus, dans la carte de la phase et les faits du compte rendu ; au-delà, comptés. */
 export const CHOICES_LISTED = 40
+/** Le début du texte d'un choix en zone sensible tranché en auto par la reco : le compte rendu les range à part. */
+export const SENSITIVE_CHOICE_MARK = 'Zone sensible :'
 
 /** Avant la validation du rapport, au-delà, un nouveau choix déclaré ici est refusé avec un message, jamais un ancien coupé (les choix relayés se gardent tous). */
 export const CHOICES_CEILING = 1000
 
-/** Un nouveau choix ne tient plus : le parcours, qui ne coupe rien, en a déjà 1 000. Rend le refus, ou ''. */
+/** Un nouveau choix ne tient plus : la mission, qui ne coupe rien, en a déjà 1 000. Rend le refus, ou ''. */
 const choiceRefusal = (run: Run): string =>
   choiceRoom(run) === null && (run.decided ?? []).length >= CHOICES_CEILING
-    ? `this workflow keeps ${CHOICES_CEILING} choices at most until its report is validated, and cuts none: not recorded; put it in the report yourself`
+    ? `this mission keeps ${CHOICES_CEILING} choices at most until its report is validated, and cuts none: not recorded; put it in the report yourself`
     : ''
 
 /**
- * Au passage des 200 choix (relayés compris), l'auto d'un parcours allumé se met en pause, au lieu
+ * Au passage des 200 choix (relayés compris), l'auto d'une mission allumé se met en pause, au lieu
  * d'en couper. Au passage seulement : rallumé ensuite par deux clics, il ne retombe pas à chaque appel.
  */
 const pauseAtChoiceLimit = (run: Run, before: number, after: number, now: number) => {
@@ -5091,7 +5345,7 @@ const mergeChoice = (a: SoloDecision, b: SoloDecision): SoloDecision => {
 }
 
 /**
- * La fusion des choix de deux copies d'un parcours qui a été en auto (l'une ou l'autre) : l'union, un
+ * La fusion des choix de deux copies d'une mission qui a été en auto (l'une ou l'autre) : l'union, un
  * par texte et date (le même choix porte la même date dans les deux copies ; un choix remis en vigueur
  * sous le texte d'un choix retiré en est un autre), chacun avec ce que l'une ou l'autre copie a appris ;
  * une entrée hors forme est gardée telle quelle. Puis la règle de coupe (aucune avant le rapport). Hors auto, la copie gardée, comme
@@ -5118,23 +5372,28 @@ const keepDecided = (kept: Run, other: Run | undefined): Run => {
 // ─── Chargement ───────────────────────────────────────────────────────────
 
 /**
- * Sans activité depuis plus longtemps, un parcours actif est tenu pour abandonné (discussion
- * fermée sans fin propre) : au chargement il passe en pause, et un skill peut le reprendre.
+ * Sans activité depuis plus longtemps, une mission active est tenue pour abandonnée (discussion
+ * fermée sans fin propre) : au chargement elle passe en pause, et un skill peut la reprendre.
  */
 const ORPHAN_MS = 30 * 60 * 1000
 
 /**
- * Le board tel qu'une discussion le charge du stockage partagé : aucun parcours actif ici ;
- * les actifs abandonnés passent en pause ; ceux qu'une autre discussion fait vivre restent
- * actifs (« dans une autre discussion »).
+ * Le board tel qu'une discussion le charge du stockage partagé : aucune mission active ici ;
+ * les actives abandonnées passent en pause ; celles qu'une autre discussion fait vivre restent
+ * actives (« dans une autre discussion »).
  */
 export const detachOnLoad = (board: Board, now: number, session: string): Board => {
   const b = clone(clampFuture(board, now))
   b.activeId = null
   b.session = session
-  // Propre à la discussion qui l'a déclaré : une copie lue du stockage ne le garde pas.
+  // Propres à la discussion qui les a posés : une copie lue du stockage ne les garde pas.
   delete b.delegate
+  delete b.cooHere
   b.deleted = soundTombstones(b.deleted, now)
+  // Le siège du COO reste tel quel (un /reload-plugins le garde) ; mal formé, il ne s'applique jamais,
+  // sans être effacé.
+  const seat = soundSeat(b.coo)
+  if (seat) b.coo = seat
   b.runs = b.runs.map(upgradeRun)
   for (const run of b.runs) {
     if (run.status === 'active' && (!run.owner || run.owner === session || now - run.updatedAt > ORPHAN_MS)) shelve(run, now)
@@ -5143,17 +5402,17 @@ export const detachOnLoad = (board: Board, now: number, session: string): Board 
 }
 
 /**
- * Fusionne la copie de cette discussion avec le stockage partagé. Pour chaque parcours, la
- * version la plus récente l'emporte, sauf le parcours actif ici, qui garde la version locale
+ * Fusionne la copie de cette discussion avec le stockage partagé. Pour chaque mission, la
+ * version la plus récente l'emporte, sauf la mission active ici, qui garde la version locale
  * tant qu'une autre discussion ne l'a pas repris. Une trace de suppression bien formée l'emporte sur
  * toute copie qui n'est pas plus récente qu'elle ; une trace mal formée ne s'applique jamais, et une
  * trace future est tombée à la lecture (`clampFuture`).
  * Certains champs se fusionnent à part, quelle que soit la copie gardée (`keepRun`) : les fermetures
- * des sessions liées, qui ne reculent jamais, l'état auto, date par date, les questions bloquantes,
- * une par une, retraits tracés, et, pour un parcours qui a été en auto, les choix « décidé sans toi »,
- * un par un. `own` : les traces de retrait que cette discussion a écrites, pour chaque parcours dont
+ * des workers, qui ne reculent jamais, l'état auto, date par date, les questions bloquantes,
+ * une par une, retraits tracés, et, pour une mission qui a été en auto, les choix « décidé sans toi »,
+ * un par un. `own` : les traces de retrait que cette discussion a écrites, pour chaque mission dont
  * l'auto est allumé en son nom (`isAutoLitBy`) : seules elles y retirent une marque en attente ou une
- * question (`keepRun`) ; les autres parcours reçoivent l'union des traces.
+ * question (`keepRun`) ; les autres missions reçoivent l'union des traces.
  * L'écriture qui suit n'est pas atomique entre discussions : la fusion suivante rattrape.
  */
 export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces | readonly OwnTraces[] | null): Board => {
@@ -5163,8 +5422,8 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
     .sort((x, y) => y.at - x.at)
     .filter((t, i, all) => all.findIndex(o => o.id === t.id) === i)
     .slice(0, LIMITS.tombstones)
-  // Une trace de suppression efface les copies plus anciennes qu'elle ; un parcours touché après
-  // (restauré des sauvegardes, par exemple) survit, et sa trace tombe.
+  // Une trace de suppression efface les copies plus anciennes qu'elle ; une mission touchée après
+  // (restaurée des sauvegardes, par exemple) survit, et sa trace tombe.
   const goneAt = new Map(deleted.map(t => [t.id, t.at]))
   const isGone = (run: Run) => (goneAt.get(run.id) ?? -Infinity) >= run.updatedAt
   const byId = new Map<string, Run>()
@@ -5175,7 +5434,7 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
     const other = byId.get(run.id)
     if (run.id === local.activeId) {
       // Une copie en pause n'a pas d'auteur lisible (`shelve` efface `owner`) : la pause d'une discussion
-      // qui a repris le parcours puis fini ne se distingue pas de celle d'un orphelin par une autre
+      // qui a repris la mission puis fini ne se distingue pas de celle d'un orphelin par une autre
       // discussion. Seule une copie active d'une autre discussion l'emporte (question au porteur).
       const isTakenOver =
         other !== undefined && other.status === 'active' && other.owner !== undefined && other.owner !== local.session && other.updatedAt > run.updatedAt
@@ -5194,16 +5453,21 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
     activeId,
     deleted: deleted.filter(t => !byId.has(t.id)),
   }
+  // Le siège du COO : la prise la plus récente l'emporte, quelle que soit la copie (`mergeSeat`) ; un
+  // siège mal formé des deux côtés reste tel quel (ignoré à la lecture, jamais effacé sur un doute).
+  const coo = mergeSeat(local.coo, stored.coo)
+  if (coo) merged.coo = coo
+  else if (local.coo !== undefined || stored.coo !== undefined) merged.coo = local.coo ?? stored.coo
   prune(merged)
   return merged
 }
 
-/** Fin de discussion : son parcours actif passe en pause, pour la prochaine discussion du projet. */
+/** Fin de discussion : sa mission active passe en pause, pour la prochaine discussion du projet. */
 export const parkActive = (board: Board, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
   const run = activeRun(b)!
-  // La discussion qui porte le parcours se ferme : son auto s'éteint ; un /clear n'arrive pas ici.
+  // La discussion qui porte la mission se ferme : son auto s'éteint ; un /clear n'arrive pas ici.
   stopAuto(run, now, AUTO_STOPS.ended)
   shelve(run, now)
   b.activeId = null
@@ -5213,9 +5477,9 @@ export const parkActive = (board: Board, now: number): Outcome => {
 // ─── Gestes de la personne (panneau, /flow) ───────────────────────────────
 
 /**
- * Met de côté le parcours actif ici (`/flow pause`, « ‖ Mettre de côté ») : il passe en pause tel
- * quel, sans être clos même si tout est fait, ni archivé, et la discussion n'a plus de parcours
- * actif. Seule la personne le reprend (« Reprendre », champ `resume`) ; un skill n'y revient pas.
+ * Met de côté la mission active ici (`/flow pause`, « ‖ Mettre de côté ») : elle passe en pause telle
+ * quelle, sans être close même si tout est fait, ni archivée, et la discussion n'a plus de mission
+ * active. Seule la personne la reprend (« Reprendre », champ `resume`) ; un skill n'y revient pas.
  */
 export const setAsideActive = (board: Board, now: number): Outcome => {
   if (!activeRun(board)) return null
@@ -5225,9 +5489,10 @@ export const setAsideActive = (board: Board, now: number): Outcome => {
   run.owner = undefined
   run.asideAt = now
   run.updatedAt = now
+  delete run.waitsUser
   stopAuto(run, now, AUTO_STOPS.aside)
   b.activeId = null
-  log(run, now, '‖', 'Parcours mis de côté', 'info')
+  log(run, now, '‖', 'Mission mise de côté', 'info')
   return { board: b, fx: { ...noFx(), toasts: [`‖ Mis de côté : ${run.title}`] } }
 }
 
@@ -5242,18 +5507,19 @@ export const finishActive = (board: Board, now: number): Outcome => {
   run.status = 'done'
   run.finishedAt = now
   run.updatedAt = now
+  delete run.waitsUser
   stopAuto(run, now, AUTO_STOPS.closed)
   b.activeId = null
-  log(run, now, '★', 'Parcours clos', 'ok')
-  return { board: b, fx: { ...noFx(), toasts: [`★ Parcours clos : ${run.title}`] } }
+  log(run, now, '★', 'Mission close', 'ok')
+  return { board: b, fx: { ...noFx(), toasts: [`★ Mission close : ${run.title}`] } }
 }
 
 /** Les choix faits sans la personne qu'elle n'a pas encore relus. */
 export const unseenDecisions = (run: Run, relay?: Relay | null): number => inForce(run.decided ?? [], relay).filter(d => d.seenAt === undefined).length
 
 /**
- * La personne a relu les choix faits sans elle, y compris ceux que les sessions liées ont relayés
- * (`stored` : le relais du parcours) : ceux-là sont enregistrés relus, pour ne plus revenir.
+ * La personne a relu les choix faits sans elle, y compris ceux que les workers ont relayés
+ * (`stored` : le relais de la mission) : ceux-là sont enregistrés relus, pour ne plus revenir.
  */
 export const markDecisionsSeen = (board: Board, now: number, stored?: unknown): Outcome => {
   const run0 = activeRun(board)
@@ -5288,7 +5554,7 @@ export const validateReport = (board: Board, now: number): Outcome => {
 }
 
 /**
- * Ce que le tableau de bord sait du parcours, donné à Claude quand le compte rendu se charge :
+ * Ce que le tableau de bord sait de la mission, donné à Claude quand le compte rendu se charge :
  * il part de ces faits et les complète par git et le tracker.
  */
 export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | null = null): string[] => {
@@ -5332,13 +5598,13 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
   const tracking = run.artifacts.filter(a => a.kind === 'tracking')
   lines.push(
     tracking.length > 0
-      ? `- Tracking files of this run (one per discussion; read them all, they hold what the other discussions did, found and decided): ${tracking.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}. Also look in travail/tasks/ for others changed since the run started (git log).`
-      : '- Tracking files: look in travail/tasks/ for every file changed since the run started (git log): one per discussion, they hold what the other discussions did, found and decided.',
+      ? `- Tracking files of this mission (one per discussion; read them all, they hold what the other discussions did, found and decided): ${tracking.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}. Also look in travail/tasks/ for others changed since the mission started (git log).`
+      : '- Tracking files: look in travail/tasks/ for every file changed since the mission started (git log): one per discussion, they hold what the other discussions did, found and decided.',
   )
   const found = run.found ?? []
-  if (found.length > 0) lines.push(`- Found on the way (tracker tasks created during the run, outside the lot): ${found.map(f => `${shownInNote(f.name)} [${shownInNote(f.id)}]: ${shownInNote(f.status)}${f.why ? ` (${shownInNote(f.why)})` : ''}${f.isForUser ? ', assigned to the user' : ''}`).join('; ')}.`)
+  if (found.length > 0) lines.push(`- Found on the way (tracker tasks created during the mission, outside the lot): ${found.map(f => `${shownInNote(f.name)} [${shownInNote(f.id)}]: ${shownInNote(f.status)}${f.why ? ` (${shownInNote(f.why)})` : ''}${f.isForUser ? ', assigned to the user' : ''}`).join('; ')}.`)
   const all = inForce(run.decided ?? [])
-  // Un parcours en auto en déclare des centaines : les 40 plus récents ici, tous dans le fichier des choix.
+  // Une mission en auto en déclare des centaines : les 40 plus récents ici, tous dans le fichier des choix.
   const decided = all.slice(-CHOICES_LISTED)
   const withdrawn = (run.decided ?? []).filter(d => d.withdrawnAt !== undefined)
   if (all.length > decided.length) {
@@ -5349,10 +5615,13 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
   }
   lines.push(
     decided.length > 0
-      ? `- Choices reported as made without the user: ${decided.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}${originOf(d.origin) ? ` [origin: ${ORIGIN_LABELS[originOf(d.origin)!]}]` : ''}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list.${all.some(d => originOf(d.origin)) ? ' Some have an origin: group « Décidé sans toi » by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de session liée »), then the others under « Autres ».' : ''}`
+      ? `- Choices reported as made without the user: ${decided.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}${originOf(d.origin) ? ` [origin: ${ORIGIN_LABELS[originOf(d.origin)!]}]` : ''}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list.${all.some(d => originOf(d.origin)) ? ' Some have an origin: group « Décidé sans toi » by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».' : ''}`
       : '- No choice was reported as made without the user: check the work for any, and put them in « Décidé sans toi ».',
   )
-  if (withdrawn.length > 0) lines.push(`- Choices withdrawn during the run (no longer in force; say so apart in « Décidé sans toi », with why): ${withdrawn.map(d => `${shownInNote(d.what)}${d.withdrawnWhy ? ` (${shownInNote(d.withdrawnWhy)})` : ''}`).join('; ')}.`)
+  // Les choix en zone sensible tranchés en auto, marqués par leur texte : tous, à part, pour que la personne les relise d'un coup.
+  const sensitive = all.filter(d => d.what.startsWith(SENSITIVE_CHOICE_MARK))
+  if (sensitive.length > 0) lines.push(`- Sensitive choices settled in auto (${sensitive.length}), to list first and apart in « Décidé sans toi », under « Zone sensible, tranché en auto », and nowhere else: ${sensitive.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}`).join('; ')}.`)
+  if (withdrawn.length > 0) lines.push(`- Choices withdrawn during the mission (no longer in force; say so apart in « Décidé sans toi », with why): ${withdrawn.map(d => `${shownInNote(d.what)}${d.withdrawnWhy ? ` (${shownInNote(d.withdrawnWhy)})` : ''}`).join('; ')}.`)
   const plans = run.artifacts.filter(a => a.kind === 'plan')
   if (plans.length > 0) lines.push(`- Plans written: ${plans.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}.`)
   const tests = run.tests.filter(t => t.kind === 'test')
@@ -5365,26 +5634,28 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
 
 export const resumeRun = (board: Board, id: string, now: number): Outcome => {
   const target0 = board.runs.find(r => r.id === id)
-  if (!target0 || target0.id === board.activeId) return null
+  // La discussion du COO ne reprend jamais une mission (bouton du panneau compris).
+  if (!target0 || target0.id === board.activeId || isCooDiscussion(board, now)) return null
   const b = clone(board)
   const current = activeRun(b)
   if (current) shelve(current, now)
   const run = b.runs.find(r => r.id === id)!
-  // Reprendre un parcours archivé le sort des archives ; mis de côté, il revient tel qu'il était.
+  // Reprendre une mission archivée la sort des archives ; mise de côté, elle revient telle qu'elle était.
   delete run.archivedAt
   delete run.asideAt
+  delete run.waitsUser
   run.status = 'active'
   run.owner = b.session
   run.finishedAt = undefined
   run.updatedAt = now
   b.activeId = run.id
-  log(run, now, '↻', 'Parcours repris', 'accent')
+  log(run, now, '↻', 'Mission reprise', 'accent')
   return { board: b, fx: { ...noFx(), toasts: [`↻ Reprise : ${run.title}`] } }
 }
 
 /**
- * Range un parcours aux archives : il quitte l'historique visible, n'est plus proposé à la reprise
- * et n'est jamais élagué. Le parcours en cours ici est d'abord mis en pause.
+ * Range une mission aux archives : elle quitte l'historique visible, n'est plus proposée à la reprise
+ * et n'est jamais élaguée. La mission en cours ici est d'abord mise en pause.
  */
 export const archiveRun = (board: Board, id: string, now: number): Outcome => {
   const run0 = board.runs.find(r => r.id === id)
@@ -5398,16 +5669,47 @@ export const archiveRun = (board: Board, id: string, now: number): Outcome => {
   }
   run.archivedAt = now
   run.updatedAt = now
+  delete run.waitsUser
   stopAuto(run, now, AUTO_STOPS.archived)
-  log(run, now, '▣', 'Parcours archivé', 'info')
+  log(run, now, '▣', 'Mission archivée', 'info')
   return { board: b, fx: { ...noFx(), toasts: [`▣ Archivé : ${run.title}`] } }
 }
 
 /**
- * La discussion prend le titre du parcours (série 1, Q14 et Q15) : le parcours y est né, aucun
- * autre n'y est né (actif, en pause, fini ou archivé ; un parcours supprimé a quitté le board), et
- * ce n'est pas une session liée ; et, au premier titre comme plus tard (`fix.title`, `/flow rename`),
- * aucune session liée n'a été demandée par ce parcours : son brief nomme la discussion (série 2, Q6 ;
+ * La demande de clôture et d'archivage du COO après la livraison, appliquée par le mod de la discussion qui porte la
+ * mission : close d'abord si elle est active ici, puis archivée. Rien quand elle est déjà archivée ou
+ * absente ; une application répétée est donc sans effet.
+ */
+export const closeAndArchive = (board: Board, id: string, now: number, delivered?: DeliveredResult): Outcome => {
+  const run0 = board.runs.find(r => r.id === id)
+  if (!run0 || run0.archivedAt !== undefined) return null
+  // Livrée par le COO : ses phases de livraison sont faites, et le journal dit ce qui est parti.
+  const base = delivered ? clone(board) : board
+  if (delivered) {
+    const run = base.runs.find(r => r.id === id)!
+    for (const p of run.phases) if (DELIVERY.has(p.skill) && p.status !== 'done') finishPhase(p, now)
+    log(run, now, '⬆', `Livrée par le COO : ${deliveredText(delivered)}`, 'ok')
+  }
+  const finished = base.activeId === id ? finishActive(base, now) : null
+  const b = finished ? finished.board : clone(base)
+  log(b.runs.find(r => r.id === id)!, now, '◆', 'Clôture et archivage demandés par le COO', 'info')
+  const archived = archiveRun(b, id, now)
+  if (!archived) return finished
+  return { board: archived.board, fx: { ...archived.fx, toasts: [...(finished?.fx.toasts ?? []), ...archived.fx.toasts] } }
+}
+
+/** Ce qu'une livraison du COO a fait partir : la version posée, le push, l'adresse de la pull request (textes rendus par Claude). */
+export type DeliveredResult = { version?: string; push?: string; pr?: string }
+
+/** Le résultat d'une livraison en une ligne : chaque étape rendue, coupée court. */
+export const deliveredText = (r: DeliveredResult): string =>
+  [r.version ? `version ${neutralLine(clip(r.version, 80))}` : '', r.push ? `push ${neutralLine(clip(r.push, 80))}` : '', r.pr ? `PR ${neutralLine(clip(r.pr, 120))}` : ''].filter(Boolean).join(' · ') || 'faite'
+
+/**
+ * La discussion prend le titre de la mission (série 1, Q14 et Q15) : la mission y est née, aucune
+ * autre n'y est née (active, en pause, finie ou archivée ; une mission supprimée a quitté le board), et
+ * ce n'est pas un worker ; et, au premier titre comme plus tard (`fix.title`, `/flow rename`),
+ * aucun worker n'a été demandé par cette mission : son brief nomme la discussion (série 2, Q6 ;
  * user story 75). Le titre attend alors le moteur (`fx.discussionTitle`) ; rend la ligne qui le dit
  * à Claude.
  */
@@ -5421,11 +5723,11 @@ const nameDiscussion = (board: Board, run: Run, fx: Effects): string => {
     !hasLaunchedLinked(run)
   if (!isHere) return ' · this discussion keeps its name'
   fx.discussionTitle = run.title
-  return ` · name this discussion "${run.title}": if you have a tool that renames it (in the app: set_session_title), call it now with this title; otherwise the dashboard renames it at the user's next message`
+  return ` · name this discussion "${run.title}": if you have a tool that renames it (in the app: set_session_title), call it now with this title; otherwise the dashboard renames it itself (/rename at the end of this turn when the session has it, else at the user's next message)`
 }
 
 /**
- * Renomme un parcours, titre automatique ou posé compris (`/flow rename <titre>`). Le titre reste
+ * Renomme une mission, titre automatique ou posé compris (`/flow rename <titre>`). Le titre reste
  * ensuite posé : un titre envoyé plus tard par l'outil ne l'écrase pas. La discussion suit, aux
  * conditions de `nameDiscussion`.
  */
@@ -5440,11 +5742,11 @@ export const renameRun = (board: Board, id: string, title: string, now: number):
   const fx = { ...noFx(), toasts: [`✎ Renommé : ${run.title}`] }
   nameDiscussion(b, run, fx)
   run.updatedAt = now
-  log(run, now, '✎', `Parcours renommé : ${run.title}`, 'info')
+  log(run, now, '✎', `Mission renommée : ${run.title}`, 'info')
   return { board: b, fx }
 }
 
-/** Sort un parcours des archives : il revient dans l'historique, tel qu'il était. */
+/** Sort une mission des archives : elle revient dans l'historique, telle qu'elle était. */
 export const unarchiveRun = (board: Board, id: string, now: number): Outcome => {
   const run0 = board.runs.find(r => r.id === id)
   if (!run0 || run0.archivedAt === undefined) return null
@@ -5452,7 +5754,7 @@ export const unarchiveRun = (board: Board, id: string, now: number): Outcome => 
   const run = b.runs.find(r => r.id === id)!
   delete run.archivedAt
   run.updatedAt = now
-  log(run, now, '▢', 'Parcours désarchivé', 'info')
+  log(run, now, '▢', 'Mission désarchivée', 'info')
   return { board: b, fx: { ...noFx(), toasts: [`▢ Désarchivé : ${run.title}`] } }
 }
 
@@ -5554,7 +5856,7 @@ const ticketOf = (run: Run, id: string): Ticket | undefined => run.tickets.find(
 export const openBlockers = (run: Run, ticket: Ticket): string[] =>
   (ticket.blockedBy ?? []).filter(id => {
     const inLot = ticketOf(run, id)
-    // Fait dans la branche d'une session liée : levé pour son groupe, pas pour les autres, sur une autre branche.
+    // Fait dans la branche d'un worker : levé pour son groupe, pas pour les autres, sur une autre branche.
     if (inLot) return inLot.status !== 'done' || (inLot.relayedFrom !== undefined && inLot.relayedFrom !== groupIdOf(run, ticket.id))
     // Hors du lot : levé quand la dépendance externe est faite ; inconnu, il bloque par prudence.
     return externalOf(run, id)?.status !== 'done'
@@ -5563,7 +5865,7 @@ export const openBlockers = (run: Run, ticket: Ticket): string[] =>
 /** Le groupe déclaré qui contient le ticket `id`. */
 const groupIdOf = (run: Run, id: string): string | undefined => (run.groups ?? []).find(g => g.tickets.some(x => sameTicket(x, id)))?.id
 
-/** La dépendance externe d'id `id`, si le parcours la connaît. */
+/** La dépendance externe d'id `id`, si la mission la connaît. */
 export const externalOf = (run: Run, id: string): ExternalBlocker | undefined => (run.externals ?? []).find(x => sameTicket(x.id, id))
 
 /**
@@ -5623,17 +5925,286 @@ const zonesOf = (v: { group: TicketGroup; open: readonly Ticket[] }): Zone[] => 
  * Le premier fichier ou la première ressource que deux groupes ont en commun, dit court ; null
  * sans recouvrement. Même chemin, ou un dossier qui contient l'autre : c'est le dossier qu'on cite.
  */
-const sharedOf = (a: { group: TicketGroup; open: readonly Ticket[] }, b: { group: TicketGroup; open: readonly Ticket[] }): string | null => {
-  const zb = zonesOf(b)
-  for (const x of zonesOf(a)) {
-    for (const y of zb) {
+const sharedOf = (a: { group: TicketGroup; open: readonly Ticket[] }, b: { group: TicketGroup; open: readonly Ticket[] }): string | null =>
+  overlapOf({ zones: zonesOf(a), resources: a.group.resources ?? [] }, { zones: zonesOf(b), resources: b.group.resources ?? [] })
+
+/** Ce que deux unités de travail ont en commun, dit court : un fichier (ou le dossier qui le contient), sinon une ressource ; null sans rien. */
+const overlapOf = (a: { zones: readonly Zone[]; resources: readonly string[] }, b: { zones: readonly Zone[]; resources: readonly string[] }): string | null => {
+  for (const x of a.zones) {
+    for (const y of b.zones) {
       if (x.key === y.key || y.key.startsWith(`${x.key}/`)) return tailOf(x.raw)
       if (x.key.startsWith(`${y.key}/`)) return tailOf(y.raw)
     }
   }
   // Le nom tel que l'autre groupe l'écrit : c'est lui qu'on cite (« ∦ A : PowerBI Desktop »).
-  const ra = new Set((a.group.resources ?? []).map(resourceKey))
-  return (b.group.resources ?? []).find(r => ra.has(resourceKey(r))) ?? null
+  const ra = new Set(a.resources.map(resourceKey))
+  return b.resources.find(r => ra.has(resourceKey(r))) ?? null
+}
+
+// ─── Retenues entre missions ──────────────────────────────────────────────
+//
+// Un groupe pas encore parti (ou le lot sans groupes d'une mission) qui touche un fichier ou une
+// ressource d'un groupe en cours d'une autre mission attend que ce groupe soit clos ou annulé, sauf
+// forçage de la paire. La retenue n'est pas enregistrée : chaque lecteur la calcule sur le fichier des
+// missions. Invariant : « Un groupe retenu ne part que si le groupe attendu est clos ou si tu as forcé ;
+// une lecture ratée du fichier des missions ne lance rien. »
+
+/** Le lot sans groupes d'une mission, dans une retenue : la clé qui le nomme à la place d'un id de groupe. */
+export const LOT_KEY = '*'
+
+/** Les documents que toutes les missions écrivent : hors des retenues entre missions, en plus des documents communs d'une mission. */
+const CROSS_DOCS = new Set(['etat_du_projet.md', 'glossary.md'])
+
+/** Une liste de chemins ou de noms relue d'une autre mission : seulement ses textes (une valeur hors forme ne casse aucun calcul). */
+const textsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+
+/** Les fichiers d'une unité, comparables, sans les documents communs. */
+const crossZones = (files: readonly string[]): Zone[] => {
+  const out: Zone[] = []
+  for (const raw of files) {
+    if (typeof raw !== 'string') continue
+    const key = zoneOf(raw)
+    if (key !== '' && !isCommonDoc(key) && !CROSS_DOCS.has(tailOf(key)) && !out.some(z => z.key === key)) out.push({ key, raw })
+  }
+  return out
+}
+
+/** Une unité de travail d'une mission : un groupe, ou son lot sans groupes (`LOT_KEY`), avec ses fichiers et ses ressources. */
+type Unit = { run: Run; group: string; zones: Zone[]; resources: string[] }
+
+const openFilesOf = (run: Run, ids: readonly string[]): string[] =>
+  ids.flatMap(id => {
+    const t = ticketOf(run, id)
+    return t && t.status !== 'done' ? textsOf(t.files) : []
+  })
+
+/**
+ * Le lot sans groupes d'une mission est en cours : pas de groupes, un ticket pas fait, et le travail
+ * commencé (une file posée, ou une phase de code commencée). Une mission en pause le garde.
+ */
+export const isLotUnderway = (run: Run): boolean =>
+  (run.groups ?? []).length === 0 &&
+  run.tickets.some(t => t.status !== 'done') &&
+  ((run.queue ?? []).length > 0 || run.phases.some(p => CODE_SKILLS.has(p.skill) && p.status !== 'pending'))
+
+/**
+ * Un groupe en cours : confié à un worker, rendu et pas encore clos, ou commencé ici sans jamais avoir
+ * été confié (un de ses tickets dans la file posée, ou en cours) ; un groupe rendu et clos ne l'est plus,
+ * même un ticket resté « en cours ».
+ */
+const isGroupUnderway = (run: Run, g: TicketGroup): boolean => {
+  if (g.linked !== undefined) return true
+  if (g.delegated !== undefined) return !isClosedLink(g.delegated)
+  const ids = groupTicketIds(run, g)
+  return ids.some(id => ticketOf(run, id)?.status === 'doing' || ((run.queue ?? []).some(q => sameTicket(q, id)) && ticketOf(run, id)?.status !== 'done'))
+}
+
+/**
+ * Les unités qu'un lancement de tickets choisis fait partir : les groupes qui les portent, rattachés
+ * compris (comme le plan les compte), ou le lot d'une mission sans groupes.
+ */
+export const unitsOfTickets = (run: Run, ids: readonly string[]): string[] => {
+  const groups = run.groups ?? []
+  if (groups.length === 0) return [LOT_KEY]
+  return groups.filter(g => groupTicketIds(run, g).some(x => ids.some(id => sameTicket(id, x)))).map(g => g.id)
+}
+
+/** Les unités en cours d'une mission, qui retiennent les autres missions ; pour une mission close ou archivée, seuls ses groupes encore confiés à un worker. */
+const busyUnitsOf = (run: Run): Unit[] => {
+  const groups = run.groups ?? []
+  // Close ou archivée : seuls ses groupes encore confiés à un worker (ou rendus, pas clos) retiennent encore ;
+  // le worker peut écrire ses fichiers après la clôture de sa mission.
+  if (run.archivedAt !== undefined || run.status === 'done') {
+    return groups
+      .filter(g => g.linked !== undefined || (g.delegated !== undefined && !isClosedLink(g.delegated)))
+      .map(g => ({ run, group: g.id, zones: crossZones([...textsOf(g.files), ...openFilesOf(run, groupTicketIds(run, g))]), resources: textsOf(g.resources) }))
+  }
+  if (groups.length === 0) return isLotUnderway(run) ? [{ run, group: LOT_KEY, zones: crossZones(openFilesOf(run, run.tickets.map(t => t.id))), resources: [] }] : []
+  return groups.filter(g => isGroupUnderway(run, g)).map(g => ({ run, group: g.id, zones: crossZones([...textsOf(g.files), ...openFilesOf(run, groupTicketIds(run, g))]), resources: textsOf(g.resources) }))
+}
+
+/** Les unités d'une mission qui ne sont pas encore parties : ses groupes ni confiés ni rendus et pas finis, ou son lot sans groupes. */
+const startingUnitsOf = (run: Run): Unit[] => {
+  const groups = run.groups ?? []
+  // Un lot déjà en cours n'attend jamais : seul celui qui n'est pas encore parti attend.
+  if (groups.length === 0) return run.tickets.some(t => t.status !== 'done') && !isLotUnderway(run) ? [{ run, group: LOT_KEY, zones: crossZones(openFilesOf(run, run.tickets.map(t => t.id))), resources: [] }] : []
+  return groups
+    .filter(g => !isGroupUnderway(run, g))
+    .map(g => ({ g, open: openFilesOf(run, groupTicketIds(run, g)) }))
+    .filter(x => groupTicketIds(run, x.g).some(id => ticketOf(run, id)?.status !== 'done'))
+    .map(({ g, open }) => ({ run, group: g.id, zones: crossZones([...textsOf(g.files), ...open]), resources: textsOf(g.resources) }))
+}
+
+/** Une paire forcée : le groupe retenu ici (ou `LOT_KEY`), la mission et le groupe attendus. */
+export type ForcedPair = { held: string; run: string; group: string; on?: 'plan' }
+
+/** Les forçages relus d'une mission : seulement ceux en forme (une paire hors forme ne lève rien). */
+export const soundForced = (v: unknown): ForcedHold[] =>
+  Array.isArray(v)
+    ? v.filter(
+        (f): f is ForcedHold =>
+          f !== null && typeof f === 'object' && (isGroupId(f.held) || f.held === LOT_KEY) && isSafeId(f.run) && (isGroupId(f.group) || f.group === LOT_KEY) && isTime(f.at) && (f.on === undefined || f.on === 'plan'),
+      )
+    : []
+
+/** Ce qu'une unité pas encore partie attend dans une autre mission, et ce qu'elles ont en commun. */
+export type OutsideHold = { held: string; run: string; title: string; group: string; shared: string; on: 'file' | 'resource' | 'plan' }
+
+/**
+ * Les retenues de la mission `runId` d'après le board relu : pour chaque unité pas encore partie, chaque
+ * unité en cours d'une autre mission qui touche un même fichier ou une même ressource, sauf les paires
+ * forcées (celles de la mission et `extra`, venues du fichier de coordination).
+ */
+export const outsideHolds = (board: Board, runId: string, extra: readonly ForcedPair[] = []): OutsideHold[] => {
+  const run = board.runs.find(r => r.id === runId)
+  if (!run || run.archivedAt !== undefined || run.status === 'done') return []
+  const busy = board.runs.filter(r => r.id !== runId).flatMap(busyUnitsOf)
+  if (busy.length === 0) return []
+  // Un forçage du plan (`on: 'plan'`) ne lève jamais une retenue de fichier : elle reste en dessous.
+  const forced = [...soundForced(run.forced), ...extra].filter(f => f.on !== 'plan')
+  const out: OutsideHold[] = []
+  for (const c of startingUnitsOf(run)) {
+    for (const b of busy) {
+      if (forced.some(f => f.held === c.group && f.run === b.run.id && f.group === b.group)) continue
+      const shared = overlapOf(c, b)
+      if (shared === null) continue
+      const on = overlapOf({ zones: c.zones, resources: [] }, { zones: b.zones, resources: [] }) !== null ? 'file' : 'resource'
+      out.push({ held: c.group, run: b.run.id, title: b.run.title, group: b.group, shared, on })
+    }
+  }
+  return out
+}
+
+/** Les retenues rangées par unité retenue. */
+export const holdMapOf = (holds: readonly OutsideHold[]): Map<string, OutsideHold[]> => {
+  const out = new Map<string, OutsideHold[]>()
+  for (const h of holds) out.set(h.held, [...(out.get(h.held) ?? []), h])
+  return out
+}
+
+/**
+ * Deux unités en cours de deux missions qui ont un fichier ou une ressource en commun : deux lancements
+ * presque simultanés sont passés tous les deux (le COO le signale).
+ */
+export const crossedLaunches = (board: Board, extra: (runId: string) => readonly ForcedPair[] = () => []): { a: { run: string; title: string; group: string }; b: { run: string; title: string; group: string }; shared: string }[] => {
+  const busy = board.runs.flatMap(busyUnitsOf)
+  // Une paire forcée est partie ensemble sur décision de la personne : rien à signaler.
+  const isForced = (x: Unit, y: Unit): boolean => [...soundForced(x.run.forced), ...extra(x.run.id)].some(f => f.on !== 'plan' && f.held === x.group && f.run === y.run.id && f.group === y.group)
+  const out: { a: { run: string; title: string; group: string }; b: { run: string; title: string; group: string }; shared: string }[] = []
+  for (let i = 0; i < busy.length; i++) {
+    for (let j = i + 1; j < busy.length; j++) {
+      const a = busy[i]!
+      const b = busy[j]!
+      if (a.run.id === b.run.id || isForced(a, b) || isForced(b, a)) continue
+      const shared = overlapOf(a, b)
+      if (shared !== null) out.push({ a: { run: a.run.id, title: a.run.title, group: a.group }, b: { run: b.run.id, title: b.run.title, group: b.group }, shared })
+    }
+  }
+  return out
+}
+
+// ─── Plan des vagues du projet (`hooks/plan-projet.ts`) ────────────────────
+//
+// Les unités que le plan range, relevées sur le board, et les attentes qu'un plan validé impose à une
+// mission. Invariant : « Un groupe ne part jamais avant ce que le plan validé lui fait attendre, sauf
+// forçage ; un plan illisible ne lance rien, et les retenues de fichiers restent. »
+
+/** Une unité du plan, avec ce qu'elle touche (fichiers et ressources, mêmes exclusions que les retenues). */
+export type ProjectUnit = PlanUnit & { zones: Zone[]; resources: string[] }
+
+/**
+ * Les unités pas encore finies de toutes les missions non archivées : celles déjà parties (`isBusy`), et
+ * celles à lancer avec les groupes de leur mission qu'elles attendent ; une mission close ne garde que ses
+ * groupes encore confiés à un worker.
+ */
+export const projectUnits = (board: Board): ProjectUnit[] =>
+  board.runs
+    .filter(r => r.archivedAt === undefined)
+    .flatMap(run => {
+      const busy = busyUnitsOf(run).filter(u => u.group === LOT_KEY || isGroupId(u.group)).map(u => ({ run: run.id, title: run.title, group: u.group, isBusy: true, after: [] as string[], zones: u.zones, resources: u.resources }))
+      if (run.status === 'done') return busy
+      const plan = groupPlan(run)
+      // Un id de groupe hors forme n'entre dans aucun plan (il n'entrerait dans aucune entrée) : ce groupe reste aux retenues de fichiers.
+      const starting = startingUnitsOf(run).filter(u => u.group === LOT_KEY || isGroupId(u.group)).map(u => ({ run: run.id, title: run.title, group: u.group, isBusy: false, after: plan?.groups.find(v => v.group.id === u.group)?.waitsOn ?? [], zones: u.zones, resources: u.resources }))
+      return [...busy, ...starting]
+    })
+
+/** Deux unités du plan ont un fichier ou une ressource en commun. */
+export const unitsOverlap = (a: ProjectUnit, b: ProjectUnit): boolean => overlapOf(a, b) !== null
+
+/** Ce que disent un lancement refusé et la carte « Ensuite » quand le plan du projet ne se lit pas. */
+export const PLAN_UNREAD_TEXT = 'Plan du projet illisible : aucun départ, retenues gardées'
+
+/** Ce que dit une attente du plan à la place du fichier en commun. */
+export const PLAN_SHARED = 'plan du projet'
+
+/**
+ * L'unité attendue n'attend plus rien d'elle : sa mission est absente, archivée ou close, l'unité n'est
+ * plus dans le plan de sa mission (retirée), ou elle est finie (ses tickets faits, aucun worker en vol ni
+ * rendu sans être clos). Un envoi annulé laisse le groupe à lancer : il est encore attendu.
+ */
+const isAwaitedOver = (board: Board, runId: string, group: string): boolean => {
+  const run = board.runs.find(r => r.id === runId)
+  if (!run || run.archivedAt !== undefined || run.status === 'done') return true
+  const groups = run.groups ?? []
+  if (group === LOT_KEY) return groups.length > 0 || run.tickets.every(t => t.status === 'done')
+  const g = groups.find(x => x.id === group)
+  if (!g) return true
+  return isGroupDone(run, g) && g.linked === undefined && (g.delegated === undefined || isClosedLink(g.delegated))
+}
+
+/**
+ * Les attentes que le plan validé impose à la mission `runId` (`waits`, relues du fichier de
+ * coordination) : pour chacune de ses unités pas encore parties, chaque unité attendue d'une autre mission
+ * qui ne l'est pas encore, sauf les paires forcées (celles de la mission et `extra`). Comme une retenue,
+ * elles se lèvent seules ; elles se montrent « plan du projet ».
+ */
+export const planHolds = (board: Board, runId: string, waits: readonly PlanWait[], extra: readonly ForcedPair[] = []): OutsideHold[] => {
+  const run = board.runs.find(r => r.id === runId)
+  if (!run || run.archivedAt !== undefined || run.status === 'done') return []
+  const starting = new Set(startingUnitsOf(run).map(u => u.group))
+  // Seul un forçage du plan lève une attente du plan ; celui d'une retenue de fichier ne la lève pas.
+  const forced = [...soundForced(run.forced), ...extra].filter(f => f.on === 'plan')
+  const out: OutsideHold[] = []
+  for (const w of waits) {
+    if (w.run !== runId || !starting.has(w.group) || isAwaitedOver(board, w.awaited.run, w.awaited.group)) continue
+    if (forced.some(f => f.held === w.group && f.run === w.awaited.run && f.group === w.awaited.group)) continue
+    if (out.some(h => h.held === w.group && h.run === w.awaited.run && h.group === w.awaited.group)) continue
+    const title = board.runs.find(r => r.id === w.awaited.run)?.title ?? w.awaited.run
+    out.push({ held: w.group, run: w.awaited.run, title, group: w.awaited.group, shared: PLAN_SHARED, on: 'plan' })
+  }
+  return out
+}
+
+/** Les attentes d'un plan qui comptent encore : celles dont l'unité attendue n'est pas finie. */
+export const liveWaits = (board: Board, waits: readonly PlanWait[]): PlanWait[] => waits.filter(w => !isAwaitedOver(board, w.awaited.run, w.awaited.group))
+
+/** Force une retenue dans la mission active ici, pour la seule paire nommée. Rien quand elle l'est déjà ou que la paire est hors forme. */
+export const forceHold = (board: Board, pair: ForcedPair, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || soundForced([{ ...pair, at: now }]).length === 0) return null
+  if (soundForced(run0.forced).some(f => f.held === pair.held && f.run === pair.run && f.group === pair.group && f.on === pair.on)) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  run.forced = [...soundForced(run.forced), { held: pair.held, run: pair.run, group: pair.group, at: now, ...(pair.on === 'plan' ? { on: 'plan' as const } : {}) }]
+  run.updatedAt = now
+  const other = board.runs.find(r => r.id === pair.run)
+  log(run, now, '⇥', `${pair.on === 'plan' ? 'Plan du projet forcé' : 'Retenue forcée'} : ${pair.held === LOT_KEY ? 'le lot' : `groupe ${pair.held}`} part sans attendre ${pair.group === LOT_KEY ? 'le lot' : `le groupe ${pair.group}`} de « ${neutralLine(other?.title ?? pair.run)} »`, 'warn')
+  return { board: b, fx: noFx() }
+}
+
+/** La fusion des forçages de deux copies d'une mission : l'union, une paire une fois (la date la plus ancienne). */
+const keepForced = (kept: Run, other: Run | undefined): Run => {
+  const theirs = soundForced(other?.forced)
+  if (theirs.length === 0) return kept
+  const byPair = new Map<string, ForcedHold>()
+  for (const f of [...soundForced(kept.forced), ...theirs]) {
+    const key = `${f.held}|${f.run}|${f.group}|${f.on ?? ''}`
+    const was = byPair.get(key)
+    if (!was || f.at < was.at) byPair.set(key, f)
+  }
+  const forced = [...byPair.values()].sort((x, y) => x.at - y.at)
+  return JSON.stringify(forced) === JSON.stringify(kept.forced ?? []) ? kept : { ...kept, forced }
 }
 
 /**
@@ -5655,13 +6226,39 @@ const wideFolders = (run: Run, groups: readonly TicketGroup[]): string[] => {
   return out
 }
 
+/**
+ * Les lettres d'un plan qui contredisent l'ordre d'exécution : un groupe qui attend un groupe de
+ * lettre plus loin, ou qu'une dépendance hors du lot retient alors qu'un groupe de lettre plus loin
+ * est prêt. Rien une fois un groupe confié à un worker : ses lettres nomment déjà sa session et sa branche.
+ */
+const lettersOutOfOrder = (run: Run): string[] => {
+  if ((run.groups ?? []).some(isSentGroup)) return []
+  const plan = groupPlan(run)
+  if (!plan) return []
+  const before = (x: string, y: string): boolean => x.localeCompare(y, 'en', { numeric: true }) < 0
+  const views = plan.groups.filter(v => !v.isFallback && v.state !== 'done')
+  const out: string[] = []
+  for (const v of views) {
+    const id = v.group.id
+    const later = v.waitsOn.filter(w => before(id, w))
+    if (later.length > 0) {
+      out.push(`${id} waits for ${later.join(', ')}`)
+      continue
+    }
+    if (v.waitsOutside.length === 0 && v.waitsElsewhere.length === 0) continue
+    const ready = views.filter(r => r.state === 'ready' && before(id, r.group.id)).map(r => r.group.id)
+    if (ready.length > 0) out.push(`${id} waits outside the lot, ${ready.join(', ')} ${ready.length > 1 ? 'are' : 'is'} ready`)
+  }
+  return out
+}
+
 /** Une ressource comparable : espaces resserrés, en minuscules. */
 const resourceKey = (name: string): string => name.trim().replace(/\s+/g, ' ').toLowerCase()
 
 /**
  * Le plan envoyé par Claude : chaque ticket connu dans un seul groupe (le premier qui le cite),
  * les ids inconnus mis de côté pour le lui dire. Un `continuesHere` reçu est ignoré : un groupe
- * ne se fait qu'en session liée.
+ * ne se fait que dans un worker.
  */
 const parseGroups = (run: Run, value: unknown): { groups: TicketGroup[]; unknown: string[]; invalid: string[]; merged: string[] } => {
   const groups: TicketGroup[] = []
@@ -5672,11 +6269,11 @@ const parseGroups = (run: Run, value: unknown): { groups: TicketGroup[]; unknown
   for (const one of asList(value)) {
     const raw = str(one.id)
     // Un id qui ne change que de casse est le groupe déjà enregistré : il garde son id, qui nomme
-    // son worktree et sa branche (un id enregistré n'est jamais renommé). L'id exact d'abord : un
-    // parcours d'avant peut porter deux ids qui ne diffèrent que de casse ; alors seul l'exact vaut.
+    // son worktree et sa branche (un id enregistré n'est jamais renommé). L'id exact d'abord : une
+    // mission d'avant peut porter deux ids qui ne diffèrent que de casse ; alors seul l'exact vaut.
     const recorded = recordedGroup(run, raw)
     // Hors forme, l'id casserait un nom de worktree, un titre ou une commande (D1) : refusé, jamais
-    // nettoyé ; seul un id déjà enregistré (un parcours d'avant) reste accepté tel quel.
+    // nettoyé ; seul un id déjà enregistré (une mission d'avant) reste accepté tel quel.
     if (!isGroupId(raw) && !recorded) {
       invalid.push(raw)
       continue
@@ -5684,7 +6281,7 @@ const parseGroups = (run: Run, value: unknown): { groups: TicketGroup[]; unknown
     const id = recorded?.id ?? raw
     // Deux ids qui ne diffèrent que de casse nommeraient le même worktree (macOS, Windows) : un seul
     // groupe, qui reçoit aussi les tickets du second (dit dans la réponse).
-    // Deux groupes enregistrés tous deux (un parcours d'avant) restent deux groupes.
+    // Deux groupes enregistrés tous deux (une mission d'avant) restent deux groupes.
     const isRecorded = (gid: string) => (run.groups ?? []).some(g => g.id === gid)
     const twin = groups.find(g => g.id.toLowerCase() === id.toLowerCase() && !(g.id !== id && isRecorded(g.id) && isRecorded(id)))
     if (twin) {
@@ -5762,8 +6359,8 @@ const refusedCut = (board: Board, why: string): { board: Board; fx: Effects; tex
 /** Ce qui ferme la session de pistes qui retient la phase, selon où elle en est (comme la fin de phase refusée). */
 const heldRemedy = (phase: FlowPhase): string => {
   const link = phase.linked
-  if (link?.session === undefined) return 'its linked session was never launched: launch it, or tell the user, who sends the request again or cancels the send from the dashboard (« Redemander », « Annuler »)'
-  if (linkedInFlight(phase).length > 0) return 'its linked session is still applying items: wait for its final note, check its work, send the full items list with each verdict, then close it by the procedure under « Close now » and send "closed"'
+  if (link?.session === undefined) return 'its worker was never launched: launch it, or tell the user, who sends the request again or cancels the send from the dashboard (« Redemander », « Annuler »)'
+  if (linkedInFlight(phase).length > 0) return 'its worker is still applying items: wait for its final note, check its work, send the full items list with each verdict, then close it by the procedure under « Close now » and send "closed"'
   if (link.closing?.state === 'app') return 'its session is to archive in the app: once the user says it is archived, close it by the procedure (line « To archive in the app ») and send "closed"'
   if (link.closing?.state === 'stopped') return 'its closing stopped: the user relaunches it from the dashboard (« ↻ Relancer la fermeture »), then close it by the procedure under « Close now » and send "closed"'
   return 'its items are judged: close it by the procedure under « Close now » and send "closed"'
@@ -5786,6 +6383,8 @@ export type GroupView = {
   waitsOn: string[]
   /** Bloqueurs hors du lot encore ouverts (décisions, tâches d'autrui, inconnus). */
   waitsOutside: string[]
+  /** Les groupes en cours d'autres missions qu'il attend (retenue entre missions : un fichier ou une ressource en commun). */
+  waitsElsewhere: OutsideHold[]
   /** Vague d'exécution (0 = la première) ; -1 pour un groupe fait. */
   wave: number
   /** Pris dans une attente circulaire entre groupes : l'ordre est à revoir. */
@@ -5794,11 +6393,11 @@ export type GroupView = {
   isFresh: boolean
   /** Les autres groupes du lot parallèle, quand ce groupe en fait partie. */
   parallelWith: string[]
-  /** Confié à une session liée qui ne l'a pas encore rendu : ni relancé, ni pris dans un lot. */
+  /** Confié à un worker qui ne l'a pas encore rendu : ni relancé, ni pris dans un lot. */
   isDelegated: boolean
   /**
    * Prêt et pas commencé : les groupes avec qui il a un fichier ou une ressource en commun, parmi
-   * ceux du lot (quand il n'en est pas), ceux confiés à une session liée et ceux en cours ici.
+   * ceux du lot (quand il n'en est pas), ceux confiés à un worker et ceux en cours ici.
    */
   conflicts: GroupConflict[]
 }
@@ -5813,13 +6412,13 @@ export type GroupPlan = {
   hasParallelWave: boolean
   /** Le lot à lancer ensemble (deux groupes au moins), vide sinon. */
   parallelBatch: string[]
-  /** Le lot possible, mis en attente parce qu'un groupe du parcours est en cours. */
+  /** Le lot possible, mis en attente parce qu'un groupe de la mission est en cours. */
   heldBatch: string[]
   /** Les groupes commencés et pas finis : tant qu'il y en a, rien ne part en parallèle. */
   busy: string[]
   /** D'autres lots possibles, chacun ouvert par un groupe prêt resté hors du lot principal. */
   otherBatches: string[][]
-  /** Les groupes confiés à une session liée et pas encore rendus. */
+  /** Les groupes confiés à un worker et pas encore rendus. */
   delegated: string[]
 }
 
@@ -5851,10 +6450,10 @@ const attachLoose = (run: Run, groups: TicketGroup[]) => {
 }
 
 /**
- * Le plan d'exécution du parcours, ou null sans groupes déclarés. Un groupe en attend un autre
+ * Le plan d'exécution de la mission, ou null sans groupes déclarés. Un groupe en attend un autre
  * quand l'un de ses tickets a un bloqueur encore ouvert dans cet autre ; les vagues en découlent.
  */
-export const groupPlan = (run: Run): GroupPlan | null => {
+export const groupPlan = (run: Run, outside?: ReadonlyMap<string, readonly OutsideHold[]>): GroupPlan | null => {
   // Les tickets de chaque groupe, rattachés compris, viennent d'un seul calcul (`groupTicketsOfRun`).
   const attached = groupTicketsOfRun(run).byIndex
   const groups = run.groups ?? []
@@ -5882,15 +6481,18 @@ export const groupPlan = (run: Run): GroupPlan | null => {
         else if (owner !== group.id) waitsOn.add(owner)
       }
     }
+    // Un groupe déjà parti n'attend jamais une autre mission : seul celui qui n'est pas encore parti attend.
+    const waitsElsewhere = isFallback || group.linked !== undefined ? [] : [...(outside?.get(group.id) ?? [])]
     return {
       group,
       isFallback,
       tickets,
       open,
       // Un groupe confié reste au travail tant qu'il n'est pas rendu, même tous ses tickets relayés faits.
-      state: open.length === 0 && group.linked === undefined ? 'done' : waitsOn.size === 0 && waitsOutside.size === 0 ? 'ready' : 'waiting',
+      state: open.length === 0 && group.linked === undefined ? 'done' : waitsOn.size === 0 && waitsOutside.size === 0 && waitsElsewhere.length === 0 ? 'ready' : 'waiting',
       waitsOn: [...waitsOn],
       waitsOutside: [...waitsOutside],
+      waitsElsewhere,
       wave: -1,
       isCyclic: false,
       isFresh: (declaredIds.get(group.id) ?? group.tickets)
@@ -5918,11 +6520,11 @@ export const groupPlan = (run: Run): GroupPlan | null => {
     wave += 1
   }
 
-  // Chaque groupe se fait dans sa session liée, ses tickets en séquence, partageant leur contexte ;
-  // des groupes indépendants partent ensemble, une session liée chacun.
+  // Chaque groupe se fait dans son worker, ses tickets en séquence, partageant leur contexte ;
+  // des groupes indépendants partent ensemble, un worker chacun.
   // Le lot réunit, dans l'ordre, les groupes prêts (aucun bloqueur encore ouvert) et pas encore
   // commencés, chacun retenu s'il n'a ni fichier ni ressource en commun avec un groupe déjà retenu
-  // ou confié à une session liée : un fichier ou une ressource en commun vaut dépendance.
+  // ou confié à un worker : un fichier ou une ressource en commun vaut dépendance.
   const candidates = views.filter(v => !v.isFallback && v.state === 'ready' && v.isFresh && !v.isCyclic && !v.isDelegated)
   const inFlight = views.filter(v => v.isDelegated)
   const lotFrom = (order: GroupView[]): GroupView[] => {
@@ -5932,12 +6534,12 @@ export const groupPlan = (run: Run): GroupPlan | null => {
   }
   const batch = lotFrom(candidates)
   const lot = batch.length >= 2 ? batch.map(v => v.group.id) : []
-  // Un groupe commencé et pas fini occupe le parcours (une discussion à la fois) : le lot attend.
-  // Un groupe confié à une session liée ne l'occupe pas : le parcours reste ici.
+  // Un groupe commencé et pas fini occupe la mission (une discussion à la fois) : le lot attend.
+  // Un groupe confié à un worker ne l'occupe pas : la mission reste ici.
   const busyViews = views.filter(v => v.state !== 'done' && !v.isFresh && !v.isDelegated)
   const busy = busyViews.map(v => v.group.id)
   if (busy.length === 0) for (const v of batch) if (lot.includes(v.group.id)) v.parallelWith = lot.filter(id => id !== v.group.id)
-  // Ce qui retient chaque groupe prêt : le lot (quand il n'en est pas), les sessions liées, le travail d'ici.
+  // Ce qui retient chaque groupe prêt : le lot (quand il n'en est pas), les workers, le travail d'ici.
   for (const v of candidates) {
     const others = [...(batch.includes(v) ? [] : batch), ...inFlight, ...busyViews]
     v.conflicts = others.flatMap(o => {
@@ -5974,7 +6576,7 @@ export const groupPlan = (run: Run): GroupPlan | null => {
 
 /**
  * Les tickets en cours, avec le groupe de chacun (null hors des groupes déclarés) et sa place dans
- * le plan, pour la couleur. Plusieurs à la fois : sessions liées des groupes, ticket laissé en
+ * le plan, pour la couleur. Plusieurs à la fois : workers des groupes, ticket laissé en
  * cours par une autre discussion.
  */
 export const doingOf = (run: Run): { ticket: Ticket; group: TicketGroup | null; groupAt: number }[] => {

@@ -9,7 +9,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const boardWith = (input: Record<string, unknown>): Board => {
@@ -18,7 +18,7 @@ const boardWith = (input: Record<string, unknown>): Board => {
   return applyReport(board, input, 2_000).board
 }
 
-/** La consigne d'/implement d'un parcours à deux groupes (sans groupes, elle suit la procédure d'une session liée). */
+/** La consigne d'/implement d'une mission à deux groupes (sans groupes, elle suit la procédure d'un worker). */
 const groupedImplement = async ($: any): Promise<string> => {
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({
@@ -240,7 +240,7 @@ test('un groupe sans ticket sensible, enregistré ni rattaché, garde --fix part
 })
 
 /**
- * Le parcours du groupe D fini, sa date de revue relue telle quelle, en pause au stockage ; avec un second
+ * La mission du groupe D fini, sa date de revue relue telle quelle, en pause au stockage ; avec un second
  * ticket que le plan lui rattache, car un groupe d'un seul ticket n'a pas de revue du groupe.
  */
 const storedD = (reviewedAt: unknown): Board => {

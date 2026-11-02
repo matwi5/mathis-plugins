@@ -3,6 +3,9 @@ import { expect, test } from 'claude-code/testing'
 import { closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, reopenText, shellQuote } from '../hooks/closing.ts'
 import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, newRun, startLinkedGroups } from '../hooks/model.ts'
 import { applyRelay, decidedFileText } from '../hooks/relay.ts'
+import { isSeat } from '../hooks/seat.ts'
+import { isEntryId, refOf, soundEntry } from '../hooks/coordination.ts'
+import { isCardId, isFolderName, isLaunchId } from '../hooks/launch.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Closing } from '../types'
 import { CORPUS, ch } from './corpus.mjs'
@@ -34,6 +37,31 @@ test('les valeurs de référence passent chaque garde : un refus vient bien de l
 
 test('isSafeId refuse chaque entrée du corpus', () => {
   expect(passing(token => isSafeId(`ab${token}cd`))).toEqual([])
+})
+
+test('la carte de lancement : l’id du lancement, celui de la carte et le dossier refusent chaque entrée du corpus', () => {
+  expect(isLaunchId('lab12cd34')).toBe(true)
+  expect(isCardId('kab12cd')).toBe(true)
+  expect(isFolderName('ab-cd')).toBe(true)
+  expect(passing(token => isLaunchId(`lab${token}12cd34`))).toEqual([])
+  expect(passing(token => isCardId(`kab${token}12cd`))).toEqual([])
+  expect(passing(token => isFolderName(`ab${token}cd`))).toEqual([])
+})
+
+test('le fichier de coordination : l’id d’une entrée, sa mission et la référence du réveil refusent chaque entrée du corpus', () => {
+  expect(isEntryId('cab12cd')).toBe(true)
+  expect(refOf('Manager [ab12cd]')).toBe('[ab12cd]')
+  expect(soundEntry({ id: 'cab12cd', kind: 'close', run: 'ab-cd', at: 1 })).not.toBeNull()
+  expect(passing(token => isEntryId(`cab${token}12cd`))).toEqual([])
+  expect(passing(token => refOf(`Manager [ab${token}12]`) !== null)).toEqual([])
+  // Après la référence, rien n'entre : elle se reconstruit de ses seuls signes en forme, ou rien.
+  expect(passing(token => ![null, '[ab12cd]'].includes(refOf(`Manager [ab12cd]${token}`)))).toEqual([])
+  expect(passing(token => soundEntry({ id: 'cab12cd', kind: 'close', run: `ab${token}cd`, at: 1 }) !== null)).toEqual([])
+})
+
+test('le siège du COO relu (isSeat) refuse chaque entrée du corpus dans l’id de sa discussion', () => {
+  expect(isSeat({ by: 'ab-cd', at: 1, seenAt: 1 })).toBe(true)
+  expect(passing(token => isSeat({ by: `ab${token}cd`, at: 1, seenAt: 1 }))).toEqual([])
 })
 
 test('isSafeBranch refuse chaque entrée du corpus', () => {
@@ -143,7 +171,7 @@ test('neutralLine ne garde de quoi ouvrir une ligne pour aucun point de code, ni
   expect(neutralLine(`Rétro · « a » [b]${ch(0xa)}suite`)).toBe('Rétro · « a » [b] ⏎ suite')
 })
 
-test('linkedPrefix, le début d’un titre de session liée cité entre « » dans le prompt, ne garde rien qui ferme cette citation', () => {
+test('linkedPrefix, le début d’un titre de worker cité entre « » dans le prompt, ne garde rien qui ferme cette citation', () => {
   const quotes = ['[', ']', ch(0x27e6), ch(0x27e7), ch(0x301a), ch(0x301b), ch(0xff3b), ch(0xff3d), ch(0xab), ch(0xbb), ch(0x2039), ch(0x203a), ch(0x226a), ch(0x226b), ch(0x300a), ch(0x300b), ch(0x2329), ch(0x232a), ch(0x276e), ch(0x276f)]
   const leaks = [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]
     .filter(([, token]) => [...linkedPrefix(newRun('implement', 1_000, `avant ${token} après`))].some(c => PROMPT_BREAKERS.has(c.codePointAt(0)!)))
@@ -152,15 +180,15 @@ test('linkedPrefix, le début d’un titre de session liée cité entre « » da
   expect(linkedPrefix(newRun('implement', 1_000, 'Rétro « a » [b]'))).toBe('Rétro a b > ')
 })
 
-test('la description d’une fermeture cite le titre du parcours neutralisé, pour un groupe comme pour les pistes d’une phase', () => {
+test('la description d’une fermeture cite le titre de la mission neutralisé, pour un groupe comme pour les pistes d’une phase', () => {
   const quotes = ['[', ']', '«', '»', ch(0x27e8), ch(0x27eb), ch(0x3010), ch(0x2985)]
   const leaks: string[] = []
   for (const [name, token] of [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]) {
     const run = newRun('implement', 1_000, `Avant ${token} après`)
     for (const target of [{ kind: 'group', id: 'A', name: 'Alpha' } as const, { kind: 'items', skill: 'retro' } as const]) {
       const text = closingProcedure({ run, target, isRepo: true })
-      const at = text.indexOf('du parcours « Avant')
-      const cited = at < 0 ? '' : text.slice(at + 'du parcours « '.length, text.indexOf('»', at))
+      const at = text.indexOf('de la mission « Avant')
+      const cited = at < 0 ? '' : text.slice(at + 'de la mission « '.length, text.indexOf('»', at))
       // Le titre se retrouve entier entre ses « » (jusqu'à sa fin, coupée ou non) : rien dans sa citation ne la ferme ni ne la coupe.
       if (at < 0 || !cited.trimEnd().endsWith(run.title.slice(-5).normalize('NFKC')) || [...cited].some(c => breaksAQuote(c))) leaks.push(`${name} (${target.kind})`)
     }
@@ -168,7 +196,7 @@ test('la description d’une fermeture cite le titre du parcours neutralisé, po
   expect(leaks).toEqual([])
 })
 
-test('le fichier des choix cite le titre du parcours neutralisé sur sa première ligne, pour chaque entrée du corpus', () => {
+test('le fichier des choix cite le titre de la mission neutralisé sur sa première ligne, pour chaque entrée du corpus', () => {
   const quotes = ['[', ']', '«', '»', ch(0x27e8), ch(0x27eb), ch(0x3010), ch(0x2985)]
   const leaks: string[] = []
   for (const [name, token] of [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]) {

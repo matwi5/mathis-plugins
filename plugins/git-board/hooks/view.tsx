@@ -101,7 +101,7 @@ export type View = {
   isBandHidden: boolean
   /** Suivi de la CI après un push ; affiché seulement pour la branche et le commit en tête. */
   ci: CiWatch
-  /** Un parcours flow-board est actif dans la discussion (pas d'envoi en cours de parcours). */
+  /** Une mission flow-board est active dans la discussion (pas d'envoi en cours de mission). */
   isFlowActive: boolean
   now: number
 }

@@ -8,7 +8,7 @@ const KEY = 'agents:s-test'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 
 /** Le moteur sous le plugin : la session « s-test », un stockage en mémoire que le test lit et modifie. */
@@ -32,7 +32,7 @@ const stored = (mem: Record<string, unknown>): SessionRegistry => {
 
 const launch = ($: any, description: string) => $.tool.call({ tool: 'Agent', description, prompt: `Brief de ${description}`, run_in_background: true })
 
-test('le registre de la session s’écrit peu après un lancement, prompt compris, sans parcours', async ($, on) => {
+test('le registre de la session s’écrit peu après un lancement, prompt compris, sans mission', async ($, on) => {
   const clock = mock.clock(on, { now: 30_000_000 })
   const mem = world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
@@ -44,7 +44,7 @@ test('le registre de la session s’écrit peu après un lancement, prompt compr
   expect(reg.agents[0]).toMatchObject({ name: 'Explorer le module', agentId: 'a1', prompt: 'Brief de Explorer le module', status: 'running' })
 })
 
-test('l’onglet montre tous les sous-agents, sans limite ni « tout voir »', async ($, on) => {
+test('l’onglet montre tous les spécialistes, sans limite ni « tout voir »', async ($, on) => {
   mock.clock(on, { now: 30_500_000 })
   world(on)
   let n = 0
@@ -59,7 +59,7 @@ test('l’onglet montre tous les sous-agents, sans limite ni « tout voir »', a
   await ui.unmount()
 })
 
-test('S7 : une écriture relit le fichier et garde les sous-agents d’un autre processus de la même session', async ($, on) => {
+test('S7 : une écriture relit le fichier et garde les spécialistes d’un autre processus de la même session', async ($, on) => {
   const clock = mock.clock(on, { now: 31_000_000 })
   const other = endCall(startCall(emptyRegistry('s-test', '', 1), { key: 'autre', name: 'Lancé ailleurs', isBackground: true }, 2)!, 'autre', { isFailed: false, isFinished: true }, 3)!
   const mem = world(on)
@@ -106,7 +106,7 @@ test('après un /clear, la discussion suivante a son propre registre ; l’en-t�
   expect((mem['agents:s-apres'] as SessionRegistry).agents.map(a => a.name)).toEqual(['Après le clear'])
 })
 
-test('S9 : la liste du moteur ne clôt pas un sous-agent chargé du fichier, seulement ceux lancés ici', async ($, on) => {
+test('S9 : la liste du moteur ne clôt pas un spécialiste chargé du fichier, seulement ceux lancés ici', async ($, on) => {
   const clock = mock.clock(on, { now: 35_000_000 })
   const elsewhere = startCall(emptyRegistry('s-test', '', 1), { key: 'ailleurs', name: 'Au travail ailleurs', isBackground: true }, 2)!
   const mem = world(on, { [KEY]: elsewhere })
@@ -120,13 +120,13 @@ test('S9 : la liste du moteur ne clôt pas un sous-agent chargé du fichier, seu
   expect(byName).toEqual({ 'Au travail ailleurs': 'running', 'Lancé ici': 'done' })
 })
 
-test('deux appels parallèles de même description gardent chacun leur sous-agent (tool_use_id)', async ($, on) => {
+test('deux appels parallèles de même description gardent chacun leur spécialiste (tool_use_id)', async ($, on) => {
   mock.clock(on, { now: 36_000_000 })
   world(on)
   on('classic.SubagentStop', () => ({}))
   let next = ''
   on('agent.spawn', () => ({ agentId: next, model: 'claude-haiku-5-5' }))
-  // Des appels qui ne rendent pas l'id : seul le tool_use_id de agent.spawn dit quel sous-agent sert quel appel.
+  // Des appels qui ne rendent pas l'id : seul le tool_use_id de agent.spawn dit quel spécialiste sert quel appel.
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched' } }))
   await $.tool.call({ tool: 'Agent', description: 'Relecture', prompt: 'axe 1', run_in_background: true, tool_use_id: 'call-1' } as any)
   await $.tool.call({ tool: 'Agent', description: 'Relecture', prompt: 'axe 2', run_in_background: true, tool_use_id: 'call-2' } as any)
@@ -168,7 +168,7 @@ test('S11 : une écriture refusée se dit dans l’onglet', async ($, on) => {
   await ui.unmount()
 })
 
-test('un sous-agent réveillé par la notification d’un de ses enfants repasse au travail', async ($, on) => {
+test('un spécialiste réveillé par la notification d’un de ses enfants repasse au travail', async ($, on) => {
   const clock = mock.clock(on, { now: 33_000_000 })
   world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))

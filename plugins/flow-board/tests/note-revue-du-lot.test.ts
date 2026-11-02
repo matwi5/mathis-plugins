@@ -1,5 +1,5 @@
 // La note de revue et de sécurité d'un lot sans groupes : /code-review chargé pendant l'Implémentation
-// d'un parcours sans groupes (hors passe « bogues ») reçoit la même note qu'à la revue d'un groupe fini,
+// d'une mission sans groupes (hors passe « bogues ») reçoit la même note qu'à la revue d'un groupe fini,
 // dite pour le lot, et l'avis de sécurité au format d'un groupe, envoyé sans "group". Ailleurs (relecture
 // de branche, Revue d'une chasse au bug ou d'un TDD), l'avis « tout le lot » reste.
 
@@ -10,7 +10,7 @@ const PLUGIN = 'flow-board'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
 } as const
 
 const world = (on: any, repo = true) => {
@@ -92,7 +92,7 @@ test('sans groupes, l’avis de sécurité du lot part dans le même message, su
   expect(text).toContain('only a send with "advised" opens a new pass of the lot')
   expect(text).toContain('send {"security": {"dismissed": <total of findings left unfixed>}}')
   expect(text).not.toContain('"group": "<id>"')
-  expect(text).not.toContain('it covers the whole run')
+  expect(text).not.toContain('it covers the whole mission')
 })
 
 test('sans groupes, la passe « bogues » d’un ticket en cours ne reçoit pas la note du lot', async ($, on) => {

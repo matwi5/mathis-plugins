@@ -10,7 +10,7 @@
 //   (/project:commit, /project:sync, /project:push, /project:pr) : le bouton les lance
 //   comme si on les tapait ; si le moteur refuse, la commande est mise dans le prompt.
 // - Le bandeau résume la branche dans un dépôt ; masqué, la ligne d'état prend le relais. Son
-//   bouton de l'étape suivante lance l'étape suggérée ; pendant un parcours flow-board (lu
+//   bouton de l'étape suivante lance l'étape suggérée ; pendant une mission flow-board (lu
 //   dans la valeur `board` de flow-board), ni Push ni PR.
 // - `/git-board:git` (commands/git.md) est connue dès le premier message ; `/git`, déclarée
 //   au démarrage, sort du menu mais reste utilisable tapée en entier.
@@ -89,8 +89,8 @@ const showRemotes = atom({ plugin: 'git-board', key: 'showRemotes' } as const, f
 const isBandHidden = atom({ plugin: 'git-board', key: 'isBandHidden' } as const, false)
 const expanded = atom({ plugin: 'git-board', key: 'expanded' } as const, EMPTY_EXPANDED)
 const ci = atom({ plugin: 'git-board', key: 'ci' } as const, null as CiWatch)
-// La valeur `board` de flow-board, lue seulement (seul son propriétaire l'écrit) : un parcours
-// actif retire Push et PR du bandeau. Absente sans flow-board.
+// La valeur `board` de flow-board, lue seulement (seul son propriétaire l'écrit) : une mission
+// active retire Push et PR du bandeau. Absente sans flow-board.
 const FLOW_BOARD = { plugin: 'flow-board', key: 'board' } as const
 
 // Les éléments que chaque surface dessine, d'après le contrat `Elements` du moteur : pas de
@@ -195,7 +195,7 @@ export const register: Register = (on) => {
   // Une commande /project lancée du panneau est un tour de Claude : elle commence au
   // prochain tour (un tour déjà en cours finit d'abord) et se termine avec lui.
   on('turn.start', async ($, e, next) => {
-    // Le tour d'un sous-agent du tour en cours ne fait pas démarrer la commande en attente.
+    // Le tour d'un spécialiste du tour en cours ne fait pas démarrer la commande en attente.
     if (e.agentId !== undefined) return next(e)
     const r = await read($, running)
     if (r && !r.isStarted) await update($, running, (x) => (x ? { ...x, isStarted: true } : x))

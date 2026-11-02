@@ -8,7 +8,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 
 const engine = (on: any) => {
@@ -16,7 +16,7 @@ const engine = (on: any) => {
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
 }
 
-/** Un board avec un parcours « implement » actif dans le projet c:/demo. */
+/** Un board avec une mission « implement » actif dans le projet c:/demo. */
 const boardWithRun = () => {
   const run = newRun('implement', 1000)
   return { ...emptyBoard('C:/demo', 'demo'), runs: [run], activeId: run.id }
@@ -81,7 +81,7 @@ test('A5, A6, A9 : clore une phase saute les étapes non atteintes ; la suite va
   expect(filled).toEqual(['/mattpocock-skills:to-tickets', '/mattpocock-skills:to-tickets'])
 })
 
-test('A4 : le parcours resté actif d’une session précédente se charge en pause', async ($, on) => {
+test('A4 : la mission resté actif d’une session précédente se charge en pause', async ($, on) => {
   mock.clock(on, { now: 10_000_000 })
   const saved = { ...emptyBoard('', 'projet'), runs: [newRun('diagnosing-bugs', 9_000_000, 'Bug d’hier')] }
   saved.activeId = saved.runs[0]!.id
@@ -93,7 +93,7 @@ test('A4 : le parcours resté actif d’une session précédente se charge en pa
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: /Bug d’hier/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Le dernier parcours, « Bug d’hier », est en pause/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /La dernière mission, « Bug d’hier », est en pause/ })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -115,7 +115,7 @@ test('commit puis clôture : la suite complète au vert compte comme Vérificati
   await $.tool.call({ tool: 'Bash', command: 'git add somme.js && git commit -m "feat: somme"' } as any)
   await $.tool.call({ tool: TOOL, complete: true })
 
-  // Les étapes ne s'affichent plus pendant l'Implémentation : elles se lisent dans le parcours enregistré.
+  // Les étapes ne s'affichent plus pendant l'Implémentation : elles se lisent dans la mission enregistré.
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   const steps = (mem['board:'] as Board).runs[0]!.phases.find(p => p.skill === 'implement')!.steps
   const status = (id: string) => steps.find(s => s.id === id)!.status
@@ -166,7 +166,7 @@ test('lancer la suite proposée d’un prototype clôt le prototype au lieu de l
   await ui.unmount()
 })
 
-test('onglet Commandes : démarrer un parcours, les autres commandes, et l’Historique sans lanceur', { timeoutMs: 15000 }, async ($, on) => {
+test('onglet Commandes : démarrer une mission, les autres commandes, et l’Historique sans lanceur', { timeoutMs: 15000 }, async ($, on) => {
   mock.clock(on, { now: 14_000_000 })
   mock.store(on)
   engine(on)
@@ -176,12 +176,12 @@ test('onglet Commandes : démarrer un parcours, les autres commandes, et l’His
     return { isFilled: true }
   })
 
-  // Sans aucun parcours : l'accueil, le lanceur dans l'onglet Parcours, et l'onglet Commandes.
+  // Sans aucune mission : l'accueil, le lanceur dans l'onglet Mission, et l'onglet Commandes.
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ key: 'new-grill-with-docs' })).toBeDefined()
     await ui.press({ key: 'tab-commands' })
-    expect(await ui.find({ type: 'Text', text: /^Démarrer un parcours$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Démarrer une mission$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^Autres commandes$/ })).toBeDefined()
     await ui.press({ key: 'cmd-prototype' })
     await ui.press({ key: 'tab-flow' })
@@ -189,7 +189,7 @@ test('onglet Commandes : démarrer un parcours, les autres commandes, et l’His
   }
   expect(filled).toEqual(['/mattpocock-skills:prototype ', '/mattpocock-skills:prototype '])
 
-  // Avec un parcours : l'Historique ne porte plus le lanceur.
+  // Avec une mission : l'Historique ne porte plus le lanceur.
   await $.skill.prompt({ skill: 'mattpocock-skills:tdd', text: 'x' })
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'tab-history' })

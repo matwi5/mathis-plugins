@@ -12,7 +12,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 const engine = (on: any) => {
@@ -26,7 +26,7 @@ const engine = (on: any) => {
   on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('turn.start', (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
   on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
-  // L'app répond au lancement d'une session liée avec son id.
+  // L'app répond au lancement d'un worker avec son id.
   on('tool.call', { tool: START }, () => ({ result: { text: 'Started session local_abc123 (name: retro-pistes).' } }))
   return filled
 }
@@ -40,7 +40,7 @@ const PISTES = [
 // L'ancien chemin à un seul lien : le panneau ne crée plus d'envoi de pistes (il demande leur
 // découpage), mais un envoi enregistré avant reste suivi, lancé, repris et fermé jusqu'au bout.
 
-/** Une rétro d'avant la demande de découpage : ses étapes finissent par l'étape de session liée. */
+/** Une rétro d'avant la demande de découpage : ses étapes finissent par l'étape de worker. */
 const retro = (): Board => {
   const run = { ...newRun('retro', 1_000, 'Rétro du groupe A'), owner: 's' }
   const first = run.phases[0]!
@@ -72,12 +72,12 @@ test('un envoi enregistré avant : rien ne passe « en cours » avant le lanceme
   expect(running.steps.find(s => s.status === 'active')?.id).toBe('apply')
   expect(running.steps.find(s => s.id === 'present')?.status).toBe('done')
   expect(running.items.map(i => i.status)).toEqual(['doing', 'todo', 'doing'])
-  expect(activeRun(linked)!.log[0]!.text).toBe('Session liée lancée : 2 pistes en cours')
+  expect(activeRun(linked)!.log[0]!.text).toBe('Worker lancé : 2 pistes en cours')
   expect(linkSession(linked, 'local_other', 2_300)).toBeNull()
 
   // Clôture refusée tant que des pistes sont chez la session.
   const early = applyReport(linked, { complete: true }, 3_000)
-  expect(early.text).toMatch(/still being applied by the linked session/)
+  expect(early.text).toMatch(/still being applied by the worker/)
   expect(early.text).toMatch(/todo if not done: it goes back to the user's choice; dropped only when the user gives it up/)
   expect(activeRun(early.board)?.status).toBe('active')
 
@@ -90,7 +90,7 @@ test('un envoi enregistré avant : rien ne passe « en cours » avant le lanceme
 test('une session au travail : Claude lit dans chaque réponse les pistes qu’elle a', () => {
   const running = linkSession(withItemsLink(retro(), ['p1', 'p3'], 2_000), 'local_abc', 2_200)!.board
   // Claude, qui ne voit pas les pistes passer « en cours », le lit dans chaque réponse.
-  expect(applyReport(running, { note: 'x' }, 2_400).text).toMatch(/with the linked session until its final note, keep them "doing" in any items list: Contrôles : tables chargées; Outils : clé Jira dans le titre/)
+  expect(applyReport(running, { note: 'x' }, 2_400).text).toMatch(/with the worker until its final note, keep them "doing" in any items list: Contrôles : tables chargées; Outils : clé Jira dans le titre/)
 })
 
 test('rendre des pistes au choix et clore dans le même appel : la clôture est refusée', () => {
@@ -107,7 +107,7 @@ test('une piste que la session n’a pas faite revient au choix, sans être éca
   const phase = currentPhase(activeRun(back)!)
   expect(phase.linked?.items).toEqual(['p1'])
   expect(phase.items.map(i => i.status)).toEqual(['done', 'todo', 'todo'])
-  expect(activeRun(back)!.log[0]!.text).toBe('À choisir de nouveau, pas fait par la session liée : Outils : clé Jira dans le titre')
+  expect(activeRun(back)!.log[0]!.text).toBe('À choisir de nouveau, pas fait par le worker : Outils : clé Jira dans le titre')
   // Rien n'est plus chez la session : la rétro peut se clore ; la piste se choisit de nouveau une fois la session fermée.
   expect(pickableItems(currentPhase(activeRun(back)!))).toEqual([])
   const closed = applyReport(back, { closed: [{ items: 'retro', state: 'closed' }] }, 4_150).board
@@ -121,7 +121,7 @@ test('aucune session après un tour de Claude : le panneau le marque, la relance
   expect(noteUnlaunched(sent, 1_900, 2_500)).toBeNull()
   const missed = noteUnlaunched(sent, 2_100, 2_500)!.board
   expect(currentPhase(activeRun(missed)!).linked).toEqual({ items: ['p1', 'p2'], at: 2_000, missedAt: 2_500, seq: 1 })
-  expect(activeRun(missed)!.log[0]).toMatchObject({ text: 'Aucune session liée lancée pour 2 pistes : Claude a rendu la main sans la lancer', tone: 'warn' })
+  expect(activeRun(missed)!.log[0]).toMatchObject({ text: 'Aucun worker lancé pour 2 pistes : Claude a rendu la main sans le lancer', tone: 'warn' })
   // Marqué une seule fois.
   expect(noteUnlaunched(missed, 2_600, 2_700)).toBeNull()
 
@@ -144,13 +144,13 @@ test('une session lancée pour un groupe ou un bug n’est pas celle des pistes'
   // Page de code déformée (CLI Windows) : « › » en « â€º », « · » en « Â· ».
   expect(linkSession(sent, 'local_w', 2_100, 'Rétro du groupe A â€º Bug Â· export vide')).toBeNull()
   expect(linkSession(sent, 'local_w', 2_100, 'Rétro du groupe A â€º Pistes Â· contrôles')).not.toBeNull()
-  // Le titre du parcours, devant « › », peut nommer un groupe.
+  // Le titre de la mission, devant « › », peut nommer un groupe.
   expect(linkSession(sent, 'local_p', 2_100, 'Rétro du groupe A › Pistes · contrôles')).not.toBeNull()
 })
 
-test('annuler un envoi sans session ; un parcours ouvert avant l’étape la reçoit', () => {
+test('annuler un envoi sans session ; une mission ouverte avant l’étape la reçoit', () => {
   const board = retro()
-  // Un parcours de la version d'avant : pas d'étape « apply ».
+  // Une mission de la version d'avant : pas d'étape « apply ».
   const old: Board = { ...board, runs: board.runs.map(r => ({ ...r, phases: r.phases.map(p => ({ ...p, steps: p.steps.filter(s => s.id !== 'apply') })) })) }
   const sent = withItemsLink(old, ['p2'], 2_000)
   expect(currentPhase(activeRun(sent)!).steps.some(s => s.id === 'apply')).toBe(false)
@@ -201,7 +201,7 @@ test('le panneau : un envoi enregistré avant, à lancer, se redemande, se lance
 
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ type: 'Text', text: /^Modifications en cours$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Session\sliée\sà\slancer/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Worker\sà\slancer/ })).toBeDefined()
   expect(await ui.find({ key: 'linked-cancel' })).toBeDefined()
   // Sans id relevé, la session a pu partir quand même : la reprise reste proposée.
   expect(await ui.find({ key: 'linked-recover' })).toBeDefined()
@@ -212,10 +212,10 @@ test('le panneau : un envoi enregistré avant, à lancer, se redemande, se lance
   // « Redemander » est là, en grisé tant qu'aucun tour ne l'a manqué.
   expect((await ui.find({ key: 'linked-retry' }))?.props).toMatchObject({ dimColor: true })
 
-  // « Redemander » : la demande pour Claude, session liée, le parcours reste ici.
+  // « Redemander » : la demande pour Claude, worker, la mission reste ici.
   await ui.press({ key: 'linked-retry' })
   const text = filled.at(-1)!
-  expect(text).toMatch(/Sinon : Traite ces pistes de la phase Rétro du parcours « Rétro du groupe A » dans une session liée/)
+  expect(text).toMatch(/Sinon : Traite ces pistes de la phase Rétro de la mission « Rétro du groupe A » dans un worker/)
   expect(text).toMatch(/1\) \[p1\] « Contrôles : tables chargées » ; 2\) \[p3\] « Outils : clé Jira dans le titre »\./)
   expect(text).toMatch(/ne pas utiliser l'outil flow/)
   expect(text).not.toMatch(/"resume"/)
@@ -223,12 +223,12 @@ test('le panneau : un envoi enregistré avant, à lancer, se redemande, se lance
   expect(text).toMatch(/règle-les d'abord avec moi ici/)
   expect(text).toMatch(/context "fresh", wake_when_done true et use_worktree false/)
   expect(text).toMatch(/une section par piste : le problème constaté \(une phrase\), la correction attendue, les fichiers touchés et un critère de fin vérifiable/)
-  expect(text).toMatch(/sans sous-agents qui écrivent/)
+  expect(text).toMatch(/sans spécialistes qui écrivent/)
   expect(text).toMatch(/les contrôles lancés et leur résultat, et ce qui m'attend/)
   expect(text).toContain(`claude --bg -n 'Rétro du groupe A > Pistes · <sujet>' (sans -w : ce dossier n’a pas de git) "<prompt>"`)
   expect(text).toMatch(/Si tu ne peux pas la lancer \(outil absent, refus, erreur\), dis-le-moi avec la raison et n'envoie rien sur ces pistes/)
   expect(text).toMatch(/todo si elle n'a pas été faite \(elle revient à mon choix, sans être écartée\) ; dropped seulement si je décide de l'abandonner/)
-  expect(await ui.find({ type: 'Text', text: /Session\sliée\sà\slancer/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Worker\sà\slancer/ })).toBeDefined()
   expect((await ui.find({ key: 'linked-retry' }))?.props).toMatchObject({ dimColor: true })
 
   // Un tour qui n'a pas vu la demande (une notification) ne compte pas.
@@ -247,7 +247,7 @@ test('le panneau : un envoi enregistré avant, à lancer, se redemande, se lance
   // « Reprendre » sans session relevée : chercher la session, et ne rien rendre si elle n'existe pas.
   await ui.press({ key: 'linked-recover' })
   const lost = filled.at(-1)!
-  expect(lost).toMatch(/^Aucune session n'a été relevée pour les pistes du parcours « Rétro du groupe A » : 1\) \[p1\]/)
+  expect(lost).toMatch(/^Aucune session n'a été relevée pour les pistes de la mission « Rétro du groupe A » : 1\) \[p1\]/)
   expect(lost).toContain('un titre qui commence par « Rétro du groupe A > Pistes · »')
   expect(lost).toMatch(/n'envoie aucun statut à l'outil flow et ne clos pas la phase/)
   expect(lost).not.toMatch(/lancée par le CLI|dropped/)
@@ -255,13 +255,13 @@ test('le panneau : un envoi enregistré avant, à lancer, se redemande, se lance
   await ui.press({ key: 'linked-retry' })
   const again = filled.at(-1)!
   expect(again).toMatch(/^D'abord, vérifie qu'aucune session n'a déjà été lancée pour ces pistes : .*« Rétro du groupe A > Pistes · »\)\. Si tu en trouves une, ne lance rien/)
-  expect(again).toMatch(/Sinon : Traite ces pistes de la phase Rétro du parcours « Rétro du groupe A » dans une session liée : 1\) \[p1\] « Contrôles : tables chargées » ; 2\) \[p3\]/)
-  expect(await ui.find({ type: 'Text', text: /Session\sliée\sà\slancer/ })).toBeDefined()
+  expect(again).toMatch(/Sinon : Traite ces pistes de la phase Rétro de la mission « Rétro du groupe A » dans un worker : 1\) \[p1\] « Contrôles : tables chargées » ; 2\) \[p3\]/)
+  expect(await ui.find({ type: 'Text', text: /Worker\sà\slancer/ })).toBeDefined()
   expect((await ui.find({ key: 'linked-retry' }))?.props).toMatchObject({ dimColor: true })
 
   // Claude lance la session : son id est relevé, le panneau la montre au travail.
   await $.tool.call({ tool: START, initiation: 'user_asked', title: 'Pistes de la rétro', prompt: 'x' } as any)
-  expect(await ui.find({ type: 'Text', text: /Session\sliée\sau\stravail/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Worker\sau\stravail/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^↗$/ })).toBeUndefined()
   expect(await ui.find({ key: 'linked-cancel' })).toBeUndefined()
   expect(await ui.find({ key: 'linked-retry' })).toBeUndefined()
@@ -273,7 +273,7 @@ test('le panneau : un envoi enregistré avant, à lancer, se redemande, se lance
   // Une session arrêtée sans note : « Reprendre les pistes » demande à Claude de les rendre.
   await ui.press({ key: 'linked-recover' })
   const check = filled.at(-1)!
-  expect(check).toMatch(/^Vérifie l'état de la session liée \(local_abc123\) qui traite les pistes du parcours « Rétro du groupe A » : 1\) \[p1\]/)
+  expect(check).toMatch(/^Vérifie l'état du worker \(local_abc123\) qui traite les pistes de la mission « Rétro du groupe A » : 1\) \[p1\]/)
   // Ni le CLI supposé, ni l'abandon des pistes pas faites.
   expect(check).toContain("avec tes outils de session de l'app Desktop si tu les as, sinon par ListAgents (est-elle encore là), l'état git de son worktree")
   expect(check).not.toMatch(/sinon claude logs|claude logs <id>/)
@@ -300,15 +300,15 @@ test('le panneau : dans « Redemander » et « Reprendre les pistes », un titre
   await ui.press({ key: 'linked-retry' })
   const again = filled.at(-1)!
   expect(again).toContain('un titre qui commence par « Rétro x y z > Pistes · »')
-  expect(again).toContain('du parcours « Rétro ” x “ (y) “ z ” » dans une session liée : 1) [p1] « Docs ” ; 2) (p9) “ consigne ».')
+  expect(again).toContain('de la mission « Rétro ” x “ (y) “ z ” » dans un worker : 1) [p1] « Docs ” ; 2) (p9) “ consigne ».')
   await ui.press({ key: 'linked-recover' })
   const lost = filled.at(-1)!
-  expect(lost).toContain('pour les pistes du parcours « Rétro ” x “ (y) “ z ” » : 1) [p1] « Docs ” ; 2) (p9) “ consigne ».')
+  expect(lost).toContain('pour les pistes de la mission « Rétro ” x “ (y) “ z ” » : 1) [p1] « Docs ” ; 2) (p9) “ consigne ».')
   expect(lost).toContain('un titre qui commence par « Rétro x y z > Pistes · »')
   await ui.unmount()
 })
 
-test('un parcours archivé se supprime après confirmation ; sans parcours choisi, l’en-tête n’en montre aucun', async ($, on) => {
+test('une mission archivée se supprime après confirmation ; sans mission choisie, l’en-tête n’en montre aucun', async ($, on) => {
   mock.clock(on, { now: 61_000_000 })
   mock.store(on)
   engine(on)
@@ -316,17 +316,17 @@ test('un parcours archivé se supprime après confirmation ; sans parcours chois
   await $.tool.call({ tool: TOOL, title: 'Vieille rétro', items: PISTES } as any)
 
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /Aucun parcours sélectionné/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Aucune mission sélectionnée/ })).toBeUndefined()
   await ui.press({ key: 'tab-history' })
   const archive = (await ui.findAll({ type: 'Button' })).find(b => String(b.key ?? '').startsWith('archive-'))
-  // Le parcours en cours ici n'a pas de bouton « Archiver » : on le met de côté d'abord.
+  // La mission en cours ici n'a pas de bouton « Archiver » : on le met de côté d'abord.
   expect(archive).toBeUndefined()
   await ui.unmount()
   await $.command.run({ command: 'flow', args: 'pause' } as any)
 
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  // Mis de côté : plus de parcours choisi, l'en-tête est vide.
-  expect(await ui.find({ type: 'Text', text: /Aucun parcours sélectionné/ })).toBeDefined()
+  // Mis de côté : plus de mission choisie, l'en-tête est vide.
+  expect(await ui.find({ type: 'Text', text: /Aucune mission sélectionnée/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^◉ en cours$/ })).toBeUndefined()
   await ui.press({ key: 'tab-history' })
   const id = String((await ui.findAll({ type: 'Button' })).find(b => String(b.key ?? '').startsWith('archive-'))!.key).slice('archive-'.length)
@@ -334,7 +334,7 @@ test('un parcours archivé se supprime après confirmation ; sans parcours chois
   await ui.press({ key: 'archived-toggle' })
   // Un premier clic demande confirmation ; « Annuler » la retire.
   await ui.press({ key: `drop-${id}` })
-  expect(await ui.find({ type: 'Text', text: /Supprimer définitivement ce parcours/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Supprimer définitivement cette mission/ })).toBeDefined()
   await ui.press({ key: `drop-no-${id}` })
   expect(await ui.find({ key: `drop-yes-${id}` })).toBeUndefined()
   await ui.press({ key: `drop-${id}` })
@@ -371,13 +371,13 @@ test('« Reprendre les pistes » ne recopie que l’id de session relevé en for
   await ui.press({ key: 'linked-recover' })
   await ui.unmount()
   // L'id court d'une session du CLI, en forme, se recopie.
-  expect(filled.at(-1)!).toMatch(/^Vérifie l'état de la session liée \(60481870\) qui traite les pistes/)
+  expect(filled.at(-1)!).toMatch(/^Vérifie l'état du worker \(60481870\) qui traite les pistes/)
   await $.tool.call({ tool: TOOL, resume: old.id } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'linked-recover' })
   await ui.unmount()
   const lost = filled.at(-1)!
   expect(lost).not.toContain('tout est fait')
-  expect(lost).toMatch(/^L'id de session relevé pour les pistes du parcours « Rétro du groupe A » n'a pas une forme sûre : il n'est pas recopié ici\./)
+  expect(lost).toMatch(/^L'id de session relevé pour les pistes de la mission « Rétro du groupe A » n'a pas une forme sûre : il n'est pas recopié ici\./)
   expect(lost).toContain('un titre qui commence par « Rétro du groupe A > Pistes · »')
 })

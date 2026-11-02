@@ -1,7 +1,8 @@
 // Suivi des requêtes de la discussion : chaque message de l'utilisateur ouvre une requête, qui
 // compte ses appels au modèle (tokens, coût au tarif, durée API, temps de génération), ceux de ses
-// sous-agents, et sa durée réelle, de l'envoi à la fin de son dernier tour, tours relancés par ses
-// tâches de fond compris. Les mots sont ceux de `GLOSSARY.md` ; l'ordre des événements et la
+// spécialistes, et sa durée réelle, de l'envoi à la fin de son dernier tour, tours relancés par ses
+// tâches de fond compris. Elle garde aussi les tours de son fil principal et de ses spécialistes de
+// fond, pour le temps cumulé : la somme du travail de chaque fil, parallélisme compris (`parallelPieces`). Les mots sont ceux de `GLOSSARY.md` ; l'ordre des événements et la
 // filiation, ceux de `docs/evenements-moteur.md` (« Ordre des événements », « Filiation »).
 //
 // Même filiation que le chrono de session-tools (`plugins/session-tools/hooks/register.tsx`), à
@@ -78,7 +79,7 @@ const setOwn = <T,>(table: Record<string, T>, key: string, value: T): void => {
 }
 
 /** Les listes du suivi, vides quand l'état d'un chargement d'avant les a écrites sans elles. */
-const listsOf = (t: Tracker) => ({ agents: t.agents ?? {}, tasks: t.tasks ?? {}, running: t.running ?? [], interrupted: t.interrupted ?? [] })
+const listsOf = (t: Tracker) => ({ agents: t.agents ?? {}, tasks: t.tasks ?? {}, running: t.running ?? [], interrupted: t.interrupted ?? [], lanes: t.lanes ?? {} })
 
 const changeRequest = (t: Tracker, id: number, change: (r: RequestRecord) => RequestRecord): Tracker =>
   t.log ? { ...t, log: { ...t.log, requests: t.log.requests.map((r) => (r.id === id ? change(r) : r)) } } : t
@@ -157,14 +158,15 @@ export function relaunchOwner(t: Tracker, why: Relaunch): number {
  * Un agent rattaché à sa requête : celle de son parent (`parent`, un autre agent), à défaut celle
  * pour laquelle travaille le fil principal. Seul le premier `agent.spawn` d'un id compte (un agent
  * réveillé en reçoit un autre) ; un agent vu sans `agent.spawn` (`isSpawn` faux : son premier tour,
- * un agent interne de Claude Code) est rattaché en attendant, et ne compte pas comme sous-agent.
+ * un agent interne de Claude Code) est rattaché en attendant, et ne compte pas comme spécialiste.
+ * `isParallel` (lancé en fond ou par un workflow) : ses tours comptent dans le temps cumulé.
  */
-export function attachAgent(t: Tracker, agentId: string, o: { parent?: string; isSpawn: boolean }): Tracker {
+export function attachAgent(t: Tracker, agentId: string, o: { parent?: string; isSpawn: boolean; isParallel?: boolean }): Tracker {
   const { agents } = listsOf(t)
   const known = ownOf(agents, agentId)
   if (known?.isSpawned || (known && !o.isSpawn)) return t
   const request = (o.parent !== undefined ? ownOf(agents, o.parent)?.request : undefined) ?? ownerNow(t) ?? OUTSIDE
-  const next: Tracker = { ...t, agents: { ...agents, [agentId]: { request, isSpawned: o.isSpawn } } }
+  const next: Tracker = { ...t, agents: { ...agents, [agentId]: { request, isSpawned: o.isSpawn, ...(o.isParallel ? { isParallel: true } : {}) } } }
   return o.isSpawn && request !== OUTSIDE ? changeRequest(next, request, (r) => ({ ...r, agents: r.agents + 1 })) : next
 }
 
@@ -191,6 +193,45 @@ export function finishTask(t: Tracker, id: string | null): Tracker {
 }
 
 /**
+ * Un tour commence à `at` : celui du fil principal pour la requête `request` (hors requête : rien à
+ * suivre), ou celui de l'agent `agent`, dont la requête se lit à la fin (son `agent.spawn` peut
+ * arriver juste après son premier tour).
+ */
+export function startLane(t: Tracker, turnId: string, at: number, who: { request: number } | { agent: string }): Tracker {
+  if ('request' in who && who.request === OUTSIDE) return t
+  const lanes = { ...listsOf(t).lanes }
+  setOwn(lanes, turnId, { at, ...who })
+  return { ...t, lanes }
+}
+
+/**
+ * Le tour `turnId` finit à `at` : son intervalle va à sa requête, dans `turnSpans` (fil principal) ou
+ * `agentSpans` (spécialiste de fond ou de workflow). Le tour d'un agent qui bloque son parent, ou vu
+ * sans `agent.spawn` (agent interne de Claude Code), n'y va pas : il ne travaille pas en parallèle.
+ * Sans début connu (module rechargé pendant le tour), rien.
+ */
+export function endLane(t: Tracker, turnId: string, at: number): Tracker {
+  const { agents, lanes } = listsOf(t)
+  const lane = ownOf(lanes, turnId)
+  if (!lane) return t
+  const { [turnId]: _, ...rest } = lanes
+  const next: Tracker = { ...t, lanes: rest }
+  const agent = lane.agent !== undefined ? ownOf(agents, lane.agent) : undefined
+  const request = lane.agent !== undefined ? (agent?.isSpawned && agent.isParallel ? agent.request : undefined) : lane.request
+  if (request === undefined || request === OUTSIDE || at <= lane.at) return next
+  const span: [number, number] = [lane.at, at]
+  return changeRequest(next, request, (r) => (lane.agent !== undefined ? { ...r, agentSpans: [...(r.agentSpans ?? []), span] } : { ...r, turnSpans: [...(r.turnSpans ?? []), span] }))
+}
+
+/** Le relevé avec les tours encore en cours, jusqu'à `now` (une écriture, la vue en direct). */
+export function withOpenLanes(t: Tracker, now: number): RequestLog | null {
+  if (!t.log) return null
+  let next: Tracker = t
+  for (const id of Object.keys(listsOf(t).lanes)) next = endLane(next, id, now)
+  return next.log
+}
+
+/**
  * Un appel au modèle, compté dans la requête `id` : celle de son tour (ou de son agent) à l'entrée
  * de l'appel, un message envoyé pendant l'appel ne le lui prend pas. `OUTSIDE` : l'entrée hors
  * requête du relevé. Sans requête ni relevé, il ne compte pas.
@@ -201,7 +242,7 @@ export function recordCall(t: Tracker, id: number | undefined, call: Call): Trac
   return changeRequest(t, id, (r) => withBusy({ ...r, apiMs: r.apiMs + call.apiMs, models: { ...r.models, [call.model]: addCall(r.models[call.model] ?? emptyStats(), call) } }, call.span))
 }
 
-/** Un appel fait pendant une attente de sa requête (un sous-agent qui travaille pendant la question) : sa part dans l'attente reste active. */
+/** Un appel fait pendant une attente de sa requête (un spécialiste qui travaille pendant la question) : sa part dans l'attente reste active. */
 function withBusy(r: RequestRecord, span: [number, number] | undefined): RequestRecord {
   if (!span || !r.waits?.length) return r
   const inside = r.waits.map(([from, to]) => [Math.max(span[0], from), Math.min(span[1], to ?? Infinity)] as [number, number]).filter(([a, b]) => b > a)
@@ -303,7 +344,7 @@ export const spanOf = (r: RequestRecord, now: number): [number, number] => [r.se
 
 /**
  * Les morceaux actifs d'une requête qui finit à `end` : de l'envoi à la fin, sans ses attentes de
- * l'utilisateur (une attente encore ouverte va jusqu'à `end`), sauf les appels de ses sous-agents
+ * l'utilisateur (une attente encore ouverte va jusqu'à `end`), sauf les appels de ses spécialistes
  * pendant ces attentes. Triés, sans chevauchement.
  */
 export function netSpans(r: Pick<RequestRecord, 'sentAt' | 'waits' | 'busy'>, end: number): [number, number][] {
@@ -355,4 +396,53 @@ export function activeMs(spans: readonly (readonly [number, number])[]): number 
     end = b
   }
   return total
+}
+
+/**
+ * Les moments où plusieurs fils d'une discussion travaillent en même temps, coupés à ses morceaux
+ * actifs `active` : [début, fin, fils en plus]. Les fils : les tours du fil principal (sans les
+ * attentes de leur requête) et ceux de ses spécialistes de fond. Un seul fil au travail n'en donne
+ * aucun : le temps gagné ne compte que le parallélisme.
+ */
+export function parallelPieces(requests: readonly Pick<RequestRecord, 'waits' | 'turnSpans' | 'agentSpans'>[], active: readonly (readonly [number, number])[]): [number, number, number][] {
+  const lanes: [number, number][] = []
+  for (const r of requests) {
+    for (const span of r.turnSpans ?? []) lanes.push(...cut(span, r.waits ?? []))
+    for (const [a, b] of r.agentSpans ?? []) lanes.push([a, b])
+  }
+  // Balayage : +1 à chaque début, -1 à chaque fin (les fins d'abord, à instant égal).
+  const events = lanes.filter(([a, b]) => b > a).flatMap(([a, b]): [number, number][] => [[a, 1], [b, -1]]).sort((x, y) => x[0] - y[0] || x[1] - y[1])
+  const crowded: [number, number, number][] = []
+  let count = 0
+  let from = 0
+  for (const [at, step] of events) {
+    if (count >= 2 && at > from) crowded.push([from, at, count - 1])
+    count += step
+    from = at
+  }
+  const out: [number, number, number][] = []
+  const within = union(active)
+  let i = 0
+  for (const [a, b, extra] of crowded) {
+    while (i < within.length && within[i]![1] <= a) i++
+    for (let j = i; j < within.length && within[j]![0] < b; j++) {
+      const [x, y] = [Math.max(a, within[j]![0]), Math.min(b, within[j]![1])]
+      if (y > x) out.push([x, y, extra])
+    }
+  }
+  return out
+}
+
+/** Le temps gagné : ce que les fils en plus ont travaillé en même temps (`parallelPieces`), en ms. */
+export const extraMs = (pieces: readonly (readonly [number, number, number])[]): number => pieces.reduce((n, [a, b, extra]) => n + (b - a) * extra, 0)
+
+/** Un intervalle sans les attentes (fin null : jusqu'au bout). */
+function cut([a, b]: readonly [number, number], waits: readonly (readonly [number, number | null])[]): [number, number][] {
+  let pieces: [number, number][] = b > a ? [[a, b]] : []
+  for (const [from, to] of waits) {
+    const end = to ?? Infinity
+    if (end <= from) continue
+    pieces = pieces.flatMap(([x, y]): [number, number][] => (end <= x || from >= y ? [[x, y]] : ([[x, from], [end, y]] as [number, number][]).filter(([p, q]) => q > p)))
+  }
+  return pieces
 }

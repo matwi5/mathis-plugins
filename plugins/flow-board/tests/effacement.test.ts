@@ -20,9 +20,9 @@ test('S5 : une trace de session couvre tout ce qui précède sa date ; ce qui vi
   expect(applyTraces(next, [{ id: 'autre', at: 9_000 }])).toBeNull()
 })
 
-test('Q6 a1 : la trace d’un parcours retire ses sous-agents, et toute la session liée qui le servait', () => {
-  const orch = at(at(emptyRegistry('orch', '/p', 0), 'k1', 'Du parcours', 1_000, 'r1'), 'k2', 'Hors parcours', 2_000)
-  expect(applyTraces(orch, [{ id: 'run:r1', at: 9_000 }])!.agents.map(a => a.name)).toEqual(['Hors parcours'])
+test('Q6 a1 : la trace d’une mission retire ses spécialistes, et toute le worker qui le servait', () => {
+  const orch = at(at(emptyRegistry('orch', '/p', 0), 'k1', 'De la mission', 1_000, 'r1'), 'k2', 'Hors mission', 2_000)
+  expect(applyTraces(orch, [{ id: 'run:r1', at: 9_000 }])!.agents.map(a => a.name)).toEqual(['Hors mission'])
   const linked = { ...at(emptyRegistry('fille', '/p', 0), 'k3', 'De la fille', 1_500), run: 'r1', main: { segments: [{ k: 'think' as const, s: 1_400, e: 1_450 }] } }
   const cleared = applyTraces(linked, [{ id: 'run:r1', at: 9_000 }])!
   expect(cleared.agents).toEqual([])
@@ -38,7 +38,7 @@ test('S5 : un fichier à part (rattrapage, reprise, lignes recopiées) respecte 
   expect(applyTracesToRebuilt(runFile, [{ id: 'run:r1', at: 5_000 }])!.rows).toEqual([])
 })
 
-test('S19 : une session est fermée sans écriture depuis 30 min et sans sous-agent au travail, ou quand sa fin est connue', () => {
+test('S19 : une session est fermée sans écriture depuis 30 min et sans spécialiste au travail, ou quand sa fin est connue', () => {
   const idle = emptyRegistry('s1', '/p', 0)
   const busy = at(idle, 'k', 'Au travail', 0)
   expect(isClosedSession(idle, 0, CLOSED_MS + 1)).toBe(true)
@@ -47,13 +47,13 @@ test('S19 : une session est fermée sans écriture depuis 30 min et sans sous-ag
   expect(isClosedSession(busy, 0, 10, true)).toBe(true)
 })
 
-test('S2 et S15 : la confirmation d’« Oublier » dit combien de sessions et de sous-agents elle efface, et ce qu’elle laisse', () => {
+test('S2 et S15 : la confirmation d’« Oublier » dit combien de sessions et de spécialistes elle efface, et ce qu’elle laisse', () => {
   const self = at(at(emptyRegistry('d', '/p', 0), 'k1', 'Un', 1), 'k2', 'Deux', 2)
   const linked = at(emptyRegistry('l', '/p', 0), 'k3', 'Trois', 3)
   const n = forgetCount(self, [linked, null], 1)
   expect(n).toEqual({ sessions: 3, agents: 3, byTitle: 1 })
-  expect(forgetText(n)).toBe('Oublier cette discussion ? 3\u00A0sessions et 3\u00A0sous-agents seront effacés définitivement. 1\u00A0session liée reconnue par le titre seul n’est pas comprise.')
-  expect(forgetText({ sessions: 1, agents: 0, byTitle: 0 })).toBe('Oublier cette discussion ? 1\u00A0session et 0\u00A0sous-agent seront effacés définitivement.')
+  expect(forgetText(n)).toBe('Oublier cette discussion ? 3\u00A0sessions et 3\u00A0spécialistes seront effacés définitivement. 1\u00A0worker reconnu par le titre seul n’est pas compris.')
+  expect(forgetText({ sessions: 1, agents: 0, byTitle: 0 })).toBe('Oublier cette discussion ? 1\u00A0session et 0\u00A0spécialiste seront effacés définitivement.')
 })
 
 test('S4 : la suppression passe par une commande système sans shell, le chemin en dernier ; une trace ne garde que l’id et la date', () => {
@@ -92,10 +92,10 @@ test('S4 : effacer un fichier, c’est le réécrire vide puis le supprimer ; si
   expect(disk['/a/s3.json']).toBe('')
 })
 
-test('S22 : un sous-agent effacé avec son parcours a sa trace à lui, que le rattrapage respecte même sans parcours connu', () => {
+test('S22 : un spécialiste effacé avec sa mission a sa trace à lui, que le rattrapage respecte même sans mission connue', () => {
   const traces = agentTraces({ key: 'call-1', agentId: 'a1' }, 9_000)
   expect(traces).toEqual([{ id: 'call:call-1', at: 9_000 }, { id: 'agent:a1', at: 9_000 }])
-  // Revenu du transcript sans parcours (le rattrapage ne le sait pas) : il reste effacé.
+  // Revenu du transcript sans mission (le rattrapage ne le sait pas) : il reste effacé.
   const back = { ...at(emptyRegistry('orch', '/p', 0), 'call-1', 'Revenu', 1_000), agents: [] as SessionRegistry['agents'] }
   const reg = { ...back, agents: [{ key: 'call-1', agentId: 'a1', name: 'Revenu', isBackground: true, status: 'done' as const, startedAt: 1_000, source: 'transcript' as const }, { key: 'call-2', name: 'Autre', isBackground: true, status: 'done' as const, startedAt: 1_000, source: 'live' as const }] }
   expect(applyTraces(reg, traces)!.agents.map(a => a.key)).toEqual(['call-2'])
@@ -103,13 +103,13 @@ test('S22 : un sous-agent effacé avec son parcours a sa trace à lui, que le ra
   expect(applyTracesToRebuilt(rebuilt, traces)!.agents).toEqual([])
 })
 
-test('S5 : une trace efface aussi la ligne advisor : appels d’avant la trace, et ceux des sous-agents effacés', () => {
-  // L'orchestrateur (avant et après la trace), un sous-agent du parcours effacé, un hors parcours, un appelant inconnu.
-  let reg = at(at(emptyRegistry('s1', '/p', 0), 'k1', 'Du parcours', 1_000, 'r1'), 'k2', 'Hors parcours', 2_000)
+test('S5 : une trace efface aussi la ligne advisor : appels d’avant la trace, et ceux des spécialistes effacés', () => {
+  // Le manager (avant et après la trace), un spécialiste de la mission effacée, un hors mission, un appelant inconnu.
+  let reg = at(at(emptyRegistry('s1', '/p', 0), 'k1', 'De la mission', 1_000, 'r1'), 'k2', 'Hors mission', 2_000)
   reg = { ...reg, agents: reg.agents.map(a => ({ ...a, agentId: a.key === 'k1' ? 'a1' : 'a2' })) }
   const call = (id: string, s: number, by: string) => ({ id, s, e: s + 100, by })
   reg = { ...reg, advisor: { calls: [call('m-avant', 1_100, 'main'), call('a1', 1_200, 'a1'), call('a2', 2_200, 'a2'), call('x', 1_300, 'inconnu'), call('m-apres', 6_000, 'main')] } }
-  // La trace d'un parcours : les appels de ses sous-agents partent, les autres restent.
+  // La trace d'une mission : les appels de ses spécialistes partent, les autres restent.
   expect(applyTraces(reg, [{ id: 'run:r1', at: 9_000 }])!.advisor!.calls.map(c => c.id)).toEqual(['m-avant', 'a2', 'x', 'm-apres'])
   // La trace de la session : tout ce qui précède part, l'appel d'après reste.
   const later = applyTraces(reg, [{ id: 's1', at: 5_000 }])!
@@ -122,22 +122,22 @@ test('S5 : une trace efface aussi la ligne advisor : appels d’avant la trace, 
   expect(applyTracesToRebuilt(rebuilt, [{ id: 's1', at: 5_000 }])!.main!.advisor!.map(c => c.id)).toEqual(['r-apres'])
 })
 
-test('S22 : un appel à l’advisor d’un sous-agent effacé ne revient ni sans son entrée, ni par un rattrapage', () => {
+test('S22 : un appel à l’advisor d’un spécialiste effacé ne revient ni sans son entrée, ni par un rattrapage', () => {
   // Un appel dont l'appelant n'a pas d'entrée au registre : sa trace `agent:` l'efface quand même.
-  let reg = at(emptyRegistry('s1', '/p', 0), 'k1', 'Du parcours', 1_000, 'r1')
+  let reg = at(emptyRegistry('s1', '/p', 0), 'k1', 'De la mission', 1_000, 'r1')
   reg = { ...reg, agents: reg.agents.map(a => ({ ...a, agentId: 'a1' })), advisor: { calls: [{ id: 'orphelin', s: 1_200, e: 1_300, by: 'a9' }, { id: 'garde', s: 1_400, e: 1_500, by: 'a8' }] } }
   const traces = [{ id: 'run:r1', at: 9_000 }, ...agentTraces({ key: 'k1', agentId: 'a1' }, 9_000), { id: 'agent:a9', at: 9_000 }]
   const erased = applyTraces(reg, traces)!
   expect(erased.agents).toEqual([])
   expect(erased.advisor!.calls.map(c => c.id)).toEqual(['garde'])
-  // Le rattrapage relit le transcript du sous-agent effacé, avec son appel : les traces le retirent encore.
+  // Le rattrapage relit le transcript du spécialiste effacé, avec son appel : les traces le retirent encore.
   const found = [{ agentId: 'a1', lane: { toolCount: 0, startedAt: 1_000, endedAt: 2_000, advisor: [{ id: 'a1-appel', s: 1_100, e: 1_150 }] }, meta: { toolUseId: 'k1', isFinished: true }, run: 'r1' }]
   const caught = catchUp(erased, found, 10_000)!
   expect(caught.advisor!.calls.map(c => c.id)).toContain('a1-appel')
   const again = applyTraces(caught, traces)!
   expect(again.agents).toEqual([])
   expect(again.advisor!.calls.map(c => c.id)).toEqual(['garde'])
-  // Le fichier à part : un sous-agent couvert part avec ses appels.
+  // Le fichier à part : un spécialiste couvert part avec ses appels.
   const rebuilt = { v: 1 as const, session: 's1', agents: [{ agentId: 'a1', lane: { toolCount: 0, startedAt: 1_000, advisor: [{ id: 'a1-appel', s: 1_100 }] }, meta: { toolUseId: 'k1' }, run: 'r1' }] }
   expect(applyTracesToRebuilt(rebuilt, traces)!.agents).toEqual([])
 })

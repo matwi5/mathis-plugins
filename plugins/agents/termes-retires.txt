@@ -1,0 +1,22 @@
+# Termes retirés de agents, un par ligne : une version, une tabulation, le terme ;
+# son entrée du CHANGELOG et les plus anciennes peuvent le citer (la version qui l'a retiré, ou celle d'avant).
+# scripts/check.py les refuse dans le README, les consignes (hooks/, skills/, commands/, reference/,
+# hors fichiers de test), la règle config/rules/agents.md
+# et les entrées du CHANGELOG plus récentes que cette version ; les tests peuvent les citer. Les sites
+# gardés exprès sont admis, fichier par fichier, par scripts/termes-retires-admis.json.
+# Les anciens mots de flow-board, remplacés par « mission », « worker », « manager », « spécialiste » :
+1.0.2	le parcours
+1.0.2	du parcours
+1.0.2	un parcours
+1.0.2	ce parcours
+1.0.2	Parcours
+1.0.2	session liée
+1.0.2	sessions liées
+1.0.2	Session liée
+1.0.2	orchestrateur
+1.0.2	Orchestrateur
+1.0.2	sous-agent
+1.0.2	sous-agents
+1.0.2	session autonome
+1.0.2	linked session
+1.0.2	main discussion

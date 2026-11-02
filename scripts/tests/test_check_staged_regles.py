@@ -1,7 +1,10 @@
-"""Tests du hook pre-commit (scripts/check.py --staged) sur un commit qui ne touche que la règle d'un
-plugin (`config/rules/<plugin>.md`) ou une liste d'admis (`scripts/renvois-admis.json`,
-`scripts/interpolations-admises.json`) : il lance les contrôles statiques qui les lisent, sur la copie de
-l'index, et refuse une liste d'admis qui augmente face à HEAD. python3 -m unittest discover -s scripts/tests."""
+"""Tests du hook pre-commit (scripts/check.py --staged) et de ses contrôles statiques. Sur un commit qui
+ne touche que la règle d'un plugin (`config/rules/<plugin>.md`) ou une liste d'admis
+(`scripts/renvois-admis.json`, `scripts/interpolations-admises.json`) : il lance les contrôles statiques
+qui les lisent, sur la copie de l'index, et refuse une liste d'admis qui augmente face à HEAD. Sur un
+commit qui indexe un fichier de code d'un plugin : il lance sur la copie de l'index les contrôles
+statiques de check.sh hors arbre « Architecture » et appels du moteur (renvois, termes retirés, valeurs
+relues brutes, termes de l'export public, règles du code). python3 -m unittest discover -s scripts/tests."""
 
 import json
 import subprocess
@@ -9,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import check  # noqa: E402
@@ -29,7 +33,10 @@ def admitted(counts):
     return json.dumps({"date": "2026-11-01", "files": counts}, indent=2) + "\n"
 
 
-class StagedRulesTest(unittest.TestCase):
+class StagedRepo(unittest.TestCase):
+    """Un dépôt d'essai avec le plugin flow-board, sa règle et ses listes d'admis, et le hook pointé
+    dessus ; sans test à lui."""
+
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.repo = Path(self.dir.name)
@@ -77,6 +84,8 @@ class StagedRulesTest(unittest.TestCase):
             check.staged()
         return str(caught.exception)
 
+
+class StagedRulesTest(StagedRepo):
     def test_un_terme_retire_ajoute_a_la_regle_seule_est_refuse(self):
         self.stage(RULE, "# Règle\n\n- en mode auto, le mod lance la vague suivante.\n")
         self.assertIn("flow-board", self.refused())
@@ -129,6 +138,69 @@ class StagedRulesTest(unittest.TestCase):
         self.stage("travail/essai/notes.md", "notes\n")
         check.staged()
         self.assertEqual(self.exported, 0)
+
+
+# Ces valeurs que l'export refuse s'écrivent par morceaux : ce fichier part dans la version publique.
+MAIL = "git" + "@" + "example.com"
+HAS_EXPORT = (Path(check.__file__).resolve().parent / "export_public.py").is_file()
+
+
+class StagedCodeTest(StagedRepo):
+    """Un commit qui indexe un fichier de code d'un plugin : des contrôles statiques de check.sh tournent
+    sur la copie de l'index (renvois, termes retirés, termes de l'export public, règles du code ; ni l'arbre
+    « Architecture » ni les appels du moteur), avec le fichier et la ligne de chaque défaut."""
+
+    def setUp(self):
+        super().setUp()
+        # La liste privée de l'export, absente : seuls les adresses et les dossiers personnels comptent.
+        # `tsc` et `claude plugin test` n'ont rien à relire dans ce dépôt d'essai.
+        for name, value in (("EXPORT_DENYLIST", self.repo / "absente.txt"),
+                            ("typecheck", lambda plugin: None), ("plugin_tests", lambda *args: None)):
+            patcher = mock.patch.object(check, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_un_renvoi_a_travail_dans_le_code_est_refuse(self):
+        self.stage(HOOK, CODE + "// voir travail/diagnostic/spec.md\n")
+        self.assertIn("flow-board/hooks/model.ts:3", self.refused())
+
+    def test_un_terme_retire_dans_le_code_est_refuse(self):
+        self.stage(HOOK, CODE + "// le mod lance la vague suivante\n")
+        refused = self.refused()
+        self.assertIn("flow-board/hooks/model.ts:3", refused)
+        self.assertIn("vague suivante", refused)
+
+    @unittest.skipUnless(HAS_EXPORT, "sans scripts/export_public.py (version publique)")
+    def test_un_terme_de_l_export_public_dans_un_test_est_refuse(self):
+        self.stage("plugins/flow-board/tests/a.test.ts", f"const a = 1\nconst m = '{MAIL}'\n")
+        refused = self.refused()
+        self.assertIn("flow-board/tests/a.test.ts:2", refused)
+        self.assertIn("export public", refused)
+
+    def test_un_caractere_invisible_brut_est_refuse(self):
+        self.stage(HOOK, CODE + f"export const s = 'a{chr(0x2028)}b'\n")
+        refused = self.refused()
+        self.assertIn("flow-board/hooks/model.ts:3", refused)
+        self.assertIn("U+2028", refused)
+
+    def test_un_bloc_de_doc_detache_est_refuse(self):
+        self.stage(HOOK, CODE + "/** premier */\n/** second */\nexport const b = 2\n")
+        self.assertIn("flow-board/hooks/model.ts:4", self.refused())
+
+    def test_un_code_propre_passe(self):
+        self.stage(HOOK, CODE + "export const b = 2\n")
+        check.staged()
+        self.assertEqual(self.exported, 1)
+
+    def test_la_documentation_d_un_plugin_seule_reste_sans_controle(self):
+        self.stage("plugins/flow-board/README.md", f"# flow-board\n\nla vague suivante, voir travail/diag/spec.md, {MAIL}\n")
+        check.staged()
+        self.assertEqual(self.exported, 0)
+
+    def test_un_plugin_identique_au_dernier_check_vert_saute_ces_controles(self):
+        self.stage(HOOK, CODE + "// le mod lance la vague suivante\n")
+        with mock.patch.object(check, "passed_already", lambda plugin: True):
+            check.staged()
 
 
 if __name__ == "__main__":

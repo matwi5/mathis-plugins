@@ -6,7 +6,7 @@ import type { RegistryAgent, SessionRegistry } from '../types'
 
 // ─── R1 : un registre découpé en morceaux numérotés, sans perte ─────────────
 
-/** Un sous-agent au long prompt accentué (2 octets par « é ») et à la longue piste. */
+/** Un spécialiste au long prompt accentué (2 octets par « é ») et à la longue piste. */
 const bigAgent = (i: number): RegistryAgent => ({
   key: `call-${i}`,
   agentId: `a${i}`,
@@ -33,7 +33,7 @@ test('R1 : un registre trop gros pour un fichier se découpe en morceaux de moin
   const { head, parts } = splitRegistry(reg, new Map())
   expect(parts.length).toBeGreaterThan(1)
   for (const text of [JSON.stringify(head), ...parts.map(p => JSON.stringify(p))]) expect(utf8Length(text)).toBeLessThanOrEqual(PART_MAX_BYTES)
-  // Relus (texte du disque), les morceaux redonnent tout : sous-agents, prompts, pistes, piste de l'orchestrateur.
+  // Relus (texte du disque), les morceaux redonnent tout : spécialistes, prompts, pistes, piste du manager.
   const joined = joinRegistry(parseRegistry(JSON.stringify(head))!, parts.map(p => JSON.parse(JSON.stringify(p)))).reg
   expect(joined.agents.map(a => a.key).sort()).toEqual(reg.agents.map(a => a.key).sort())
   expect(joined.agents.find(a => a.key === 'call-399')!.segments).toHaveLength(300)
@@ -41,11 +41,11 @@ test('R1 : un registre trop gros pour un fichier se découpe en morceaux de moin
   expect(joined.main!.segments).toHaveLength(5_000)
 })
 
-test('R1 : un sous-agent garde son morceau d’une écriture à l’autre ; seul le trop-plein monte au morceau suivant', () => {
+test('R1 : un spécialiste garde son morceau d’une écriture à l’autre ; seul le trop-plein monte au morceau suivant', () => {
   const reg = bigRegistry(400)
   const first = splitRegistry(reg, new Map())
   const { placed } = joinRegistry(first.head, first.parts)
-  // Un nouveau sous-agent, et le premier qui grandit : les autres ne bougent pas, aucun ne descend.
+  // Un nouveau spécialiste, et le premier qui grandit : les autres ne bougent pas, aucun ne descend.
   const grown: SessionRegistry = {
     ...reg,
     agents: [...reg.agents.map(a => (a.key === 'call-0' ? { ...a, segments: [...a.segments!, { k: 'write' as const, s: 1, e: 2 }] } : a)), bigAgent(400)],
@@ -157,7 +157,7 @@ test('R1 : un très grand nombre d’unités se découpe sans erreur', () => {
   expect(joinRegistry(again.head, again.parts).reg.main!.segments).toHaveLength(150_000)
 })
 
-test('F2 (S16) : le prompt gardé d’un sous-agent masque les mêmes motifs, le reste intact', () => {
+test('F2 (S16) : le prompt gardé d’un spécialiste masque les mêmes motifs, le reste intact', () => {
   const prompt = `Teste l’API avec la clé ${['sk-ant-', 'api03-abcdefghijklmnopqrstuv'].join('')} puis rends le rapport.`
   expect(maskSecrets(prompt)).toBe('Teste l’API avec la clé ‹masqué› puis rends le rapport.')
   const reg = startCall(emptyRegistry('s1', '/p', 0), { key: 't1', name: 'Test API', isBackground: true, prompt }, 1)!
@@ -170,7 +170,7 @@ const KEY = 'agents:s-dur'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 
 const world = (on: any, opts: { storeGet?: (key: string, mem: Record<string, unknown>) => unknown; isFull?: boolean; isReadFailing?: () => boolean } = {}) => {

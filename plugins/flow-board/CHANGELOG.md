@@ -4,6 +4,34 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.79.0 — 2026-11-03
+
+Le COO arrive : une discussion par projet qui suit toutes les missions, les ordonne, relaie tes réponses et tes gestes, et livre sur ton clic. Le vocabulaire devient mission, manager, worker et spécialiste. Le mode auto ne t'arrête plus que pour ce qui est à toi.
+
+### Ajouté
+- **COO** (`/flow-board:coo`) : un seul siège par projet et par poste, à la racine du dossier principal du dépôt ; la prise la plus récente l'emporte, « ↻ Reprendre ici », « Laisser » ; libre après 30 minutes sans signe de vie. Le relevé d'état, calculé par le mod, est donné à son Claude à chaque message ; onglet « Coordination » et bandeau « ◆ COO · N missions · N t'attend ».
+- **Feuille de route** : le COO la tient, le mod la surveille ; une entrée ou un ancien texte qui disparaît est montré avec sa dernière version et se remet d'un clic (« ↺ Remettre »), aucun bouton ne le laisse partir ; son endroit se choisit d'un clic (commitée dans le dépôt ou gardée sur le poste) ; une copie mise de côté est signalée.
+- **Entre les missions** : fichier de coordination écrit par le seul COO et appliqué par chaque manager ; retenues d'un groupe qui touche les fichiers d'un groupe en cours d'une autre mission (« ⇥ Forcer ») ; « À reprendre » (ce qu'une mission met de côté, recopié dans la feuille de route et gardé jusqu'à ta décision) ; pistes de rétro déjà prises ailleurs ; signal « t'attend », notifié une fois.
+- **Lancer et ordonner** : carte de lancement (boutons « Lancer » et « Lancer en auto », un clic qui ne sert qu'une fois en 10 minutes) ; plan des vagues du projet validé chez le COO (« ⏸ attend … (plan du projet) », « ⇥ Forcer (plan) ») ; vague lancée par le COO (« ⇉ Lancer la vague ») ; découpage qui connaît les fichiers que les autres missions toucheront encore.
+- **Chez le COO** : réponses aux questions bloquantes et gestes de toutes les missions ; rapport lu et validé sur la version ouverte ; « ▶ Livrer » enchaîne version, push, PR et étapes du projet, chacune seulement si la précédente a réussi (« ↻ Réessayer », « ✕ Abandonner », « ▶ Reprendre à … ») ; décisions opposées entre missions posées en question ; rétro d'une mission livrée, pistes cochées chez le COO, les autres vers « À reprendre ».
+- **Compaction** : en auto, une fois après un découpage (ou une rétro découpée) ; le COO se compacte seul au-delà de 150 000 tokens quand rien ne t'attend ; un worker se compacte à la clôture d'un ticket dès 450 000 tokens, au repos, puis repart ; consignes de compaction du rôle COO et du passage entre deux tickets.
+- **Effort d'un manager** qui fait lui-même le travail d'un worker : la règle des workers, requête par requête, dite au bandeau.
+- **`/flow archive on|off`** et l'interrupteur « Archivage d'office » de l'onglet Commandes : l'accord, donné d'avance, d'archiver les sessions de l'app que la fermeture a vérifiées.
+- **`snapshot.mjs --clean <ticket>`** : supprime la référence d'instantané d'un ticket une fois son commit fait ; le dossier d'un relecteur vit dans le dossier git du worktree (`--dossier`, `consignes.mjs --relecteur`).
+- **Lettres des groupes** : un plan dont les lettres contredisent l'ordre d'exécution est gardé, et l'outil nomme chaque écart.
+
+### Modifié
+- **Vocabulaire** : mission, manager, worker, spécialiste et affectation partout (libellés, journal, notifications, consignes, procédure, README) ; la notification devient « Mission <titre> : N question(s) t'attendent ». Aucun identifiant, champ enregistré, chemin ni commande ne change ; les anciens mots sont refusés par `check.sh` (`termes-retires.txt`), sauf les valeurs enregistrées gardées exprès.
+- **Mode auto** : une question en zone sensible se tranche seule quand la recommandation respecte l'invariant validé et qu'elle est la plus prudente ; elle est déclarée « Zone sensible : … » et le compte rendu la range à part. Restent bloquants : un choix d'expérience, fixer ou affaiblir un invariant ou contredire une décision, une suppression sans retour ou une exposition hors du poste, une faille laissée, xhigh, une dépense ou une action externe.
+- **Revue de sécurité** : conseillée seulement quand quelque chose franchit la limite du compte (secrets et jetons, dépendances et code tiers lancé, publication, réseau ou export public, droits des fichiers et accès) ; un fichier sous `~/.claude` écrit par une autre session du compte n'est plus une entrée hostile. Les revues de groupe et de lot signalent une valeur relue qui entre dans une commande ou un chemin.
+- **Renommage de la discussion** : sans l'outil de l'app, `/rename <titre>` part juste après le tour où la mission naît.
+- **Revue d'un ticket** : le relecteur suit `prompt-relecteur.md` sans charger le skill de revue ; l'advisor d'un worker autonome a deux moments nommés.
+
+### Corrigé
+- **Lancement refusé par l'app Desktop** : un `start_session` refusé dans un tour envoyé par le mod remet la même demande dans le prompt, une fois, avec un toast ; une vague du COO garde sa demande de même.
+
+---
+
 ## 0.78.0 — 2026-11-01
 
 Les revues d'un ticket suivent son niveau de sensibilité : moins de relectures en doublon, plus de xhigh d'office, et un classement vérifié deux fois.

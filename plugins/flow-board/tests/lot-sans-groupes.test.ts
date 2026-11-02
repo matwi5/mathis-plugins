@@ -4,7 +4,7 @@ import { applyReport, applySkill, emptyBoard, needsReview, newRun, reportFacts, 
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
-// Un lot sans groupes, fait dans la discussion du parcours, se relit comme un groupe : il est à relire
+// Un lot sans groupes, fait dans la discussion de la mission, se relit comme un groupe : il est à relire
 // quand tous ses tickets sont faits et qu'il n'a jamais été relu, ou qu'un ticket a fini après sa
 // dernière revue ; il est dispensé de revue et de sécurité quand chacun de ses tickets est dit ni
 // sensible ni avec logique. Rien ne s'enregistre pour cela : tout se calcule à la lecture.
@@ -14,7 +14,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 type Flags = { sensitive?: boolean; logic?: boolean }
@@ -137,7 +137,7 @@ test('chemin normal : tous les tickets faits, Claude charge /code-review ; la re
     if (surface === 'desktop') await shown.press({ key: 'security-group-lot' })
     await shown.unmount()
   }
-  expect(filled.at(-1)).toMatch(/^Avant de la lancer, envoie à l'outil flow \{"security": \{"advised": true, "why": "<raison>"\}\} : l'avis de ce passage\. Lance la revue de sécurité de ce parcours : confie-la à un sous-agent relecteur/)
+  expect(filled.at(-1)).toMatch(/^Avant de la lancer, envoie à l'outil flow \{"security": \{"advised": true, "why": "<raison>"\}\} : l'avis de ce passage\. Lance la revue de sécurité de cette mission : confie-la à un spécialiste relecteur/)
   await $.tool.call({ tool: TOOL, security: { advised: true, why: 'un chemin lu ailleurs' } } as any)
   await $.tool.call({ tool: TOOL, security: { findings: 0, fixed: 0 } } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })

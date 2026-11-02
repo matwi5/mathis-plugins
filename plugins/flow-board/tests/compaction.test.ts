@@ -15,7 +15,7 @@ const START = 'mcp__ccd_session__start_session'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 const LOT = {
   tickets: [
@@ -77,7 +77,7 @@ const world = (on: any, session = SESSION) => {
 
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
-/** Un parcours à deux groupes, tickets publiés : l'orchestrateur après `/to-tickets` (`complete` pour le finir). */
+/** Une mission à deux groupes, tickets publiés : le manager après `/to-tickets` (`complete` pour le finir). */
 const ticketed = async ($: any, isComplete = false) => {
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
@@ -136,7 +136,7 @@ test('lastCompactionAt : aucune compaction sans repère, sinon l’heure de la d
   expect(lastCompactionAt(two)).toBe(3_000)
 })
 
-test('le repère ⇣ se pose pour une compaction tapée ou automatique de la discussion, pas pour un calcul à l’avance ni pour un sous-agent', async ($, on) => {
+test('le repère ⇣ se pose pour une compaction tapée ou automatique de la discussion, pas pour un calcul à l’avance ni pour un spécialiste', async ($, on) => {
   const clock = mock.clock(on, { now: 60_000_000 })
   const { mem, files } = world(on)
   const seen = await summarizer($, on)
@@ -166,7 +166,7 @@ test('une compaction refusée par un hook plus bas ne pose pas de repère', asyn
 
 // ─── Les consignes de compaction, selon le rôle de la discussion ──
 
-test('compactionInstructions : l’orchestrateur garde des renvois, valeurs inconnues omises', () => {
+test('compactionInstructions : le manager garde des renvois, valeurs inconnues omises', () => {
   const text = compactionInstructions({
     kind: 'orchestrator',
     run: { id: 'r1', title: 'Boutique', phase: 'Implémentation' },
@@ -176,9 +176,9 @@ test('compactionInstructions : l’orchestrateur garde des renvois, valeurs inco
     ],
     transcript: '/h/.claude/projects/-p/s1.jsonl',
   })
-  expect(text).toContain('orchestrator')
+  expect(text).toContain('the manager of a mission')
   expect(text).toContain('"Boutique" (id r1), phase Implémentation')
-  expect(text).toContain('A "Code": 1/2 tickets done, linked session local_a42')
+  expect(text).toContain('A "Code": 1/2 tickets done, worker local_a42')
   expect(text).toContain('B "Doc": 0/1 tickets done')
   expect(text).toContain('DECISIONS.md')
   expect(text).toContain('mcp__flow-board__flow')
@@ -190,31 +190,31 @@ test('compactionInstructions : l’orchestrateur garde des renvois, valeurs inco
   expect(bare).toContain('reread its transcript (the .jsonl file of this session under ~/.claude/projects/).')
 })
 
-test('les sessions liées des pistes d’une phase entrent aussi dans les consignes de l’orchestrateur', () => {
+test('les workers des pistes d’une phase entrent aussi dans les consignes du manager', () => {
   const run = newRun('diagnosing-bugs', 1_000, 'Bug du panier')
   run.phases[0]!.linked = { items: ['p1'], at: 2_000, session: 'local_p1' }
   run.groups = [{ id: 'A', name: 'Code', tickets: [] }]
   const board = { ...emptyBoard('/p', 'p'), runs: [run], activeId: run.id }
   const role = compactionRoleOf(board, null)
   expect(role).toMatchObject({ kind: 'orchestrator', sessions: ['local_p1'] })
-  expect(compactionInstructions(role!)).toContain('- Other linked sessions: local_p1.')
+  expect(compactionInstructions(role!)).toContain('- Other workers: local_p1.')
   // Sans autre session : pas de ligne.
   run.phases[0]!.linked = undefined
-  expect(compactionInstructions(compactionRoleOf(board, null)!)).not.toContain('Other linked sessions')
+  expect(compactionInstructions(compactionRoleOf(board, null)!)).not.toContain('Other workers')
 })
 
-test('compactionInstructions : la session de groupe garde de quoi reprendre son ticket et joindre l’orchestrateur', () => {
-  const text = compactionInstructions({ kind: 'group', run: 'r1', runTitle: 'Boutique', group: 'E', main: 'Orchestrateur [e5eb08]' })
-  expect(text).toContain('group E of the run "Boutique" (id r1)')
+test('compactionInstructions : la session de groupe garde de quoi reprendre son ticket et joindre le manager', () => {
+  const text = compactionInstructions({ kind: 'group', run: 'r1', runTitle: 'Boutique', group: 'E', main: 'Manager [e5eb08]' })
+  expect(text).toContain('group E of the mission "Boutique" (id r1)')
   expect(text).toContain('the current task (N of M)')
   expect(text).toContain('the branch and the worktree')
   expect(text).toContain('refs/worktree/flow-board/<ticket>')
   expect(text).toContain('commit hash of each ticket done')
-  expect(text).toContain('Orchestrateur [e5eb08]')
+  expect(text).toContain('Manager [e5eb08]')
   expect(text).toContain('DECISIONS.md')
   const bare = compactionInstructions({ kind: 'group', run: 'r1', group: 'E' })
   expect(bare).not.toContain('undefined')
-  expect(bare).toContain('group E of the run r1')
+  expect(bare).toContain('group E of the mission r1')
 })
 
 test('withCompactionInstructions : le texte de la personne reste en tête', () => {
@@ -223,7 +223,7 @@ test('withCompactionInstructions : le texte de la personne reste en tête', () =
   expect(withCompactionInstructions('garde le plan', 'FB')).toBe('garde le plan\n\nFB')
 })
 
-test('l’orchestrateur reçoit ses consignes à chaque compaction de la discussion, calcul à l’avance compris ; un sous-agent n’en reçoit pas', async ($, on) => {
+test('le manager reçoit ses consignes à chaque compaction de la discussion, calcul à l’avance compris ; un spécialiste n’en reçoit pas', async ($, on) => {
   mock.clock(on, { now: 61_000_000 })
   world(on)
   const seen = await summarizer($, on)
@@ -231,18 +231,18 @@ test('l’orchestrateur reçoit ses consignes à chaque compaction de la discuss
   await $.classic.UserPromptSubmit({ prompt: 'x', session_id: SESSION, transcript_path: '/h/.claude/projects/-proj/s-cmp.jsonl', cwd: '/proj', hook_event_name: 'UserPromptSubmit' } as any)
   await compact($, { trigger: 'manual', instructions: 'garde le plan' })
   await compact($, { trigger: 'precompute' })
-  await compact($, { trigger: 'auto', agentId: 'a1', instructions: 'du sous-agent' })
+  await compact($, { trigger: 'auto', agentId: 'a1', instructions: 'du spécialiste' })
   const [manual, precompute, sub] = seen
   expect(manual!.instructions!.startsWith('garde le plan\n\n')).toBe(true)
-  expect(manual!.instructions).toContain('orchestrator')
+  expect(manual!.instructions).toContain('the manager of a mission')
   expect(manual!.instructions).toContain('"Boutique en ligne"')
   expect(manual!.instructions).toContain('A "Code": 0/1 tickets done')
   expect(manual!.instructions).toContain('reread its transcript /h/.claude/projects/-proj/s-cmp.jsonl')
-  expect(precompute!.instructions).toContain('orchestrator')
-  expect(sub!.instructions).toBe('du sous-agent')
+  expect(precompute!.instructions).toContain('the manager of a mission')
+  expect(sub!.instructions).toBe('du spécialiste')
 })
 
-test('une session de groupe reçoit les siennes ; une discussion sans parcours ne reçoit rien', async ($, on) => {
+test('une session de groupe reçoit les siennes ; une discussion sans mission ne reçoit rien', async ($, on) => {
   mock.clock(on, { now: 62_000_000 })
   world(on, 'linked')
   const seen = await summarizer($, on)
@@ -251,14 +251,14 @@ test('une session de groupe reçoit les siennes ; une discussion sans parcours n
   expect(seen[0]!.instructions).toBeUndefined()
   await $.tool.call({ tool: TOOL, delegate: 'run-1', group: 'E', main: '[e5eb08]' } as any)
   await compact($, { trigger: 'auto' })
-  expect(seen[1]!.instructions).toContain('group E of the run')
+  expect(seen[1]!.instructions).toContain('group E of the mission')
   expect(seen[1]!.instructions).toContain('run-1')
   expect(seen[1]!.instructions).toContain('[e5eb08]')
 })
 
-// ─── `/compact` proposé après `/to-tickets`, dans un parcours à groupes ──
+// ─── `/compact` proposé après `/to-tickets`, dans une mission à groupes ──
 
-test('après /to-tickets dans un parcours à groupes, /compact se propose en gris et dans la carte « Ensuite » ; plus après une compaction', async ($, on) => {
+test('après /to-tickets dans une mission à groupes, /compact se propose en gris et dans la carte « Ensuite » ; plus après une compaction', async ($, on) => {
   const clock = mock.clock(on, { now: 63_000_000 })
   const { filled, shown, toasts } = world(on)
   await summarizer($, on)
@@ -300,7 +300,7 @@ test('plus de proposition de /compact une fois un groupe lancé', async ($, on) 
   expect(await compactButton($)).toBe(false)
 })
 
-test('les pistes d’une phase confiées à une session liée avant les tickets n’empêchent pas la proposition ; un groupe lancé, si', () => {
+test('les pistes d’une phase confiées à un worker avant les tickets n’empêchent pas la proposition ; un groupe lancé, si', () => {
   const run = newRun('to-tickets', 1_000, 'Boutique')
   run.tickets = LOT.tickets.map(t => ({ ...t, status: 'todo' as const }))
   run.groups = LOT.groups.map(g => ({ ...g }))
@@ -313,7 +313,7 @@ test('les pistes d’une phase confiées à une session liée avant les tickets 
   expect(suggestsCompaction(board, null)).toBe(false)
 })
 
-test('rien n’est proposé pour un lot sans groupes ni dans une session liée', async ($, on) => {
+test('rien n’est proposé pour un lot sans groupes ni dans un worker', async ($, on) => {
   mock.clock(on, { now: 65_000_000 })
   const { shown } = world(on)
   await start($)
@@ -324,7 +324,7 @@ test('rien n’est proposé pour un lot sans groupes ni dans une session liée',
   expect(await compactButton($)).toBe(false)
 })
 
-test('une session liée de groupe ne se voit pas proposer /compact', async ($, on) => {
+test('un worker de groupe ne se voit pas proposer /compact', async ($, on) => {
   mock.clock(on, { now: 66_000_000 })
   const { shown } = world(on, 'linked')
   await ticketed($, true)
@@ -340,7 +340,7 @@ const noteTranscript = ($: any) =>
   $.classic.UserPromptSubmit({ prompt: 'x', session_id: SESSION, transcript_path: TRANSCRIPT, cwd: '/proj', hook_event_name: 'UserPromptSubmit' } as any)
 const retroText = async ($: any): Promise<string> => (await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'RETRO' })).text
 
-test('/retro dans une discussion compactée porte la consigne de transcript, avec un parcours actif', async ($, on) => {
+test('/retro dans une discussion compactée porte la consigne de transcript, avec une mission active', async ($, on) => {
   const clock = mock.clock(on, { now: 67_000_000 })
   world(on)
   await summarizer($, on)
@@ -363,7 +363,7 @@ test('/retro dans une discussion compactée porte la consigne de transcript, ave
   expect(text).toContain('logicalParentUuid')
 })
 
-test('/retro sans parcours actif : la consigne de transcript, conditionnelle avant compaction', async ($, on) => {
+test('/retro sans mission active : la consigne de transcript, conditionnelle avant compaction', async ($, on) => {
   const clock = mock.clock(on, { now: 68_000_000 })
   world(on)
   await summarizer($, on)
@@ -377,7 +377,7 @@ test('/retro sans parcours actif : la consigne de transcript, conditionnelle ava
   expect(text).toContain('compact_boundary')
 })
 
-test('le bouton Rétro d’un parcours à sessions liées transmet la règle du fichier d’origine à leurs lecteurs', async ($, on) => {
+test('le bouton Rétro d’une mission à workers transmet la règle du fichier d’origine à leurs lecteurs', async ($, on) => {
   const clock = mock.clock(on, { now: 69_000_000 })
   const { filled } = world(on)
   await ticketed($, true)
@@ -406,11 +406,11 @@ test('retroTranscriptNote : affirmative quand la compaction est vue, sinon une v
   expect(retroTranscriptNote(undefined, 's1', false)).toContain('~/.claude/projects/<project folder>/s1.jsonl')
 })
 
-test('/retro dans une session liée de groupe : la consigne de transcript seule, sans bloc du tableau de bord', async ($, on) => {
+test('/retro dans un worker de groupe : la consigne de transcript seule, sans bloc du tableau de bord', async ($, on) => {
   mock.clock(on, { now: 70_000_000 })
   world(on, 'linked')
   await start($)
-  // Une session liée de groupe : son /retro n'ouvre ni ne touche aucun parcours, la consigne reste.
+  // Un worker de groupe : son /retro n'ouvre ni ne touche aucune mission, la consigne reste.
   await $.tool.call({ tool: TOOL, delegate: 'run-x', group: 'A', main: '[e5eb08]' } as any)
   const delegated = await retroText($)
   expect(delegated.startsWith('RETRO')).toBe(true)

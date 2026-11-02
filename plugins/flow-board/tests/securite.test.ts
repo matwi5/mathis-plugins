@@ -5,7 +5,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 const world = (on: any) => {
@@ -29,7 +29,7 @@ const GROUPS = [
   { id: 'B', name: 'App', tickets: ['B0', 'B1'], files: ['app'] },
 ]
 
-/** La consigne d'/implement du parcours à groupes (sans groupes, elle suit la procédure d'une session liée). */
+/** La consigne d'/implement de la mission à groupes (sans groupes, elle suit la procédure d'un worker). */
 const groupedCoaching = async ($: any): Promise<string> => {
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)
@@ -42,7 +42,7 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   const filled = world(on)
   on('session.repo', () => ({ value: { root: 'C:/proj', remote: null, internal: false, name: null } }))
   const coaching = await groupedCoaching($)
-  // Claude sait dès l'implémentation qu'il donnera son avis, puis lancera lui-même le sous-agent relecteur, jamais /security-review.
+  // Claude sait dès l'implémentation qu'il donnera son avis, puis lancera lui-même le spécialiste relecteur, jamais /security-review.
   expect(coaching).toContain('"advised": true|false')
   expect(coaching).toContain('launch it yourself: a reviewer subagent (Agent tool, general-purpose, model opus, effort high for its search and its verifications, in a single pass), read-only, limited to git diff <group base>..<launch>')
   // Le périmètre est figé au commit du lancement, pour que les correctifs de la revue du groupe se commitent pendant qu'elle tourne.
@@ -50,8 +50,9 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   // La méthode fixe, citée par son chemin (tiré de la racine du mod), sans être recopiée.
   expect(coaching).toMatch(/the path of the security review method file, \S+\/reference\/revue-securite\.md \(it follows it:/)
   expect(coaching).not.toContain('effort xhigh)')
-  // La revue de sécurité ne se conseille que pour une zone de la liste de la méthode, jamais pour la concurrence seule.
-  expect(coaching).toContain('authentication or permissions, secrets or tokens, a command or a path built from an input, data deletion, personal data or message content stored on disk; concurrency alone does not call for it')
+  // La revue de sécurité ne se conseille que pour ce qui franchit la limite du compte, jamais pour une suppression ou la concurrence seule.
+  expect(coaching).toContain("judge whether a security review is worth it (its changes touch something that crosses the boundary of the user's account: secrets and tokens (masking included), dependencies and third-party code run, publishing, network or public export, file permissions and access (access includes authentication and an application's access rules, and network goes both ways); a file under ~/.claude written by another session of the account is not a hostile input, and neither a data deletion nor concurrency alone calls for it)")
+  expect(coaching).not.toContain('a command or a path built from an input')
   expect(coaching).not.toContain('user input reaching a query')
   expect(coaching).not.toContain('high or xhigh as the criterion of the method file')
   // Les correctifs proposés, acceptés en une ligne ; findings ne compte que les failles gardées.
@@ -64,6 +65,8 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   await $.tool.call({ tool: TOOL, set: [{ id: 'A1', status: 'done' }, { id: 'A2', status: 'done' }] } as any)
   const review = (await $.skill.prompt({ skill: 'code-review', text: 'r' })).text
   expect(review).toContain('"security"')
+  // La valeur relue qui entre dans une commande ou un chemin revient à la revue du groupe (la revue de sécurité ne la cherche plus).
+  expect(review).toContain('and in its instructions file this security line of this review: a value read back')
   // Un événement ne termine pas la phase en cours.
   expect(review).not.toContain('{"complete": true}')
 
@@ -77,14 +80,14 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   // Le plan renvoyé garde l'avis.
   await $.tool.call({ tool: TOOL, groups: GROUPS } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(String((await ui.find({ key: 'security-group-A' }))?.props?.label)).toMatch(/^⛨.Revue de sécurité · sous-agent relecteur$/)
+  expect(String((await ui.find({ key: 'security-group-A' }))?.props?.label)).toMatch(/^⛨.Revue de sécurité · spécialiste relecteur$/)
   expect(await ui.find({ type: 'Text', text: /conseillée : touche les règles RLS/ })).toBeDefined()
   // Facultative : la carte « Ensuite » ne la propose jamais, et B reste la suite.
   expect(await ui.find({ key: 'go-security-review' })).toBeUndefined()
   await ui.press({ key: 'security-group-A' })
   await ui.unmount()
-  // Le bouton demande à Claude le sous-agent relecteur, limité au diff du groupe : plus de /security-review.
-  expect(filled.at(-1)).toMatch(/^Lance la revue de sécurité du groupe A \(Worker\) : confie-la à un sous-agent relecteur/)
+  // Le bouton demande à Claude le spécialiste relecteur, limité au diff du groupe : plus de /security-review.
+  expect(filled.at(-1)).toMatch(/^Lance la revue de sécurité du groupe A \(Worker\) : confie-la à un spécialiste relecteur/)
   expect(filled.at(-1)).toContain("git diff <base>..<lancement> (<base> : le commit d'avant le premier ticket du groupe A ; <lancement> : le hash de HEAD au lancement, écrit en clair dans ses consignes")
   expect(filled.at(-1)).toContain('je décide de leur correction')
   expect(filled.at(-1)).toContain('effort high pour sa recherche et ses vérifications, en une seule passe)')
@@ -96,7 +99,7 @@ test('revue de sécurité : l’avis de Claude après la revue du groupe, le bou
   expect(filled.at(-1)).not.toContain('effort xhigh')
   expect(filled.at(-1)).not.toMatch(/copie/)
 
-  // Les constats du sous-agent, sans skill chargé : la revue compte comme faite.
+  // Les constats du spécialiste, sans skill chargé : la revue compte comme faite.
   await $.tool.call({ tool: TOOL, security: { group: 'A', findings: 2, fixed: 1 } } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'security-group-A' })).toBeUndefined()
@@ -152,7 +155,7 @@ test('sans groupes, l’avis de sécurité du lot cite aussi le fichier de méth
   mock.store(on)
   world(on)
   const text = (await $.skill.prompt({ skill: 'mattpocock-skills:code-review', text: 'x' })).text
-  expect(text).toContain('without "group": it covers the whole run')
+  expect(text).toContain('without "group": it covers the whole mission')
   expect(text).toMatch(/the path of the security review method file, \S+\/reference\/revue-securite\.md/)
   expect(text).toContain('effort high for its search and its verifications, in a single pass')
   expect(text).not.toContain('effort xhigh)')

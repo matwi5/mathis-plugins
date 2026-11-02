@@ -1,4 +1,4 @@
-// Le titre du parcours, recopié dans une demande mise dans le prompt, dans la description d'une
+// Le titre de la mission, recopié dans une demande mise dans le prompt, dans la description d'une
 // fermeture ou en tête du fichier des choix (relay.ts), passe toujours par neutralInPrompt : un titre recopié brut pouvait fermer sa citation
 // « … » ou glisser une consigne (pistes du groupe C de « Pistes de rétro en groupes »).
 //
@@ -20,9 +20,9 @@ const rawTitleLines = src =>
     .filter(({ line }) => /\$\{run\??\.title\}/.test(line))
 
 /** Les textes qui ne vont pas dans le prompt : la ligne d'état et les réponses de /flow à la personne. */
-const NOT_PROMPT = [/\$\.ui\.status\(/, /Parcours mis de côté : \$\{run\.title\}/, /Parcours archivé : \$\{run\.title\}/]
+const NOT_PROMPT = [/\$\.ui\.status\(/, /Mission mise de côté : \$\{run\.title\}/, /Mission archivée : \$\{run\.title\}/]
 
-test('register.tsx, closing.ts et relay.ts ne recopient le titre du parcours brut dans aucune demande, description de fermeture ni fichier des choix', () => {
+test('register.tsx, closing.ts et relay.ts ne recopient le titre de la mission brut dans aucune demande, description de fermeture ni fichier des choix', () => {
   const leaks = ['hooks/register.tsx', 'hooks/closing.ts', 'hooks/relay.ts'].flatMap(file =>
     rawTitleLines(read(file))
       .filter(({ line }) => !NOT_PROMPT.some(re => re.test(line)))

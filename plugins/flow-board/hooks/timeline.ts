@@ -6,13 +6,13 @@
 // - La fenêtre de vue (zoom, déplacement, « dernière heure », « tout ») découpe une partie de l'axe
 //   entier ; voir « Zoom et navigation » en bas.
 // - Le résumé compte le gain par rapport à une exécution en série sur l'union des périodes
-//   d'activité des sous-agents, pour que les heures creuses ne comptent pas.
+//   d'activité des spécialistes, pour que les heures creuses ne comptent pas.
 
 import type { AgentLane, AgentMark, AgentsWindow, RegistryAgent, SegmentKind, ToolFamily } from '../types'
 
 /**
  * Les sortes de segments qui travaillent : réfléchir, rédiger, lancer un outil, attendre un
- * sous-agent ou une tâche de fond, consulter l'advisor. Elles seules empêchent une pause de se
+ * spécialiste ou une tâche de fond, consulter l'advisor. Elles seules empêchent une pause de se
  * compresser ; attendre la réponse de la personne n'en est pas.
  */
 export const WORKING_KINDS: ReadonlySet<SegmentKind> = new Set<SegmentKind>(['think', 'write', 'tool', 'waitAgent', 'waitBg', 'waitAdvisor'])
@@ -235,7 +235,7 @@ export const laneMarks = (lane: AgentLane, axis: Axis): (AgentMark & { x: number
   (lane.marks ?? []).filter(m => m.at >= axis.start && m.at <= axis.end).map(m => ({ ...m, x: xOf(axis, m.at) }))
 
 /**
- * La période d'un sous-agent, de son départ à sa fin. Une fin seulement constatée (`isEndUnseen`)
+ * La période d'un spécialiste, de son départ à sa fin. Une fin seulement constatée (`isEndUnseen`)
  * porte l'heure du rattrapage, pas la vraie : la période s'arrête alors à la fin de son dernier segment.
  */
 const periodOf = (a: RegistryAgent, now: number): Interval => {
@@ -250,8 +250,8 @@ const workOf = (lane: AgentLane, now: number): Interval[] =>
 
 /**
  * Les moments où quelqu'un travaille, sur toutes les pistes affichées et chez tous les
- * sous-agents : leurs segments qui travaillent, pas leurs périodes entières. Seule garde : un
- * sous-agent en cours qui n'a encore aucun segment travaille depuis son départ.
+ * spécialistes : leurs segments qui travaillent, pas leurs périodes entières. Seule garde : un
+ * spécialiste en cours qui n'a encore aucun segment travaille depuis son départ.
  */
 export const activityOf = (lanes: readonly AgentLane[], agents: readonly RegistryAgent[], now: number): Interval[] => [
   ...lanes.flatMap(l => workOf(l, now)),
@@ -261,7 +261,7 @@ export const activityOf = (lanes: readonly AgentLane[], agents: readonly Registr
 export type Summary = {
   agents: number
   running: number
-  /** Le temps où au moins un sous-agent travaillait (union de leurs périodes). */
+  /** Le temps où au moins un spécialiste travaillait (union de leurs périodes). */
   activeMs: number
   /** La somme de leurs durées : ce qu'aurait pris une exécution en série. */
   serialMs: number
@@ -284,7 +284,7 @@ export const summaryOf = (agents: readonly RegistryAgent[], now: number): Summar
 }
 
 /**
- * Une rangée de la frise, dans l'ordre d'affichage : un sous-agent, ou la piste repliable d'un
+ * Une rangée de la frise, dans l'ordre d'affichage : un spécialiste, ou la piste repliable d'un
  * Workflow (ses agents réunis). `depth` : le retrait sous le parent.
  */
 export type TreeRow =
@@ -292,7 +292,7 @@ export type TreeRow =
   | { kind: 'workflow'; id: string; agents: RegistryAgent[]; depth: number; isOpen: boolean }
 
 /**
- * L'ordre des pistes (Q13) : les sous-agents par ordre de départ, les enfants d'un sous-agent en
+ * L'ordre des pistes (Q13) : les spécialistes par ordre de départ, les enfants d'un spécialiste en
  * retrait sous lui (`parent`, à toute profondeur) ; les agents d'un même Workflow réunis en une
  * piste repliée, que `openWorkflows` déplie. Un parent inconnu (autre session, effacé) laisse
  * l'agent à la racine.

@@ -8,7 +8,7 @@
 
 import type { ActiveRow, ApiRow, CallStats, Durations, HourRow, PeerDurations, ProjectInfo, RequestLog, RequestRecord, SessionDayRow, TimesRow } from '../types'
 import { dayOf, earliest, groupOf, maxOf, UNKNOWN } from './model.ts'
-import { REQUEST_SCHEMA, activeMs, mergeSpeeds, netSpans, weightedSpeed } from './requests.ts'
+import { REQUEST_SCHEMA, activeMs, mergeSpeeds, netSpans, parallelPieces, weightedSpeed } from './requests.ts'
 
 export { weightedSpeed }
 
@@ -181,8 +181,13 @@ const projectOf = (log: RequestLog): string => log.project ?? UNKNOWN
 function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: number, machine: string): Required<Pick<Durations, 'api' | 'active' | 'hours' | 'sessions' | 'times'>> {
   const times = new Map<string, TimesRow>()
   const byHour = new Map<string, Span[]>()
-  // Le temps cumulé d'une heure : la somme des temps actifs de chaque discussion dans cette heure.
+  // Le temps cumulé d'une heure : la somme des temps actifs de chaque discussion dans cette heure, plus
+  // ce que ses fils en plus (spécialistes de fond) ont travaillé en même temps (`parallelPieces`).
   const bySessionHour = new Map<string, Span[]>()
+  const extraByHour = new Map<string, number>()
+  const extraBySessionDay = new Map<string, number>()
+  // Chaque discussion entière : ses requêtes et ses morceaux actifs, pour compter ses fils en même temps.
+  const whole = new Map<string, { requests: RequestRecord[]; spans: Span[] }>()
   const byProject = new Map<string, { spans: Span[]; requests: number }>()
   const bySession = new Map<string, { project: string; spans: Span[]; apiMs: number; requests: number }>()
   const api = new Map<string, ApiRow>()
@@ -195,7 +200,10 @@ function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: numb
   for (const log of logs) {
     const project = projectOf(log)
     const group = groupOf(project, {})
+    const all = slot(whole, log.session, () => ({ requests: [], spans: [] }))
     for (const r of log.requests) {
+      all.requests.push(r)
+      all.spans.push(...activeSpansOf(r))
       for (const [day, hour, a, b] of activeSpansOf(r).flatMap((span) => piecesOf(span, tz))) {
         if (!days.has(day)) continue
         slot(byHour, `${day}|${hour}`, () => []).push([a, b])
@@ -221,6 +229,15 @@ function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: numb
       }
     }
   }
+  for (const [session, x] of whole) {
+    for (const [from, to, extra] of parallelPieces(x.requests, x.spans)) {
+      for (const [day, hour, a, b] of piecesOf([from, to], tz)) {
+        if (!days.has(day)) continue
+        extraByHour.set(`${day}|${hour}`, (extraByHour.get(`${day}|${hour}`) ?? 0) + (b - a) * extra)
+        extraBySessionDay.set(`${day}|${session}`, (extraBySessionDay.get(`${day}|${session}`) ?? 0) + (b - a) * extra)
+      }
+    }
+  }
   const hours = new Map<string, HourRow>()
   const hourOfDate = (date: string) => slot(hours, date, () => ({ date, machine, hours: Array.from({ length: 24 }, () => 0), cumul: Array.from({ length: 24 }, () => 0) }))
   for (const [key, spans] of byHour) {
@@ -231,13 +248,20 @@ function rowsOf(logs: readonly RequestLog[], days: ReadonlySet<string>, tz: numb
     const [date, hour] = key.split('|') as [string, string]
     hourOfDate(date).cumul![Number(hour)]! += activeMs(spans)
   }
+  for (const [key, ms] of extraByHour) {
+    const [date, hour] = key.split('|') as [string, string]
+    hourOfDate(date).cumul![Number(hour)]! += ms
+  }
   const sessions: SessionDayRow[] = [...bySession].map(([key, x]) => {
     const [date, session] = key.split('|') as [string, string]
     return { date, session, project: x.project, machine, activeMs: activeMs(x.spans), apiMs: x.apiMs, requests: x.requests }
   })
-  // Le temps cumulé d'un projet : la somme des temps actifs de ses discussions ce jour-là.
+  // Le temps cumulé d'un projet : la somme des temps actifs de ses discussions ce jour-là, avec leurs fils en même temps.
   const cumul = new Map<string, number>()
-  for (const s of sessions) cumul.set(`${s.date}|${groupOf(s.project, {})}`, (cumul.get(`${s.date}|${groupOf(s.project, {})}`) ?? 0) + s.activeMs)
+  for (const s of sessions) {
+    const key = `${s.date}|${groupOf(s.project, {})}`
+    cumul.set(key, (cumul.get(key) ?? 0) + s.activeMs + (extraBySessionDay.get(`${s.date}|${s.session}`) ?? 0))
+  }
   const active: ActiveRow[] = [...byProject].map(([key, x]) => {
     const [date, project] = key.split('|') as [string, string]
     return { date, project, machine, activeMs: activeMs(x.spans), requests: x.requests, cumulMs: cumul.get(key) ?? 0 }
@@ -373,7 +397,17 @@ function parseRecord(v: unknown): RequestRecord | null {
     agents: finiteOrZero(r.agents),
     models: parseModels(r.models),
     ...waitsOf(r, r.sentAt),
+    ...lanesOf(r, r.sentAt),
   }
+}
+
+/** Les tours relevés d'une requête lue sur le disque, bornés à ses 30 jours : un intervalle impossible est écarté. */
+function lanesOf(r: Record<string, unknown>, sentAt: number): Pick<RequestRecord, 'turnSpans' | 'agentSpans'> {
+  const isIn = (v: unknown): v is number => isFiniteIn(v, sentAt, sentAt + MAX_REQUEST_MS)
+  const spans = (v: unknown): [number, number][] =>
+    (Array.isArray(v) ? v : []).filter((p): p is [number, number] => Array.isArray(p) && p.length === 2 && isIn(p[0]) && isIn(p[1]) && p[1] > p[0]).map(([a, b]) => [a, b])
+  const [turnSpans, agentSpans] = [spans(r.turnSpans), spans(r.agentSpans)]
+  return { ...(turnSpans.length ? { turnSpans } : {}), ...(agentSpans.length ? { agentSpans } : {}) }
 }
 
 /**

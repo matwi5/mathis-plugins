@@ -16,8 +16,8 @@ test('le compte rendu a une borne chiffrée, et « Trouvé » se range par thèm
   assert.ok(found.includes('Rangé par thème'), '« Trouvé » ne dit pas son rangement')
 })
 
-// Ce qu'une session liée rend au relais (le CHANGELOG, le code antérieur, les pistes) va au compte rendu
-// du parcours dans tous les cas : repris des sessions liées avec des groupes, rédigé par Claude sans groupes.
+// Ce qu'un worker rend au relais (le CHANGELOG, le code antérieur, les pistes) va au compte rendu
+// de la mission dans tous les cas : repris des workers avec des groupes, rédigé par Claude sans groupes.
 test('le compte rendu demande les trois rubriques, avec ou sans groupes, et dit d’où elles viennent', () => {
   const sections = [...skill.matchAll(/^## (.+)$/gm)].map(m => m[1])
   for (const title of ['Code antérieur au lot', 'Pistes', 'Ce que le CHANGELOG devra dire']) assert.ok(sections.includes(title), `rubrique absente : « ${title} »`)
@@ -26,7 +26,7 @@ test('le compte rendu demande les trois rubriques, avec ou sans groupes, et dit 
   assert.ok(at('Trouvé') < at('Code antérieur au lot') && at('Code antérieur au lot') < at('Pistes') && at('Pistes') < at('Documentation'))
   assert.ok(at('Documentation') < at('Ce que le CHANGELOG devra dire') && at('Ce que le CHANGELOG devra dire') < at('Ce que la livraison enverra'))
   const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
-  assert.ok(sources.includes('**avec des groupes**, reprends-les des comptes rendus des sessions liées'), 'origine avec groupes absente')
+  assert.ok(sources.includes('**avec des groupes**, reprends-les des comptes rendus des workers'), 'origine avec groupes absente')
   assert.ok(sources.includes('**sans groupes**, rédige-les toi-même'), 'origine sans groupes absente')
   const older = skill.slice(skill.indexOf('## Code antérieur au lot'), skill.indexOf('## Pistes'))
   assert.ok(older.includes('groupe « durcissement »'), 'le code antérieur ne sert pas à décider d’un groupe « durcissement »')
@@ -50,7 +50,7 @@ test('le README et la description du skill nomment les mêmes rubriques que le s
   for (const part of ['code antérieur au lot', 'les pistes', 'ce que le CHANGELOG devra dire']) assert.ok(description.includes(part), `description sans « ${part} »`)
 })
 
-test('avec des groupes, le skill renvoie aux comptes rendus des sessions liées ; « Trouvé » ne range plus de pistes', () => {
+test('avec des groupes, le skill renvoie aux comptes rendus des workers ; « Trouvé » ne range plus de pistes', () => {
   // La consigne qui donne ce chemin se teste au chargement : compte-rendu.test.ts.
   assert.ok(skill.includes('dans leurs fichiers du relais, dont la consigne de flow-board plus bas donne le chemin'))
   // « Trouvé » ne range plus de pistes : elles vont sous « Pistes ».

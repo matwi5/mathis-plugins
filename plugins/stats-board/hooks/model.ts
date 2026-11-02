@@ -128,7 +128,7 @@ export function sessionsOf(json: Json, machine: string): SessionRow[] {
     const first = Date.parse(str(s.firstActivity))
     const id = str(s.sessionId) || str(s.period)
     if (!id || !Number.isFinite(last)) continue
-    // Un sous-agent de workflow écrit sous `<projet>\<session>\subagents\…` : il compte pour son
+    // Un spécialiste de workflow écrit sous `<projet>\<session>\subagents\…` : il compte pour son
     // projet et se rattache à la discussion qui l'a lancé.
     const path = str(s.projectPath).split(/[\\/]/)
     out.push({
@@ -974,12 +974,12 @@ export function funFact(output: number): string | null {
 
 // ─── Journée ────────────────────────────────────────────────────────────────
 
-/** Une discussion d'un jour : la session principale et ses sous-agents de workflow, réunis. */
+/** Une discussion d'un jour : la session principale et ses spécialistes de workflow, réunis. */
 export type DayDiscussion = { id: string; machine: string; project: string; first: number; last: number; cost: number; tokens: number; models: string[]; agents: number }
 
 /**
  * Les discussions actives un jour donné : commencées ou terminées ce jour-là (ccusage ne donne
- * que la première et la dernière activité). Une discussion compte avec tous ses sous-agents de
+ * que la première et la dernière activité). Une discussion compte avec tous ses spécialistes de
  * workflow dès que l'un d'eux est actif ce jour-là ; son coût est son total, jours précédents
  * compris. Les plus chères d'abord.
  */

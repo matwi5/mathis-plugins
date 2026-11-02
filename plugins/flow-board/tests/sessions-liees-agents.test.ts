@@ -7,7 +7,7 @@ import type { Relay, SessionRegistry } from '../types'
 const NOW = 50_000_000
 const reg = (session: string, patch: Partial<SessionRegistry> = {}): SessionRegistry => ({ ...emptyRegistry(session, '/p', NOW - 1_000), ...patch })
 
-test('avec un parcours, ses sessions liées se reconnaissent par leur fichier et par le relais, sûrement', () => {
+test('avec une mission, ses workers se reconnaissent par leur fichier et par le relais, sûrement', () => {
   const self = reg('orch')
   const relay: Relay = {
     v: 1,
@@ -31,7 +31,7 @@ test('avec un parcours, ses sessions liées se reconnaissent par leur fichier et
   expect(linked.every(l => isSureLink(l.how))).toBe(true)
 })
 
-test('sans parcours, une session de claude --bg se reconnaît par son id court ou son job, une session du desktop par son titre en repli', () => {
+test('sans mission, une session de claude --bg se reconnaît par son id court ou son job, une session du desktop par son titre en repli', () => {
   const self = reg('orch', {
     linked: [
       { id: '9f3e21aa', title: 'Explorer le cache', at: NOW - 8_000, via: 'bg' },
@@ -54,12 +54,12 @@ test('sans parcours, une session de claude --bg se reconnaît par son id court o
     ['local_0d4e', 'c1c1c1c1-0000', 'title', 'working'],
     ['local_ffff', undefined, 'none', 'working'],
   ])
-  // Reconnue par son titre seul : montrée, jamais effacée avec l'orchestrateur (S15).
+  // Reconnue par son titre seul : montrée, jamais effacée avec le manager (S15).
   expect(isSureLink('title')).toBe(false)
   expect(linked[3]!.session).toBeUndefined()
 })
 
-test('l’état d’une session liée : échouée si elle finit avec un ticket ouvert ou si son job échoue, fermée sans signe de vie', () => {
+test('l’état d’un worker : échouée si elle finit avec un ticket ouvert ou si son job échoue, fermée sans signe de vie', () => {
   const self = reg('orch', { linked: [{ id: 'aaaa1111', title: 'En échec', at: NOW - 9_000, via: 'bg' }] })
   const relay: Relay = {
     v: 1,
@@ -101,7 +101,7 @@ test('le relais se lit par l’id de session du job, le lancement donne l’heur
   ])
 })
 
-test('un lancement du desktop que le parcours connaît déjà par son groupe ne fait pas une seconde pastille', () => {
+test('un lancement du desktop que la mission connaît déjà par son groupe ne fait pas une seconde pastille', () => {
   const self = reg('orch', { linked: [{ id: 'local_9z', title: 'Lot › Groupe B · Export', at: NOW - 9_000, via: 'desktop' }] })
   const others = [reg('uuid-b', { run: 'r1', group: 'B', title: 'Lot' })]
   const linked = linkedSessions({ self, run: 'r1', others, now: NOW })

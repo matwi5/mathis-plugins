@@ -9,7 +9,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 const BAND = {
   component: 'AbovePrompt',
@@ -35,7 +35,7 @@ const lot = (): Board => {
 test('chaque ticket en cours garde la discussion qui l’a lancé et son groupe ; fini, il la perd', () => {
   let board = lot()
   board = applyReport(board, { set: [{ id: 'a1', status: 'doing' }] }, 2_000).board
-  // Une autre discussion (session « t ») passe b1 en cours sur le même parcours.
+  // Une autre discussion (session « t ») passe b1 en cours sur la même mission.
   board = applyReport({ ...board, session: 't' }, { set: [{ id: 'b1', status: 'doing' }] }, 2_100).board
   const run = activeRun(board)!
   expect(run.tickets.find(t => t.id === 'a1')!.by).toBe('s')
@@ -94,7 +94,7 @@ test('les tickets en cours se lisent dans leur groupe ; ni le panneau ni le band
 
 test('un ticket laissé en cours par une autre discussion est marqué comme tel sur sa ligne', async ($, on) => {
   mock.clock(on, { now: 401_000_000 })
-  // Le parcours en pause qu'une autre discussion (session-B) a laissé avec un ticket en cours.
+  // La mission en pause qu'une autre discussion (session-B) a laissé avec un ticket en cours.
   const saved = lot()
   const run0 = activeRun(applyReport({ ...saved, session: 'session-B' }, { set: [{ id: 'a1', status: 'doing' }] }, 2_000).board)!
   const stored: Board = { ...emptyBoard('', 'projet'), deleted: [], runs: [{ ...run0, status: 'paused', owner: undefined, updatedAt: 400_999_000 }], activeId: null }

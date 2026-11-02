@@ -1,4 +1,4 @@
-// Dessin du tableau de bord : le panneau à onglets (Parcours, Activité, Historique) et le
+// Dessin du tableau de bord : le panneau à onglets (Mission, Activité, Historique) et le
 // bandeau au-dessus du prompt. Un seul arbre pour toutes les surfaces : le desktop, VS Code
 // et le mobile reçoivent les SVG animés, le terminal des glyphes et des barres en blocs.
 //
@@ -11,6 +11,11 @@
 import type { SyncState, AgentStatus, AgentsWindow, AdvisorCall, AdvisorLane, Artifact, ArtifactKind, Board, Closing, Detour, FlowItem, FlowPhase, FlowStep, FoundTask, ItemStatus, Live, Relay, Run, SecurityCheck, Tab, AgentLane, AgentMark, AgentType, RegistryAgent, SegmentKind, SessionRegistry, Ticket, ToolFamily, TicketGroup, TicketStatus, Tone, UiState } from '../types'
 import { ANYTIME_GROUPS, C, CODE_SKILLS, COMMAND_GROUPS, FLOW_COMMANDS, LAUNCHERS, SKILLS, commandLineOf, slashOf, type AnytimeTool, type SkillDef, type StepDef } from './catalog.ts'
 import {
+  holdMapOf,
+  PLAN_UNREAD_TEXT,
+  LOT_KEY,
+  type ForcedPair,
+  type OutsideHold,
   activeDetour,
   autoStateOf,
   isAutoOn,
@@ -72,14 +77,19 @@ import {
   hasUnreadableCounts,
   isSecuritySettled,
   hasGroupReview,
+  clip,
 } from './basics.ts'
 import { MAIN, reviewForkName, runningOf } from './registry.ts'
 import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
+import { seatState } from './seat.ts'
+import { managerWorkEffort } from './effort.ts'
+import type { CooStatement } from './coo.ts'
+import { cooBandParts, coordinationRows, type CooDo, type CooPart } from './coo-view.tsx'
 import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
-import { reopenText, type ReopenText } from './closing.ts'
+import { archiveConsent, consentDay, neutralLine, reopenText, type ReopenText } from './closing.ts'
 import { advisorCostOf, costOf, costText, familyOf, pricesFor, type UnitPrices } from './cost.ts'
 import { HOUR_MS, TOOL_FAMILIES, WORKING_KINDS, activityOf, buildAxis, laneMarks, laneParts, laneTree, rulerTicks, sliceAxis, summaryOf, unionOf, windowBounds, zoomWindow, type Axis, type AxisPiece, type LanePart } from './timeline.ts'
 import { DEFAULT, FAMILY_CELL, WAIT_COLOR, WAIT_GLYPH, laneCells, laneRaster, markLook, pack, rulerCells, textColorOf, type LaneCell } from './cells.ts'
@@ -161,13 +171,13 @@ export type View = {
   /** L'id de la discussion du moment (nouveau après un `/clear`) : le mode auto n'envoie que de celle qui l'a allumé. */
   here?: string
   /**
-   * La date du second clic que cette discussion garde pour le parcours actif ici (`$.store`), null sans
+   * La date du second clic que cette discussion garde pour la mission active ici (`$.store`), null sans
    * clic gardé : l'auto n'envoie d'ici que si l'« allumé à » la vaut ; absent, pas vérifié.
    */
   autoConfirmedAt?: number | null
-  /** L'avancement relayé par les sessions liées du parcours actif. */
+  /** L'avancement relayé par les workers de la mission active. */
   relay?: Relay | null
-  /** Le registre des sous-agents de cette session (onglet Agents). */
+  /** Le registre des spécialistes de cette session (onglet Agents). */
   agents?: SessionRegistry | null
   /** Le suivi en défaut (S11, R2) : `true`, une écriture du registre refusée ; `'lost'`, un changement perdu. */
   agentsAlert?: boolean | 'lost'
@@ -175,10 +185,26 @@ export type View = {
   erasing?: readonly { key: string; title: string }[]
   /** Les prix des modèles tirés de ccusage (Q15) ; null tant qu'ils manquent : « coût indisponible ». */
   agentPrices?: Readonly<Record<string, UnitPrices>> | null
-  /** Les sessions liées de cette discussion (onglet Agents), avec leur registre quand il se lit. */
+  /** Le relevé d'état du projet, dans la seule discussion qui tient le siège du COO (sans mission ici) : sa vue Coordination. */
+  coo?: CooStatement | null
+  /** Le fichier de coordination ne se lit pas ici : l'auto ne lance rien (pause qui se lève seule à la relecture). */
+  coordUnread?: boolean
+  /** Les retenues de la mission portée ici par d'autres missions (calculées sur le fichier des missions relu). */
+  holds?: readonly OutsideHold[]
+  /** Le dernier lancement n'a pas relu le fichier des missions : rien n'est parti (la carte « Ensuite » le dit). */
+  launchUnread?: boolean
+  /** Le plan des vagues du projet ne se lit pas pour la mission d'ici (fichier de coordination ou entrée de plan) : rien ne part. */
+  planUnread?: boolean
+  /** La mission dont la suppression attend confirmation : ses comptes rendus de workers que le COO n'a pas encore relevés. */
+  dropUngleaned?: number
+  /** Les pistes de la rétro d'ici que le COO a vues déjà prises par une autre mission : hors du découpage. */
+  taken?: readonly { item: string; title: string; ticket: string }[]
+  /** Des marques de pistes qui ne se lisent pas : leurs pistes restent découpables, et la vue le dit. */
+  takenNote?: string
+  /** Les workers de cette discussion (onglet Agents), avec leur registre quand il se lit. */
   linked?: readonly { session: LinkedSession; reg: SessionRegistry | null }[]
   /**
-   * Le sélecteur d'historique de l'onglet Agents, et la vue de l'entrée choisie (un parcours passé,
+   * Le sélecteur d'historique de l'onglet Agents, et la vue de l'entrée choisie (une mission passée,
    * une ancienne discussion) quand elle est lue.
    */
   history?: { entries: readonly HistoryEntry[]; shown: { key: string; title: string; self: SessionRegistry; linked: readonly { session: LinkedSession; reg: SessionRegistry | null }[] } | null }
@@ -186,7 +212,7 @@ export type View = {
 
 export type Actions = {
   setTab: (tab: Tab) => unknown
-  /** Lance la commande du skill (la suite du parcours). */
+  /** Lance la commande du skill (la suite de la mission). */
   launch: (skill: string, args?: string) => unknown
   /** Met la commande du skill dans le prompt (lanceur : la personne ajoute le sujet). */
   prepare: (skill: string, args?: string) => unknown
@@ -197,23 +223,23 @@ export type Actions = {
   /** Met dans le prompt une demande à Claude : mettre à jour le dossier `dir` par `git pull --ff-only`. */
   askFastForward: (dir: string | null) => unknown
   finish: () => unknown
-  /** Met de côté le parcours actif ici, sans le clore : la discussion peut en ouvrir un autre. */
+  /** Met de côté la mission active ici, sans la clore : la discussion peut en ouvrir une autre. */
   setAside: () => unknown
   /** « ⚡ Auto », premier clic : montre ce que l'activation vaut et « Confirmer » (ou le cache). */
   askAuto: () => unknown
-  /** « Confirmer » : allume le mode auto du parcours actif ici, pour cette discussion. */
+  /** « Confirmer » : allume le mode auto de la mission active ici, pour cette discussion. */
   confirmAuto: () => unknown
-  /** Coupe le mode auto du parcours actif ici. */
+  /** Coupe le mode auto de la mission active ici. */
   stopAuto: () => unknown
   /** « ↻ Renvoyer » sur la question « envoi resté sans suite » d'une marque d'envoi du mode auto. */
   resendAuto: (runId: string, key: string) => unknown
   resume: (id: string) => unknown
   drop: (id: string) => unknown
-  /** Range un parcours aux archives. */
+  /** Range une mission aux archives. */
   archive: (id: string) => unknown
-  /** Sort un parcours des archives. */
+  /** Sort une mission des archives. */
   unarchive: (id: string) => unknown
-  /** Montre ou cache les parcours archivés dans l'historique. */
+  /** Montre ou cache les missions archivées dans l'historique. */
   toggleArchived: () => unknown
   toggleTickets: () => unknown
   /** Ajoute un ticket à la sélection, ou l'en retire. */
@@ -223,20 +249,20 @@ export type Actions = {
   launchPicks: () => unknown
   /** Lot sans groupe : /implement sur tous ses tickets ouverts, dans l'ordre du lot. */
   launchAll: () => unknown
-  /** Confie un groupe prêt à une session liée ; le parcours reste dans cette discussion. */
+  /** Confie un groupe prêt à un worker ; la mission reste dans cette discussion. */
   launchGroupLinked: (id: string) => unknown
-  /** La même session liée, en xhigh imposé ; `surface` : celle de l'appui (l'app y plafonne l'effort). */
+  /** Le même worker, en xhigh imposé ; `surface` : celle de l'appui (l'app y plafonne l'effort). */
   launchGroupLinkedXhigh: (id: string, surface?: string) => unknown
-  /** Annule l'envoi d'un groupe à une session liée qui n'a pas été lancée. */
+  /** Annule l'envoi d'un groupe à un worker qui n'a pas été lancé. */
   cancelGroupLinked: (id: string) => unknown
-  /** Fait faire par sa session liée la revue d'un groupe rendu sans revue. */
+  /** Fait faire par son worker la revue d'un groupe rendu sans revue. */
   reviewLinkedGroup: (id: string) => unknown
-  /** Demande à Claude de fermer la session liée et le worktree d'un groupe rendu. */
+  /** Demande à Claude de fermer le worker et le worktree d'un groupe rendu. */
   closeLinkedGroup: (id: string) => unknown
   closeLinkedItems: () => unknown
-  /** Demande à Claude la revue de sécurité d'un groupe (ou du lot, `lot`) par un sous-agent relecteur. */
+  /** Demande à Claude la revue de sécurité d'un groupe (ou du lot, `lot`) par un spécialiste relecteur. */
   securityReview: (id: string) => unknown
-  /** Demande à Claude un diagnostic de bug dans une session liée, en détour de la phase en cours. */
+  /** Demande à Claude un diagnostic de bug dans un worker, en détour de la phase en cours. */
   launchBugLinked: () => unknown
   /** Ajoute un élément de la phase (une piste de rétro) à la sélection, ou l'en retire. */
   pickItem: (id: string) => unknown
@@ -245,17 +271,17 @@ export type Actions = {
   clearItemPicks: () => unknown
   /** Met dans le prompt la demande de découpage en tickets des éléments choisis, sans rien enregistrer. */
   splitItems: () => unknown
-  /** Annule un envoi à une session liée qui n'a pas été lancée. */
+  /** Annule un envoi à un worker qui n'a pas été lancé. */
   cancelLinked: () => unknown
-  /** Demande à Claude de vérifier la session liée et de rendre ses éléments (session arrêtée sans note, ou jamais lancée). */
+  /** Demande à Claude de vérifier le worker et de rendre ses éléments (session arrêtée sans note, ou jamais lancée). */
   recoverLinked: () => unknown
   /** Remet dans le prompt la demande de lancement des éléments qu'aucune session n'a pris. */
   relaunchLinked: () => unknown
-  /** Demande (ou retire) la confirmation de suppression d'un parcours archivé. */
+  /** Demande (ou retire) la confirmation de suppression d'une mission archivée. */
   askDrop: (id: string) => unknown
-  /** /ask-matt dans le prompt, prérempli avec l'endroit du parcours où l'on est. */
+  /** /ask-matt dans le prompt, prérempli avec l'endroit de la mission où l'on est. */
   askNext: () => unknown
-  /** Confie chaque groupe d'un lot à sa session liée (0 : le lot principal, puis les autres lots). */
+  /** Confie chaque groupe d'un lot à son worker (0 : le lot principal, puis les autres lots). */
   launchParallelLinked: (lot?: number) => unknown
   toggleLog: () => unknown
   /** Déplie ou replie les éléments de la phase au-delà des 14 premiers. */
@@ -280,19 +306,21 @@ export type Actions = {
   copyLink: (url: string, what: string, surface?: string) => unknown
   /** « ↺ Rouvrir » : copie la commande qui rouvre une session fermée (pour l'app, qui recrée son worktree) ; ne change rien d'enregistré. */
   reopenSession: (reopen: ReopenText, surface?: string) => unknown
+  /** Onglet Commandes : allume ou éteint l'accord d'archivage d'office (`/flow archive on|off`). */
+  toggleArchiveConsent: () => unknown
   /** Onglet Agents : la fenêtre de vue de la frise (zoom, déplacement) ; null, tout. */
   setAgentsWindow: (win: AgentsWindow | null) => unknown
-  /** Onglet Agents : montre la frise d'une session liée (sa clé), ou celle de l'orchestrateur (null). */
+  /** Onglet Agents : montre la frise d'un worker (sa clé), ou celle du manager (null). */
   selectAgentsSession: (key: string | null) => unknown
   /** Onglet Agents : déplie ou replie le sélecteur d'historique. */
   toggleAgentsHistory: () => unknown
   /** Onglet Agents : montre une entrée de l'historique (`now`, `run:<id>`, `session:<id>`). */
   chooseAgentsHistory: (key: string) => unknown
-  /** Historique : ouvre l'onglet Agents sur un parcours. */
+  /** Historique : ouvre l'onglet Agents sur une mission. */
   openAgentsOf: (runId: string) => unknown
   /** Onglet Agents : demande (ou retire) la confirmation d'« Oublier » une discussion (`session:<id>`). */
   askForget: (key: string) => unknown
-  /** Onglet Agents : oublie une discussion et ses sessions liées sûres (S2, S15). */
+  /** Onglet Agents : oublie une discussion et ses workers sûrs (S2, S15). */
   forget: (sessionId: string) => unknown
   /** Onglet Agents : ouvre ou referme la carte de détail d'une piste. */
   toggleAgentCard: (key: string) => unknown
@@ -302,8 +330,18 @@ export type Actions = {
   toggleLegend: () => unknown
   /** Frise : déplie ou replie la piste d'un Workflow. */
   toggleWorkflow: (id: string) => unknown
-  /** Carte de détail : ouvre la transcription d'un sous-agent de cette discussion. */
+  /** Carte de détail : ouvre la transcription d'un spécialiste de cette discussion. */
   openAgentTranscript: (agentId: string) => unknown
+  /** Bandeau d'accueil : fait de cette discussion le COO du projet (`/flow-board:coo`). */
+  cooOpen: () => unknown
+  /** Bandeau du COO : « ↻ Reprendre ici », le siège tenu ailleurs (ou libéré) passe à cette discussion. */
+  cooTake: () => unknown
+  /** Bandeau du COO : « Laisser », cette discussion ne demande plus le siège et redevient une discussion ordinaire. */
+  cooLeave: () => unknown
+  /** Vue Coordination : un geste sur la feuille de route (demande au Claude du COO, ou choix de l'endroit où elle vit). */
+  cooDo: (d: CooDo) => unknown
+  /** « ⇥ Forcer » sur une retenue entre missions : la seule paire nommée. */
+  forceHold: (pair: ForcedPair) => unknown
 }
 
 // ─── Petits outils ────────────────────────────────────────────────────────
@@ -447,7 +485,7 @@ const phaseSub = (run: Run, index: number): string => {
   return isPhaseOptional(run, p) ? 'facultative' : ''
 }
 
-/** Les stations : les phases, ou les étapes quand le parcours n'a qu'une phase. */
+/** Les stations : les phases, ou les étapes quand la mission n'a qu'une phase. */
 const roadNodes = (run: Run): RoadNode[] => {
   if (run.phases.length === 1) {
     const only = run.phases[0]!
@@ -535,7 +573,7 @@ const livePill = (k: Kit, run: Run, view: View): unknown => {
   if (run.status === 'paused') return T(k, run.asideAt !== undefined ? `‖${NB}Mis de côté` : `‖${NB}En pause`, { color: C.gray, bold: true })
   const running = agentsAtWork(view)
   const { live, now } = view
-  // Des éléments chez une session liée lancée : c'est elle qui travaille, pas la personne.
+  // Des éléments chez un worker lancé : c'est lui qui travaille, pas la personne.
   const phase = currentPhase(run)
   const isGroupBusy = (run.groups ?? []).some(g => g.linked?.session !== undefined && relayForGroup(view.relay, g, run.groups)?.endedAt === undefined)
   const isLinkedBusy = (phase.linked?.session !== undefined && linkedInFlight(phase).length > 0) || isGroupBusy
@@ -544,7 +582,7 @@ const livePill = (k: Kit, run: Run, view: View): unknown => {
     mode === 'working'
       ? { color: C.tangerine, text: 'Claude travaille', isLive: true }
       : mode === 'linked'
-        ? { color: C.blue, text: 'Session liée au travail', isLive: true }
+        ? { color: C.blue, text: 'Worker au travail', isLive: true }
       : mode === 'agents'
         ? { color: C.blue, text: `${plural(Math.max(1, running), 'agent')} au travail`, isLive: true }
         : mode === 'waiting'
@@ -621,12 +659,12 @@ const stepsList = (k: Kit, steps: readonly FlowStep[], def: SkillDef, color: str
   )
 }
 
-/** Les éléments d'une phase qui peut en demander le découpage en tickets (les pistes d'une rétro), et l'ancien envoi à une session liée qu'elle suit. */
+/** Les éléments d'une phase qui peut en demander le découpage en tickets (les pistes d'une rétro), et l'ancien envoi à un worker qu'elle suit. */
 type Linkable = { phase: FlowPhase; view: View; act: Actions }
 
 /**
- * Où en est l'envoi à la session liée : à lancer, ou pas lancée après un tour de Claude (avec
- * « Redemander » et « Annuler » dans les deux cas), au travail, ou terminée.
+ * Où en est l'envoi au worker : à lancer, ou pas lancé après un tour de Claude (avec
+ * « Redemander » et « Annuler » dans les deux cas), au travail, ou terminé.
  */
 const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
   const { Box, Button } = k
@@ -639,7 +677,7 @@ const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
   if (inFlight === 0 && linked.session !== undefined && linked.closing?.state !== 'closed') {
     return (
       <Box key="linked" flexDirection="column">
-        {line(k, [T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }), T(k, `fermer d'abord la session précédente avant un nouveau découpage`, { dim: true, wrap: 'wrap' })], true)}
+        {line(k, [T(k, `✓${NB}Worker${NB}terminé`, { color: C.green, bold: true }), T(k, `fermer d'abord la session précédente avant un nouveau découpage`, { dim: true, wrap: 'wrap' })], true)}
         {closingRow(k, 'items', linked.closing, () => l.act.closeLinkedItems())}
       </Box>
     )
@@ -647,13 +685,13 @@ const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
   const parts =
     inFlight === 0
       ? [
-          T(k, `✓${NB}Session${NB}liée${NB}terminée`, { color: C.green, bold: true }),
+          T(k, `✓${NB}Worker${NB}terminé`, { color: C.green, bold: true }),
           T(k, `${label}${NB}:${NB}${total}/${total}`, { dim: true }),
           linked.closing?.state === 'closed' && T(k, `✕${NB}session et worktree fermés`, { dim: true }),
         ]
       : linked.session !== undefined
         ? [
-            T(k, `↗${NB}Session${NB}liée${NB}au${NB}travail`, { color: C.blue, bold: true }),
+            T(k, `↗${NB}Worker${NB}au${NB}travail`, { color: C.blue, bold: true }),
             // Les éléments ne bougent qu'à la note de fin : un compteur à 0 ferait croire la session bloquée.
             T(k, `${plural(inFlight, label.replace(/s$/, ''), label)}${NB}en${NB}cours`, { dim: true }),
             T(k, dur(l.view.now - linked.at), { dim: true }),
@@ -663,7 +701,7 @@ const linkedRow = (k: Kit, l: Linkable, label: string): unknown => {
               T(k, `⚠${NB}Aucun${NB}lancement${NB}relevé`, { color: C.amber, bold: true }),
               T(k, `${plural(inFlight, label.replace(/s$/, ''), label)} en attente : Claude a rendu la main sans lancer de session. S'il te pose une question, réponds-lui ; sinon redemande, ou annule pour les remettre au choix.`, { dim: true, wrap: 'wrap' }),
             ]
-          : [T(k, `↗${NB}Session${NB}liée${NB}à${NB}lancer`, { color: C.amber, bold: true }), T(k, `${plural(inFlight, label.replace(/s$/, ''), label)} en attente : envoie la demande à Claude, qui lance la session (plus dans le prompt : « Redemander »)`, { dim: true, wrap: 'wrap' })]
+          : [T(k, `↗${NB}Worker${NB}à${NB}lancer`, { color: C.amber, bold: true }), T(k, `${plural(inFlight, label.replace(/s$/, ''), label)} en attente : envoie la demande à Claude, qui lance la session (plus dans le prompt : « Redemander »)`, { dim: true, wrap: 'wrap' })]
   // Fermée : de quoi la rouvrir sur sa branche gardée.
   const run = l.view.board?.runs.find(r => r.phases.includes(l.phase))
   const reopen = inFlight === 0 && run ? reopenText({ run, target: { kind: 'items', skill: l.phase.skill }, closing: linked.closing, session: linked.session, seq: linked.seq, root: l.view.board?.root ?? '' }) : null
@@ -700,7 +738,9 @@ const itemsBlock = (k: Kit, items: readonly FlowItem[], def: SkillDef, color: st
   const done = items.filter(i => i.status === 'done').length
   const isAll = view.ui.showAllItems === true
   const shown = isAll ? items : items.slice(0, ITEMS_SHOWN)
-  const pickable = linkable ? pickableItems(linkable.phase).map(i => i.id) : []
+  // Une piste déjà prise par une autre mission (marque du COO) n'entre jamais dans un découpage.
+  const takenBy = new Map((view.taken ?? []).map(t => [t.item, t]))
+  const pickable = linkable ? pickableItems(linkable.phase, new Set(takenBy.keys())).map(i => i.id) : []
   // Confiés à une session pas encore lancée : ni à choisir, ni en cours.
   const waiting = linkable && linkable.phase.linked?.session === undefined ? linkedInFlight(linkable.phase).map(i => i.id) : []
   const selection = linkable ? (linkable.view.ui.itemSelection ?? []).filter(id => pickable.includes(id)) : []
@@ -721,6 +761,7 @@ const itemsBlock = (k: Kit, items: readonly FlowItem[], def: SkillDef, color: st
       </Box>
       {linkable && linkedRow(k, linkable, label)}
       {pickable.length > 0 && selection.length === 0 && T(k, `Choisis les ${label} à traiter (○), puis demande leur découpage en tickets.`, { dim: true, wrap: 'wrap' })}
+      {linkable && view.takenNote ? T(k, `⚠ ${view.takenNote}`, { color: C.amber, wrap: 'wrap' }) : null}
       {shown.map(item => {
         const look = ITEM[item.status]
         const isPicked = selection.includes(item.id)
@@ -740,9 +781,12 @@ const itemsBlock = (k: Kit, items: readonly FlowItem[], def: SkillDef, color: st
               {T(k, item.label, {
                 wrap: 'wrap',
                 bold: item.status === 'doing',
-                dim: item.status === 'done' || item.status === 'dropped',
+                dim: item.status === 'done' || item.status === 'dropped' || takenBy.has(item.id),
                 strike: item.status === 'dropped',
               })}
+              {linkable && takenBy.has(item.id) && item.status !== 'done' && item.status !== 'dropped'
+                ? T(k, `déjà prise par « ${neutralLine(clip(takenBy.get(item.id)!.title, 50))} », ticket ${neutralLine(clip(takenBy.get(item.id)!.ticket, 40))}`, { color: C.amber, wrap: 'wrap' })
+                : null}
             </Box>
           </Box>
         )
@@ -772,7 +816,7 @@ const ordinal = (i: number): string => ORDINALS[i] ?? `${i + 1}.`
 
 const shortName = (name: string): string => (name.length > 22 ? `${name.slice(0, 21)}…` : name)
 
-/** Un ticket tel que sa session liée le relaie, tant que le groupe n'est pas rendu. */
+/** Un ticket tel que son worker le relaie, tant que le groupe n'est pas rendu. */
 const RELAYED: Record<TicketStatus, { glyph: string; color: string; label: string }> = {
   todo: TICKET.todo,
   doing: { glyph: '◉', color: C.tangerine, label: 'en cours ↗' },
@@ -802,7 +846,7 @@ const ticketRow = (k: Kit, run: Run, t: Ticket, view: View, act: Actions, relaye
   const blockers = openBlockers(run, t)
   // Bloqué sans raison mais derrière un ticket ouvert : c'est une attente, pas un blocage.
   const isWaiting = isWaitingTicket(run, t)
-  // Le statut relayé par la session liée prime à l'affichage, jamais dans le parcours.
+  // Le statut relayé par le worker prime à l'affichage, jamais dans la mission.
   const look =
     relayed && t.status !== 'done' && relayed.status !== 'todo'
       ? RELAYED[relayed.status]
@@ -880,17 +924,17 @@ const ticketParts = (run: Run): BarPart[] => {
 
 const GROUP_COLORS = [C.blue, C.teal, C.magenta, C.coral, C.indigo, C.sand]
 
-/** Où en est la session liée d'un groupe : à lancer, au travail, ou terminée avec des tickets ouverts (ambre). */
+/** Où en est le worker d'un groupe : à lancer, au travail, ou terminé avec des tickets ouverts (ambre). */
 const linkLabel = (k: Kit, link: NonNullable<TicketGroup['linked']>, relay: GroupRelay | null, open: number, now: number): unknown =>
   link.session === undefined
-    ? T(k, `↗${NB}session liée à lancer`, { color: C.blue, bold: true })
+    ? T(k, `↗${NB}worker à lancer`, { color: C.blue, bold: true })
     : relay?.endedAt !== undefined
       ? open > 0
-        ? T(k, `↗${NB}session terminée il y a ${dur(now - relay.endedAt)}`, { color: C.amber, bold: true })
-        : T(k, `↗${NB}session terminée · à rendre`, { color: C.blue, bold: true })
-      : T(k, `↗${NB}en cours · session liée`, { color: C.blue, bold: true })
+        ? T(k, `↗${NB}worker terminé il y a ${dur(now - relay.endedAt)}`, { color: C.amber, bold: true })
+        : T(k, `↗${NB}worker terminé · à rendre`, { color: C.blue, bold: true })
+      : T(k, `↗${NB}en cours · worker`, { color: C.blue, bold: true })
 
-/** En-tête d'un groupe : où il en est, avec qui il peut avancer, ce qu'il attend, sa session liée. */
+/** En-tête d'un groupe : où il en est, avec qui il peut avancer, ce qu'il attend, son worker. */
 const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, act: Actions): unknown => {
   const { Button } = k
   const done = g.tickets.length - g.open.length
@@ -904,18 +948,33 @@ const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, ac
       T(k, `${done}/${g.tickets.length}`, { dim: true }),
       g.parallelWith.length > 0 ? T(k, `∥${NB}${g.parallelWith.join(', ')}`, { color: C.cyan, bold: true }) : null,
       g.conflicts.length > 0 ? T(k, `∦${NB}${g.conflicts.map(c => `${c.with}${NB}:${NB}${c.on}`).join(', ')}`, { color: C.amber }) : null,
-      g.state === 'waiting' && waits.length > 0 ? T(k, `⏸${NB}attend ${waits.join(', ')}`, { color: C.amber }) : null,
+      g.state === 'waiting' && (waits.length > 0 || g.waitsElsewhere.length > 0)
+        ? T(k, `⏸${NB}attend ${[...(waits.length > 0 ? [waits.join(', ')] : []), ...g.waitsElsewhere.map(elsewhereText)].join(' · ')}`, { color: C.amber })
+        : null,
+      ...g.waitsElsewhere.map(x => (
+        <Button key={`force-${g.group.id}-${x.run}-${x.group}${x.on === 'plan' ? '-plan' : ''}`} plain={true} dimColor={true} label={x.on === 'plan' ? `⇥${NB}Forcer${NB}(plan)` : `⇥${NB}Forcer`} onPress={() => act.forceHold({ held: x.held, run: x.run, group: x.group, ...(x.on === 'plan' ? { on: 'plan' as const } : {}) })} />
+      )),
       g.isCyclic ? T(k, `⚠${NB}ordre à revoir`, { color: C.red }) : null,
       g.isDelegated && link ? linkLabel(k, link, relayForGroup(view.relay, g.group, run.groups), g.open.length, view.now) : null,
       g.isDelegated && link?.session === undefined ? (
         <Button key={`group-linked-cancel-${g.group.id}`} plain={true} dimColor={true} label="Annuler" onPress={() => act.cancelGroupLinked(g.group.id)} />
       ) : null,
-      isDelegable(g) ? <Button key={`launch-linked-${g.group.id}`} variant="primary" label={`↗${NB}Session${NB}liée`} onPress={() => act.launchGroupLinked(g.group.id)} /> : null,
+      isDelegable(g) ? <Button key={`launch-linked-${g.group.id}`} variant="primary" label={`↗${NB}Worker`} onPress={() => act.launchGroupLinked(g.group.id)} /> : null,
       isDelegable(g) ? xhighButton(k, `launch-xhigh-${g.group.id}`, g.group.id, act) : null,
     ],
     true,
   )
 }
+
+/** Les retenues entre missions de la vue, rangées par unité retenue. */
+const outsideOf = (view: View): Map<string, OutsideHold[]> => holdMapOf(view.holds ?? [])
+
+/** Ce qu'une unité attend dans une autre mission, sur sa ligne : « groupe D de « M » (fichier commun) » (titre neutralisé). */
+const elsewhereText = (h: OutsideHold): string =>
+  `${h.group === LOT_KEY ? 'le lot' : `groupe${NB}${h.group}`} de « ${neutralLine(clip(h.title, 50))} » (${h.on === 'plan' ? 'plan du projet' : h.on === 'file' ? 'fichier commun' : 'ressource commune'})`
+
+/** Une retenue dite en entier : l'unité retenue, puis ce qu'elle attend. */
+const heldText = (h: OutsideHold): string => `${h.held === LOT_KEY ? 'le lot' : `groupe${NB}${h.held}`} attend ${elsewhereText(h)}`
 
 /** Un bouton avant son dessin : la carte « Ensuite » le dessine, le bandeau reprend tel quel le bouton de l'étape suivante. */
 type NextButton = { key: string; label: string; onPress: (press?: { surface?: string }) => unknown; isPrimary?: true; isQuiet?: true }
@@ -923,7 +982,7 @@ type NextButton = { key: string; label: string; onPress: (press?: { surface?: st
 const nextButton = (k: Kit, b: NextButton): unknown =>
   b.isQuiet ? <k.Button key={b.key} plain={true} dimColor={true} label={b.label} onPress={b.onPress} /> : <k.Button key={b.key} {...(b.isPrimary ? { variant: 'primary' } : {})} label={b.label} onPress={b.onPress} />
 
-/** « ↗ xhigh », discret après « ↗ Session liée » : le même groupe, en xhigh imposé ; l'appui donne sa surface. */
+/** « ↗ xhigh », discret après « ↗ Worker » : le même groupe, en xhigh imposé ; l'appui donne sa surface. */
 const xhighOf = (key: string, id: string, act: Actions): NextButton => ({
   key,
   isQuiet: true,
@@ -932,7 +991,7 @@ const xhighOf = (key: string, id: string, act: Actions): NextButton => ({
 })
 const xhighButton = (k: Kit, key: string, id: string, act: Actions): unknown => nextButton(k, xhighOf(key, id, act))
 
-/** Un lot parallèle : une session liée par groupe. */
+/** Un lot parallèle : un worker par groupe. */
 const lotRow = (k: Kit, ids: readonly string[], at: number, act: Actions): unknown => {
   const { Box, Button } = k
   const suffix = at === 0 ? '' : `-${at}`
@@ -940,15 +999,15 @@ const lotRow = (k: Kit, ids: readonly string[], at: number, act: Actions): unkno
   return (
     <Box key={`lot${suffix}`} flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={at === 0 ? 1 : 0}>
       <Box marginRight={1}>
-        <Button key={`launch-parallel-linked${suffix}`} label={`⇉${NB}${lot} en parallèle · sessions liées`} onPress={() => act.launchParallelLinked(at)} />
+        <Button key={`launch-parallel-linked${suffix}`} label={`⇉${NB}${lot} en parallèle · workers`} onPress={() => act.launchParallelLinked(at)} />
       </Box>
-      {at === 0 && T(k, 'une session liée par groupe', { dim: true, wrap: 'wrap' })}
+      {at === 0 && T(k, 'un worker par groupe', { dim: true, wrap: 'wrap' })}
     </Box>
   )
 }
 
 /**
- * La revue de sécurité d'un groupe fini, ou du lot entier quand le parcours n'a pas de groupes,
+ * La revue de sécurité d'un groupe fini, ou du lot entier quand la mission n'a pas de groupes,
  * facultative : l'avis de Claude une fois la revue faite (il la lance lui-même quand il la juge
  * utile), puis son résultat. Rien tant que Claude n'a pas donné d'avis (groupes d'avant la 0.23.0
  * compris). Le bouton la lui demande quand il ne l'a pas lancée. `id` : le groupe, ou « lot ».
@@ -970,7 +1029,7 @@ const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Ac
   const launch = (
     <Button
       key={`security-group-${group.id}`}
-      label={sec.isAdvised ? `⛨${NB}Revue de sécurité · sous-agent relecteur` : `⛨${NB}La lancer quand même`}
+      label={sec.isAdvised ? `⛨${NB}Revue de sécurité · spécialiste relecteur` : `⛨${NB}La lancer quand même`}
       onPress={() => act.securityReview(group.id)}
     />
   )
@@ -1007,7 +1066,7 @@ const lotSecurityRow = (k: Kit, run: Run, act: Actions): unknown => {
     return (
       <Box key="sec-lot" flexDirection="row" flexWrap="wrap" alignItems="center" marginLeft={2}>
         <Box marginRight={1}>
-          <Button key="security-group-lot" label={`⛨${NB}Revue de sécurité · sous-agent relecteur`} onPress={() => act.securityReview('lot')} />
+          <Button key="security-group-lot" label={`⛨${NB}Revue de sécurité · spécialiste relecteur`} onPress={() => act.securityReview('lot')} />
         </Box>
         <Box flexShrink={1}>
           {T(k, isPrevious ? 'avis de sécurité d’avant la dernière fin de ticket ou la dernière revue : celui de ce passage est attendu' : 'avis de sécurité attendu : le compte rendu attend que Claude le donne', { color: C.amber, wrap: 'wrap' })}
@@ -1027,7 +1086,7 @@ const reopenButton = (k: Kit, id: string, reopen: ReopenText | null | undefined,
 }
 
 /**
- * Où en est la fermeture d'une session liée rendue : rien tant que rien n'a été tenté (elle part
+ * Où en est la fermeture d'un worker rendu : rien tant que rien n'a été tenté (elle part
  * d'office par la réponse de l'outil), puis fermée, à archiver dans l'app, ou arrêtée avec sa
  * raison et « ↻ Relancer la fermeture », le seul bouton, pour relancer une fois la cause réglée.
  * Fermée avec de quoi la rouvrir : « ↺ Rouvrir ».
@@ -1102,8 +1161,8 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
               // Un groupe d'un seul ticket avec logique, sensible ou muet : son avis de sécurité reste dû, la ligne le dit.
               T(k, `✓${NB}revu par ${g.group.tickets.length > 1 ? 'ses tickets' : 'son ticket'}${g.group.security === undefined && !isNoLogicGroup(run, run.groups?.find(x => x.id === g.group.id) ?? g.group) ? `${NB}·${NB}avis de sécurité dû` : ''}`, { color: C.green, bold: true })
             ) : g.group.delegated !== undefined ? (
-              // Fait par une session liée : ici la branche est fusionnée, la revue se fait là-bas.
-              <Button key={`review-linked-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · session liée`} onPress={() => act.reviewLinkedGroup(g.group.id)} />
+              // Fait par un worker : ici la branche est fusionnée, la revue se fait là-bas.
+              <Button key={`review-linked-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe · worker`} onPress={() => act.reviewLinkedGroup(g.group.id)} />
             ) : (
               <Button key={`review-group-${g.group.id}`} variant="primary" label={`◆${NB}Revue du groupe`} onPress={() => act.launch('final-review', groupReviewArgs(run, g.group))} />
             ))}
@@ -1137,9 +1196,9 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
         </Box>
       )}
       {plan.delegated.length > 0 &&
-        T(k, `↗${NB}${plan.delegated.join(', ')} en session liée : son avancement (tickets d'après Asana, commits, tests) s'affiche sur le groupe, marqué ↗. Claude vérifie le travail à sa note de fin, puis rend les statuts ici.`, { dim: true, wrap: 'wrap' })}
+        T(k, `↗${NB}${plan.delegated.join(', ')} dans un worker : son avancement (tickets d'après Asana, commits, tests) s'affiche sur le groupe, marqué ↗. Claude vérifie le travail à sa note de fin, puis rend les statuts ici.`, { dim: true, wrap: 'wrap' })}
       {isNewHere &&
-        T(k, `↗${NB}« Session liée » : Claude lance une session qui fait le groupe, et le parcours reste ici. « ↗ xhigh » : la même session, lancée en xhigh, sans question sur l'effort, pour un groupe qui demande du jugement.`, { dim: true, wrap: 'wrap' })}
+        T(k, `↗${NB}« Worker » : Claude lance une session qui fait le groupe, et la mission reste ici. « ↗ xhigh » : la même session, lancée en xhigh, sans question sur l'effort, pour un groupe qui demande du jugement.`, { dim: true, wrap: 'wrap' })}
     </Box>
   )
 }
@@ -1183,7 +1242,7 @@ const decidedBlock = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const unseen = all.filter(d => d.seenAt === undefined)
   const seen = all.filter(d => d.seenAt !== undefined)
   const isOpen = view.ui.showDecided === true
-  // Un parcours en auto en déclare des centaines : les plus récents de chaque sorte, le reste compté.
+  // Une mission en auto en déclare des centaines : les plus récents de chaque sorte, le reste compté.
   const shownUnseen = [...unseen].reverse().slice(0, CHOICES_LISTED)
   const shownSeen = isOpen ? [...seen].reverse().slice(0, CHOICES_LISTED) : []
   const rows = shownUnseen.concat(shownSeen)
@@ -1305,8 +1364,8 @@ const ticketsBlock = (k: Kit, run: Run, view: View, act: Actions, cells: number)
   const shown = view.ui.showAllTickets ? ordered : open.slice(0, 20)
   const hidden = run.tickets.length - shown.length
   const selection = (view.ui.selection ?? []).filter(id => run.tickets.some(x => x.id === id))
-  const plan = groupPlan(run)
-  const hint = plan ? 'Lance un groupe en session liée (↗), ou choisis les tickets (○) dans l’ordre voulu.' : 'Choisis les tickets à traiter (○), dans l’ordre voulu.'
+  const plan = groupPlan(run, outsideOf(view))
+  const hint = plan ? 'Lance un groupe dans un worker (↗), ou choisis les tickets (○) dans l’ordre voulu.' : 'Choisis les tickets à traiter (○), dans l’ordre voulu.'
   return (
     <Box flexDirection="column" marginTop={1}>
       {line(k, [T(k, 'Tickets', { bold: true }), bar, T(k, `${t.done}/${t.total}`, { bold: true }), T(k, pct(t.done / Math.max(1, t.total)), { dim: true })])}
@@ -1543,7 +1602,7 @@ const doingBlock = (k: Kit, run: Run, view: View, color: string): unknown => {
 /**
  * L'ordre des choses pendant l'Implémentation : les étapes d'un ticket, puis ce qui suit pour
  * chaque groupe une fois ses tickets commités. Une ligne fixe, sans l'étape en cours : plusieurs
- * tickets peuvent avancer en même temps (sessions liées).
+ * tickets peuvent avancer en même temps (workers).
  */
 const orderBlock = (k: Kit, def: SkillDef): unknown => {
   const { Box } = k
@@ -1568,7 +1627,7 @@ const phaseCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const t = countTickets(run.tickets)
   const showTickets = t.total > 0 && (def.hasTickets === true || t.done < t.total)
   const showTests = def.hasTests === true || (detour !== null && SKILLS[detour.skill]?.hasTests === true)
-  // Implémentation : les groupes partent en parallèle ou en sessions liées, le suivi ticket par
+  // Implémentation : les groupes partent en parallèle ou dans des workers, le suivi ticket par
   // ticket (ticket en cours, étapes) n'a plus de sens ici ; les vagues et les groupes le disent.
   const isImplement = phase.skill === 'implement'
   return (
@@ -1604,9 +1663,9 @@ const phaseCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   )
 }
 
-// ─── Sous-agents ──────────────────────────────────────────────────────────
+// ─── Spécialistes ──────────────────────────────────────────────────────────
 
-/** Ce que dit l'état d'un sous-agent, et sa couleur. */
+/** Ce que dit l'état d'un spécialiste, et sa couleur. */
 const AGENT_STATE: Record<AgentStatus, { word: string; color: string }> = {
   running: { word: `au${NB}travail`, color: C.blue },
   done: { word: 'fini', color: C.green },
@@ -1614,10 +1673,10 @@ const AGENT_STATE: Record<AgentStatus, { word: string; color: string }> = {
   cancelled: { word: 'annulé', color: C.gray },
 }
 
-/** Les sous-agents de la session au travail : l'onglet, le bandeau et la pastille d'état les comptent. */
+/** Les spécialistes de la session au travail : l'onglet, le bandeau et la pastille d'état les comptent. */
 const agentsAtWork = (view: View): number => runningOf(view.agents ?? null).length
 
-/** La couleur de la piste de l'orchestrateur ; celle d'un sous-agent est celle de son type (AGENT_TYPE). */
+/** La couleur de la piste du manager ; celle d'un spécialiste est celle de son type (AGENT_TYPE). */
 const ORCHESTRATOR_COLOR = C.violet
 
 /** Le glyphe d'une famille d'outils dans le SVG ; le terminal a les siens (cells.ts). */
@@ -1628,7 +1687,7 @@ const SEGMENT_WORD: Record<SegmentKind, string> = {
   think: 'réflexion',
   write: 'rédaction',
   tool: 'outil',
-  waitAgent: 'attend un sous-agent',
+  waitAgent: 'attend un spécialiste',
   waitPerson: 'attend ta réponse',
   waitBg: 'attend une tâche de fond',
   waitAdvisor: 'consulte l’advisor',
@@ -1664,9 +1723,9 @@ type FriseLane = {
   depth?: number
   /** La piste d'un Workflow : ses agents réunis, et si elle est dépliée. */
   workflow?: { id: string; count: number; running: number; isOpen: boolean }
-  /** La piste d'une session liée, dans la frise de l'orchestrateur : son bouton ouvre sa frise. */
+  /** La piste d'un worker, dans la frise du manager : son bouton ouvre sa frise. */
   linked?: LinkedSession
-  /** Sous le nom d'une piste sans sous-agent : « cette discussion » par défaut. */
+  /** Sous le nom d'une piste sans spécialiste : « cette discussion » par défaut. */
   caption?: string
   /** La ligne advisor : ses appels, ses barres cerclées, sa carte. */
   advisor?: AdvisorLane
@@ -1730,7 +1789,7 @@ const laneTrack = (k: Kit, l: FriseLane, axis: Axis, cells: number, now: number)
 }
 
 /**
- * Les 9 types de sous-agents (Q9) : libellé, glyphe et couleur, distincte et lisible en thème clair
+ * Les 9 types de spécialistes (Q9) : libellé, glyphe et couleur, distincte et lisible en thème clair
  * comme sombre. P1 : rose à la place du corail (proche de la mandarine et du rouge des échecs) ;
  * B1 : vert anis pour les transcripts, à la place du ciel (proche du cyan) puis du bleu (celui des
  * hachures « attente d'une tâche de fond ») ; planches de la carte et des teintes validées par Mathis, dans le dépôt privé.
@@ -1747,7 +1806,7 @@ const AGENT_TYPE: Record<AgentType, { label: string; glyph: string; color: strin
   other: { label: 'Autre', glyph: '●', color: C.slate },
 }
 
-const FAMILY_WORD: Record<ToolFamily, string> = { read: 'lecture', edit: 'modification', run: 'commande', web: 'web', agent: 'sous-agents', other: 'autres outils' }
+const FAMILY_WORD: Record<ToolFamily, string> = { read: 'lecture', edit: 'modification', run: 'commande', web: 'web', agent: 'spécialistes', other: 'autres outils' }
 
 /** Une durée courte, au dixième de seconde sous 10 s. */
 const durShort = (ms: number): string => (ms < 10_000 ? `${(Math.max(0, ms) / 1000).toFixed(1).replace('.', ',')}${NB}s` : dur(ms))
@@ -1781,7 +1840,7 @@ const advisorCostText = (sum: ReturnType<typeof advisorCostOf>): string => (sum.
 
 /**
  * Sur la carte d'un agent qui a consulté l'advisor : « 2 appels, ≈ 0,42 $ », hors de son propre
- * coût et de la somme avec ses sous-agents ; null quand il ne l'a pas consulté.
+ * coût et de la somme avec ses spécialistes ; null quand il ne l'a pas consulté.
  */
 const advisorOfCaller = (calls: readonly AdvisorCall[], by: string, view: View): string | null => {
   const own = calls.filter(c => c.by === by)
@@ -1792,19 +1851,19 @@ const advisorOfCaller = (calls: readonly AdvisorCall[], by: string, view: View):
 
 /**
  * La carte de la ligne advisor : le nombre d'appels, puis chacun avec son heure, sa durée et qui
- * l'a fait : l'orchestrateur de la frise, ou le sous-agent nommé, cherché parmi tous les
- * sous-agents de la session (ceux d'un Workflow replié n'ont pas de piste).
+ * l'a fait : le manager de la frise, ou le spécialiste nommé, cherché parmi tous les
+ * spécialistes de la session (ceux d'un Workflow replié n'ont pas de piste).
  */
 const advisorCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], agents: readonly RegistryAgent[], view: View): unknown => {
   const { Box } = k
   const advisor = l.advisor!
-  const callerOf = (by: string): string => (by === MAIN ? (lanes[0]?.name ?? 'Orchestrateur') : (lanes.find(x => x.agent?.agentId === by)?.name ?? agents.find(a => a.agentId === by)?.name ?? by))
+  const callerOf = (by: string): string => (by === MAIN ? (lanes[0]?.name ?? 'Manager') : (lanes.find(x => x.agent?.agentId === by)?.name ?? agents.find(a => a.agentId === by)?.name ?? by))
   const shown = advisor.calls.slice(-ADVISOR_CALLS_SHOWN)
   const sum = advisorCostOf(advisor.calls, view.agentPrices ?? {})
   const t = sum.tokens
   return (
     <Box key={`card-${l.key}`} flexDirection="column" borderStyle="round" borderColor={l.color} paddingX={1} marginBottom={1}>
-      {line(k, [T(k, `✦${NB}${ADVISOR_NAME}`, { color: l.color, bold: true }), T(k, 'un modèle relecteur consulté par la discussion et ses sous-agents', { dim: true, wrap: 'truncate-end' })], true)}
+      {line(k, [T(k, `✦${NB}${ADVISOR_NAME}`, { color: l.color, bold: true }), T(k, 'un modèle relecteur consulté par la discussion et ses spécialistes', { dim: true, wrap: 'truncate-end' })], true)}
       {sum.models.length > 0 && cardLine(k, 'Modèles', sum.models.map(shortModel).join(' · '))}
       {cardLine(k, 'Appels', `${plural(advisor.calls.length, 'appel')}${advisor.calls.length > shown.length ? ` · les ${shown.length} derniers` : ''}`)}
       {(t || sum.isUnknown) && cardLine(k, 'Coût', advisorCostText(sum))}
@@ -1823,7 +1882,7 @@ const advisorCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], agents: 
  * La carte de détail d'une piste, ouverte par son bouton : type, modèles, effort, parent, début et
  * fin ; tokens par sorte ; appels d'outils par famille, avec argument, durée et erreur ; lignes
  * ajoutées et retirées ; prompt (déplié à la demande) ; « ↗ Ouvrir la transcription » pour un
- * sous-agent de cette discussion.
+ * spécialiste de cette discussion.
  */
 const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View, act: Actions, isOwn = true): unknown => {
   const { Box, Button } = k
@@ -1834,13 +1893,13 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
   const tools = (lane.segments ?? []).filter(s => (s.k === 'tool' || s.k === 'waitAgent') && s.t !== undefined)
   const families = (Object.keys(FAMILY_WORD) as ToolFamily[]).map(f => ({ f, calls: tools.filter(s => (s.f ?? 'other') === f) })).filter(g => g.calls.length > 0)
   const t = lane.tokens
-  // Lancé par son parent, sinon par la session de la frise (l'orchestrateur, ou la session liée choisie).
-  const parent = a?.parent !== undefined ? lanes.find(x => x.agent?.agentId === a.parent)?.name ?? a.parent : (lanes[0]?.name ?? 'Orchestrateur')
+  // Lancé par son parent, sinon par la session de la frise (le manager, ou le worker choisi).
+  const parent = a?.parent !== undefined ? lanes.find(x => x.agent?.agentId === a.parent)?.name ?? a.parent : (lanes[0]?.name ?? 'Manager')
   const models = [...new Set([...(a?.model !== undefined ? [a.model] : []), ...(lane.models ?? [])].map(shortModel))]
   const prompt = a?.prompt ?? ''
   const promptLines = prompt.split('\n')
   const isPromptOpen = view.ui.isPromptOpen === true
-  // Un sous-agent qui en a lancé d'autres : son coût et ses tokens avec ceux de ses descendants.
+  // Un spécialiste qui en a lancé d'autres : son coût et ses tokens avec ceux de ses descendants.
   const agents = lanes.map(x => x.agent).filter((x): x is RegistryAgent => x !== undefined)
   const sum = a ? familyOf(a, agents, m => agentCost(m, m, view)) : null
   const family = sum && sum.descendants > 0 ? sum : null
@@ -1850,7 +1909,7 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
   const advised = caller !== undefined ? advisorOfCaller(advisorCalls, caller, view) : null
   return (
     <Box key={`card-${l.key}`} flexDirection="column" borderStyle="round" borderColor={l.color} paddingX={1} marginBottom={1}>
-      {line(k, [type ? T(k, `${type.glyph}${NB}${type.label}`, { color: type.color, bold: true }) : T(k, l.caption !== undefined ? `↗${NB}Session${NB}liée` : `◆${NB}Orchestrateur`, { color: l.color, bold: true }), T(k, l.name, { bold: true, wrap: 'truncate-end' })], true)}
+      {line(k, [type ? T(k, `${type.glyph}${NB}${type.label}`, { color: type.color, bold: true }) : T(k, l.caption !== undefined ? `↗${NB}Worker` : `◆${NB}Manager`, { color: l.color, bold: true }), T(k, l.name, { bold: true, wrap: 'truncate-end' })], true)}
       {models.length > 0 && cardLine(k, 'Modèles', models.join(' · '))}
       {lane.effort !== undefined && cardLine(k, 'Effort', lane.effort)}
       {a && l.name !== a.name && cardLine(k, 'Commande', a.name)}
@@ -1859,7 +1918,7 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
       {t && cardLine(k, 'Coût', agentCost(l.lane, a, view) !== null ? costText(agentCost(l.lane, a, view)!) : 'coût indisponible')}
       {t && cardLine(k, 'Tokens', `entrée ${tokensText(t.input)} · sortie ${tokensText(t.output)} · cache lu ${tokensText(t.cacheRead)} · cache écrit ${tokensText(t.cacheWrite)} · réflexion non comptée à part`)}
       {advised !== null && cardLine(k, `✦${NB}Advisor`, advised)}
-      {family && cardLine(k, 'Avec ses sous-agents', `${family.cost !== null ? costText(family.cost) : 'coût indisponible'} · ${plural(family.descendants, 'sous-agent')}${family.tokens ? ` · entrée ${tokensText(family.tokens.input)} · sortie ${tokensText(family.tokens.output)} · cache lu ${tokensText(family.tokens.cacheRead)} · cache écrit ${tokensText(family.tokens.cacheWrite)}` : ''}`)}
+      {family && cardLine(k, 'Avec ses spécialistes', `${family.cost !== null ? costText(family.cost) : 'coût indisponible'} · ${plural(family.descendants, 'spécialiste')}${family.tokens ? ` · entrée ${tokensText(family.tokens.input)} · sortie ${tokensText(family.tokens.output)} · cache lu ${tokensText(family.tokens.cacheRead)} · cache écrit ${tokensText(family.tokens.cacheWrite)}` : ''}`)}
       {lane.lines && cardLine(k, 'Lignes', line(k, [T(k, `+${lane.lines.added}`, { color: C.green, bold: true }), T(k, `−${lane.lines.removed}`, { color: C.red, bold: true })]))}
       {families.length > 0 && (
         <Box flexDirection="column">
@@ -1903,8 +1962,8 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
 
 
 /**
- * L'effort demandé aux requêtes d'une session liée ou d'un sous-agent, sous son nom (jamais pour
- * l'orchestrateur) ; rien quand il n'est pas relevé.
+ * L'effort demandé aux requêtes d'un worker ou d'un spécialiste, sous son nom (jamais pour
+ * le manager) ; rien quand il n'est pas relevé.
  */
 const effortText = (k: Kit, effort: string | undefined): unknown => (effort !== undefined && effort !== '' ? T(k, effort, { color: C.lilac }) : null)
 
@@ -1936,7 +1995,7 @@ const laneRow = (k: Kit, l: FriseLane, axis: Axis, view: View, act: Actions, lab
       <Box key={`lane-row-${l.key}`} flexDirection="row" alignItems="center">
         <Box width={labelCells} flexShrink={0} flexDirection="column" marginRight={1} paddingLeft={indent}>
           <Button key={`lane-${l.key}`} plain={true} label={`↗${NB}${l.name}`} onPress={() => act.selectAgentsSession(ls.key)} />
-          {line(k, [T(k, look.word, { color: look.color, dim: ls.state === 'closed' }), T(k, `session${NB}liée`, { dim: true }), effortText(k, l.lane.effort)], true)}
+          {line(k, [T(k, look.word, { color: look.color, dim: ls.state === 'closed' }), T(k, `worker`, { dim: true }), effortText(k, l.lane.effort)], true)}
         </Box>
         <Box flexShrink={1}>{laneTrack(k, l, axis, trackCells, now)}</Box>
       </Box>
@@ -2035,7 +2094,7 @@ const agentsSummary = (agents: readonly RegistryAgent[]): string => {
 const gainText = (gain: number | null): string =>
   gain !== null && gain >= 1.05 ? `${gain.toFixed(1).replace('.', ',')}×${NB}plus${NB}rapide${NB}qu’en${NB}série` : ''
 
-/** Dans l'onglet Parcours, une ligne de résumé à la place de l'ancien encadré : elle mène à l'onglet Agents. */
+/** Dans l'onglet Mission, une ligne de résumé à la place de l'ancien encadré : elle mène à l'onglet Agents. */
 const agentsLine = (k: Kit, view: View, act: Actions): unknown => {
   const { Box, Button } = k
   const agents = view.agents?.agents ?? []
@@ -2092,15 +2151,15 @@ const WAIT_KINDS = ['waitAgent', 'waitPerson', 'waitBg', 'waitAdvisor'] as const
 
 /** Les repères, dans la légende détaillée : le repère (dessiné par `markLook`) et ce qu'il marque. */
 const MARK_LEGEND: readonly { mark: AgentMark; word: string }[] = [
-  { mark: { k: 'fail', at: 0 }, word: 'échec d’un outil ou d’un sous-agent' },
+  { mark: { k: 'fail', at: 0 }, word: 'échec d’un outil ou d’un spécialiste' },
   { mark: { k: 'stop', at: 0 }, word: 'interrompu ou annulé' },
-  { mark: { k: 'relay', at: 0 }, word: 'départ d’un sous-agent ou d’une session liée (relais)' },
+  { mark: { k: 'relay', at: 0 }, word: 'départ d’un spécialiste ou d’un worker (relais)' },
   { mark: { k: 'back', at: 0 }, word: 'retour de son rapport' },
   { mark: { k: 'compact', at: 0 }, word: 'compaction du contexte' },
-  { mark: { k: 'msg', at: 0 }, word: 'message d’une autre session (orchestrateur)' },
-  { mark: { k: 'commit', at: 0 }, word: 'commit (orchestrateur)' },
-  { mark: { k: 'test', at: 0, ok: true }, word: 'tests au vert (orchestrateur)' },
-  { mark: { k: 'test', at: 0, ok: false }, word: 'tests en échec (orchestrateur)' },
+  { mark: { k: 'msg', at: 0 }, word: 'message d’une autre session (manager)' },
+  { mark: { k: 'commit', at: 0 }, word: 'commit (manager)' },
+  { mark: { k: 'test', at: 0, ok: true }, word: 'tests au vert (manager)' },
+  { mark: { k: 'test', at: 0, ok: false }, word: 'tests en échec (manager)' },
 ]
 
 /**
@@ -2130,9 +2189,9 @@ const legendDetail = (k: Kit, view: View, act: Actions): unknown => {
     {
       title: 'Agents',
       items: [
-        legendItem(k, '◆', 'Orchestrateur', ORCHESTRATOR_COLOR),
-        legendItem(k, '✦', `${ADVISOR_NAME} : le modèle relecteur que la discussion et ses sous-agents consultent ; une barre cerclée par appel, vue à la fin de l’étape qui l’a fait`, ADVISOR_COLOR),
-        legendItem(k, '↗', 'Session liée', LINKED_COLOR),
+        legendItem(k, '◆', 'Manager', ORCHESTRATOR_COLOR),
+        legendItem(k, '✦', `${ADVISOR_NAME} : le modèle relecteur que la discussion et ses spécialistes consultent ; une barre cerclée par appel, vue à la fin de l’étape qui l’a fait`, ADVISOR_COLOR),
+        legendItem(k, '↗', 'Worker', LINKED_COLOR),
         ...Object.values(AGENT_TYPE).map(t => legendItem(k, t.glyph, t.label, t.color)),
       ],
     },
@@ -2163,7 +2222,7 @@ const legendDetail = (k: Kit, view: View, act: Actions): unknown => {
 }
 
 /**
- * Les repères que la piste d'un sous-agent porte d'elle-même : son départ et son retour (les
+ * Les repères que la piste d'un spécialiste porte d'elle-même : son départ et son retour (les
  * points du relais, en face de ceux du lanceur), son échec ou son annulation à sa fin.
  */
 const ownMarks = (a: RegistryAgent): AgentMark[] => {
@@ -2172,7 +2231,7 @@ const ownMarks = (a: RegistryAgent): AgentMark[] => {
   return [...marks, { k: a.status === 'failed' ? 'fail' : a.status === 'cancelled' ? 'stop' : 'back', at: a.finishedAt }]
 }
 
-/** L'état d'une session liée (pastille, piste) : glyphe, mot, couleur. */
+/** L'état d'un worker (pastille, piste) : glyphe, mot, couleur. */
 const LINKED_STATE: Record<LinkedState, { glyph: string; word: string; color: string }> = {
   working: { glyph: '◉', word: `au${NB}travail`, color: C.blue },
   returned: { glyph: '✓', word: 'rendue', color: C.green },
@@ -2180,11 +2239,11 @@ const LINKED_STATE: Record<LinkedState, { glyph: string; word: string; color: st
   closed: { glyph: '○', word: 'fermée', color: C.gray },
 }
 
-/** La couleur des pistes des sessions liées dans la frise de l'orchestrateur : mauve, loin du violet de l'orchestrateur (planche `teintes.*`). */
+/** La couleur des pistes des workers dans la frise du manager : mauve, loin du violet du manager (planche `teintes.*`). */
 const LINKED_COLOR = C.mauve
 
 /**
- * Une session liée qui ne travaille plus ne s'allonge plus : ses segments restés ouverts (session
+ * Un worker qui ne travaille plus ne s'allonge plus : ses segments restés ouverts (session
  * arrêtée en plein outil) se ferment à son retour, sinon à sa dernière écriture.
  */
 const settledLane = (lane: AgentLane, ls: LinkedSession, reg: SessionRegistry | null): AgentLane => {
@@ -2195,7 +2254,7 @@ const settledLane = (lane: AgentLane, ls: LinkedSession, reg: SessionRegistry | 
 
 /**
  * Le sélecteur d'historique en tête de l'onglet (Q12) : un bouton dit l'entrée montrée ; déplié, il
- * liste « Ici, maintenant », les parcours (archivés compris), puis les discussions sans parcours qui
+ * liste « Ici, maintenant », les missions (archivées comprises), puis les discussions sans mission qui
  * ont lancé des agents, les plus récentes d'abord.
  */
 const historySelector = (k: Kit, view: View, act: Actions): unknown => {
@@ -2223,9 +2282,9 @@ const historySelector = (k: Kit, view: View, act: Actions): unknown => {
       {isOpen && (
         <Box flexDirection="column">
           {entries.filter(e => e.kind === 'now').map(entry)}
-          {runs.length > 0 && T(k, 'Parcours', { color: C.slate, bold: true })}
+          {runs.length > 0 && T(k, 'Missions', { color: C.slate, bold: true })}
           {runs.map(entry)}
-          {discussions.length > 0 && T(k, `Discussions${NB}sans${NB}parcours`, { color: C.slate, bold: true })}
+          {discussions.length > 0 && T(k, `Discussions${NB}sans${NB}mission`, { color: C.slate, bold: true })}
           {discussions.map(entry)}
         </Box>
       )}
@@ -2234,8 +2293,8 @@ const historySelector = (k: Kit, view: View, act: Actions): unknown => {
 }
 
 /**
- * La confirmation d'« ✗ Oublier » une discussion (S2), comme « Supprimer » d'un parcours : ce qui
- * sera effacé, en nombres ; les sessions liées reconnues par leur titre seul n'y sont pas (S15).
+ * La confirmation d'« ✗ Oublier » une discussion (S2), comme « Supprimer » d'une mission : ce qui
+ * sera effacé, en nombres ; les workers reconnus par leur titre seul n'y sont pas (S15).
  */
 const forgetBox = (k: Kit, past: NonNullable<NonNullable<View['history']>['shown']>, act: Actions): unknown => {
   const { Box, Button } = k
@@ -2253,15 +2312,15 @@ const forgetBox = (k: Kit, past: NonNullable<NonNullable<View['history']>['shown
 }
 
 /**
- * La rangée de pastilles en tête de l'onglet : « ◆ Orchestrateur », puis une pastille par session
- * liée avec son état ; la sélectionnée porte « ▸ », comme les onglets.
+ * La rangée de pastilles en tête de l'onglet : « ◆ Manager », puis une pastille par
+ * worker avec son état ; le sélectionné porte « ▸ », comme les onglets.
  */
 const sessionPills = (k: Kit, linked: readonly LinkedSession[], selected: string | null, act: Actions): unknown => {
   const { Box, Button } = k
   return (
     <Box key="agents-sessions" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
       <Box marginRight={2}>
-        <Button key="agents-session-main" plain={true} dimColor={selected !== null} label={`${selected === null ? '▸' : NB}${NB}◆${NB}Orchestrateur`} onPress={() => act.selectAgentsSession(null)} />
+        <Button key="agents-session-main" plain={true} dimColor={selected !== null} label={`${selected === null ? '▸' : NB}${NB}◆${NB}Manager`} onPress={() => act.selectAgentsSession(null)} />
       </Box>
       {linked.map(ls => {
         const look = LINKED_STATE[ls.state]
@@ -2283,7 +2342,7 @@ const sessionPills = (k: Kit, linked: readonly LinkedSession[], selected: string
 const erasingLine = (k: Kit, view: View): unknown => {
   const all = view.erasing ?? []
   if (all.length === 0) return null
-  const lines = all.map(e => `⏳${NB}Effacement${NB}en${NB}cours ${e.key.startsWith('run:') ? `du${NB}parcours` : `de${NB}la${NB}discussion`} « ${e.title} »…`)
+  const lines = all.map(e => `⏳${NB}Effacement${NB}en${NB}cours ${e.key.startsWith('run:') ? `de${NB}la${NB}mission` : `de${NB}la${NB}discussion`} « ${e.title} »…`)
   return T(k, lines.join('\n'), { color: C.amber, wrap: 'wrap' })
 }
 
@@ -2305,21 +2364,21 @@ const ticketTagOf =
   }
 
 /**
- * L'onglet Agents : en tête, l'orchestrateur et ses sessions liées en pastilles ; puis le résumé
- * et la frise de la session choisie. Celle de l'orchestrateur a sa piste en tête, une piste par
- * session liée (lancement et retour), puis une par sous-agent dans l'ordre de départ, sans
- * limite. Pendant un parcours comme sans. La barre de navigation règle la fenêtre de vue, propre à la
- * discussion. Ouvert dans une session liée, l'onglet la montre comme son propre orchestrateur.
+ * L'onglet Agents : en tête, le manager et ses workers en pastilles ; puis le résumé
+ * et la frise de la session choisie. Celle du manager a sa piste en tête, une piste par
+ * worker (lancement et retour), puis une par spécialiste dans l'ordre de départ, sans
+ * limite. Pendant une mission comme sans. La barre de navigation règle la fenêtre de vue, propre à la
+ * discussion. Ouvert dans un worker, l'onglet la montre comme son propre manager.
  */
 const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
   const { Box, Button } = k
-  // L'entrée du sélecteur d'historique : un parcours passé, une ancienne discussion, ou ici.
+  // L'entrée du sélecteur d'historique : une mission passée, une ancienne discussion, ou ici.
   const past = view.ui.agentsHistory !== undefined && view.history?.shown?.key === view.ui.agentsHistory ? view.history.shown : null
   const isPastLoading = view.ui.agentsHistory !== undefined && past === null
   const linked = past ? past.linked : isPastLoading ? [] : (view.linked ?? [])
   const chosen = linked.find(l => l.session.key === view.ui.agentsSession) ?? null
   const chosenReg = chosen?.reg ?? null
-  // La session liée choisie, figée si elle ne travaille plus.
+  // Le worker choisi, figé s'il ne travaille plus.
   const reg = chosen
     ? chosenReg && { ...chosenReg, main: settledLane(chosenReg.main ?? {}, chosen.session, chosenReg), agents: chosenReg.agents.map(a => ({ ...a, ...settledLane(a, chosen.session, chosenReg) })) }
     : past
@@ -2335,12 +2394,12 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
       : { ...lane, segments: lane.segments!.filter(x => !(x.k === 'waitAdvisor' && voidWaits.has(`${by}|${x.s}`))) }
   const agents = [...(reg?.agents ?? [])].map(a => withoutVoidWaits(a, a.agentId)).sort((a, b) => a.startedAt - b.startedAt)
   const now = view.now
-  // Les sous-agents en arbre (Q13) : enfants en retrait sous leur parent, Workflow repliés.
+  // Les spécialistes en arbre (Q13) : enfants en retrait sous leur parent, Workflow repliés.
   const tree = laneTree(agents, new Set(view.ui.openWorkflows ?? []))
   // Les exécutions de /code-review sous leur nom standard ; le groupe, celui de la session montrée.
   const tagOf = ticketTagOf(view.board ?? null)
   const shownName = (a: RegistryAgent): string => reviewForkName(a.name, tagOf, reg?.group) ?? a.name
-  // Dans la frise de l'orchestrateur, une piste par session liée : ses périodes de travail et
+  // Dans la frise du manager, une piste par worker : ses périodes de travail et
   // d'attente, un départ à son lancement, un retour à son compte rendu (ou à sa fin).
   const linkedLanes: FriseLane[] = chosen
     ? []
@@ -2366,10 +2425,10 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
   const lanes: FriseLane[] = [
     {
       key: MAIN,
-      name: chosen ? chosen.session.title : 'Orchestrateur',
+      name: chosen ? chosen.session.title : 'Manager',
       color: ORCHESTRATOR_COLOR,
       lane: returns.length > 0 ? { ...main, marks: [...(main.marks ?? []), ...returns] } : main,
-      ...(chosen ? { caption: `session${NB}liée` } : {}),
+      ...(chosen ? { caption: `worker` } : {}),
     },
     // La ligne advisor de la session montrée, seulement si elle l'a consulté.
     ...(advisor
@@ -2389,8 +2448,8 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
           },
     ),
   ]
-  // Qui travaille : les pistes sans sous-agent (orchestrateur, advisor, sessions liées), puis les
-  // segments bruts de tous les sous-agents, pas la piste réunie d'un Workflow.
+  // Qui travaille : les pistes sans spécialiste (manager, advisor, workers), puis les
+  // segments bruts de tous les spécialistes, pas la piste réunie d'un Workflow.
   const activity = activityOf(lanes.filter(l => l.workflow === undefined && l.agent === undefined).map(l => l.lane), agents, now)
   // Ce qui se dessine, attentes de la personne comprises : l'axe va de son début à sa fin. Une
   // boucle, pas `Math.min(...)` : au-delà de 100 000 valeurs, l'étalement lève une erreur.
@@ -2419,13 +2478,13 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
   const labelCells = Math.max(18, Math.min(34, Math.floor(k.width * 0.36)))
   const trackCells = Math.max(16, k.width - labelCells - 5)
   const delegate = view.board?.delegate
-  // Ce que montre la frise : cette discussion, la session liée choisie, ou cette session liée elle-même.
+  // Ce que montre la frise : cette discussion, le worker choisi, ou ce worker lui-même.
   const context = chosen
-    ? `session${NB}liée${NB}·${NB}${LINKED_STATE[chosen.session.state].word}`
+    ? `worker${NB}·${NB}${LINKED_STATE[chosen.session.state].word}`
     : past
-      ? `${past.key.startsWith('run:') ? 'parcours' : 'discussion'}${NB}·${NB}${past.title}`
+      ? `${past.key.startsWith('run:') ? 'mission' : 'discussion'}${NB}·${NB}${past.title}`
       : delegate
-        ? `session${NB}liée${NB}de${NB}${delegate.main ?? delegate.title ?? 'l’orchestrateur'}`
+        ? `worker${NB}de${NB}${delegate.main ?? delegate.title ?? 'son manager'}`
         : `cette${NB}discussion`
   const isBusy = chosen ? chosen.session.state === 'working' : agentsAtWork(view) > 0
   return [
@@ -2433,7 +2492,7 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
     erasingLine(k, view),
     sessionPills(k, linked.map(l => l.session), chosen ? chosen.session.key : null, act),
     <Box key="agents-head" flexDirection="row" flexWrap="wrap" alignItems="center">
-      <Box marginRight={1}>{chip(k, chosen ? `↗${NB}${chosen.session.title}` : `◆${NB}Orchestrateur`, chosen ? LINKED_COLOR : C.violet)}</Box>
+      <Box marginRight={1}>{chip(k, chosen ? `↗${NB}${chosen.session.title}` : `◆${NB}Manager`, chosen ? LINKED_COLOR : C.violet)}</Box>
       <Box marginRight={1}>{T(k, context, { dim: true })}</Box>
       {past?.key.startsWith('session:') === true && view.ui.confirmForget !== past.key && (
         <Button key="agents-forget" plain={true} dimColor={true} label={`✗${NB}Oublier`} onPress={() => act.askForget(past.key)} />
@@ -2446,10 +2505,10 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
         : chosen && !reg
         ? T(k, 'Pas encore de registre lisible pour cette session (pas encore écrit, ou en cours d’écriture).', { dim: true, wrap: 'wrap' })
         : agents.length === 0 && linkedLanes.length === 0 && advisorPart === null
-          ? T(k, chosen ? 'Aucun sous-agent dans cette session pour l’instant.' : 'Aucun sous-agent dans cette discussion pour l’instant.', { dim: true, wrap: 'wrap' })
+          ? T(k, chosen ? 'Aucun spécialiste dans cette session pour l’instant.' : 'Aucun spécialiste dans cette discussion pour l’instant.', { dim: true, wrap: 'wrap' })
           : line(k, [
               T(k, agentsSummary(agents), { bold: true }),
-              linkedLanes.length > 0 && T(k, `·${NB}${plural(linkedLanes.length, 'session')}${NB}${linkedLanes.length > 1 ? 'liées' : 'liée'}`, { dim: true }),
+              linkedLanes.length > 0 && T(k, `·${NB}${plural(linkedLanes.length, 'worker')}`, { dim: true }),
               summary.activeMs > 0 && T(k, `·${NB}${dur(summary.activeMs)}`, { dim: true }),
               gainText(summary.gain) !== '' && T(k, `·${NB}${gainText(summary.gain)}`, { color: C.teal }),
               totalCost !== null && T(k, `·${NB}${costText(totalCost)}`, { color: C.sand }),
@@ -2473,46 +2532,58 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
 
 // ─── Prochaine étape ──────────────────────────────────────────────────────
 
-/** Les boutons et la ligne de la suite recommandée pendant l'Implémentation d'un parcours à groupes. */
+/** Les boutons et la ligne de la suite recommandée pendant l'Implémentation d'une mission à groupes. */
 const launchParts = (rec: NextLaunch, act: Actions): { buttons: NextButton[]; note: string } => {
   const and = (ids: readonly string[]) => ids.join(', ')
   if (rec.kind === 'parallel') {
     const lot = rec.groups.join(' ∥ ')
     return {
-      buttons: [{ key: 'next-parallel-linked', isPrimary: true, label: `⇉${NB}${lot} en parallèle · sessions liées`, onPress: () => act.launchParallelLinked(0) }],
+      buttons: [{ key: 'next-parallel-linked', isPrimary: true, label: `⇉${NB}${lot} en parallèle · workers`, onPress: () => act.launchParallelLinked(0) }],
       note: 'groupes indépendants : ils partent ensemble',
     }
   }
   if (rec.kind === 'group') {
-    // Un groupe ne se fait qu'en session liée.
+    // Un groupe ne se fait que dans un worker.
     const id = rec.group
     return {
       buttons: rec.isDelegable
         ? [
-            { key: `next-linked-${id}`, isPrimary: true, label: `↗${NB}Groupe ${id} · session liée`, onPress: () => act.launchGroupLinked(id) },
+            { key: `next-linked-${id}`, isPrimary: true, label: `↗${NB}Groupe ${id} · worker`, onPress: () => act.launchGroupLinked(id) },
             xhighOf(`next-xhigh-${id}`, id, act),
           ]
         : [],
       note: 'le prochain groupe prêt',
     }
   }
+  if (rec.kind === 'held')
+    return {
+      buttons: rec.holds.map(h => ({ key: `next-force-${h.held}-${h.run}-${h.group}${h.on === 'plan' ? '-plan' : ''}`, isQuiet: true as const, label: `⇥${NB}Forcer ${h.held === LOT_KEY ? 'le lot' : h.held}${h.on === 'plan' ? `${NB}(plan)` : ''}`, onPress: () => act.forceHold({ held: h.held, run: h.run, group: h.group, ...(h.on === 'plan' ? { on: 'plan' as const } : {}) }) })),
+      note: `retenu par une autre mission : ${rec.holds.map(heldText).join(' ; ')} ; part une fois le groupe attendu clos`,
+    }
   if (rec.kind === 'busy') return { buttons: [], note: `${rec.groups.length > 1 ? 'groupes' : 'groupe'} ${and(rec.groups)} en cours ici : la suite viendra une fois ${rec.groups.length > 1 ? 'finis' : 'fini'}` }
-  if (rec.kind === 'linked') return { buttons: [], note: `${and(rec.groups)} en session liée : la suite une fois ${rec.groups.length > 1 ? 'rendus' : 'rendu'}` }
+  if (rec.kind === 'linked') return { buttons: [], note: `${and(rec.groups)} dans un worker : la suite une fois ${rec.groups.length > 1 ? 'rendus' : 'rendu'}` }
   return { buttons: [], note: `tickets faits ; le compte rendu attend la revue de ${and(rec.groups)} (bouton sur la ligne du groupe)` }
 }
 
 /**
  * La carte « Ensuite » avant son dessin : son titre, sa note, ses boutons, et le bouton de l'étape
  * suivante (`lead`, l'un d'eux) que le bandeau reprend. C'est le lancement de groupes quand il y en
- * a un ; sinon, l'étape finie, la suite principale, ou « Clore le parcours » quand elle n'est que la
+ * a un ; sinon, l'étape finie, la suite principale, ou « Clore la mission » quand elle n'est que la
  * rétro ou qu'il n'y en a pas. Jamais la compaction, la rétro ni « xhigh » ; rien en pleine étape.
  */
 const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: string; buttons: NextButton[]; lead: NextButton | null; preview: string[] } | null => {
   const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet, versionUnits: view.sync.versionUnits })
-  const rec = nextLaunchFor(run)
+  const rec = nextLaunchFor(run, outsideOf(view))
   const phase = currentPhase(run)
   if (rec === null && sug.primary === null && !sug.canFinish) return null
-  const title = sug.canFinish && sug.primary === null ? 'Parcours bouclé' : phase.status === 'done' ? 'Prochaine étape' : 'Ensuite'
+  // Le lot sans groupes retenu par une autre mission : la carte le dit, et propose de forcer.
+  // Seulement quand la suite est la phase de code du lot : les autres étapes (compte rendu, clôture) restent proposées.
+  const lotHolds = (run.groups ?? []).length === 0 && sug.primary !== null && CODE_SKILLS.has(sug.primary) ? (view.holds ?? []).filter(h => h.held === LOT_KEY) : []
+  if (rec === null && lotHolds.length > 0) {
+    const parts = launchParts({ kind: 'held', groups: [LOT_KEY], holds: lotHolds }, act)
+    return { title: 'Ensuite', note: parts.note, buttons: parts.buttons, lead: null, preview: [] }
+  }
+  const title = sug.canFinish && sug.primary === null ? 'Mission bouclée' : phase.status === 'done' ? 'Prochaine étape' : 'Ensuite'
   const buttons: NextButton[] = []
   let lead: NextButton | null = null
   let note = phase.status !== 'done' ? 'la commande va dans le prompt ; la lancer clôt la phase en cours' : 'la commande va dans le prompt'
@@ -2522,7 +2593,9 @@ const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: 
     buttons.push(...parts.buttons)
     lead = parts.buttons[0] ?? null
     note = parts.buttons.length > 0 ? `${parts.note} · la demande va dans le prompt, la phase continue` : parts.note
-    // Après /to-tickets, avant les groupes : alléger l'orchestrateur d'abord (bouton secondaire).
+    // Un autre groupe retenu par une autre mission : la carte le dit aussi.
+    if (rec.kind !== 'held' && (view.holds ?? []).length > 0) note = `${note} · retenu par une autre mission : ${(view.holds ?? []).map(heldText).join(' ; ')}`
+    // Après /to-tickets, avant les groupes : alléger le manager d'abord (bouton secondaire).
     if (view.live.ask === null && suggestsCompaction(view.board, view.agents)) buttons.push({ key: 'next-compact', label: `⇣${NB}Compacter d’abord`, onPress: () => act.compactFirst() })
     if (phase.skill !== 'retro') buttons.push({ key: 'go-retro', label: `${SKILLS.retro!.glyph} ${SKILLS.retro!.label}`, onPress: () => act.launch('retro') })
     return { title, note, buttons, lead, preview: [] }
@@ -2538,7 +2611,7 @@ const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: 
     buttons.push({ key: `go-${skill}`, label: `${d.glyph} ${d.label}`, onPress: () => act.launch(skill) })
   }
   if (sug.canFinish) {
-    buttons.push({ key: 'finish', label: '✓ Clore le parcours', onPress: () => act.finish() })
+    buttons.push({ key: 'finish', label: '✓ Clore la mission', onPress: () => act.finish() })
     if (phase.status === 'done' && lead === null) lead = buttons.at(-1)!
   }
   if (sug.versionNote) note = sug.versionNote
@@ -2547,8 +2620,10 @@ const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: 
 
 const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const { Box } = k
-  const next = nextStepOf(run, view, act)
-  if (next === null) return null
+  const found = nextStepOf(run, view, act)
+  if (found === null) return null
+  const withPlan = view.planUnread ? { ...found, note: `${PLAN_UNREAD_TEXT.toLowerCase()} · ${found.note}` } : found
+  const next = view.launchUnread ? { ...withPlan, note: `fichier des missions illisible au dernier lancement : rien n’est parti, réessaie · ${withPlan.note}` } : withPlan
   return (
     <Box key="next" flexDirection="column" borderStyle="round" borderDimColor={true} paddingX={1} marginTop={1}>
       {line(k, [T(k, next.title, { bold: true }), T(k, next.note, { dim: true })])}
@@ -2572,21 +2647,62 @@ const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
 
 const tabsRow = (k: Kit, view: View, run: Run | null, act: Actions): unknown => {
   const { Box, Button } = k
-  const tabs: [Tab, string][] = [
-    ['flow', 'Parcours'],
-    ['agents', agentsAtWork(view) > 0 ? `Agents${NB}·${NB}${agentsAtWork(view)}` : 'Agents'],
-    ['activity', run && run.log.length > 0 ? `Activité${NB}·${NB}${run.log.length}` : 'Activité'],
-    ['history', `Historique${NB}·${NB}${view.board?.runs.filter(r => r.archivedAt === undefined).length ?? 0}`],
-    ['commands', 'Commandes'],
-  ]
+  const agents: [Tab, string] = ['agents', agentsAtWork(view) > 0 ? `Agents${NB}·${NB}${agentsAtWork(view)}` : 'Agents']
+  const history: [Tab, string] = ['history', `Historique${NB}·${NB}${view.board?.runs.filter(r => r.archivedAt === undefined).length ?? 0}`]
+  // La discussion du COO ne porte pas de mission : Coordination à la place de Mission et Activité.
+  const tabs: [Tab, string][] = view.coo
+    ? [['coord', 'Coordination'], agents, history, ['commands', 'Commandes']]
+    : [['flow', 'Mission'], agents, ['activity', run && run.log.length > 0 ? `Activité${NB}·${NB}${run.log.length}` : 'Activité'], history, ['commands', 'Commandes']]
+  const current = shownTab(view)
   return (
     <Box key="tabs" flexDirection="row" flexWrap="wrap" marginTop={1}>
       {tabs.map(([tab, label]) => (
         <Box marginRight={2}>
-          <Button key={`tab-${tab}`} plain={true} dimColor={tab !== view.ui.tab} label={tab === view.ui.tab ? `▸ ${label}` : label} onPress={() => act.setTab(tab)} />
+          <Button key={`tab-${tab}`} plain={true} dimColor={tab !== current} label={tab === current ? `▸ ${label}` : label} onPress={() => act.setTab(tab)} />
         </Box>
       ))}
     </Box>
+  )
+}
+
+/** L'onglet montré : dans la discussion du COO, Coordination remplace Mission et Activité ; ailleurs, Coordination n'existe pas. */
+const shownTab = (view: View): Tab => {
+  const tab = view.ui.tab
+  if (view.coo) return tab === 'flow' || tab === 'activity' ? 'coord' : tab
+  return tab === 'coord' ? 'flow' : tab
+}
+
+/** Une ligne de morceaux de texte décrite par la vue du COO (`coo-view.tsx`). */
+const cooLine = (k: Kit, parts: readonly CooPart[]): unknown => line(k, parts.map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })), true)
+
+/** L'onglet Coordination : le point, ce qui t'attend, les missions, la feuille de route (variante A des planches). */
+const coordinationTab = (k: Kit, s: CooStatement, act: Actions): unknown[] =>
+  coordinationRows(s).map(row =>
+    row.kind === 'heading' ? (
+      <k.Box key={row.key} marginTop={1}>
+        {cooLine(k, row.parts)}
+      </k.Box>
+    ) : (
+      <k.Box key={row.key} flexDirection="row" flexWrap="wrap">
+        <k.Box flexShrink={1}>{cooLine(k, row.parts)}</k.Box>
+        {(row.actions ?? []).map(a => (
+          <k.Box key={`${a.key}-box`} marginLeft={1}>
+            <k.Button key={a.key} plain={true} label={a.label} onPress={() => act.cooDo(a.act)} />
+          </k.Box>
+        ))}
+      </k.Box>
+    ),
+  )
+
+/** Le panneau de la discussion du COO. */
+const cooPane = (k: Kit, view: View, s: CooStatement, act: Actions): unknown => {
+  const tab = shownTab(view)
+  const body: unknown = tab === 'commands' ? commandsTab(k, act) : tab === 'agents' ? agentsTab(k, view, act) : tab === 'history' && view.board ? historyTab(k, view.board, view, act) : coordinationTab(k, s, act)
+  return (
+    <k.Box flexDirection="column" paddingX={1} paddingBottom={1}>
+      {tabsRow(k, view, null, act)}
+      {body}
+    </k.Box>
   )
 }
 
@@ -2594,7 +2710,7 @@ const launcher = (k: Kit, act: Actions): unknown => {
   const { Box, Button } = k
   return (
     <Box key="launcher" flexDirection="column" marginTop={1}>
-      {T(k, 'Démarrer un parcours', { bold: true })}
+      {T(k, 'Démarrer une mission', { bold: true })}
       {T(k, 'La commande arrive dans le prompt : ajoute le sujet, puis Entrée.', { dim: true, wrap: 'wrap' })}
       <Box flexDirection="column" marginTop={1}>
         {LAUNCHERS.map(l => {
@@ -2633,7 +2749,7 @@ const commandsTab = (k: Kit, act: Actions): unknown[] => {
     launcher(k, act),
     <Box key="others" flexDirection="column" marginTop={1}>
       {T(k, 'Autres commandes', { bold: true })}
-      {T(k, 'Les étapes et outils qui se greffent sur un parcours, ou servent seuls.', { dim: true, wrap: 'wrap' })}
+      {T(k, 'Les étapes et outils qui se greffent sur une mission, ou servent seuls.', { dim: true, wrap: 'wrap' })}
       {COMMAND_GROUPS.map(group => (
         <Box key={`g-${group.title}`} flexDirection="column" marginTop={1}>
           {T(k, group.title, { color: C.slate, bold: true })}
@@ -2652,7 +2768,26 @@ const commandsTab = (k: Kit, act: Actions): unknown[] => {
         </Box>
       ))}
     </Box>,
+    archiveToggle(k, act),
   ]
+}
+
+/**
+ * L'interrupteur de l'archivage d'office : l'état de l'accord (relu par le mod toutes les 5 s) et le
+ * clic qui le bascule. Allumé, Claude archive sans redemander les sessions de l'app que la fermeture
+ * d'un groupe ou des pistes a vérifiées ; éteint, il demande pour chacune.
+ */
+const archiveToggle = (k: Kit, act: Actions): unknown => {
+  const { Box, Button } = k
+  const at = archiveConsent.at
+  const state = at !== null ? `allumé depuis le ${consentDay(at)}` : 'éteint'
+  return (
+    <Box key="archive" flexDirection="column" marginTop={1}>
+      {T(k, 'Sessions de l’app', { bold: true })}
+      <Button key="archive-toggle" label={`Archivage d’office : ${state} · ${at !== null ? 'éteindre' : 'allumer'}`} onPress={() => act.toggleArchiveConsent()} />
+      {T(k, 'Allumé, Claude archive sans redemander les sessions de l’app que la fermeture d’un groupe ou des pistes a vérifiées (comme claude stop dans le CLI) ; éteint, il te demande pour chacune.', { dim: true, wrap: 'wrap' })}
+    </Box>
+  )
 }
 
 // ─── À tout moment ────────────────────────────────────────────────────────
@@ -2667,8 +2802,8 @@ const anytimeButton = (k: Kit, tool: AnytimeTool, act: Actions): unknown => {
 }
 
 /**
- * La barre du bas de la page Parcours : des outils qui servent à tout moment, sans clore la phase.
- * Avec un parcours actif ici dans une phase de code ou de revue, « 🐞 Bug · session liée » s'ajoute.
+ * La barre du bas de la page Mission : des outils qui servent à tout moment, sans clore la phase.
+ * Avec une mission active ici dans une phase de code ou de revue, « 🐞 Bug · worker » s'ajoute.
  */
 const anytimeCard = (k: Kit, act: Actions, run?: Run): unknown => {
   const { Box, Button } = k
@@ -2691,7 +2826,7 @@ const anytimeCard = (k: Kit, act: Actions, run?: Run): unknown => {
           {T(k, 'Déléguer', { color: C.slate, bold: true })}
           <Box flexDirection="row" flexWrap="wrap" alignItems="center">
             <Box marginRight={1}>
-              <Button key="any-bug" label={`🐞${NB}Bug${NB}·${NB}session${NB}liée`} onPress={() => act.launchBugLinked()} />
+              <Button key="any-bug" label={`🐞${NB}Bug${NB}·${NB}worker`} onPress={() => act.launchBugLinked()} />
             </Box>
             {T(k, 'diagnostic dans une session à part, en détour de la phase', { dim: true, wrap: 'truncate-end' })}
           </Box>
@@ -2703,20 +2838,20 @@ const anytimeCard = (k: Kit, act: Actions, run?: Run): unknown => {
 
 /** Ce que vaut l'allumage du mode auto, décidé au cadrage du mode auto, montré au premier clic sur « ⚡ Auto ». */
 const AUTO_WORTH =
-  'Ton second clic vaut ton accord, pour ce parcours seulement, sur ses validations à boutons (accord du cadrage, spec, découpage, plan) et sur les écritures Asana qu’il prévoit (création des tickets, statuts) : chacune sera inscrite dans « Décidé sans toi ». L’auto s’arrête au rapport du compte rendu ; le valider, la version et le push restent à toi. Restent aussi à toi, et n’arrêtent que ce qu’elles concernent :'
+  'Ton second clic vaut ton accord, pour cette mission seulement, sur ses validations à boutons (accord du cadrage, spec, découpage, plan) et sur les écritures Asana qu’elle prévoit (création des tickets, statuts) : chacune sera inscrite dans « Décidé sans toi ». Une question en zone sensible se tranche seule quand l’option recommandée respecte l’invariant déjà validé (quand il y en a un) et qu’elle est la plus prudente (elle ne perd rien, n’expose rien, ne supprime rien sans retour) : elle est inscrite dans « Décidé sans toi », son texte commençant par « Zone sensible : », et le compte rendu la range à part, pour que tu la relises. L’auto s’arrête au rapport du compte rendu ; le valider, la version et le push restent à toi. Restent aussi à toi, et n’arrêtent que ce qu’elles concernent :'
 
-/** Les six catégories de décisions qui bloquent toujours, même en auto (fixées au cadrage du mode auto). */
+/** Les six catégories de décisions qui bloquent toujours, même en auto : seuls les choix d'expérience et les décisions qui sont vraiment à la personne. */
 const AUTO_BLOCKS: readonly string[] = [
-  'une zone sensible (confidentialité, suppression de données, chiffrement, concurrence), invariant compris ;',
-  'une question sans recommandation défendable (goût, priorité, intention ambiguë) ;',
-  'un changement qui contredit une décision déjà prise ;',
+  'un choix d’expérience : ce que tu vois et fais (mise en page, maquette, libellés, boutons, notifications), ou toute question où les options se valent techniquement et ne diffèrent que par ta préférence ;',
+  'fixer ou affaiblir un invariant, ou un changement qui contredit une décision déjà prise ;',
+  'une suppression sans retour ou une exposition de tes données hors du poste (une publication) ;',
   'laisser une faille de sécurité sans correctif ;',
-  'l’effort xhigh d’une session liée ;',
-  'une dépense ou une action externe hors du parcours (dépendance lourde, service tiers).',
+  'l’effort xhigh d’un worker ;',
+  'une dépense ou une action externe hors de la mission (dépendance lourde, service tiers).',
 ]
 
 /**
- * Le bouton « ⚡ Auto » du parcours actif ici, seul moyen de l'allumer : un premier clic montre ce que l'activation vaut,
+ * Le bouton « ⚡ Auto » de la mission active ici, seul moyen de l'allumer : un premier clic montre ce que l'activation vaut,
  * « Confirmer » l'allume pour cette discussion ; quand il envoie d'ici, le même bouton le coupe d'un clic.
  */
 const autoRow = (k: Kit, run: Run, view: View, act: Actions): unknown => {
@@ -2725,7 +2860,7 @@ const autoRow = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   if (state.kind !== 'on' && view.ui.confirmAuto === run.id) {
     return (
       <Box key="auto" flexDirection="column" borderStyle="round" borderColor={C.amber} paddingX={1} marginTop={1}>
-        {T(k, `⚡${NB}Allumer le mode auto de ce parcours ?`, { bold: true, color: C.amber })}
+        {T(k, `⚡${NB}Allumer le mode auto de cette mission ?`, { bold: true, color: C.amber })}
         {T(k, AUTO_WORTH, { wrap: 'wrap' })}
         {AUTO_BLOCKS.map((text, i) => (
           <Box key={`auto-block-${i}`} flexDirection="row">
@@ -2751,12 +2886,12 @@ const autoRow = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   const canCut = isOn || state.kind === 'paused'
   const hint =
     state.kind === 'on'
-      ? 'le parcours avance seul ; un clic rend la main'
+      ? 'la mission avance seule ; un clic rend la main'
       : state.kind === 'paused' && isOn
         ? `en pause : ${state.why} ; deux clics le rallument ici, un clic le coupe`
         : state.kind === 'paused'
           ? `en pause : ${state.why} ; deux clics le rallument, un clic l’éteint pour de bon`
-          : 'le parcours avance seul jusqu’au rapport ; deux clics pour l’allumer'
+          : 'la mission avance seule jusqu’au rapport ; deux clics pour l’allumer'
   return (
     <Box key="auto" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
       {state.kind !== 'on' && (
@@ -2783,7 +2918,7 @@ const waitingCard = (k: Kit, run: Run, act?: Actions): unknown => {
   const open = openQuestions(run)
   if (open.length === 0) return null
   // « Envoi resté sans suite » : la marque attend encore son démarrage, « ↻ Renvoyer » l'efface et laisse l'auto renvoyer.
-  // Seulement sur le parcours actif ici (`act` donné) : ailleurs, il ne pourrait pas renvoyer.
+  // Seulement sur la mission active ici (`act` donné) : ailleurs, il ne pourrait pas renvoyer.
   const stale = new Set(act ? pendingAutoMarks(run).filter(m => m.staleAt !== undefined).map(m => m.key) : [])
   return (
     <Box key="waiting" flexDirection="column" borderStyle="round" borderColor={C.amber} paddingX={1} marginTop={1}>
@@ -2803,7 +2938,7 @@ const waitingCard = (k: Kit, run: Run, act?: Actions): unknown => {
   )
 }
 
-/** Mettre de côté le parcours actif : ni clos ni archivé, il attend dans l'historique. */
+/** Mettre de côté la mission active : ni close ni archivée, elle attend dans l'historique. */
 const asideRow = (k: Kit, act: Actions): unknown => {
   const { Box, Button } = k
   return (
@@ -2811,7 +2946,7 @@ const asideRow = (k: Kit, act: Actions): unknown => {
       <Box marginRight={1}>
         <Button key="set-aside" plain={true} dimColor={true} label={`‖${NB}Mettre de côté`} onPress={() => act.setAside()} />
       </Box>
-      {T(k, 'pour en ouvrir un autre ; « Reprendre » le rouvre tel quel', { dim: true, wrap: 'wrap' })}
+      {T(k, 'pour en ouvrir une autre ; « Reprendre » la rouvre telle quelle', { dim: true, wrap: 'wrap' })}
     </Box>
   )
 }
@@ -2823,23 +2958,23 @@ const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
   const isElsewhere = run.status === 'active'
   const isAside = run.status === 'paused' && run.asideAt !== undefined
   const head = isElsewhere
-    ? `Le dernier parcours, « ${run.title} », est en cours dans une autre discussion.`
+    ? `La dernière mission, « ${run.title} », est en cours dans une autre discussion.`
     : isAside
-      ? `Le dernier parcours, « ${run.title} », est mis de côté.`
+      ? `La dernière mission, « ${run.title} », est mise de côté.`
       : run.status === 'paused'
-        ? `Le dernier parcours, « ${run.title} », est en pause.`
-        : 'Aucun parcours en cours.'
+        ? `La dernière mission, « ${run.title} », est en pause.`
+        : 'Aucune mission en cours.'
   const hint = isElsewhere
-    ? 'Le reprendre ici le retire de l’autre discussion.'
+    ? 'La reprendre ici la retire de l’autre discussion.'
     : isAside
-      ? 'Il reprend tel quel avec « Reprendre » ; un skill lancé d’ici ouvre un autre parcours.'
+      ? 'Elle reprend telle quelle avec « Reprendre » ; un skill lancé d’ici ouvre une autre mission.'
       : run.status === 'paused'
-        ? 'Il reprend tout seul quand tu relances un de ses skills.'
-        : 'Le suivant démarre au prochain skill.'
-  // Le mode auto d'un parcours qui n'est pas actif ici : en pause (déduite ou posée), ou envoyé d'ailleurs.
+        ? 'Elle reprend toute seule quand tu relances un de ses skills.'
+        : 'La suivante démarre au prochain skill.'
+  // Le mode auto d'une mission qui n'est pas actif ici : en pause (déduite ou posée), ou envoyé d'ailleurs.
   const auto = view.board ? autoStateOf(run, view.board, view.here ?? view.board.session ?? '') : ({ kind: 'off' } as const)
   const autoLine =
-    auto.kind === 'paused' ? `⚡${NB}Auto en pause : ${auto.why}` : auto.kind === 'elsewhere' ? `⚡${NB}Auto allumé, le parcours est suivi dans une autre discussion` : ''
+    auto.kind === 'paused' ? `⚡${NB}Auto en pause : ${auto.why}` : auto.kind === 'elsewhere' ? `⚡${NB}Auto allumé, la mission est suivie dans une autre discussion` : ''
   return [
     <Box key="idle" flexDirection="column" borderStyle="round" borderDimColor={true} paddingX={1} marginTop={1}>
       {T(k, head, { bold: true })}
@@ -2939,7 +3074,7 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
   const live = sorted.filter(r => r.archivedAt === undefined)
   const archived = sorted.filter(r => r.archivedAt !== undefined).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0))
   const isArchiveOpen = view.ui.showArchived === true
-  // Chaque parcours, archivés compris, ouvre l'onglet Agents sur lui (Q12).
+  // Chaque mission, archivées comprises, ouvre l'onglet Agents sur elle (Q12).
   const agentsOf = (r: Run) => <Button key={`agents-of-${r.id}`} plain={true} dimColor={true} label={`◆${NB}Agents`} onPress={() => act.openAgentsOf(r.id)} />
   const card = (r: Run) => {
     const isArchived = r.archivedAt !== undefined
@@ -2948,14 +3083,14 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
     const ratio = runProgress(r)
     const isMine = r.id === board.activeId
     const status = isArchived
-      ? T(k, `▣${NB}archivé`, { color: C.gray, bold: true })
+      ? T(k, `▣${NB}archivée`, { color: C.gray, bold: true })
       : r.status === 'active' && !isMine
         ? T(k, `⇆${NB}autre discussion`, { color: C.blue, bold: true })
         : r.status === 'active'
         ? T(k, `◉${NB}en cours`, { color: def.color, bold: true })
         : r.status === 'paused'
-          ? T(k, r.asideAt !== undefined ? `‖${NB}mis de côté` : `‖${NB}en pause`, { color: C.gray, bold: true })
-          : T(k, `✓${NB}terminé`, { color: C.green, bold: true })
+          ? T(k, r.asideAt !== undefined ? `‖${NB}mise de côté` : `‖${NB}en pause`, { color: C.gray, bold: true })
+          : T(k, `✓${NB}terminée`, { color: C.green, bold: true })
     const bar = k.isRich
       ? svgOf(k, barSvg([{ value: ratio, color: def.color }], 1, px(Math.min(24, k.width - 10))), pct(ratio), false)
       : blocks(k, [{ value: ratio, color: def.color }], 1, Math.min(24, k.width - 12))
@@ -2975,7 +3110,10 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
         {isArchived ? (
           view.ui.confirmDrop === r.id ? (
             <Box flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
-              <Box marginRight={1}>{T(k, 'Supprimer définitivement ce parcours ?', { color: C.red, bold: true })}</Box>
+              <Box marginRight={1}>{T(k, 'Supprimer définitivement cette mission ?', { color: C.red, bold: true })}</Box>
+              {view.dropUngleaned !== undefined && view.dropUngleaned > 0 ? (
+                <Box marginRight={1}>{T(k, `${view.dropUngleaned} ${view.dropUngleaned > 1 ? 'comptes rendus pas encore relevés' : 'compte rendu pas encore relevé'} par le COO`, { color: C.amber, bold: true })}</Box>
+              ) : null}
               <Box marginRight={1}>
                 <Button key={`drop-yes-${r.id}`} variant="primary" label="✗ Supprimer" onPress={() => act.drop(r.id)} />
               </Box>
@@ -3006,11 +3144,11 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
   }
   return [
     erasingLine(k, view),
-    T(k, `Projet${NB}${board.name}${SEP}${plural(live.length, 'parcours', 'parcours')}${archived.length > 0 ? `${SEP}${archived.length}${NB}archivé${archived.length > 1 ? 's' : ''}` : ''}`, { dim: true, wrap: 'truncate-end' }),
+    T(k, `Projet${NB}${board.name}${SEP}${plural(live.length, 'mission', 'missions')}${archived.length > 0 ? `${SEP}${archived.length}${NB}archivée${archived.length > 1 ? 's' : ''}` : ''}`, { dim: true, wrap: 'truncate-end' }),
     ...live.map(card),
     archived.length > 0 && (
       <Box key="archived-toggle" marginTop={1}>
-        <Button key="archived-toggle" plain={true} dimColor={true} label={isArchiveOpen ? `▾ Cacher les archivés` : `▸ Archivés (${archived.length})`} onPress={() => act.toggleArchived()} />
+        <Button key="archived-toggle" plain={true} dimColor={true} label={isArchiveOpen ? `▾ Cacher les archivées` : `▸ Archivées (${archived.length})`} onPress={() => act.toggleArchived()} />
       </Box>
     ),
     ...(isArchiveOpen ? archived.map(card) : []),
@@ -3018,22 +3156,22 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
 }
 
 /**
- * L'en-tête quand aucun parcours n'est choisi dans cette discussion : aucun parcours n'y est montré.
- * Une session liée qui travaille pour un groupe le dit : son parcours est suivi par la discussion principale.
+ * L'en-tête quand aucune mission n'est choisie dans cette discussion : aucune mission n'y est montrée.
+ * Un worker qui travaille pour un groupe le dit : sa mission est suivie par le manager.
  */
 const noRunHero = (k: Kit, board: Board): unknown => {
-  // Le parcours peut manquer à ce board (session dans un worktree) : le titre relevé à la déclaration le remplace.
+  // La mission peut manquer à ce board (session dans un worktree) : le titre relevé à la déclaration le remplace.
   const delegated = board.delegate ? delegatedTitle(board) : undefined
   return (
     <k.Box key="hero" flexDirection="column" borderStyle="round" borderDimColor={true} paddingX={1}>
       {delegated
-        ? T(k, `↗${NB}Session liée du parcours « ${delegated} »`, { bold: true, color: C.blue })
-        : T(k, `◇${NB}Aucun parcours sélectionné`, { bold: true })}
+        ? T(k, `↗${NB}Worker de la mission « ${delegated} »`, { bold: true, color: C.blue })
+        : T(k, `◇${NB}Aucune mission sélectionnée`, { bold: true })}
       {T(
         k,
         delegated
-          ? 'La discussion principale suit ce parcours : elle rend les statuts des tickets à la fin de cette session.'
-          : 'Reprends-en un depuis l’onglet Historique, ou lance un skill pour en démarrer un.',
+          ? 'Le manager suit cette mission : il rend les statuts des tickets à la fin de cette session.'
+          : 'Reprends-en une depuis l’onglet Historique, ou lance un skill pour en démarrer une.',
         { dim: true, wrap: 'wrap' },
       )}
     </k.Box>
@@ -3048,7 +3186,7 @@ const welcome = (k: Kit, board: Board | null): unknown => {
         {T(k, `◆${NB}Tableau de bord du workflow`, { color: C.violet, bold: true })}
         {T(
           k,
-          `Le suivi démarre au premier skill mattpocock lancé${board ? ` dans ${board.name}` : ''} : phases, étapes, tickets, sous-agents, tests et livrables, le tout en direct.`,
+          `Le suivi démarre au premier skill mattpocock lancé${board ? ` dans ${board.name}` : ''} : phases, étapes, tickets, spécialistes, tests et livrables, le tout en direct.`,
           { dim: true, wrap: 'wrap' },
         )}
       </Box>
@@ -3061,7 +3199,8 @@ const welcome = (k: Kit, board: Board | null): unknown => {
 export const drawPane = (k: Kit, view: View, act: Actions): unknown => {
   const { Box } = k
   const board = view.board
-  // Une session liée dans un worktree a un board vide : elle dit pour quel parcours elle travaille, pas l'accueil.
+  if (view.coo) return cooPane(k, view, view.coo, act)
+  // Un worker dans un worktree a un board vide : il dit pour quelle mission il travaille, pas l'accueil.
   if (!board || (board.runs.length === 0 && !board.delegate)) {
     return (
       <Box flexDirection="column" paddingX={1} paddingBottom={1}>
@@ -3071,11 +3210,11 @@ export const drawPane = (k: Kit, view: View, act: Actions): unknown => {
       </Box>
     )
   }
-  // Sans parcours en cours, le dernier touché, hors archives : archiver le rafraîchit sans le remettre en avant.
-  // Les tickets relayés par les sessions liées comptent à l'affichage (jamais dans le parcours enregistré).
+  // Sans mission en cours, la dernière touchée, hors archives : archiver la rafraîchit sans la remettre en avant.
+  // Les tickets relayés par les workers comptent à l'affichage (jamais dans la mission enregistrée).
   const shown = (r: Run | null) => (r ? withRelay(r, view.relay) : null)
   const run = shown(activeRun(board) ?? [...board.runs].filter(r => r.archivedAt === undefined).sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null)
-  // L'en-tête ne montre que le parcours choisi dans cette discussion (en cours, ou fini ici).
+  // L'en-tête ne montre que la mission choisie dans cette discussion (en cours, ou fini ici).
   const selected = shown(board.runs.find(r => r.id === board.activeId) ?? null)
   const tab = view.ui.tab
   const body: unknown[] =
@@ -3114,26 +3253,53 @@ const bandTag = (k: Kit, label: string | null, color: string): unknown => (
 )
 
 /**
- * Le bandeau d'accueil, tant que la discussion n'a pas de parcours actif : une ligne qui le dit,
- * et, si le projet en a un en pause ou suivi ailleurs, le plus récent à reprendre. Une session
- * liée dit à la place pour quel parcours elle travaille : il est suivi par la discussion principale.
+ * Le bandeau d'accueil, tant que la discussion n'a pas de mission active : une ligne qui le dit,
+ * et, si le projet en a une en pause ou suivie ailleurs, la plus récente à reprendre. Un
+ * worker dit à la place pour quelle mission il travaille : il est suivi par le manager.
  */
 export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
   if (view.ui.isBandHidden || (view.board && activeRun(view.board))) return null
   const { Box, Button } = k
   const width = k.width
   const delegated = view.board?.delegate ? delegatedTitle(view.board) : undefined
-  const latest = view.board && !delegated ? [...resumable(view.board)].sort((x, y) => y.updatedAt - x.updatedAt)[0] : undefined
+  // Le siège du COO vu d'ici : tenu ici, ou demandé ici (`cooHere`) et tenu ailleurs ou libéré.
+  const seat = view.board && !delegated ? seatState(view.board.coo, view.here ?? view.board.session, view.now) : 'free'
+  const isCoo = seat === 'mine'
+  const isCooAway = !isCoo && delegated === undefined && view.board?.cooHere !== undefined
+  // La discussion du COO ne reprend pas de mission : pas de proposition de reprise.
+  const latest = view.board && !delegated && !isCoo && !isCooAway ? [...resumable(view.board)].sort((x, y) => y.updatedAt - x.updatedAt)[0] : undefined
   const def = latest ? SKILLS[latest.entry] : undefined
+  if (isCoo || isCooAway) {
+    return (
+      <Box key="flow-welcome" flexDirection="row" alignItems="center" justifyContent="space-between" width={width}>
+        <Box flexShrink={1}>
+          {line(k, [
+            bandTag(k, 'Flow', C.violet),
+            ...(isCoo && view.coo ? cooBandParts(view.coo).map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })) : [T(k, `◆${NB}COO`, { color: C.teal, bold: true })]),
+            isCooAway && T(k, '·', { dim: true }),
+            isCooAway && <Box flexShrink={1}>{T(k, seat === 'other' ? 'siège tenu par une autre discussion' : 'siège libre', { color: C.amber, wrap: 'truncate-end' })}</Box>,
+            isCooAway && <Button key="band-coo-take" plain={true} label={`↻${NB}Reprendre${NB}ici`} onPress={() => act.cooTake()} />,
+            isCooAway && <Button key="band-coo-leave" plain={true} dimColor={true} label="Laisser" onPress={() => act.cooLeave()} />,
+          ])}
+        </Box>
+        <Box flexDirection="row" flexShrink={0} marginLeft={1}>
+          <Box marginRight={1}>
+            <Button key="band-open" plain={true} dimColor={true} label="▸ Ouvrir" onPress={() => act.openPane()} />
+          </Box>
+          <Button key="band-hide" plain={true} dimColor={true} role="dismiss" label="x" onPress={() => act.hideBand()} />
+        </Box>
+      </Box>
+    )
+  }
   return (
     <Box key="flow-welcome" flexDirection="row" alignItems="center" justifyContent="space-between" width={width}>
       <Box flexShrink={1}>
         {line(k, [
           bandTag(k, 'Flow', C.violet),
-          delegated !== undefined && T(k, `↗${NB}Session${NB}liée`, { color: C.blue, bold: true }),
+          delegated !== undefined && T(k, `↗${NB}Worker`, { color: C.blue, bold: true }),
           delegated !== undefined && T(k, '·', { dim: true }),
           delegated !== undefined && <Box flexShrink={1}>{T(k, `« ${delegated} »`, { wrap: 'truncate-end' })}</Box>,
-          delegated === undefined && T(k, width < 40 ? 'Aucun workflow' : `Aucun${NB}workflow${NB}sélectionné`, { dim: true }),
+          delegated === undefined && T(k, width < 40 ? 'Aucune mission' : `Aucune${NB}mission${NB}sélectionnée`, { dim: true }),
           latest && def && T(k, '·', { dim: true }),
           latest && def && T(k, def.glyph, { color: def.color, bold: true }),
           latest && def && width >= 56 && <Box flexShrink={1}>{T(k, latest.title, { wrap: 'truncate-end' })}</Box>,
@@ -3141,6 +3307,11 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
         ])}
       </Box>
       <Box flexDirection="row" flexShrink={0} marginLeft={1}>
+        {delegated === undefined && (
+          <Box marginRight={1}>
+            <Button key="band-coo" plain={true} dimColor={true} label={`◆${NB}COO`} onPress={() => act.cooOpen()} />
+          </Box>
+        )}
         <Box marginRight={1}>
           <Button key="band-open" plain={true} dimColor={true} label="▸ Ouvrir" onPress={() => act.openPane()} />
         </Box>
@@ -3160,36 +3331,43 @@ const relayPills = (run: Run, view: View): BandPill[] =>
     // En cours dès que l'id de sa session est relevé, avant le premier signal relayé.
     .filter(x => x.relay !== null || x.g.linked?.session !== undefined)
     .map(({ g, relay }) => {
-      // Les tickets que le plan lui rattache comptent aussi : le parcours les tient, pas sa session.
+      // Les tickets que le plan lui rattache comptent aussi : la mission les tient, pas sa session.
       const { done, total } = groupProgress(run, g, relay)
       return { text: `↗${g.id}${NB}${done}/${total}`, color: relay?.endedAt !== undefined && done < total ? C.amber : C.blue, bold: true }
     })
 
 /**
- * Dans le bandeau, le mode auto du parcours : « ⚡ Auto · en cours » quand il envoie d'ici, « ⚡ Auto ·
+ * Dans le bandeau, le mode auto de la mission : « ⚡ Auto · en cours » quand il envoie d'ici, « ⚡ Auto ·
  * attend ta réponse (N) » quand des questions bloquantes l'attendent,
- * « ⚡ Auto en pause : <raison> » quand il s'est arrêté sans un geste de la personne ni la fin du
- * parcours, ou que la pause se déduit (discussion changée) ; rien, éteint. À part des autres
+ * « ⚡ Auto en pause : <raison> » quand il s'est arrêté sans un geste de la personne ni la fin de la
+ * mission, ou que la pause se déduit (discussion changée) ; rien, éteint. À part des autres
  * pastilles : il se coupe quand la place manque et ne retire jamais le bouton de l'étape suivante.
  */
 const autoPill = (run: Run, view: View): BandPill | null => {
   if (!view.board) return null
   const state = autoStateOf(run, view.board, view.here ?? view.board.session ?? '', view.autoConfirmedAt)
   const waiting = openQuestions(run).length
+  if (state.kind === 'on' && view.planUnread && !view.coordUnread) return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}plan${NB}du${NB}projet${NB}illisible`, color: C.amber, bold: true }
+  if (state.kind === 'on' && view.coordUnread) return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}fichier${NB}de${NB}coordination${NB}illisible`, color: C.amber, bold: true }
   if (state.kind === 'on' && waiting > 0) return { text: `⚡${NB}Auto${NB}·${NB}attend${NB}ta${NB}réponse${NB}(${waiting})`, color: C.amber, bold: true }
   if (state.kind === 'on') return { text: `⚡${NB}Auto${NB}·${NB}en${NB}cours`, color: C.teal, bold: true }
   if (state.kind === 'paused') return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}${state.why.replace(/ /g, NB)}`, color: C.amber, bold: true }
   return null
 }
 
-/** Les pastilles du bandeau après la phase : les tickets, les groupes en sessions liées, les agents au travail, les choix à relire. */
+/** Les pastilles du bandeau après la phase : les tickets, les groupes dans des workers, les agents au travail, les choix à relire. */
 const bandPills = (run: Run, view: View): BandPill[] => {
   const t = countTickets(run.tickets)
   const running = agentsAtWork(view)
   const unseen = unseenDecisions(run, view.relay)
+  // Le manager fait lui-même le travail d'un worker : le mod applique l'effort de sa règle, et le dit.
+  const work = managerWorkEffort(run)
   return [
+    ...(work ? [{ text: `effort${NB}${work.rule === 'group' ? 'du lot' : 'du diagnostic'}${NB}:${NB}${work.level},${NB}règle${NB}des${NB}workers`, color: C.blue }] : []),
     ...(t.total > 0 ? [{ text: `${t.done}/${t.total}`, bold: true }] : []),
     ...relayPills(run, view),
+    // Retenu par une autre mission : ce qui attend, et quoi (titre neutralisé).
+    ...(view.holds && view.holds.length > 0 ? [{ text: `⏸${NB}${heldText(view.holds[0]!)}${view.holds.length > 1 ? `${NB}(+${view.holds.length - 1})` : ''}`, color: C.amber }] : []),
     ...(running > 0 ? [{ text: `${spinFrame(view.now)}${NB}${plural(running, 'agent')}`, color: C.blue }] : []),
     ...(unseen > 0 ? [{ text: `⚑${NB}${unseen}${NB}à${NB}relire`, color: C.amber, bold: true }] : []),
   ]
@@ -3238,8 +3416,8 @@ export const drawBand = (k: Kit, view: View, act: Actions): unknown => {
               bold: x.state === 'active',
             })),
           )
-  // Une seule ligne, l'essentiel : le parcours, sa phase, les tickets, les groupes en sessions
-  // liées, ce qui attend la personne. L'état de la session et le détail des tickets sont dans /flow.
+  // Une seule ligne, l'essentiel : la mission, sa phase, les tickets, les groupes dans des
+  // workers, ce qui attend la personne. L'état de la session et le détail des tickets sont dans /flow.
   return (
     <Box key="flow-band" flexDirection="row" alignItems="center" justifyContent="space-between" width={width}>
       <Box flexShrink={1}>

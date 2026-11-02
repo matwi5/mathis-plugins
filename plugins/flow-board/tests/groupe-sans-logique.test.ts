@@ -15,13 +15,13 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 type Flags = { sensitive?: boolean; logic?: boolean }
 const LIGHT: Flags = { sensitive: false, logic: false }
 
-/** Le groupe D (ses tickets d1, d2… avec ces drapeaux), rendu par sa session liée, ses tickets faits ; E garde le plan à deux groupes. */
+/** Le groupe D (ses tickets d1, d2… avec ces drapeaux), rendu par son worker, ses tickets faits ; E garde le plan à deux groupes. */
 const returned = (flags: Flags[]): Board => {
   const run = { ...newRun('implement', 1_000, 'Règles'), owner: 's' }
   const board: Board = { ...emptyBoard('/w/p', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
@@ -105,7 +105,7 @@ test('l’invariant : un groupe qui passe à deux tickets par le plan n’est pl
   // Un groupe qui ne cite qu'un ticket inconnu n'est ni relu ni de sécurité tranchée.
   const ghost = { ...groupD(one), tickets: ['zz9'] }
   expect(isGroupReviewed(runOf(one), ghost)).toBe(false)
-  // Le même plan renvoyé, ou le parcours relu du disque : l'avis de sécurité reste dû, jamais réputé tranché.
+  // Le même plan renvoyé, ou la mission relue du disque : l'avis de sécurité reste dû, jamais réputé tranché.
   const resent = applyReport(one, { groups: [{ id: 'D', name: 'Règles', tickets: ['d1'] }, { id: 'E', name: 'Code', tickets: ['e1'] }] }, 4_600).board
   const reread = JSON.parse(JSON.stringify(resent)) as Board
   for (const b of [resent, reread]) {
@@ -134,7 +134,7 @@ test('un envoi de sécurité explicite l’emporte : le groupe attend que cette 
 })
 
 test('un ticket avec logique que le plan rattache au groupe après coup le rend dû, comme le panneau le montre', () => {
-  // x, ajouté pendant que D est chez sa session liée, attend d2 : le plan le montre dans D.
+  // x, ajouté pendant que D est chez son worker, attend d2 : le plan le montre dans D.
   const b = returned([LIGHT, LIGHT])
   const added = applyReport(b, { tickets: [{ id: 'x', name: 'Rattaché', sensitive: false, logic: true, blockedBy: ['d2'] }] }, 4_500).board
   const run = runOf(added)

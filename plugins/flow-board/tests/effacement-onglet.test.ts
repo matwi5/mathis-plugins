@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { emptyBoard, newRun } from '../hooks/model.ts'
+import { missionReportKey } from '../hooks/register.tsx'
 import { emptyRegistry, parseRegistry, startCall } from '../hooks/registry.ts'
 import type { Board, Run, SessionRegistry } from '../types'
 
@@ -10,7 +11,7 @@ const NOW = 80_000_000
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 /** Le moteur sous le plugin, la session `s-del` du projet `/p`, et un stockage en mémoire. */
@@ -47,7 +48,7 @@ const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds
   for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
-/** Un registre d'une session du projet, ses sous-agents finis, écrit pour la dernière fois à `updatedAt`. */
+/** Un registre d'une session du projet, ses spécialistes finis, écrit pour la dernière fois à `updatedAt`. */
 const reg = (session: string, updatedAt: number, agents: { key: string; name: string; run?: string; status?: 'running' | 'done' }[], patch: Partial<SessionRegistry> = {}): SessionRegistry => {
   let r: SessionRegistry = { ...emptyRegistry(session, '/p', updatedAt - 1_000), ...patch }
   for (const a of agents) r = startCall(r, { key: a.key, name: a.name, isBackground: true, ...(a.run ? { run: a.run } : {}) }, updatedAt - 500)!
@@ -62,7 +63,7 @@ const traces = (mem: Record<string, unknown>): string[] =>
 
 /**
  * Un disque vide où rien ne s'écrit, pour un test qui relaie sans simuler de disque : le relais (un
- * fichier par session liée) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
+ * fichier par worker) passe alors par `$.store`, même quand le dossier du mod dit où est ~/.claude.
  */
 const emptyDisk = (on: any) => {
   on('fs.exists', () => ({ value: false }) as any)
@@ -71,21 +72,21 @@ const emptyDisk = (on: any) => {
   })
 }
 
-test('supprimer un parcours efface ses agents, ses sessions liées fermées, son relais et ses fichiers à part ; une session liée ouverte n’est pas touchée', async ($, on) => {
+test('supprimer une mission efface ses agents, ses workers fermés, son relais et ses fichiers à part ; un worker ouvert n’est pas touchée', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot à jeter'), status: 'done', archivedAt: NOW - 8_000_000, agents: [] } as Run
   const old = NOW - 2 * 3_600_000
   const mem = world(on, {
     [BOARD_KEY]: { ...emptyBoard('/p', 'p'), runs: [run] },
-    // Cette discussion a porté le parcours : elle se compacte elle-même.
-    'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, du parcours', run: run.id }, { key: 'ici-h', name: 'Ici, hors parcours' }]),
-    // Un autre orchestrateur, fermé : réécrit sans le parcours (S14).
-    'agents:orch-ferme': reg('orch-ferme', old, [{ key: 'o-p', name: 'Orch, du parcours', run: run.id }, { key: 'o-h', name: 'Orch, hors parcours' }]),
-    // Ses sessions liées : la fermée part, l'ouverte attend de se compacter elle-même (S6).
+    // Cette discussion a porté la mission : elle se compacte elle-même.
+    'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, de la mission', run: run.id }, { key: 'ici-h', name: 'Ici, hors mission' }]),
+    // Un autre manager, fermé : réécrit sans la mission (S14).
+    'agents:orch-ferme': reg('orch-ferme', old, [{ key: 'o-p', name: 'Orch, de la mission', run: run.id }, { key: 'o-h', name: 'Orch, hors mission' }]),
+    // Ses workers : la fermée part, l'ouverte attend de se compacter elle-même (S6).
     'agents:fille-fermee': reg('fille-fermee', old, [{ key: 'f1', name: 'Fille fermée' }], { run: run.id }),
     'agents:fille-ouverte': reg('fille-ouverte', NOW - 60_000, [{ key: 'f2', name: 'Fille ouverte', status: 'running' }], { run: run.id }),
     [`relay:${run.id}`]: { v: 1, run: run.id, sessions: {} },
-    // L'entrée d'une session liée, sa clé à elle (un fichier par session liée).
+    // L'entrée d'un worker, sa clé à elle (un fichier par worker).
     [`relay:${run.id}:fille-fermee`]: { v: 1, run: run.id, session: 'fille-fermee', entry: { tickets: {}, commits: 1, startedAt: old, at: old } },
     [`agents:run-${run.id}:rebuilt`]: { v: 1, session: `run:${run.id}`, agents: [], rows: [{ key: 'vieux', name: 'Vieille ligne', isBackground: true, status: 'done', startedAt: 1, source: 'live', run: run.id }] },
   })
@@ -100,21 +101,21 @@ test('supprimer un parcours efface ses agents, ses sessions liées fermées, son
   await settle(clock, 2)
   await ui.unmount()
   expect((mem[BOARD_KEY] as Board).runs.find(r => r.id === run.id)).toBeUndefined()
-  // Le relais, le fichier du parcours et la session liée fermée sont partis.
+  // Le relais, le fichier de la mission et le worker fermé sont partis.
   expect(mem[`relay:${run.id}`]).toBeUndefined()
   expect(mem[`relay:${run.id}:fille-fermee`]).toBeUndefined()
   expect(mem[`agents:run-${run.id}:rebuilt`]).toBeUndefined()
   expect(mem['agents:fille-fermee']).toBeUndefined()
-  // L'ouverte n'est pas touchée : la trace du parcours la couvrira à sa prochaine écriture.
+  // L'ouverte n'est pas touchée : la trace de la mission la couvrira à sa prochaine écriture.
   expect(JSON.stringify(mem['agents:fille-ouverte'])).toBe(before)
-  expect(parseRegistry(mem['agents:orch-ferme'])!.agents.map(a => a.name)).toEqual(['Orch, hors parcours'])
-  expect(parseRegistry(mem['agents:s-del'])!.agents.map(a => a.name)).toEqual(['Ici, hors parcours'])
-  // Les traces : le parcours, ses sessions liées, et chaque sous-agent effacé (S5, S22) ; ni nom ni prompt.
+  expect(parseRegistry(mem['agents:orch-ferme'])!.agents.map(a => a.name)).toEqual(['Orch, hors mission'])
+  expect(parseRegistry(mem['agents:s-del'])!.agents.map(a => a.name)).toEqual(['Ici, hors mission'])
+  // Les traces : la mission, ses workers, et chaque spécialiste effacé (S5, S22) ; ni nom ni prompt.
   expect(traces(mem)).toEqual(expect.arrayContaining([`run:${run.id}`, 'fille-fermee', 'fille-ouverte', 'call:ici-p', 'agent:id-ici-p', 'call:o-p']))
   for (const [k, v] of Object.entries(mem)) if (k.endsWith(':erased')) expect(Object.keys(v as object).sort()).toEqual(['at', 'id'])
 })
 
-test('« ✗ Oublier » une discussion : la confirmation dit ce qu’elle efface, puis sa session et ses sessions liées sûres partent, pas celle reconnue par son titre seul', async ($, on) => {
+test('« ✗ Oublier » une discussion : la confirmation dit ce qu’elle efface, puis sa session et ses workers sûrs partent, pas celle reconnue par son titre seul', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const old = NOW - 2 * 3_600_000
   const LINKED = '9f3e21aa-1111-2222-3333-444455556666'
@@ -138,7 +139,7 @@ test('« ✗ Oublier » une discussion : la confirmation dit ce qu’elle efface
   await ui.press({ key: 'agents-history-session:vieille' })
   await clock.advance(300)
   await ui.press({ key: 'agents-forget' })
-  expect(await ui.find({ type: 'Text', text: /2 sessions et 3 sous-agents seront effacés définitivement\. 1 session liée reconnue par le titre seul n’est pas comprise\./ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /2 sessions et 3 spécialistes seront effacés définitivement\. 1 worker reconnu par le titre seul n’est pas compris\./ })).toBeDefined()
   await ui.press({ key: 'agents-forget-yes' })
   await settle(clock, 2)
   expect(mem['agents:vieille']).toBeUndefined()
@@ -158,9 +159,9 @@ test('S5 : après l’effacement, le rattrapage par transcripts ne fait rien rev
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot à jeter'), status: 'done', archivedAt: NOW - 8_000_000, agents: [] } as Run
   const mem = world(on, {
     [BOARD_KEY]: { ...emptyBoard('/p', 'p'), runs: [run] },
-    'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, du parcours', run: run.id }], { transcript: '/t/projects/-p/s-del.jsonl' }),
+    'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, de la mission', run: run.id }], { transcript: '/t/projects/-p/s-del.jsonl' }),
   })
-  // Le transcript du sous-agent effacé reste (hors périmètre) : le rattrapage le relit à l'ouverture de l'onglet.
+  // Le transcript du spécialiste effacé reste (hors périmètre) : le rattrapage le relit à l'ouverture de l'onglet.
   const T0 = NOW - 6_000
   const agent = [
     { type: 'api-request', id: 'r', timestamp: new Date(T0).toISOString() },
@@ -168,7 +169,7 @@ test('S5 : après l’effacement, le rattrapage par transcripts ne fait rien rev
   ]
     .map(r => JSON.stringify(r))
     .join('\n')
-  const files: Record<string, string> = { '/t/projects/-p/s-del/subagents/agent-id-ici-p.jsonl': agent, '/t/projects/-p/s-del/subagents/agent-id-ici-p.meta.json': JSON.stringify({ description: 'Ici, du parcours', toolUseId: 'ici-p', finished: true }) }
+  const files: Record<string, string> = { '/t/projects/-p/s-del/subagents/agent-id-ici-p.jsonl': agent, '/t/projects/-p/s-del/subagents/agent-id-ici-p.meta.json': JSON.stringify({ description: 'Ici, de la mission', toolUseId: 'ici-p', finished: true }) }
   on('fs.read', (_$: unknown, e: { path: string }) => {
     if (!(e.path in files)) throw new Error(`ENOENT ${e.path}`)
     return { value: files[e.path] } as any
@@ -188,8 +189,8 @@ test('S5 : après l’effacement, le rattrapage par transcripts ne fait rien rev
   await settle(clock, 2)
   await ui.press({ key: 'tab-agents' })
   await settle(clock, 2)
-  expect(await ui.find({ type: 'Button', text: /Ici, du parcours$/ })).toBeUndefined()
-  // Un nouveau sous-agent, lancé après : suivi normalement.
+  expect(await ui.find({ type: 'Button', text: /Ici, de la mission$/ })).toBeUndefined()
+  // Un nouveau spécialiste, lancé après : suivi normalement.
   await $.tool.call({ tool: 'Agent', description: 'Après l’effacement', prompt: 'p', run_in_background: true } as any)
   await settle(clock, 2)
   expect(await ui.find({ type: 'Button', text: /Après l’effacement$/ })).toBeDefined()
@@ -265,7 +266,7 @@ test('S4 par le mod (disque et commande simulés) : le fichier d’une discussio
   void mem
 })
 
-test('S24 : si les traces ne s’écrivent pas, rien n’est effacé et le parcours reste', async ($, on) => {
+test('S24 : si les traces ne s’écrivent pas, rien n’est effacé et la mission reste', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot gardé'), status: 'done', archivedAt: NOW - 8_000_000, agents: [] } as Run
   const toasts: string[] = []
@@ -273,7 +274,7 @@ test('S24 : si les traces ne s’écrivent pas, rien n’est effacé et le parco
     on,
     {
       [BOARD_KEY]: { ...emptyBoard('/p', 'p'), runs: [run] },
-      'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, du parcours', run: run.id }]),
+      'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, de la mission', run: run.id }]),
       [`relay:${run.id}`]: { v: 1, run: run.id, sessions: {} },
       refuseTraces: true,
     },
@@ -291,17 +292,17 @@ test('S24 : si les traces ne s’écrivent pas, rien n’est effacé et le parco
   await ui.unmount()
   expect((mem[BOARD_KEY] as Board).runs.some(r => r.id === run.id)).toBe(true)
   expect(mem[`relay:${run.id}`]).toBeDefined()
-  expect(parseRegistry(mem['agents:s-del'])!.agents.map(a => a.name)).toEqual(['Ici, du parcours'])
+  expect(parseRegistry(mem['agents:s-del'])!.agents.map(a => a.name)).toEqual(['Ici, de la mission'])
   expect(toasts.some(t => /rien n’a été effacé/.test(t))).toBe(true)
 })
 
-test('S25 et S26 : les lancements des sessions liées partent avec le parcours ; une session liée ouverte à l’effacement l’est plus tard, une fois fermée', { timeoutMs: 15000 }, async ($, on) => {
+test('S25 et S26 : les lancements des workers partent avec la mission ; un worker ouvert à l’effacement l’est plus tard, une fois fermée', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot à jeter'), status: 'done', archivedAt: NOW - 8_000_000, agents: [] } as Run
   const LINKED = '9f3e21aa-1111-2222-3333-444455556666'
   const mem = world(on, {
     [BOARD_KEY]: { ...emptyBoard('/p', 'p'), runs: [run] },
-    'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, du parcours', run: run.id }], { linked: [{ id: '9f3e21aa', title: 'Lot › Groupe A · Synchro', at: NOW - 8_900_000, via: 'bg' }] }),
+    'agents:s-del': reg('s-del', NOW - 5_000, [{ key: 'ici-p', name: 'Ici, de la mission', run: run.id }], { linked: [{ id: '9f3e21aa', title: 'Lot › Groupe A · Synchro', at: NOW - 8_900_000, via: 'bg' }] }),
     [`agents:${LINKED}`]: reg(LINKED, NOW - 60_000, [{ key: 'f1', name: 'Fille ouverte' }], { run: run.id, group: 'A' }),
   })
   await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
@@ -312,7 +313,7 @@ test('S25 et S26 : les lancements des sessions liées partent avec le parcours ;
   await ui.press({ key: `drop-${run.id}` })
   await ui.press({ key: `drop-yes-${run.id}` })
   await settle(clock, 2)
-  // Le lancement de la session liée du parcours est parti avec lui (S25).
+  // Le lancement du worker de la mission est parti avec lui (S25).
   expect(parseRegistry(mem['agents:s-del'])!.linked).toBeUndefined()
   // Ouverte à l'effacement : pas touchée.
   expect(mem[`agents:${LINKED}`]).toBeDefined()
@@ -325,7 +326,7 @@ test('S25 et S26 : les lancements des sessions liées partent avec le parcours ;
   await ui.unmount()
 })
 
-test('S23 : une session liée qui voit la trace de son parcours le lâche : son relais ne revient pas, ses sous-agents ne sont plus rattachés à lui', { timeoutMs: 15000 }, async ($, on) => {
+test('S23 : un worker qui voit la trace de sa mission le lâche : son relais ne revient pas, ses spécialistes ne sont plus rattachés à lui', { timeoutMs: 15000 }, async ($, on) => {
   emptyDisk(on)
   const clock = mock.clock(on, { now: NOW })
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot effacé'), owner: 's-orch', agents: [] } as Run
@@ -333,10 +334,10 @@ test('S23 : une session liée qui voit la trace de son parcours le lâche : son 
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a9' } }))
   await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
   await $.tool.call({ tool: 'mcp__flow-board__flow', delegate: run.id, group: 'B' } as any)
-  // La déclaration a bien écrit l'entrée de la session au relais (sa clé à elle, un fichier par session liée).
+  // La déclaration a bien écrit l'entrée de la session au relais (sa clé à elle, un fichier par worker).
   const relayKeys = () => Object.keys(mem).filter(k => k === `relay:${run.id}` || k.startsWith(`relay:${run.id}:`))
   expect(relayKeys()).not.toEqual([])
-  // Le parcours est supprimé ailleurs : sa trace arrive, son relais est effacé.
+  // La mission est supprimée ailleurs : sa trace arrive, son relais est effacé.
   mem[`agents:run-${run.id}:erased`] = { id: `run:${run.id}`, at: NOW + 1_000 }
   for (const key of relayKeys()) delete mem[key]
   await clock.advance(2_000)
@@ -346,13 +347,13 @@ test('S23 : une session liée qui voit la trace de son parcours le lâche : son 
   await settle(clock, 2)
   expect(relayKeys()).toEqual([])
   // La note n'est pas gardée, et la réponse le dit.
-  expect(out.result).toMatch(/NOT kept in the relay: the note \(the workflow was erased\)/)
+  expect(out.result).toMatch(/NOT kept in the relay: the note \(the mission was erased\)/)
   const after = parseRegistry(mem['agents:s-del'])!
   expect(after.agents.map(a => [a.name, a.run])).toEqual([['Après la suppression', undefined]])
   expect(after.run).toBeUndefined()
 })
 
-test('S23 : l’en-tête d’une session liée, écrit avec son parcours, le perd une fois la trace du parcours vue', { timeoutMs: 15000 }, async ($, on) => {
+test('S23 : l’en-tête d’un worker, écrit avec sa mission, le perd une fois la trace de la mission vue', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const run = { ...newRun('implement', NOW - 9_000_000, 'Lot effacé'), owner: 's-orch', agents: [] } as Run
   const mem = world(on, { [BOARD_KEY]: { ...emptyBoard('/p', 'p'), session: 's-orch', runs: [run], activeId: null } })
@@ -371,4 +372,28 @@ test('S23 : l’en-tête d’une session liée, écrit avec son parcours, le per
   expect(after.run).toBeUndefined()
   expect(after.group).toBeUndefined()
   expect(after.agents.map(a => a.name)).toEqual(['Après la suppression'])
+})
+
+test('le rapport gardé pour le COO reste à l’archivage de la mission et part avec sa suppression', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const run = { ...newRun('implement', NOW - 9_000_000, 'Lot rapporté'), status: 'done', finishedAt: NOW - 8_000_000, agents: [] } as Run
+  const mem = world(on, {
+    [BOARD_KEY]: { ...emptyBoard('/p', 'p'), runs: [run] },
+    [missionReportKey(run.id)]: '# Compte rendu : Lot rapporté',
+  })
+  await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
+  await settle(clock, 6)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await ui.press({ key: 'tab-history' })
+  await ui.press({ key: `archive-${run.id}` })
+  await settle(clock, 2)
+  expect((mem[BOARD_KEY] as Board).runs.find(r => r.id === run.id)?.archivedAt).toBeDefined()
+  expect(mem[missionReportKey(run.id)]).toBe('# Compte rendu : Lot rapporté')
+  await ui.press({ key: 'archived-toggle' })
+  await ui.press({ key: `drop-${run.id}` })
+  await ui.press({ key: `drop-yes-${run.id}` })
+  await settle(clock, 2)
+  await ui.unmount()
+  expect((mem[BOARD_KEY] as Board).runs.find(r => r.id === run.id)).toBeUndefined()
+  expect(mem[missionReportKey(run.id)]).toBeUndefined()
 })

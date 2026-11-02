@@ -69,7 +69,7 @@ export const pack = (grid: readonly (readonly Cell[])[]): RasterCells => {
 /** Le glyphe d'une famille d'outils au terminal : une case de large (🌐 en prend deux, d'où ◍). */
 export const FAMILY_CELL: Record<ToolFamily, string> = { read: '⌕', edit: '✎', run: '❯', web: '◍', agent: '⇢', other: '•' }
 
-/** La couleur des hachures d'attente : grise pour un sous-agent, ambre pour la personne, bleue pour une tâche de fond, or pour l'advisor. */
+/** La couleur des hachures d'attente : grise pour un spécialiste, ambre pour la personne, bleue pour une tâche de fond, or pour l'advisor. */
 export const WAIT_COLOR: Record<'waitAgent' | 'waitPerson' | 'waitBg' | 'waitAdvisor', string> = { waitAgent: C.gray, waitPerson: C.amber, waitBg: C.blue, waitAdvisor: C.gold }
 
 /** Le glyphe d'une attente : hachure, sauf l'advisor en pointillés, que l'or et l'ambre ne confondent pas. */

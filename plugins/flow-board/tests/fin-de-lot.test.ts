@@ -11,7 +11,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 
 const world = (on: any) => {
@@ -29,7 +29,7 @@ const world = (on: any) => {
   return mem
 }
 
-/** Un parcours d'implémentation dont le compte rendu vient d'être validé. */
+/** Une mission d'implémentation dont le compte rendu vient d'être validé. */
 const reportValidated = async ($: any, on: any) => {
   const clock = mock.clock(on, { now: 31_000_000 })
   const mem = world(on)

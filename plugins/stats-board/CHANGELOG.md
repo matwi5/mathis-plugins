@@ -4,6 +4,17 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.13.0 — 2026-11-02
+
+### Ajouté
+- **Temps gagné** : le temps cumulé moins le temps actif, c'est-à-dire ce que le parallélisme a fait en plus du temps passé, avec son facteur (« ×1,4 en parallèle »). Discussion : tuiles « Temps cumulé » et « Temps gagné ». Journée et Aperçu : tuile « Temps gagné ». Récap (`/stats-board:recap`) : « (gagné … en parallèle) » après le temps cumulé de la discussion, du jour et d'une mission, dès une seconde gagnée.
+
+### Changé
+- **Le temps cumulé compte les spécialistes de fond qui travaillent en même temps** : chaque requête relève les tours de son fil principal et de ses spécialistes lancés en arrière-plan ou par un workflow (`turnSpans`, `agentSpans` dans le fichier de relevé). À chaque instant de son temps actif, une discussion ajoute chaque fil en plus du premier : deux spécialistes en même temps que le fil principal pendant 10 min ajoutent 20 min. Un spécialiste seul pendant que le fil principal l'attend, un spécialiste qui bloque son parent ou un agent interne de Claude Code n'ajoutent rien. Journée, Aperçu, Projets, Évolution, Rythme, le temps cumulé publié dans claude-usage et le récap suivent. Les tours relevés avant la 0.13.0 n'ont pas ces données : les jours passés gardent leur temps cumulé ; un poste pas encore à jour publie le sien sans les spécialistes. Choix de Mathis : « Le temps cumulé compte tout le temps ».
+- **Vocabulaire des missions** : la description du plugin, le README, le récap et ses mots déclencheurs disent « mission », « manager », « worker » et « spécialiste ».
+
+---
+
 ## 0.12.0 — 2026-10-29
 
 ### Changé

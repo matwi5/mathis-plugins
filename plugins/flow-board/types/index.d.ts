@@ -1,10 +1,10 @@
 // Contrat d'état de flow-board : le tableau de bord du workflow mattpocock-skills.
 //
-// Un projet (racine de la session) garde ses parcours ; un parcours enchaîne des
+// Un projet (racine de la session) garde ses missions ; une mission enchaîne des
 // phases (une par skill : Cadrage, Spec, Tickets…) ; une phase déroule les étapes
 // internes de son skill. Les détours (prototype, handoff…) se greffent sur une phase.
 
-/** Actif, en pause (un autre parcours a pris la main) ou terminé. */
+/** Actif, en pause (une autre mission a pris la main) ou terminé. */
 export type FlowStatus = 'active' | 'paused' | 'done'
 
 export type PhaseStatus = 'pending' | 'active' | 'done' | 'skipped'
@@ -50,14 +50,14 @@ export type TicketGroup = {
    */
   resources?: string[]
   // `continuesHere` et `continuesIn` (avant la 0.60.0) restent dans les anciens fichiers, sans effet :
-  // un groupe ne se fait qu'en session liée.
+  // un groupe ne se fait que dans un worker.
   /**
-   * Groupe confié à une session liée depuis le panneau : le parcours reste dans la discussion
+   * Groupe confié à un worker depuis le panneau : la mission reste dans la discussion
    * principale, qui suit la session et rend les statuts de ses tickets à sa note de fin.
    */
   linked?: GroupLink
   /**
-   * Le groupe a été fait par une session liée, puis rendu : sa revue, si elle manque, se fait
+   * Le groupe a été fait par un worker, puis rendu : sa revue, si elle manque, se fait
    * là-bas, car ici sa branche est déjà fusionnée et `/code-review` n'aurait rien à lire.
    */
   delegated?: GroupLink
@@ -65,7 +65,7 @@ export type TicketGroup = {
   reviewedAt?: number
   /** La revue de sécurité du groupe : l'avis de Claude, puis `/security-review` s'il a été lancé. */
   security?: SecurityCheck
-  /** Les envois du groupe à une session liée, annulés compris : le suivant prend le numéro d'après (jamais un numéro déjà donné). */
+  /** Les envois du groupe à un worker, annulés compris : le suivant prend le numéro d'après (jamais un numéro déjà donné). */
   sends?: number
   /**
    * La revue et l'avis de sécurité d'avant (faits ici, ou ceux d'un envoi rendu) ont été remis à zéro à un
@@ -77,7 +77,7 @@ export type TicketGroup = {
   isReset?: true
 }
 
-/** Un groupe confié à une session liée : quand, et l'id `local_…` de la session une fois lancée. */
+/** Un groupe confié à un worker : quand, et l'id `local_…` de la session une fois lancée. */
 export type GroupLink = {
   at: number
   session?: string
@@ -102,10 +102,10 @@ export type GroupLink = {
   earlier?: ClosedLink[]
 }
 
-/** Une session liée dont un nouvel envoi a pris la place : son lien (envoi, id) et sa fermeture, si elle en a une. */
+/** Un worker dont un nouvel envoi a pris la place : son lien (envoi, id) et sa fermeture, si elle en a une. */
 export type ClosedLink = { at: number; session?: string; seq?: number; closing?: Closing }
 
-/** La fermeture d'une session liée rendue (un groupe, ou la session des pistes d'une phase). */
+/** La fermeture d'un worker rendu (un groupe, ou la session des pistes d'une phase). */
 export type Closing = {
   /** `closed` : session et worktree fermés ; `app` : la personne doit l'archiver dans l'app ; `stopped` : arrêtée, avec sa raison. */
   state: 'closed' | 'app' | 'stopped'
@@ -140,22 +140,22 @@ export type SecurityCheck = {
   /**
    * Les failles gardées que la personne décide de laisser, sur sa confirmation : avec `fixed`, elles
    * rendent la sécurité tranchée. Un envoi de `dismissed` le change ; un envoi qui change `findings`
-   * sans lui le remet à 0 ; seul un envoi de la discussion du parcours le pose (pour le lot sans groupes, la fusion peut aussi reprendre celui de l'avis d'une autre copie, plus récent).
+   * sans lui le remet à 0 ; seul un envoi de la discussion de la mission le pose (pour le lot sans groupes, la fusion peut aussi reprendre celui de l'avis d'une autre copie, plus récent).
    */
   dismissed?: number
   /**
-   * Les failles laissées qu'une session liée a relayées : une proposition, affichée, qui ne tranche
-   * rien ; seul un envoi de `dismissed` par la discussion du parcours compte.
+   * Les failles laissées qu'un worker a relayées : une proposition, affichée, qui ne tranche
+   * rien ; seul un envoi de `dismissed` par la discussion de la mission compte.
    */
   proposedDismissed?: number
   /**
-   * La date de l'avis, pour le lot d'un parcours sans groupes seulement : posée à chaque envoi de
+   * La date de l'avis, pour le lot d'une mission sans groupes seulement : posée à chaque envoi de
    * sécurité du lot et au lancement de `/security-review` sans groupes ; un envoi sur l'avis d'un
    * passage précédent garde la sienne. L'avis ne tranche la sécurité du lot que s'il est postérieur à
    * la dernière fin de ticket et à la dernière revue du lot ; sans date (avis d'avant ce champ), il se date par la dernière revue du
    * lot, et la revue suivante (`/code-review`) ou la fusion avec une revue plus récente lui pose
    * d'abord celle de la revue d'avant (0 sans elle) ; une date au-delà de la tolérance se relit 0.
-   * Jamais effacé seul : il part avec le parcours.
+   * Jamais effacé seul : il part avec la mission.
    */
   at?: number
 }
@@ -179,16 +179,16 @@ export type FlowStep = {
 export type FlowItem = { id: string; label: string; status: ItemStatus }
 
 /**
- * Éléments d'une phase confiés à une session liée (les pistes d'une rétro) par un envoi d'avant la
+ * Éléments d'une phase confiés à un worker (les pistes d'une rétro) par un envoi d'avant la
  * demande de découpage : le panneau n'en crée plus, mais suit, relance et ferme ceux qui existent ;
- * le parcours reste dans la discussion principale, qui suit la session et rend les statuts.
+ * la mission reste dans le manager, qui suit la session et rend les statuts.
  */
 export type LinkedWork = {
   /** Ids des éléments confiés, dans l'ordre de la liste. */
   items: string[]
   /** Envoi de la demande (ms), ou sa dernière relance. */
   at: number
-  /** Id de la session liée (`local_…`), relevé quand Claude la lance. */
+  /** Id du worker (`local_…`), relevé quand Claude le lance. */
   session?: string
   /**
    * Un tour de la discussion, commencé après l'envoi, s'est fini sans lancer de session (ms) : les
@@ -226,7 +226,7 @@ export type PhaseStats = {
   fixed?: number
 }
 
-/** Un skill lancé hors du fil du parcours, rattaché à la phase en cours. */
+/** Un skill lancé hors du fil de la mission, rattaché à la phase en cours. */
 export type Detour = {
   skill: string
   status: 'active' | 'done'
@@ -241,7 +241,7 @@ export type FlowPhase = {
   skill: string
   /** Autres skills qui peuvent tenir cette phase. */
   alts: string[]
-  /** Facultative : sautée sans souci si le parcours passe outre. */
+  /** Facultative : sautée sans souci si la mission passe outre. */
   isOptional: boolean
   status: PhaseStatus
   steps: FlowStep[]
@@ -252,7 +252,7 @@ export type FlowPhase = {
   finishedAt?: number
   detours: Detour[]
   stats: PhaseStats
-  /** Éléments confiés à une session liée, tant que la phase les suit. */
+  /** Éléments confiés à un worker, tant que la phase les suit. */
   linked?: LinkedWork
   /**
    * La fermeture de la dernière session des éléments, gardée quand un nouvel envoi d'avant la demande
@@ -280,20 +280,20 @@ export type Ticket = {
   logic?: boolean
   /**
    * Id de la discussion qui a passé le ticket « en cours » ; effacé quand il en sort. Plusieurs
-   * tickets peuvent être en cours à la fois (sessions liées des groupes, autre discussion).
+   * tickets peuvent être en cours à la fois (workers des groupes, autre discussion).
    */
   by?: string
   startedAt?: number
   finishedAt?: number
   /**
-   * Affichage seulement, jamais enregistré : le groupe confié dont la session liée relaie ce
+   * Affichage seulement, jamais enregistré : le groupe confié dont le worker relaie ce
    * statut. Fait ainsi, le ticket ne lève ses dépendances que dans ce groupe.
    */
   relayedFrom?: string
 }
 
 /**
- * Une tâche créée dans le tracker pendant le parcours, hors du lot : constat de revue, anomalie
+ * Une tâche créée dans le tracker pendant la mission, hors du lot : constat de revue, anomalie
  * découverte, action pour la personne. Visible, mais hors de la progression et de la livraison ;
  * elle entre dans le lot quand Claude l'envoie dans `tickets`.
  */
@@ -322,21 +322,21 @@ export type SoloDecision = {
   why?: string
   /** Quand la personne l'a marqué comme relu. */
   seenAt?: number
-  /** Affichage seulement, jamais enregistré : le groupe confié dont la session liée a relayé ce choix. */
+  /** Affichage seulement, jamais enregistré : le groupe confié dont le worker a relayé ce choix. */
   relayedFrom?: string
   /**
    * D'où vient le choix, en auto : une recommandation prise sans la personne, une validation sautée
-   * (accord du cadrage, spec, découpage, plan, écritures Asana), un choix d'une session liée ; absent
+   * (accord du cadrage, spec, découpage, plan, écritures Asana), un choix d'un worker ; absent
    * pour un choix d'avant l'auto ou sans origine dite.
    */
   origin?: DecisionOrigin
-  /** Le choix ne tient plus (`withdrawn` de l'outil) : il reste au parcours, hors du fichier des choix et du panneau. */
+  /** Le choix ne tient plus (`withdrawn` de l'outil) : il reste à la mission, hors du fichier des choix et du panneau. */
   withdrawnAt?: number
   /** Pourquoi il a été retiré, et ce qui le remplace s'il y a lieu. */
   withdrawnWhy?: string
 }
 
-/** L'origine d'un choix fait sans la personne : « reco prise », « validation sautée », « choix de session liée ». */
+/** L'origine d'un choix fait sans la personne : « reco prise », « validation sautée », « choix de worker ». */
 export type DecisionOrigin = 'recommendation' | 'skipped-validation' | 'linked-session'
 
 export type AgentRow = {
@@ -352,16 +352,16 @@ export type AgentRow = {
   status: AgentStatus
   startedAt: number
   finishedAt?: number
-  /** Fin constatée après coup (le sous-agent n'était plus actif) : sa durée n'est pas connue. */
+  /** Fin constatée après coup (le spécialiste n'était plus actif) : sa durée n'est pas connue. */
   isEndUnseen?: boolean
 }
 
-/** La famille d'un outil, qui donne son glyphe sur la frise : ⌕ lecture, ✎ modification, ❯ commande, 🌐 web, ⇢ sous-agent. */
+/** La famille d'un outil, qui donne son glyphe sur la frise : ⌕ lecture, ✎ modification, ❯ commande, 🌐 web, ⇢ spécialiste. */
 export type ToolFamily = 'read' | 'edit' | 'run' | 'web' | 'agent' | 'other'
 
 /**
  * Les sortes de segments de la frise (Q3) : réflexion, rédaction, appel d'outil, et quatre attentes
- * (d'un sous-agent au premier plan, de la personne, d'une tâche de fond, de l'advisor consulté).
+ * (d'un spécialiste au premier plan, de la personne, d'une tâche de fond, de l'advisor consulté).
  */
 export type SegmentKind = 'think' | 'write' | 'tool' | 'waitAgent' | 'waitPerson' | 'waitBg' | 'waitAdvisor'
 
@@ -391,7 +391,7 @@ export type AgentSegment = {
 
 /**
  * Les repères (des instants) : échec ✗, interruption ⊘, départ ↳ et retour ↲ d'un relais, compaction ⇣ ;
- * sur l'orchestrateur seulement, message d'une autre session ✉, commit ⎇, tests ✓/✗.
+ * sur le manager seulement, message d'une autre session ✉, commit ⎇, tests ✓/✗.
  */
 export type MarkKind = 'fail' | 'stop' | 'relay' | 'back' | 'compact' | 'msg' | 'commit' | 'test'
 
@@ -400,7 +400,7 @@ export type AgentMark = {
   at: number
   /** Tests : au vert ou non. */
   ok?: boolean
-  /** Relais : la clé de la piste du sous-agent parti ou revenu. */
+  /** Relais : la clé de la piste du spécialiste parti ou revenu. */
   to?: string
 }
 
@@ -418,13 +418,13 @@ export type AgentLane = {
 }
 
 /**
- * Un sous-agent du registre de la session (onglet Agents) : sans limite de nombre, gardé après
- * l'archivage du parcours. Aucun texte de message ni rapport : la description, le prompt (Q8), des chiffres.
+ * Un spécialiste du registre de la session (onglet Agents) : sans limite de nombre, gardé après
+ * l'archivage de la mission. Aucun texte de message ni rapport : la description, le prompt (Q8), des chiffres.
  */
 export type RegistryAgent = AgentLane & {
   /** tool_use_id de l'appel Agent ; `agent:<id>` pour un agent lancé sans appel vu (Workflow). */
   key: string
-  /** Id du sous-agent (`agent.spawn`, résultat de l'appel), que les fins rappellent. */
+  /** Id du spécialiste (`agent.spawn`, résultat de l'appel), que les fins rappellent. */
   agentId?: string
   /** Id d'agent du lanceur ; absent quand c'est le fil principal de la session. */
   parent?: string
@@ -434,18 +434,18 @@ export type RegistryAgent = AgentLane & {
   name: string
   /** `subagent_type` de l'appel. */
   subagentType?: string
-  /** Le prompt donné au sous-agent (Q8), coupé au-delà de PROMPT_MAX caractères. */
+  /** Le prompt donné au spécialiste (Q8), coupé au-delà de PROMPT_MAX caractères. */
   prompt?: string
   model?: string
   isBackground: boolean
   status: AgentStatus
   startedAt: number
   finishedAt?: number
-  /** Fin constatée après coup (le sous-agent n'était plus actif) : sa durée n'est pas connue. */
+  /** Fin constatée après coup (le spécialiste n'était plus actif) : sa durée n'est pas connue. */
   isEndUnseen?: boolean
   /** Réveils : un `agent.spawn` du même id après une fin, qui le rouvre (notification d'une de ses tâches). */
   wakes?: number
-  /** Le parcours actif (ou servi, pour une session liée) à son lancement. */
+  /** La mission active (ou servie, pour un worker) à son lancement. */
   run?: string
   /** D'où vient l'entrée : le direct (hooks), ou le rattrapage par transcript. */
   source: 'live' | 'transcript'
@@ -453,13 +453,13 @@ export type RegistryAgent = AgentLane & {
   type?: AgentType
 }
 
-/** Les 9 types de sous-agents (Q9). */
+/** Les 9 types de spécialistes (Q9). */
 export type AgentType = 'explore' | 'research' | 'implement' | 'review' | 'security' | 'merge' | 'plan' | 'transcripts' | 'other'
 
 /** Les tokens d'un agent par sorte ; la réflexion n'est pas comptée à part par l'API (essai, point 4). */
 export type AgentTokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
-/** Une période où une session a porté un parcours (S31, S37) : de `from` à `to`. */
+/** Une période où une session a porté une mission (S31, S37) : de `from` à `to`. */
 export type CarrySpan = { from: number; to: number }
 
 /**
@@ -473,8 +473,8 @@ export type CarrySpan = { from: number; to: number }
 export type AdvisorFigures = { id: string; s: number; e?: number; model?: string; tokens?: AgentTokens; isVoid?: boolean }
 
 /**
- * Un appel de la ligne advisor : ses chiffres, l'appelant (`main` pour l'orchestrateur, sinon l'id
- * du sous-agent), et `isRead` une fois relu dans un transcript : sans tokens, il compte alors sans
+ * Un appel de la ligne advisor : ses chiffres, l'appelant (`main` pour le manager, sinon l'id
+ * du spécialiste), et `isRead` une fois relu dans un transcript : sans tokens, il compte alors sans
  * prix, au lieu d'attendre un rattrapage qui n'en dira pas plus (sauf `isVoid` : sans réponse, il ne compte pas).
  */
 export type AdvisorCall = AdvisorFigures & { by: string; isRead?: boolean }
@@ -492,31 +492,31 @@ export type SessionRegistry = {
   title?: string
   /** `transcript_path` des hooks classiques, relevé tel quel. */
   transcript?: string
-  /** Le parcours servi et le groupe, pour une session liée (appel `delegate`). */
+  /** La mission servie et le groupe, pour un worker (appel `delegate`). */
   run?: string
   group?: string
   agents: RegistryAgent[]
-  /** La piste de la session elle-même (l'orchestrateur) : ses tours, ses outils, ses attentes. */
+  /** La piste de la session elle-même (le manager) : ses tours, ses outils, ses attentes. */
   main?: AgentLane
-  /** La ligne advisor : les appels de l'orchestrateur et de ses sous-agents ; absente sans appel. */
+  /** La ligne advisor : les appels du manager et de ses spécialistes ; absente sans appel. */
   advisor?: AdvisorLane
-  /** Les sessions liées que cette session a lancées (`start_session`, `claude --bg`), avec ou sans parcours. */
+  /** Les workers que cette session a lancés (`start_session`, `claude --bg`), avec ou sans mission. */
   linked?: LinkedLaunch[]
   /**
-   * Les ids des parcours que cette session a portés (S28) : actifs ici, ou un de leurs tickets passé
-   * « en cours » par elle ; des ids seulement. Le rattrapage y rattache ses sous-agents manqués (Q-a).
+   * Les ids des missions que cette session a portées (S28) : actives ici, ou un de leurs tickets passé
+   * « en cours » par elle ; des ids seulement. Le rattrapage y rattache ses spécialistes manqués (Q-a).
    */
   carried?: string[]
   /**
-   * Pour chaque parcours de `carried`, les périodes où cette session le portait (S31, S37) : une
+   * Pour chaque mission de `carried`, les périodes où cette session la portait (S31, S37) : une
    * par portage, une nouvelle après plus de 10 min sans le porter, 20 au plus ; des dates, aucun
-   * contenu. Le rattachement d'un sous-agent rattrapé s'y borne (R3). Un id sans dates (en-tête
+   * contenu. Le rattachement d'un spécialiste rattrapé s'y borne (R3). Un id sans dates (en-tête
    * d'avant) n'a pas de borne.
    */
   carriedAt?: Record<string, CarrySpan[]>
   /**
-   * S40 : la date de la première écriture qui ne portait plus un parcours daté, après sa dernière
-   * période. Une période ne se rouvre que si une écriture faite entre-temps ne le portait pas ;
+   * S40 : la date de la première écriture qui ne portait plus une mission datée, après sa dernière
+   * période. Une période ne se rouvre que si une écriture faite entre-temps ne la portait pas ;
    * sans écriture entre-temps, la période en cours s'allonge, trou compris.
    */
   carriedNotedAt?: number
@@ -529,12 +529,12 @@ export type SessionRegistry = {
 }
 
 /**
- * Une session liée lancée par cette session : l'id que son lancement rend (`local_…` de
+ * Un worker lancé par cette session : l'id que son lancement rend (`local_…` de
  * `start_session`, id court de `claude --bg`), son titre, quand.
  */
 export type LinkedLaunch = { id: string; title?: string; at: number; via: 'bg' | 'desktop' }
 
-/** Un morceau du registre d'une session, après le premier (R1) : des sous-agents et un bout de la piste de l'orchestrateur. */
+/** Un morceau du registre d'une session, après le premier (R1) : des spécialistes et un bout de la piste du manager. */
 export type RegistryPart = {
   v: 1
   session: string
@@ -589,10 +589,10 @@ export type Counters = {
 
 export type Run = {
   id: string
-  /** Skill de départ : il fixe la forme du parcours. */
+  /** Skill de départ : il fixe la forme de la mission. */
   entry: string
   title: string
-  /** Le titre vient de Claude (ou du parcours parent d'une suite), pas du nom du flux. */
+  /** Le titre vient de Claude (ou de la mission parent d'une suite), pas du nom du flux. */
   isTitled: boolean
   status: FlowStatus
   phases: FlowPhase[]
@@ -603,7 +603,7 @@ export type Run = {
   queue?: string[]
   /** Tâches hors du lot dont des tickets dépendent. */
   externals?: ExternalBlocker[]
-  /** Tâches créées dans le tracker pendant le parcours, hors du lot (« Trouvé en route »). */
+  /** Tâches créées dans le tracker pendant la mission, hors du lot (« Trouvé en route »). */
   found?: FoundTask[]
   /** Choix faits par Claude sans la personne, à relire (« Décidé sans toi »). */
   decided?: SoloDecision[]
@@ -611,19 +611,19 @@ export type Run = {
   groups?: TicketGroup[]
   /**
    * Quand la personne a validé le compte rendu (« ✓ Valider le rapport ») : seule cette marque compte
-   * pour la règle de coupe des choix d'un parcours qui a été en auto (une clôture finit aussi la phase).
+   * pour la règle de coupe des choix d'une mission qui a été en auto (une clôture finit aussi la phase).
    */
   reportValidatedAt?: number
   /**
-   * Quand `/code-review` a relu le lot entier (parcours sans groupes, tickets tous faits). Une date à
+   * Quand `/code-review` a relu le lot entier (mission sans groupes, tickets tous faits). Une date à
    * plus d'une minute dans le futur se relit en négatif : une revue à refaire, sa date gardée.
    */
   reviewedAt?: number
-  /** La revue de sécurité du lot entier, pour un parcours sans groupes. */
+  /** La revue de sécurité du lot entier, pour une mission sans groupes. */
   security?: SecurityCheck
   /**
-   * L'ancien champ des sous-agents (12 au plus), d'avant le registre : relu une fois pour être
-   * recopié dans le fichier du parcours, puis vidé (S1, S18, S21 : une liste vide, qu'une version
+   * L'ancien champ des spécialistes (12 au plus), d'avant le registre : relu une fois pour être
+   * recopié dans le fichier de la mission, puis vidé (S1, S18, S21 : une liste vide, qu'une version
    * d'avant lit sans casser). Plus jamais rempli.
    */
   agents?: AgentRow[]
@@ -635,15 +635,15 @@ export type Run = {
   touched: string[]
   startedAt: number
   updatedAt: number
-  /** Id de la discussion où le parcours est actif ; absent quand il ne l'est nulle part. */
+  /** Id de la discussion où la mission est active ; absent quand elle ne l'est nulle part. */
   owner?: string
   /**
-   * Id de la discussion où le parcours est né, posé à sa création et jamais effacé (depuis la
-   * 0.60.0) : seule elle prend son titre. Absent d'un parcours d'avant, qui ne compte pas.
+   * Id de la discussion où la mission est née, posé à sa création et jamais effacé (depuis la
+   * 0.60.0) : seule elle prend son titre. Absent d'une mission d'avant, qui ne compte pas.
    */
   bornIn?: string
   /**
-   * Le premier lancement d'une session liée par ce parcours (groupe ou éléments d'une phase), jamais
+   * Le premier lancement d'un worker par cette mission (groupe ou éléments d'une phase), jamais
    * effacé : la discussion ne prend plus de titre ensuite (depuis la 0.60.0).
    */
   linkedAt?: number
@@ -656,14 +656,14 @@ export type Run = {
   asideAt?: number
   finishedAt?: number
   /**
-   * Le mode auto du parcours (« ⚡ Auto »), propre à ce parcours : absent, il n'a jamais été allumé.
+   * Le mode auto de la mission (« ⚡ Auto »), propre à cette mission : absent, il n'a jamais été allumé.
    * Actif quand `onAt` est plus récent que `offAt` ; une date hors forme le dit éteint.
    */
   auto?: RunAuto
   /**
    * Les questions qui attendent la personne (`waiting` de l'outil), chacune avec ce qu'elle bloque.
    * Fusionnées une par une entre deux copies (union, retraits tracés) : une question ne disparaît que
-   * par son retrait ou l'effacement du parcours (une copie en retard de plus de 100 retraits pourrait en
+   * par son retrait ou l'effacement de la mission (une copie en retard de plus de 100 retraits pourrait en
    * faire revenir une). 50 ouvertes au plus : au-delà, une nouvelle est refusée.
    */
   waiting?: WaitingQuestion[]
@@ -672,12 +672,52 @@ export type Run = {
   /**
    * Les actions que le mode auto a envoyées (une phase, une vague, une revue), une marque par action, posée
    * avant l'envoi : une action marquée ne repart jamais. Fusionnées marque par marque entre deux copies,
-   * jamais coupées : seuls « ↻ Renvoyer » (tracé dans `autoResent`) et l'effacement du parcours en retirent.
+   * jamais coupées : seuls « ↻ Renvoyer » (tracé dans `autoResent`) et l'effacement de la mission en retirent.
    */
   autoSent?: AutoMark[]
   /** La trace des marques retirées par « ↻ Renvoyer », les 100 plus récentes : une copie en retard ne les fait pas revenir. */
   autoResent?: { key: string; at: number }[]
+  /**
+   * Les retenues entre missions que la personne a forcées dans cette mission : chacune nomme la paire
+   * (le groupe retenu ici, ou `*` pour le lot sans groupes ; la mission et le groupe attendus) et sa date.
+   * Écrites par la seule discussion qui porte la mission, unies à la fusion, effacées avec elle.
+   */
+  forced?: ForcedHold[]
+  /**
+   * La mission attend la personne (signal « t'attend ») : depuis quand, et pour quoi (une question posée, une
+   * validation, l'étape suivante proposée, le rapport). Écrit par la seule discussion qui la porte, à la fin
+   * d'un tour, à la pause de l'auto hors d'un tour, ou le temps d'une question à boutons, jamais en auto
+   * actif ; effacé au tour suivant, à l'allumage de l'auto, à la reprise, à la pause, à la clôture, à
+   * l'archivage, et avec la mission ; il suit le reste de la mission à la fusion.
+   */
+  waitsUser?: WaitsUser
+  /**
+   * La carte de lancement du COO dont cette mission est née : l'id de l'enregistrement consommé, la
+   * carte, la date du clic, le dossier `travail/<folder>/`, le départ et le mode. Posé une fois par la
+   * discussion de la mission à sa première consommation, jamais changé (la fusion garde le premier
+   * posé), effacé avec la mission. Un id qu'une mission porte déjà ne se consomme plus.
+   */
+  launch?: RunLaunch
 }
+
+/** Le rattachement d'une mission à la carte de lancement du COO dont elle est née. */
+export type RunLaunch = {
+  id: string
+  card: string
+  at: number
+  folder: string
+  start: string
+  mode: 'auto' | 'manual'
+  lostAt?: number
+  /** Une rétro lancée par le COO : l'id de la mission close qu'elle étudie, posé une fois au rattachement, jamais changé. */
+  of?: string
+}
+
+/** Ce que la mission attend de la personne, et depuis quand. */
+export type WaitsUser = { since: number; kind: 'question' | 'validation' | 'step' | 'report' }
+
+/** Un forçage d'une retenue entre missions : le groupe retenu (ou `*`), le groupe attendu d'une autre mission. */
+export type ForcedHold = { held: string; run: string; group: string; at: number; on?: 'plan' }
 
 /**
  * La marque d'une action envoyée par le mode auto : sa clé stable, quand elle est partie (« envoyée »),
@@ -694,7 +734,7 @@ export type AutoMark = {
   blocks?: WaitTarget
 }
 
-/** Ce qu'une question bloque : une phase (son skill), un groupe ou un ticket du parcours. */
+/** Ce qu'une question bloque : une phase (son skill), un groupe ou un ticket de la mission. */
 export type WaitTarget = { kind: 'phase' | 'group' | 'ticket'; id: string }
 
 /** Une question qui attend la personne, déclarée par Claude, retirée par lui une fois répondue. */
@@ -705,14 +745,24 @@ export type WaitingQuestion = {
   text: string
   /** Quand elle a été posée : une trace de retrait plus récente l'efface à la fusion. */
   at: number
+  /**
+   * Un geste qui revient à la personne et qu'un bouton du COO peut faire : autoriser une dépense
+   * (`spend`) ou une action externe (`external`), laisser une faille sans correctif (`flaw`, avec le
+   * total des failles laissées, `dismissed`). Il fait partie du texte vu : son empreinte le compte.
+   */
+  gesture?: GestureKind
+  dismissed?: number
 }
 
+/** Les gestes d'une question bloquante qu'un bouton du COO peut faire. */
+export type GestureKind = 'spend' | 'external' | 'flaw'
+
 /**
- * L'état auto d'un parcours : deux dates fusionnées chacune à la plus récente des deux copies,
- * jamais par la copie la plus récente du parcours, pour qu'une copie en retard ne rallume rien.
+ * L'état auto d'une mission : deux dates fusionnées chacune à la plus récente des deux copies,
+ * jamais par la copie la plus récente de la mission, pour qu'une copie en retard ne rallume rien.
  */
 export type RunAuto = {
-  /** « Allumé à » : posé seulement par le second clic de la personne (« Confirmer »). */
+  /** « Allumé à » : posé seulement par un clic de la personne : « Confirmer » dans la mission, ou « Lancer en auto » chez le COO (la discussion lancée le pose en consommant le lancement). */
   onAt?: number
   /** « Allumé par » : l'id de la discussion du clic (lu après un `/clear`, qui en donne un nouveau). */
   onBy?: string
@@ -722,7 +772,7 @@ export type RunAuto = {
   offWhy?: string
 }
 
-/** Trace d'un parcours supprimé, pour qu'une autre discussion ne le fasse pas revenir. */
+/** Trace d'une mission supprimée, pour qu'une autre discussion ne la fasse pas revenir. */
 export type Tombstone = { id: string; at: number }
 
 export type Board = {
@@ -732,14 +782,14 @@ export type Board = {
   /** Nom court du projet. */
   name: string
   runs: Run[]
-  /** Parcours actif DE CETTE DISCUSSION : jamais repris du stockage, qui est partagé. */
+  /** Mission active DE CETTE DISCUSSION : jamais repris du stockage, qui est partagé. */
   activeId: string | null
   /** Id de la discussion qui tient cette copie du board. */
   session?: string
   /**
-   * Cette discussion travaille pour une autre (session liée d'un groupe) : propre à la
-   * discussion, jamais repris du stockage. Ses skills et ses rapports ne touchent aucun parcours.
-   * `title` : le titre du parcours quand il n'est pas dans ce board (session dans un worktree,
+   * Cette discussion travaille pour une autre (worker d'un groupe) : propre à la
+   * discussion, jamais repris du stockage. Ses skills et ses rapports ne touchent aucune mission.
+   * `title` : le titre de la mission quand il n'est pas dans ce board (session dans un worktree,
    * qui a son propre fichier), lu dans celui du dépôt principal.
    */
   delegate?: {
@@ -748,19 +798,37 @@ export type Board = {
     title?: string
     group?: string
     /**
-     * La discussion principale telle que le brief la désigne, « <nom> [ref] » : son nom peut changer,
+     * Le manager tel que le brief le désigne, « <nom> [ref] » : son nom peut changer,
      * pas sa référence. Rappelé à chaque réponse de l'outil, pour que la session puisse la joindre.
      */
     main?: string
     /** Quand `main` a été connu : au `delegate`, puis à chaque nouvelle référence lue à côté du relais. */
     mainAt?: number
   }
-  /** Parcours supprimés récemment (toutes discussions confondues). */
+  /** Missions supprimées récemment (toutes discussions confondues). */
   deleted?: Tombstone[]
+  /**
+   * Le siège du COO du projet sur ce poste (`hooks/seat.ts`) : la discussion qui le tient, fusionné
+   * par `mergeBoards`, la prise la plus récente l'emportant. Écrit seulement par la discussion qui le
+   * prend, le rafraîchit ou le libère.
+   */
+  coo?: CooSeat
+  /**
+   * L'id sous lequel cette discussion a demandé le siège du COO (`/flow-board:coo`, « ◆ COO ») : propre
+   * à la discussion, jamais repris du stockage. Sert à montrer « ↻ Reprendre ici » quand le siège est tenu
+   * ailleurs ou libéré, et à refuser une mission tant que le siège est à cet id.
+   */
+  cooHere?: string
 }
 
 /**
- * L'avancement qu'une session liée relaie à la discussion principale, hors du parcours (qui n'a
+ * Une prise du siège du COO : qui (`by`, l'id de la discussion), quand (`at`), vue vivante pour la
+ * dernière fois (`seenAt`), et quand son titulaire l'a libérée (`releasedAt`).
+ */
+export type CooSeat = { by: string; at: number; seenAt: number; releasedAt?: number }
+
+/**
+ * L'avancement qu'un worker relaie au manager, hors de la mission (qui n'a
  * qu'un écrivain) : ses tickets d'après ses mises à jour Asana ou ses `set`, ses commits, ses tests.
  */
 export type RelayEntry = {
@@ -780,7 +848,7 @@ export type RelayEntry = {
   withdrawn?: { what: string; why?: string; at: number }[]
   /**
    * Le compte rendu final de la session (`report`), en filet de son envoi par SendMessage : la
-   * discussion principale, renommée ou redémarrée, peut ne jamais recevoir le message.
+   * manager, renommé ou redémarré, peut ne jamais recevoir le message.
    */
   report?: {
     text: string
@@ -803,15 +871,15 @@ export type RelayEntry = {
 }
 
 /**
- * Le relais d'un parcours : une entrée par session liée (id de la discussion). Tel que la discussion
+ * Le relais d'une mission : une entrée par worker (id de la discussion). Tel que la discussion
  * principale le lit : l'ancien fichier commun (`<parcours>.json`, écrit par les versions d'avant, plus
  * jamais réécrit) et le fichier de chaque session (`RelayEntryFile`), réunis.
  */
 export type Relay = { v: 1; run: string; sessions: Record<string, RelayEntry> }
 
 /**
- * Le fichier d'une session liée dans le relais (`<parcours>.<session>.entry.json`, ou la clé
- * `relay:<parcours>:<session>` du store) : son entrée seule, écrite par elle seule (un fichier par session liée) ;
+ * Le fichier d'un worker dans le relais (`<parcours>.<session>.entry.json`, ou la clé
+ * `relay:<parcours>:<session>` du store) : son entrée seule, écrite par lui seul (un fichier par worker) ;
  * aucune écriture ne touche plus l'entrée d'une autre session.
  */
 export type RelayEntryFile = { v: 1; run: string; session: string; entry: RelayEntry }
@@ -873,7 +941,7 @@ export type VersionCommit = { subject: string; isBreaking: boolean }
 /** Une partie versionnée changée face au distant : son nom, sa version, et d'où elle part ou ce qui l'attend. */
 export type VersionUnit = { name: string; version: string; from?: string; commits?: VersionCommit[] }
 
-export type Tab = 'flow' | 'agents' | 'activity' | 'history' | 'commands'
+export type Tab = 'flow' | 'agents' | 'activity' | 'history' | 'commands' | 'coord'
 
 export type UiState = {
   tab: Tab
@@ -890,7 +958,7 @@ export type UiState = {
   showDecided?: boolean
   /** Toutes les tâches trouvées en route, pas seulement celles qui attendent la personne. */
   showFound?: boolean
-  /** L'historique montre aussi les parcours archivés. */
+  /** L'historique montre aussi les missions archivées. */
   showArchived?: boolean
   /** « Trouvé en route » réduit à son titre, tâches qui attendent la personne comprises. */
   hideFound?: boolean
@@ -898,9 +966,9 @@ export type UiState = {
   selection: string[]
   /** Éléments de la phase (pistes d'une rétro) choisis pour leur découpage en tickets. */
   itemSelection?: string[]
-  /** Parcours archivé dont la suppression attend sa confirmation. */
+  /** Mission archivée dont la suppression attend sa confirmation. */
   confirmDrop?: string
-  /** Parcours dont l'allumage du mode auto attend son second clic (« Confirmer »). */
+  /** Mission dont l'allumage du mode auto attend son second clic (« Confirmer »). */
   confirmAuto?: string
   /**
    * Frise de l'onglet Agents : la fenêtre de vue (zoom et déplacement), en temps réel ; absente,
@@ -909,7 +977,7 @@ export type UiState = {
   agentsWindow?: AgentsWindow
   /** Onglet Agents : la piste dont la carte de détail est ouverte (clé d'appel, ou `main`). */
   agentCard?: string
-  /** Onglet Agents : la session liée dont la frise est montrée (sa clé) ; absente, l'orchestrateur. */
+  /** Onglet Agents : le worker dont la frise est montrée (sa clé) ; absente, le manager. */
   agentsSession?: string
   /** Onglet Agents : l'entrée du sélecteur d'historique (`run:<id>`, `session:<id>`) ; absente, « Ici, maintenant ». */
   agentsHistory?: string
@@ -935,15 +1003,15 @@ declare module 'claude-code' {
       commands: Record<string, string>
       /** Retard de la branche sur le distant, pour savoir s'il faut demander /project:sync. */
       sync: SyncState
-      /** L'avancement relayé par les sessions liées du parcours actif (discussion principale). */
+      /** L'avancement relayé par les workers de la mission active (manager). */
       relay: Relay | null
-      /** Le registre des sous-agents de cette session (onglet Agents). */
+      /** Le registre des spécialistes de cette session (onglet Agents). */
       agents: SessionRegistry | null
-      /** Les clés des sous-agents que ce processus a vus partir (S9). */
+      /** Les clés des spécialistes que ce processus a vus partir (S9). */
       agentsOwn: string[]
       /** Une écriture du registre a été refusée (S11) ; `'lost'` : un changement n'a pas pu s'appliquer à l'état (R2). */
       agentsAlert: boolean | 'lost'
-      /** Les sessions liées vues à la dernière relecture (onglet Agents). */
+      /** Les workers vus à la dernière relecture (onglet Agents). */
       agentsLinked: { key: string; session?: string; title: string; how: 'run' | 'relay' | 'id' | 'job' | 'title' | 'none'; state: 'working' | 'returned' | 'failed' | 'closed'; launchedAt?: number; returnedAt?: number }[]
       /** Le sélecteur d'historique de l'onglet Agents. */
       agentsHistory: { key: string; kind: 'now' | 'run' | 'session'; title: string; at?: number; isArchived?: boolean; agents?: number }[]
@@ -952,6 +1020,8 @@ declare module 'claude-code' {
        * gardé après /reload-plugins, neuf après un redémarrage, où une date gardée avant ne vaut plus.
        */
       autoBoot: string
+      /** Les cartes de lancement que le Claude du COO a proposées dans cette discussion (`hooks/launch.ts`). */
+      cooCards: unknown[]
       /** Les prix des modèles tirés de ccusage (Q15), relevés au plus une fois par jour. */
       agentPrices: { at: number; prices: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> } | null
     }

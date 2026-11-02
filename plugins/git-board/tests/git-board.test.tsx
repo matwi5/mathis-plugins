@@ -829,12 +829,12 @@ describe('git-board', () => {
     await band.unmount()
   })
 
-  // Pendant un parcours flow-board, un seul envoi en fin de parcours : ni Push ni PR au bandeau.
+  // Pendant une mission flow-board, un seul envoi en fin de mission : ni Push ni PR au bandeau.
   // La valeur `board` de flow-board se lit par `state.get`, que le test remplace.
   const FLOW_CASES = [
-    { name: 'parcours actif', board: { activeId: 'r1', runs: [{ id: 'r1', status: 'active' }] }, isHidden: true },
-    { name: 'parcours désigné mais fini', board: { activeId: 'r1', runs: [{ id: 'r1', status: 'done' }] }, isHidden: false },
-    { name: 'aucun parcours désigné', board: { activeId: null, runs: [{ id: 'r1', status: 'active' }] }, isHidden: false },
+    { name: 'mission active', board: { activeId: 'r1', runs: [{ id: 'r1', status: 'active' }] }, isHidden: true },
+    { name: 'mission désignée mais finie', board: { activeId: 'r1', runs: [{ id: 'r1', status: 'done' }] }, isHidden: false },
+    { name: 'aucune mission désignée', board: { activeId: null, runs: [{ id: 'r1', status: 'active' }] }, isHidden: false },
     { name: 'valeur d’une autre forme', board: { activeId: 'r1', runs: 'r1' }, isHidden: false },
     { name: 'sans flow-board (pas de valeur)', board: undefined, isHidden: false },
   ] as const
@@ -854,7 +854,7 @@ describe('git-board', () => {
       const pane = await openPane($, clock, 'terminal')
       const band = await mountBand($, 'terminal')
       const nextText = async () => (await band.find({ type: 'Button', key: 'git-band-next' }))?.text
-      // Commit et Pull restent, parcours ou non.
+      // Commit et Pull restent, mission ou non.
       expect(await nextText()).toMatch(/^▶\sCommit$/)
       fake.repo.isDirty = false
       await pane.press({ key: 'refresh' })
@@ -1270,13 +1270,13 @@ describe('git-board', () => {
     expect(await pane.find({ type: 'Text', text: /\/project:version en cours/ })).toBeUndefined()
   })
 
-  test('le tour d’un sous-agent ne fait pas démarrer une commande en file', async ($, on) => {
+  test('le tour d’un spécialiste ne fait pas démarrer une commande en file', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     engine(on, fakeRepo())
     const pane = await openPane($, clock, 'terminal')
     await pane.press({ key: 'act-push' })
     await pane.press({ key: 'launch-version' })
-    // Un sous-agent du tour en cours démarre, puis ce tour finit : la commande attend toujours.
+    // Un spécialiste du tour en cours démarre, puis ce tour finit : la commande attend toujours.
     await $.turn.start({ text: 'explore', turnId: 't0', agentId: 'a1' } as any)
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't0', reason: 'end_turn' } as any)
     expect(await pane.find({ type: 'Text', text: /\/project:version en file/ })).toBeDefined()
@@ -1562,7 +1562,7 @@ describe('git-board', () => {
     fake.repo.isDirty = false
     const seen = engine(on, fake)
     await start($, clock)
-    // Le tour d'un sous-agent ne propose rien.
+    // Le tour d'un spécialiste ne propose rien.
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't0', reason: 'end_turn', agentId: 'a1' } as any)
     await clock.settle()
     expect(seen.suggested).toEqual([])

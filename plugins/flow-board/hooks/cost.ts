@@ -1,10 +1,10 @@
-// Coût estimé d'un sous-agent (Q15 : les prix de ccusage). Fonctions pures.
+// Coût estimé d'un spécialiste (Q15 : les prix de ccusage). Fonctions pures.
 //
 // - ccusage ne publie pas ses prix unitaires : sa sortie `claude session --json` donne, par
 //   discussion et par modèle, les tokens par sorte et leur coût. Les prix unitaires d'un modèle
 //   s'en tirent par moindres carrés positifs (une équation par discussion), au plus une fois par
 //   jour. Sur les discussions de ce poste, ils redonnent le coût de ccusage à 3 % près (médiane).
-// - Coût d'un sous-agent = ses tokens par sorte × les prix de son modèle ; toujours affiché « ≈ ».
+// - Coût d'un spécialiste = ses tokens par sorte × les prix de son modèle ; toujours affiché « ≈ ».
 // - Un modèle trop peu vu (moins de jours que de prix à tirer) n'a pas de prix : « coût indisponible ».
 // - L'advisor se chiffre appel par appel, au prix de son modèle, à part de l'agent qui l'a appelé.
 
@@ -109,11 +109,11 @@ export const pricesFor = (prices: Readonly<Record<string, UnitPrices>>, model: s
 export const costOf = (tokens: AgentTokens | undefined, prices: UnitPrices | undefined): number | null =>
   tokens && prices ? KEYS.reduce((sum, k) => sum + tokens[k] * prices[k], 0) : null
 
-/** Un sous-agent tel que la somme de sa famille le lit : son id, celui de son lanceur, ses tokens. */
+/** Un spécialiste tel que la somme de sa famille le lit : son id, celui de son lanceur, ses tokens. */
 type FamilyMember = { agentId?: string; parent?: string; tokens?: AgentTokens }
 
 /**
- * Un sous-agent avec ses descendants, ceux qu'il a lancés et ceux qu'ils ont lancés à leur tour
+ * Un spécialiste avec ses descendants, ceux qu'il a lancés et ceux qu'ils ont lancés à leur tour
  * (r18 : un relecteur et les chercheurs qu'il lance) : leur nombre, leurs tokens et leur coût
  * sommés. `cost` rend le coût d'un membre (null sans prix) ; le coût de la famille ne somme que les
  * coûts connus, null quand aucun ne l'est. Un lien qui boucle ne compte chaque membre qu'une fois.

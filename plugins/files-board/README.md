@@ -6,7 +6,7 @@ Navigateur de fichiers pour Claude Code CLI, à la manière de celui de l'app de
 - **Souris et clavier.** Clic, double clic, clic droit, clic du milieu, glisser ; le clavier atteint le navigateur après un clic dedans, Échap le rend au prompt.
 - **Il suit les fichiers.** Les onglets et l'arborescence se relisent après chaque outil d'écriture de Claude, et toutes les 4 s tant que le panneau est ouvert. Un fichier que Claude vient de modifier porte `◆`, ses dossiers `◇`, jusqu'à votre message suivant.
 
-Version actuelle : **0.3.4**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.4.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -167,7 +167,7 @@ Sous 70 colonnes, le panneau montre l'arborescence ou le fichier, pas les deux :
 |---|---|
 | Dossier | À son dépliage ; relu après un outil d'écriture de Claude (400 ms après le dernier) et toutes les 4 s panneau ouvert |
 | Fichier ouvert | À son ouverture ; relu quand sa date ou sa taille change (mêmes moments) |
-| Index de recherche | À la première recherche : `git ls-files` dans un dépôt, sinon un parcours du disque (30 000 fichiers au plus, sans `node_modules`, `.git`, `dist`…) ; refait après un outil d'écriture |
+| Index de recherche | À la première recherche : `git ls-files` dans un dépôt, sinon une lecture du disque (30 000 fichiers au plus, sans `node_modules`, `.git`, `dist`…) ; refait après un outil d'écriture |
 
 Un fichier changé sur le disque se relit tout seul ; pendant des modifications, la bannière « Modifié sur le disque » laisse choisir. Relu parce que Claude vient de le modifier, il le dit dans le fil d'Ariane (« ◆ Rechargé : modifié par Claude »).
 
@@ -175,7 +175,7 @@ Un fichier changé sur le disque se relit tout seul ; pendant des modifications,
 
 | Quoi | Comment |
 |---|---|
-| Posée | Après un Edit, Write, MultiEdit ou NotebookEdit réussi, sur le fichier de l'appel (`file_path`, `notebook_path`), sous-agents compris. Pas après Bash ni PowerShell, qui ne nomment pas de fichier : relecture seule. |
+| Posée | Après un Edit, Write, MultiEdit ou NotebookEdit réussi, sur le fichier de l'appel (`file_path`, `notebook_path`), spécialistes compris. Pas après Bash ni PowerShell, qui ne nomment pas de fichier : relecture seule. |
 | Effacée | Au message suivant de la personne (tapé, ou par Remote Control). Une commande (`/files`…) ou un message envoyé par un plugin ne l'efface pas. |
 | Gardée | État de session (`$.state`), chemins absolus, 200 au plus : elle suit un changement de dossier parcouru. |
 

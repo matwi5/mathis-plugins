@@ -6,10 +6,10 @@ Lu par `/setup:install`. Une ligne par plugin : ce qu'il apporte, ce qu'il exige
 
 | Plugin | Apporte | Dépend de | Prérequis | Réglage à l'installation | Règles |
 |---|---|---|---|---|---|
-| `agents` | Sous-agents routés par coût : `agents:explorer` (Haiku, lecture seule), `agents:researcher` (Sonnet, documentation), `agents:worker` (Opus, implémentation) | — | — | — | `agents.md` |
+| `agents` | Spécialistes routés par coût : `agents:explorer` (Haiku, lecture seule) et `agents:researcher` (Sonnet, documentation) | — | — | — | `agents.md` |
 | `project` | Convention de projet (`/project:new`, `/project:audit`) et commandes git (`commit`, `sync`, `push`, `pr`, `version`) que seul l'utilisateur lance | — | `git` ; `gh` pour `pr` et le suivi de CI ; Python 3.8+ pour `/project:audit` | — | `project.md` |
 | `mattpocock-skills` | Copie figée des skills de Matt Pocock (grilling, spec, tickets, TDD, revue de code) | — | — | Doublon amont à couper (voir plus bas) | — |
-| `flow-board` | Tableau de bord des parcours mattpocock-skills (`/flow`) | `mattpocock-skills` (obligatoire) ; `project` (conseillé : étapes de livraison) | Claude Code 2.1.286+ | — | `flow-board.md` |
+| `flow-board` | Tableau de bord des missions mattpocock-skills (`/flow`) | `mattpocock-skills` (obligatoire) ; `project` (conseillé : étapes de livraison) | Claude Code 2.1.286+ | — | `flow-board.md` |
 | `asana-board` | Tâches Asana du projet en panneau et bandeau (`/asana`), skill `suivi-asana` | — | Claude Code 2.1.286+ ; connecteur Asana | Bloc « Suivi Asana » ; en mode auto, outils Asana dans `permissions.allow` | `asana-board.md` |
 | `git-board` | Panneau Git (`/git`) : branche, écarts, modifications, historique, PR, CI | `project` (conseillé : ses boutons lancent `/project:*`) | Claude Code 2.1.286+ ; `git` ; `gh` facultatif | — | — |
 | `files-board` | Navigateur de fichiers dans le terminal (`/files`) | — | Claude Code 2.1.289+ ; terminal (pas l'app de bureau) | `tui: fullscreen` conseillé | — |

@@ -5,7 +5,7 @@ import type { Board } from '../types'
 
 const TOOL = 'mcp__flow-board__flow'
 
-/** Un board avec un parcours actif ici : 3 tickets en chaîne, deux groupes, une file. */
+/** Un board avec une mission active ici : 3 tickets en chaîne, deux groupes, une file. */
 const boardWithRun = (): Board => {
   const run = newRun('to-tickets', 1_000, 'Lot SC')
   run.owner = 'session-A'
@@ -42,10 +42,10 @@ test('le retrait l’emporte à la fusion avec une discussion qui avait encore l
   expect(merged.runs[0]!.tickets.map(t => t.id)).toEqual(['A1', 'C3'])
 })
 
-test('« resume » : une session liée reprend le parcours et enregistre dans le même appel ; la discussion principale le reprend ensuite', () => {
+test('« resume » : un worker reprend la mission et enregistre dans le même appel ; le manager le reprend ensuite', () => {
   const stored = boardWithRun()
   const runId = stored.runs[0]!.id
-  // La session liée (B) charge le projet : le parcours de A y est suivi ailleurs.
+  // Le worker (B) charge le projet : la mission de A y est suivi ailleurs.
   const linked = detachOnLoad(stored, 3_000, 'session-B')
   const out = applyReport(linked, { resume: runId, set: [{ id: 'A1', status: 'doing' }] }, 3_100)
   expect(out.board.activeId).toBe(runId)
@@ -53,7 +53,7 @@ test('« resume » : une session liée reprend le parcours et enregistre dans le
   expect(out.board.runs[0]!.tickets.find(t => t.id === 'A1')!.status).toBe('doing')
   expect(out.text).toMatch(/^Workflow "Lot SC" resumed in this discussion\./)
   expect(out.fx.toasts[0]).toMatch(/Reprise : Lot SC/)
-  // A relit le stockage : la reprise par B lui retire le parcours…
+  // A relit le stockage : la reprise par B lui retire la mission…
   const main = mergeBoards(stored, out.board)
   expect(main.activeId).toBeNull()
   // … qu'il reprend à son tour, avec l'avancement de B.
@@ -66,36 +66,36 @@ test('« resume » : une session liée reprend le parcours et enregistre dans le
   // Id inconnu : rien n'est écrit, et Claude le sait.
   const unknown = applyReport(linked, { resume: 'nope', set: [{ id: 'A1', status: 'done' }] }, 3_200)
   expect(unknown.board).toBe(linked)
-  expect(unknown.text).toMatch(/No workflow "nope" in this project: nothing was resumed nor recorded/)
+  expect(unknown.text).toMatch(/No mission "nope" in this project: nothing was resumed nor recorded/)
 })
 
-test('sans parcours actif ici mais avec un parcours à reprendre, l’outil n’enregistre rien et le dit', () => {
+test('sans mission active ici mais avec une mission à reprendre, l’outil n’enregistre rien et le dit', () => {
   const stored = boardWithRun()
-  // Une nouvelle discussion charge le projet : le parcours de A y apparaît suivi ailleurs.
+  // Une nouvelle discussion charge le projet : la mission de A y apparaît suivi ailleurs.
   const here = detachOnLoad(stored, 3_000, 'session-B')
   expect(here.activeId).toBeNull()
   const out = applyReport(here, { tickets: [{ id: 'Q1', name: 'Autre lot' }] }, 3_100)
   expect(out.board).toBe(here)
-  expect(out.text).toMatch(/No workflow is active in this discussion, so nothing was recorded/)
+  expect(out.text).toMatch(/No mission is active in this discussion, so nothing was recorded/)
   expect(out.text).toMatch(/"Lot SC" \(in progress in another discussion, 0\/3 tickets/)
   expect(out.text).toMatch(/Reprendre ici/)
-  // Sans aucun parcours dans le projet, un lot de tickets ouvre toujours un parcours.
+  // Sans aucune mission dans le projet, un lot de tickets ouvre toujours une mission.
   const empty = { ...emptyBoard('c:/dev/p', 'p'), session: 'session-B', deleted: [] }
   expect(applyReport(empty, { tickets: [{ id: 'Q1', name: 'Autre lot' }] }, 3_200).board.runs).toHaveLength(1)
-  expect(noActiveText(empty)).toMatch(/No workflow is running/)
+  expect(noActiveText(empty)).toMatch(/No mission is running/)
 })
 
 test('une date dans le futur ne fait plus échouer les reprises', () => {
   const now = 10_000_000
   const b = boardWithRun()
   const run = b.runs[0]!
-  run.log = [{ at: now - 60_000, glyph: '↻', text: 'Parcours repris', tone: 'accent' }]
+  run.log = [{ at: now - 60_000, glyph: '↻', text: 'Mission reprise', tone: 'accent' }]
   run.updatedAt = now + 10 * 60_000
   run.owner = 'manual-cleanup'
   const stored = clampFuture(b, now)
   expect(stored.runs[0]!.updatedAt).toBe(now - 60_000)
 
-  // La discussion B reprend le parcours : sa reprise tient face au stockage relu.
+  // La discussion B reprend la mission : sa reprise tient face au stockage relu.
   const here = detachOnLoad(b, now, 'session-B')
   const resumed = resumeRun(here, run.id, now + 1_000)!.board
   const merged = mergeBoards(resumed, clampFuture(b, now + 2_000))
@@ -103,7 +103,7 @@ test('une date dans le futur ne fait plus échouer les reprises', () => {
   expect(merged.runs[0]!.owner).toBe('session-B')
 })
 
-test('/flow-board:flow nomme les parcours à reprendre au lieu de « aucun parcours »', async ($, on) => {
+test('/flow-board:flow nomme les missions à reprendre au lieu de « aucune mission »', async ($, on) => {
   mock.clock(on, { now: 80_000_000 })
   const mem: Record<string, unknown> = {}
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
@@ -119,7 +119,7 @@ test('/flow-board:flow nomme les parcours à reprendre au lieu de « aucun parco
   mem['board:'] = { ...stored, root: '', runs: [{ ...stored.runs[0]!, status: 'paused', owner: undefined, updatedAt: 79_000_000 }], activeId: null }
 
   const answer = await $.command.run({ command: 'flow-board:flow', args: '' } as any)
-  expect(String(answer.text)).toMatch(/Aucun parcours actif dans cette discussion\. À reprendre .*« Lot SC » \(en pause, 0\/3 tickets\)/)
+  expect(String(answer.text)).toMatch(/Aucune mission active dans cette discussion\. À reprendre .*« Lot SC » \(en pause, 0\/3 tickets\)/)
   const tool = await $.tool.call({ tool: TOOL, tickets: [{ id: 'Q1', name: 'Autre lot' }] } as any)
   expect(JSON.stringify(tool)).toMatch(/nothing was recorded/)
 })

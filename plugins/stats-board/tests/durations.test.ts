@@ -76,8 +76,31 @@ describe('durées', () => {
     expect(periodOf(m, { machine: 'all', project: null, model: null }, null, '2026-10-07', {}).hoursCumul![10]! / MIN).toBe(100)
   })
 
+  test('temps cumulé : les spécialistes de fond en même temps comptent chacun, le temps actif ne bouge pas', async () => {
+    // 10:30–11:30 : le fil principal à 10:30–10:40 et 11:20–11:30, un spécialiste de 10:40 à 11:20, un autre
+    // de 10:50 à 11:10, et le fil principal qui travaille aussi de 10:55 à 11:05 (entre deux tours relancés).
+    const r: RequestRecord = {
+      ...request(1, at(10, 30), 60 * MIN),
+      turnSpans: [[at(10, 30), at(10, 40)], [at(10, 55), at(11, 5)], [at(11, 20), at(11, 30)]],
+      agentSpans: [[at(10, 40), at(11, 20)], [at(10, 50), at(11, 10)]],
+    }
+    const files = { 'a.json': log('a', '-p-demo', [r]) }
+    const d = await refreshDurations(EMPTY_DURATIONS, [{ name: 'a.json', mtimeMs: 1 }], disk(files).read, TZ, 'Mac')
+    // Deux fils de 10:50 à 10:55 et de 11:05 à 11:10, trois de 10:55 à 11:05 : 5 + 5 + 2 × 10 = 30 min gagnées.
+    expect(d.active[0]).toMatchObject({ activeMs: 60 * MIN, cumulMs: 90 * MIN })
+    const day = d.hours[0]!
+    expect([day.hours[10]! / MIN, day.hours[11]! / MIN]).toEqual([30, 30])
+    // 10 h : 30 actives + 5 + 2 × 5 ; 11 h : 30 + 2 × 5 + 5.
+    expect([day.cumul![10]! / MIN, day.cumul![11]! / MIN]).toEqual([45, 45])
+    expect(d.sessions[0]!.activeMs).toBe(60 * MIN)
+    // Relus sur le disque : les tours restent ; un intervalle impossible ou d'avant la requête est écarté.
+    const read = parseRequestLog(JSON.parse(JSON.stringify(log('a', '-p-demo', [{ ...r, agentSpans: [...r.agentSpans!, [0, 1], [at(11), at(10)], ['x', 1]] as any }])))) as RequestLog
+    expect(read.requests[0]!.turnSpans).toEqual(r.turnSpans)
+    expect(read.requests[0]!.agentSpans).toEqual(r.agentSpans)
+  })
+
   test('une attente de l’utilisateur sort du temps actif, de l’heure et de la durée de la requête', async () => {
-    // 10:00–11:00, une question de 10:10 à 10:50, un sous-agent appelé de 10:20 à 10:25 : 10 + 5 + 10 = 25 min.
+    // 10:00–11:00, une question de 10:10 à 10:50, un spécialiste appelé de 10:20 à 10:25 : 10 + 5 + 10 = 25 min.
     const r = { ...request(1, at(10), 60 * MIN), waits: [[at(10, 10), at(10, 50)]] as [number, number | null][], busy: [[at(10, 20), at(10, 25)]] as [number, number][] }
     const files = { 'a.json': log('a', '-p-demo', [r]) }
     const d = await refreshDurations(EMPTY_DURATIONS, [{ name: 'a.json', mtimeMs: 1 }], disk(files).read, TZ, 'Mac')

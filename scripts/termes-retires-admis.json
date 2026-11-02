@@ -1,0 +1,9 @@
+{
+  "date": "2026-11-02",
+  "note": "Termes retirés gardés exprès, par fichier, à leur nombre (une occurrence par ligne et par terme) : jamais à augmenter. flow-board/hooks/model.ts : les raisons d'arrêt de l'auto enregistrées (« lecture du parcours ratée », « écriture du parcours ratée ») et la relecture du journal (« une session liée », « des sessions liées »), que relisent les copies plus anciennes du mod. stats-board/skills/recap/SKILL.md : la description garde « récap du parcours » et « combien a coûté le parcours » pour se déclencher encore sur ces demandes (décision du renommage). stats-board/skills/recap/recap.mjs : des identifiants du code (inParcours, renderParcours, isParcours, mainParcours), que le renommage ne touche pas.",
+  "files": {
+    "flow-board/hooks/model.ts": 6,
+    "stats-board/skills/recap/SKILL.md": 2,
+    "stats-board/skills/recap/recap.mjs": 11
+  }
+}

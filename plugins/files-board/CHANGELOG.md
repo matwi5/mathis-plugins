@@ -4,6 +4,14 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.4.0 — 2026-11-03
+
+### Changé
+- **Vocabulaire des missions** dans le README (spécialistes) ; l'index de recherche hors d'un dépôt est décrit comme une lecture du disque.
+- **Anciens mots refusés** : `termes-retires.txt` ; `check.sh` refuse les anciens mots de flow-board dans le README, les consignes et les nouvelles entrées du CHANGELOG.
+
+---
+
 ## 0.3.4 — 2026-10-27
 
 ### Documentation

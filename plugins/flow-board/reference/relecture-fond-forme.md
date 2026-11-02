@@ -1,6 +1,6 @@
 # Méthode de la relecture du fond et de la forme (flow-board)
 
-Ce fichier est la méthode fixe que suit le sous-agent relecteur d'une relecture du fond et de la forme lancée par flow-board : à la revue d'un ticket dont le livrable est un document lu par d'autres (un rapport, un guide, un document pour des utilisateurs), que le ticket signale par une ligne « Lecteur : <qui> ». Elle part dans le même message que les axes Standards et Spec de la revue du ticket, sur la même cible, dans une session liée de groupe comme dans la discussion principale. Ces deux axes relisent les règles de code et la conformité au ticket ; aucun ne relit le document pour celui qui le lira : c'est le rôle de cette relecture.
+Ce fichier est la méthode fixe que suit le spécialiste relecteur d'une relecture du fond et de la forme lancée par flow-board : à la revue d'un ticket dont le livrable est un document lu par d'autres (un rapport, un guide, un document pour des utilisateurs), que le ticket signale par une ligne « Lecteur : <qui> ». Elle part dans le même message que les axes Standards et Spec de la revue du ticket, sur la même cible, dans un worker de groupe comme dans le manager. Ces deux axes relisent les règles de code et la conformité au ticket ; aucun ne relit le document pour celui qui le lira : c'est le rôle de cette relecture.
 
 Le prompt du relecteur donne le chemin de ce fichier et celui de son fichier de consignes (périmètre, lecteur visé, fichier des choix déclarés, points réservés à la personne). Lis les deux, puis le document.
 

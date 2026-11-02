@@ -17,7 +17,7 @@ const KEY = 'board:'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 const LOT = {
@@ -31,7 +31,7 @@ const LOT = {
   ],
 }
 
-/** Un parcours actif dans la discussion `session`, après un appel de l'outil `flow`. */
+/** Une mission active dans la discussion `session`, après un appel de l'outil `flow`. */
 const boardWith = (input: Record<string, unknown>, session = 's'): Board => {
   const run = { ...newRun('implement', 1_000, 'Lot'), owner: session }
   const board: Board = { ...emptyBoard('', 'p'), session, deleted: [], runs: [run], activeId: run.id }
@@ -107,7 +107,7 @@ test('le compte des failles laissées survit au renvoi des groupes et à une fus
   // Le plan renvoyé.
   const resent = applyReport(kept, { groups: LOT.groups }, 6_000).board
   expect(groupOf(resent, 'A').security?.dismissed).toBe(1)
-  // La fusion avec la copie du même parcours d'avant l'envoi : la plus récente l'emporte, locale ou stockée.
+  // La fusion avec la copie de la même mission d'avant l'envoi : la plus récente l'emporte, locale ou stockée.
   const runId = activeRun(resent)!.id
   expect(activeRun(before)!.id).toBe(runId)
   const runOf = (b: Board) => b.runs.find(r => r.id === runId)!.groups!.find(g => g.id === 'A')!
@@ -116,7 +116,7 @@ test('le compte des failles laissées survit au renvoi des groupes et à une fus
   expect(runOf(mergeBoards(elsewhere(before), resent)).security?.dismissed).toBe(1)
 })
 
-test('une session liée relaie « dismissed » ; au retour, c’est une proposition : seul un envoi de l’orchestrateur tranche', () => {
+test('un worker relaie « dismissed » ; au retour, c’est une proposition : seul un envoi du manager tranche', () => {
   const sent = startLinkedGroups(boardWith(LOT), ['B'], 5_000)!.board
   const runId = activeRun(sent)!.id
   // La session déléguée l'envoie : il part au relais.
@@ -132,8 +132,8 @@ test('une session liée relaie « dismissed » ; au retour, c’est une proposit
   expect(groupOf(back, 'B').security?.dismissed).toBeUndefined()
   expect(isSecuritySettled(groupOf(back, 'B').security)).toBe(false)
   // La réponse dit la proposition : à confirmer avec la personne, puis à envoyer d'ici.
-  expect(applyReport(back, { note: 'point' }, 7_100).text).toContain('its linked session proposes 1 dismissed: confirm with the user, then send {"security": {"group": "B", "dismissed": <n>}}')
-  // L'envoi de l'orchestrateur tranche, et la proposition tombe.
+  expect(applyReport(back, { note: 'point' }, 7_100).text).toContain('its worker proposes 1 dismissed: confirm with the user, then send {"security": {"group": "B", "dismissed": <n>}}')
+  // L'envoi du manager tranche, et la proposition tombe.
   const confirmed = applyReport(back, { security: { group: 'B', dismissed: 1 } }, 7_200).board
   expect(groupOf(confirmed, 'B').security).toMatchObject({ findings: 2, fixed: 1, dismissed: 1 })
   expect(groupOf(confirmed, 'B').security?.proposedDismissed).toBeUndefined()
@@ -167,7 +167,7 @@ test('un envoi qui change « findings » sans « dismissed » remet les failles 
   expect(groupOf(applyReport(kept, { security: { group: 'A', findings: 3, fixed: 0, dismissed: 3 } }, 6_000).board, 'A').security).toMatchObject({ dismissed: 3 })
 })
 
-test('une session liée redémarrée qui n’envoie que « dismissed » garde les comptes relayés par la précédente', () => {
+test('un worker redémarrée qui n’envoie que « dismissed » garde les comptes relayés par la précédente', () => {
   const sent = startLinkedGroups(boardWith(LOT), ['B'], 5_000)!.board
   const runId = activeRun(sent)!.id
   let relay = applyRelay(undefined, runId, 'f1', { kind: 'start', group: 'B' }, 5_500)!
@@ -192,7 +192,7 @@ test('un « dismissed » envoyé sans comptes est gardé et dit, sans trancher l
   mock.clock(on, { now: 97_000_000 })
   mock.store(on)
   const coaching = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
-  // Sans groupes (ce parcours n'en a pas), l'envoi du lot, sans id de groupe.
+  // Sans groupes (cette mission n'en a pas), l'envoi du lot, sans id de groupe.
   expect(coaching).toContain('when the user decides to leave a kept finding unfixed, on their confirmation, send {"security": {"dismissed": <total of findings left unfixed>}}')
 })
 

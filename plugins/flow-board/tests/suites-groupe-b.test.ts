@@ -88,7 +88,7 @@ test('F1 : un guillemet fermant n’apparaît que s’il était là ; une valeur
   expect(maskSecrets(`PASSWORD=${fake('abc', '123')};x`)).toBe('PASSWORD=‹masqué›;x')
 })
 
-test('F1 : le prompt gardé d’un sous-agent masque un jeton long entre guillemets', () => {
+test('F1 : le prompt gardé d’un spécialiste masque un jeton long entre guillemets', () => {
   const prompt = `Configure le compte : export AWS_SESSION_TOKEN="${LONG}" puis lance les tests.`
   const kept = startCall(emptyRegistry('s1', '/p', 0), { key: 't1', name: 'Config', isBackground: true, prompt }, 1)!.agents[0]!.prompt!
   expect(kept.includes(LONG.slice(0, 40))).toBe(false)
@@ -133,7 +133,7 @@ test('F4 et F6 : la commande de lecture est « cat -- » ; sous Windows, un chem
   }
 })
 
-test('F4 : un fichier de sous-agent a un nom strict, agent-<lettres, chiffres, _ et ->.jsonl', () => {
+test('F4 : un fichier de spécialiste a un nom strict, agent-<lettres, chiffres, _ et ->.jsonl', () => {
   expect(SUBAGENT_FILE.exec('agent-a1B_2-c.jsonl')?.[1]).toBe('a1B_2-c')
   for (const name of ['agent-a&b.jsonl', 'agent-.jsonl', 'agent-a b.jsonl', 'agent-a%x.jsonl', 'xagent-a1.jsonl', 'agent-a1.jsonl.bak']) expect(SUBAGENT_FILE.test(name)).toBe(false)
 })
@@ -195,7 +195,7 @@ const T0 = 70_000_000
 const lane = (startedAt: number) => ({ segments: [], toolCount: 0, startedAt, endedAt: startedAt + 1_000 })
 const seen = (agentId: string, startedAt: number, toolUseId?: string): TranscriptAgent => ({ agentId, lane: lane(startedAt), meta: { description: agentId, ...(toolUseId ? { toolUseId } : {}) } })
 
-test('Q-a (S27) : un sous-agent rattrapé rejoint le parcours que la discussion portait à son départ ; les entrées connues ne changent pas', () => {
+test('Q-a (S27) : un spécialiste rattrapé rejoint la mission que la discussion portait à son départ ; les entrées connues ne changent pas', () => {
   const mine = { ...newRun('implement', T0, 'Le mien'), owner: 's-qa', updatedAt: T0 + 600_000 } as Run
   const ticketed = { ...newRun('implement', T0 + 3_600_000, 'Par un ticket'), status: 'done', updatedAt: T0 + 4_000_000, finishedAt: T0 + 4_000_000, tickets: [{ id: '1', name: 'Un', status: 'done', by: 's-qa' }] } as unknown as Run
   const other = { ...newRun('implement', T0 + 7_200_000, 'D’une autre discussion'), owner: 's-autre', updatedAt: T0 + 7_800_000 } as Run
@@ -205,17 +205,17 @@ test('Q-a (S27) : un sous-agent rattrapé rejoint le parcours que la discussion 
   expect(carried.map(r => r.title)).toEqual(['Le mien', 'Par un ticket'])
   const out = withCarriedRuns([seen('a-vu', T0 + 10_000), seen('a-1', T0 + 20_000), seen('a-2', T0 + 3_700_000), seen('a-3', T0 + 7_300_000), seen('a-4', T0 - 3_600_000)], reg, carried)
   expect(out.map(a => [a.agentId, a.run])).toEqual([
-    // Déjà au registre : il garde ce qu'il a (ici, aucun parcours).
+    // Déjà au registre : il garde ce qu'il a (ici, aucune mission).
     ['a-vu', undefined],
     ['a-1', mine.id],
     ['a-2', ticketed.id],
-    // Pendant le parcours d'une autre discussion, ou hors de toute période : aucun.
+    // Pendant la mission d'une autre discussion, ou hors de toute période : aucun.
     ['a-3', undefined],
     ['a-4', undefined],
   ])
 })
 
-test('S28 : l’en-tête garde les ids des parcours portés ; le rattrapage s’en sert, la fusion les unit, la suppression d’un parcours retire le sien', () => {
+test('S28 : l’en-tête garde les ids des missions portées ; le rattrapage s’en sert, la fusion les unit, la suppression d’une mission retire le sien', () => {
   const done = { ...newRun('implement', T0, 'Fini'), status: 'done', updatedAt: T0 + 600_000, finishedAt: T0 + 600_000 } as Run
   const reg = noteCarried(emptyRegistry('s-qa', '/p', T0), [done.id])!
   expect(reg.carried).toEqual([done.id])
@@ -226,12 +226,12 @@ test('S28 : l’en-tête garde les ids des parcours portés ; le rattrapage s’
   expect(withCarriedRuns([seen('a-1', T0 + 20_000)], reg, runsCarriedBy([done], reg))[0]!.run).toBe(done.id)
   // Deux processus de la même session : l'union.
   expect(mergeRegistry(reg, { ...reg, carried: ['autre'] }).carried).toEqual([done.id, 'autre'])
-  // Le parcours supprimé quitte la liste.
+  // La mission supprimée quitte la liste.
   expect(applyTraces(reg, [{ id: `run:${done.id}`, at: T0 + 700_000 }])?.carried ?? []).toEqual([])
   expect(parseRegistry(JSON.stringify({ ...reg, carried: [done.id, 42] }))?.carried).toEqual([done.id])
 })
 
-test('Q-c : le compte rendu compte les sous-agents en échec du parcours dans tous les registres, chacun une fois', () => {
+test('Q-c : le compte rendu compte les spécialistes en échec de la mission dans tous les registres, chacun une fois', () => {
   const failed = (session: string, keys: string[], run: string): SessionRegistry => ({
     ...emptyRegistry(session, '/p', 0),
     agents: keys.map(key => ({ key, name: key, isBackground: true, status: 'failed' as const, startedAt: 1, source: 'live' as const, run })),
@@ -247,7 +247,7 @@ test('Q-c : le compte rendu compte les sous-agents en échec du parcours dans to
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 /**
@@ -383,7 +383,7 @@ test('F6 par le mod : l’id d’une session effacée est pris tel quel ; ses si
   await ui.unmount()
 })
 
-test('Q-b par le mod : « ✗ Oublier » pose aussi une trace par sous-agent ; réveillé ensuite, il ne revient pas dans l’historique', async ($, on) => {
+test('Q-b par le mod : « ✗ Oublier » pose aussi une trace par spécialiste ; réveillé ensuite, il ne revient pas dans l’historique', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const old = T0 - 2 * 3_600_000
   const theirs = { ...startCall(emptyRegistry('s-oubli', '/p', old), { key: 'k-fond', name: 'Agent de fond', isBackground: true }, old)!, updatedAt: old }
@@ -400,7 +400,7 @@ test('Q-b par le mod : « ✗ Oublier » pose aussi une trace par sous-agent ; r
   for (let i = 0; i < 2; i++) await clock.advance(1_000)
   const traces = Object.entries(mem).filter(([k]) => k.endsWith(':erased')).map(([, v]) => (v as { id: string }).id).sort()
   expect(traces).toEqual(['agent:id-fond', 'call:k-fond', 's-oubli'])
-  // La discussion oubliée était ouverte en vrai : son sous-agent de fond se réveille après l'oubli
+  // La discussion oubliée était ouverte en vrai : son spécialiste de fond se réveille après l'oubli
   // (une entrée plus récente que la trace de la session, qui ne la couvre donc pas) et elle le réécrit.
   for (let i = 0; i < 20; i++) await clock.advance(1_000)
   const awake = T0 + 25_000
@@ -443,12 +443,12 @@ test('S29 et D2 (b) par le mod : le retrait ne touche jamais une trace plus anci
   const clock = mock.clock(on, { now: T0 })
   const old = T0 - 2 * 3_600_000
   const theirs = startCall(emptyRegistry('s-deux', '/p', old), { key: 'k1', name: 'Un', isBackground: true }, old)!
-  // Une trace plus ancienne de la même discussion (un premier « Oublier », avant ses sous-agents d'ici).
+  // Une trace plus ancienne de la même discussion (un premier « Oublier », avant ses spécialistes d'ici).
   const before = { id: 's-deux', at: old - 60_000 }
   const { mem, toasts } = world(
     on,
     { 'agents:s-deux': { ...theirs, agents: theirs.agents.map(a => ({ ...a, agentId: 'id-k1', status: 'done' })), updatedAt: old }, 'agents:s-deux:erased': before },
-    // La trace de la discussion passe, celle de son sous-agent est refusée ; le retrait passe.
+    // La trace de la discussion passe, celle de son spécialiste est refusée ; le retrait passe.
     { traceFailing: 2 },
   )
   await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
@@ -468,7 +468,7 @@ test('S29 et D2 (b) par le mod : le retrait ne touche jamais une trace plus anci
   await ui.unmount()
 })
 
-test('Q-a par le mod : à l’ouverture de l’onglet, un sous-agent manqué pendant le parcours actif lui est rattaché', async ($, on) => {
+test('Q-a par le mod : à l’ouverture de l’onglet, un spécialiste manqué pendant la mission active lui est rattaché', async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 30_000 })
   mock.env(on, { CLAUDE_CONFIG_DIR: '/h/.claude' })
   const iso = (ms: number) => new Date(ms).toISOString()
@@ -487,7 +487,7 @@ test('Q-a par le mod : à l’ouverture de l’onglet, un sous-agent manqué pen
     },
   })
   await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
-  // Le parcours démarre ici : cette discussion le porte.
+  // La mission démarre ici : cette discussion le porte.
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await clock.advance(20_000)
   await prompt($, `${dir}/s-sgb.jsonl`)
@@ -502,7 +502,7 @@ test('Q-a par le mod : à l’ouverture de l’onglet, un sous-agent manqué pen
   await ui.unmount()
 })
 
-test('S28 par le mod : un parcours actif ici est noté dans l’en-tête du registre à l’écriture', async ($, on) => {
+test('S28 par le mod : une mission active ici est noté dans l’en-tête du registre à l’écriture', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const { mem } = world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
@@ -515,7 +515,7 @@ test('S28 par le mod : un parcours actif ici est noté dans l’en-tête du regi
   expect(parseRegistry(mem['agents:s-sgb'])?.carried).toEqual([run!.id])
 })
 
-test('B1 et lilas : les transcripts ne sont plus du bleu des hachures « fond », les pistes des sessions liées s’écartent du violet', async ($, on) => {
+test('B1 et lilas : les transcripts ne sont plus du bleu des hachures « fond », les pistes des workers s’écartent du violet', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))

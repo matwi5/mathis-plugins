@@ -5,7 +5,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
 } as const
 
 const RECALCUL = '1200000000000113'
@@ -58,7 +58,7 @@ test('une dépendance hors du lot bloque jusqu’à ce que la tâche soit coché
   await ui.unmount()
 })
 
-test('un bloqueur inconnu du parcours bloque par prudence et s’affiche comme inconnu', async ($, on) => {
+test('un bloqueur inconnu de la mission bloque par prudence et s’affiche comme inconnu', async ($, on) => {
   mock.clock(on, { now: 61_000_000 })
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))

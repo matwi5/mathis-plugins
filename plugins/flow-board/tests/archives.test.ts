@@ -5,7 +5,7 @@ import type { Board, Run } from '../types'
 
 const boardOf = (runs: Run[], activeId: string | null = null): Board => ({ ...emptyBoard('c:/p', 'p'), session: 's', deleted: [], runs, activeId })
 
-test('archiver : caché de la reprise, jamais élagué, et le parcours en cours ici passe en pause', () => {
+test('archiver : caché de la reprise, jamais élagué, et la mission en cours ici passe en pause', () => {
   const active = { ...newRun('implement', 1_000), status: 'active' as const, owner: 's' }
   const paused = { ...newRun('tdd', 2_000), status: 'paused' as const }
   let board = boardOf([active, paused], active.id)
@@ -29,7 +29,7 @@ test('désarchiver le remet tel quel ; reprendre un archivé le sort aussi des a
   expect(resumed.status).toBe('active')
 })
 
-test('un parcours touché après sa trace de suppression survit à la fusion, et la trace tombe', () => {
+test('une mission touché après sa trace de suppression survit à la fusion, et la trace tombe', () => {
   const run = { ...newRun('tdd', 1_000), status: 'done' as const, updatedAt: 5_000, archivedAt: 5_000 }
   const local = boardOf([run])
   const stale: Board = { ...boardOf([]), deleted: [{ id: run.id, at: 3_000 }] }

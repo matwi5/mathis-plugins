@@ -4,7 +4,7 @@ import { applyReport, emptyBoard, groupPlan, newRun } from '../hooks/model.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
 
-/** Un parcours actif après un appel de l'outil `flow`. */
+/** Une mission active après un appel de l'outil `flow`. */
 const boardWith = (input: Record<string, unknown>): Board => {
   const run = { ...newRun('to-tickets', 1_000, 'Lot'), owner: 's' }
   const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
@@ -73,7 +73,7 @@ test('/to-tickets fait dire à chaque ticket sa zone sensible et sa logique, et 
   expect(text).toContain('« Logique : oui/non »')
   expect(text).toContain('"sensitive": true|false')
   expect(text).toContain('"logic": true|false')
-  // Une session liée ne peut pas écrire CLAUDE.md : un ticket resté 19 heures en attente.
+  // Un worker ne peut pas écrire CLAUDE.md : un ticket resté 19 heures en attente.
   expect(text).toContain('A write to CLAUDE.md never goes into the done criteria of a group ticket')
   expect(text).toContain('README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files"')
 })
@@ -110,7 +110,7 @@ test('/to-spec et /to-tickets font lire le code avant un ticket sensible, et lis
   }
 })
 
-// Les décisions d'un parcours avaient posé, ticket par ticket, des questions prévisibles au cadrage :
+// Les décisions d'une mission avaient posé, ticket par ticket, des questions prévisibles au cadrage :
 // les étapes de /to-spec et /to-tickets listent les cas du cycle de vie d'un champ persisté.
 test('/to-spec et /to-tickets listent les cas du cycle de vie d’un champ persisté et les transitions de l’objet qui porte une marque', async ($, on) => {
   mock.clock(on, { now: 53_000_000 })

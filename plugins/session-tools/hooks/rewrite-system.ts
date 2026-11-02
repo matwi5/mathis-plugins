@@ -29,7 +29,7 @@ La consigne de Claude Code, les CLAUDE.md et les skills de la session règlent d
 - **Quand continuer, quand s'arrêter et quand demander** : ni règle d'arrêt, ni « continue sans me demander », ni « retiens l'hypothèse la plus raisonnable », ni liste d'actions qui imposent une confirmation.
 - **Le compte rendu final** : ni ordre, ni rubriques, ni « termine par… ». Une forme de réponse que la tâche impose (un tableau, une liste de propositions) relève du livrable et s'écrit.
 - **Le suivi** : ni fichier de tâches, ni liste à cocher.
-- **La délégation** : ni sous-agents, ni plafond, ni briefs.
+- **La délégation** : ni spécialistes, ni plafond, ni briefs.
 - **Les contrôles génériques** : ni « vérifie ton travail », ni « lance les tests ». Un contrôle propre à la tâche, qui dit quand elle est finie, va dans « Terminé quand ».
 - **La réflexion** : aucune consigne du type « réfléchis bien », « étape par étape », « prends ton temps ». Pour une question simple, écrire « réponds directement ».
 - **La procédure** : décrire le résultat attendu, pas les étapes. Une méthode ne s'écrit que pour une contrainte réelle du brouillon : un ordre imposé, un contrôle précis.

@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { applyReport, emptyBoard, groupPlan, newRun } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
@@ -8,10 +9,10 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
-/** Un parcours de trois groupes d'un ticket, réglés par le test. */
+/** Une mission de trois groupes d'un ticket, réglés par le test. */
 const plan3 = (opts: { files: [string, string, string]; blocked?: boolean; statuses?: [string, string, string] }) => {
   const run = newRun('implement', 1_000)
   const st = opts.statuses ?? ['todo', 'todo', 'todo']
@@ -59,8 +60,9 @@ test('une dépendance levée ne compte plus : B et C deviennent parallélisables
   expect(after.parallelBatch).toEqual(['B', 'C'])
 })
 
-test('le panneau : ⇉ seulement pour le lot, en sessions liées', async ($, on) => {
+test('le panneau : ⇉ seulement pour le lot, dans des workers', async ($, on) => {
   mock.clock(on, { now: 120_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('session.repo', () => ({ value: { root: 'C:/proj', remote: null, internal: false, name: null } }))
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
@@ -87,7 +89,7 @@ test('le panneau : ⇉ seulement pour le lot, en sessions liées', async ($, on)
 
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'launch-parallel' })).toBeUndefined()
-  expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ C en parallèle · sessions liées$/)
+  expect(String((await ui.find({ key: 'launch-parallel-linked' }))?.props.label)).toMatch(/^⇉.A ∥ C en parallèle · workers$/)
   await ui.press({ key: 'launch-parallel-linked' })
   await ui.unmount()
   const text = filled.at(-1)!
@@ -103,6 +105,7 @@ test('le panneau : ⇉ seulement pour le lot, en sessions liées', async ($, on)
 
 test('lot retenu par un groupe en cours : le panneau le dit', async ($, on) => {
   mock.clock(on, { now: 121_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
@@ -125,20 +128,21 @@ test('lot retenu par un groupe en cours : le panneau le dit', async ($, on) => {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ key: 'launch-parallel-linked' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^⇉.B ∥ C en parallèle une fois A fini$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /« Session liée » : Claude lance une session qui fait le groupe/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /« Worker » : Claude lance une session qui fait le groupe/ })).toBeDefined()
     await ui.unmount()
   }
 })
 
 test('la consigne de /to-tickets décrit les deux sortes de groupes', async ($, on) => {
   mock.clock(on, { now: 122_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text
-  expect(note).toMatch(/its linked session does them in a row with \/implement/)
+  expect(note).toMatch(/its worker does them in a row with \/implement/)
   expect(note).toMatch(/a group of one ticket is fine when its context is its own/)
-  expect(note).toMatch(/can later run at the same time, one linked session per group\./)
+  expect(note).toMatch(/can later run at the same time, one worker per group\./)
   // Ressources exclusives et fichiers par ticket.
   expect(note).toMatch(/"resources": what a group cannot share with another group working at the same time/)
   expect(note).toMatch(/"PowerBI Desktop"/)

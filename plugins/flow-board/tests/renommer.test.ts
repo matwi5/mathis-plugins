@@ -6,7 +6,7 @@ import type { Board, Run } from '../types'
 const boardOf = (runs: Run[], activeId: string | null = null): Board => ({ ...emptyBoard('c:/p', 'p'), session: 's', deleted: [], runs, activeId })
 
 test('renommer remplace un titre déjà posé, et un titre envoyé ensuite ne l’écrase pas', () => {
-  const run = { ...newRun('implement', 1_000, 'crée un parcours de ces tickets. Ne commence pas'), status: 'active' as const, owner: 's' }
+  const run = { ...newRun('implement', 1_000, 'crée une mission de ces tickets. Ne commence pas'), status: 'active' as const, owner: 's' }
   expect(run.isTitled).toBe(true)
   const out = renameRun(boardOf([run], run.id), run.id, '  Tickets de test   et règles  ', 2_000)!
   const renamed = out.board.runs[0]!

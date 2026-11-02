@@ -7,7 +7,10 @@
 //
 // Elle porte aussi un déclencheur d'envoi : `/sonde-envoi [<s>] [--commande] <texte>` envoie le texte
 // au nom du mod (sans `asUser`), par `$.prompt.submit` ou, avec `--commande`, par `$.command.run`,
-// tout de suite ou après <s> secondes.
+// tout de suite ou après <s> secondes. Et les essais du COO de flow-board : `/sonde-envoyer-a` (un message à
+// une autre discussion, `$.session.send`), `/sonde-compacte` (`$.session.compact`), et, réglés par
+// l'environnement, une note ajoutée au contexte de chaque message (`SONDE_CONTEXTE`) et l'effort de chaque
+// requête réécrit (`SONDE_EFFORT`).
 //
 // La sonde fait elle-même des `await` dans ses hooks : l'ordre qu'elle note entre deux événements
 // très proches (moins d'une milliseconde) peut différer de celui d'un plugin sans attente.
@@ -54,6 +57,7 @@ async function logClassic($: any, name: string, e: any) {
   }
   await log($, name, {
     agent_id: e.agent_id,
+    effort: e.effort,
     hasBg: "background_tasks" in e,
     background_tasks: e.background_tasks?.map((t: any) => ({ id: t.id, type: t.type, status: t.status, d: String(t.description).slice(0, 30) })),
     crons: e.session_crons?.length,
@@ -108,11 +112,65 @@ function short(s: unknown) {
   return typeof s === "string" ? s.slice(0, 60) : s;
 }
 
+// Les essais du COO, réglés par l'environnement (`scripts/sonde.py --env`) : `SONDE_CONTEXTE` ajoute une
+// note au contexte de chaque message (le modèle la lit-il au tour même ?), `SONDE_EFFORT` réécrit
+// l'effort de chaque requête du fil principal (`turn.step`). Lus une fois par processus.
+type Essais = { contexte?: string; effort?: string };
+let essais: Promise<Essais> | null = null;
+function essaisOf($: any): Promise<Essais> {
+  if (!essais) {
+    essais = Promise.all([$.env.get("SONDE_CONTEXTE"), $.env.get("SONDE_EFFORT")]).then(([contexte, effort]: (string | undefined)[]) => ({
+      contexte: contexte || undefined,
+      effort: effort || undefined,
+    }));
+  }
+  return essais;
+}
+
+// Un id de session (le nom du transcript) : un UUID ; tout autre premier mot est un nom, tel que
+// l'outil SendMessage l'écrit (ListAgents).
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function parseEnvoiA(args: string): { to: string | { sessionId: string }; text: string } {
+  const m = /^(\S+)\s+([\s\S]+)$/.exec(args.trim());
+  if (!m) return { to: "", text: "" };
+  const head = m[1] ?? "";
+  return { to: SESSION_ID.test(head) ? { sessionId: head } : head, text: (m[2] ?? "").trim() };
+}
+
+const ENVOI_A = "sonde-envoyer-a";
+const COMPACTE = "sonde-compacte";
+
+// La compaction lancée par le mod (`$.session.compact`), et ce que le moteur en a fait.
+async function compacte($: any, instructions: string) {
+  await log($, "compacte", { instructions: short(instructions) });
+  try {
+    const r = await $.session.compact(instructions ? { instructions } : {});
+    await log($, "compacte:résultat", { skip: r?.skip, messages: r?.messages?.length, tokensBefore: r?.tokensBefore, tokensAfter: r?.tokensAfter });
+  } catch (err) {
+    await log($, "compacte:erreur", { error: String(err).slice(0, 300) });
+  }
+}
+
+// Le remplissage du contexte tel que le mod le lit (`$.session.usage()`).
+async function logUsage($: any, ev: string) {
+  try {
+    const u = await $.session.usage();
+    await log($, ev, { tokens: u?.context?.tokens, window: u?.context?.window, percent: u?.context?.percent });
+  } catch (err) {
+    await log($, `${ev}:erreur`, { error: String(err).slice(0, 300) });
+  }
+}
+
 export const register = (on: any) => {
   on("prompt.submit", async ($: any, e: any, next: any) => {
-    await log($, "prompt.submit", { origin: e.origin, turnId: e.turnId, command: e.command, isMeta: e.isMeta, text: short(e.text) });
-    const r = await next(e);
-    await log($, "prompt.submit:after", { turnId: e.turnId, drop: r?.drop, text: short(r?.text) });
+    await log($, "prompt.submit", { origin: e.origin, turnId: e.turnId, command: e.command, isMeta: e.isMeta, text: short(e.text), context: e.context?.length });
+    // Essai 1 : une note ajoutée au contexte d'un message (pas d'une commande), que le modèle doit lire.
+    const { contexte } = await essaisOf($);
+    const sent = contexte && !e.command ? { ...e, context: [...(e.context ?? []), `Note de la sonde : le mot du jour est « ${contexte} ».`] } : e;
+    if (sent !== e) await log($, "contexte:ajouté", { mot: contexte });
+    const r = await next(sent);
+    await log($, "prompt.submit:after", { turnId: e.turnId, drop: r?.drop, text: short(r?.text), context: r?.context?.length });
     return r;
   });
   on("turn.start", async ($: any, e: any, next: any) => {
@@ -120,21 +178,41 @@ export const register = (on: any) => {
     return next(e);
   });
   on("turn.step", async function* ($: any, e: any, next: any) {
-    await log($, "turn.step", { turnId: e.turnId, agentId: e.agentId, index: e.index, model: e.model });
-    const stream = next(e);
+    await log($, "turn.step", { turnId: e.turnId, agentId: e.agentId, index: e.index, model: e.model, effort: e.effort });
+    // Essai 2 : l'effort de la requête du fil principal réécrit ; la réponse dit s'il a pris (réflexion, tokens).
+    const { effort } = await essaisOf($);
+    const asked = effort && e.agentId === undefined ? { ...e, effort } : e;
+    if (asked !== e) await log($, "effort:réécrit", { de: e.effort, vers: effort, index: e.index });
+    const stream = next(asked);
     let first = false;
+    let thinking = 0;
     for await (const chunk of stream) {
       if (!first) {
         first = true;
         await log($, "turn.step:first", { agentId: e.agentId, index: e.index });
       }
-      if (chunk.kind === "stop") await log($, "turn.step:stop", { agentId: e.agentId, index: e.index, out: chunk.usage?.output_tokens, model: chunk.usage?.model });
+      if (chunk.kind === "thinking") thinking += String(chunk.text ?? "").length;
+      if (chunk.kind === "stop") await log($, "turn.step:stop", { agentId: e.agentId, index: e.index, out: chunk.usage?.output_tokens, model: chunk.usage?.model, thinking });
       yield chunk;
     }
     return await stream.result;
   });
   on("turn.complete", async ($: any, e: any, next: any) => {
     await log($, "turn.complete", { turnId: e.turnId, agentId: e.agentId, reason: e.reason, durationMs: e.durationMs, isAborted: e.isAborted, hasUsage: !!e.usage });
+    const r = await next(e);
+    // Essai 6 : le remplissage du contexte, lu par le mod à la fin de chaque tour du fil principal.
+    if (e.agentId === undefined) await logUsage($, "session.usage");
+    return r;
+  });
+  // Essai 4 : l'effort actif tel qu'un hook le lit (`effort.level`), après chaque appel d'outil
+  // (`classic.PreToolUse` reçoit l'enveloppe de l'appel, sans `effort`).
+  on("classic.PostToolUse", async ($: any, e: any, next: any) => {
+    await log($, "classic.PostToolUse", { tool: e.tool_name, effort: e.effort });
+    return next(e);
+  });
+  // Essai 3 : le message d'une autre discussion, tel qu'il arrive.
+  on("session.receive", async ($: any, e: any, next: any) => {
+    await log($, "session.receive", { origin: e.origin, agentId: e.agentId, text: short(e.text) });
     return next(e);
   });
   on("agent.spawn", async ($: any, e: any, next: any) => {
@@ -158,7 +236,32 @@ export const register = (on: any) => {
   on("session.start", async ($: any, e: any, next: any) => {
     await log($, "session.start", { cwd: short(e.cwd), surface: e.surface });
     await $.command.register({ name: ENVOI, description: "Sonde : envoie un texte par $.prompt.submit (par $.command.run avec --commande), après <s> secondes" });
+    await $.command.register({ name: ENVOI_A, description: "Sonde : envoie un texte à une autre discussion par $.session.send (<id de session ou nom> <texte>)" });
+    await $.command.register({ name: COMPACTE, description: "Sonde : compacte la discussion par $.session.compact après <s> secondes ([<s>] <consignes>)" });
+    // Essai 6 : le remplissage du contexte au démarrage (avant la première réponse : absent).
+    await logUsage($, "session.usage");
     return next(e);
+  });
+  // Essai 3 : un message à une autre discussion, par son id de session ou par un nom.
+  on("command.run", { command: ENVOI_A }, async ($: any, e: any) => {
+    const { to, text } = parseEnvoiA(e.args);
+    if (!text) return { text: `usage : /${ENVOI_A} <id de session ou nom> <texte>` };
+    await log($, "envoi-a", { to, text: short(text) });
+    try {
+      const r = await $.session.send({ to, text });
+      await log($, "envoi-a:résultat", { isDelivered: r?.isDelivered, reason: r?.reason });
+      return { text: `sonde : envoi à ${JSON.stringify(to)} : ${r?.isDelivered ? "livré" : `refusé (${r?.reason})`}` };
+    } catch (err) {
+      await log($, "envoi-a:erreur", { error: String(err).slice(0, 300) });
+      return { text: `sonde : envoi à ${JSON.stringify(to)} en erreur : ${String(err).slice(0, 200)}` };
+    }
+  });
+  // Essais 5 et 7 : une compaction lancée par le mod, au repos (après <s> secondes), et ce qui la suit.
+  on("command.run", { command: COMPACTE }, async ($: any, e: any) => {
+    const { delayS, text } = parseEnvoi(e.args);
+    await log($, "compacte:programmé", { delayS, instructions: short(text) });
+    timers.push($.clock.after(delayS * 1000, () => void compacte($, text)));
+    return { text: `sonde : compaction par $.session.compact dans ${delayS} s` };
   });
   // `/clear` finit la session (`reason: "clear"`) : l'identifiant d'après se lit sur les lignes suivantes.
   on("session.end", async ($: any, e: any, next: any) => {

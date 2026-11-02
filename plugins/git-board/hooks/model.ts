@@ -341,7 +341,7 @@ export function suggest(r: GitRepo, p: PrState): Action | null {
  * Le bouton de l'étape suivante du bandeau : l'étape suggérée, que le bandeau lance comme
  * « ▶ Lancer » du tiroir. Rien quand une commande /project est en file ou en cours (pas de
  * double lancement), ni hors du dossier de la session, où les commandes /project n'agissent pas.
- * Pendant un parcours flow-board, ni Push ni PR : un seul envoi, en fin de parcours.
+ * Pendant une mission flow-board, ni Push ni PR : un seul envoi, en fin de mission.
  */
 export function bandNext(r: GitRepo, p: PrState, m: Meta, run: Running, isFlowActive: boolean): Action | null {
   if (run || m.sessionRoot === null || !sameDir(m.sessionRoot, r.root)) return null
@@ -350,7 +350,7 @@ export function bandNext(r: GitRepo, p: PrState, m: Meta, run: Running, isFlowAc
 }
 
 /**
- * Un parcours flow-board est actif dans la discussion : même règle que flow-board (un parcours
+ * Une mission flow-board est active dans la discussion : même règle que flow-board (une mission
  * de ce board, désigné actif, au statut actif). La valeur appartient à un autre plugin : sa
  * forme est vérifiée avant usage.
  */

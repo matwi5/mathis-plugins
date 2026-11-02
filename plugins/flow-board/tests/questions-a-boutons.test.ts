@@ -15,7 +15,7 @@ test('l’accord d’un grilling, la spec et le découpage se valident par une q
     const text = (await $.skill.prompt({ skill: `mattpocock-skills:${skill}`, text: 'x' })).text as string
     expect(text).toContain('a button question (AskUserQuestion)')
     expect(text).toContain('« Valider (Recommandé) » and « À reprendre »')
-    expect(text).toContain('none in a linked session: there the validation goes up to the main discussion')
+    expect(text).toContain('none in a worker: there the validation goes up to the manager')
   }
   const spec = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text as string
   expect(spec).toContain('publish (once the user validates it with a button question (AskUserQuestion)')
@@ -25,7 +25,7 @@ test('le compte rendu renvoie au bouton « Valider le rapport », jamais à une 
   mock.clock(on, { now: 53_000_000 })
   mock.store(on)
   world(on)
-  // Le compte rendu n'a d'étapes que dans un parcours.
+  // Le compte rendu n'a d'étapes que dans une mission.
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
   await $.tool.call({ tool: 'mcp__flow-board__flow', title: 'Lot', tickets: [{ id: 'a1', name: 'Règle', status: 'done' }] } as any)
   await $.tool.call({ tool: 'mcp__flow-board__flow', complete: true } as any)

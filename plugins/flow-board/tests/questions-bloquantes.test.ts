@@ -1,7 +1,7 @@
 // Questions bloquantes du mode auto : Claude déclare par l'outil `flow` (`waiting`) chaque question qui
 // attend la personne, avec ce qu'elle bloque (une phase, un groupe ou un ticket), et la retire une fois
 // répondue. Invariant : une question bloquante ne disparaît jamais par une fusion ou une
-// reconstruction ; seuls son retrait par Claude ou l'effacement du parcours la font disparaître.
+// reconstruction ; seuls son retrait par Claude ou l'effacement de la mission la font disparaître.
 
 import { expect, mock, test } from 'claude-code/testing'
 
@@ -10,7 +10,7 @@ import type { Board, Run } from '../types'
 
 const T0 = 95_000_000
 
-/** Un parcours actif dans la discussion « sa », avec deux groupes (A : t1, B : t2, t3) et un ticket hors groupe. */
+/** Une mission active dans la discussion « sa », avec deux groupes (A : t1, B : t2, t3) et un ticket hors groupe. */
 const lot = (): Board => {
   const run: Run = { ...newRun('implement', T0, 'Boutique'), owner: 'sa' }
   const board: Board = { ...emptyBoard('', 'p'), session: 'sa', deleted: [], runs: [run], activeId: run.id }
@@ -244,7 +244,7 @@ test('Une seule fonction dit si une action est bloquée : la phase par ses quest
 test('Les notifications : une question qui apparaît en auto, une pause posée par le mod ou la fin de la discussion ; jamais hors auto, ni pour une coupure par la personne, ni de texte de question', () => {
   const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
   const asked = ask(on, [{ id: 'q1', ticket: 't2', text: 'Le code `rm -rf` ?' }, { id: 'q2', group: 'A', text: 'Deux ?' }], T0 + 3).board
-  expect(autoNotices(on, asked)).toEqual(['Parcours Boutique : 2 question(s) t\'attendent'])
+  expect(autoNotices(on, asked)).toEqual(['Mission Boutique : 2 question(s) t\'attendent'])
   // Une question retirée, ou redéclarée : rien.
   expect(autoNotices(asked, ask(asked, [{ id: 'q1', answered: true }], T0 + 4).board)).toEqual([])
   expect(autoNotices(asked, ask(asked, [{ id: 'q2', group: 'A', text: 'Deux, reformulée ?' }], T0 + 4).board)).toEqual([])
@@ -252,8 +252,8 @@ test('Les notifications : une question qui apparaît en auto, une pause posée p
   const off = lot()
   expect(autoNotices(off, ask(off, [{ id: 'q1', ticket: 't2', text: 'x' }], T0 + 3).board)).toEqual([])
   // Une pause posée par la fin de la discussion ou par une lecture ratée : sa raison.
-  expect(autoNotices(on, parkActive(on, T0 + 5)!.board)).toEqual(['Parcours Boutique : auto en pause (discussion fermée)'])
-  expect(autoNotices(on, stopAutoUnread(on, T0 + 5)!)).toEqual(['Parcours Boutique : auto en pause (lecture du parcours ratée)'])
+  expect(autoNotices(on, parkActive(on, T0 + 5)!.board)).toEqual(['Mission Boutique : auto en pause (discussion fermée)'])
+  expect(autoNotices(on, stopAutoUnread(on, T0 + 5)!)).toEqual(['Mission Boutique : auto en pause (lecture de la mission ratée)'])
   // Coupé par la personne : rien.
   expect(autoNotices(on, switchOffAuto(on, T0 + 5)!.board)).toEqual([])
 })
@@ -265,7 +265,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 200 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 200 }, view: {} },
 } as const
 const BAND = {
   component: 'AbovePrompt',
@@ -342,7 +342,7 @@ test('En auto, une question déclarée lève une notification au texte fixé, sa
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', ticket: 't2', text: 'Faut-il effacer les anciens totaux ?' }] } as any)
-  expect(notified.map(n => n.text)).toEqual(['Parcours Boutique : 1 question(s) t\'attendent'])
+  expect(notified.map(n => n.text)).toEqual(['Mission Boutique : 1 question(s) t\'attendent'])
   for (const surface of SURFACES) {
     expect(await bandText($, surface)).toMatch(/⚡\sAuto\s·\sattend\sta\sréponse\s\(1\)/)
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
@@ -352,7 +352,7 @@ test('En auto, une question déclarée lève une notification au texte fixé, sa
   }
   // Une seconde question : le compte suit ; la retirer ne notifie rien.
   await $.tool.call({ tool: TOOL, waiting: [{ id: 'q2', phase: 'to-tickets', text: 'Deux ?' }] } as any)
-  expect(notified.at(-1)!.text).toBe('Parcours Boutique : 2 question(s) t\'attendent')
+  expect(notified.at(-1)!.text).toBe('Mission Boutique : 2 question(s) t\'attendent')
   await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }, { id: 'q2', answered: true }] } as any)
   expect(notified).toHaveLength(2)
   expect(await bandText($, 'terminal')).toMatch(/⚡\sAuto\s·\sen\scours/)
@@ -384,10 +384,10 @@ test('La fin de la discussion porteuse notifie la pause de l’auto, avec sa rai
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await $.session.end({ reason: 'prompt_input_exit' } as any)
-  expect(notified.map(n => n.text)).toEqual(['Parcours Boutique : auto en pause (discussion fermée)'])
+  expect(notified.map(n => n.text)).toEqual(['Mission Boutique : auto en pause (discussion fermée)'])
 })
 
-test('Le parcours en pause liste encore ses questions dans l’onglet, avec ce qu’elles bloquent', { timeoutMs: 20000 }, async ($, on) => {
+test('La mission en pause liste encore ses questions dans l’onglet, avec ce qu’elles bloquent', { timeoutMs: 20000 }, async ($, on) => {
   await running($, on)
   await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', ticket: 't2', text: 'Faut-il effacer les anciens totaux ?' }] } as any)
   await $.session.end({ reason: 'prompt_input_exit' } as any)
@@ -400,7 +400,7 @@ test('Le parcours en pause liste encore ses questions dans l’onglet, avec ce q
   }
 })
 
-test('Une pause que la fusion pose (une copie relue abîmée) sur le parcours porté ici est notifiée', { timeoutMs: 20000 }, async ($, on) => {
+test('Une pause que la fusion pose (une copie relue abîmée) sur la mission portée ici est notifiée', { timeoutMs: 20000 }, async ($, on) => {
   const { clock, mem, disk, notified } = await running($, on)
   await press($, 'auto-on')
   await press($, 'auto-confirm')
@@ -412,14 +412,14 @@ test('Une pause que la fusion pose (une copie relue abîmée) sur le parcours po
   else mem['board:'] = damaged
   await $.tool.call({ tool: TOOL, note: 'un pas' } as any)
   await clock.advance(1000)
-  expect(notified.map(n => n.text)).toContain('Parcours Boutique : auto en pause (lecture du parcours ratée)')
+  expect(notified.map(n => n.text)).toContain('Mission Boutique : auto en pause (lecture de la mission ratée)')
 })
 
-test('Une session liée ne déclare pas de question : « waiting » n’y est pas enregistré, et la réponse dit de la remonter par message', { timeoutMs: 20000 }, async ($, on) => {
+test('Un worker ne déclare pas de question : « waiting » n’y est pas enregistré, et la réponse dit de la remonter par message', { timeoutMs: 20000 }, async ($, on) => {
   mock.clock(on, { now: T0 })
   world(on)
   await start($)
   await $.tool.call({ tool: TOOL, delegate: 'run-1', group: 'A', main: '[e5eb08]' } as any)
   const reply = JSON.stringify(await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', ticket: 't1', text: 'Un ?' }] } as any))
-  expect(reply).toContain('is not recorded in a linked session: send your question to the main discussion by SendMessage')
+  expect(reply).toContain('is not recorded in a worker: send your question to the manager by SendMessage')
 })

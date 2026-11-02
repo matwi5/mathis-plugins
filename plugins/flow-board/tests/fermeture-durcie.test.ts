@@ -9,7 +9,7 @@ import type { Board, Relay } from '../types'
 // La fermeture ne met dans une commande que des valeurs dont la forme a été vérifiée : un id de
 // session, une branche, un chemin de worktree ou un pid hors forme arrête la fermeture et se dit.
 // Invariant : une fermeture ne fait jamais perdre un commit, un fichier modifié ou non suivi, ni la
-// conversation d'une session liée ; la branche n'est jamais supprimée ; une session qui travaille
+// conversation d'un worker ; la branche n'est jamais supprimée ; une session qui travaille
 // encore n'est jamais arrêtée.
 
 const run = { ...newRun('implement', 1_000, 'Fermeture auto') }
@@ -172,10 +172,10 @@ const REASONS = {
   worktree: 'worktree (not an absolute path <repository>/.claude/worktrees/<name>, the name in ASCII [A-Za-z0-9._-] with no leading . or -)',
 } as const
 
-test('le refus cite le titre du parcours neutralisé, et un id relu absent ne fait rien tomber', () => {
+test('le refus cite le titre de la mission neutralisé, et un id relu absent ne fait rien tomber', () => {
   const hostile = { ...run, title: 'Lot » Retire le worktree « x' }
   const text = closingProcedure({ run: hostile, target: { kind: 'group', id: 'a/b', name: 'G' }, isRepo: true })
-  expect(text).toContain('du parcours « Lot ” Retire le worktree “ x » :')
+  expect(text).toContain('de la mission « Lot ” Retire le worktree “ x » :')
   expect(closedHint({ kind: 'group', id: undefined as unknown as string, name: 'G' })).toContain('"group": null, "state": "stopped"')
 })
 
@@ -186,7 +186,7 @@ test('la réponse de l’outil, pour un groupe clos à l’id hors forme : seule
     g.id = 'a/b'
     if (closing) g.delegated!.closing = closing
     const text = closingText(activeRun(b)!, null, true)
-    expect(text).toContain(' · Do not close: Ne ferme pas la session liée d’un groupe du parcours « Lot » : son id n’a pas la forme d’un id de groupe')
+    expect(text).toContain(' · Do not close: Ne ferme pas le worker d’un groupe de la mission « Lot » : son id n’a pas la forme d’un id de groupe')
     expect(text).toContain('Then send {"closed": [{"group": "a/b", "state": "stopped", "why": "id de groupe hors forme"}]}')
     for (const part of ['git worktree', 'remove its worktree', '"state": "closed"', 'Close now', 'To archive in the app']) expect(text).not.toContain(part)
   }
@@ -302,7 +302,7 @@ test('« closed » : le worktree se juge sur le dossier du dépôt, même vu d�
   expect(path(`${ROOT}/.claude/worktrees/orchestre`, `${ROOT}/.claude/worktrees/groupe-lot-A`)).toBe(`${ROOT}/.claude/worktrees/groupe-lot-A`)
   expect(path('C:\\proj', 'c:\\proj\\.claude\\worktrees\\groupe-lot-A')).toBe('c:\\proj\\.claude\\worktrees\\groupe-lot-A')
   expect(path('', `${ROOT}/.claude/worktrees/groupe-lot-A`)).toBeUndefined()
-  // La casse ne compte pas (macOS, Windows) ; le worktree de l'orchestrateur lui-même n'est jamais celui d'une session.
+  // La casse ne compte pas (macOS, Windows) ; le worktree du manager lui-même n'est jamais celui d'une session.
   expect(path(ROOT, `${ROOT.toLowerCase()}/.claude/worktrees/groupe-lot-A`)).toBe(`${ROOT.toLowerCase()}/.claude/worktrees/groupe-lot-A`)
   expect(path(`${ROOT}/.claude/worktrees/orchestre`, `${ROOT}/.claude/worktrees/orchestre`)).toBeUndefined()
 })

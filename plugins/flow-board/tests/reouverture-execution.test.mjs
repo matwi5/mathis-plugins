@@ -2,7 +2,7 @@
 // défauts (une HEAD détachée, un échec silencieux) n'avaient été trouvés que par raisonnement. Un
 // dépôt git temporaire, une branche gardée, un faux `claude` dans le PATH qui note où et avec quoi il
 // est lancé. La variante PowerShell ne tourne que sous Windows avec `pwsh` ; sinon le test le dit et
-// la saute (série de décisions du parcours « Fermeture auto des sessions liées », POSIX seulement).
+// la saute (série de décisions de la mission « Fermeture auto des workers », POSIX seulement).
 // Node lit closing.ts en retirant ses types (Node 22.18 ou plus récent) ; plus ancien, le test le dit.
 
 import { execFileSync, spawnSync } from 'node:child_process'

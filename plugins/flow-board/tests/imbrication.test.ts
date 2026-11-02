@@ -18,7 +18,7 @@ const agent = (key: string, start: number, extra: Partial<RegistryAgent> = {}): 
 const shape = (rows: ReturnType<typeof laneTree>): string[] =>
   rows.map(r => `${'  '.repeat(r.depth)}${r.kind === 'agent' ? r.agent.key : `⚙${r.agents.length}${r.isOpen ? '▾' : '▸'}`}`)
 
-test('les sous-agents d’un sous-agent se rangent en retrait sous leur parent, à toute profondeur', () => {
+test('les spécialistes d’un spécialiste se rangent en retrait sous leur parent, à toute profondeur', () => {
   const agents = [
     agent('relecteur', 1),
     agent('autre', 2),
@@ -51,7 +51,7 @@ test('une piste « ⚙ Workflow » repliée se déplie au bouton, et le reste au
   const PANE = {
     component: 'Pane',
     requestId: 'flow-board',
-    props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
+    props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
   } as const
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })

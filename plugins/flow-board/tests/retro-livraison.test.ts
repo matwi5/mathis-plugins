@@ -8,7 +8,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 const engine = (on: any) => {
@@ -19,7 +19,7 @@ const engine = (on: any) => {
 
 const skills = (run: Run) => run.phases.map(p => `${p.skill}:${p.status}`)
 
-/** Un parcours tel que l'écrivaient les versions d'avant la 0.5.0 : Corps de PR puis Rétro. */
+/** Une mission tel que l'écrivaient les versions d'avant la 0.5.0 : Corps de PR puis Rétro. */
 const oldRun = (): Run => {
   const run = newRun('to-tickets', 1_000)
   const phase = (skill: string, status: FlowPhase['status']): FlowPhase => ({ ...run.phases[0]!, skill, status, alts: [], isOptional: true })
@@ -33,7 +33,7 @@ const oldRun = (): Run => {
 test('un ancien parcours passe à Version et push puis Pull request, sans rétro ni revue finale', () => {
   const run = upgradeRun(oldRun())
   expect(skills(run)).toEqual(['to-tickets:done', 'implement:active', 'compte-rendu:pending', 'project:version:pending', 'project:pr:pending'])
-  // Un parcours mis à niveau par la 0.13.0 perd sa phase « Revue finale » à venir.
+  // Une mission mise à niveau par la 0.13.0 perd sa phase « Revue finale » à venir.
   const withFinal = { ...run, phases: [...run.phases.slice(0, 2), { ...run.phases[2]!, skill: 'final-review' }, ...run.phases.slice(2)] }
   expect(skills(upgradeRun(withFinal))).toEqual(['to-tickets:done', 'implement:active', 'compte-rendu:pending', 'project:version:pending', 'project:pr:pending'])
   expect(run.cursor).toBe(1)
@@ -95,7 +95,7 @@ test('le panneau : ni revue finale ni Version et push avec des tickets ouverts, 
   await ui.unmount()
 })
 
-test('un sous-agent refusé s’affiche « annulé », pas en échec', async ($, on) => {
+test('un spécialiste refusé s’affiche « annulé », pas en échec', async ($, on) => {
   mock.clock(on, { now: 71_000_000 })
   mock.store(on)
   engine(on)

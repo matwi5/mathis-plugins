@@ -1,7 +1,7 @@
 // flow-board : la file d'écriture du registre des agents de la session.
 //
 // Un fichier par session, `~/.claude/flow-board/agents/<session>.json` (`$.store` en secours),
-// écrit par cette session seule (Q7) et lu par l'onglet Agents. Pendant un parcours comme sans.
+// écrit par cette session seule (Q7) et lu par l'onglet Agents. Pendant une mission comme sans.
 
 import { atom, read, update } from 'claude-code'
 import type { Board, RegistryPart, SessionRegistry } from '../types'
@@ -19,7 +19,7 @@ const boardAtom = atom({ plugin: 'flow-board', key: 'board' } as const, null)
 const REGISTRY_REF = { plugin: 'flow-board', key: 'agents' } as const
 export const registryAtom = atom(REGISTRY_REF, null)
 /**
- * Les clés des sous-agents que ce processus a vus partir : les seuls que la liste du moteur peut
+ * Les clés des spécialistes que ce processus a vus partir : les seuls que la liste du moteur peut
  * clore (S9). Dans l'état de la session, qui survit à /reload-plugins ; jamais sur le disque.
  */
 export const ownAtom = atom({ plugin: 'flow-board', key: 'agentsOwn' } as const, [] as string[])
@@ -230,7 +230,7 @@ export function commitRegistry($: any, change: (reg: SessionRegistry) => Session
     })
 }
 
-/** Ce processus a vu partir ce sous-agent. */
+/** Ce processus a vu partir ce spécialiste. */
 export function ownAgent($: any, key: string) {
   return update($, ownAtom, own => (own.includes(key) ? own : [...own, key]))
 }
@@ -241,8 +241,8 @@ const REGISTRY_SAVE_MAX_MS = 5_000
 let registryDueTimer: { cancel: () => void } | null = null
 
 /**
- * Au rythme des parcours : 600 ms après le dernier changement. Les `turn.step` et les appels
- * d'outil des sous-agents en parallèle peuvent se suivre sans répit : l'échéance garantit une
+ * Au rythme des missions : 600 ms après le dernier changement. Les `turn.step` et les appels
+ * d'outil des spécialistes en parallèle peuvent se suivre sans répit : l'échéance garantit une
  * écriture au plus REGISTRY_SAVE_MAX_MS après le premier changement en attente.
  */
 function scheduleRegistrySave($: any) {
@@ -297,13 +297,13 @@ async function saveRegistryOnce($: any) {
   if (!stored.ok) return
   const board: Board | null = await read($, boardAtom)
   const patch = {
-    // Le titre de la discussion d'abord (hooks classiques), sinon celui du parcours qu'elle porte ou sert.
+    // Le titre de la discussion d'abord (hooks classiques), sinon celui de la mission qu'elle porte ou sert.
     title: value.title ?? (board?.delegate ? delegatedTitle(board) : activeRun(board)?.title),
-    // Un parcours effacé n'est plus déclaré (S23).
+    // Une mission effacée n'est plus déclarée (S23).
     run: board?.delegate?.run !== undefined && !erasedRuns.has(board.delegate.run) ? board.delegate.run : undefined,
     group: board?.delegate?.run !== undefined && !erasedRuns.has(board.delegate.run) ? board.delegate.group : undefined,
   }
-  // S28 : le parcours actif ici et ceux dont elle porte un ticket « en cours », notés dans l'en-tête ;
+  // S28 : la mission active ici et celles dont elle porte un ticket « en cours », notés dans l'en-tête ;
   // S31 : avec la date de cette écriture, la dernière où elle les portait.
   const carriedNow = board && !board.delegate ? board.runs.filter(r => (r.id === board.activeId && r.status === 'active') || r.tickets.some(t => t.by === value.session)).map(r => r.id).filter(id => !erasedRuns.has(id)) : []
   const noted = await $.clock.now()
@@ -312,8 +312,8 @@ async function saveRegistryOnce($: any) {
   // S6 : les traces relues avant chaque écriture ; ce qu'elles couvrent sort du fichier et de l'état.
   const traces = await readTraces($)
   const joined = mergeRegistry(header ?? value, stored.value)
-  // Les traces d'abord (celle du parcours couvre la session liée qui le déclare), puis le parcours
-  // effacé quitte l'en-tête : la fusion, qui garde l'en-tête déjà écrit, ne le retirerait jamais.
+  // Les traces d'abord (celle de la mission couvre le worker qui la déclare), puis la mission
+  // effacée quitte l'en-tête : la fusion, qui garde l'en-tête déjà écrit, ne la retirerait jamais.
   const merged = withoutErasedRun(applyTraces(joined, traces) ?? joined)
   const isWritten = await writeRegistry($, merged, stored.placed, stored.count)
   if (!isWritten && (await read($, registryAlertAtom)) !== true) {
@@ -328,7 +328,7 @@ async function saveRegistryOnce($: any) {
   }, false))
 }
 
-/** Le registre sans le parcours effacé qu'il déclarait (S23), ni son groupe ; tel quel sinon. */
+/** Le registre sans la mission effacée qu'il déclarait (S23), ni son groupe ; tel quel sinon. */
 const withoutErasedRun = (reg: SessionRegistry): SessionRegistry => {
   if (reg.run === undefined || !erasedRuns.has(reg.run)) return reg
   const next = { ...reg }

@@ -16,7 +16,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} },
 } as const
 
 /** Un lot sans groupes d'un ticket de logique, fait à 4 000. */
@@ -224,7 +224,7 @@ test('un avis du lot ne compte que s’il suit aussi la dernière revue du lot :
 test('fusion : un avis sans date, à côté d’une revue plus récente de l’autre copie, se date par la revue de sa copie et ne compte pas', () => {
   const old = settled()
   delete (runOf(old).security as Record<string, unknown>).at
-  // L'autre copie du même parcours : un ticket fini après la revue, puis relu, sans avis.
+  // L'autre copie de la même mission : un ticket fini après la revue, puis relu, sans avis.
   const other = review(addDone(old, 9, 6_000), 7_000)
   delete runOf(other).security
   // Gardée ici (sans t9), la revue de l'autre copie, qui a tout vu, est reprise : l'avis sans date se date
@@ -301,5 +301,5 @@ test('le panneau : relu de nouveau, un avis d’avant la dernière fin de ticket
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'security-group-lot' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^Avant de la lancer, envoie à l'outil flow \{"security": \{"advised": true, "why": "<raison>"\}\} : l'avis de ce passage\. Lance la revue de sécurité de ce parcours/)
+  expect(filled.at(-1)).toMatch(/^Avant de la lancer, envoie à l'outil flow \{"security": \{"advised": true, "why": "<raison>"\}\} : l'avis de ce passage\. Lance la revue de sécurité de cette mission/)
 })

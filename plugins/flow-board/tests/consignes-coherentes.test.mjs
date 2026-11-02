@@ -22,16 +22,22 @@ const SURFACES = {
   'config/reference/revues.md': repoFile('config/reference/revues.md'),
   'config/rules/agents.md': repoFile('config/rules/agents.md'),
   'reference/procedure-groupe.md': read('reference/procedure-groupe.md'),
+  'reference/revue-securite.md': read('reference/revue-securite.md'),
+  'reference/consignes-revue.md': read('reference/consignes-revue.md'),
   'README.md': read('README.md'),
   'hooks/register.tsx': read('hooks/register.tsx'),
   'hooks/catalog.ts': read('hooks/catalog.ts'),
+  'hooks/effort.ts': read('hooks/effort.ts'),
   'hooks/view.tsx': read('hooks/view.tsx'),
+  'hooks/model.ts': read('hooks/model.ts'),
+  'skills/compte-rendu/SKILL.md': read('skills/compte-rendu/SKILL.md'),
+  'skills/coo/SKILL.md': read('skills/coo/SKILL.md'),
   'to-spec/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-spec/SKILL.md'),
   'to-tickets/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-tickets/SKILL.md'),
   'docs/evenements-moteur.md': repoFile('docs/evenements-moteur.md'),
 }
 
-/** Chaque consigne : ses mots-clés, et les surfaces qui la recopient (la procédure ne reçoit de la règle d'effort que la session autonome). */
+/** Chaque consigne : ses mots-clés, et les surfaces qui la recopient (la procédure ne reçoit de la règle d'effort que le worker autonome). */
 const CONSIGNES = [
   {
     // Un ticket sensible ou très sensible n'a que l'axe Spec, en high : l'axe Standards refait sa passe « bogues ».
@@ -49,13 +55,37 @@ const CONSIGNES = [
   { name: "le groupe d'un seul ticket, dans la procédure", keywords: ["un groupe d'un seul ticket, rattachés compris, n'a pas de revue du groupe", 'avis de sécurité reste dû'], surfaces: ['reference/procedure-groupe.md'] },
   { name: "le groupe d'un seul ticket, en anglais", keywords: ['A group of a single ticket (attached ones included) has no group review'], surfaces: ['hooks/catalog.ts'] },
   {
-    // La revue de sécurité ne se conseille que sur une zone de la liste de sa méthode, jamais pour la concurrence seule.
+    // La revue de sécurité ne se conseille que pour ce qui franchit la limite du compte (sa frontière de confiance) :
+    // un fichier sous ~/.claude écrit par une autre session n'est pas une entrée hostile ; ni suppression ni concurrence seule.
     name: 'la liste qui déclenche la revue de sécurité',
-    keywords: ['la concurrence seule', 'suppression de données'],
-    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md'],
+    keywords: [
+      'la limite du compte',
+      'secrets et jetons (masquage compris), dépendances et code tiers lancé, publication, réseau ou export public, droits des fichiers et accès',
+      "un fichier sous `~/.claude` écrit par une autre session du compte n'est pas une entrée hostile",
+      "ni une suppression de données ni la concurrence seule n'en font partie",
+      "l'accès comprend l'authentification et les règles d'accès d'une application, et le réseau vaut dans les deux sens",
+    ],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'reference/revue-securite.md', 'README.md'],
   },
-  { name: 'la liste qui déclenche la revue de sécurité, contenu de messages compris', keywords: ['contenu de messages'], surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe.md', 'README.md'] },
-  { name: 'la liste qui déclenche la revue de sécurité, en anglais', keywords: ['concurrency alone does not call for it'], surfaces: ['hooks/catalog.ts'] },
+  {
+    name: 'la liste qui déclenche la revue de sécurité, en anglais',
+    keywords: [
+      "crosses the boundary of the user's account",
+      'secrets and tokens (masking included), dependencies and third-party code run, publishing, network or public export, file permissions and access',
+      'a file under ~/.claude written by another session of the account is not a hostile input',
+      'neither a data deletion nor concurrency alone calls for it',
+      "access includes authentication and an application's access rules, and network goes both ways",
+    ],
+    surfaces: ['hooks/catalog.ts'],
+  },
+  {
+    // La revue d'un groupe ou d'un lot signale une valeur relue qui entre dans une commande ou un chemin : le gabarit
+    // des consignes (sessions liées), la consigne du mod (revue d'un groupe fini, d'un lot), le README.
+    name: 'la ligne « sécurité » de la revue du groupe',
+    keywords: ['qui entre dans une commande shell ou un chemin', 'sauf là où un contrôle du projet la vérifie déjà'],
+    surfaces: ['reference/consignes-revue.md', 'README.md'],
+  },
+  { name: 'la ligne « sécurité » de la revue du groupe, en anglais', keywords: ['that reaches a shell command or a path is reported as a bug, Important, except where a check of the project already controls it'], surfaces: ['hooks/catalog.ts'] },
   {
     // Trois questions vérifient le classement d'un ticket, au découpage puis avant chaque ticket.
     name: 'les trois questions du classement',
@@ -71,10 +101,11 @@ const CONSIGNES = [
   },
   {
     name: "l'effort d'une session de groupe",
-    keywords: ['medium par défaut', 'xhigh (Recommandé) / high', 'tâche de jugement', "tâche d'exécution", 'session autonome'],
-    surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/register.tsx'],
+    keywords: ['medium par défaut', 'xhigh (Recommandé) / high', 'tâche de jugement', "tâche d'exécution", 'worker autonome'],
+    // Le brief d'un worker la tient de hooks/effort.ts, la règle d'effort des workers en un seul endroit.
+    surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/effort.ts'],
   },
-  { name: 'la session autonome', keywords: ['session autonome', 'Session autonome'], surfaces: ['reference/procedure-groupe.md'] },
+  { name: 'le worker autonome', keywords: ['worker autonome', 'Worker autonome'], surfaces: ['reference/procedure-groupe.md'] },
   {
     name: 'la relecture du fond et de la forme',
     keywords: ['Lecteur', 'relecture-fond-forme.md', 'fond et de la forme'],
@@ -124,11 +155,45 @@ const CONSIGNES = [
     surfaces: ['hooks/catalog.ts', 'hooks/register.tsx'],
   },
   {
-    // Les six catégories qui restent à la personne en auto : la règle des lots, le premier clic sur « ⚡ Auto » (view.tsx), le README.
+    // Les six catégories qui restent à la personne en auto, le choix d'expérience défini là où la liste le nomme :
+    // la règle des lots, le premier clic sur « ⚡ Auto » (view.tsx), le README, la procédure d'un worker autonome.
     name: 'les six catégories qui bloquent en mode auto',
-    keywords: ['zone sensible', 'recommandation défendable', 'contredit une décision déjà prise', 'faille de sécurité sans correctif', 'effort xhigh', 'action externe hors du parcours'],
+    keywords: ['expérience', 'mise en page, maquette, libellés, boutons, notifications', 'se valent techniquement et ne diffèrent que par', 'affaiblir un invariant', 'contredit une décision déjà prise', 'suppression sans retour', 'hors du poste', 'faille de sécurité sans correctif', 'effort xhigh', 'action externe hors de la mission'],
+    surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/view.tsx', 'reference/procedure-groupe.md'],
+  },
+  {
+    // Une question en zone sensible se tranche seule en auto, à une condition : les mêmes surfaces.
+    name: 'la question sensible tranchée seule en mode auto',
+    keywords: ['invariant déjà validé', 'la plus prudente', 'ne perd rien, n', 'ne supprime rien sans retour', '« Décidé sans toi »'],
     surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/view.tsx'],
   },
+  {
+    // Le choix sensible tranché en auto se reconnaît à son texte, et le compte rendu le range à part.
+    name: 'la marque d’un choix sensible tranché en auto',
+    keywords: ['« Zone sensible : »'],
+    surfaces: ['config/rules/flow-board.md', 'README.md', 'reference/procedure-groupe.md', 'skills/compte-rendu/SKILL.md', 'hooks/register.tsx'],
+  },
+  {
+    // Le worker d'une mission en auto : la condition dans sa procédure, et le renvoi de la réponse de l'outil flow.
+    name: 'la question sensible tranchée seule par un worker autonome',
+    keywords: ['invariant déjà validé', 'la plus prudente', 'Seules les décisions qui restent bloquantes en mode auto montent au manager'],
+    surfaces: ['reference/procedure-groupe.md'],
+  },
+  {
+    // Les blocs de la spec et du découpage en auto : seuls l'invariant et la question sensible hors condition y bloquent.
+    name: 'la question sensible à la spec et au découpage en mode auto',
+    keywords: ['qui ne remplissent pas la condition pour se trancher seules'],
+    surfaces: ['README.md'],
+  },
+  { name: 'la question sensible à la spec et au découpage en mode auto, en anglais', keywords: ['does not meet the condition above to be settled by you, stay blocking questions on this phase ("phase": "to-tickets")', 'and setting or weakening an invariant, stay blocking questions on this phase ("phase": "to-spec")'], surfaces: ['hooks/register.tsx'] },
+  {
+    // Les questions répondues par écrit chez le COO : les mêmes catégories que la liste bloquante.
+    name: 'les questions répondues par écrit chez le COO',
+    keywords: ["un choix d'expérience, une zone sensible, un invariant ou une contradiction, une suppression ou une exposition"],
+    surfaces: ['skills/coo/SKILL.md'],
+  },
+  { name: 'les questions répondues par écrit chez le COO, en anglais', keywords: ['an experience choice, a sensitive area, an invariant or a contradiction, a deletion or an exposure'], surfaces: ['hooks/register.tsx'] },
+  { name: 'la question sensible tranchée seule par un worker autonome, en anglais', keywords: ['a worker of a mission in auto mode', '« Worker autonome »'], surfaces: ['hooks/model.ts'] },
   {
     // Les origines d'un choix déclaré en auto, et la notification au texte fixé : la règle des lots et le README.
     name: 'les choix et la notification du mode auto',
@@ -138,7 +203,7 @@ const CONSIGNES = [
   {
     // Ce que le second clic accorde : les validations sautées, la même liste dans la règle des lots, le glossaire et le README.
     name: 'les validations sautées du mode auto',
-    keywords: ['accord du cadrage, spec, découpage, plan, écritures Asana du parcours'],
+    keywords: ['accord du cadrage, spec, découpage, plan, écritures Asana de la mission'],
     surfaces: ['config/rules/flow-board.md', 'GLOSSARY.md', 'README.md'],
   },
   { name: 'les validations sautées du mode auto, en anglais', keywords: ['framing agreement, spec, ticket split, work plan', 'the tickets created, their statuses'], surfaces: ['hooks/register.tsx'] },
@@ -155,8 +220,14 @@ const CONSIGNES = [
     surfaces: ['config/rules/general.md', 'config/rules/asana-board.md', 'config/rules/flow-board.md'],
   },
   {
-    // La session autonome et l'effort en mode auto : à tout effort, jamais xhigh proposé ; les groupes suivants lancés par le mod.
-    name: 'la session autonome et l’effort en mode auto',
+    // L'accord du mode auto et le tour d'intention recueilli par le COO : la règle des lots et le README.
+    name: 'l’accord du mode auto et le tour d’intention du COO',
+    keywords: ['« Lancer en auto »', 'à la seule discussion lancée pour lui, dans les 10 minutes', 'une fusion, une reconstruction ou une lecture ratée laisse l\'auto éteint ou l\'éteint, jamais l\'inverse', 'travail/<sujet>/demande.md'],
+    surfaces: ['config/rules/flow-board.md', 'README.md'],
+  },
+  {
+    // Le worker autonome et l'effort en mode auto : à tout effort, jamais xhigh proposé ; les groupes suivants lancés par le mod.
+    name: 'le worker autonome et l’effort en mode auto',
     keywords: ['quel que soit son effort', 'ne propose jamais xhigh', 'le mod lance lui-même les groupes suivants', 'jamais par une question à boutons'],
     surfaces: ['config/rules/flow-board.md'],
   },
@@ -167,17 +238,17 @@ const CONSIGNES = [
     keywords: ['ticket qui modifie les règles communes (`config/rules`), un fichier de référence ou un skill', 'ces textes guident ce que fait Claude'],
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md'],
   },
-  { name: 'la session autonome en mode auto, au glossaire', keywords: ['quel que soit son effort', 'mode auto'], surfaces: ['GLOSSARY.md'] },
+  { name: 'le worker autonome en mode auto, au glossaire', keywords: ['quel que soit son effort', 'mode auto'], surfaces: ['GLOSSARY.md'] },
   {
     // Une session liée d'un parcours en mode auto est autonome à tout effort : la règle, la procédure, la demande de délégation, le README.
-    name: 'la session autonome à tout effort en mode auto',
+    name: 'le worker autonome à tout effort en mode auto',
     keywords: ['quel que soit son effort'],
     surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe.md', 'hooks/register.tsx', 'README.md'],
   },
   {
-    // Les mêmes, en anglais, dans la consigne du mode auto, avec ses deux origines de choix.
+    // Les mêmes, en anglais, dans la consigne du mode auto, avec ses deux origines de choix et la question sensible tranchée seule.
     name: 'les six catégories qui bloquent en mode auto, en anglais',
-    keywords: ['a sensitive area', 'no defensible recommendation', 'contradicts DECISIONS.md', 'leaving a security finding unfixed', 'declare that xhigh was not offered', 'external action outside the run', '« reco prise »', '« validation sautée »'],
+    keywords: ['an experience choice', 'layout, mockup, labels, buttons, notifications', 'technically equal and differ only by', 'setting or weakening an invariant', 'contradicts DECISIONS.md', 'a deletion with no way back', 'outside this machine', 'leaving a security finding unfixed', 'declare that xhigh was not offered', 'external action outside the mission', '« reco prise »', '« validation sautée »', 'the invariant already validated', 'the most prudent one'],
     surfaces: ['hooks/register.tsx'],
   },
   {
@@ -226,10 +297,10 @@ for (const consigne of CONSIGNES) {
 }
 
 // Hors de la règle « Mode auto » des lots, les règles chargées dans toutes les sessions ne parlent du mode auto
-// que par le renvoi au bloc de la consigne (et la définition d'une session autonome) : une exception recopiée
+// que par le renvoi au bloc de la consigne (et la définition d'un worker autonome) : une exception recopiée
 // y ajoutait des centaines de mots qui ne valent que dans la discussion d'où l'auto agit.
 const AUTO_RULES = ['config/rules/general.md', 'config/rules/asana-board.md', 'config/rules/flow-board.md']
-const AUTO_ALLOWED = ["En mode auto, le bloc « mode auto » de la consigne flow-board l'emporte", 'ou par un parcours en mode auto quel que soit son effort']
+const AUTO_ALLOWED = ["En mode auto, le bloc « mode auto » de la consigne flow-board l'emporte", 'ou par une mission en mode auto quel que soit son effort']
 
 test('les règles communes ne recopient pas les exceptions du mode auto, hors de la règle « Mode auto »', () => {
   const copied = []
@@ -255,7 +326,8 @@ test('aucune surface ne dit qu’une règle qui ne fait rien lancer n’a pas de
 
 test('la liste qui déclenche la revue de sécurité : plus aucune surface ne garde l’ancienne liste', () => {
   // Une copie restée dans le README passait le test à mots-clés, qui les trouvait ailleurs dans le même fichier.
-  const OLD = ["entrées de l'utilisateur jusqu'à une requête", 'user input reaching a query', 'uploads, dependencies', 'accès réseau ou fichiers, envois de fichiers']
+  // Puis la liste d'avant la limite du compte (02/11/2026), qui faisait entrer une valeur relue sous ~/.claude et la suppression.
+  const OLD = ["entrées de l'utilisateur jusqu'à une requête", 'user input reaching a query', 'uploads, dependencies', 'accès réseau ou fichiers, envois de fichiers', "commande ou chemin construit à partir d'une entrée", 'a command or a path built from an input', 'données personnelles ou contenu de messages', 'personal data or message content stored on disk', "n'est **pas** de confiance"]
   const stale = Object.entries(SURFACES).flatMap(([name, text]) => (text === null ? [] : OLD.filter(k => text.includes(k)).map(k => `${name} : « ${k} »`)))
   assert.deepEqual(stale, [])
 })

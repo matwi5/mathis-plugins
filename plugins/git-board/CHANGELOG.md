@@ -4,6 +4,14 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.7.0 — 2026-11-03
+
+### Changé
+- **Vocabulaire des missions** : le README et les commentaires disent « mission flow-board » ; pas de changement de comportement.
+- **Anciens mots refusés** : `termes-retires.txt` ; `check.sh` refuse les anciens mots de flow-board dans le README, les consignes et les nouvelles entrées du CHANGELOG.
+
+---
+
 ## 0.6.0 — 2026-10-29
 
 ### Ajouté

@@ -3,8 +3,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import { proposeBump, suggestionsFor, versionPreview } from '../hooks/model.ts'
 import type { Board, VersionCommit } from '../types'
 
-// En fin de parcours, la version passe par /project:version, lancé depuis le bouton Version, avec un
-// aperçu « version précédente → nouvelle version » sous les boutons (Mathis, rétro du parcours xhigh,
+// En fin de mission, la version passe par /project:version, lancé depuis le bouton Version, avec un
+// aperçu « version précédente → nouvelle version » sous les boutons (Mathis, rétro de la mission xhigh,
 // V1 à V3) : Version en tête tant qu'une partie changée n'a pas sa nouvelle version, Push en tête
 // quand elle est déjà posée ou que le projet n'a pas de fichier de version, l'autre toujours à côté.
 
@@ -13,7 +13,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 92, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
 } as const
 
 const commit = (subject: string, isBreaking = false): VersionCommit => ({ subject, isBreaking })
@@ -64,7 +64,7 @@ const world = (on: any) => {
   return mem
 }
 
-/** Un parcours d'implémentation dont le compte rendu vient d'être validé, le distant mesuré. */
+/** Une mission d'implémentation dont le compte rendu vient d'être validé, le distant mesuré. */
 const reportValidated = async ($: any, on: any) => {
   const clock = mock.clock(on, { now: 31_000_000 })
   const mem = world(on)

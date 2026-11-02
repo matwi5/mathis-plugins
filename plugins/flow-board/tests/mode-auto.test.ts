@@ -1,7 +1,7 @@
-// Mode auto d'un parcours : son état (« allumé à », « allumé par », « éteint à », raison), sa fusion
+// Mode auto d'une mission : son état (« allumé à », « allumé par », « éteint à », raison), sa fusion
 // entre deux copies du board, le bouton « ⚡ Auto » et le bandeau. Invariant : le mode auto n'est
 // jamais allumé sans le second clic de l'utilisateur ; une fusion, une reconstruction ou une
-// lecture ratée du fichier de parcours le laisse éteint ou l'éteint, jamais l'inverse.
+// lecture ratée du fichier de mission le laisse éteint ou l'éteint, jamais l'inverse.
 
 import { expect, mock, test } from 'claude-code/testing'
 
@@ -15,7 +15,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
 } as const
 const BAND = {
   component: 'AbovePrompt',
@@ -23,7 +23,7 @@ const BAND = {
 } as const
 const SURFACES = ['terminal', 'desktop'] as const
 
-/** Le fichier commun des parcours, quel que soit le dossier d'où le mod est lancé. */
+/** Le fichier commun des missions, quel que soit le dossier d'où le mod est lancé. */
 const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
 
 /**
@@ -107,7 +107,7 @@ const press = async ($: any, key: string) => {
   await pane.unmount()
 }
 
-/** Un parcours en phase Tickets (sa carte « Ensuite » propose une suite), actif dans la discussion « sa ». */
+/** Une mission en phase Tickets (sa carte « Ensuite » propose une suite), actif dans la discussion « sa ». */
 const running = async ($: any, on: any, now: number) => {
   const clock = mock.clock(on, { now })
   const w = world(on)
@@ -124,7 +124,7 @@ test('« ⚡ Auto » : le premier clic montre ce que l’activation vaut, « Con
   await press($, 'auto-on')
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: /Allumer le mode auto de ce parcours/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /Allumer le mode auto de cette mission/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /validations à boutons.*écritures Asana/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^6\.$/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /effort xhigh/ })).toBeDefined()
@@ -181,16 +181,16 @@ test('Après un /clear (nouvel id de discussion), l’auto est en pause « discu
   expect(await bandText($, 'terminal')).toMatch(/⚡\sAuto\s·\sen\scours/)
 })
 
-test('Un parcours dont la discussion porteuse a planté garde l’auto allumé, en pause ; repris ici, il ne repart pas sans deux clics, et un clic le coupe', { timeoutMs: 20000 }, async ($, on) => {
+test('Une mission dont la discussion porteuse a planté garde l’auto allumé, en pause ; repris ici, il ne repart pas sans deux clics, et un clic le coupe', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 60_000 })
   const w = world(on)
-  // Le parcours d'une discussion morte (pas d'événement de fin) : actif, vieux de plus de 30 min, allumé par elle.
+  // La mission d'une discussion morte (pas d'événement de fin) : actif, vieux de plus de 30 min, allumé par elle.
   const run: Run = { ...newRun('implement', T0 - 3_600_000, 'Orphelin'), owner: 'morte', updatedAt: T0 - 3_600_000, auto: { onAt: T0 - 3_600_000, onBy: 'morte' } }
   seed(w, { ...emptyBoard('', 'p'), session: 'morte', deleted: [], runs: [run], activeId: run.id })
   await start($)
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: /⚡\sAuto en pause : parcours en pause/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /⚡\sAuto en pause : mission en pause/ })).toBeDefined()
     await pane.unmount()
   }
   // Repris dans cette discussion : la pause se déduit (« discussion changée ») ; les deux boutons sont là.
@@ -227,7 +227,7 @@ test('Allumé, le bandeau garde le bouton de l’étape suivante à toute largeu
   for (const surface of SURFACES) for (const width of widths) expect(await keysAt(surface, width)).toEqual(before.get(`${surface}${width}`)!)
 })
 
-test('Une lecture ratée du stockage avant une sauvegarde éteint l’auto (« lecture du parcours ratée ») au lieu d’écraser une coupure faite ailleurs', { timeoutMs: 20000 }, async ($, on) => {
+test('Une lecture ratée du stockage avant une sauvegarde éteint l’auto (« lecture de la mission ratée ») au lieu d’écraser une coupure faite ailleurs', { timeoutMs: 20000 }, async ($, on) => {
   const { clock, ...w } = await running($, on, T0)
   await press($, 'auto-on')
   await press($, 'auto-confirm')
@@ -238,7 +238,7 @@ test('Une lecture ratée du stockage avant une sauvegarde éteint l’auto (« l
   await $.tool.call({ tool: TOOL, note: 'un pas' } as any)
   await settle(clock, 1)
   expect(storedRun(w).auto).toMatchObject({ offWhy: 'lecture du parcours ratée' })
-  for (const surface of SURFACES) expect(await bandText($, surface)).toMatch(/⚡\sAuto\sen\spause\s:\slecture\sdu\sparcours\sratée/)
+  for (const surface of SURFACES) expect(await bandText($, surface)).toMatch(/⚡\sAuto\sen\spause\s:\slecture\sde\sla\smission\sratée/)
   // Relu de nouveau, l'auto reste éteint jusqu'au prochain second clic.
   w.unreadable.board = false
   await $.tool.call({ tool: TOOL, note: 'un autre pas' } as any)
@@ -274,7 +274,7 @@ test('Une lecture ratée à la relecture périodique, sans aucune copie de secou
   // Le fichier et le stockage ne se lisent plus ; aucun appel ne fait sauvegarder : la relecture des 5 s le voit.
   w.unreadable.board = true
   await settle(clock, 6)
-  for (const surface of SURFACES) expect(await bandText($, surface)).toMatch(/⚡\sAuto\sen\spause\s:\slecture\sdu\sparcours\sratée/)
+  for (const surface of SURFACES) expect(await bandText($, surface)).toMatch(/⚡\sAuto\sen\spause\s:\slecture\sde\sla\smission\sratée/)
   w.unreadable.board = false
   // La pause posée par le mod s'efface d'un clic : le bandeau n'en dit plus rien, l'auto reste éteint.
   await press($, 'auto-off')
@@ -306,7 +306,7 @@ test('La fin de la discussion porteuse éteint l’auto (« discussion fermée �
   expect(storedRun(w).auto).toMatchObject({ offWhy: 'discussion fermée' })
 })
 
-/** La discussion A, où le parcours est actif, et la copie de la discussion B, faite au même instant. */
+/** La discussion A, où la mission est active, et la copie de la discussion B, faite au même instant. */
 const twoCopies = () => {
   const run: Run = { ...newRun('implement', T0, 'Auto'), owner: 'sa' }
   const a: Board = { ...emptyBoard('', 'p'), session: 'sa', deleted: [], runs: [run], activeId: run.id }
@@ -326,7 +326,7 @@ test('Une copie en retard, auto allumé, ne rallume jamais une copie éteinte, d
   const staleNewer: Board = { ...stale, runs: stale.runs.map(r => ({ ...r, status: 'paused' as const, owner: undefined, updatedAt: T0 + 9 })) }
   const off = switchOffAuto(on, T0 + 3)!.board
   expect(isOn(off)).toBe(false)
-  // Ici, la copie la plus récente du reste du parcours (celle de B) gagnerait : pas l'auto.
+  // Ici, la copie la plus récente du reste de la mission (celle de B) gagnerait : pas l'auto.
   expect(isOn(mergeBoards(off, staleNewer))).toBe(false)
   expect(runOf(mergeBoards(off, staleNewer)).auto?.offAt).toBe(T0 + 3)
   // Dans l'autre sens (la discussion B fusionne la copie d'ici) : éteint aussi.
@@ -342,7 +342,7 @@ test('Une copie en retard, auto allumé, ne rallume jamais une copie éteinte, d
 test('Chaque date prend la plus récente des deux copies : un nouveau second clic gagne sur une coupure plus ancienne, une coupure plus récente gagne sur un allumage', () => {
   const { a } = twoCopies()
   const off = switchOffAuto(switchOnAuto(a, 'sa', T0 + 1)!.board, T0 + 3)!.board
-  // Rallumé plus tard dans la copie de B (B porte le parcours, son clic) : l'auto est allumé par B.
+  // Rallumé plus tard dans la copie de B (B porte la mission, son clic) : l'auto est allumé par B.
   const relit = switchOnAuto({ ...(JSON.parse(JSON.stringify(off)) as Board), session: 'sb' }, 'sb', T0 + 5)!.board
   const merged = mergeBoards(off, relit)
   expect(runOf(merged).auto).toMatchObject({ onAt: T0 + 5, onBy: 'sb', offAt: T0 + 3 })
@@ -396,7 +396,7 @@ test('Une copie abîmée éteint l’auto fusionné, même face à un second cli
   expect(isAutoOn(runOf(mergeBoards(undated, relit)))).toBe(false)
 })
 
-test('Un parcours qui se termine (dernière phase finie, ou mis en pause tout fait) éteint l’auto, sans pause affichée : relancé, il ne repart pas sans un nouveau second clic', () => {
+test('Une mission qui se termine (dernière phase finie, ou mis en pause tout fait) éteint l’auto, sans pause affichée : relancé, il ne repart pas sans un nouveau second clic', () => {
   const { a } = twoCopies()
   const on = switchOnAuto(a, 'sa', T0 + 1)!.board
   // Le lot fait et relu, le compte rendu validé, la livraison sautée : la dernière phase finie le termine.
@@ -405,7 +405,7 @@ test('Un parcours qui se termine (dernière phase finie, ou mis en pause tout fa
   expect(runOf(finished).status).toBe('done')
   expect(runOf(finished).auto).toMatchObject({ offWhy: 'parcours terminé' })
   expect(autoStateOf(runOf(finished), finished, 'sa')).toEqual({ kind: 'off' })
-  // Mis en pause tout fait par l'ouverture d'un autre parcours : terminé, éteint aussi.
+  // Mis en pause tout fait par l'ouverture d'une autre mission : terminé, éteint aussi.
   const allDone = applyReport(on, { fix: { phase: 'project:pr' } }, T0 + 2).board
   const doneRun = { ...runOf(allDone), phases: runOf(allDone).phases.map(p => ({ ...p, status: 'done' as const })) }
   const opened = openRun({ ...allDone, runs: [doneRun] }, { title: 'Autre' }, T0 + 4).board
@@ -481,20 +481,22 @@ test('Une coupure tient même quand l’horloge la place avant l’allumage, et 
   expect(isOn(relit)).toBe(true)
 })
 
-test('Mise de côté, clôture, archivage et fin de la discussion porteuse éteignent l’auto avec leur raison ; la pause par l’ouverture d’un autre parcours ne pose rien', () => {
+test('Mise de côté, clôture, archivage et fin de la discussion porteuse éteignent l’auto avec leur raison ; la pause par l’ouverture d’une autre mission ne pose rien', () => {
   const { a } = twoCopies()
   const on = switchOnAuto(a, 'sa', T0 + 1)!.board
   const autoIn = (board: Board) => board.runs.find(r => r.id === runOf(on).id)!.auto
   expect(autoIn(setAsideActive(on, T0 + 2)!.board)).toMatchObject({ offAt: T0 + 2, offWhy: 'parcours mis de côté' })
+  // La valeur enregistrée garde l'ancien mot ; le journal la dit dans le nouveau.
+  expect(setAsideActive(on, T0 + 2)!.board.runs.find(r => r.id === runOf(on).id)!.log.map(l => l.text)).toContain('Mode auto éteint : mission mise de côté')
   expect(autoIn(finishActive(on, T0 + 2)!.board)).toMatchObject({ offAt: T0 + 2, offWhy: 'parcours clos' })
   expect(autoIn(archiveRun(on, runOf(on).id, T0 + 2)!.board)).toMatchObject({ offAt: T0 + 2, offWhy: 'parcours archivé' })
   expect(autoIn(parkActive(on, T0 + 2)!.board)).toMatchObject({ offAt: T0 + 2, offWhy: 'discussion fermée' })
-  // Un autre parcours ouvert ici : le premier passe en pause, son auto reste allumé (pause déduite).
+  // Une autre mission ouverte ici : la première passe en pause, son auto reste allumé (pause déduite).
   const opened = openRun(on, { title: 'Autre' }, T0 + 2).board
   const first = opened.runs.find(r => r.id === runOf(on).id)!
   expect(first.status).toBe('paused')
   expect(first.auto?.offAt).toBeUndefined()
-  expect(autoStateOf(first, opened, 'sa')).toEqual({ kind: 'paused', why: 'parcours en pause' })
+  expect(autoStateOf(first, opened, 'sa')).toEqual({ kind: 'paused', why: 'mission en pause' })
   // Revenu actif ici, il envoie de nouveau, sans nouveau clic.
   const back = resumeRun(opened, first.id, T0 + 3)!.board
   expect(autoStateOf(back.runs.find(r => r.id === first.id)!, back, 'sa').kind).toBe('on')
@@ -515,7 +517,7 @@ test('La discussion change (après un /clear, une reprise ailleurs) : l’auto n
   expect(autoStateOf(runOf(seen), seen, 'sb')).toEqual({ kind: 'elsewhere' })
 })
 
-test('Une lecture ratée éteint l’auto de chaque parcours de la copie, sans la rendre plus récente pour le reste', () => {
+test('Une lecture ratée éteint l’auto de chaque mission de la copie, sans la rendre plus récente pour le reste', () => {
   const { a } = twoCopies()
   const two = switchOnAuto(openRun(switchOnAuto(a, 'sa', T0 + 1)!.board, { title: 'Second' }, T0 + 2).board, 'sa', T0 + 3)!.board
   expect(two.runs.filter(isAutoOn)).toHaveLength(2)
@@ -527,7 +529,7 @@ test('Une lecture ratée éteint l’auto de chaque parcours de la copie, sans l
   expect(stopAutoUnread(unread, T0 + 5)).toBeNull()
 })
 
-test('Deux parcours du même board ont chacun leur état : allumer l’un ne change pas l’autre', () => {
+test('Deux missions du même board ont chacun leur état : allumer l’un ne change pas l’autre', () => {
   const { a } = twoCopies()
   const two = openRun(a, { title: 'Second' }, T0 + 1).board
   const on = switchOnAuto(two, 'sa', T0 + 2)!.board

@@ -10,7 +10,7 @@ const PLUGIN = 'flow-board'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
 } as const
 const ALL = ['terminal', 'desktop', 'vscode', 'mobile'] as const
 
@@ -29,7 +29,7 @@ const world = (on: any) => {
 }
 
 /**
- * Une requête au modèle de l'orchestrateur (ou du sous-agent `agentId`) : 3 s de réflexion, dont
+ * Une requête au modèle du manager (ou du spécialiste `agentId`) : 3 s de réflexion, dont
  * un appel à l'advisor de la 1re à la 2e seconde, que le moteur ne donne qu'à la fin de l'étape.
  * Le hook du moteur se pose avant tout appel à `$` ; la requête part par la fonction rendue.
  */
@@ -49,7 +49,7 @@ const advisedSteps = (on: any, clock: any) => {
   }
 }
 
-test('un appel à l’advisor pose, à la fin de l’étape, sa ligne et une attente « consulte l’advisor » sur l’orchestrateur', { timeoutMs: 15000 }, async ($, on) => {
+test('un appel à l’advisor pose, à la fin de l’étape, sa ligne et une attente « consulte l’advisor » sur le manager', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 50_000_000 })
   const mem = world(on)
   const step = advisedSteps(on, clock)
@@ -66,19 +66,19 @@ test('un appel à l’advisor pose, à la fin de l’étape, sa ligne et une att
     expect(await ui.find({ type: 'Text', text: /consulte\sl’advisor/ })).toBeDefined()
     if (surface !== 'terminal') {
       const alts = (await ui.findAll({ type: 'Svg' })).map(svg => String(svg.props.alt).replace(/ /g, ' '))
-      expect(alts).toContain('Orchestrateur : réflexion, consulte l’advisor, réflexion')
+      expect(alts).toContain('Manager : réflexion, consulte l’advisor, réflexion')
       expect(alts.some(alt => alt.startsWith('advisor · relecteur : 1 appel'))).toBe(true)
     }
     // Sa carte : le nombre d'appels, l'heure et l'appelant de chacun.
     await ui.press({ key: 'lane-advisor' })
     expect(await ui.find({ type: 'Text', text: /1\sappel/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Orchestrateur/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Manager/ })).toBeDefined()
     await ui.press({ key: 'lane-advisor' })
     await ui.unmount()
   }
 })
 
-test('l’appel d’un sous-agent va sur la même ligne, avec son nom pour appelant ; pas de ligne sans appel', { timeoutMs: 15000 }, async ($, on) => {
+test('l’appel d’un spécialiste va sur la même ligne, avec son nom pour appelant ; pas de ligne sans appel', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 51_000_000 })
   const mem = world(on)
   const step = advisedSteps(on, clock)
@@ -204,7 +204,7 @@ test('la ligne advisor d’une discussion passée vient de son fichier à part, 
 })
 
 /**
- * Une session au registre déjà relu : un sous-agent qui a consulté l'advisor, ses tokens et ceux
+ * Une session au registre déjà relu : un spécialiste qui a consulté l'advisor, ses tokens et ceux
  * de l'appel connus ; les prix gardés du jour, sans relancer ccusage.
  */
 const relu = (on: any, advisorModel: string) => {
@@ -238,7 +238,7 @@ test('le coût de l’advisor : une part à part du total, sa carte, et une lign
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     await ui.press({ key: 'tab-agents' })
-    // Le total des sous-agents, puis la part de l'advisor, nommée.
+    // Le total des spécialistes, puis la part de l'advisor, nommée.
     expect(await ui.find({ type: 'Text', text: /^·\s≈\s0,01\s\$$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /advisor\s≈\s1,89\s\$/ })).toBeDefined()
     // La carte de la ligne advisor : modèle, tokens, coût.
@@ -276,20 +276,20 @@ test('un appel relu sans modèle ni tokens compte sans prix : « coût inconnu �
   expect(advisorCostOf(reg.advisor!.calls, {})).toMatchObject({ unread: 1, isUnknown: false, cost: null })
   const lane = laneFromTranscript(advisedTranscript({ input_tokens: 'x' }))
   reg = catchUp(reg, [{ agentId: 'a1', lane, meta: {} }], T1 + 20_000) ?? reg
-  // L'appel de l'orchestrateur n'est pas celui du sous-agent : on relit la piste de la discussion.
+  // L'appel du manager n'est pas celui du spécialiste : on relit la piste de la discussion.
   reg = applyRebuilt(reg, { v: 1, session: 's', agents: [], main: { advisor: lane.advisor! } }, T1 + 20_000)
   expect(reg.advisor!.calls[0]!.isRead).toBe(true)
   expect(advisorCostOf(reg.advisor!.calls, {})).toMatchObject({ unread: 0, isUnknown: true, cost: null })
 })
 
-test('l’historique d’un parcours garde la ligne advisor : fichier à part et registres des discussions porteuses', () => {
+test('l’historique d’une mission garde la ligne advisor : fichier à part et registres des discussions porteuses', () => {
   const main = laneFromTranscript(advisedTranscript(FABLE, false), true)
-  // La reprise d'un parcours garde les appels de la piste de la discussion, et une union n'en perd aucun.
-  const run = { id: 'r1', startedAt: T1 - 60_000, updatedAt: T1 + 60_000, status: 'done', finishedAt: T1 + 60_000, title: 'Parcours', tickets: [], log: [] } as any
+  // La reprise d'une mission garde les appels de la piste de la discussion, et une union n'en perd aucun.
+  const run = { id: 'r1', startedAt: T1 - 60_000, updatedAt: T1 + 60_000, status: 'done', finishedAt: T1 + 60_000, title: 'Mission', tickets: [], log: [] } as any
   const kept = withRun(null, 's', run, [], main)
   expect(kept.main?.advisor?.map(c => c.id)).toEqual(['srv-1'])
   expect(unionRebuilt(kept, { v: 1, session: 's', agents: [] }).main?.advisor?.map(c => c.id)).toEqual(['srv-1'])
-  // La vue du parcours reprend les appels des discussions qui le portaient, dans sa période.
+  // La vue de la mission reprend les appels des discussions qui le portaient, dans sa période.
   const reg = { ...emptyRegistry('s', '/p', T1), main: { segments: [{ k: 'write' as const, s: T1, e: T1 + 10_000 }] }, advisor: { calls: [{ id: 'srv-1', s: T1 + 1_000, e: T1 + 9_000, by: MAIN }, { id: 'srv-old', s: T1 - 3_600_000, e: T1 - 3_599_000, by: MAIN }] } }
   expect(runRegistry(run, [reg], null, T1 + 120_000).advisor?.calls.map(c => c.id)).toEqual(['srv-1'])
 })
@@ -299,7 +299,7 @@ test('un appel sans résultat dans le transcript (réponse coupée) finit avec s
   expect(laneFromTranscript(cut).advisor).toEqual([{ id: 'srv-1', s: T1 + 1_000, e: T1 + 9_500, model: 'claude-fable-5-1', tokens: { input: 156_265, output: 6_473, cacheRead: 0, cacheWrite: 0 } }])
 })
 
-test('l’orchestrateur seul a consulté l’advisor : le résumé montre quand même sa part', { timeoutMs: 15000 }, async ($, on) => {
+test('le manager seul a consulté l’advisor : le résumé montre quand même sa part', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T1 + 60_000 })
   const mem = world(on)
   mem['agents:s-adv'] = {
@@ -389,6 +389,6 @@ test('un appel sans réponse ne se montre pas sur la ligne advisor, et le résum
   expect(await ui.find({ type: 'Text', text: /^1\sappel$/ })).toBeDefined()
   // L'attente posée en direct pour l'appel sans réponse ne reste pas sur la piste de l'appelant.
   const alts = (await ui.findAll({ type: 'Svg' })).map(svg => String(svg.props.alt).replace(/ /g, ' '))
-  expect(alts.find(alt => alt.startsWith('Orchestrateur :'))).toBe('Orchestrateur : rédaction')
+  expect(alts.find(alt => alt.startsWith('Manager :'))).toBe('Manager : rédaction')
   await ui.unmount()
 })

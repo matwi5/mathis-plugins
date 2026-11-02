@@ -9,7 +9,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
 const LINKED = '9f3e21aa-1111-2222-3333-444455556666'
@@ -37,13 +37,13 @@ const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds
   for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
-/** Le registre d'une session liée, tel que son fichier le garde : sa piste, un sous-agent au travail. */
+/** Le registre d'un worker, tel que son fichier le garde : sa piste, un spécialiste au travail. */
 const linkedRegistry = (session: string, now: number, patch: Partial<SessionRegistry> = {}): SessionRegistry => {
   const reg = startCall({ ...emptyRegistry(session, '/p', now - 60_000), title: 'Explorer le cache', ...patch }, { key: 'c-1', name: 'Chercheur web', isBackground: true }, now - 50_000)!
   return { ...reg, agents: reg.agents.map(a => ({ ...a, agentId: 'x1' })), main: { segments: [{ k: 'think', s: now - 55_000, e: now - 54_000 }, { k: 'tool', s: now - 54_000, e: now - 40_000, f: 'run', t: 'Bash' }] }, updatedAt: now - 1_000 }
 }
 
-test('sans parcours, une session lancée par claude --bg a sa pastille, sa piste dans la frise de l’orchestrateur et sa propre frise à la sélection', { timeoutMs: 15000 }, async ($, on) => {
+test('sans mission, une session lancée par claude --bg a sa pastille, sa piste dans la frise du manager et sa propre frise à la sélection', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 60_000_000 })
   const mem = world(on)
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'backgrounded · 9f3e21aa · Explorer le cache\n' } }))
@@ -51,17 +51,17 @@ test('sans parcours, une session lancée par claude --bg a sa pastille, sa piste
   await $.tool.call({ tool: 'Bash', command: 'claude --bg -n "Explorer le cache" "$(cat /tmp/brief.txt)"' } as any)
   mem[`agents:${LINKED}`] = linkedRegistry(LINKED, 60_000_000)
   await settle(clock, 6)
-  // L'orchestrateur garde son lancement dans son propre fichier.
+  // Le manager garde son lancement dans son propre fichier.
   expect((mem['agents:s-orch'] as SessionRegistry).linked).toEqual([{ id: '9f3e21aa', title: 'Explorer le cache', at: 60_000_000, via: 'bg' }])
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     await ui.press({ key: 'tab-agents' })
     expect(await ui.find({ key: 'agents-session-main' })).toBeDefined()
     expect(await ui.find({ key: 'agents-session-9f3e21aa', text: /Explorer le cache/ })).toBeDefined()
-    // Dans la frise de l'orchestrateur, une piste pour la session liée.
+    // Dans la frise du manager, une piste pour le worker.
     expect(await ui.find({ key: 'lane-linked-9f3e21aa' })).toBeDefined()
     expect(await ui.find({ type: 'Button', text: /Chercheur web$/ })).toBeUndefined()
-    // Sélectionnée, sa propre frise : ses sous-agents ; la sélection survit aux rafraîchissements.
+    // Sélectionnée, sa propre frise : ses spécialistes ; la sélection survit aux rafraîchissements.
     await ui.press({ key: 'agents-session-9f3e21aa' })
     expect(await ui.find({ type: 'Button', text: /Chercheur web$/ })).toBeDefined()
     await settle(clock, 6)
@@ -99,7 +99,7 @@ test('un fichier d’une autre session lu à moitié écrit est ignoré, sans er
   await ui.unmount()
 })
 
-test('avec un parcours, la session liée que son fichier déclare a sa pastille, et rendue, elle le dit', async ($, on) => {
+test('avec une mission, le worker que son fichier déclare a sa pastille, et rendue, elle le dit', async ($, on) => {
   const clock = mock.clock(on, { now: 62_000_000 })
   const mem = world(on)
   await start($)
@@ -118,7 +118,7 @@ test('avec un parcours, la session liée que son fichier déclare a sa pastille,
   await ui.unmount()
 })
 
-test('une session liée enregistre ses sous-agents avec son parcours et son groupe, et son onglet dit de qui elle est la session liée', async ($, on) => {
+test('un worker enregistre ses spécialistes avec sa mission et son groupe, et son onglet dit de qui elle est le worker', async ($, on) => {
   const clock = mock.clock(on, { now: 63_000_000 })
   const mem = world(on, 's-fille')
   const run = { ...newRun('implement', 1_000, 'Lot'), owner: 's-orch' }
@@ -132,13 +132,13 @@ test('une session liée enregistre ses sous-agents avec son parcours et son grou
   expect(mem['agents:s-fille']).toMatchObject({ run: run.id, group: 'B' })
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'tab-agents' })
-  expect(await ui.find({ type: 'Text', text: /session\sliée\sde\sLot principal \[abc123\]/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /worker\sde\sLot principal \[abc123\]/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', text: /Relecture du ticket$/ })).toBeDefined()
   await ui.press({ key: 'tab-flow' })
   await ui.unmount()
 })
 
-test('la frise montre l’effort d’une session liée et de ses sous-agents, et les exécutions de /code-review sous un nom standard', { timeoutMs: 15000 }, async ($, on) => {
+test('la frise montre l’effort d’un worker et de ses spécialistes, et les exécutions de /code-review sous un nom standard', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 62_000_000 })
   const mem = world(on)
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'backgrounded · 9f3e21aa · Explorer le cache\n' } }))
@@ -160,7 +160,7 @@ test('la frise montre l’effort d’une session liée et de ses sous-agents, et
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     await ui.press({ key: 'tab-agents' })
-    // La piste de la session liée dit son effort ; l'orchestrateur, non.
+    // La piste du worker dit son effort ; le manager, non.
     expect(await ui.find({ type: 'Text', text: /^xhigh$/ })).toBeDefined()
     await ui.press({ key: 'agents-session-9f3e21aa' })
     expect(await ui.find({ type: 'Button', text: /Passe bogues · 03$/ })).toBeDefined()

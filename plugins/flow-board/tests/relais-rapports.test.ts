@@ -5,7 +5,7 @@ import { RELAY_CHOICES_MAX, applyRelay, mergeRelay, nextRelayTime, refusedRelayT
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Relay } from '../types'
 
-// Le relais garde ce qu'une session liée y dépose (compte rendu, choix déclarés, comptes de revue et
+// Le relais garde ce qu'un worker y dépose (compte rendu, choix déclarés, comptes de revue et
 // de sécurité), ou la réponse de l'outil dit qu'il ne l'a pas gardé et pourquoi. Invariant :
 // une entrée déjà gardée n'est jamais réécrite vide ni effacée par l'écriture d'une autre session.
 
@@ -26,7 +26,7 @@ const world = (on: any, session: string, opts: { isRelayBroken?: boolean } = {})
     if (!racer) return
     const { session: other, entry } = racer
     racer = null
-    // Le relais commun du même parcours : sa clé du store, ou `<dossier>/<parcours>.json`.
+    // Le relais commun de la même mission : sa clé du store, ou `<dossier>/<parcours>.json`.
     const shared = target.startsWith('relay:') ? `relay:${runOf(target)}` : target.replace(/^(.*\/[^/.]+)\.[^/]+\.json$/, '$1.json')
     const was = target.startsWith('relay:') ? mem[shared] : shared in files ? JSON.parse(files[shared]!) : undefined
     const relay = was !== null && typeof was === 'object' ? (was as Relay) : { v: 1, run: runOf(target), sessions: {} }
@@ -76,7 +76,7 @@ const world = (on: any, session: string, opts: { isRelayBroken?: boolean } = {})
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
 /**
- * Le relais d'un parcours tel qu'il est gardé : ses fichiers sous …/flow-board/relais/ (le commun
+ * Le relais d'une mission tel qu'il est gardé : ses fichiers sous …/flow-board/relais/ (le commun
  * `<parcours>.json`, et ceux d'une session, `<parcours>.<session>.json`), sinon `$.store` ; les entrées
  * de toutes ces sources réunies, celle d'une session prise dans son propre fichier d'abord.
  */
@@ -106,7 +106,7 @@ const relayOf = (mem: Record<string, unknown>, files: Record<string, string>, ru
   return sources.length > 0 ? { v: 1, run: runId, sessions } : null
 }
 
-/** Le parcours du groupe C, enregistré par la discussion principale, pas actif ici. */
+/** La mission du groupe C, enregistré par le manager, pas actif ici. */
 const seeded = (mem: Record<string, unknown>): string => {
   const run = { ...newRun('implement', 1_000, 'Pistes'), owner: 's-main' }
   const board: Board = applyReport({ ...emptyBoard('', 'p'), session: 's-main', deleted: [], runs: [run], activeId: run.id }, { tickets: [{ id: '08', name: 'Neutraliser' }], groups: [{ id: 'C', name: 'Durcissement', tickets: ['08'] }] }, 2_000).board
@@ -134,7 +134,7 @@ test('le scénario du groupe C : un compte rendu, des choix et des comptes envoy
   expect(entry?.decided?.map(d => d.what)).toEqual(['Un choix'])
   expect(entry?.reviews).toMatchObject({ count: 1, standards: 1, spec: 2, fixed: 3 })
   expect(entry?.security).toMatchObject({ advised: true, findings: 0, fixed: 0 })
-  expect(out.result).toMatch(/Relayed to the main discussion's dashboard: 1 choice\(s\) made without the user and the review findings and the security review and the final report\./)
+  expect(out.result).toMatch(/Relayed to the manager's dashboard: 1 choice\(s\) made without the user and the review findings and the security review and the final report\./)
 })
 
 test('un dépôt que le relais ne garde pas reçoit une réponse qui le dit, avec la raison, sans se dire relayé', async ($, on) => {
@@ -145,8 +145,8 @@ test('un dépôt que le relais ne garde pas reçoit une réponse qui le dit, ave
   await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
   const out = (await $.tool.call({ tool: TOOL, report: 'Compte rendu du groupe C', decided: [{ what: 'Un choix' }] } as any)) as { result: string }
   expect(relayOf(mem, files, runId)).toBeNull()
-  expect(out.result).toMatch(/NOT kept in the relay: 1 choice\(s\) made without the user \(the relay could not be written, neither its file nor the store\); the final report \(the relay could not be written, neither its file nor the store\): the main discussion does not see them; send them again in a new call of this tool, and send your final report by SendMessage too\./)
-  expect(out.result).not.toMatch(/Relayed to the main discussion's dashboard/)
+  expect(out.result).toMatch(/NOT kept in the relay: 1 choice\(s\) made without the user \(the relay could not be written, neither its file nor the store\); the final report \(the relay could not be written, neither its file nor the store\): the manager does not see them; send them again in a new call of this tool, and send your final report by SendMessage too\./)
+  expect(out.result).not.toMatch(/Relayed to the manager's dashboard/)
 })
 
 /** Une entrée de relais d'une autre session, déjà gardée, avec son compte rendu. */
@@ -164,7 +164,7 @@ test('deux sessions qui écrivent le relais en même temps ne perdent ni n’eff
   const relay = relayOf(mem, files, runId)
   expect(relay?.sessions['s-autre']?.report?.text).toBe('Compte rendu du groupe A')
   expect(relay?.sessions['s-fille']?.report?.text).toBe('Compte rendu du groupe C')
-  expect(out.result).toMatch(/^Relayed to the main discussion's dashboard: the final report\./)
+  expect(out.result).toMatch(/^Relayed to the manager's dashboard: the final report\./)
 })
 
 test('un ancien relais commun qui ne se lit pas n’est jamais réécrit : la session garde son entrée dans la sienne', async ($, on) => {
@@ -185,7 +185,7 @@ test('un ancien relais commun qui ne se lit pas n’est jamais réécrit : la se
   // L'entrée de la session est gardée dans la sienne, et la réponse le dit.
   expect(declared.result).not.toMatch(/NOT kept/)
   expect(relayOf(mem, files, runId)?.sessions['s-fille']?.report?.text).toBe('Compte rendu du groupe C')
-  expect(out.result).toMatch(/^Relayed to the main discussion's dashboard: the final report\./)
+  expect(out.result).toMatch(/^Relayed to the manager's dashboard: the final report\./)
   // L'ancien relais commun, illisible, n'a pas été touché.
   expect(mem[`relay:${runId}`]).toBe(cut)
   if (shared) expect(files[shared]).toBe(cut)
@@ -205,7 +205,7 @@ test('l’entrée d’une session qui ne se lit pas n’est jamais réécrite : 
   else mem[`relay:${runId}:s-fille`] = damaged
   const out = (await $.tool.call({ tool: TOOL, report: 'Compte rendu du groupe C' } as any)) as { result: string }
   expect(out.result).toMatch(/NOT kept in the relay: the final report \(its own relay (file exists but does not read \(cut or damaged\)|entry in the store is not an entry of this session): nothing overwritten\)/)
-  expect(out.result).not.toMatch(/Relayed to the main discussion's dashboard/)
+  expect(out.result).not.toMatch(/Relayed to the manager's dashboard/)
   if (ownFile) expect(files[ownFile]).toBe(damaged)
   else expect(mem[`relay:${runId}:s-fille`]).toBe(damaged)
 })
@@ -218,7 +218,7 @@ test('au-delà de la borne des choix d’une session, un nouveau choix est refus
   await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
   const many = Array.from({ length: RELAY_CHOICES_MAX }, (_, i) => ({ what: `Choix ${i + 1}` }))
   const first = (await $.tool.call({ tool: TOOL, decided: many } as any)) as { result: string }
-  expect(first.result).toMatch(new RegExp(`^Relayed to the main discussion's dashboard: ${RELAY_CHOICES_MAX} choice\\(s\\)`))
+  expect(first.result).toMatch(new RegExp(`^Relayed to the manager's dashboard: ${RELAY_CHOICES_MAX} choice\\(s\\)`))
   const out = (await $.tool.call({ tool: TOOL, decided: [{ what: 'Un de trop' }] } as any)) as { result: string }
   expect(out.result).toMatch(new RegExp(`NOT kept in the relay: 1 choice\\(s\\) made without the user \\(the relay keeps at most ${RELAY_CHOICES_MAX} choices per session; give these in your final report instead\\)`))
   const kept = relayOf(mem, files, runId)?.sessions['s-fille']?.decided?.map(d => d.what) ?? []
@@ -257,14 +257,14 @@ test('les bogues d’une passe « bogues » partent au relais ; un compte illisi
   await $.tool.call({ tool: TOOL, delegate: runId, group: 'C', main: '[abc123]' } as any)
   const ok = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: 2, fixed: 3 } } as any)) as { result: string }
   expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 3, bugs: 2 })
-  expect(ok.result).toMatch(/Relayed to the main discussion's dashboard: the review findings\./)
+  expect(ok.result).toMatch(/Relayed to the manager's dashboard: the review findings\./)
   expect(ok.result).not.toMatch(/NOT kept|bug count/)
   // Une revue sans passe « bogues » ne touche pas aux bogues déjà relayés.
   await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 1, fixed: 1 } } as any)
   expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 2, standards: 1, spec: 1, fixed: 4, bugs: 2 })
   for (const bad of ['3', null, -1, 2.5, 10_001]) {
     const out = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: bad, fixed: 0 } } as any)) as { result: string }
-    expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the review findings\. NOT kept in the relay: the bug count \(not a whole number from 0 to 10 000; the rest of this review is relayed: do not send it again, give the bug count in your final report\): the main discussion does not see it; do what each reason says, and send your final report by SendMessage too\./)
+    expect(out.result).toMatch(/Relayed to the manager's dashboard: the review findings\. NOT kept in the relay: the bug count \(not a whole number from 0 to 10 000; the rest of this review is relayed: do not send it again, give the bug count in your final report\): the manager does not see it; do what each reason says, and send your final report by SendMessage too\./)
     expect(out.result).not.toMatch(/again in a new call/)
   }
   // Les autres comptes de ces revues sont gardés, les bogues restent ceux d'avant.
@@ -293,7 +293,7 @@ test('une entrée dont le compte de bogues est illisible n’est jamais réécri
   })
   // Avec la revue de sécurité : celle-ci part seule, la revue est refusée.
   const out = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, bugs: 1, fixed: 0 }, security: { group: 'C', advised: true, why: 'chemins', findings: 1, fixed: 1 } } as any)) as { result: string }
-  expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\. NOT kept in the relay: the review findings \(its relay entry holds an unreadable bug count, never rewritten; send this review again without "bugs", and give the bug count in your final report\)/)
+  expect(out.result).toMatch(/Relayed to the manager's dashboard: the security review\. NOT kept in the relay: the review findings \(its relay entry holds an unreadable bug count, never rewritten; send this review again without "bugs", and give the bug count in your final report\)/)
   expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 1, bugs: 'deux' })
   expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ advised: true, findings: 1, fixed: 1 })
   // Sans bogues, la revue se garde : le compte illisible reste tel quel.
@@ -327,7 +327,7 @@ test('un relais qui ne s’écrit pas n’efface pas la raison d’un compte de 
 
 test('une revue écrite mais pas relue ne se renvoie pas, même avec un compte de bogues hors forme', () => {
   const input = { review: { standards: 2, spec: 1, bugs: '2', fixed: 0 } }
-  const why = 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the main discussion checks the relay'
+  const why = 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the manager checks the relay'
   const text = relayedSentence(input, [{ part: 'review', why, isFinal: true }])
   // Le message dit la perte de la revue et des bogues, sans jamais demander de renvoyer la revue.
   expect(text).toContain(`the review findings (${why})`)
@@ -348,7 +348,7 @@ test('au relais, une revue dont un compte est hors forme est refusée en entier,
     for (const bad of ['3', null, -1, 2.5, 10_001]) {
       const out = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, fixed: 0, [field]: bad }, security: { group: 'C', advised: true, why: 'chemins', findings: 1, fixed: 0 } } as any)) as { result: string }
       expect(out.result).toContain(`review: refused, counts out of range (${field}): each is a whole number from 0 to 10 000; nothing relayed for it, send it again`)
-      expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+      expect(out.result).toMatch(/Relayed to the manager's dashboard: the security review\./)
       // Un compte de bogues ne se dit pas relayé à part quand la revue entière est refusée.
       const withBugs = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, fixed: 0, bugs: 'x', [field]: bad } } as any)) as { result: string }
       expect(withBugs.result).toContain(`review: refused, counts out of range (${field}): each is a whole number from 0 to 10 000`)
@@ -372,7 +372,7 @@ test('une revue dont un compte de la session passerait 10 000 est refusée, sa r
   await $.tool.call({ tool: TOOL, review: { standards: 9_999, spec: 0, fixed: 10_000 } } as any)
   const out = (await $.tool.call({ tool: TOOL, review: { standards: 2, spec: 0, fixed: 0 }, security: { group: 'C', advised: false, why: 'aucun risque' } } as any)) as { result: string }
   expect(out.result).toMatch(/NOT kept in the relay: the review findings \(its relay entry would pass 10 000 \(standards\); give the review counts in your final report\)/)
-  expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+  expect(out.result).toMatch(/Relayed to the manager's dashboard: the security review\./)
   expect(out.result).not.toMatch(/again in a new call/)
   const fixed = (await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 0, fixed: 1 } } as any)) as { result: string }
   expect(fixed.result).toMatch(/its relay entry would pass 10 000 \(fixed\)/)
@@ -390,7 +390,7 @@ test('la borne des comptes s’écrit « 10 000 » dans les réponses, pour la r
     expect(text).toContain('each is a whole number from 0 to 10 000')
     expect(text).not.toContain('10000')
   }
-  // Dans la discussion du parcours aussi.
+  // Dans la discussion de la mission aussi.
   const run = newRun('implement', 1_000, 'Lot')
   const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
   expect(applyReport(board, { security: { findings: -1 } }, 3_000).text).toContain('each is a whole number from 0 to 10 000')
@@ -423,7 +423,7 @@ test('un compte de revue gardé illisible n’est jamais réécrit : la revue es
       })
       const out = (await $.tool.call({ tool: TOOL, review: { standards: 2, spec: 0, fixed: 0 }, security: { group: 'C', advised: true, why: 'chemins', findings: 1, fixed: 1 } } as any)) as { result: string }
       expect(out.result).toContain(`NOT kept in the relay: the review findings (its relay entry holds an unreadable review count (${field}), never rewritten; give the review counts in your final report)`)
-      expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+      expect(out.result).toMatch(/Relayed to the manager's dashboard: the security review\./)
       expect(out.result).not.toMatch(/again in a new call/)
       expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual(kept)
       expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ advised: true, findings: 1, fixed: 1 })
@@ -469,14 +469,14 @@ test('un compte de sécurité gardé illisible n’est jamais écrasé : l’avi
       })
       const out = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, fixed: 0 }, security: { group: 'C', findings: 2, fixed: 2, dismissed: 0 } } as any)) as { result: string }
       expect(out.result).toContain(`NOT kept in the relay: the security review (its relay entry holds an unreadable security count (${field}), never overwritten; give the security counts in your final report)`)
-      expect(out.result).toMatch(/Relayed to the main discussion's dashboard: the review findings\./)
+      expect(out.result).toMatch(/Relayed to the manager's dashboard: the review findings\./)
       const entry = relayOf(mem, files, runId)?.sessions['s-fille']
       expect(entry?.security).toMatchObject({ advised: true, findings: 2, fixed: 1, dismissed: 1, [field]: bad })
       expect(entry?.reviews).toEqual({ count: 1, standards: 1, spec: 0, fixed: 0 })
       // Un avis qui ne touche pas ce compte le laisse tel quel et se garde (il remplace les autres, même plus petits).
       const other = field === 'dismissed' ? { findings: 1 } : { dismissed: 0 }
       const next = (await $.tool.call({ tool: TOOL, security: { group: 'C', ...other } } as any)) as { result: string }
-      expect(next.result).toMatch(/Relayed to the main discussion's dashboard: the security review\./)
+      expect(next.result).toMatch(/Relayed to the manager's dashboard: the security review\./)
       expect(relayOf(mem, files, runId)?.sessions['s-fille']?.security).toMatchObject({ [field]: bad, ...other })
     }
   }

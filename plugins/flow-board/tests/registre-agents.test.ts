@@ -4,7 +4,7 @@ import { emptyRegistry, endCall, mergeRegistry, parseRegistry, reconcileAgents, 
 
 const call = (key: string, name = `Agent ${key}`) => ({ key, name, isBackground: true })
 
-test('un appel Agent devient un sous-agent au travail, puis fini à son retour « completed »', () => {
+test('un appel Agent devient un spécialiste au travail, puis fini à son retour « completed »', () => {
   const r0 = emptyRegistry('s1', '/p', 1_000)
   const r1 = startCall(r0, { ...call('t1', 'Explorer le module'), model: 'haiku', subagentType: 'Explore', prompt: 'Cherche X' }, 2_000)!
   expect(runningOf(r1).map(a => a.name)).toEqual(['Explorer le module'])
@@ -13,7 +13,7 @@ test('un appel Agent devient un sous-agent au travail, puis fini à son retour �
   expect(r2.agents[0]).toMatchObject({ agentId: 'a1', status: 'done', startedAt: 2_000, finishedAt: 9_000, prompt: 'Cherche X', subagentType: 'Explore' })
 })
 
-test('un réveil (agent.spawn du même id) rouvre le sous-agent ; une fin pour un id inconnu est ignorée', () => {
+test('un réveil (agent.spawn du même id) rouvre le spécialiste ; une fin pour un id inconnu est ignorée', () => {
   let r = startCall(emptyRegistry('s1', '/p', 0), call('t1', 'Relecteur du groupe'), 1_000)!
   r = spawnAgent(r, { agentId: 'a1', name: 'Relecteur du groupe', isBackground: true }, new Set(['t1']), 1_010)!
   r = endCall(r, 't1', { agentId: 'a1', isFailed: false, isFinished: false }, 1_050)!
@@ -38,13 +38,13 @@ test('un agent lancé sans appel vu devient une entrée à lui, que le retour d�
   expect(r.agents.find(a => a.agentId === 'w1')).toMatchObject({ key: 't2', workflow: 'wf-1', status: 'running' })
 })
 
-test('aucune limite de nombre : 50 sous-agents restent tous', () => {
+test('aucune limite de nombre : 50 spécialistes restent tous', () => {
   let r = emptyRegistry('s1', '/p', 0)
   for (let i = 0; i < 50; i++) r = endCall(startCall(r, call(`t${i}`), i)!, `t${i}`, { isFailed: false, isFinished: true }, i + 1)!
   expect(r.agents).toHaveLength(50)
 })
 
-test('S7 : la fusion garde les sous-agents des deux processus, et l’état le plus avancé de chacun', () => {
+test('S7 : la fusion garde les spécialistes des deux processus, et l’état le plus avancé de chacun', () => {
   const base = startCall(startCall(emptyRegistry('s1', '/p', 0), call('t1'), 1_000)!, call('t2'), 2_000)!
   // Ici, t1 vient de finir ; dans le fichier (l'autre processus), t2 a échoué et t3 est apparu.
   const local = endCall(base, 't1', { isFailed: false, isFinished: true }, 3_000)!
@@ -73,7 +73,7 @@ test('S8 : un fichier coupé ou étranger ne se lit pas', () => {
   expect(parseRegistry('')).toBeNull()
 })
 
-test('le rattrapage par la liste ne touche que les sous-agents de ce processus, hors appels en vol', () => {
+test('le rattrapage par la liste ne touche que les spécialistes de ce processus, hors appels en vol', () => {
   let r = emptyRegistry('s1', '/p', 0)
   for (const k of ['t1', 't2', 't3', 't4']) r = startCall(r, call(k), 1)!
   r = endCall(r, 't1', { agentId: 'a1', isFailed: false, isFinished: false }, 2)!

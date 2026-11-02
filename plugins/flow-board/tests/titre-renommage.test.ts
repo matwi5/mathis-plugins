@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { applyReport, applySkill, emptyBoard, newRun, renameRun, startLinkedGroups } from '../hooks/model.ts'
 import { cancelLinkedGroup, linkSession } from '../hooks/link.ts'
@@ -18,7 +19,7 @@ const opened = (board: Board, skill = 'mattpocock-skills:to-spec', args = '# CON
   applySkill(board, skill, { now: 1_000, isMain: true, args })!.board
 const runOf = (board: Board) => activeRun(board)!
 
-test('un parcours ouvert par un skill ne prend pas son titre dans les arguments ; il naît dans cette discussion', () => {
+test('une mission ouverte par un skill ne prend pas son titre dans les arguments ; il naît dans cette discussion', () => {
   const run = runOf(opened(empty()))
   expect(run.title).not.toMatch(/CONTEXTE/)
   expect(run.isTitled).toBe(false)
@@ -30,7 +31,7 @@ test('au premier titre, la discussion prend le même nom ; le titre attend le mo
   expect(runOf(out.board).title).toBe('Frise, groupes et titres')
   expect(out.text).toContain(NAME('Frise, groupes et titres'))
   expect(out.fx.discussionTitle).toBe('Frise, groupes et titres')
-  // Rien sur le parcours partagé : une autre discussion ne peut pas ramener le titre (série 5, Q2).
+  // Rien sur la mission partagée : une autre discussion ne peut pas ramener le titre (série 5, Q2).
   expect(JSON.stringify(out.board)).not.toContain('titleToSend')
   // Le titre suivant ne change rien : seul le premier compte.
   const again = applyReport(out.board, { title: 'Autre' }, 3_000)
@@ -38,7 +39,7 @@ test('au premier titre, la discussion prend le même nom ; le titre attend le mo
   expect(again.text).not.toContain(KEEPS)
 })
 
-test('un autre parcours déjà né ici, même fini ou archivé : seul le nouveau parcours reçoit son titre', () => {
+test('une autre mission déjà né ici, même fini ou archivé : seul la nouvelle mission reçoit son titre', () => {
   for (const status of ['paused', 'done'] as const) {
     let board = opened(empty())
     board = applyReport(board, { title: 'Premier' }, 2_000).board
@@ -50,14 +51,14 @@ test('un autre parcours déjà né ici, même fini ou archivé : seul le nouveau
   }
 })
 
-test('un parcours supprimé, ou d’avant ce changement (sans discussion de naissance), ne bloque pas le renommage', () => {
+test('une mission supprimée, ou d’avant ce changement (sans discussion de naissance), ne bloque pas le renommage', () => {
   const old: Run = { ...newRun('implement', 500, 'Ancien'), status: 'paused' }
   expect(old.bornIn).toBeUndefined()
   const board = opened({ ...empty(), runs: [old] })
   expect(applyReport(board, { title: 'Nouveau' }, 2_000).text).toContain(NAME('Nouveau'))
 })
 
-test('un parcours né dans une autre discussion ne la renomme pas', () => {
+test('une mission né dans une autre discussion ne la renomme pas', () => {
   let board = opened(empty('ailleurs'))
   // Repris ici : la discussion de naissance ne change pas.
   board = { ...board, session: 's', runs: board.runs.map(r => ({ ...r, owner: 's' })) }
@@ -83,7 +84,7 @@ test('une suite garde « <libellé> · <titre du parent> » et ne renomme pas la
   expect(out.fx.discussionTitle).toBeUndefined()
 })
 
-test('fix.title et /flow rename renomment la discussion avant une session liée, pas après', () => {
+test('fix.title et /flow rename renomment la discussion avant un worker, pas après', () => {
   const groups = { tickets: [{ id: 'a1', name: 'Un' }, { id: 'b1', name: 'Deux' }], groups: [{ id: 'A', name: 'Un', tickets: ['a1'] }, { id: 'B', name: 'Deux', tickets: ['b1'] }] }
   let board = applyReport(opened(empty(), 'mattpocock-skills:implement'), { title: 'Lot', ...groups }, 2_000).board
   const fixed = applyReport(board, { fix: { title: 'Lot corrigé' } }, 3_000)
@@ -91,7 +92,7 @@ test('fix.title et /flow rename renomment la discussion avant une session liée,
   expect(fixed.fx.discussionTitle).toBe('Lot corrigé')
   const renamed = renameRun(fixed.board, runOf(fixed.board).id, 'Lot renommé', 3_500)!
   expect(renamed.fx.discussionTitle).toBe('Lot renommé')
-  // Une session liée lancée : le nom donné dans son brief ne bouge plus.
+  // Un worker lancé : le nom donné dans son brief ne bouge plus.
   board = startLinkedGroups(renamed.board, ['A'], 4_000)!.board
   const late = applyReport(board, { fix: { title: 'Trop tard' } }, 5_000)
   expect(runOf(late.board).title).toBe('Trop tard')
@@ -100,18 +101,18 @@ test('fix.title et /flow rename renomment la discussion avant une session liée,
   expect(renameRun(board, runOf(board).id, 'Encore', 6_000)!.fx.discussionTitle).toBeUndefined()
 })
 
-test('une session liée lancée pour des éléments bloque le renommage, même quand ils reviennent à faire', () => {
+test('un worker lancé pour des éléments bloque le renommage, même quand ils reviennent à faire', () => {
   let board = applyReport(opened(empty(), 'mattpocock-skills:retro'), { title: 'Rétro', items: [{ id: 'r1', label: 'Piste' }] }, 2_000).board
   board = withItemsLink(board, ['r1'], 3_000)
   board = linkSession(board, 'local_pistes', 3_500)!.board
-  // Les éléments reviennent à faire : la phase ne suit plus la session, le parcours s'en souvient.
+  // Les éléments reviennent à faire : la phase ne suit plus la session, la mission s'en souvient.
   board = { ...board, runs: board.runs.map(r => ({ ...r, phases: r.phases.map(p => ({ ...p, linked: undefined })) })) }
   const late = applyReport(board, { fix: { title: 'Rétro corrigée' } }, 4_000)
   expect(late.text).toContain(KEEPS)
   expect(late.fx.discussionTitle).toBeUndefined()
 })
 
-test('le premier titre ne renomme pas la discussion une fois une session liée demandée ; « Annuler » la libère', () => {
+test('le premier titre ne renomme pas la discussion une fois un worker demandée ; « Annuler » la libère', () => {
   const groups = { tickets: [{ id: 'a1', name: 'Un' }, { id: 'b1', name: 'Deux' }], groups: [{ id: 'A', name: 'Un', tickets: ['a1'] }, { id: 'B', name: 'Deux', tickets: ['b1'] }] }
   let board = applyReport(opened(empty(), 'mattpocock-skills:implement'), groups, 2_000).board
   board = startLinkedGroups(board, ['A'], 3_000)!.board
@@ -125,13 +126,13 @@ test('le premier titre ne renomme pas la discussion une fois une session liée d
   expect(renamed.fx.discussionTitle).toBe('Lot renommé')
 })
 
-test('une session liée (delegate) ne prend jamais de titre', () => {
+test('un worker (delegate) ne prend jamais de titre', () => {
   const linked: Board = { ...opened(empty()), delegate: { run: 'ailleurs', at: 1_500 } }
   // L'outil y refuse tout ; la règle elle-même refuse aussi.
   const out = applyReport({ ...linked, delegate: undefined }, { title: 'Témoin' }, 2_000)
   expect(out.text).toContain(NAME('Témoin'))
   const run = { ...runOf(opened(empty())) }
-  const fromLinked = renameRun({ ...linked, runs: [run], activeId: run.id }, run.id, 'Session liée', 3_000)!
+  const fromLinked = renameRun({ ...linked, runs: [run], activeId: run.id }, run.id, 'Worker', 3_000)!
   expect(fromLinked.fx.discussionTitle).toBeUndefined()
 })
 
@@ -149,6 +150,7 @@ const prompt = ($: any, session_title?: string) =>
 
 test('la consigne « First call » demande un titre réfléchi, sans recopier le message, et le renommage par l’outil de l’app', async ($, on) => {
   mock.clock(on, { now: 100_000_000 })
+  memoryDisk(on)
   mock.store(on)
   world(on)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text
@@ -158,6 +160,7 @@ test('la consigne « First call » demande un titre réfléchi, sans recopier le
 
 test('le titre part une fois dans sessionTitle, au prochain message', async ($, on) => {
   mock.clock(on, { now: 101_000_000 })
+  memoryDisk(on)
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
@@ -168,6 +171,7 @@ test('le titre part une fois dans sessionTitle, au prochain message', async ($, 
 
 test('pas de sessionTitle quand la discussion porte déjà le bon titre (renommée par l’outil de l’app)', async ($, on) => {
   mock.clock(on, { now: 102_000_000 })
+  memoryDisk(on)
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
@@ -177,8 +181,9 @@ test('pas de sessionTitle quand la discussion porte déjà le bon titre (renomm�
   expect((await prompt($, 'Autre')).sessionTitle).toBeUndefined()
 })
 
-test('pas de sessionTitle quand un autre parcours est né ici', async ($, on) => {
+test('pas de sessionTitle quand une autre mission est né ici', async ($, on) => {
   mock.clock(on, { now: 103_000_000 })
+  memoryDisk(on)
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
@@ -190,6 +195,7 @@ test('pas de sessionTitle quand un autre parcours est né ici', async ($, on) =>
 
 test('une reprise par SessionStart envoie un titre qui attend encore', async ($, on) => {
   mock.clock(on, { now: 104_000_000 })
+  memoryDisk(on)
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
@@ -199,14 +205,15 @@ test('une reprise par SessionStart envoie un titre qui attend encore', async ($,
   expect((await prompt($, 'Ancien')).sessionTitle).toBeUndefined()
 })
 
-test('dans une session liée, aucun sessionTitle, même si elle a le parcours de la discussion principale', async ($, on) => {
+test('dans un worker, aucun sessionTitle, même si elle a la mission du manager', async ($, on) => {
   mock.clock(on, { now: 104_500_000 })
+  memoryDisk(on)
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
   const runId = String((await $.tool.call({ tool: TOOL, title: 'Principal' } as any)).result)
   expect(runId).toContain(NAME('Principal'))
-  // La discussion devient la session liée d'un autre parcours avant son prochain message : rien ne part plus ici.
+  // La discussion devient le worker d'une autre mission avant son prochain message : rien ne part plus ici.
   await $.tool.call({ tool: TOOL, delegate: 'autre-parcours' } as any)
   expect((await prompt($, 'Avant')).sessionTitle).toBe('Principal')
   await $.tool.call({ tool: TOOL, fix: { title: 'Corrigé' } } as any)
@@ -215,6 +222,7 @@ test('dans une session liée, aucun sessionTitle, même si elle a le parcours de
 
 test('les consignes ne demandent plus de renommer la discussion à la main', async ($, on) => {
   mock.clock(on, { now: 105_000_000 })
+  memoryDisk(on)
   mock.store(on)
   world(on)
   const filled: string[] = []
@@ -226,9 +234,92 @@ test('les consignes ne demandent plus de renommer la discussion à la main', asy
   await $.tool.call({ tool: TOOL, title: 'Lot', tickets: [{ id: 'a1', name: 'Un' }, { id: 'b1', name: 'Deux' }], groups: [{ id: 'A', name: 'Un', tickets: ['a1'] }, { id: 'B', name: 'Deux', tickets: ['b1'] }] } as any)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'y' })).text
   expect(note).not.toMatch(/rename this discussion/)
-  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'flow-board', props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} } })
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'flow-board', props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 140 }, view: {} } })
   await ui.press({ key: 'launch-linked-A' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^Confie ce groupe à une session liée/)
+  expect(filled.at(-1)).toMatch(/^Confie ce groupe à un worker/)
   expect(filled.at(-1)).not.toMatch(/renommer cette discussion/)
+})
+
+// ─── Renommer dès la fin du tour de naissance (décision de Mathis du 02/11/2026) ───
+
+/** Le moteur du renommage : les outils de la session, `/rename` (accepté ou refusé) et la fin d'un tour. */
+const renameWorld = (on: any, o: { tools?: string[]; isRefused?: boolean; source?: string } = {}) => {
+  world(on)
+  const renamed: string[] = []
+  on('tool.list', () => ({ value: (o.tools ?? []).map(name => ({ name, description: '' })) }))
+  on('command.list', () => ({ value: [{ name: 'rename', description: 'Rename the current conversation', source: o.source ?? 'builtin' }] }))
+  on('command.run', { command: 'rename' }, (_$: unknown, e: { args: string }) => {
+    if (o.isRefused) throw new Error('unknown command')
+    renamed.push(e.args)
+    return { text: `Session renamed to: ${e.args}` }
+  })
+  on('turn.start', (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
+  return renamed
+}
+const endTurn = async ($: any, clock: { advance: (ms: number) => Promise<void> }) => {
+  await $.turn.complete({ answer: 'Fait.', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+  for (let i = 0; i < 2; i++) await clock.advance(1000)
+}
+
+test('dans le CLI, la discussion prend le titre dès la fin du tour où la mission naît, par /rename ; le message suivant ne le renvoie pas', async ($, on) => {
+  const clock = mock.clock(on, { now: 110_000_000 })
+  memoryDisk(on)
+  mock.store(on)
+  const renamed = renameWorld(on)
+  await $.skill.prompt({ skill: 'mattpocock-skills:diagnosing-bugs', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Écarts flow-board sur session app' } as any)
+  await endTurn($, clock)
+  expect(renamed).toEqual(['Écarts flow-board sur session app'])
+  expect((await prompt($, 'Écarts flow-board sur session app')).sessionTitle).toBeUndefined()
+  // Une seule fois : la fin de tour suivante ne renomme plus.
+  await endTurn($, clock)
+  expect(renamed.length).toBe(1)
+})
+
+test('dans l’app (Claude a set_session_title), pas de /rename : Claude renomme, et le message suivant reste le filet', async ($, on) => {
+  const clock = mock.clock(on, { now: 111_000_000 })
+  memoryDisk(on)
+  mock.store(on)
+  const renamed = renameWorld(on, { tools: ['mcp__ccd_session__set_session_title'] })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Export CSV' } as any)
+  await endTurn($, clock)
+  expect(renamed).toEqual([])
+  expect(await prompt($, 'Session tools start')).toMatchObject({ sessionTitle: 'Export CSV' })
+})
+
+test('une commande rename qui ne vient pas de Claude Code (projet, MCP, autre plugin) n’est pas lancée : le message suivant pose le titre', async ($, on) => {
+  const clock = mock.clock(on, { now: 113_000_000 })
+  memoryDisk(on)
+  mock.store(on)
+  const renamed = renameWorld(on, { source: 'plugin' })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Export CSV' } as any)
+  await endTurn($, clock)
+  expect(renamed).toEqual([])
+  expect(await prompt($, 'Session tools start')).toMatchObject({ sessionTitle: 'Export CSV' })
+})
+
+test('le titre passé à /rename perd ses caractères invisibles et bidirectionnels', async ($, on) => {
+  const clock = mock.clock(on, { now: 114_000_000 })
+  memoryDisk(on)
+  mock.store(on)
+  const renamed = renameWorld(on)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: `Export${String.fromCodePoint(0x202e)} CSV${String.fromCodePoint(0x200b)}` } as any)
+  await endTurn($, clock)
+  expect(renamed).toEqual(['Export CSV'])
+})
+
+test('un /rename refusé laisse le titre au message suivant', async ($, on) => {
+  const clock = mock.clock(on, { now: 112_000_000 })
+  memoryDisk(on)
+  mock.store(on)
+  renameWorld(on, { isRefused: true })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Export CSV' } as any)
+  await endTurn($, clock)
+  expect(await prompt($, 'Session tools start')).toMatchObject({ sessionTitle: 'Export CSV' })
 })

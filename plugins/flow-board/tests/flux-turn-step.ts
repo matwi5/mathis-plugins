@@ -28,7 +28,7 @@ export const stoppedStep = (usage: StepUsage) =>
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage }
   }
 
-/** Joue une étape du modèle jusqu'au bout : `$.turn.step` pour cette discussion ou un sous-agent (`agentId`), à un effort relevé ou non. */
+/** Joue une étape du modèle jusqu'au bout : `$.turn.step` pour cette discussion ou un spécialiste (`agentId`), à un effort relevé ou non. */
 export const playStep = async ($: any, o: { model: string; turnId?: string; index?: number; agentId?: string; effort?: string }): Promise<void> => {
   const input = { turnId: o.turnId ?? 't', index: o.index ?? 0, model: o.model, messageCount: 1, ...(o.agentId ? { agentId: o.agentId } : {}), ...(o.effort ? { effort: o.effort } : {}) }
   for await (const _ of $.turn.step(input)) {

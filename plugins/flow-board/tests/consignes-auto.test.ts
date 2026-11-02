@@ -1,4 +1,4 @@
-// Les consignes du mode auto : un parcours en auto, qui envoie d'ici, reçoit à la fin de la consigne de
+// Les consignes du mode auto : une mission en auto, qui envoie d'ici, reçoit à la fin de la consigne de
 // chaque skill un bloc commun (l'accord du second clic, les choix déclarés avec leur origine, les six
 // catégories qui restent des questions bloquantes, la notification au texte fixé) et le bloc de sa phase
 // (cadrage, spec, découpage, implémentation, revues, compte rendu). Hors auto, ou en pause ici, rien ne change.
@@ -12,11 +12,11 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
 } as const
 
 /**
- * Le moteur sous le plugin : `$.store` et les fichiers en mémoire (le fichier commun des parcours sert quand le
+ * Le moteur sous le plugin : `$.store` et les fichiers en mémoire (le fichier commun des missions sert quand le
  * dossier du mod est sous un `.claude/`, comme dans un worktree), l'id de la discussion que le test change pour jouer un `/clear`.
  */
 const world = (on: any) => {
@@ -59,7 +59,7 @@ const press = async ($: any, key: string) => {
 
 const skill = async ($: any, name: string): Promise<string> => String((await $.skill.prompt({ skill: name.includes(':') ? name : `mattpocock-skills:${name}`, text: 'x' })).text)
 
-/** Un parcours ouvert par `entry`, actif dans la discussion « sa », titré « Boutique », auto allumé ou non. */
+/** Une mission ouverte par `entry`, actif dans la discussion « sa », titré « Boutique », auto allumé ou non. */
 const opened = async ($: any, on: any, entry: string, isAuto: boolean) => {
   const clock = mock.clock(on, { now: 70_000_000 })
   const w = world(on)
@@ -74,7 +74,7 @@ const opened = async ($: any, on: any, entry: string, isAuto: boolean) => {
   return { clock, ...w }
 }
 
-const COMMON = ['Auto mode is on for this run', '"origin": "recommendation"', '"origin": "skipped-validation"', 'Six kinds of decisions stay with the user', '{"waiting": [{"id"', 'PushNotification']
+const COMMON = ['Auto mode is on for this mission', '"origin": "recommendation"', '"origin": "skipped-validation"', 'Six kinds of decisions stay with the user', '{"waiting": [{"id"', 'PushNotification']
 // Le texte de la notification vient de la même fonction que celui du mod (`autoNotices`).
 const NOTICE = `« ${autoQuestionsNotice('Boutique', 'N')} »`
 
@@ -82,13 +82,13 @@ const NOTICE = `« ${autoQuestionsNotice('Boutique', 'N')} »`
 const PHASES: [string, string][] = [
   ['to-spec', 'Spec in auto mode: the seams are not asked: settle them by your recommended answer'],
   ['to-tickets', 'Ticket split in auto mode: the breakdown is not approved by a button question'],
-  // Ce parcours n'a pas de groupes : le bloc du lot (celui d'un parcours à groupes, dans note-revue-du-lot.test.ts).
+  // Cette mission n'a pas de groupes : le bloc du lot (celui d'une mission à groupes, dans note-revue-du-lot.test.ts).
   ['implement', 'Implementation in auto mode, without groups: launch the lot review yourself'],
   ['flow-board:compte-rendu', 'Report in auto mode: the auto mode stops once the report is written'],
 ]
 
 test('En auto, le cadrage reçoit le bloc commun et celui d’un seul tour d’intention', { timeoutMs: 20000 }, async ($, on) => {
-  // Un questionnaire, puis le cadrage, phase suivante du même parcours.
+  // Un questionnaire, puis le cadrage, phase suivante de la même mission.
   await opened($, on, 'to-questionnaire', true)
   const grill = await skill($, 'grill-with-docs')
   for (const part of COMMON) expect(grill).toContain(part)
@@ -97,9 +97,11 @@ test('En auto, le cadrage reçoit le bloc commun et celui d’un seul tour d’i
   expect(grill).toContain('« acceptée en auto (reco) »')
   expect(grill).toContain('The final agreement is not asked')
   // Les six catégories, dans l'ordre du premier clic sur « ⚡ Auto », xhigh sans question.
-  expect(grill).toMatch(/1\) a sensitive area .*2\) a question with no defensible recommendation.*3\) a design change that contradicts DECISIONS\.md.*4\) leaving a security finding unfixed.*5\) an xhigh effort .*stay in high and declare that xhigh was not offered.*6\) a spending or an external action outside the run/)
+  expect(grill).toMatch(/1\) an experience choice: .*2\) setting or weakening an invariant, or a design change that contradicts DECISIONS\.md.*3\) a deletion with no way back, or an exposure of the user's data outside this machine.*4\) leaving a security finding unfixed.*5\) an xhigh effort .*stay in high and declare that xhigh was not offered.*6\) a spending or an external action outside the mission/)
+  // Une question en zone sensible se tranche seule à sa condition, déclarée comme une reco prise marquée « Zone sensible : ».
+  expect(grill).toMatch(/A question in a sensitive area .* is settled by you when its recommended option respects the invariant already validated \(when there is one\) and is the most prudent one .*« Zone sensible : ».*otherwise it stays a blocking question\. In auto mode, this wins over any line above that says a sensitive choice is never declared/)
   // Le bloc du mode auto vient en dernier : il l'emporte sur les demandes de validation qui précèdent.
-  expect(grill.indexOf('Auto mode is on for this run')).toBeGreaterThan(grill.indexOf('Dashboard (flow-board)'))
+  expect(grill.indexOf('Auto mode is on for this mission')).toBeGreaterThan(grill.indexOf('Dashboard (flow-board)'))
 })
 
 test('En auto, la spec, le découpage, l’implémentation et le compte rendu reçoivent le bloc commun et le leur', { timeoutMs: 20000 }, async ($, on) => {
@@ -109,7 +111,7 @@ test('En auto, la spec, le découpage, l’implémentation et le compte rendu re
     for (const part of COMMON) expect(text).toContain(part)
     expect(text).toContain(own)
     expect(text).not.toContain('Framing in auto mode')
-    expect(text.indexOf('Auto mode is on for this run')).toBeGreaterThan(text.indexOf('Dashboard (flow-board)'))
+    expect(text.indexOf('Auto mode is on for this mission')).toBeGreaterThan(text.indexOf('Dashboard (flow-board)'))
     if (name === 'to-spec') expect(text).toContain('write them in the decision file as « acceptée en auto (reco) » and declare them ("origin": "recommendation")')
     if (name === 'implement') {
       expect(text).toContain('fix every kept finding without asking the user')
@@ -125,7 +127,7 @@ test('Hors auto, la consigne de chaque phase est la même qu’avant : aucun blo
     const text = await skill($, name)
     // Le contrôle positif : la consigne de flow-board est bien là.
     expect(text).toContain('Dashboard (flow-board)')
-    expect(text).not.toContain('Auto mode is on for this run')
+    expect(text).not.toContain('Auto mode is on for this mission')
     expect(text).not.toContain('in auto mode')
     expect(text).not.toContain('PushNotification')
   }
@@ -134,19 +136,19 @@ test('Hors auto, la consigne de chaque phase est la même qu’avant : aucun blo
 test('Après un /clear, l’auto est en pause ici : la consigne n’a plus le bloc du mode auto', { timeoutMs: 20000 }, async ($, on) => {
   const { clock, ids } = await opened($, on, 'grill-with-docs', true)
   // D'abord l'effet : allumé ici, la consigne porte le bloc.
-  expect(await skill($, 'to-spec')).toContain('Auto mode is on for this run')
+  expect(await skill($, 'to-spec')).toContain('Auto mode is on for this mission')
   await $.session.end({ reason: 'clear' } as any)
   ids.now = 'sa-apres-clear'
   await clock.advance(1000)
   const text = await skill($, 'to-tickets')
   expect(text).toContain('Dashboard (flow-board)')
-  expect(text).not.toContain('Auto mode is on for this run')
+  expect(text).not.toContain('Auto mode is on for this mission')
 })
 
 test('Coupé après une consigne qui portait le bloc du mode auto, la réponse suivante de l’outil le dit, une fois', { timeoutMs: 20000 }, async ($, on) => {
   const { clock } = await opened($, on, 'grill-with-docs', true)
-  const OFF = 'Auto mode is OFF for this run now'
-  expect(await skill($, 'to-spec')).toContain('Auto mode is on for this run')
+  const OFF = 'Auto mode is OFF for this mission now'
+  expect(await skill($, 'to-spec')).toContain('Auto mode is on for this mission')
   // Allumé : la réponse de l'outil n'en dit rien (après l'effet : la consigne portait le bloc).
   expect(String((await $.tool.call({ tool: TOOL, step: 'explore' } as any)).result)).not.toContain(OFF)
   await press($, 'auto-off')

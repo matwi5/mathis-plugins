@@ -54,6 +54,7 @@ import {
   REQUESTS_DIR,
   attachAgent,
   costed,
+  endLane,
   endTurn,
   finishTask,
   noteTasks,
@@ -65,8 +66,10 @@ import {
   requestFile,
   requestOfAgent,
   requestOfTurn,
+  startLane,
   startTurn,
   startWait,
+  withOpenLanes,
   type Call,
   type Relaunch,
 } from './requests.ts'
@@ -353,10 +356,20 @@ export const register: Register = (on) => {
   }).catch(() => undefined) // en cas de panne du mod, le message passe sans lui
 
   on('turn.start', async ($, e, next) => {
+    const at = await $.clock.now()
     const agentId = e.agentId
-    if (agentId === undefined) await quietly(() => noteTurn($, e.text, e.turnId))
+    if (agentId === undefined) {
+      await quietly(() => noteTurn($, e.text, e.turnId))
+      // Le tour du fil principal, pour le temps cumulé : sa requête est celle que `noteTurn` vient de lui donner.
+      await quietly(() =>
+        update($, requests, (t) => {
+          const request = requestOfTurn(t, e.turnId)
+          return request !== undefined ? startLane(t, e.turnId, at, { request }) : t
+        }),
+      )
+    }
     // Le premier tour d'un agent vu sans `agent.spawn` (un agent interne de Claude Code) : rattaché en attendant.
-    else await quietly(() => update($, requests, (t) => attachAgent(t, agentId, { isSpawn: false })))
+    else await quietly(() => update($, requests, (t) => startLane(attachAgent(t, agentId, { isSpawn: false }), e.turnId, at, { agent: agentId })))
     return next(e)
   })
 
@@ -364,7 +377,9 @@ export const register: Register = (on) => {
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     const agentId = result.agentId
-    if (agentId) await quietly(() => update($, requests, (t) => attachAgent(t, agentId, { parent: e.parentAgentId, isSpawn: true })))
+    // Lancé en fond ou par un workflow, il travaille en même temps que son parent : ses tours comptent dans le temps cumulé.
+    const isParallel = e.background === true || e.workflow !== undefined
+    if (agentId) await quietly(() => update($, requests, (t) => attachAgent(t, agentId, { parent: e.parentAgentId, isSpawn: true, isParallel })))
     return result
   }).catch(() => undefined) // en cas de panne du mod, l'agent part sans lui
 
@@ -434,6 +449,8 @@ export const register: Register = (on) => {
         const active = isInterrupted ? await activeAgents($) : []
         await quietly(() => update($, requests, (t) => endTurn(t, e.turnId, at, { isInterrupted, activeAgents: active })))
       }
+      // Le tour, du fil principal ou d'un agent, va à sa requête pour le temps cumulé.
+      await quietly(() => update($, requests, (t) => endLane(t, e.turnId, at)))
       // Une interruption n'a pas de `classic.Stop`, un agent qui finit son tour non plus : l'écriture part d'ici aussi.
       scheduleWrite($)
     }
@@ -1304,7 +1321,9 @@ async function writeLog($: any): Promise<void> {
   const isSame = (await $.session.id()) === t.log.session
   const usage = isSame ? await Promise.resolve($.session.usage()).catch(() => null) : null
   const cost = typeof usage?.cost?.usd === 'number' ? usage.cost.usd : null
-  await $.fs.write(`${dir}/${REQUESTS_DIR}/${requestFile(t.log.session, t.log.openedAt)}`, JSON.stringify(costed(t.log, cost)))
+  // Les tours encore en cours vont jusqu'à maintenant : un spécialiste long compte déjà.
+  const log = withOpenLanes(t, await $.clock.now()) ?? t.log
+  await $.fs.write(`${dir}/${REQUESTS_DIR}/${requestFile(t.log.session, t.log.openedAt)}`, JSON.stringify(costed(log, cost)))
 }
 
 // ─── Petits outils ──────────────────────────────────────────────────────────

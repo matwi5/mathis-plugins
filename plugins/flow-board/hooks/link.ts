@@ -1,12 +1,12 @@
-// Le cycle de vie du lien d'un groupe ou de pistes : l'envoi à une session liée, la session relevée,
+// Le cycle de vie du lien d'un groupe ou de pistes : l'envoi à un worker, la session relevée,
 // l'annulation, la relance de fermeture, le retour, les envois précédents, la fermeture notée et la
 // fusion de deux copies du tableau de bord, et les champs qu'un groupe garde quand son plan est réécrit
 // (`KEPT_GROUP_FIELDS`). Les écritures et les recopies des champs du lien passent par ce module ; le
 // modèle lit encore le lien, des groupes comme des pistes, pour les décisions qu'il garde (quels groupes
 // partent, si un groupe rendu ou une session de pistes est close et à fermer, les refus d'une
 // fermeture, le texte de fermeture), et l'appelle pour écrire. À ne pas confondre avec linked.ts, qui
-// reconnaît les sessions liées de l'onglet Agents. Fonctions pures, sans entrée ni sortie : une
-// fonction qui change un parcours, une phase ou un groupe reçus (`sendGroups`, `returnGroups`,
+// reconnaît les workers de l'onglet Agents. Fonctions pures, sans entrée ni sortie : une
+// fonction qui change une mission, une phase ou un groupe reçus (`sendGroups`, `returnGroups`,
 // `openLinkedWork`) attend un clone, jamais le tableau de bord enregistré. Il n'importe que basics, relay et des modules sans lien avec le modèle, jamais le
 // modèle (un test le vérifie).
 
@@ -19,22 +19,22 @@ import { isRelay, keepDecisions, relayedDecisions, relayForGroup, UNREADABLE_COU
 import { maxOf } from './timeline.ts'
 
 /**
- * Les ids confiés à la session liée d'une phase, pour chaque lecteur de la liste : relue d'un fichier
- * partagé, une liste hors forme n'en confie aucun (`upgradeRun` la lit au chargement de chaque parcours).
+ * Les ids confiés au worker d'une phase, pour chaque lecteur de la liste : relue d'un fichier
+ * partagé, une liste hors forme n'en confie aucun (`upgradeRun` la lit au chargement de chaque mission).
  */
 export const confidedIds = (link: LinkedWork | null | undefined): string[] => {
   const ids: unknown = link !== null && typeof link === 'object' ? link.items : undefined
   return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
 }
 
-/** Les éléments confiés à une session liée et pas encore rendus (ni faits ni écartés). */
+/** Les éléments confiés à un worker et pas encore rendus (ni faits ni écartés). */
 export const linkedInFlight = (phase: FlowPhase): FlowItem[] => {
   const ids = confidedIds(phase.linked)
   return phase.items.filter(i => ids.includes(i.id) && i.status !== 'done' && i.status !== 'dropped')
 }
 
 /**
- * La phase attend la session liée de ses éléments : envoyés et pas rendus, ou rendus et sa session
+ * La phase attend le worker de ses éléments : envoyés et pas rendus, ou rendus et sa session
  * pas encore fermée. Un lien relu qui n'est pas un objet n'est pas une session, comme pour `pickableItems`.
  */
 export const holdsItemsSession = (phase: FlowPhase): boolean => {
@@ -45,19 +45,19 @@ export const holdsItemsSession = (phase: FlowPhase): boolean => {
 
 /**
  * Les éléments que le panneau peut encore faire découper : ni faits, ni écartés. Aucun tant que la
- * phase attend la session liée d'un ancien envoi (lancée ou non) : l'appel du découpage serait refusé.
+ * phase attend le worker d'un ancien envoi (lancé ou non) : l'appel du découpage serait refusé.
  */
-export const pickableItems = (phase: FlowPhase): FlowItem[] =>
-  holdsItemsSession(phase) ? [] : phase.items.filter(i => i.status !== 'done' && i.status !== 'dropped')
+export const pickableItems = (phase: FlowPhase, taken?: ReadonlySet<string>): FlowItem[] =>
+  holdsItemsSession(phase) ? [] : phase.items.filter(i => i.status !== 'done' && i.status !== 'dropped' && !taken?.has(i.id))
 
 /**
- * Les éléments passent « en cours » et l'étape de la phase prévue pour une session liée s'ouvre :
+ * Les éléments passent « en cours » et l'étape de la phase prévue pour un worker s'ouvre :
  * au lancement de la session, pas à l'envoi de la demande.
  */
 const openLinkedWork = (phase: FlowPhase, ids: readonly string[], now: number) => {
   const stepId = SKILLS[phase.skill]?.items?.linkedStep
   if (!stepId) return
-  // Un parcours ouvert avant que l'étape existe la reçoit à la fin de ses étapes.
+  // Une mission ouverte avant que l'étape existe la reçoit à la fin de ses étapes.
   if (!phase.steps.some(s => s.id === stepId)) phase.steps = [...phase.steps, { id: stepId, status: 'pending' }]
   setStep(phase, stepId, now, true)
   if (phase.status === 'done') {
@@ -68,9 +68,9 @@ const openLinkedWork = (phase: FlowPhase, ids: readonly string[], now: number) =
 }
 
 /**
- * Les sessions filles d'un parcours : une par groupe confié ou rendu, une par envoi de pistes
+ * Les sessions filles d'une mission : une par groupe confié ou rendu, une par envoi de pistes
  * encore suivi, et les ids relevés à leur lancement. Une session de diagnostic de bug n'y laisse
- * pas de trace : seul son titre la relie au parcours.
+ * pas de trace : seul son titre la relie à la mission.
  */
 export const linkedSessionsOf = (run: Run): { count: number; ids: string[] } => {
   const links = [...(run.groups ?? []).map(g => g.linked ?? g.delegated), ...run.phases.map(p => p.linked)].filter(
@@ -81,7 +81,7 @@ export const linkedSessionsOf = (run: Run): { count: number; ids: string[] } => 
 }
 
 /**
- * La session liée est lancée : son id, relevé dans la réponse de start_session ou dans la sortie
+ * Le worker est lancé : son id, relevé dans la réponse de start_session ou dans la sortie
  * de `claude --bg`, est gardé, et les éléments passent « en cours ». Une session dont le titre
  * nomme un groupe ou un bug (« … > Groupe A · », « … > Bug · ») n'est pas celle des éléments.
  */
@@ -102,7 +102,7 @@ export const linkSession = (board: Board, session: string, now: number, title = 
   const ids = linkedInFlight(phase).map(i => i.id)
   openLinkedWork(phase, ids, now)
   const label = SKILLS[phase.skill]?.items?.label.toLowerCase() ?? 'éléments'
-  log(run, now, '↗', `Session liée lancée : ${ids.length} ${label} en cours`, 'info')
+  log(run, now, '↗', `Worker lancé : ${ids.length} ${label} en cours`, 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -125,7 +125,7 @@ export const noteUnlaunched = (board: Board, turnAt: number, now: number): Outco
   const phase = currentPhase(run)
   phase.linked = { ...phase.linked!, missedAt: now }
   const label = SKILLS[phase.skill]?.items?.label.toLowerCase() ?? 'éléments'
-  log(run, now, '!', `Aucune session liée lancée pour ${count} ${label} : Claude a rendu la main sans la lancer`, 'warn')
+  log(run, now, '!', `Aucun worker lancé pour ${count} ${label} : Claude a rendu la main sans le lancer`, 'warn')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -141,7 +141,7 @@ export const retryLinked = (board: Board, now: number): Outcome => {
   const phase = currentPhase(run)
   const { missedAt: _, ...linked } = phase.linked!
   phase.linked = { ...linked, at: now }
-  log(run, now, '↗', 'Session liée redemandée : la demande est dans le prompt', 'info')
+  log(run, now, '↗', 'Worker redemandé : la demande est dans le prompt', 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -164,7 +164,7 @@ export const cancelLinked = (board: Board, now: number): Outcome => {
   const stepId = SKILLS[phase.skill]?.items?.linkedStep
   const at = phase.steps.findIndex(s => s.id === stepId)
   if (at > 0 && phase.steps[at]!.status === 'active') setStep(phase, phase.steps[at - 1]!.id, now)
-  log(run, now, '↺', 'Envoi à la session liée annulé', 'info')
+  log(run, now, '↺', 'Envoi au worker annulé', 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -191,9 +191,9 @@ export const withEarlierClosing = (link: GroupLink, list: readonly ClosedLink[],
 export const returnedLink = (at: number): GroupLink => ({ at })
 
 /**
- * L'envoi des groupes choisis, chacun à une session liée : son numéro d'envoi et son lien en cours ;
+ * L'envoi des groupes choisis, chacun à un worker : son numéro d'envoi et son lien en cours ;
  * un groupe déjà relu perd sa revue et son avis de sécurité, que le journal cite, et garde la marque
- * de la remise à zéro (`isReset`) jusqu'au retour d'un envoi. Change le parcours reçu : un clone.
+ * de la remise à zéro (`isReset`) jusqu'au retour d'un envoi. Change la mission reçue : un clone.
  */
 export const sendGroups = (run: Run, picked: readonly string[], now: number): void => {
   const resets: string[] = []
@@ -216,11 +216,11 @@ export const sendGroups = (run: Run, picked: readonly string[], now: number): vo
     return { ...rest, isReset: true }
   })
   for (const line of resets) log(run, now, '↺', line, 'info')
-  log(run, now, '↗', `${picked.length > 1 ? `Groupes ${picked.join(', ')} confiés` : `Groupe ${picked[0]} confié`} à ${picked.length > 1 ? 'des sessions liées' : 'une session liée'}`, 'info')
+  log(run, now, '↗', `${picked.length > 1 ? `Groupes ${picked.join(', ')} confiés` : `Groupe ${picked[0]} confié`} à ${picked.length > 1 ? 'des workers' : 'un worker'}`, 'info')
 }
 
 /**
- * La raison d'une fermeture, relue du fichier de parcours (une fusion ou une reprise l'apporte), dans la
+ * La raison d'une fermeture, relue du fichier de mission (une fusion ou une reprise l'apporte), dans la
  * réponse de l'outil, juste avant la procédure de fermeture : bornée à 200 caractères, neutralisée comme
  * un texte relayé et citée en JSON ; rien quand ce n'est pas un texte.
  */
@@ -249,8 +249,8 @@ export const isResentInFlight = (g: TicketGroup | null | undefined): boolean =>
 /** Pourquoi la revue ou l'avis d'un groupe en vol attendent son retour, pour la réponse de l'outil. */
 export const inFlightWhy = (g: TicketGroup): string =>
   g.delegated !== undefined
-    ? `is in a linked session again (send ${sendNumber(g.linked?.seq) ?? 1}), not returned yet`
-    : `is in a linked session (send ${sendNumber(g.linked?.seq) ?? 1}), its review and security advice reset at a send not returned yet`
+    ? `is in a worker again (send ${sendNumber(g.linked?.seq) ?? 1}), not returned yet`
+    : `is in a worker (send ${sendNumber(g.linked?.seq) ?? 1}), its review and security advice reset at a send not returned yet`
 
 /** L'avis de sécurité d'un envoi précédent, en mots pour le journal : l'avis, et les comptes s'il y en a. */
 export const previousSecurityText = (sec: SecurityCheck | undefined): string => {
@@ -261,9 +261,9 @@ export const previousSecurityText = (sec: SecurityCheck | undefined): string => 
 }
 
 /**
- * Une session liée est lancée : son id va au groupe que son titre nomme (« <parcours> > Groupe A · … »),
+ * Un worker est lancé : son id va au groupe que son titre nomme (« <mission> > Groupe A · … »),
  * sinon au seul groupe confié qui n'a pas encore de session. Rien quand on ne sait pas lequel. Seule
- * compte la partie après le dernier séparateur : le titre du parcours, en tête, peut lui-même dire
+ * compte la partie après le dernier séparateur : le titre de la mission, en tête, peut lui-même dire
  * « groupe … ».
  */
 export const linkGroupSession = (board: Board, title: string, session: string, now: number): Outcome => {
@@ -271,7 +271,7 @@ export const linkGroupSession = (board: Board, title: string, session: string, n
   if (!run0) return null
   const pending = (run0.groups ?? []).filter(g => g.linked !== undefined && g.linked.session === undefined)
   if (pending.length === 0) return null
-  // Après le dernier séparateur : le titre du parcours, devant, ne nomme pas le groupe de la session.
+  // Après le dernier séparateur : le titre de la mission, devant, ne nomme pas le groupe de la session.
   const own = ownPart(title)
   const named = [...own.matchAll(/\bgroupe\s+([^\s·:,()]+)/gi)].map(m => m[1]!.toLowerCase())
   const target =
@@ -285,7 +285,7 @@ export const linkGroupSession = (board: Board, title: string, session: string, n
   const run = activeRun(b)!
   run.groups = run.groups!.map(g => (g.id === target.id ? { ...g, linked: { ...g.linked!, session } } : g))
   run.linkedAt ??= now
-  log(run, now, '↗', `Session liée lancée pour le groupe ${target.id}`, 'info')
+  log(run, now, '↗', `Worker lancé pour le groupe ${target.id}`, 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -299,12 +299,12 @@ export const askCloseLinkedItems = (board: Board, now: number): Outcome => {
   const run = activeRun(b)!
   const phase = currentPhase(run)
   phase.linked = { ...phase.linked!, closeAskedAt: now }
-  log(run, now, '↻', 'Fermeture de la session liée des éléments relancée', 'info')
+  log(run, now, '↻', 'Fermeture du worker des éléments relancée', 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
 
-/** Annule l'envoi d'un groupe à une session liée qui n'a pas été lancée : il redevient à lancer. */
+/** Annule l'envoi d'un groupe à un worker qui n'a pas été lancé : il redevient à lancer. */
 export const cancelLinkedGroup = (board: Board, id: string, now: number): Outcome => {
   const run0 = activeRun(board)
   const was = run0?.groups?.find(g => g.id === id)
@@ -312,7 +312,7 @@ export const cancelLinkedGroup = (board: Board, id: string, now: number): Outcom
   const b = clone(board)
   const run = activeRun(b)!
   run.groups = run.groups!.map(g => (g.id === id ? withoutLink(g) : g))
-  log(run, now, '↺', `Envoi du groupe ${id} à une session liée annulé`, 'info')
+  log(run, now, '↺', `Envoi du groupe ${id} à un worker annulé`, 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
 }
@@ -323,7 +323,7 @@ export const withoutLink = (group: TicketGroup): TicketGroup => {
 }
 
 /**
- * Les ids reçus dans `returned` : les groupes que leurs sessions liées ont rendus. Une revue
+ * Les ids reçus dans `returned` : les groupes que leurs workers ont rendus. Une revue
  * (`/code-review`, `/security-review`) que la session a relayée vaut celle du groupe.
  */
 export const returnGroups = (run: Run, value: unknown, now: number, stored?: unknown): { back: string[]; unknown: string[] } => {
@@ -361,9 +361,9 @@ export const returnGroups = (run: Run, value: unknown, now: number, stored?: unk
         s.standards = Math.max(0, s.standards) + relayed.reviews.standards
         s.spec = Math.max(0, s.spec) + relayed.reviews.spec
         s.fixed = (s.fixed ?? 0) + relayed.reviews.fixed
-        // Ses bogues, comme dans la discussion du parcours : cités, et comptés dans l'alerte « constats > corrigés ».
+        // Ses bogues, comme dans la discussion de la mission : cités, et comptés dans l'alerte « constats > corrigés ».
         const { standards, spec, fixed, bugs } = relayed.reviews
-        log(run, now, '◈', `Revues du groupe ${g.id} (session liée) : ${standards} Standards · ${spec} Spec${bugsText(bugs)} · ${fixed} corrigé(s)`, standards + spec + (bugs ?? 0) > fixed ? 'warn' : 'info')
+        log(run, now, '◈', `Revues du groupe ${g.id} (worker) : ${standards} Standards · ${spec} Spec${bugsText(bugs)} · ${fixed} corrigé(s)`, standards + spec + (bugs ?? 0) > fixed ? 'warn' : 'info')
       }
       // La revue de sécurité relayée vaut celle que la discussion n'a pas encore reçue (un envoi d'ici
       // l'emporte) ; ses failles laissées ne sont qu'une proposition : seul un envoi d'ici tranche.
@@ -408,8 +408,8 @@ export const returnGroups = (run: Run, value: unknown, now: number, stored?: unk
         ...(security !== undefined ? { security } : {}),
       })
     })
-    if (reviewedThere.length > 0) log(run, now, '◆', `Revue du groupe faite dans sa session liée : ${reviewedThere.join(', ')}`, 'accent')
-    log(run, now, '↩', `${back.length > 1 ? `Groupes ${back.join(', ')} rendus` : `Groupe ${back[0]} rendu`} par ${back.length > 1 ? 'leurs sessions liées' : 'sa session liée'}`, 'ok')
+    if (reviewedThere.length > 0) log(run, now, '◆', `Revue du groupe faite dans son worker : ${reviewedThere.join(', ')}`, 'accent')
+    log(run, now, '↩', `${back.length > 1 ? `Groupes ${back.join(', ')} rendus` : `Groupe ${back[0]} rendu`} par ${back.length > 1 ? 'leurs workers' : 'son worker'}`, 'ok')
   }
   return { back, unknown }
 }
@@ -432,14 +432,14 @@ export const groupSendSeq = (g: TicketGroup): number => {
 }
 
 /**
- * Un groupe déjà confié à une session liée : en cours (`linked`), rendu (`delegated`), fermé ou non,
+ * Un groupe déjà confié à un worker : en cours (`linked`), rendu (`delegated`), fermé ou non,
  * ou dont l'envoi a été annulé (`sends` gardé : sa session a pu créer son worktree et sa branche).
  */
 export const isSentGroup = (g: TicketGroup): boolean => g.linked !== undefined || g.delegated !== undefined || g.sends !== undefined
 
 /**
  * Un groupe que garde chaque chemin qui élague le plan (renvoi des groupes, retrait de tickets) : il
- * a des tickets, ou il a été confié à une session liée, même vide (son lien, sa fermeture et son
+ * a des tickets, ou il a été confié à un worker, même vide (son lien, sa fermeture et son
  * compteur d'envois ne se perdent jamais).
  */
 export const isKeptGroup = (g: TicketGroup): boolean => g.tickets.length > 0 || isSentGroup(g)
@@ -533,8 +533,8 @@ const isAhead = (ours: Closing | undefined, theirs: Closing): boolean =>
   (theirs.state === 'closed' && ours.state === 'closed' && theirs.cleanupAt !== undefined && ours.cleanupAt === undefined && theirs.branch === ours.branch)
 
 /**
- * La fusion de deux copies d'un même parcours garde la plus récente ; l'état de fermeture d'une
- * session liée (groupe ou pistes), lui, ne recule jamais : celui de l'autre copie revient quand il est plus avancé.
+ * La fusion de deux copies d'une même mission garde la plus récente ; l'état de fermeture d'un
+ * worker (groupe ou pistes), lui, ne recule jamais : celui de l'autre copie revient quand il est plus avancé.
  */
 export const keepClosings = (kept: Run, other: Run | undefined): Run => {
   if (!other) return kept
@@ -572,7 +572,7 @@ export const keepClosings = (kept: Run, other: Run | undefined): Run => {
 }
 
 /**
- * La consigne de suppression des branches est partie : chaque fermeture « closed » du parcours dont la
+ * La consigne de suppression des branches est partie : chaque fermeture « closed » de la mission dont la
  * branche notée est l'une de celles qu'elle visait, et qu'une consigne écrite maintenant viserait
  * encore, reçoit sa marque (`cleanupAt`) ; une fermeture déjà marquée la garde.
  */
@@ -606,13 +606,13 @@ export const markCleanupSent = (board: Board, runId: string, branches: readonly 
     if (isEntry(phase.linked) && phase.linked.session) mark(target, phase.linked.seq, readClosing(phase.linked.closing))
   }
   if (!changed) return null
-  // Lue après l'envoi, l'heure ne fait jamais reculer le parcours face à une écriture faite entre-temps.
+  // Lue après l'envoi, l'heure ne fait jamais reculer la mission face à une écriture faite entre-temps.
   run.updatedAt = Math.max(run.updatedAt, now)
   return { board: b, fx: noFx() }
 }
 
 /**
- * Une session liée a été demandée ou lancée par ce parcours (groupe ou éléments d'une phase) : son
+ * Un worker a été demandé ou lancé par cette mission (groupe ou éléments d'une phase) : son
  * brief nomme la discussion, dès la demande mise dans le prompt. Une demande en cours se lit sur le
  * groupe ou la phase (« Annuler » la retire) ; une session lancée, sur `linkedAt`, gardé même quand
  * ses éléments reviennent ensuite à faire ; les groupes confiés avant ce champ comptent aussi.

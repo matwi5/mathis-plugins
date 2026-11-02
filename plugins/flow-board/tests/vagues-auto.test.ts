@@ -2,7 +2,7 @@
 // (tout le lot parallèle, sans les groupes bloqués par une question), attend qu'elle soit close avant
 // la suivante, lance la revue du groupe et la revue de sécurité conseillée au retour d'un groupe, et
 // renvoie une fois un groupe revenu avec des tickets ouverts avant de le bloquer par une question. Les
-// sessions liées d'un parcours en auto sont des sessions autonomes, jamais en xhigh. Invariant : une
+// workers d'une mission en auto sont des workers autonomes, jamais en xhigh. Invariant : une
 // même action auto (phase, vague, groupe, revue) n'est jamais envoyée deux fois.
 
 import { expect, mock, test } from 'claude-code/testing'
@@ -13,11 +13,11 @@ const T0 = 140_000_000
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
 /** Le début du message de consigne que le mod envoie à Claude quand l'auto s'allume au repos. */
-const BRIEF = '⚡ flow-board: the auto mode instructions for this run'
+const BRIEF = '⚡ flow-board: the auto mode instructions for this mission'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
 } as const
 
 const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
@@ -132,7 +132,7 @@ const LOT_A2 = {
 }
 
 /**
- * Un parcours dont les tickets sont découpés en groupes, actif dans la discussion « sa », auto allumé
+ * Une mission dont les tickets sont découpés en groupes, actif dans la discussion « sa », auto allumé
  * (ou non), la phase des tickets finie (`questions` : déclarées avant la fin du tour) : la carte « Ensuite »
  * propose les groupes, que l'auto lance à la fin du tour.
  */
@@ -149,8 +149,10 @@ const implementing = async ($: any, on: any, lot: Record<string, unknown> = LOT,
   }
   await $.tool.call({ tool: TOOL, complete: true, ...(o.questions ? { waiting: o.questions } : {}) } as any)
   await turnEnd($, clock)
-  // Avec des groupes, la suite n'est pas /implement : c'est le lancement des groupes.
-  expect(w.commands).toEqual([])
+  // Avec des groupes, la suite n'est pas /implement : c'est le lancement des groupes, après une compaction quand
+  // le découpage a fini sous l'auto (compaction stratégique).
+  expect(w.commands).toEqual(o.isAuto !== false ? ['compact'] : [])
+  w.commands.length = 0
   return { clock, ...w }
 }
 
@@ -161,7 +163,7 @@ test('La vague prête part une fois, en un seul texte au nom du mod ; la suivant
   expect(w.texts.length).toBe(1)
   const wave = w.texts[0]!
   expect(wave.origin).toMatchObject({ kind: 'plugin', name: PLUGIN })
-  expect(wave.text).toContain('Confie chacun de ces groupes à sa session liée, en parallèle')
+  expect(wave.text).toContain('Confie chacun de ces groupes à son worker, en parallèle')
   expect(wave.text).toContain('Groupe A (Worker)')
   expect(wave.text).toContain('Groupe B (App)')
   expect(wave.text).not.toContain('Groupe C')
@@ -176,13 +178,13 @@ test('La vague prête part une fois, en un seul texte au nom du mod ; la suivant
   await $.tool.call({ tool: TOOL, set: [{ id: 'b1', status: 'done' }], returned: ['B'], reviewed: ['B'], security: { group: 'B', advised: false, why: 'rien de sensible' } } as any)
   await turnEnd($, clock)
   expect(w.texts.length).toBe(2)
-  expect(w.texts[1]!.text).toContain('Confie ce groupe à une session liée')
+  expect(w.texts[1]!.text).toContain('Confie ce groupe à un worker')
   expect(w.texts[1]!.text).toContain('Groupe C (Worker bis)')
   await turnEnd($, clock)
   expect(w.texts.length).toBe(2)
 })
 
-test('Le brief d’un parcours en auto : sessions autonomes quel que soit leur effort, jamais xhigh, sans question d’effort', { timeoutMs: 40000 }, async ($, on) => {
+test('Le brief d’une mission en auto : workers autonomes quel que soit leur effort, jamais xhigh, sans question d’effort', { timeoutMs: 40000 }, async ($, on) => {
   const { ...w } = await implementing($, on)
   const text = w.texts[0]!.text
   expect(text).toContain('quel que soit son effort')
@@ -199,7 +201,7 @@ test('Hors auto, rien ne part, et la demande de « ⇉ en parallèle » est cell
   // Le contrôle positif : le bouton remplit bien la demande, sans rien du mode auto.
   await press($, 'next-parallel-linked')
   const filled = w.filled.at(-1)!
-  expect(filled).toContain('Confie chacun de ces groupes à sa session liée, en parallèle')
+  expect(filled).toContain('Confie chacun de ces groupes à son worker, en parallèle')
   expect(filled).toContain('et, si son effort est xhigh,')
   expect(filled).toContain('pose-moi une question à boutons « xhigh (Recommandé) / high »')
   expect(filled).not.toContain('quel que soit son effort')
@@ -261,8 +263,8 @@ test('Un groupe rendu avec des tickets ouverts repart une fois ; au troisième e
   const run = w.stored()!.runs[0]!
   expect(run.waiting).toEqual([expect.objectContaining({ id: 'relance:A#3', blocks: { kind: 'group', id: 'A' } })])
   expect(run.auto).toMatchObject({ offWhy: 'deuxième échec du groupe A' })
-  expect(w.notices).toContain('Parcours Boutique : auto en pause (deuxième échec du groupe A)')
-  // Relancé par la personne (« ↗ Session liée »), comme la question le propose : elle a sa réponse.
+  expect(w.notices).toContain('Mission Boutique : auto en pause (deuxième échec du groupe A)')
+  // Relancé par la personne (« ↗ Worker »), comme la question le propose : elle a sa réponse.
   await press($, 'launch-linked-A')
   await settle(clock, 1)
   expect((w.stored()!.runs[0]!.waiting ?? []).map(q => q.id)).not.toContain('relance:A#3')
@@ -290,11 +292,11 @@ test('Une vague restée sans suite : « ↻ Renvoyer » rend ses groupes à lanc
   expect(w.texts.length).toBe(2)
 })
 
-test('Dans un parcours en auto, « ↗ Session liée » remplit la demande du mode auto', { timeoutMs: 40000 }, async ($, on) => {
+test('Dans une mission en auto, « ↗ Worker » remplit la demande du mode auto', { timeoutMs: 40000 }, async ($, on) => {
   const { ...w } = await implementing($, on, LOT, { questions: [{ id: 'qa', group: 'A', text: 'Quel format ?' }] })
   await press($, 'launch-linked-A')
   const filled = w.filled.at(-1)!
-  expect(filled).toContain('Confie ce groupe à une session liée')
+  expect(filled).toContain('Confie ce groupe à un worker')
   expect(filled).toContain('quel que soit son effort')
   expect(filled).not.toContain('pose-moi une question à boutons « xhigh (Recommandé) / high »')
 })
@@ -320,7 +322,7 @@ test('Tous les groupes rendus, relus et clos : l’auto lance le compte rendu, u
   expect(w.commands).toEqual(['flow-board:compte-rendu'])
 })
 
-test('Un groupe fini ici, sans session liée, a sa revue par /code-review, une fois', { timeoutMs: 40000 }, async ($, on) => {
+test('Un groupe fini ici, sans worker, a sa revue par /code-review, une fois', { timeoutMs: 40000 }, async ($, on) => {
   const lot = { tickets: [...LOT.tickets.slice(0, 2), LOT_A2.tickets.at(-1)!], groups: LOT_A2.groups.slice(0, 2) }
   const { clock, ...w } = await implementing($, on, lot, { isAuto: false })
   await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'done' }, { id: 'a2', status: 'done' }, { id: 'b1', status: 'done' }] } as any)

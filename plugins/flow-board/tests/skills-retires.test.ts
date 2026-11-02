@@ -11,7 +11,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
 } as const
 
 const engine = (on: any) => {
@@ -86,7 +86,7 @@ test('une phase /wayfinder faite devient un cadrage fait, ses décisions et son 
   expect(run.log.map(e => e.text)).toEqual(['Carte écrite'])
 })
 
-test('l’ancienne alternative implement-spec disparaît ; un parcours sans skill retiré reste le même objet', () => {
+test('l’ancienne alternative implement-spec disparaît ; une mission sans skill retiré reste le même objet', () => {
   const run = newRun('implement', 1_000)
   run.phases[0] = { ...run.phases[0]!, alts: ['implement-spec'] }
   const upgraded = upgradeRun(run)
@@ -94,7 +94,7 @@ test('l’ancienne alternative implement-spec disparaît ; un parcours sans skil
   expect(upgradeRun(upgraded)).toBe(upgraded)
 })
 
-test('un parcours enregistré par /implement-spec ou /wayfinder se reprend et se dessine', async ($, on) => {
+test('une mission enregistré par /implement-spec ou /wayfinder se reprend et se dessine', async ($, on) => {
   mock.clock(on, { now: 50_000_000 })
   const spec = { ...oldSpecRun(), status: 'paused' as const, owner: undefined }
   const map = { ...oldMapRun(), id: 'carte', status: 'paused' as const, owner: undefined }

@@ -101,7 +101,7 @@ export const register: Register = (on, options) => {
   }).catch(() => undefined); // en cas de panne du mod, le message passe sans lui
 
   on("turn.start", async ($, e, next) => {
-    // Le tour d'un sous-agent (`agentId`) ne touche pas au chrono du fil principal.
+    // Le tour d'un spécialiste (`agentId`) ne touche pas au chrono du fil principal.
     if (e.agentId !== undefined) return next(e);
     // Le plus récent : un prompt resté sans tour (refusé, consommé par un hook) ne prête pas son
     // heure à un message identique envoyé plus tard ; ses doublons partent avec.
@@ -153,7 +153,7 @@ export const register: Register = (on, options) => {
   });
 
   on("turn.step", async function* ($, e, next) {
-    // Les sous-agents ont leur propre cache, et leur génération, parallèle, fausserait la vitesse.
+    // Les spécialistes ont leur propre cache, et leur génération, parallèle, fausserait la vitesse.
     if (e.agentId) return yield* next(e);
     // Chaque requête du fil principal relit le cache et relance sa durée de vie.
     await $.state.set(lastRequest, await $.clock.now());

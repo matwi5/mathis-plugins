@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { memoryDisk } from './disque-memoire.ts'
 
 import { applyCommand, applyReport, applySkill, emptyBoard } from '../hooks/model.ts'
 import { activeRun, currentPhase } from '../hooks/basics.ts'
@@ -78,6 +79,7 @@ test('le premier ticket passé en cours ne remet pas à zéro des étapes encore
 
 test('pendant /implement, le ticket en cours se lit dans son groupe, avec sa place dans la file ; l’ordre des étapes et des revues est affiché', async ($, on) => {
   mock.clock(on, { now: 95_000_000 })
+  memoryDisk(on)
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
@@ -85,7 +87,7 @@ test('pendant /implement, le ticket en cours se lit dans son groupe, avec sa pla
   const PANE = {
     component: 'Pane',
     requestId: 'flow-board',
-    props: { title: 'Parcours', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+    props: { title: 'Mission', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
   } as const
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({

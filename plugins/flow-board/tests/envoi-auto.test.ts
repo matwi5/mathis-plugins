@@ -1,6 +1,6 @@
-// L'envoi du mode auto : à la fin d'un tour de la discussion qui porte le parcours, la phase finie, le
+// L'envoi du mode auto : à la fin d'un tour de la discussion qui porte la mission, la phase finie, le
 // mod envoie lui-même la suite du bouton de l'étape suivante, par `$.command.run`, après avoir relu le
-// fichier de parcours et posé sa marque « envoyée » dedans. Invariant : une même action auto n'est
+// fichier de mission et posé sa marque « envoyée » dedans. Invariant : une même action auto n'est
 // jamais envoyée deux fois. Une lecture ratée n'envoie rien et éteint l'auto ; une écriture ratée de
 // la marque n'envoie rien et le met en pause ; un envoi resté sans suite devient une question avec
 // « ↻ Renvoyer » ; le rapport écrit et le quota l'arrêtent ; un fichier seul ne le rallume pas.
@@ -16,7 +16,7 @@ const TOOL = 'mcp__flow-board__flow'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 160 }, view: {} },
 } as const
 const BAND = {
   component: 'AbovePrompt',
@@ -27,7 +27,7 @@ const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcou
 
 /**
  * Le moteur sous le plugin : le board dans le fichier commun (ou `$.store`), l'id de la discussion
- * (`ids.now`), une lecture ou une écriture du fichier de parcours que le test fait rater, `$.store` qui
+ * (`ids.now`), une lecture ou une écriture du fichier de mission que le test fait rater, `$.store` qui
  * refuse d'écrire, et les commandes que le mod lance (`runs`, avec le board écrit au moment de l'appel),
  * dont la prochaine peut être refusée (`refuseNext`).
  */
@@ -36,7 +36,9 @@ const world = (on: any) => {
   const files: Record<string, string> = {}
   const disk: { board?: string; isUsed: boolean } = { isUsed: false }
   const ids = { now: 'sa' }
-  const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false, refusePrompt: false, holdPrompt: false }
+  const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false, refusePrompt: false, holdPrompt: false, coordUnreadable: false }
+  // Le fichier de coordination du COO, quel que soit son nom ; illisible quand le test le dit (une écriture coupée).
+  const isCoord = (path: string): boolean => path.includes('/flow-board/coordination/') && !path.includes('feuille-de-route')
   const held: (() => void)[] = []
   // Les messages que le mod soumet (la consigne de l'allumage, au repos).
   const prompts: { text: string; origin: any }[] = []
@@ -48,6 +50,7 @@ const world = (on: any) => {
   on('session.id', () => ({ value: ids.now }))
   on('store.get', (_$: unknown, e: { key: string }) => {
     if (flags.unreadable && e.key === 'board:') throw new Error('EIO')
+    if (flags.coordUnreadable && e.key.startsWith('coo-coordination:')) return { value: 'coupé' }
     return { value: mem[e.key] }
   })
   on('store.set', (_$: unknown, e: { key: string; value: unknown }) => {
@@ -60,13 +63,14 @@ const world = (on: any) => {
     delete mem[e.key]
     return { value: undefined }
   })
-  on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: isBoardFile(e.path) ? disk.board !== undefined : e.path in files }) as any)
+  on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: isBoardFile(e.path) ? disk.board !== undefined : (flags.coordUnreadable && isCoord(e.path)) || e.path in files }) as any)
   on('fs.read', (_$: unknown, e: { path: string }) => {
     if (isBoardFile(e.path)) {
       disk.isUsed = true
       if (flags.unreadable || disk.board === undefined) throw new Error(`EIO ${e.path}`)
       return { value: disk.board } as any
     }
+    if (flags.coordUnreadable && isCoord(e.path)) return { value: '{"v":1,"ro' } as any
     if (!(e.path in files)) throw new Error(`ENOENT ${e.path}`)
     return { value: files[e.path] } as any
   })
@@ -146,7 +150,7 @@ const turnEnd = async ($: any, clock: { advance: (ms: number) => Promise<void> }
 const autoOf = (w: World) => w.stored()?.runs[0]?.auto
 const marksOf = (w: World) => w.stored()?.runs[0]?.autoSent ?? []
 
-/** Un parcours « De la spec au code », actif dans la discussion « sa », titré, auto allumé (ou non), spec finie (ou non). */
+/** Une mission « De la spec au code », actif dans la discussion « sa », titré, auto allumé (ou non), spec finie (ou non). */
 const specDone = async ($: any, on: any, o: { isAuto?: boolean; isDone?: boolean } = {}) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
@@ -171,7 +175,7 @@ test('La phase finie, la fin du tour envoie la suite une fois, par $.command.run
   await turnEnd($, clock)
   expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
   expect(w.runs[0]!.origin).toMatchObject({ kind: 'plugin', name: PLUGIN })
-  // La marque « envoyée » est écrite dans le fichier de parcours avant l'envoi.
+  // La marque « envoyée » est écrite dans le fichier de mission avant l'envoi.
   expect(w.runs[0]!.stored!.runs[0]!.autoSent).toEqual([expect.objectContaining({ key: 'phase:to-tickets#1', at: expect.any(Number) })])
   // Revenue de l'envoi, la commande a démarré.
   await settle(clock, 1)
@@ -182,6 +186,20 @@ test('La phase finie, la fin du tour envoie la suite une fois, par $.command.run
   await start($)
   await turnEnd($, clock, 't3')
   expect(w.runs.length).toBe(1)
+})
+
+test('Le fichier de coordination illisible : l’auto ne lance rien et le bandeau le dit ; relu de nouveau, l’auto reprend seul', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, ...w } = await specDone($, on)
+  w.flags.coordUnreadable = true
+  await turnEnd($, clock)
+  expect(w.runs).toEqual([])
+  expect(await bandText($)).toMatch(/fichier.de.coordination.illisible/)
+  // Une pause qui se lève seule : aucun arrêt enregistré.
+  expect(autoOf(w)?.offAt).toBeUndefined()
+  w.flags.coordUnreadable = false
+  await settle(clock, 6)
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  expect(await bandText($)).not.toMatch(/fichier.de.coordination.illisible/)
 })
 
 test('Rien ne part sans l’auto, ni d’une autre discussion après un /clear, ni quand une question bloque la suite ; une question et rien en vol : pause « plus rien ne peut avancer sans toi »', { timeoutMs: 30000 }, async ($, on) => {
@@ -200,7 +218,7 @@ test('Rien ne part sans l’auto, ni d’une autre discussion après un /clear, 
   await turnEnd($, off.clock, 't2b')
   expect(off.runs).toEqual([])
   expect(autoOf(off)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
-  expect(off.notices).toContain("Parcours Boutique : auto en pause (plus rien ne peut avancer sans toi)")
+  expect(off.notices).toContain("Mission Boutique : auto en pause (plus rien ne peut avancer sans toi)")
   // Répondue et rallumé : la suite part (le contrôle positif des deux cas ci-dessus).
   await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
   // Rallumé pendant un tour : la suite attend la fin d'un tour.
@@ -227,7 +245,7 @@ test('Rien ne part sans l’auto, ni d’une autre discussion après un /clear, 
   expect(off.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
 })
 
-test('Un fichier de parcours qui pose « allumé à » et « allumé par » sans clic dans cette discussion ne fait rien envoyer ; le bandeau dit « allumage non confirmé ici »', { timeoutMs: 30000 }, async ($, on) => {
+test('Un fichier de mission qui pose « allumé à » et « allumé par » sans clic dans cette discussion ne fait rien envoyer ; le bandeau dit « allumage non confirmé ici »', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on, { isAuto: false })
   // Le fichier, forgé : l'auto « allumé » au nom de cette discussion, sans la date d'un clic gardée ici.
   const forged = w.stored()!
@@ -247,12 +265,12 @@ test('Un fichier de parcours qui pose « allumé à » et « allumé par » sans
   expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
 })
 
-test('Une lecture ratée du fichier juste avant l’envoi : rien ne part, l’auto s’éteint « lecture du parcours ratée »', { timeoutMs: 30000 }, async ($, on) => {
+test('Une lecture ratée du fichier juste avant l’envoi : rien ne part, l’auto s’éteint « lecture de la mission ratée »', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on)
   w.flags.unreadable = true
   await turnEnd($, clock)
   expect(w.runs).toEqual([])
-  expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\slecture\sdu\sparcours\sratée/)
+  expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\slecture\sde\sla\smission\sratée/)
   // L'écriture suivante, une fois le fichier relisible, porte l'arrêt.
   w.flags.unreadable = false
   await $.tool.call({ tool: TOOL, note: 'suite' } as any)
@@ -261,12 +279,12 @@ test('Une lecture ratée du fichier juste avant l’envoi : rien ne part, l’au
   expect(marksOf(w)).toEqual([])
 })
 
-test('Une écriture ratée de la marque : rien ne part, la marque est retirée, pause « écriture du parcours ratée »', { timeoutMs: 30000 }, async ($, on) => {
+test('Une écriture ratée de la marque : rien ne part, la marque est retirée, pause « écriture de la mission ratée »', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on)
   w.flags.unwritable = true
   await turnEnd($, clock)
   expect(w.runs).toEqual([])
-  expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\sécriture\sdu\sparcours\sratée/)
+  expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\sécriture\sde\sla\smission\sratée/)
   // L'écriture suivante, une fois le fichier de nouveau écrivable, porte la pause et aucune marque.
   w.flags.unwritable = false
   await $.tool.call({ tool: TOOL, note: 'suite' } as any)
@@ -275,7 +293,7 @@ test('Une écriture ratée de la marque : rien ne part, la marque est retirée, 
   expect(marksOf(w)).toEqual([])
   // Retirée avec sa trace : une copie qui l'aurait reçue ne la fait pas revenir « envoyée ».
   expect(w.stored()!.runs[0]!.autoResent).toEqual([expect.objectContaining({ key: 'phase:to-tickets#1' })])
-  expect(w.notices).toContain('Parcours Boutique : auto en pause (écriture du parcours ratée)')
+  expect(w.notices).toContain('Mission Boutique : auto en pause (écriture de la mission ratée)')
   // Rallumé au repos : rien ne part tout de suite ; le mod envoie à Claude la consigne de l'allumage, une
   // fois, et la suite part à la fin du tour de ce message, une fois.
   const before = w.prompts.length
@@ -284,7 +302,7 @@ test('Une écriture ratée de la marque : rien ne part, la marque est retirée, 
   await settle(clock, 1)
   expect(w.runs).toEqual([])
   expect(w.prompts.length).toBe(before + 1)
-  expect(w.prompts.at(-1)!.text).toContain('Auto mode is ON for this run now')
+  expect(w.prompts.at(-1)!.text).toContain('Auto mode is ON for this mission now')
   await turnEnd($, clock, 't2')
   expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
   await turnEnd($, clock, 't3')
@@ -362,7 +380,7 @@ test('Le rapport écrit arrête l’auto (« rapport prêt »), qui ne valide ri
   await $.tool.call({ tool: TOOL, step: 'validate' } as any)
   await settle(clock, 1)
   expect(autoOf(w)).toMatchObject({ offWhy: 'rapport prêt' })
-  expect(w.notices).toContain('Parcours Boutique : auto en pause (rapport prêt)')
+  expect(w.notices).toContain('Mission Boutique : auto en pause (rapport prêt)')
   expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\srapport\sprêt/)
 })
 
@@ -371,12 +389,19 @@ test('Une erreur de quota en fin de tour met l’auto en pause « quota atteint 
   await ($ as any).classic.StopFailure({ session_id: 'sa', transcript_path: '/t', cwd: '', hook_event_name: 'StopFailure', error: 'overloaded' })
   await settle(clock, 1)
   expect(autoOf(w)?.offAt).toBeUndefined()
+  expect(w.stored()!.runs[0]!.waitsUser).toBeUndefined()
+  // Comme le moteur : StopFailure dans le tour encore ouvert, puis la fin du tour en erreur.
+  await $.turn.start({ text: 'x', turnId: 't9' })
   await ($ as any).classic.StopFailure({ session_id: 'sa', transcript_path: '/t', cwd: '', hook_event_name: 'StopFailure', error: 'rate_limit' })
   await settle(clock, 1)
   expect(autoOf(w)).toMatchObject({ offWhy: 'quota atteint' })
+  // L'auto en pause, la suite revient à la personne : la mission l'attend (signal « t'attend »).
+  await $.turn.complete({ answer: '', durationMs: 10, isAborted: false, turnId: 't9', reason: 'error' })
+  await settle(clock, 1)
+  expect(w.stored()!.runs[0]!.waitsUser).toEqual({ since: expect.any(Number), kind: 'step' })
 })
 
-test('Le parcours effacé par une autre discussion : rien ne part ensuite', { timeoutMs: 30000 }, async ($, on) => {
+test('La mission effacée par une autre discussion : rien ne part ensuite', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on)
   // D'abord l'effet : la spec finie, la suite part ; son skill se charge, puis sa phase se finit à son tour.
   await turnEnd($, clock)
@@ -452,13 +477,13 @@ test('Une copie rejouée avec une trace « ↻ Renvoyer » et une trace « répo
   expect(w.runs.length).toBe(2)
 })
 
-test('Mis en pause par l’ouverture d’un autre parcours, l’auto allumé d’ici garde sa protection : une copie forgée ne lui retire rien, et repris, il ne renvoie rien', { timeoutMs: 30000 }, async ($, on) => {
+test('Mis en pause par l’ouverture d’une autre mission, l’auto allumé d’ici garde sa protection : une copie forgée ne lui retire rien, et repris, il ne renvoie rien', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on)
   w.flags.refuseNext = true
   await turnEnd($, clock)
   await settle(clock, 1)
   const id = w.stored()!.runs[0]!.id
-  // Un autre parcours s'ouvre ici : la Boutique passe en pause, son auto reste allumé.
+  // Une autre mission s'ouvre ici : la Boutique passe en pause, son auto reste allumé.
   await $.tool.call({ tool: TOOL, open: { title: 'Autre' } } as any)
   await settle(clock, 2)
   const was = w.stored()!
@@ -481,7 +506,7 @@ test('Mis en pause par l’ouverture d’un autre parcours, l’auto allumé d�
   expect(openQuestions(back).map(q => q.id)).toEqual([question.id])
 })
 
-test('Effacé ailleurs, le parcours emporte les traces gardées ici', { timeoutMs: 30000 }, async ($, on) => {
+test('Effacé ailleurs, la mission emporte les traces gardées ici', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on)
   w.flags.refuseNext = true
   await turnEnd($, clock)
@@ -568,7 +593,7 @@ test('La fusion garde l’union des marques, « démarrée » l’emporte, et la
   // « ↻ Renvoyer » sur une marque restée sans suite, puis un nouvel envoi : une copie en retard (l'ancienne marque) ne la fait pas revenir.
   const stale = raiseStaleAutoSends(sent, 5_000, true)!.board
   const resent = resendAutoMark(stale, stale.activeId!, action.key, 6_000)!.board
-  // Le bouton d'un autre parcours ne touche pas à celui-ci, même sous la même clé.
+  // Le bouton d'une autre mission ne touche pas à celui-ci, même sous la même clé.
   expect(resendAutoMark(stale, 'autre', action.key, 6_000)).toBeNull()
   expect(autoMarksOf(resent.runs[0]!)).toEqual([])
   const again = markAutoSent(resent, action, 7_000)!.board
@@ -591,12 +616,12 @@ test('La fusion garde l’union des marques, « démarrée » l’emporte, et la
   for (const [a, b] of [[tracedOnly, started], [started, tracedOnly]] as const) {
     expect(autoMarksOf(mergeBoards({ ...a, activeId: null }, b).runs[0]!)).toEqual([expect.objectContaining({ key: action.key, startedAt: 4_000 })])
   }
-  // Une liste de marques abîmée bloque tout envoi : la pause « lecture du parcours ratée ».
+  // Une liste de marques abîmée bloque tout envoi : la pause « lecture de la mission ratée ».
   const damaged = runWith({ autoSent: 'x' as unknown as Run['autoSent'] })
   expect(autoDecision(damaged, {}, false)).toEqual({ kind: 'stop', why: 'lecture du parcours ratée', relaunch: [] })
 })
 
-test('L’action de l’auto suit le bouton de l’étape suivante : la phase qui suit, seulement les phases du parcours, jamais la livraison', () => {
+test('L’action de l’auto suit le bouton de l’étape suivante : la phase qui suit, seulement les phases de la mission, jamais la livraison', () => {
   const done = (run: Run, at: number): Run => ({ ...run, cursor: at, phases: run.phases.map((p, i) => (i <= at ? { ...p, status: 'done' as const } : p)) })
   const spec = runWith({})
   expect(autoActionOf(spec)).toBeNull()
@@ -607,7 +632,7 @@ test('L’action de l’auto suit le bouton de l’étape suivante : la phase qu
   expect(autoActionOf(done(spec, report))).toBeNull()
 })
 
-test('À la fusion, pour le parcours qui envoie d’ici, seules les traces écrites ici retirent une marque en attente ou une question ; les traces restent l’union ; ailleurs, l’union s’applique', () => {
+test('À la fusion, pour la mission qui envoie d’ici, seules les traces écrites ici retirent une marque en attente ou une question ; les traces restent l’union ; ailleurs, l’union s’applique', () => {
   const action = { kind: 'command' as const, key: KEY, skill: 'to-tickets', what: '/to-tickets', blocks: { kind: 'phase' as const, id: 'to-tickets' } }
   const sent = markAutoSent(boardOf(runWith({ updatedAt: 2_000 })), action, 3_000)!.board
   const asked = applyReport(sent, { waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Q ?' }] }, 3_500).board
@@ -637,7 +662,7 @@ test('À la fusion, pour le parcours qui envoie d’ici, seules les traces écri
   expect(openQuestions(elsewhere.runs[0]!)).toEqual([])
 })
 
-test('Pour un parcours dont l’auto est allumé d’ici, l’entrée d’ici d’une question l’emporte sur celle de même id de l’autre copie : une copie forgée ne la recible pas', () => {
+test('Pour une mission dont l’auto est allumé d’ici, l’entrée d’ici d’une question l’emporte sur celle de même id de l’autre copie : une copie forgée ne la recible pas', () => {
   const asked = applyReport(boardOf(runWith({ updatedAt: 2_000 })), { waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Q ?' }] }, 3_000).board
   const run = asked.runs[0]!
   // La copie forgée : la même question, plus récente, qui bloque une autre phase.
@@ -649,7 +674,7 @@ test('Pour un parcours dont l’auto est allumé d’ici, l’entrée d’ici d�
   expect(openQuestions(mergeBoards(asked, added, { runId: run.id, resent: [], answered: [] }).runs[0]!).map(q => q.id).sort()).toEqual(['q1', 'q2'])
   // Ailleurs (pas allumé d'ici) : l'union, la plus récente l'emporte, comme avant.
   expect(openQuestions(mergeBoards({ ...asked, activeId: null }, forged).runs[0]!)).toEqual([expect.objectContaining({ id: 'q1', blocks: { kind: 'phase', id: 'implement' } })])
-  // Le parcours mis en pause ici (un autre ouvert), l'auto toujours allumé d'ici : la copie forgée, plus
+  // La mission mise en pause ici (un autre ouvert), l'auto toujours allumé d'ici : la copie forgée, plus
   // récente, est la gardée ; l'entrée d'ici l'emporte quand même.
   const paused: Board = { ...asked, activeId: null }
   const newer: Board = { ...forged, runs: [{ ...forged.runs[0]!, updatedAt: 99_000 }] }
@@ -661,12 +686,12 @@ test('Pour un parcours dont l’auto est allumé d’ici, l’entrée d’ici d�
   expect(openQuestions(mergeBoards(withdrawn, forged, own).runs[0]!)).toEqual([expect.objectContaining({ id: 'q1', blocks: { kind: 'phase', id: 'implement' } })])
 })
 
-test('Une trace gardée ici ne compte jamais plus tard que celle du parcours de même clé : une marque posée après la trace ramenée reste', () => {
+test('Une trace gardée ici ne compte jamais plus tard que celle de la mission de même clé : une marque posée après la trace ramenée reste', () => {
   const action = { kind: 'command' as const, key: KEY, skill: 'to-tickets', what: '/to-tickets', blocks: { kind: 'phase' as const, id: 'to-tickets' } }
   const run = runWith({ autoResent: [{ key: KEY, at: 5_000 }], answered: [{ id: 'q1', at: 5_000 }], updatedAt: 2_000 })
   const sent = markAutoSent(boardOf(run), action, 6_000)!.board
   const asked = applyReport(sent, { waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Q ?' }] }, 6_500).board
-  // Gardée ici loin dans le futur (horloge recalée, marque forgée retirée) : elle ne dépasse pas la trace du parcours.
+  // Gardée ici loin dans le futur (horloge recalée, marque forgée retirée) : elle ne dépasse pas la trace de la mission.
   const merged = mergeBoards(asked, asked, { runId: run.id, resent: [{ key: KEY, at: 9e12 }], answered: [{ id: 'q1', at: 9e12 }] })
   expect(autoMarksOf(merged.runs[0]!)).toEqual([expect.objectContaining({ key: KEY, at: 6_000 })])
   expect(openQuestions(merged.runs[0]!).map(q => q.id)).toEqual(['q1'])
@@ -713,7 +738,7 @@ test('Une trace « ↻ Renvoyer » ou « répondue » datée dans le futur est r
 
 // ─── Claude prévenu de l'allumage (invariant : aucune étape ne part d'un allumage avant la consigne) ───
 
-const ON = 'Auto mode is ON for this run now'
+const ON = 'Auto mode is ON for this mission now'
 
 test('Allumé pendant un tour, un appel de l’outil dans ce tour porte l’avis une fois, et la fin du tour envoie la suite, sans message du mod', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on, { isAuto: false })
@@ -846,7 +871,7 @@ test('Un message de consigne refusé met l’auto en pause « Claude pas préven
   await settle(clock, 1)
   expect(w.prompts.length).toBe(1)
   expect(autoOf(w)).toMatchObject({ offWhy: 'Claude pas prévenu' })
-  expect(w.notices).toContain('Parcours Boutique : auto en pause (Claude pas prévenu)')
+  expect(w.notices).toContain('Mission Boutique : auto en pause (Claude pas prévenu)')
   expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\sClaude\spas\sprévenu/)
   await turnEnd($, clock, 't1')
   expect(w.runs).toEqual([])
@@ -870,7 +895,7 @@ test('Un skill chargé après le clic prévient Claude : pas d’avis en double 
   const sent = w.runs.length
   await $.command.run({ command: 'mattpocock-skills:to-tickets', args: '' } as any)
   const consigne = String((await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', pluginName: 'mattpocock-skills', frontmatter: {} } as any)).text)
-  expect(consigne).toContain('Auto mode is on for this run')
+  expect(consigne).toContain('Auto mode is on for this mission')
   expect(String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)).not.toContain(ON)
   // Coupé puis rallumé, sans appel de l'outil entre les deux : Claude repart non prévenu.
   await press($, 'auto-off')
@@ -878,7 +903,7 @@ test('Un skill chargé après le clic prévient Claude : pas d’avis en double 
   await press($, 'auto-confirm')
   const relit = String((await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result)
   expect(relit).toContain(ON)
-  expect(relit).not.toContain('Auto mode is OFF for this run now')
+  expect(relit).not.toContain('Auto mode is OFF for this mission now')
   // /reload-plugins : le mod redémarre, la date du clic reste, Claude est prévenu une fois de plus.
   await start($)
   expect(String((await $.tool.call({ tool: TOOL, note: 'après' } as any)).result)).toContain(ON)
@@ -895,38 +920,38 @@ test('Prévenu par l’avis de l’outil, puis coupé : la réponse suivante por
   await press($, 'auto-confirm')
   expect(String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)).toContain(ON)
   await press($, 'auto-off')
-  expect(String((await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result)).toContain('Auto mode is OFF for this run now')
+  expect(String((await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result)).toContain('Auto mode is OFF for this mission now')
 })
 
-test('L’appel de l’outil par un sous-agent ne prévient pas Claude : ni avis dans sa réponse, ni envoi à la fin du tour ; l’appel suivant de Claude porte l’avis', { timeoutMs: 30000 }, async ($, on) => {
+test('L’appel de l’outil par un spécialiste ne prévient pas Claude : ni avis dans sa réponse, ni envoi à la fin du tour ; l’appel suivant de Claude porte l’avis', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on, { isAuto: false })
   await $.turn.start({ text: 'x', turnId: 't1' })
   await press($, 'auto-on')
   await press($, 'auto-confirm')
-  expect(String((await $.tool.call({ tool: TOOL, note: 'du sous-agent', agentId: 'sub1' } as any)).result)).not.toContain(ON)
+  expect(String((await $.tool.call({ tool: TOOL, note: 'du spécialiste', agentId: 'sub1' } as any)).result)).not.toContain(ON)
   expect(String((await $.tool.call({ tool: TOOL, note: 'de Claude' } as any)).result)).toContain(ON)
   await turnEnd($, clock, 't1')
   expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
 })
 
-test('Allumé pendant un tour où seul un sous-agent appelle l’outil : la fin du tour n’envoie que la consigne à Claude', { timeoutMs: 30000 }, async ($, on) => {
+test('Allumé pendant un tour où seul un spécialiste appelle l’outil : la fin du tour n’envoie que la consigne à Claude', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on, { isAuto: false })
   await $.turn.start({ text: 'x', turnId: 't1' })
   await press($, 'auto-on')
   await press($, 'auto-confirm')
-  await $.tool.call({ tool: TOOL, note: 'du sous-agent', agentId: 'sub1' } as any)
+  await $.tool.call({ tool: TOOL, note: 'du spécialiste', agentId: 'sub1' } as any)
   await turnEnd($, clock, 't1')
   expect(w.runs).toEqual([])
   expect(w.prompts.length).toBe(1)
 })
 
-test('Un skill forké (`context: fork`, comme /code-review) ou qu’aucun appel d’ici n’explique (préchargé dans un sous-agent) ne prévient pas Claude : la fin du tour lui envoie la consigne', { timeoutMs: 30000 }, async ($, on) => {
+test('Un skill forké (`context: fork`, comme /code-review) ou qu’aucun appel d’ici n’explique (préchargé dans un spécialiste) ne prévient pas Claude : la fin du tour lui envoie la consigne', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, ...w } = await specDone($, on, { isAuto: false })
   await $.turn.start({ text: 'x', turnId: 't1' })
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   const forked = String((await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: { context: 'fork' } } as any)).text)
-  expect(forked).toContain('Auto mode is on for this run')
+  expect(forked).toContain('Auto mode is on for this mission')
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: {} } as any)
   await turnEnd($, clock, 't1')
   expect(w.runs).toEqual([])
@@ -998,7 +1023,7 @@ test('Un skill intégré à Claude Code (source « built-in », comme /code-revi
   await $.command.run({ command: 'code-review', args: 'xhigh' } as any)
   await $.skill.prompt({ skill: 'code-review', text: 'x', source: 'built-in', frontmatter: {} } as any)
   // Tapée une fois et chargée d'abord dans un fork, la phase suivante : le second chargement (préchargé
-  // dans un sous-agent) n'est plus expliqué par la commande, et ne prévient pas Claude.
+  // dans un spécialiste) n'est plus expliqué par la commande, et ne prévient pas Claude.
   await $.command.run({ command: 'mattpocock-skills:to-tickets', args: '' } as any)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: { context: 'fork' } } as any)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', frontmatter: {} } as any)

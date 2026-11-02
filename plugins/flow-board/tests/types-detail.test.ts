@@ -7,14 +7,15 @@ const PLUGIN = 'flow-board'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 120 }, view: {} },
 } as const
 
-test('le type d’un sous-agent : son subagent_type, puis ce que flow-board a demandé, puis sa description', () => {
+test('le type d’un spécialiste : son subagent_type, puis ce que flow-board a demandé, puis sa description', () => {
   expect(agentTypeOf('agents:explorer', 'review', 'Relecture du diff')).toBe('explore')
   expect(agentTypeOf('Explore', undefined, 'x')).toBe('explore')
   expect(agentTypeOf('agents:researcher', undefined, 'x')).toBe('research')
   expect(agentTypeOf('claude-code-guide', undefined, 'x')).toBe('research')
+  // agents:worker est retiré du plugin agents : ses anciens lancements gardent le rôle « implémentation ».
   expect(agentTypeOf('agents:worker', undefined, 'x')).toBe('implement')
   expect(agentTypeOf('Plan', undefined, 'x')).toBe('plan')
   // Un coéquipier d'une équipe d'agents : « Autre ».
@@ -85,7 +86,7 @@ test('le bouton d’une piste ouvre sa carte de détail, puis la referme ; la ca
   expect(await ui.find({ type: 'Text', text: '+1' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '−0' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /claude-haiku-5-5|haiku-5-5/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^Orchestrateur$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Manager$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^hooks\/view\.tsx$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^erreur$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^high$/ })).toBeDefined()
@@ -100,7 +101,7 @@ test('le bouton d’une piste ouvre sa carte de détail, puis la referme ; la ca
   // La carte se referme par son bouton.
   await ui.press({ key: 'lane-call-1' })
   expect(await ui.find({ type: 'Text', text: /Relecture de code/ })).toBeUndefined()
-  // L'orchestrateur a sa carte, sans transcription à ouvrir d'ici.
+  // Le manager a sa carte, sans transcription à ouvrir d'ici.
   await ui.press({ key: 'lane-main' })
   expect(await ui.find({ key: 'card-main' })).toBeDefined()
   expect(await ui.find({ key: 'transcript-main' })).toBeUndefined()
@@ -115,7 +116,7 @@ test('un coéquipier d’une équipe d’agents est « Autre », quelle que soit
   expect(r.agents[0]!.type).toBe('other')
 })
 
-test('ce que flow-board a demandé : pendant une revue, un sous-agent general-purpose est une relecture', async ($, on) => {
+test('ce que flow-board a demandé : pendant une revue, un spécialiste general-purpose est une relecture', async ($, on) => {
   mock.clock(on, { now: 51_000_000 })
   mock.store(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))

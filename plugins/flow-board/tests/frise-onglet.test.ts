@@ -9,7 +9,7 @@ const PLUGIN = 'flow-board'
 const PANE = {
   component: 'Pane',
   requestId: 'flow-board',
-  props: { title: 'Parcours', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
+  props: { title: 'Mission', isFocused: false, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
 } as const
 const ALL = ['terminal', 'desktop', 'vscode', 'mobile'] as const
 
@@ -28,7 +28,7 @@ const world = (on: any) => {
 }
 
 /**
- * Un sous-agent qui réfléchit 2 s, écrit un Read (0,5 s), le lance (0,3 s), puis demande une
+ * Un spécialiste qui réfléchit 2 s, écrit un Read (0,5 s), le lance (0,3 s), puis demande une
  * commande : l'autorisation le fait attendre `waitMs` (5 s par défaut), la commande tourne 1 s ; il
  * rédige 1 s, puis finit.
  */
@@ -69,7 +69,7 @@ const scenario = async ($: any, on: any, clock: any, waitMs = 5_000) => {
   await $.tool.call({ tool: 'Agent', description: 'Explorer le module', prompt: 'p', run_in_background: true, tool_use_id: 'call-1' })
   const step = async (index: number) => {
     for await (const _ of $.turn.step({ turnId: 'ta', index, model: 'claude-haiku-5-5', messageCount: 1, agentId: 'a1' })) {
-      // la réponse du sous-agent
+      // la réponse du spécialiste
     }
   }
   await step(0)
@@ -79,11 +79,11 @@ const scenario = async ($: any, on: any, clock: any, waitMs = 5_000) => {
   await $.tool.call({ tool: 'Bash', command: 'touch b.txt', tool_use_id: 'tu-bash', agentId: 'a1' })
   plan = 'report'
   await step(2)
-  // Une requête de plus du sous-agent : réflexion 2 s, rédaction 1 s.
+  // Une requête de plus du spécialiste : réflexion 2 s, rédaction 1 s.
   return () => step(3)
 }
 
-test('les requêtes et les outils d’un sous-agent deviennent des segments datés de sa piste', { timeoutMs: 15000 }, async ($, on) => {
+test('les requêtes et les outils d’un spécialiste deviennent des segments datés de sa piste', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 40_000_000 })
   const mem = world(on)
   await scenario($, on, clock)
@@ -91,7 +91,7 @@ test('les requêtes et les outils d’un sous-agent deviennent des segments dat�
   const reg = mem['agents:s-frise'] as SessionRegistry
   const segs = reg.agents[0]!.segments!.map(s => `${s.k}${s.f ? `/${s.f}` : ''}:${(s.e ?? NaN) - s.s}${s.a ? `:${s.a}` : ''}`)
   expect(segs).toEqual(['think:2000', 'tool/read:800:hooks/view.tsx', 'think:2000', 'tool/run:500:touch b.txt', 'waitPerson:5000', 'tool/run:1000:touch b.txt', 'think:2000', 'write:1000'])
-  // Le départ est relevé sur la piste de l'orchestrateur.
+  // Le départ est relevé sur la piste du manager.
   expect(reg.main?.marks?.map(m => m.k)).toEqual(['relay'])
 })
 
@@ -102,7 +102,7 @@ test('la frise se dessine sur les 4 surfaces : SVG décrit par son texte alt, ca
   for (const surface of ALL) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     await ui.press({ key: 'tab-agents' })
-    expect(await ui.find({ type: 'Button', text: /Orchestrateur$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', text: /Manager$/ })).toBeDefined()
     expect(await ui.find({ type: 'Button', text: /Explorer le module$/ })).toBeDefined()
     if (surface === 'terminal') {
       // Une grille de cases, ou à défaut des barres de glyphes : la réflexion « ▒ » s'y lit.
@@ -121,7 +121,7 @@ test('la frise se dessine sur les 4 surfaces : SVG décrit par son texte alt, ca
   }
 })
 
-test('un sous-agent sans fin vue garde son segment en cours, qui s’allonge', { timeoutMs: 15000 }, async ($, on) => {
+test('un spécialiste sans fin vue garde son segment en cours, qui s’allonge', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 42_000_000 })
   const mem = world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
@@ -140,7 +140,7 @@ test('un sous-agent sans fin vue garde son segment en cours, qui s’allonge', {
   await pending
 })
 
-test('le retour d’un sous-agent se pose sur la piste du lanceur quand son message arrive ; un tour interrompu ferme ses segments', { timeoutMs: 15000 }, async ($, on) => {
+test('le retour d’un spécialiste se pose sur la piste du lanceur quand son message arrive ; un tour interrompu ferme ses segments', { timeoutMs: 15000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 43_000_000 })
   const mem = world(on)
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
@@ -162,7 +162,7 @@ test('le retour d’un sous-agent se pose sur la piste du lanceur quand son mess
   } catch {
     // l'interruption remonte au moteur
   }
-  // Une fin de tour du sous-agent ne pose pas de retour : il n'a encore rien rendu au fil principal.
+  // Une fin de tour du spécialiste ne pose pas de retour : il n'a encore rien rendu au fil principal.
   await ($ as any).classic.SubagentStop({ agent_id: 'a1', agent_type: 'general-purpose', agent_transcript_path: 'x', stop_hook_active: false })
   await $.prompt.submit({ text: '<agent-message from="a1">Rapport</agent-message>', origin: { kind: 'peer' } } as any)
   await clock.advance(1_000)
@@ -199,7 +199,7 @@ test('la légende nomme chaque attente et la pause ; la légende détaillée, re
   for (const surface of ALL) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     await ui.press({ key: 'tab-agents' })
-    for (const word of [/attend\sun\ssous-agent/, /attend\sta\sréponse/, /attend\sune\stâche\sde\sfond/, /pause\s:\spersonne\sne\stravaillait/]) {
+    for (const word of [/attend\sun\sspécialiste/, /attend\sta\sréponse/, /attend\sune\stâche\sde\sfond/, /pause\s:\spersonne\sne\stravaillait/]) {
       expect(await ui.find({ type: 'Text', text: word })).toBeDefined()
     }
     // Repliée par défaut : aucun outil n'y est listé.
@@ -235,7 +235,7 @@ test('la légende montre les glyphes de la surface : ceux du SVG sur les surface
   expect(relayGlyphs(terminal)).toEqual(['↳', '↲'])
 })
 
-/** Le texte `alt` de la piste du sous-agent, blancs insécables ramenés à des espaces. */
+/** Le texte `alt` de la piste du spécialiste, blancs insécables ramenés à des espaces. */
 const explorerAlt = async (ui: any): Promise<string> =>
   (await ui.findAll({ type: 'Svg' })).map((svg: any) => String(svg.props.alt).replace(/\u00a0/g, ' ')).find((alt: string) => alt.startsWith('Explorer le module')) ?? ''
 
@@ -262,7 +262,7 @@ test('la barre de navigation : chaque bouton a sa lettre et son raccourci, la r�
 
 const RICH = ['desktop', 'vscode', 'mobile'] as const
 
-/** Le dessin SVG de la piste du sous-agent : il change dès que la fenêtre glisse (le texte `alt` s'arrête à 12 mots). */
+/** Le dessin SVG de la piste du spécialiste : il change dès que la fenêtre glisse (le texte `alt` s'arrête à 12 mots). */
 const explorerSource = async (ui: any): Promise<string> =>
   String((await ui.findAll({ type: 'Svg' })).find((svg: any) => String(svg.props.alt).startsWith('Explorer'))?.props.source ?? '')
 
@@ -283,7 +283,7 @@ test('zoomer suit le direct : un nouveau segment apparaît ; décalée vers le p
     expect(zoomed).not.toContain('outil ⌕')
     expect(count(zoomed)).toBeGreaterThan(0)
     expect(await ui.find({ type: 'Text', text: /→\smaintenant/ })).toBeDefined()
-    // Elle suit le direct : une nouvelle requête du sous-agent y entre.
+    // Elle suit le direct : une nouvelle requête du spécialiste y entre.
     await clock.advance(5_000)
     await more()
     expect(await explorerSource(ui)).not.toBe(zoomedSource)
@@ -323,7 +323,7 @@ test('une frise qui n’est plus en direct ne dit pas « maintenant » au bout d
   world(on)
   on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
   await scenario($, on, clock, 20 * 60_000)
-  // Le sous-agent rend sa réponse : plus rien ne tourne.
+  // Le spécialiste rend sa réponse : plus rien ne tourne.
   await ($ as any).turn.complete({ turnId: 'ta', agentId: 'a1', answer: 'Rapport', isAborted: false })
   await clock.advance(10 * 60_000)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
