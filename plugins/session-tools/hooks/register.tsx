@@ -469,6 +469,7 @@ async function rewrite($: EngineInterface, draft: string) {
 
 // ─── Effort auto ────────────────────────────────────────────────────────────
 
+// max reste lisible dans la réponse, pour être ramené à xhigh (cappedEffort) au lieu d'être refusé.
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 // Le même modèle que Réécrire ; la réponse est une ligne de JSON.
 const EFFORT_REQUEST = { effort: "low", maxTokens: 1000, timeoutMs: 60_000 } as const;
@@ -489,16 +490,35 @@ async function chooseEffort($: EngineInterface, draft: string) {
     await $.ui.toast("Effort auto : réponse illisible, l'effort est laissé tel quel.");
     return;
   }
+  // Le modèle de la session (pas celui du bouton) ne se lit que s'il peut plafonner le niveau.
+  let sessionModel: unknown = null;
+  if (EFFORT_LEVELS.indexOf(choice.effort) > EFFORT_LEVELS.indexOf("high")) {
+    try {
+      sessionModel = await $.session.model();
+    } catch {
+      // lecture ratée : seul le plafond de max s'applique
+    }
+  }
+  const capped = cappedEffort(choice.effort, sessionModel);
   // Brouillon envoyé ou changé pendant l'appel : le niveau ne vaudrait plus pour lui.
   if ((await $.prompt.read()).text !== draft) {
     await $.ui.toast("Effort auto : le brouillon a changé pendant le choix, l'effort est laissé tel quel.");
     return;
   }
   // La commande, comme si elle était tapée. Claude Code garde ce niveau comme défaut des nouvelles
-  // sessions (sauf max), et peut demander de confirmer un changement en cours de discussion : la
-  // notification dit « demandé », pas « réglé ».
-  await $.command.run({ command: "effort", args: choice.effort });
-  await $.ui.toast(`Effort demandé : ${choice.effort}${choice.reason ? ` (${choice.reason})` : ""}`);
+  // sessions, et peut demander de confirmer un changement en cours de discussion : la notification
+  // dit « demandé », pas « réglé ».
+  await $.command.run({ command: "effort", args: capped.effort });
+  await $.ui.toast(`Effort demandé : ${capped.effort}${choice.reason ? ` (${choice.reason})` : ""}${capped.note ? ` · ${capped.note}` : ""}`);
+}
+
+// Règle « Jamais d'effort max, jamais Haiku au-dessus de high » (`config/rules/agents.md`) : max
+// reste à la personne, qui le tape elle-même ; une session Haiku ne monte pas au-dessus de high.
+function cappedEffort(effort: string, sessionModel: unknown) {
+  if (typeof sessionModel === "string" && /haiku/i.test(sessionModel) && EFFORT_LEVELS.indexOf(effort) > EFFORT_LEVELS.indexOf("high"))
+    return { effort: "high", note: `${effort} ramené à high (session Haiku)` };
+  if (effort === "max") return { effort: "xhigh", note: "max ramené à xhigh" };
+  return { effort, note: "" };
 }
 
 // `{"effort": "high", "raison": "…"}`, au besoin entouré d'autre texte ; undefined sans niveau valide.

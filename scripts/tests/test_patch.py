@@ -70,6 +70,16 @@ class PatchTest(unittest.TestCase):
         self.assertEqual(run(str(self.file), "{{uu}} et", "x").returncode, 0)
         self.assertIn("x {{uu}}", self.file.read_text(encoding="utf-8"))
 
+    def test_un_fichier_de_lot_en_cible_simple_est_refuse_et_renvoie_a_lot(self):
+        lot = self.root / "lot.txt"
+        text = "::: fichier doc.md\n::: ancien\ntrois\n::: nouveau\n3\n::: fin\n"
+        lot.write_text(text, encoding="utf-8")
+        out = run(str(lot), "trois", "3")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("--lot", out.stderr)
+        self.assertEqual(lot.read_text(encoding="utf-8"), text)
+        self.assertIn("trois", self.file.read_text(encoding="utf-8"))
+
     def test_fichier_absent_et_mauvais_nombre_d_arguments(self):
         self.assertEqual(run(str(self.root / "absent.md"), "a", "b").returncode, 1)
         self.assertEqual(run(str(self.file), "@" + str(self.root / "absent"), "b").returncode, 1)
@@ -152,6 +162,64 @@ class BatchTest(unittest.TestCase):
             self.assertEqual(out.returncode, 1, text)
             self.assertIn("ÉCHEC", out.stderr)
         self.assertEqual(self.a.read_bytes(), before)
+
+
+class AppendTest(unittest.TestCase):
+    """`patch.py --append <fichier> <texte>` : un texte ajouté à la fin du fichier, comme un heredoc
+    `cat >> <fichier> <<EOF` (suivi d'une fin de ligne), sans que le garde-fou d'un worktree le refuse."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.file = self.root / "journal.md"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_ajoute_le_texte_a_la_fin_suivi_d_une_fin_de_ligne(self):
+        self.file.write_bytes("# Journal\n\n- un\n".encode("utf-8"))
+        out = run("--append", str(self.file), "- deux « git » é")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ajouté", out.stdout)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"), "# Journal\n\n- un\n- deux « git » é\n")
+
+    def test_garde_les_fins_de_ligne_crlf_du_fichier(self):
+        self.file.write_bytes("un\r\ndeux\r\n".encode("utf-8"))
+        (self.root / "texte").write_bytes("trois\nquatre\n".encode("utf-8"))
+        out = run("--append", str(self.file), f"@{self.root / 'texte'}")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"), "un\r\ndeux\r\ntrois\r\nquatre\r\n")
+
+    def test_un_fichier_sans_fin_de_ligne_finale_en_recoit_une_avant_le_texte(self):
+        self.file.write_bytes("un".encode("utf-8"))
+        self.assertEqual(run("--append", str(self.file), "deux").returncode, 0)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"), "un\ndeux\n")
+
+    def test_le_marqueur_u_et_l_arobase_valent_comme_pour_un_remplacement(self):
+        self.file.write_bytes(b"")
+        self.assertEqual(run("--append", str(self.file), "const s = '{{" + "u}}2028'").returncode, 0)
+        self.assertEqual(run("--append", str(self.file), "@@dresse").returncode, 0)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"), "const s = '" + chr(92) + "u2028'\n@dresse\n")
+
+    def test_un_mauvais_nombre_d_arguments_montre_chaque_forme(self):
+        out = run("--append", str(self.file))
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("--append <fichier> <texte>", out.stderr)
+        self.assertIn("--lot <fichier de paires>", out.stderr)
+
+    def test_un_fichier_absent_est_une_erreur_sans_creation(self):
+        out = run("--append", str(self.file), "texte")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("introuvable", out.stderr)
+        self.assertFalse(self.file.exists())
+
+    def test_un_fichier_qui_n_est_pas_en_utf8_ou_un_texte_vide_ne_change_rien(self):
+        self.file.write_bytes(b"caf\xe9\n")
+        self.assertEqual(run("--append", str(self.file), "x").returncode, 1)
+        self.assertEqual(self.file.read_bytes(), b"caf\xe9\n")
+        self.file.write_bytes(b"un\n")
+        self.assertEqual(run("--append", str(self.file), "").returncode, 1)
+        self.assertEqual(self.file.read_bytes(), b"un\n")
 
 
 if __name__ == "__main__":

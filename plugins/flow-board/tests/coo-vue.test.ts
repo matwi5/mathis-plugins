@@ -166,10 +166,29 @@ test('l’effort actif du COO, relevé sur sa dernière requête, entre dans le 
   const w = world(on)
   seed(w)
   await start($)
-  expect(await openCoo($, clock)).toMatch(/Active effort of this discussion: unknown \(ask the user once\)/)
+  expect(await openCoo($, clock)).toMatch(/Effort chosen in this discussion: unknown \(ask the user once\)/)
   await playStep($, { model: 'claude-opus-5-5', effort: 'xhigh' })
   await settle(clock, 2)
   await $.prompt.submit({ text: 'et l’effort ?', origin: { kind: 'composer' } } as any)
   const statement = (w.sent.at(-1)?.context ?? []).find(c => /COO statement/.test(c)) ?? ''
-  expect(statement).toMatch(/Active effort of this discussion: xhigh\./)
+  expect(statement).toMatch(/Effort chosen in this discussion: xhigh\./)
+  // Un high choisi part en medium : le relevé dit les deux.
+  await playStep($, { model: 'claude-opus-5-5', effort: 'high' })
+  await settle(clock, 2)
+  await $.prompt.submit({ text: 'et maintenant ?', origin: { kind: 'composer' } } as any)
+  const after = (w.sent.at(-1)?.context ?? []).find(c => /COO statement/.test(c)) ?? ''
+  expect(after).toMatch(/Effort chosen in this discussion: high; the mod sends its requests in medium \(COO rule\)\./)
+})
+
+test('le relevé du COO relit l’accord d’archivage d’office à chaque tour : éteint, puis allumé depuis sa date', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  seed(w)
+  await start($)
+  expect(await openCoo($, clock)).toMatch(/Archivage d’office : éteint\. .*\/flow archive \(no argument\)/)
+  // L'accord donné ailleurs (une autre discussion, l'onglet Commandes) : le tour suivant le dit.
+  w.mem['archive-consent'] = { at: NOW - 1_000 }
+  await $.prompt.submit({ text: 'et l’archivage ?', origin: { kind: 'composer' } } as any)
+  const statement = (w.sent.at(-1)?.context ?? []).find(c => /COO statement/.test(c)) ?? ''
+  expect(statement).toMatch(/Archivage d’office : allumé depuis le 1970-01-02\./)
 })

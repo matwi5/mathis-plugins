@@ -46,6 +46,7 @@ With an argument, use it; if it contradicts the commits (a `patch` requested ove
 - Every other source from step 1 gets the same version; a marker for a version not yet known becomes the new version.
 - If the project's `CLAUDE.md` names a script that sets the version (its files, its markers), use it rather than editing by hand, then check its report.
 - `CHANGELOG.md`, if the project has one: a new section at the top in the file's existing format, listing the changes from the commits in the owner's words.
+- If the project's `CLAUDE.md` names a quick or static check command (for example `scripts/check.sh --quick <plugin>`), run it on each plugin or package whose CHANGELOG you just wrote, before the commit of step 4, and fix what it reports (a retired term in the new entry, a malformed entry): the pre-commit hook would otherwise refuse the release commit. Without such a command, skip this.
 
 ## 4. Commit and tag
 

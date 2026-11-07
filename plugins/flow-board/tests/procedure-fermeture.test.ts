@@ -34,10 +34,10 @@ test('la liste jetable, mot pour mot ; tout autre fichier ignoré, modifié ou n
     expect(text).toContain(
       'liste jetable : les liens symboliques, quelle que soit leur cible (test -L) ; __pycache__/ et *.pyc ; .show-your-work/ ; .pytest_cache/, .mypy_cache/, .ruff_cache/, node_modules/, .DS_Store',
     )
-    expect(text).toContain('les dossiers de la liste exclus ci-dessus (__pycache__/, .show-your-work/, .pytest_cache/, .mypy_cache/, .ruff_cache/, node_modules/) sont jetables en entier, quel que soit leur contenu ; les types générés d’un mod, eux, seulement après ce diff -rq ; un lien, un .pyc ou un .DS_Store le sont où qu’ils soient')
+    expect(text).toContain('les dossiers de la liste exclus ci-dessus (__pycache__/, .show-your-work/, .pytest_cache/, .mypy_cache/, .ruff_cache/, node_modules/, .claude-plugin/types/) sont jetables en entier, quel que soit leur contenu ; un lien, un .pyc ou un .DS_Store le sont où qu’ils soient')
     expect(text).toContain("git -C '<worktree>' status --porcelain --untracked-files=all")
     // Les dossiers jetables exclus de la liste : un .env ne se perd pas dans node_modules/.
-    expect(text).toContain("git -C '<worktree>' ls-files --others --ignored --exclude-standard -- . ':(exclude,glob)**/__pycache__/**' ':(exclude,glob)**/.show-your-work/**' ':(exclude,glob)**/.pytest_cache/**' ':(exclude,glob)**/.mypy_cache/**' ':(exclude,glob)**/.ruff_cache/**' ':(exclude,glob)**/node_modules/**'")
+    expect(text).toContain("git -C '<worktree>' ls-files --others --ignored --exclude-standard -- . ':(exclude,glob)**/__pycache__/**' ':(exclude,glob)**/.show-your-work/**' ':(exclude,glob)**/.pytest_cache/**' ':(exclude,glob)**/.mypy_cache/**' ':(exclude,glob)**/.ruff_cache/**' ':(exclude,glob)**/node_modules/**' ':(exclude,glob)**/.claude-plugin/types/**'")
     expect(text).toMatch(/tout autre fichier ignoré, tout fichier modifié ou non suivi arrête la fermeture : liste-les-moi, ne retire rien/)
   }
 })

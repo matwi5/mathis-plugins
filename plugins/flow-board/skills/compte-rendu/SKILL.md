@@ -35,7 +35,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 ## Fait
 (Un sous-titre par groupe quand la mission en a plusieurs : « Groupe A · <nom> », puis ses tickets.)
 - <ticket ou changement> : ce qui change concrètement (comportement, données), pas le code. Commit <hash>. Vérifié par <commande> : <résultat>.
-- Sécurité (une ligne par groupe) : revue faite, avec ce qu'elle a trouvé et corrigé ; ou conseillée mais pas lancée, et pourquoi elle était conseillée ; ou jugée inutile, et pourquoi.
+- Sécurité (une ligne par groupe) : revue faite, avec ce qu'elle a trouvé et corrigé ; ou conseillée mais pas lancée, et pourquoi elle était conseillée ; ou, quand les faits le disent (revue désactivée pour le projet par son réglage du tableau de bord), « revue de sécurité désactivée pour ce projet ; le groupe touchait : <zone> » (« le lot touchait » pour une mission sans groupes) ; ou jugée inutile, et pourquoi.
 
 ## Décidé sans toi
 - <le choix> : pourquoi. Comment revenir dessus si tu n'es pas d'accord.
@@ -52,7 +52,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 (Rangé par thème : un thème par point, ses constats à la suite sur la même ligne quand ils sont petits.)
 
 ## Code antérieur au lot
-- <constat sur du code que le lot n'a pas changé, classé à part par une revue> : gravité en un mot. Pour que tu décides d'un groupe « durcissement » (un ticket par constat), que je ne crée qu'avec ton accord.
+- <constat sur du code que le lot n'a pas changé, classé à part par une revue> : gravité en un mot. Pour que tu décides d'un groupe « durcissement » (un ticket par constat), que je ne crée qu'avec ton accord ; seuls les constats de gravité moyenne ou plus, ou qui violent un invariant, y sont proposés, les autres vont au journal, sous « À reprendre ».
 
 ## Pistes
 - <constat d'une passe « bogues » qui ne viole pas l'invariant du ticket, ou cas limite relevé en route> : ce qu'il faudrait trancher ou surveiller.

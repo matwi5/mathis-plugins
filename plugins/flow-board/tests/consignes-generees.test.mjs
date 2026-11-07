@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { criteria, isSafePath, isSafeRange, readTicket, render, ConsignesError } from '../scripts/consignes.mjs'
+import { criteria, isSafePath, isSafeRange, isTicketId, readTicket, render, ConsignesError } from '../scripts/consignes.mjs'
 import { CORPUS } from './corpus.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../scripts/consignes.mjs', import.meta.url))
@@ -53,6 +53,8 @@ test('sans invariant : un fichier conforme au gabarit, sans trou ni ligne entre 
     assert.match(text, /^# Consignes de la revue : ticket 05 « Édition : un outil »\n/)
     assert.deepEqual(headings(text), headings(body))
     assert.equal(consigne(text), consigne(body))
+    // Un relecteur, fork de /code-review compris, lit d'abord ce fichier : la ligne de l'advisor y est.
+    assert.ok(consigne(text).endsWith("Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport."), 'la ligne de l’advisor manque')
     assert.ok(!/<[^>\n]+>/.test(text), `un trou <…> reste : ${text.match(/<[^>\n]+>/)}`)
     assert.ok(!text.split('\n').some(l => l.startsWith('- [')), 'une ligne entre crochets reste')
     assert.match(text, /Cible : `abc1234\.\.def5678`/)
@@ -182,6 +184,41 @@ test('un ticket aux fins de ligne CRLF se lit comme les autres', () => {
   assert.deepEqual(criteria('- [ ] un critère\r\n', '7'), ['7 : un critère'])
 })
 
+test('--faits prend aussi l’id d’un ticket, cherché dans le dossier d’issues du ticket relu', () => {
+  const dir = project()
+  try {
+    writeFileSync(join(dir, 'travail', 'chantier', 'issues', '06-suite.md'), '# 06: Suite\n\nZone sensible : non\n')
+    const out = run(dir, 'travail/chantier/issues/06-suite.md', 'a..b', 'c.md', '--faits', '05')
+    assert.equal(out.status, 0, out.stderr)
+    assert.ok(readFileSync(join(dir, 'c.md'), 'utf8').includes('05 : Premier critère (test). ; 05 : Deuxième critère.'))
+    const missing = run(dir, 'travail/chantier/issues/06-suite.md', 'a..b', 'c.md', '--faits', '42')
+    assert.equal(missing.status, 1)
+    assert.match(missing.stderr, /42/)
+    assert.match(missing.stderr, /travail\/chantier\/issues/)
+    for (const hostile of ['../05', '05/..', '-05']) {
+      const refused = run(dir, 'travail/chantier/issues/06-suite.md', 'a..b', 'c.md', '--faits', hostile)
+      assert.equal(refused.status, 1, hostile)
+    }
+    const spaced = run(dir, 'travail/chantier/issues/06-suite.md', 'a..b', 'c.md', '--faits', '05 06')
+    assert.equal(spaced.status, 1)
+    assert.ok(spaced.stderr.includes('--faits 05 --faits 06'), spaced.stderr)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--chemins en une chaîne à espaces est refusé, avec la forme répétée', () => {
+  const dir = project()
+  try {
+    const out = run(dir, 'travail/chantier/issues/05-outil.md', 'a..b', 'c.md', '--chemins', 'scripts CLAUDE.md')
+    assert.equal(out.status, 1)
+    assert.ok(out.stderr.includes('--chemins scripts --chemins CLAUDE.md'), out.stderr)
+    assert.ok(!existsSync(join(dir, 'c.md')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('la plage et les chemins passent le corpus hostile commun : chaque entrée les fait refuser', () => {
   assert.equal(isSafeRange('abc1234..def5678'), true)
   assert.equal(isSafeRange('refs/worktree/flow-board/T07^..refs/worktree/flow-board/T07'), true)
@@ -192,6 +229,9 @@ test('la plage et les chemins passent le corpus hostile commun : chaque entrée 
   assert.deepEqual(range, [])
   const path = Object.entries(CORPUS).filter(([, token]) => isSafePath(`dossier/a${token}1.md`)).map(([name]) => name)
   assert.deepEqual(path, [])
+  assert.equal(isTicketId('05'), true)
+  const id = Object.entries(CORPUS).filter(([, token]) => isTicketId(`a${token}1`)).map(([name]) => name)
+  assert.deepEqual(id, [])
 })
 
 test('dans un worktree, le fichier de décisions est celui du clone principal', () => {

@@ -4,6 +4,42 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.80.0 — 2026-11-07
+
+Moins de dépense par mission : l'effort de chaque discussion et de chaque worker suit son rôle et son travail, un groupe sans logique part sur Sonnet, l'advisor reste aux discussions et la revue de sécurité se règle par projet. Le worker écrit moins pour son manager, et le manager garde mieux la main sur ses missions.
+
+### Ajouté
+- **Revue de sécurité par projet** : bascule « ⛨ Sécurité : activée / désactivée » dans la vue Coordination et sur la ligne de sécurité d'un groupe ou d'un lot, désactivée tant qu'elle n'a jamais été réglée. Désactivée, l'avis est toujours jugé et envoyé mais aucun relecteur ne tourne, et le compte rendu le dit. Le réglage vit sous le dossier personnel (`~/.claude/flow-board/coordination/`), le même pour toutes les discussions du poste ; un réglage illisible vaut « activée ».
+- **Effort selon le rôle et la phase** : le mod impose l'effort de chaque requête : le COO en medium, le manager d'une mission à groupes en medium du découpage au compte rendu, high au moins ailleurs ; xhigh et max sont laissés. Le bandeau dit l'effort imposé et sa raison.
+- **Effort calculé au lancement** : la demande de lancement écrit l'effort de chaque groupe (« effort calculé : medium », « high (<raisons>) », « xhigh, imposé ») ; « plusieurs modules » veut dire plusieurs modules de code (la documentation, `travail/` et `docs/` ne comptent pas).
+- **Groupe sans logique sur Sonnet** : un groupe dont chaque ticket dit « Zone sensible : non » et « Logique : non » part en worker Sonnet high, qui confie chaque revue et lecture à un spécialiste Opus ; un groupe passé en xhigh reste sur Opus.
+- **High pendant un ticket sensible** : un ticket sensible ne relève plus l'effort de lancement du groupe ; le mod du worker passe en high seulement pendant ce ticket (un ticket muet ou une lecture ratée comptent comme sensibles), et son bandeau le dit.
+- **Brief écrit par flow-board** : au lancement d'un groupe, le mod écrit le brief de chaque worker dans le dossier temporaire du système ; Claude n'y ajoute que ce qui varie.
+- **Compte rendu par son chemin** : un worker dont le compte rendu est déjà dans un fichier l'envoie par `reportPath`, lu sous son worktree ou son dossier de travail seulement.
+- **Commits hors mission** : le COO signale « ⚠ main a reçu N commit(s) hors mission sur des fichiers du groupe … » quand la branche de travail reçoit des commits sur les fichiers d'un groupe en cours.
+- **Fichiers des groupes en cours des autres missions** nommés dans la consigne d'un skill de code, avec le conseil de travailler dans un worktree en cas de recoupement.
+- **Index « Décisions en vigueur »** en tête du `DECISIONS.md` d'une mission ; la compaction d'un worker garde les constats de revue pas encore appliqués.
+- **COO** : état de l'archivage d'office dans son relevé ; index du README et note « le mod qui tourne est la version installée » dans le brief d'un worker du dépôt de flow-board.
+
+### Modifié
+- **Advisor** réservé aux discussions : aucun spécialiste ne le consulte, chaque consigne de relecteur le dit.
+- **Revue de sécurité** en un seul agent, qui cherche et vérifie lui-même ses constats.
+- **Textes de l'outil `flow`** raccourcis de 30 % (23 397 → 16 294 caractères), sans changer son schéma.
+- **Un worker code la recommandation et continue** : seul un cas bloquant de l'auto retient le commit du ticket ; il n'écrit à son manager que pour une question ou son compte rendu.
+- **Découpage** : un groupe tout sensible compte 3 à 4 tickets, le chevauchement avec les autres missions se vérifie, la question du cycle de vie se pose pour un champ gardé, ask-matt se relit avant de proposer un départ.
+- **Passe « bogues »** avec `--max-findings all` ; un changement sans effet sur le comportement (commentaires, documentation, libellés, tests seuls) n'a ni passe « bogues » ni nouvelle passe.
+- **Groupe « durcissement »** limité aux constats antérieurs de gravité moyenne ou plus ; les autres vont dans « À reprendre ».
+- **Seuil de compaction du COO** porté à 450 000 tokens, et sa compaction attend une question posée n'importe où dans sa réponse.
+- **L'auto attend une tâche externe** au lieu de se mettre en pause ; les types générés d'un mod ne bloquent plus la fermeture d'un groupe.
+- **`snapshot.mjs --clean`** juge chaque fichier figé à part.
+- Les puces d'effort des workers et « Après le compte rendu d'un worker » passent dans la section 11 de la procédure d'un worker de groupe.
+
+### Corrigé
+- **Reprise d'une mission** : un skill ne reprend plus qu'une mission née ou tenue dans la discussion ; une mission tenue ailleurs reste où elle est.
+- **Worktree** : une discussion qui entre dans un worktree garde la mission du dépôt principal.
+
+---
+
 ## 0.79.0 — 2026-11-03
 
 Le COO arrive : une discussion par projet qui suit toutes les missions, les ordonne, relaie tes réponses et tes gestes, et livre sur ton clic. Le vocabulaire devient mission, manager, worker et spécialiste. Le mode auto ne t'arrête plus que pour ce qui est à toi.

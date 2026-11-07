@@ -14,10 +14,11 @@ node_modules/
 .env*
 
 # Propre à un poste : jamais versionné, sauf .claude/settings.json, les réglages du dépôt quand il en
-# a (alors présents dans chaque worktree) ; les worktrees, settings.local.json et le .claude d'un
+# a (alors présents dans chaque worktree), et .claude/rules/, ses règles de projet ; les worktrees, settings.local.json et le .claude d'un
 # sous-dossier restent ignorés
 /.claude/*
 !/.claude/settings.json
+!/.claude/rules/
 */**/.claude/
 *.jsonl
 .machine

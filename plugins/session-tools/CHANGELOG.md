@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.24.1 — 2026-11-07
+
+### Corrigé
+- **Effort auto** : le bouton ne propose plus que low à xhigh ; une réponse max est ramenée à xhigh, et sur une session Haiku tout niveau au-dessus de high est ramené à high. La notification le dit.
+
+---
+
 ## 0.24.0 — 2026-11-03
 
 ### Changé

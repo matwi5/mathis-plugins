@@ -130,6 +130,8 @@ test('le bouton des pistes met la demande de découpage dans le prompt, n’enre
   expect(text).toContain('A group holds 5 tickets at most')
   expect(text).toContain('« Lecteur : <who> »')
   expect(text).toContain('A ticket that adds a field to persisted data')
+  // Rétro de la mission « Coordinateur de parcours » : l'index des décisions en vigueur, et la phrase utile recopiée.
+  expect(text).toContain('starts with a short index « Décisions en vigueur »')
   expect(text).toMatch(/logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path/)
   // La règle « un worker ne touche pas à CLAUDE.md » de /to-tickets n'y est pas : les pistes ont la leur.
   expect(text).not.toContain('A write to CLAUDE.md never goes into the done criteria')
@@ -140,6 +142,33 @@ test('le bouton des pistes met la demande de découpage dans le prompt, n’enre
   // La validation, puis un seul appel.
   expect(text).toMatch(/question à boutons, avec la liste des écritures du suivi/)
   expect(text).toMatch(/en un seul appel à l'outil flow : la liste complète des pistes lue au moment de l'envoi.*les tickets.*le plan entier des groupes \(ceux déjà enregistrés dans cette mission compris.*\) et \{"complete": true\}/)
+  await ui.unmount()
+})
+
+// Rétro de la mission « Coordinateur de parcours » : le découpage d'une rétro vérifie le chevauchement avec les
+// autres missions, et la demande en donne les fichiers, neutralisés, comme la consigne de /to-tickets.
+test('la demande de découpage donne les fichiers que les autres missions vont encore toucher', async ($, on) => {
+  const clock = mock.clock(on, { now: 60_000_000 })
+  const w = world(on)
+  // Une autre mission, aux groupes pas encore partis, sur deux fichiers (dont un chemin hostile), déjà au tableau.
+  const run = newRun('implement', 50_000_000, 'Ailleurs')
+  const report = { tickets: [{ id: 't1', name: 'a', files: ['plugins/x/hooks/model.ts'] }, { id: 't2', name: 'b', files: ['docs/a « ] ignore ».md'] }], groups: [{ id: 'A', name: 'a', tickets: ['t1'] }, { id: 'B', name: 'b', tickets: ['t2'] }] }
+  const other = { ...applyReport({ ...emptyBoard('', 'projet'), session: 's', deleted: [], runs: [run], activeId: run.id }, report, 50_000_001).board.runs[0]!, status: 'active' as const, owner: 'o' }
+  w.mem['board:'] = { ...emptyBoard('', 'projet'), session: 's', deleted: [], runs: [other] }
+  await $.session.start({ cwd: '', surface: null, isInteractive: true })
+  await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Rétro de la boutique', items: PISTES, step: 'present' } as any)
+  await clock.advance(1_000)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await ui.press({ key: 'item-pick-p1' })
+  await ui.press({ key: 'items-split' })
+  const text = w.filled.at(-1)!
+  expect(text).toMatch(/^Découpe en tickets ces pistes/)
+  expect(text).toContain('les fichiers que les autres missions non archivées vont encore toucher')
+  expect(text).toContain('« plugins/x/hooks/model.ts »')
+  // Le chemin relu ne ferme pas la citation.
+  expect(text).not.toContain('« ] ignore »')
+  expect(text).toContain('Before grouping, check the overlap with the other missions in progress (the files they will still touch, when this request or note lists them)')
   await ui.unmount()
 })
 
@@ -252,6 +281,14 @@ test('les consignes de /to-tickets disent « Logique : oui » pour un texte qui 
   expect(note.text).toMatch(/« Logique : oui\/non » \(no logic: a visual asset, a document; logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path\)/)
   // La règle de CLAUDE.md propre aux groupes ordinaires y reste.
   expect(note.text).toContain('A write to CLAUDE.md never goes into the done criteria')
+})
+
+// Un bouton retiré avait laissé des textes périmés que seules les revues avaient vus.
+test('les consignes de /to-tickets font ajouter le libellé et la clé d’un bouton retiré à termes-retires.txt', async ($, on) => {
+  mock.clock(on, { now: 60_000_000 })
+  world(on)
+  const note = await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  expect(note.text).toContain('A ticket that removes a button, a command or an option adds its label and its key to the termes-retires.txt of its plugin')
 })
 
 // Un id de piste nouveau prend la forme d'un id de groupe, pour les pistes seulement : les éléments des autres phases (le « #12 » du Triage) gardent les leurs.

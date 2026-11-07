@@ -57,7 +57,9 @@ test('mis de côté même quand tout est fait : il n’est pas clos', () => {
 })
 
 test('un skill lancé après la mise de côté ouvre une nouvelle mission au lieu de reprendre l’ancien', () => {
+  // Née dans cette discussion : seule la mise de côté l'empêche de revenir.
   const aside = setAsideActive(lot(), 2_000)!.board
+  aside.runs = aside.runs.map(r => (r.asideAt === undefined ? r : { ...r, bornIn: 's' }))
   const out = applySkill(aside, 'mattpocock-skills:implement', { now: 3_000, isMain: true, args: 'Autre lot' })!
   const run = activeRun(out.board)!
   expect(out.board.runs).toHaveLength(2)
@@ -67,9 +69,9 @@ test('un skill lancé après la mise de côté ouvre une nouvelle mission au lie
   const old = out.board.runs.find(r => r.id !== run.id)!
   expect(old.status).toBe('paused')
   expect(old.asideAt).toBe(2_000)
-  // Sans mise de côté, le même skill reprenait la mission en pause.
+  // Sans mise de côté, le même skill reprenait la mission en pause, née dans cette discussion.
   const paused = { ...lot(), activeId: null }
-  paused.runs = paused.runs.map(r => ({ ...r, status: 'paused' as const, owner: undefined }))
+  paused.runs = paused.runs.map(r => ({ ...r, status: 'paused' as const, owner: undefined, bornIn: 's' }))
   expect(activeRun(applySkill(paused, 'mattpocock-skills:implement', { now: 3_000, isMain: true })!.board)!.id).toBe(paused.runs[0]!.id)
 })
 

@@ -59,10 +59,15 @@ test('la rétro lancée pendant la mission de cette discussion porte son titre e
   expect(run.isTitled).toBe(true)
   expect(run.id).not.toBe(other.id)
   expect(out.board.runs.find(r => r.id === other.id)!.status).toBe('paused')
-  // Sans mission active ici, une rétro reprend toujours la mission en pause qui en a une.
-  const idle: Board = { ...board, activeId: null, runs: [{ ...here, status: 'paused' as const }, other] }
+  // Sans mission active ici, une rétro reprend la mission en pause qui en a une, née dans cette discussion (une pause efface l'owner)…
+  const idle: Board = { ...board, activeId: null, runs: [{ ...here, status: 'paused' as const }, { ...other, owner: undefined, bornIn: 's' }] }
   const resumed = applySkill(idle, 'mattpocock-skills:retro', { now: 9_000, isMain: true })!
   expect(activeRun(resumed.board)!.id).toBe(other.id)
+  // … jamais celle d'une autre discussion : une nouvelle mission s'ouvre.
+  const foreign: Board = { ...idle, runs: [{ ...here, status: 'paused' as const }, { ...other, owner: undefined, bornIn: 'autre' }] }
+  const opened = applySkill(foreign, 'mattpocock-skills:retro', { now: 9_000, isMain: true })!
+  expect(activeRun(opened.board)!.id).not.toBe(other.id)
+  expect(opened.board.runs.find(r => r.id === other.id)!.status).toBe('paused')
 })
 
 test('p3 : /implement pour un groupe de la mission en phase compte rendu le continue, et son compte rendu est à refaire', () => {

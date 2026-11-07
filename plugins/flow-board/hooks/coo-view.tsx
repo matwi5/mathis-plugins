@@ -6,11 +6,14 @@
 // missions en auto), les missions, puis la feuille de route (alertes, jalon, étapes, idées, À reprendre),
 // chaque section absente tant qu'elle est vide. La coordination entre les missions s'ajoutera ici.
 
+import { shownGroupId } from './basics.ts'
 import { C, SKILLS } from './catalog.ts'
+import { COO_EFFORT, leadEffortPill } from './effort.ts'
 import { neutralLine } from './closing.ts'
 import { WAITS_FR, cooPoint, roadmapNow, waveText, type CooCard, type CooMission, REPORT_CHANGED, REPORT_PAUSED, type CooDelivery, type CooReport, type CooRoadmap, type CooStatement, type CooWait } from './coo.ts'
 import type { LaunchMode, LaunchStart } from './launch.ts'
 import { roadmapTextPrint } from './roadmap.ts'
+import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
 
 /** Un morceau de texte d'une ligne, avec son style. */
 export type CooPart = { text: string; color?: string; bold?: boolean; dim?: boolean }
@@ -44,6 +47,7 @@ export type CooDo =
   | { kind: 'retro-tick-all'; retro: string }
   | { kind: 'retro-pick'; retro: string; print: string }
   | { kind: 'retro-dismiss'; card: string }
+  | { kind: 'security'; to: 'on' | 'off' }
 /** Un bouton d'une ligne : sa clé, son libellé, son geste. */
 export type CooAction = { key: string; label: string; act: CooDo }
 /** Une ligne de la vue : un titre de section, ou une ligne de contenu, avec ses boutons. */
@@ -124,10 +128,25 @@ export const coordinationRows = (s: CooStatement): CooRow[] => {
     ...waveRows(s),
     ...(s.roadmap ? roadmapRows(s.roadmap) : []),
     ...holdRows(s),
+    ...outsideRows(s),
     ...oppositionRows(s),
     ...coordinationFileRows(s),
   ]
 }
+
+/**
+ * La bascule de la revue de sécurité du projet, dans la vue du COO : son état relu à l'instant (une lecture
+ * ratée se montre « activée », avec une ligne ambre) ; un clic pose l'état inverse de celui qu'elle montre.
+ */
+export const securitySettingRows = (review: SecurityReview): CooRow[] => [
+  { key: 'coo-security', kind: 'heading', parts: [{ text: 'Revue de sécurité de ce projet', bold: true }] },
+  {
+    key: 'coo-security-line',
+    kind: 'line',
+    parts: review === 'unread' ? [{ text: '⚠', color: C.amber, bold: true }, { text: SECURITY_UNREAD_FR, color: C.amber }] : [{ text: 'Gardée sur ce poste, pour tout le dépôt (worktrees des workers compris).', dim: true }],
+    actions: [{ key: 'coo-security-toggle', label: securityToggleLabel(review), act: { kind: 'security', to: securityToggleTarget(review) } }],
+  },
+]
 
 /** L'identité d'une question à l'écran : sa mission, son id et l'empreinte de son texte, jamais la place de sa ligne. */
 export const waitKey = (w: Pick<CooWait, 'missionId' | 'id' | 'print'>): string => `${neutralLine(w.missionId)}-${neutralLine(w.id)}-${w.print}`
@@ -397,6 +416,17 @@ const holdRows = (s: CooStatement): CooRow[] =>
         })),
       ]
 
+/** Les commits hors mission sur les fichiers d'un groupe en cours : une ligne par groupe, sans bouton ni notification. */
+const outsideRows = (s: CooStatement): CooRow[] =>
+  (s.outside ?? []).map(o => ({
+    key: `coo-outside-${o.missionId}-${o.group}`,
+    kind: 'line' as const,
+    parts: [
+      { text: '⚠', color: C.amber, bold: true },
+      { text: `main a reçu ${o.count} commit(s) hors mission sur des fichiers du groupe ${shownGroupId(o.group)} de « ${neutralLine(o.mission)} »` },
+    ],
+  }))
+
 /** Le fichier de coordination illisible : rien ne s'y écrit ; la personne seule repart d'un fichier neuf, la copie gardée. */
 const coordinationFileRows = (s: CooStatement): CooRow[] =>
   s.coordination?.state !== 'unread'
@@ -504,9 +534,14 @@ const roadmapRows = (r: CooRoadmap): CooRow[] => {
   return rows
 }
 
-/** Le bandeau du COO : « ◆ COO · N missions · N t’attend ». */
-export const cooBandParts = (s: CooStatement): CooPart[] => {
+/**
+ * Le bandeau du COO : « ◆ COO · N missions · N t’attend », puis l'effort que le mod impose à ses
+ * requêtes (`COO_EFFORT`), quand il change l'effort relevé de la discussion sur sa propre piste du
+ * registre (`effort` : absent sur un effort inconnu, medium, xhigh ou max).
+ */
+export const cooBandParts = (s: CooStatement, effort: string | undefined): CooPart[] => {
   const open = s.missions.filter(m => m.status !== 'done').length
+  const pill = leadEffortPill(COO_EFFORT, effort)
   return [
     { text: `◆${NB}COO`, color: C.teal, bold: true },
     { text: '·', dim: true },
@@ -514,5 +549,6 @@ export const cooBandParts = (s: CooStatement): CooPart[] => {
     ...(s.waits.length + s.waiting.length > 0
       ? [{ text: '·', dim: true }, { text: `${s.waits.length + s.waiting.length}${NB}t’attend${s.waits.length + s.waiting.length > 1 ? 'ent' : ''}`, color: C.amber, bold: true }]
       : []),
+    ...(pill === null ? [] : [{ text: '·', dim: true }, { text: pill.replace(/ /g, NB), color: C.blue }]),
   ]
 }

@@ -1,4 +1,4 @@
-"""Tests du refus d'un ticket sensible sans sa recherche citée (scripts/check.py, hook pre-commit) :
+"""Tests du refus d'un ticket sensible sans sa recherche citée, et d'une case mal formée (scripts/check.py, hook pre-commit) :
 python3 -m unittest discover -s scripts/tests."""
 
 import subprocess
@@ -20,7 +20,10 @@ def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
 
-class SensitiveTicketTest(unittest.TestCase):
+class TicketRepo(unittest.TestCase):
+    """Un dépôt d'essai avec un ancien ticket sensible commité sans recherche, et le hook pointé dessus ;
+    sans test à lui."""
+
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.repo = Path(self.dir.name)
@@ -49,6 +52,8 @@ class SensitiveTicketTest(unittest.TestCase):
         self.write(rel, text)
         git(self.repo, "add", rel)
 
+
+class SensitiveTicketTest(TicketRepo):
     def test_un_nouveau_ticket_sensible_sans_recherche_est_refuse(self):
         self.stage(NEW, SENSITIVE)
         problems = check.tickets_without_search([NEW])
@@ -106,6 +111,29 @@ class SensitiveTicketTest(unittest.TestCase):
         git(self.repo, "commit", "-q", "-m", "texte")
         self.stage(NEW, SENSITIVE)
         self.assertEqual(len(check.tickets_without_search([NEW])), 1)
+
+
+class CheckboxTest(TicketRepo):
+    """Les cases d'un ticket indexé : seules « - [ ] » et « - [x] » sont bien formées."""
+
+    def test_une_case_mal_formee_est_refusee_avec_le_fichier_la_ligne_et_la_forme_attendue(self):
+        for bad in ("- [x ] fait", "- [ x] fait", "- [] à faire", "- [X] fait", "  - [  ] sous-critère", "* [x] fait", "-[x] fait", "- [x]fait"):
+            with self.subTest(bad=bad):
+                self.stage(NEW, f"# 02: essai\n\n- [x] bon\n{bad}\n")
+                problems = check.malformed_checkboxes([NEW])
+                self.assertEqual(len(problems), 1)
+                self.assertIn(f"{NEW}:4", problems[0])
+                self.assertIn("« - [ ] »", problems[0])
+                self.assertIn("« - [x] »", problems[0])
+                with self.assertRaises(check.Failed):
+                    check.staged()
+
+    def test_des_cases_bien_formees_un_lien_ou_un_bloc_de_code_passent(self):
+        text = ("# 02: essai\n\n- [ ] à faire\n- [x] fait\n  - [x] sous-critère\n- [CR](lien) une liste de liens\n"
+                "Exemple cité : `- [x ]`, refusé.\n```\n- [x ] dans un bloc de code\n```\n")
+        self.stage(NEW, text)
+        self.assertEqual(check.malformed_checkboxes([NEW]), [])
+        check.staged()
 
 
 if __name__ == "__main__":

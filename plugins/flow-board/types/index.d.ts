@@ -121,6 +121,13 @@ export type Closing = {
    * recule jamais (la fusion garde la fermeture marquée) ; part si la branche notée change.
    */
   cleanupAt?: number
+  /**
+   * Un groupe clos (`closed`) alors que la revue de sécurité du projet était désactivée : posé à sa première
+   * fermeture, seulement si le réglage relu à cet instant dit « désactivée » et que son avis est conseillé sans
+   * revue faite ; gardé par un « closed » renvoyé, jamais posé ensuite. Le groupe garde sa ligne « désactivée »
+   * au compte rendu et n'a plus de revue de sécurité due, quel que soit le réglage ensuite.
+   */
+  securityOff?: true
 }
 
 /**
@@ -130,6 +137,16 @@ export type Closing = {
 export type SecurityCheck = {
   /** L'avis de Claude, une fois le groupe relu : la revue vaut-elle la peine ? */
   isAdvised?: boolean
+  /**
+   * La marque « revue de sécurité désactivée pour ce projet » d'un avis conseillé sans revue faite : sa date,
+   * posée par la discussion de la mission à la réception de l'avis, ou à la fermeture du groupe (`closed`),
+   * seulement si le réglage du projet relu à cet instant dit « désactivée » (jamais sur une lecture ratée).
+   * Posée à la première fermeture même si l'avis en portait déjà une. Informative : un groupe clos ne vaut
+   * « désactivée » que par sa fermeture (`Closing.securityOff`, `isClosedTurnedOff`) ; un groupe clos sans elle
+   * suit le réglage relu, comme un groupe ouvert. Une marque datée à plus d'une minute dans le futur tombe à la
+   * lecture (`clampFuture`). Copiée avec l'avis ; part avec lui à un nouvel envoi ou un nouveau passage du lot.
+   */
+  offAt?: number
   /** Pourquoi, court, dans la langue de la personne. */
   why?: string
   /** Quand `/security-review` a été lancé sur le groupe. */
@@ -639,7 +656,8 @@ export type Run = {
   owner?: string
   /**
    * Id de la discussion où la mission est née, posé à sa création et jamais effacé (depuis la
-   * 0.60.0) : seule elle prend son titre. Absent d'une mission d'avant, qui ne compte pas.
+   * 0.60.0) : seule elle prend son titre, et seul un skill qu'elle charge reprend la mission en pause
+   * d'office. Absent d'une mission d'avant, qui ne compte pas : seul « ↻ Reprendre ici » la reprend.
    */
   bornIn?: string
   /**

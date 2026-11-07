@@ -4,7 +4,7 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyReport, applySkill, autoDecision, emptyBoard, isGroupLotStuck, hereReviewMark, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, applySkill, autoDecision, awaitedExternals, emptyBoard, isGroupLotStuck, hereReviewMark, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'
 import { cancelLinkedGroup, linkGroupSession } from '../hooks/link.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
@@ -244,6 +244,193 @@ test('Un groupe gardé vide après un envoi annulé retient le lot : sans rien e
   expect(isGroupLotStuck(kept, false)).toBe(true)
   // Une tâche de fond en vol : on attend son retour.
   expect(isGroupLotStuck(kept, true)).toBe(false)
+})
+
+/** Le lot de deux groupes dont B attend une dépendance externe (`kind` : task ou decision), pas encore faite. */
+const outsideLot = (kind: 'task' | 'decision', extra: string[] = []) => ({
+  tickets: LOT.tickets.map(t => (t.id.startsWith('b') ? { ...t, blockedBy: ['ext-1', ...extra] } : t)),
+  groups: LOT.groups,
+  externals: [{ id: 'ext-1', name: kind === 'task' ? 'Revue du diagnostic' : 'Choix du format', kind, status: 'todo' }],
+})
+
+/** A rendu, relu, sécurité jugée inutile : il ne reste que B, qui attend l'externe. */
+const onlyOutsideLeft = (kind: 'task' | 'decision', extra: string[] = []): Board => {
+  const run = newRun('implement', T0, 'Boutique')
+  let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  b = applyReport(b, outsideLot(kind, extra), T0 + 1).board
+  b = startLinkedGroups(b, ['A'], T0 + 2)!.board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'] }, T0 + 3).board
+  return applyReport(b, { security: { group: 'A', advised: false, why: 'rien' } }, T0 + 4).board
+}
+
+test('Une tâche externe pas faite que tout le reste attend n’est pas un blocage ; levée, B part ; une décision externe, ou un bloqueur inconnu en plus, l’est', () => {
+  const b = onlyOutsideLeft('task')
+  const waiting = activeRun(b)!
+  const before = JSON.stringify(waiting)
+  expect(autoDecision(waiting, {}, false).kind).toBe('none')
+  // L'effet d'abord : l'auto attend la tâche, qu'il nomme ; le lot n'est donc pas dit bloqué.
+  expect(awaitedExternals(waiting, false).map(x => x.name)).toEqual(['Revue du diagnostic'])
+  expect(isGroupLotStuck(waiting, false)).toBe(false)
+  // La simulation de la tâche faite ne touche pas la mission.
+  expect(JSON.stringify(waiting)).toBe(before)
+  // La tâche marquée faite : B part.
+  const lifted = applyReport(b, { externals: [{ id: 'ext-1', status: 'done' }] }, T0 + 5).board
+  expect(autoDecision(activeRun(lifted)!, {}, false)).toMatchObject({ kind: 'send' })
+  expect(awaitedExternals(activeRun(lifted)!, false)).toEqual([])
+  // Une décision externe attend la personne : le lot est bloqué, comme avant (pause « plus rien ne peut avancer sans toi »).
+  const decision = activeRun(onlyOutsideLeft('decision'))!
+  expect(isGroupLotStuck(decision, false)).toBe(true)
+  expect(awaitedExternals(decision, false)).toEqual([])
+  // B bloqué aussi par un id que la mission ne connaît pas : lever la tâche ne le libère pas, le lot reste bloqué.
+  const unknown = activeRun(onlyOutsideLeft('task', ['inconnu-9']))!
+  expect(isGroupLotStuck(unknown, false)).toBe(true)
+  expect(awaitedExternals(unknown, false)).toEqual([])
+  // Une tâche de fond en vol : rien à nommer, on attend son retour.
+  expect(awaitedExternals(waiting, true)).toEqual([])
+  // Un lot sans groupes dont chaque ticket ouvert attend la tâche : elle est nommée (le bandeau la dit).
+  const solo = newRun('implement', T0, 'Solo')
+  let s: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [solo], activeId: solo.id }
+  s = applyReport(s, { tickets: [{ id: 'x1', name: 'Un', blockedBy: ['ext-1'] }, { id: 'x2', name: 'Deux' }], externals: [{ id: 'ext-1', name: 'Revue du diagnostic', kind: 'task', status: 'todo' }] }, T0 + 1).board
+  // Un ticket encore libre : rien n'attend la tâche.
+  expect(awaitedExternals(activeRun(s)!, false)).toEqual([])
+  s = applyReport(s, { set: [{ id: 'x2', status: 'done' }] }, T0 + 2).board
+  expect(awaitedExternals(activeRun(s)!, false).map(x => x.id)).toEqual(['ext-1'])
+  // Pendant un découpage pas fini, l'auto n'attend aucune tâche : rien n'est nommé.
+  const cutting = newRun('to-tickets', T0, 'Découpe')
+  let c: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [cutting], activeId: cutting.id }
+  c = applyReport(c, { tickets: [{ id: 'x1', name: 'Un', blockedBy: ['ext-1'] }], externals: [{ id: 'ext-1', name: 'Revue du diagnostic', kind: 'task', status: 'todo' }] }, T0 + 1).board
+  expect(awaitedExternals(activeRun(c)!, false)).toEqual([])
+  // Un nom illisible relu du fichier partagé n'écarte pas la tâche : elle reste attendue (le bandeau la nomme par son id).
+  const unnamed = { ...activeRun(s)!, externals: [{ id: 'ext-1', name: 42, status: 'todo', isDecision: false }] } as unknown as Run
+  expect(awaitedExternals(unnamed, false).map(x => x.id)).toEqual(['ext-1'])
+  // Une entrée hors forme (null, id pas texte) n'est ni trouvée ni attendue, et rien ne lève : le ticket reste bloqué.
+  const forged = { ...activeRun(s)!, externals: [null, { id: 42, name: 'X', status: 'todo', isDecision: false }] } as unknown as Run
+  expect(awaitedExternals(forged, false)).toEqual([])
+})
+
+test('Une décision externe pas tranchée qui bloque un groupe l’emporte sur une tâche attendue ailleurs : le lot est bloqué, la pause la fait voir', () => {
+  const run = newRun('implement', T0, 'Boutique')
+  let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  const lot = {
+    tickets: [
+      ...LOT.tickets.map(t => (t.id.startsWith('b') ? { ...t, blockedBy: ['dec-1'] } : t)),
+      { id: 'c0', name: 'Doc prép', files: ['src/c.ts'], blockedBy: ['ext-1'] },
+      { id: 'c1', name: 'Doc', files: ['src/c.ts'], blockedBy: ['ext-1'] },
+    ],
+    groups: [...LOT.groups, { id: 'C', name: 'Doc', tickets: ['c0', 'c1'], files: ['src/c.ts'] }],
+    externals: [
+      { id: 'dec-1', name: 'Choix du format', kind: 'decision', status: 'todo' },
+      { id: 'ext-1', name: 'Revue du diagnostic', kind: 'task', status: 'todo' },
+    ],
+  }
+  b = applyReport(b, lot, T0 + 1).board
+  b = startLinkedGroups(b, ['A'], T0 + 2)!.board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'] }, T0 + 3).board
+  b = applyReport(b, { security: { group: 'A', advised: false, why: 'rien' } }, T0 + 4).board
+  const mixed = activeRun(b)!
+  // L'effet d'abord : le lot est bloqué (la décision attend la personne), et rien n'est dit attendu.
+  expect(isGroupLotStuck(mixed, false)).toBe(true)
+  expect(awaitedExternals(mixed, false)).toEqual([])
+  // La décision tranchée : B part (C attend toujours sa tâche).
+  const decided = activeRun(applyReport(b, { externals: [{ id: 'dec-1', status: 'done' }] }, T0 + 5).board)!
+  expect(autoDecision(decided, {}, false)).toMatchObject({ kind: 'send' })
+})
+
+test('Une tâche externe sans nom lisible, seule à retenir le lot, est attendue : l’auto ne se met pas en pause', () => {
+  const b = onlyOutsideLeft('task')
+  const run = activeRun(b)!
+  const unnamed = { ...run, externals: run.externals!.map(x => ({ ...x, name: undefined })) } as unknown as Run
+  expect(awaitedExternals(unnamed, false).map(x => x.id)).toEqual(['ext-1'])
+  expect(isGroupLotStuck(unnamed, false)).toBe(false)
+})
+
+test('Une tâche externe dont la levée n’ouvre qu’une relance (groupe revenu deux fois) est attendue, pas un blocage', () => {
+  const run = newRun('implement', T0, 'Boutique')
+  let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  b = applyReport(b, { ...outsideLot('task'), externals: [{ id: 'ext-1', name: 'Revue du diagnostic', kind: 'task', status: 'done' }] }, T0 + 1).board
+  b = startLinkedGroups(b, ['A', 'B'], T0 + 2)!.board
+  b = applyReport(b, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A', 'B'], reviewed: ['A'] }, T0 + 3).board
+  b = applyReport(b, { security: { group: 'A', advised: false, why: 'rien' } }, T0 + 4).board
+  b = startLinkedGroups(b, ['B'], T0 + 5)!.board
+  b = applyReport(b, { returned: ['B'] }, T0 + 6).board
+  // La tâche rouverte : B, revenu deux fois, attend la tâche avant que sa relance (une question) se pose.
+  b = applyReport(b, { externals: [{ id: 'ext-1', status: 'todo' }] }, T0 + 7).board
+  const waiting = activeRun(b)!
+  const lifted = { ...waiting, externals: waiting.externals!.map(x => ({ ...x, status: 'done' as const })) }
+  expect(autoDecision(lifted, {}, false).relaunch.length).toBeGreaterThan(0)
+  expect(awaitedExternals(waiting, false).map(x => x.id)).toEqual(['ext-1'])
+  expect(isGroupLotStuck(waiting, false)).toBe(false)
+})
+
+test('L’auto attend une tâche externe sans se mettre en pause, le dit au bandeau, et repart quand elle est marquée faite', { timeoutMs: 60000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  await $.session.start({ cwd: '', surface: null, isInteractive: true })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...outsideLot('task') } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await $.tool.call({ tool: TOOL, complete: true } as any)
+  await turnEnd($, clock)
+  // Seul A part : B attend la tâche externe.
+  expect(w.texts.length).toBe(1)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'rien' } } as any)
+  await turnEnd($, clock)
+  await settle(clock, 35)
+  // L'effet d'abord : le bandeau dit l'attente de la tâche ; puis pas de pause, rien d'envoyé.
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 160, scroll: { offset: 0, bodyRows: 12 }, view: {} } } as any)
+  expect(await band.find({ type: 'Text', text: /Auto.·.en.attente.de.Revue.du.diagnostic/ })).toBeDefined()
+  await band.unmount()
+  expect(autoOf(w)?.offAt).toBeUndefined()
+  expect(w.texts.length).toBe(1)
+  // La tâche marquée faite dans un tour : B part à la fin du tour.
+  await $.tool.call({ tool: TOOL, externals: [{ id: 'ext-1', status: 'done' }] } as any)
+  await turnEnd($, clock)
+  expect(w.texts.length).toBe(2)
+  expect(autoOf(w)?.offAt).toBeUndefined()
+})
+
+test('Une décision externe pas tranchée que tout le reste attend met l’auto en pause, comme avant', { timeoutMs: 60000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  await $.session.start({ cwd: '', surface: null, isInteractive: true })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...outsideLot('decision') } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await $.tool.call({ tool: TOOL, complete: true } as any)
+  await turnEnd($, clock)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'rien' } } as any)
+  await turnEnd($, clock)
+  await settle(clock, 35)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+  expect(w.texts.length).toBe(1)
+})
+
+test('Une tâche externe marquée faite dans un tour interrompu : l’auto repart quand même, sans attendre un autre tour', { timeoutMs: 60000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  await $.session.start({ cwd: '', surface: null, isInteractive: true })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...outsideLot('task') } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await $.tool.call({ tool: TOOL, complete: true } as any)
+  await turnEnd($, clock)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'rien' } } as any)
+  await turnEnd($, clock)
+  await settle(clock, 35)
+  expect(w.texts.length).toBe(1)
+  // Le tour s'ouvre, la tâche est marquée faite, et Claude travaille encore plus de deux passages du guet avant l'interruption.
+  turns += 1
+  await $.turn.start({ turnId: `t${turns}`, text: 'la revue est faite' } as any)
+  await $.tool.call({ tool: TOOL, externals: [{ id: 'ext-1', status: 'done' }] } as any)
+  await settle(clock, 12)
+  expect(w.texts.length).toBe(1)
+  await $.turn.complete({ answer: '', durationMs: 10, isAborted: true, turnId: `t${turns}`, reason: 'aborted' } as any)
+  await settle(clock, 40)
+  expect(w.texts.length).toBe(2)
+  expect(autoOf(w)?.offAt).toBeUndefined()
 })
 
 test('« ◆ Revue du groupe · worker » pose la marque de l’auto, démarrée : rallumé, l’auto demande la revue de B, pas celle de A', { timeoutMs: 60000 }, async ($, on) => {

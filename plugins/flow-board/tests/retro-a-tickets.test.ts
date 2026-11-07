@@ -5,7 +5,7 @@ import {
   applyCommand,
   applyReport,
   applySkill,
-  detachOnLoad,
+  parkActive,
   emptyBoard,
   groupPlan,
   isPhaseOptional,
@@ -82,8 +82,8 @@ test('un seul appel porte pistes jugées, tickets, groupes et complete : la Rét
   expect(phases(run)).toEqual(['retro:done', 'implement:pending', 'compte-rendu?:pending', 'project:version?:pending', 'project:pr?:pending'])
   expect(currentPhase(run).skill).toBe('retro')
   expect(nextLaunchFor(run)).toEqual({ kind: 'parallel', groups: ['A', 'B'] })
-  // La discussion finie (ou abandonnée) avant le premier groupe : la mission passe en pause, jamais « terminé ».
-  const later = detachOnLoad(out.board, 3_000 + 31 * 60_000, 'autre')
+  // La discussion finie avant le premier groupe : la mission passe en pause, jamais « terminé ».
+  const later = parkActive(out.board, 3_000 + 31 * 60_000)!.board
   expect(later.runs.find(r => r.id === run.id)!.status).toBe('paused')
 })
 
@@ -141,14 +141,14 @@ test('un Triage terminé avec des tickets pas lancés passe en pause à la fin d
   const out = applyReport(boardOf('mattpocock-skills:triage'), { tickets: TICKETS, complete: true }, 2_000)
   const run = activeRun(out.board)!
   expect(phases(run)).toEqual(['triage:done', 'implement:pending', 'compte-rendu?:pending', 'project:version?:pending', 'project:pr?:pending'])
-  const later = detachOnLoad(out.board, 2_000 + 31 * 60_000, 'autre')
+  const later = parkActive(out.board, 2_000 + 31 * 60_000)!.board
   expect(later.runs.find(r => r.id === run.id)!.status).toBe('paused')
 })
 
 test('un lot envoyé après la fin du Triage le met aussi en pause à la fin de la discussion', () => {
   const finished = applyReport(boardOf('mattpocock-skills:triage'), { complete: true }, 2_000).board
   const out = applyReport(finished, { tickets: TICKETS }, 2_500)
-  const later = detachOnLoad(out.board, 2_500 + 31 * 60_000, 'autre')
+  const later = parkActive(out.board, 2_500 + 31 * 60_000)!.board
   expect(later.runs[0]!.status).toBe('paused')
 })
 
@@ -167,7 +167,7 @@ test('une mission « Santé du code » dont /to-tickets laisse un lot pas lancé
   const out = applyReport(board, { tickets: TICKETS, complete: true }, 2_000)
   const run = activeRun(out.board)!
   expect(run.phases.find(p => p.skill === 'implement')!.isOptional).toBe(false)
-  const later = detachOnLoad(out.board, 2_000 + 31 * 60_000, 'autre')
+  const later = parkActive(out.board, 2_000 + 31 * 60_000)!.board
   expect(later.runs.find(r => r.id === run.id)!.status).toBe('paused')
 })
 
@@ -176,7 +176,7 @@ test('un Triage sans ticket, ou dont tous les tickets sont faits, se termine com
     const out = applyReport(boardOf('mattpocock-skills:triage'), { tickets, complete: true }, 2_000)
     const run = out.board.runs[0]!
     expect(run.phases.find(p => p.skill === 'implement')!.isOptional).toBe(true)
-    expect(detachOnLoad(out.board, 2_000 + 31 * 60_000, 'autre').runs[0]!.status).toBe('done')
+    expect(parkActive(out.board, 2_000 + 31 * 60_000)!.board.runs[0]!.status).toBe('done')
   }
 })
 

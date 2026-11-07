@@ -38,13 +38,14 @@ import type {
   WaitsUser,
   RunLaunch,
 } from '../types'
-import { CODE_SKILLS, SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
+import { CODE_SKILLS, SECURITY_OFF_REPLY, SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
 import { GROUP_ID_FORM, asciiJson, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isQuestionIdForm, isSafeId, sendNumber } from './closing.ts'
 import { maxOf, minOf } from './timeline.ts'
 import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
 import { soundRunLaunch } from './launch.ts'
+import type { SecurityReview } from './security-setting.ts'
 import type { PlanUnit, PlanWait } from './plan-projet.ts'
-import { activeRun, asanaChange, asList, AUTO_CHOICES_MAX, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
+import { activeRun, asanaChange, asList, AUTO_CHOICES_MAX, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
 import { type GroupRelay, ignoredOrigins, inForce, isRelay, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
 import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, keepClosings, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
 
@@ -130,9 +131,10 @@ export type Suggestions = {
 /**
  * Ce que la carte « Ensuite » sait du dépôt : GitHub (pour la PR), versions déjà posées face au
  * distant (null : le projet n'a pas de fichier de version ; absent : pas encore mesuré), parties
- * versionnées changées (pour l'aperçu).
+ * versionnées changées (pour l'aperçu). `security` : le réglage « revue de sécurité » du projet, relu juste avant la décision (le module ne lit
+ * jamais le moteur) ; absent, `on` ou `unread` (une lecture ratée) : la revue reste due, seul `off` la désactive.
  */
-export type SuggestOpts = { hasPullRequests?: boolean; isVersionSet?: boolean | null; versionUnits?: readonly VersionUnit[] | null }
+export type SuggestOpts = { hasPullRequests?: boolean; isVersionSet?: boolean | null; versionUnits?: readonly VersionUnit[] | null; security?: SecurityReview }
 
 /**
  * Sans GitHub (distant ailleurs, ou aucun), la PR par /project:pr n'a pas de sens : la mission
@@ -171,7 +173,7 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
   const isReviewHere = isReviewDue && (run.groups ?? []).length === 0
   // Sans groupes, le lot relu attend encore sa sécurité tranchée, comme un groupe pas clos : le compte
   // rendu ne se propose pas avant (la ligne de sécurité du lot porte la suite).
-  const isLotSecurityHeld = SKILLS[phase.skill]?.hasTickets === true && isLotSecurityDue(run)
+  const isLotSecurityHeld = SKILLS[phase.skill]?.hasTickets === true && isLotSecurityDue(run, opts.security)
   const kept = [
     ...(isReviewHere ? ['final-review'] : []),
     ...(isUnfinished || isReviewDue || isLotSecurityHeld ? list.filter(skill => !AFTER_TICKETS.has(skill)) : list)
@@ -776,15 +778,44 @@ export const isLotAdvicePrevious = (run: Run): boolean => run.security !== undef
  * (`isSecuritySettled`), ou, sans aucun envoi, un lot dispensé ; un envoi explicite l'emporte sur la
  * dispense, comme pour un groupe (`closeMissing`), même d'un passage précédent.
  */
-export const isLotSecuritySettled = (run: Run): boolean =>
-  (run.security === undefined && isLotReviewEnough(run)) || (isLotAdviceCurrent(run) && isSecuritySettled(run.security))
+export const isLotSecuritySettled = (run: Run, review: SecurityReview = 'on'): boolean =>
+  (run.security === undefined && isLotReviewEnough(run)) || (isLotAdviceCurrent(run) && isSecuritySettledFor(run.security, review))
 
 /**
  * Un lot sans groupes relu (ou dispensé) dont la sécurité n'est pas tranchée : le compte rendu attend
  * encore, comme un groupe pas clos. Faux avec des groupes, ou tant qu'un ticket est ouvert.
  */
-export const isLotSecurityDue = (run: Run): boolean =>
-  (run.groups ?? []).length === 0 && isAllDone(run, run.tickets.map(t => t.id)) && !needsReview(run) && !isLotSecuritySettled(run)
+export const isLotSecurityDue = (run: Run, review: SecurityReview = 'on'): boolean =>
+  (run.groups ?? []).length === 0 && isAllDone(run, run.tickets.map(t => t.id)) && !needsReview(run) && !isLotSecuritySettled(run, review)
+
+/**
+ * Un groupe clos par sa session (`closed`, l'envoi en cours) alors que la revue de sécurité était désactivée :
+ * sa fermeture porte `securityOff`, posé une fois, à sa première fermeture, sur une lecture « désactivée » de
+ * son avis conseillé sans revue (jamais d'après des dates : une marque de l'avis, la revue réactivée avant la
+ * fermeture, ne compte pas). Il garde sa ligne « désactivée » au compte rendu, quel que soit le réglage ensuite.
+ */
+export const isClosedTurnedOff = (g: TicketGroup): boolean => {
+  const closing = g.delegated?.closing
+  return closing?.state === 'closed' && closing.securityOff === true
+}
+
+/**
+ * Pose la marque « revue désactivée » d'un avis conseillé sans revue faite, seulement si le réglage lu à cet
+ * instant dit « désactivée » (jamais sur une lecture ratée) : à la réception de l'avis (une marque déjà là
+ * reste), ou à la fermeture du groupe (`isClosing` : posée à l'heure de la fermeture). Rien d'autre ne la pose.
+ */
+const markSecurityOff = (check: SecurityCheck | undefined, review: SecurityReview | undefined, now: number, isClosing = false): SecurityCheck | undefined =>
+  review === 'off' && isAdvisedUnrun(check) && (isClosing || check.offAt === undefined) ? { ...check, offAt: now } : check
+
+/** La marque `offAt` d'un avis relu datée à plus d'une minute dans le futur (la tolérance de toutes les dates relues). */
+const isMarkAhead = (check: unknown, now: number): boolean =>
+  check !== null && typeof check === 'object' && isTime((check as SecurityCheck).offAt) && (check as SecurityCheck).offAt! > now + 60_000
+
+/** L'avis sans sa marque « revue désactivée ». */
+const withoutMark = (check: SecurityCheck): SecurityCheck => {
+  const { offAt: _dropped, ...rest } = check
+  return rest
+}
 
 /** Un groupe fini n'a pas encore eu sa revue ; sans groupes, le lot à relire et pas dispensé. */
 export const needsReview = (run: Run): boolean => {
@@ -905,16 +936,28 @@ const securityCounts = (check: SecurityCheck): string =>
     ? `counts read back out of form (${unreadableCounts(check).join(', ')}): send "findings" and "fixed" again`
     : `${check.findings} finding${check.findings === 1 ? '' : 's'}, ${check.fixed ?? 0} fixed${(check.dismissed ?? 0) > 0 ? `, ${check.dismissed} dismissed` : ''}`
 
-/** L'état de la revue de sécurité, pour le compte rendu. */
-const securityText = (check: SecurityCheck | undefined): string => {
+/**
+ * L'état de la revue de sécurité, pour le compte rendu. Un avis « inutile » prime sur des comptes envoyés
+ * avec lui (un worker envoyait l'avis et des comptes à zéro) ; des failles trouvées quand même se disent à côté.
+ */
+const securityText = (check: SecurityCheck | undefined, review: SecurityReview = 'on', isClosedOff = false, unit: 'le groupe' | 'le lot' = 'le groupe'): string => {
   if (check && typeof check === 'object' && hasUnreadableCounts(check)) return `security review not settled: ${securityCounts(check)}`
+  if (check?.isAdvised === false) {
+    const anyway = (check.findings ?? 0) > 0 ? `, run anyway (${securityCounts(check)})` : ''
+    return `security review judged not needed${check.why ? ` (${shownInNote(check.why)})` : ''}${anyway}`
+  }
   if (check?.ranAt !== undefined) {
     const counts = check.findings !== undefined ? ` (${securityCounts(check)})` : ''
     return `security review run${counts}`
   }
+  // Conseillée sans revue, la revue désactivée pour le projet (groupe clos avec sa marque, ou réglage relu « off ») :
+  // la ligne fixe du compte rendu, avec la zone que l'avis a nommée.
+  if (check?.isAdvised === true && (isClosedOff || review === 'off')) return `security review turned off for this project, write « revue de sécurité désactivée pour ce projet ; ${unit} touchait : ${check.why ? shownInNote(check.why) : 'zone non dite'} »`
+  // Une marque d'avant une réactivation : la revue redevient due, et la ligne le dit ; un réglage illisible n'est pas une réactivation.
+  if (check?.isAdvised === true && isTime(check.offAt) && review === 'unread') return `security review advised but not run, its setting unreadable now (counted as on)${check.why ? ` (${shownInNote(check.why)})` : ''}`
+  if (check?.isAdvised === true && isTime(check.offAt)) return `security review advised but not run, turned back on since the advice${check.why ? ` (${shownInNote(check.why)})` : ''}`
   // La raison, relue du fichier partagé, sur une seule ligne : ce texte entre dans les faits du compte rendu.
   if (check?.isAdvised === true) return `security review advised but not run${check.why ? ` (${shownInNote(check.why)})` : ''}`
-  if (check?.isAdvised === false) return `security review judged not needed${check.why ? ` (${shownInNote(check.why)})` : ''}`
   return ''
 }
 
@@ -1302,7 +1345,7 @@ export type SkillContext = {
 
 /**
  * Un skill du plugin vient d'être chargé. Dans l'ordre : sous-skill de la phase en cours,
- * phase suivante de la mission, détour, reprise d'une mission en pause, nouvelle mission.
+ * phase suivante de la mission, détour, reprise d'une mission en pause née ici, nouvelle mission.
  */
 export const applySkill = (board: Board, name: string, ctx: SkillContext): Outcome => {
   const raw = skillIdOf(name)
@@ -1419,6 +1462,11 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
     : b.runs
     // Une mission mise de côté ne revient qu'à la demande de la personne : un skill ouvre alors la sienne.
     .filter(r => r.archivedAt === undefined && r.asideAt === undefined)
+    // Seule une mission tenue ici, ou née ici et tenue par personne, revient d'office ; celle d'une autre discussion,
+    // même muette ou close, se reprend par « ↻ Reprendre ici » : un /grill-with-docs lancé dans une discussion neuve
+    // avait repris la mission de cadrage d'une autre discussion, muette depuis trois jours, et y avait écrit ses points
+    // (06/11/2026). Née ici mais reprise ailleurs par le bouton, elle est à l'autre discussion tant qu'elle la tient.
+    .filter(r => b.session !== undefined && (r.owner === b.session || (r.owner === undefined && r.bornIn === b.session)))
     .filter(r => r.status === 'paused' || (r.status === 'active' && r.id !== b.activeId && now - r.updatedAt > ORPHAN_MS))
     .sort((x, y) => y.updatedAt - x.updatedAt)
     .find(r => findPhase(r, id, r.cursor) >= 0)
@@ -1868,7 +1916,7 @@ export const applyReport = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean } = {},
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean; security?: SecurityReview } = {},
 ): { board: Board; fx: Effects; text: string } => {
   const out = reportOnce(board, input, now, opts)
   if (board.delegate || str(input.delegate) !== '' || out.board.delegate) return out
@@ -1877,7 +1925,7 @@ export const applyReport = (
   const relay = run && isRelay(opts.relay, run.id) ? opts.relay : null
   const reports = run ? relayedReportsText(run, relay, opts.seenReports) : ''
   // Puis les groupes rendus à fermer, et ce qui manque aux autres.
-  const closing = run ? closingText(run, relay, opts.isRepo !== false) : ''
+  const closing = run ? closingText(run, relay, opts.isRepo !== false, opts.security) : ''
   // Enfin les rappels : un ticket fait ici sans revue envoyée, et les tickets bloqués.
   const reminders = run ? `${unreviewedDoneText(activeRun(board), run, input)}${blockedText(run)}` : ''
   return reports || closing || reminders ? { ...out, text: `${out.text}${reports}${closing}${reminders}` } : out
@@ -1917,7 +1965,7 @@ const reportOnce = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean },
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean; security?: SecurityReview },
 ): { board: Board; fx: Effects; text: string } => {
   // Un worker qui travaille pour un groupe d'une mission restée ailleurs : rien ne s'écrit ici.
   const delegateId = str(input.delegate)
@@ -2042,7 +2090,7 @@ const delegateText = (board: Board): string => {
     'Each choice you make that the user neither asked for nor approved goes here at once, in {"decided": [{"what": "<the choice>", "why": "<why>"}]}: the main dashboard shows it for review right away; a choice that touches a sensitive area (' +
     SENSITIVE_AREAS +
     ') is never declared: ask the user; except when your prompt says you are a worker of a mission in auto mode: there section « Worker autonome » of your procedure says when it is settled by its recommended option and declared. ' +
-    'End with your report, one line per ticket (done, or not done and why): leave your whole report here, {"report": "<the whole report>"}: it is kept in your relay file, next to the mission\'s, which the manager reads; then send the manager one line that points to it with SendMessage (that message wakes it up), and end on that same line. The manager checks your work and records the statuses. Nothing else is accepted. ' +
+    'End with your report, one line per ticket (done, or not done and why): leave your whole report here, {"report": "<the whole report>"} (or, when it is already in a .md or .txt file under your worktree or your temporary folder CLAUDE_JOB_DIR, {"reportPath": "<its absolute path>"}, without pasting it again): it is kept in your relay file, next to the mission\'s, which the manager reads; then send the manager one line that points to it with SendMessage (that message wakes it up), and end on that same line. The manager checks your work and records the statuses. Nothing else is accepted. ' +
     reachText(board)
   )
 }
@@ -2084,7 +2132,7 @@ const reportHere = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; relay?: unknown } = {},
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; relay?: unknown; security?: SecurityReview } = {},
 ): { board: Board; fx: Effects; text: string } => {
   const b = clone(board)
   const fx = noFx()
@@ -2266,11 +2314,12 @@ const reportHere = (
     .map(({ hasKind, ...x }) => ({ ...x, isDecision: hasKind ? x.isDecision : (externalOf(run, x.id)?.isDecision ?? false) }))
   if (externals.length > 0) {
     const known = run.externals ?? []
-    const updated = known.map(k => externals.find(x => sameTicket(x.id, k.id)) ?? k)
-    const added = externals.filter(x => !known.some(k => sameTicket(k.id, x.id)))
+    // Une entrée gardée hors forme (relue du fichier partagé) reste telle quelle, sans faire échouer l'envoi.
+    const updated = known.map(k => (isSoundExternal(k) ? (externals.find(x => sameTicket(x.id, k.id)) ?? k) : k))
+    const added = externals.filter(x => !known.some(k => isSoundExternal(k) && sameTicket(k.id, x.id)))
     run.externals = [...updated, ...added].slice(0, LIMITS.tickets)
     for (const x of externals) {
-      const was = known.find(k => sameTicket(k.id, x.id))
+      const was = known.find(k => isSoundExternal(k) && sameTicket(k.id, x.id))
       if (x.status === 'done' && was?.status !== 'done') log(run, now, '✓', `Dépendance externe levée : ${x.name}`, 'ok')
     }
   }
@@ -2375,6 +2424,8 @@ const reportHere = (
     const back = returnGroups(run, input.returned, now, opts.relay)
     if (back.unknown.length > 0) returnText = ` · returned: no group in a worker among ${back.unknown.join(', ')}`
     returned.push(...back.back)
+    // L'avis « conseillée » relayé par le worker, reçu ici alors que la revue est désactivée : sa marque.
+    for (const g of run.groups ?? []) if (back.back.includes(g.id)) g.security = markSecurityOff(g.security, opts.security, now)
   }
 
   // Des groupes finis relus ailleurs (leur worker, après leur retour) : la revue vaut ici.
@@ -2510,11 +2561,17 @@ const reportHere = (
     if (hasCounts && next.dismissed !== undefined && !isSecurityCount(next.dismissed)) delete next.dismissed
     // Seul un envoi d'ici tranche : la proposition d'un worker tombe, comme après d'autres failles.
     if (dismissed !== undefined || isNewFindings) delete next.proposedDismissed
-    if (group) group.security = next
-    else run.security = next
+    // Un avis « conseillée » reçu alors que la revue est désactivée pour le projet : sa marque.
+    const marked = security.advised === true ? markSecurityOff(next, opts.security, now)! : next
+    if (group) group.security = marked
+    else run.security = marked
+    // Un avis « conseillée » gardé sans comptes, la revue relue « désactivée » : la réponse le dit, pour que la
+    // discussion ne lance pas de relecteur sur une consigne chargée avant le clic.
+    const isOffNotice = security.advised === true && opts.security === 'off' && isAdvisedUnrun(marked)
     const who = group ? `${shownGroupId(group.id)} : ` : ''
     const isOpen = !isSecuritySettled(next)
     const target = group ? `group ${shownGroupId(group.id)}` : 'the lot'
+    if (isOffNotice) securityReply = ` · security of ${target}: ${SECURITY_OFF_REPLY.replace('<unit>', group ? 'le groupe' : 'le lot')}`
     if (next.findings !== undefined && (hasCounts || dismissed !== undefined)) securityReply = ` · security of ${target}: ${securityCounts(next)}`
     else if (dismissed !== undefined) securityReply = ` · security of ${target}: ${dismissed} dismissed, kept, but its review has sent no counts yet (send "findings" and "fixed")`
     // Le lot encore à relire : un avis ne compte qu'après sa revue, et une revue de sécurité lancée avant elle non plus.
@@ -2546,7 +2603,7 @@ const reportHere = (
     const hasStopped = g.delegated?.closing?.state === 'stopped' || earlierOf(g.delegated).some(x => x.closing?.state === 'stopped')
     if (g.delegated && hasStopped && touchedIds.has(g.id.toLowerCase())) g.delegated = touchedLink(g.delegated, now)
   }
-  const closedText = applyClosed(run, input.closed, now, b.root)
+  const closedText = applyClosed(run, input.closed, now, b.root, opts.security)
   // La session de pistes fermée par cet appel : la suite de la rétro arrive avant son `complete`.
   extendActive(run)
   // Le découpage d'une rétro attend la fermeture de sa session de pistes (celle de cet appel compte) :
@@ -2735,7 +2792,7 @@ export const askCloseLinkedGroup = (board: Board, id: string, now: number): Outc
 // jamais à fermer, et seul un nouvel envoi de `closed` pour ce groupe le change.
 
 /** Ce qui manque à un groupe rendu pour être clos, du côté que le tableau de bord voit : vide s'il l'est. */
-const closeMissing = (run: Run, g: TicketGroup): string[] => {
+const closeMissing = (run: Run, g: TicketGroup, review: SecurityReview = 'on'): string[] => {
   const missing: string[] = []
   if (!isGroupReviewed(run, g)) {
     // Un `reviewed` refusé tant qu'un ticket était ouvert : rappelé une fois le groupe fini.
@@ -2749,7 +2806,7 @@ const closeMissing = (run: Run, g: TicketGroup): string[] => {
     missing.push(
       `its security counts read back out of form (${unreadableCounts(sec).join(', ')}; each must be a whole number from 0 to ${BUGS_MAX}): send {"security": {"group": ${asciiJson(g.id)}, "findings": <kept findings>, "fixed": <fixed>}} again, with "dismissed" if some are left unfixed (an unreadable "dismissed" not sent again counts as 0)`,
     )
-  } else if (!isSecuritySettled(sec)) {
+  } else if (!isSecuritySettledFor(sec, review, isClosedTurnedOff(g))) {
     if (sec?.findings !== undefined) {
       const open = sec.findings - (sec.fixed ?? 0) - (sec.dismissed ?? 0)
       const proposal = sec.proposedDismissed !== undefined ? ` — its worker proposes ${sec.proposedDismissed} dismissed: confirm with the user, then send {"security": {"group": ${asciiJson(g.id)}, "dismissed": <n>}}` : ''
@@ -2776,15 +2833,15 @@ const isStillActive = (relay: Relay | null, g: TicketGroup, plan: readonly Ticke
 }
 
 /** Un groupe rendu, relu, à la sécurité tranchée, sans fermeture en cours : candidat à la fermeture. */
-export const isCloseCandidate = (run: Run, g: TicketGroup, relay: Relay | null = null): boolean => {
+export const isCloseCandidate = (run: Run, g: TicketGroup, relay: Relay | null = null, review: SecurityReview = 'on'): boolean => {
   const link = g.delegated
-  if (!link || typeof link !== 'object' || g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g).length > 0 || isStillActive(relay, g, run.groups)) return false
+  if (!link || typeof link !== 'object' || g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g, review).length > 0 || isStillActive(relay, g, run.groups)) return false
   // Une fermeture relue hors forme (null, un autre type) n'est ni à faire ni relancée.
   return link.closing === undefined || (link.closing !== null && typeof link.closing === 'object' && link.closing.state === 'stopped' && isRetried(link))
 }
 
 /** Ce que la réponse de l'outil ajoute, dans la discussion de la mission : les groupes à fermer, et ce qui manque aux autres. */
-export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): string => {
+export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, review: SecurityReview = 'on'): string => {
   const parts: string[] = []
   // Une session archivée dans l'app : son worktree se retire par la procédure, sans git il n'y en a pas.
   const archived = (procedure: string) =>
@@ -2823,7 +2880,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     }
     // Confié de nouveau : sa nouvelle session travaille, rien d'autre à fermer ni à réclamer.
     if (!link || g.linked !== undefined || link.closing?.state === 'closed') continue
-    if (!isGroupId(g.id) && (link.closing?.state === 'app' || isCloseCandidate(run, g, relay))) {
+    if (!isGroupId(g.id) && (link.closing?.state === 'app' || isCloseCandidate(run, g, relay, review))) {
       const target = { kind: 'group', id: g.id, name: g.name } as const
       parts.push(` · Do not close: ${closingProcedure({ run, target, isRepo })} ${closedHint(target)}`)
       continue
@@ -2834,7 +2891,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     const attachedOpen = openAttachedOf(run, g)
     if (attachedOpen.length > 0) {
       if (!(link.closing?.state === 'stopped' && !isRetried(link))) {
-        const missing = closeMissing(run, g)
+        const missing = closeMissing(run, g, review)
         const after = isGroupId(g.id) ? '' : '; then nothing is closed from here either (its id is out of form)'
         parts.push(` · Not closed yet: ${name} — still open, attached to it by the plan: ${attachedOpen.join(', ')}; closing waits for it${after}${missing.length > 0 ? `; it also lacks: ${missing.join('; ')}` : ''}.`)
       }
@@ -2845,7 +2902,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
       parts.push(` · To archive in the app: ${name}${closingWhy(link.closing.why)}; ${archived(procedure)} Then send {"closed": [{"group": ${asciiJson(g.id)}, "state": "closed", "sessionId": "<full sessionId>", "branch": "<kept branch>", "worktree": "<removed worktree path>"}]} (the last three when known).`)
       continue
     }
-    if (isCloseCandidate(run, g, relay)) {
+    if (isCloseCandidate(run, g, relay, review)) {
       const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}) })
       parts.push(
         ` · Close now: ${name} is closed (returned, reviewed, security settled). Only in the discussion that leads the mission, never in a worker (a bug-diagnosis session that resumed the mission included: there, ignore this section). ${procedure} ${closedHint({ kind: 'group', id: g.id, name: g.name })}`,
@@ -2854,13 +2911,13 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
     }
     // Une fermeture arrêtée ne se repropose pas à chaque appel ; relancée, elle dit ce qui manque encore.
     if (link.closing?.state === 'stopped' && !isRetried(link)) continue
-    if (isStillActive(relay, g, run.groups) && closeMissing(run, g).length === 0) {
+    if (isStillActive(relay, g, run.groups) && closeMissing(run, g, review).length === 0) {
       parts.push(
         ` · Not closed yet: ${name} — its worker is still active (relayed activity after its final report): closing waits. Once its work is done and checked, ask it by SendMessage to leave its final report in the relay again, updated with that work (its procedure says so after any later fix; the same text again is ignored): ${isGroupId(g.id) ? 'the next call then closes it' : 'the next call then gives its refusal to report (its id is out of form: nothing is closed from here)'}.`,
       )
       continue
     }
-    const missing = closeMissing(run, g)
+    const missing = closeMissing(run, g, review)
     if (missing.length > 0) parts.push(` · Not closed yet: ${name} lacks: ${missing.join('; ')}.`)
   }
   for (const phase of run.phases) {
@@ -2881,7 +2938,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean): str
 }
 
 /** Les entrées `closed` : notées sur le lien du groupe rendu ; « closed » ne recule jamais (T2). */
-const applyClosed = (run: Run, value: unknown, now: number, root: string): string => {
+const applyClosed = (run: Run, value: unknown, now: number, root: string, review?: SecurityReview): string => {
   if (value === undefined) return ''
   const noted: string[] = []
   const notedItems: string[] = []
@@ -2948,7 +3005,15 @@ const applyClosed = (run: Run, value: unknown, now: number, root: string): strin
       refused.push(`${shownGroupId(g.id)} (still open, attached to it by the plan: ${openAttachedOf(run, g).join(', ')}; a group is closed only once they are done)`)
     else {
       const closing = closingFor(e, state, g.delegated.closing, `group ${shownGroupId(g.id)}`)
-      g.delegated = withClosing(g.delegated, closing)
+      // Première fermeture alors que la revue de sécurité est désactivée (lue « off » à l'instant), l'avis conseillé
+      // sans revue : la fermeture le garde (`securityOff`), avec la marque de l'avis à l'heure de la fermeture. Un
+      // « closed » renvoyé pour un groupe déjà clos (sa branche, sa session) garde l'état de la première
+      // (`closingOf`), sans relire le réglage ni toucher à la marque.
+      const isFirstClose = state === 'closed' && g.delegated.closing?.state !== 'closed'
+      const marked = isFirstClose ? markSecurityOff(g.security, review, now, true) : g.security
+      const isOff = isFirstClose && marked !== g.security
+      g.delegated = withClosing(g.delegated, isOff ? { ...closing, securityOff: true } : closing)
+      if (isOff) g.security = marked
       noted.push(g.id)
       const words = { closed: 'session et worktree fermés', app: "à archiver dans l'app", stopped: `fermeture arrêtée${closing.why ? ` : ${closing.why}` : ''}` }
       log(run, now, state === 'closed' ? '✕' : state === 'app' ? '⧗' : '!', `Groupe ${g.id} : ${words[state]}`, state === 'stopped' ? 'warn' : state === 'closed' ? 'ok' : 'info')
@@ -3043,7 +3108,8 @@ export const clampFuture = (board: Board, now: number): Board => {
   // Un siège du COO daté au-delà de la tolérance : ses dates sont ramenées à maintenant (il ne gagne plus
   // toute prise), jamais effacées.
   const isSeatFuture = isSeatAhead(board.coo, now)
-  if (isDeletedSound && !isSeatFuture && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || isReviewAhead(r))) return board
+  const areMarksAhead = (r: Run) => isMarkAhead(r.security, now) || (r.groups ?? []).some(g => isMarkAhead(g.security, now))
+  if (isDeletedSound && !isSeatFuture && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || isReviewAhead(r) || areMarksAhead(r))) return board
   const b = clone(board)
   if (isSeatFuture) b.coo = soundSeat(board.coo, now)
   // Une trace de suppression datée dans le futur, ou mal formée, tombe à la lecture : jamais appliquée.
@@ -3052,6 +3118,10 @@ export const clampFuture = (board: Board, now: number): Board => {
     if (isAhead(r)) r.updatedAt = Math.min(now, maxOf(r.log.map(e => e.at).filter(at => at <= now), r.startedAt))
     if (isAutoAhead(r, now)) r.auto = autoAtMost(r, now)
     if (isAdviceAhead(r)) r.security = { ...r.security, at: 0 }
+    // Une marque « revue désactivée » datée au-delà de la tolérance (horloge en avance) tombe : elle pourrait
+    // dater une fermeture faite revue réactivée ; sans elle, l'avis redevient dû tant que la lecture ne dit pas « off ».
+    if (isMarkAhead(r.security, now)) r.security = withoutMark(r.security!)
+    for (const g of r.groups ?? []) if (isMarkAhead(g.security, now)) g.security = withoutMark(g.security!)
     if (isReviewAhead(r)) r.reviewedAt = -r.reviewedAt!
     if (isTicketAhead(r)) r.tickets = r.tickets.map(t => (isTime(t.finishedAt) && t.finishedAt > now + 60_000 ? { ...t, finishedAt: now } : t))
     if (areTracesAhead(r, now)) {
@@ -3637,7 +3707,7 @@ const isFindingTime = (run: Run): boolean => {
 const addFound = (run: Run, task: Omit<FoundTask, 'at'>, now: number): boolean => {
   const isKnown = (id: string) =>
     run.tickets.some(t => sameTicket(t.id, id)) ||
-    (run.externals ?? []).some(x => sameTicket(x.id, id)) ||
+    (run.externals ?? []).some(x => isSoundExternal(x) && sameTicket(x.id, id)) ||
     (run.found ?? []).some(f => sameTicket(f.id, id))
   if (task.id === '' || isKnown(task.id)) return false
   run.found = [...(run.found ?? []), { ...task, at: now }].slice(-LIMITS.found)
@@ -3731,7 +3801,7 @@ export const applyAsana = (board: Board, tasks: unknown, now: number): Outcome =
   }
   for (const t of asList(tasks)) {
     const id = typeof t.task === 'string' ? t.task : ''
-    const at = (run.externals ?? []).findIndex(x => sameTicket(x.id, id))
+    const at = (run.externals ?? []).findIndex(x => isSoundExternal(x) && sameTicket(x.id, id))
     if (at < 0) continue
     const x = run.externals![at]!
     const status: 'todo' | 'done' = t.completed === true ? 'done' : t.completed === false ? 'todo' : x.status
@@ -4178,7 +4248,7 @@ const phaseKey = (run: Run, at: number): string => {
  */
 export const autoActionOf = (run: Run, opts: SuggestOpts = {}, outside?: ReadonlyMap<string, readonly OutsideHold[]>): AutoAction | null => {
   const phase = currentPhase(run)
-  if ((phase.status !== 'done' && !isGroupLotOver(run)) || run.status !== 'active') return null
+  if ((phase.status !== 'done' && !isGroupLotOver(run, opts.security)) || run.status !== 'active') return null
   const skill = nextCommandSkill(run, opts, outside)
   if (skill === null || !AUTO_PHASES.has(skill)) return null
   const at = run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending' && (p.skill === skill || p.alts.includes(skill)))
@@ -4212,7 +4282,7 @@ const isGroupSendMarked = (run: Run, unit: string): boolean => isUnitMarked(run,
  * lot parallèle, ou le seul groupe prêt), sans les groupes bloqués par une question ; `relaunch` : les
  * groupes revenus trop de fois pour repartir seuls, que l'auto ne lance pas (une question les bloque).
  */
-export const autoGroupActionOf = (run: Run, outside?: ReadonlyMap<string, readonly OutsideHold[]>): { action: AutoAction | null; relaunch: string[] } => {
+export const autoGroupActionOf = (run: Run, outside?: ReadonlyMap<string, readonly OutsideHold[]>, review: SecurityReview = 'on'): { action: AutoAction | null; relaunch: string[] } => {
   const none = { action: null, relaunch: [] as string[] }
   const phase = currentPhase(run)
   // L'implémentation, ou le découpage une fois fini (la carte « Ensuite » propose alors les groupes) ;
@@ -4239,14 +4309,17 @@ export const autoGroupActionOf = (run: Run, outside?: ReadonlyMap<string, readon
       continue
     }
     const sec = g.security
-    if (g.delegated !== undefined && sec && typeof sec === 'object' && sec.isAdvised === true && sec.ranAt === undefined && sec.findings === undefined) {
+    // La revue de sécurité désactivée pour le projet (relue « off »), ou le groupe clos alors qu'elle l'était
+    // (`isClosedTurnedOff`) : l'auto ne la lance pas ; réactivée, elle redevient due pour tout autre groupe,
+    // clos sans revue compris (comme avant le réglage).
+    if (review !== 'off' && !isClosedTurnedOff(g) && g.delegated !== undefined && sec && typeof sec === 'object' && sec.isAdvised === true && sec.ranAt === undefined && sec.findings === undefined) {
       const key = `security:${g.id}#${seq}`
       if (!isMarked(run, key)) return { action: { kind: 'security', group: g.id, key, what: `revue de sécurité du groupe ${g.id}`, blocks }, relaunch: [] }
     }
   }
   // Une nouvelle vague attend que celle en cours soit close : rien en vol, rien de fini sans être clos.
   const returned = groups.filter(g => g.linked === undefined && g.delegated !== undefined && isGroupDone(run, g))
-  if (groups.some(g => g.linked !== undefined) || returned.some(g => closeMissing(run, g).length > 0)) return none
+  if (groups.some(g => g.linked !== undefined) || returned.some(g => closeMissing(run, g, review).length > 0)) return none
   const rec = nextLaunchFor(run, outside)
   const picked = rec?.kind === 'parallel' ? rec.groups : rec?.kind === 'group' && rec.isDelegable ? [rec.group] : []
   const relaunch: string[] = []
@@ -4325,13 +4398,15 @@ const doneTicketsPrint = (run: Run): string => {
  * envoyée deux fois par l'auto pour le même passage, et une marque d'un passage précédent n'empêche
  * jamais la revue d'un passage suivant (la clé change avec la date de la revue et les tickets faits).
  */
-const autoLotActionOf = (run: Run, inFlight: boolean): AutoAction | null => {
+const autoLotActionOf = (run: Run, inFlight: boolean, review: SecurityReview = 'on'): AutoAction | null => {
   const phase = currentPhase(run)
   if (phase.skill !== 'implement' || run.status !== 'active' || (run.groups ?? []).length > 0 || inFlight || isBlocked(run, LOT_BLOCKS) || isLotReviewEnough(run)) return null
   if (needsReview(run)) {
     const key = lotReviewKeyOf(run)
     return isMarked(run, key) ? null : { kind: 'command', skill: 'final-review', key, what: '/code-review du lot', blocks: LOT_BLOCKS }
   }
+  // La revue de sécurité désactivée pour le projet : l'auto ne la lance pas.
+  if (review === 'off') return null
   const sec: unknown = run.security
   if (sec === null || typeof sec !== 'object' || !isLotAdviceCurrent(run) || !isAllDone(run, run.tickets.map(t => t.id))) return null
   const check = sec as SecurityCheck
@@ -4349,10 +4424,10 @@ const autoLotActionOf = (run: Run, inFlight: boolean): AutoAction | null => {
  * aucun texte : rien ne part, et l'auto se met en pause « lecture de la mission ratée » au lieu de
  * l'écarter en silence. Un tel groupe fini et clos ne retient rien.
  */
-const hasUnsafeOpenGroup = (run: Run): boolean => {
+const hasUnsafeOpenGroup = (run: Run, review: SecurityReview = 'on'): boolean => {
   const phase = currentPhase(run)
   const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
-  return isOwnPhase && run.status === 'active' && (run.groups ?? []).some(g => !isGroupId(g.id) && (g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g).length > 0))
+  return isOwnPhase && run.status === 'active' && (run.groups ?? []).some(g => !isGroupId(g.id) && (g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g, review).length > 0))
 }
 
 /**
@@ -4441,8 +4516,10 @@ const isUnitsMarked = (run: Run, key: string): boolean => {
  * ni marque qui attend, le lot pas clos, et aucune action à envoyer ; et aucune revue lancée dont le
  * résultat n'est pas encore là. Par exemple un groupe relu sans avis de sécurité envoyé, un groupe fini
  * ici avec une revue de sécurité conseillée et pas lancée, un groupe gardé vide après un envoi annulé.
+ * Jamais quand l'auto attend une tâche externe pas faite dont la levée le ferait avancer
+ * (`awaitedExternals`) : il l'attend, sans pause.
  */
-export const isGroupLotStuck = (run: Run, inFlight: boolean): boolean => {
+export const isGroupLotStuck = (run: Run, inFlight: boolean, review: SecurityReview = 'on'): boolean => {
   const phase = currentPhase(run)
   const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
   const groups = run.groups ?? []
@@ -4450,12 +4527,15 @@ export const isGroupLotStuck = (run: Run, inFlight: boolean): boolean => {
   if (inFlight || groups.some(g => g.linked !== undefined)) return false
   const read = readMarks(run)
   if (read.isDamaged || read.marks.some(m => m.startedAt === undefined) || readWaiting(run).length > 0) return false
-  if (isGroupLotOver(run)) return false
+  if (isGroupLotOver(run, review)) return false
   // Rien à envoyer : ni action prête (une action déjà marquée ne repart pas), ni relance à poser.
   // Une relance encore sans question est posée à la fin du tour, avant ce guet : une relance sans question
   // à poser (répondue ici, puis redevenue nécessaire) laisse le lot bloqué.
-  const decision = autoDecision(run, {}, inFlight)
+  const decision = autoDecision(run, { security: review }, inFlight)
   if (decision.kind !== 'none') return false
+  // Une tâche externe pas faite dont la levée ferait avancer le lot (un envoi, ou une relance) : l'auto l'attend, sans pause ; seule une
+  // décision externe, ou un bloqueur qu'aucune tâche ne lève, laisse le lot bloqué.
+  if (awaitedExternals(run, inFlight, undefined, review).length > 0) return false
   // Une revue ou une revue de sécurité lancée (marque démarrée) dont le résultat n'est pas encore là : on l'attend.
   const isAwaiting = groups.some(g => {
     const unit = g.delegated !== undefined ? `${g.id}#${sendNumber(g.delegated?.seq) ?? 1}` : hereUnitOf(g)
@@ -4464,6 +4544,45 @@ export const isGroupLotStuck = (run: Run, inFlight: boolean): boolean => {
     return sec !== undefined && sec !== null && typeof sec === 'object' && sec.isAdvised === true && sec.findings === undefined && isUnitMarked(run, 'security:', unit)
   })
   return !isAwaiting
+}
+
+/**
+ * Les tâches externes (`kind` « task », ou sans type) pas faites qu'attend l'auto : celles qui bloquent un
+ * ticket ouvert, dans une phase où l'auto agit sur les tickets (l'implémentation, ou le découpage fini),
+ * quand rien n'est en vol et que leur levée laisserait avancer le lot. Un lot à groupes : l'auto, rejoué
+ * sur une copie où ces tâches sont faites, enverrait quelque chose qu'il n'envoie pas aujourd'hui, ou
+ * ouvrirait une relance (un groupe revenu deux fois, dont la question se pose alors) ; un groupe qui attend
+ * aussi un autre bloqueur, ou un groupe qui en attend un autre bloqué, ne part pas : rien n'est nommé. Un lot sans groupes : chaque ticket ouvert est bloqué, et l'un au moins ne
+ * l'est plus une fois ces tâches faites. Une décision externe n'y est jamais : elle attend la personne.
+ * Lecture seule : la mission n'est jamais modifiée.
+ */
+export const awaitedExternals = (run: Run, inFlight: boolean, outside?: ReadonlyMap<string, readonly OutsideHold[]>, review: SecurityReview = 'on'): ExternalBlocker[] => {
+  // Seulement dans une phase où l'auto agit sur les tickets (comme `isGroupLotStuck`) : pendant un découpage
+  // ou un compte rendu, l'auto n'attend aucune tâche.
+  const phase = currentPhase(run)
+  if (inFlight || !(phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done'))) return []
+  const open = run.tickets.filter(t => t.status !== 'done')
+  const blocking = new Set(open.flatMap(t => openBlockers(run, t)))
+  // Relues du fichier partagé : une entrée hors forme (pas un objet, id pas texte) n'est jamais attendue ; un nom illisible
+  // ne l'écarte pas (elle reste une tâche, nommée par son id).
+  const tasks = (run.externals ?? []).filter(x => isSoundExternal(x) && x.status !== 'done' && x.isDecision !== true && [...blocking].some(id => sameTicket(id, x.id)))
+  if (tasks.length === 0) return []
+  // Une décision externe pas tranchée qui bloque un ticket ouvert attend la personne : rien n'est attendu, la
+  // pause « plus rien ne peut avancer sans toi » la fait voir, comme une question ouverte.
+  if ((run.externals ?? []).some(x => isSoundExternal(x) && x.status !== 'done' && x.isDecision === true && [...blocking].some(id => sameTicket(id, x.id)))) return []
+  const lifted: Run = { ...run, externals: (run.externals ?? []).map(x => (tasks.includes(x) ? { ...x, status: 'done' as const } : x)) }
+  const groups = run.groups ?? []
+  if (groups.length === 0) {
+    const isAllBlocked = open.length > 0 && open.every(t => openBlockers(run, t).length > 0)
+    return isAllBlocked && open.some(t => openBlockers(lifted, t).length === 0) ? tasks : []
+  }
+  if (groups.some(g => g.linked !== undefined)) return []
+  const now = autoDecision(run, { security: review }, inFlight, outside)
+  if (now.kind !== 'none') return []
+  // La levée fait avancer le lot : un envoi, ou une relance qu'elle seule ouvre (un groupe revenu deux fois,
+  // dont la question se pose alors).
+  const then = autoDecision(lifted, { security: review }, inFlight, outside)
+  return then.kind === 'send' || then.relaunch.some(r => !now.relaunch.includes(r)) ? tasks : []
 }
 
 /** Les envois d'un groupe revenus de leur worker (le dernier et les précédents gardés) ; un envoi annulé n'en est pas un. */
@@ -4506,12 +4625,12 @@ export const raiseRelaunchQuestions = (board: Board, units: readonly string[], n
  * consigne de /implement qui fait envoyer `complete` : sa suite (le compte rendu, dont le lancement clôt
  * la phase) part comme celle d'une phase finie.
  */
-const isGroupLotOver = (run: Run): boolean => {
+const isGroupLotOver = (run: Run, review: SecurityReview = 'on'): boolean => {
   const phase = currentPhase(run)
   const groups = run.groups ?? []
   if (phase.skill !== 'implement' || phase.status !== 'active' || groups.length === 0 || run.tickets.length === 0) return false
   if (!run.tickets.every(t => t.status === 'done')) return false
-  return groups.every(g => g.linked === undefined && closeMissing(run, g).length === 0) && nextLaunchFor(run) === null
+  return groups.every(g => g.linked === undefined && closeMissing(run, g, review).length === 0) && nextLaunchFor(run) === null
 }
 
 /** Ce que l'auto fait à la fin d'un tour : envoyer une action, se mettre en pause, ou rien ; `relaunch` : les questions d'un renvoi de trop à poser d'abord. */
@@ -4530,13 +4649,14 @@ export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean, out
   const read = readMarks(run)
   if (read.isDamaged) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
   if (read.marks.some(m => m.startedAt === undefined)) return { kind: 'none', relaunch: [] }
-  if (hasUnsafeOpenGroup(run)) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
-  const grouped = autoGroupActionOf(run, outside)
+  const review = opts.security ?? 'on'
+  if (hasUnsafeOpenGroup(run, review)) return { kind: 'stop', why: AUTO_STOPS.unreadable, relaunch: [] }
+  const grouped = autoGroupActionOf(run, outside, review)
   if (grouped.action) return { kind: 'send', action: grouped.action, relaunch: grouped.relaunch }
   // Une retenue entre missions : seule la branche retenue attend, sans pause ; elle repart quand la retenue tombe.
   const isHeldElsewhere = (outside?.size ?? 0) > 0
   // Un lot sans groupes : sa revue, puis sa revue de sécurité, avant la phase suivante.
-  const lot = autoLotActionOf(run, inFlight)
+  const lot = autoLotActionOf(run, inFlight, review)
   if (lot) return { kind: 'send', action: lot, relaunch: grouped.relaunch }
   const action = autoActionOf(run, opts, outside)
   const phase = currentPhase(run)
@@ -5373,7 +5493,9 @@ const keepDecided = (kept: Run, other: Run | undefined): Run => {
 
 /**
  * Sans activité depuis plus longtemps, une mission active est tenue pour abandonnée (discussion
- * fermée sans fin propre) : au chargement elle passe en pause, et un skill peut la reprendre.
+ * fermée sans fin propre) : au chargement elle passe en pause, même tenue par une autre discussion encore
+ * ouverte (choix de Mathis du 06/11/2026, faute d'un signal de vie des discussions), et seul un skill de la
+ * discussion où elle est née peut la reprendre.
  */
 const ORPHAN_MS = 30 * 60 * 1000
 
@@ -5462,7 +5584,7 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
   return merged
 }
 
-/** Fin de discussion : sa mission active passe en pause, pour la prochaine discussion du projet. */
+/** Fin de discussion : sa mission active passe en pause ; un de ses skills la reprend dans cette discussion, « ↻ Reprendre ici » ailleurs. */
 export const parkActive = (board: Board, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
@@ -5557,7 +5679,7 @@ export const validateReport = (board: Board, now: number): Outcome => {
  * Ce que le tableau de bord sait de la mission, donné à Claude quand le compte rendu se charge :
  * il part de ces faits et les complète par git et le tracker.
  */
-export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | null = null): string[] => {
+export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | null = null, review: SecurityReview = 'on'): string[] => {
   const lines = [`- Run ${JSON.stringify(shownInNote(run.title))}, started ${isoMinute(run.startedAt)} UTC (use it for git log --since).`]
   const ticket = (t: Ticket) =>
     `${shownInNote(t.name)} [${shownInNote(t.id)}]: ${shownInNote(t.status)}${t.why ? ` (waits for: ${shownInNote(t.why)})` : ''}${t.startedAt !== undefined && t.finishedAt !== undefined ? `, ${Math.round((t.finishedAt - t.startedAt) / 60_000)} min` : ''}`
@@ -5569,7 +5691,9 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
       const ids = groupTicketIds(run, g)
       const done = ids.filter(id => ticketOf(run, id)?.status === 'done').length
       const total = ids.length
-      const sec = securityText(g.security)
+      // La même lecture que la fermeture, l'auto et la vue (`closeMissing`, `securityRow`) : un groupe clos avec sa
+      // marque reste « désactivée » ; sans elle, le réglage lu à l'instant décide, comme pour un groupe ouvert.
+      const sec = securityText(g.security, review, isClosedTurnedOff(g))
       // « relu » seulement pour un groupe fini, rattachés compris : une date posée recompte une fois le groupe fini.
       const isDone = isGroupDone(run, g)
       return `${shownGroupId(g.id)} (${shownGroupName(g.name)}): ${done}/${total} done${isDone && hasGroupReview(g) ? ', reviewed by /code-review' : isDone && isNoLogicGroup(run, g) ? `, reviewed by its ticket reviews (no logic, not sensitive)${g.security === undefined ? ', no group review nor security review needed' : ''}` : isDone && isTicketReviewEnough(run, g) ? `, reviewed by its ticket review (a group of one ticket)${g.security === undefined ? ', its security advice still due' : ''}` : ''}${sec ? `, ${sec}` : ''}`
@@ -5581,7 +5705,7 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
     const isDone = isAllDone(run, run.tickets.map(t => t.id))
     // Un avis antérieur à la dernière fin de ticket ou à la dernière revue du lot ne compte plus : il ne se dit pas comme celui du passage.
     const lotSecurity =
-      isLotAdvicePrevious(run) ? 'security advice older than the last ticket end or the last lot review, not settled for the current pass (its own advice is due)' : securityText(run.security)
+      isLotAdvicePrevious(run) ? 'security advice older than the last ticket end or the last lot review, not settled for the current pass (its own advice is due)' : securityText(run.security, review, false, 'le lot')
     const reviewed = !isDone
       ? ''
       : isLotReviewEnough(run)
@@ -5592,7 +5716,7 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
     const parts = [reviewed, lotSecurity].filter(x => x !== '')
     if (parts.length > 0) lines.push(`- Lot: ${parts.join(', ')}.`)
   } else if (groups.length === 0) {
-    const lotSecurity = securityText(run.security)
+    const lotSecurity = securityText(run.security, review, false, 'le lot')
     if (lotSecurity) lines.push(`- Lot: ${lotSecurity}.`)
   }
   const tracking = run.artifacts.filter(a => a.kind === 'tracking')
@@ -5866,7 +5990,14 @@ export const openBlockers = (run: Run, ticket: Ticket): string[] =>
 const groupIdOf = (run: Run, id: string): string | undefined => (run.groups ?? []).find(g => g.tickets.some(x => sameTicket(x, id)))?.id
 
 /** La dépendance externe d'id `id`, si la mission la connaît. */
-export const externalOf = (run: Run, id: string): ExternalBlocker | undefined => (run.externals ?? []).find(x => sameTicket(x.id, id))
+export const externalOf = (run: Run, id: string): ExternalBlocker | undefined => (run.externals ?? []).find(x => isSoundExternal(x) && sameTicket(x.id, id))
+
+/**
+ * Une dépendance externe relue du fichier partagé, en forme pour être lue : un objet dont l'id est un texte.
+ * Hors forme, elle n'est ni trouvée (un ticket qu'elle bloque reste bloqué, par prudence) ni attendue ;
+ * son nom, lui, peut manquer (il se montre alors par son id).
+ */
+const isSoundExternal = (x: unknown): x is ExternalBlocker => x !== null && typeof x === 'object' && typeof (x as { id?: unknown }).id === 'string'
 
 /**
  * Un ticket peut entrer dans la sélection s'il n'est pas fait et que chacun de ses bloqueurs est
@@ -5959,7 +6090,7 @@ const CROSS_DOCS = new Set(['etat_du_projet.md', 'glossary.md'])
 const textsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 
 /** Les fichiers d'une unité, comparables, sans les documents communs. */
-const crossZones = (files: readonly string[]): Zone[] => {
+export const crossZones = (files: readonly string[]): Zone[] => {
   const out: Zone[] = []
   for (const raw of files) {
     if (typeof raw !== 'string') continue
@@ -6102,6 +6233,24 @@ export const crossedLaunches = (board: Board, extra: (runId: string) => readonly
   }
   return out
 }
+
+/** Un groupe d'une autre mission confié à un worker et pas encore rendu, avec ses fichiers (mêmes exclusions que les retenues). */
+export type InFlightElsewhere = { run: string; title: string; group: string; files: string[] }
+
+/**
+ * Les groupes des autres missions du projet confiés à un worker et pas encore rendus (`linked`), d'après
+ * le board relu, archivées comprises (leur worker écrit encore) : ce qu'une discussion qui code ici risque
+ * de recouper. Calculés à la demande, jamais gardés ; un groupe sans fichier n'y est pas.
+ */
+export const inFlightElsewhere = (board: Board, runId: string): InFlightElsewhere[] =>
+  board.runs
+    .filter(r => r.id !== runId)
+    .flatMap(run =>
+      (run.groups ?? [])
+        .filter(g => g.linked !== undefined)
+        .map(g => ({ run: run.id, title: String(run.title), group: String(g.id), files: crossZones([...textsOf(g.files), ...openFilesOf(run, groupTicketIds(run, g))]).map(z => z.raw) })),
+    )
+    .filter(u => u.files.length > 0)
 
 // ─── Plan des vagues du projet (`hooks/plan-projet.ts`) ────────────────────
 //

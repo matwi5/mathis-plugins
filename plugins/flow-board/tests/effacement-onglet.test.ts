@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { MISSION_FAMILIES, WORKER_FAMILIES, missionFamilyKey, missionFamilyPath, workerFamilyKey, workerFamilyPath } from '../hooks/erase-run.ts'
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import { missionReportKey } from '../hooks/register.tsx'
 import { emptyRegistry, parseRegistry, startCall } from '../hooks/registry.ts'
@@ -372,6 +373,79 @@ test('S23 : l’en-tête d’un worker, écrit avec sa mission, le perd une fois
   expect(after.run).toBeUndefined()
   expect(after.group).toBeUndefined()
   expect(after.agents.map(a => a.name)).toEqual(['Après la suppression'])
+})
+
+test('supprimer une mission efface chaque famille de clés et de fichiers rangée par mission ou par worker que le mod connaît', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const files: Record<string, string> = {}
+  const run = { ...newRun('implement', NOW - 9_000_000, 'Lot aux familles'), status: 'done', archivedAt: NOW - 8_000_000, agents: [] } as Run
+  const worker = 'fille-fermee'
+  const old = NOW - 2 * 3_600_000
+  const mem = world(on, { [BOARD_KEY]: { ...emptyBoard('/p', 'p'), runs: [run] }, [`agents:${worker}`]: reg(worker, old, [{ key: 'f1', name: 'Fille fermée' }], { run: run.id }) }, (_$: unknown, e: { argv: string[] }) => {
+    if (e.argv[0] === 'rm') delete files[String(e.argv.at(-1))]
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: e.path in files }) as any)
+  on('fs.read', (_$: unknown, e: { path: string }) => {
+    if (!(e.path in files)) throw new Error(`ENOENT ${e.path}`)
+    return { value: files[e.path] } as any
+  })
+  on('fs.write', (_$: unknown, e: { path: string; text: string }) => {
+    files[e.path] = e.text
+    return { value: undefined } as any
+  })
+  on('fs.list', (_$: unknown, e: { path?: string }) => {
+    const dir = `${String(e.path ?? '').replace(/\/$/, '')}/`
+    const names = Object.keys(files).filter(p => p.startsWith(dir) && !p.slice(dir.length).includes('/'))
+    if (names.length === 0) throw new Error(`ENOENT ${e.path}`)
+    return { value: names.map(p => ({ name: p.slice(dir.length), kind: 'file', size: files[p]!.length, mtimeMs: NOW - 3_600_000, isLink: false })) } as any
+  })
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1' } }))
+  await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
+  // Un premier lancement écrit le registre de cette session : il dit où est ~/.claude pour le mod (rien sans lui : clés seules).
+  await $.tool.call({ tool: 'Agent', description: 'Ici', prompt: 'p', run_in_background: true } as any)
+  await settle(clock, 2)
+  const own = Object.keys(files).find(p => p.endsWith('/flow-board/agents/s-del.json'))
+  const home = own?.slice(0, own.indexOf('/flow-board/agents/'))
+  const at = { plugin: { root: home ? `${home}/plugins/flow-board` : '' } }
+  // Chaque famille de la liste que suit l'effacement, créée pour la mission et pour son worker.
+  const seededKeys: string[] = []
+  const seededFiles: string[] = []
+  const relayValue = { v: 1, run: run.id, sessions: {} }
+  for (const f of MISSION_FAMILIES) {
+    const key = missionFamilyKey(f, run.id)
+    if (key) mem[key] = f === 'relais' ? relayValue : { v: 1, run: run.id }
+    const path = missionFamilyPath(at, f, run.id)
+    if (path) files[path] = f === 'relais' ? JSON.stringify(relayValue) : 'x'
+    if (key) seededKeys.push(key)
+    if (path) seededFiles.push(path)
+  }
+  for (const f of WORKER_FAMILIES) {
+    const key = workerFamilyKey(f, run.id, worker)
+    if (key) mem[key] = { v: 1, run: run.id, session: worker }
+    const path = workerFamilyPath(at, f, run.id, worker)
+    if (path) files[path] = 'x'
+    if (key) seededKeys.push(key)
+    if (path) seededFiles.push(path)
+  }
+  // Les familles connues, d'une source à part de la liste : chacune y est (clés toujours, fichiers quand ~/.claude est connu).
+  for (const prefix of [`relay:${run.id}`, `relay-main:${run.id}`, `coo-report:${run.id}`, `coo-applied:${run.id}`, `relay:${run.id}:${worker}`]) expect(seededKeys).toContain(prefix)
+  expect(seededKeys.some(k => k.endsWith(':rebuilt'))).toBe(true)
+  if (home) for (const end of ['.report.md', '.entry.json', '/choix/', '/rapports/', '.rebuilt.json', '.main.json']) expect(seededFiles.some(p => p.includes(end)), end).toBe(true)
+  await settle(clock, 6)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await ui.press({ key: 'tab-history' })
+  await ui.press({ key: 'archived-toggle' })
+  await ui.press({ key: `drop-${run.id}` })
+  await ui.press({ key: `drop-yes-${run.id}` })
+  await settle(clock, 2)
+  await ui.unmount()
+  // Avec ~/.claude connu, le fichier des missions est le fichier commun du disque simulé ; sinon `$.store`.
+  const boardFile = Object.keys(files).find(p => p.includes('/flow-board/parcours/'))
+  const after = (boardFile ? JSON.parse(files[boardFile]!) : mem[BOARD_KEY]) as Board
+  expect(after.runs.find(r => r.id === run.id)).toBeUndefined()
+  for (const key of seededKeys) expect(mem[key], key).toBeUndefined()
+  for (const path of seededFiles) expect(path in files, path).toBe(false)
 })
 
 test('le rapport gardé pour le COO reste à l’archivage de la mission et part avec sa suppression', async ($, on) => {

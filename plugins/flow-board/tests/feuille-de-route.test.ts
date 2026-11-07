@@ -125,6 +125,8 @@ const world = (on: any) => {
   on('session.id', () => ({ value: 'session-A' }))
   on('session.root', () => ({ value: ROOT }))
   on('session.repo', () => ({ value: { root: ROOT, remote: null, internal: false, name: null } }))
+  // Le dossier personnel, sous lequel vit le réglage « revue de sécurité ».
+  on('env.get', (_$: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/h' : undefined }))
   on('store.get', (_$: unknown, e: { key: string }) => {
     if (fault.state && e.key === STATE_KEY) throw new Error('lecture ratée')
     return { value: mem[e.key] }
@@ -290,6 +292,36 @@ test('où vit la feuille de route : sans choix, la vue pose la question ; le cli
   const after = await pane($)
   expect(await after.find({ type: 'Text', text: /la commiter dans ce projet \?/ })).toBeUndefined()
   await after.unmount()
+})
+
+test('la vue du COO porte la bascule de la revue de sécurité du projet : jamais réglée, désactivée ; un clic l’active', { timeoutMs: 15000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  // Un dossier listé : les fichiers écrits dessous (le réglage absent s'y constate).
+  on('fs.list', (_$: unknown, e: { path?: string }) => {
+    const dir = (e.path ?? '').replace(/\/+$/, '')
+    const names = new Set(Object.keys(w.files).filter(p => p.startsWith(`${dir}/`)).map(p => p.slice(dir.length + 1).split('/')[0]!))
+    return { value: [...names].map(name => ({ name, kind: 'file', size: 0, mtimeMs: 0, isLink: false })) } as any
+  })
+  w.files[FILE_PATH] = FILE
+  await start($)
+  await openCoo($, clock)
+  const label = async (): Promise<string> => {
+    const ui = await pane($)
+    const found = String((await ui.find({ key: 'coo-security-toggle' }))?.props?.label ?? '')
+    await ui.unmount()
+    return found.replace(/ /g, ' ')
+  }
+  expect(await label()).toBe('⛨ Sécurité : désactivée')
+  const ui = await pane($)
+  await ui.press({ key: 'coo-security-toggle' })
+  await ui.unmount()
+  // Gardé à part de la feuille de route : son fichier du poste, ou sa clé de `$.store`.
+  const path = Object.keys(w.files).find(p => p.endsWith('.revue-securite.json'))
+  expect((path ? JSON.parse(w.files[path]!) : w.mem[`security-review:${ROOT}`])?.review).toBe('on')
+  expect(await label()).toBe('⛨ Sécurité : activée')
+  // Rien n'est demandé au Claude du COO : le clic écrit le seul réglage.
+  expect(asks(w.sent)).toEqual([])
 })
 
 test('une discussion qui ne tient pas le siège ne garde rien de la feuille de route', { timeoutMs: 15000 }, async ($, on) => {

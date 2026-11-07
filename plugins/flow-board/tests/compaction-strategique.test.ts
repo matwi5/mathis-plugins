@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { compactionInstructions, compactionMoment, compactionRoleOf, suggestsCompaction } from '../hooks/compaction.ts'
+import { answerAwaitsPerson, compactionInstructions, compactionMoment, compactionRoleOf, suggestsCompaction } from '../hooks/compaction.ts'
 import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
 import { PANE, PLUGIN, TOOL, coordFile, openCoo, seatOf, settle, start, stored, world, writeBoard } from './monde-coordination.ts'
@@ -127,10 +127,10 @@ test('en manuel, rien n’est envoyé : seule la suggestion grisée reste', { ti
   expect(w.runs.filter(c => c === 'compact')).toHaveLength(0)
 })
 
-test('le COO se compacte quand son contexte dépasse 150 000 tokens et que rien ne l’attend ; pas quand une mission l’attend', { timeoutMs: 30000 }, async ($, on) => {
+test('le COO se compacte quand son contexte dépasse 450 000 tokens et que rien ne l’attend ; pas quand une mission l’attend', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
-  const usage = { tokens: 200_000 }
+  const usage = { tokens: 500_000 }
   on('session.usage', () => ({ value: { context: { tokens: usage.tokens, window: 1_000_000, percent: 20 } } }) as any)
   const waiting = { ...newRun('implement', T0 - 5000, 'Attend'), status: 'active' as const, owner: 'session-B', waitsUser: { since: T0 - 1000, kind: 'question' as const } }
   writeBoard(w, b => ({ ...b, runs: [waiting] }))
@@ -149,7 +149,8 @@ test('le COO se compacte quand son contexte dépasse 150 000 tokens et que rien 
 test('le COO ne se compacte ni sous le seuil, ni pendant une livraison (une mission ouverte dans sa phase « Version et push »)', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
-  const usage = { tokens: 100_000 }
+  // 400 000 : sous le seuil de 450 000 (au-dessus de l'ancien, 150 000).
+  const usage = { tokens: 400_000 }
   on('session.usage', () => ({ value: { context: { tokens: usage.tokens, window: 1_000_000, percent: 20 } } }) as any)
   const base = newRun('implement', T0 - 5000, 'Livre')
   const at = base.phases.findIndex(p => p.skill === 'project:version')
@@ -163,7 +164,7 @@ test('le COO ne se compacte ni sous le seuil, ni pendant une livraison (une miss
   // Sous le seuil : rien.
   expect(w.runs.filter(c => c === 'compact')).toHaveLength(0)
   // Au-dessus, mais une mission livre : rien.
-  usage.tokens = 200_000
+  usage.tokens = 500_000
   writeBoard(w, b => ({ ...b, runs: [other, { ...delivering, updatedAt: T0 + 10_000 }] }))
   await settle(clock, 12)
   expect(w.runs.filter(c => c === 'compact')).toHaveLength(0)
@@ -176,7 +177,7 @@ test('le COO ne se compacte ni sous le seuil, ni pendant une livraison (une miss
 test('le COO ne se compacte pas tant que sa dernière réponse attend la personne (finie sur une question), ni pendant qu’une vague se lance', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
-  on('session.usage', () => ({ value: { context: { tokens: 200_000, window: 1_000_000, percent: 20 } } }) as any)
+  on('session.usage', () => ({ value: { context: { tokens: 500_000, window: 1_000_000, percent: 20 } } }) as any)
   const run = mission()
   writeBoard(w, b => ({ ...b, runs: [run] }))
   w.coord.text = coordFile([{ id: 'cwave0009', kind: 'wave', run: run.id, at: T0, wave: 'cwaveclic9', groups: ['A'] }])
@@ -197,4 +198,45 @@ test('le COO ne se compacte pas tant que sa dernière réponse attend la personn
   await settle(clock, 6)
   counts.push(w.runs.filter(c => c === 'compact').length)
   expect(counts).toEqual([0, 0, 1])
+})
+
+test('le COO ne se compacte pas quand sa dernière réponse pose une question puis finit par une ligne « needs input »', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  on('session.usage', () => ({ value: { context: { tokens: 500_000, window: 1_000_000, percent: 50 } } }) as any)
+  await start($)
+  await openCoo($, clock)
+  await $.turn.start({ turnId: 'q', text: 'x' } as any)
+  await $.turn.complete({ answer: 'Deux choix pour la suite.\n\n**Q1.** Je lance la mission suivante ?\n(a) oui (Recommandé)\n(b) non\n\nneeds input: Q1', durationMs: 10, isAborted: false, turnId: 'q', reason: 'answer' })
+  await settle(clock, 12)
+  const counts = [w.runs.filter(c => c === 'compact').length]
+  // La personne a répondu, la réponse suivante ne demande rien : il se compacte.
+  await $.turn.start({ turnId: 'r', text: 'a' } as any)
+  await $.turn.complete({ answer: 'C’est lancé.', durationMs: 10, isAborted: false, turnId: 'r', reason: 'answer' })
+  await settle(clock, 6)
+  counts.push(w.runs.filter(c => c === 'compact').length)
+  expect(counts).toEqual([0, 1])
+})
+
+test('une réponse du COO attend la personne : « ? » final, ligne « needs input », ou question suivie d’options ; pas un « ? » de bloc de code', () => {
+  expect(answerAwaitsPerson('Je lance la mission suivante ?')).toBe(true)
+  expect(answerAwaitsPerson('Le plan est prêt.\n\n**needs input:** Q1, Q2')).toBe(true)
+  expect(answerAwaitsPerson('**Q1.** Laquelle ?\n(a) 300k\n(b) 450k')).toBe(true)
+  expect(answerAwaitsPerson('C’est noté.')).toBe(false)
+  expect(answerAwaitsPerson('Corrigé :\n```ts\nconst x = a ?\n  b : c\n```\nFait.')).toBe(false)
+  // Une question dont le « ? » ne finit pas la ligne : options sur la même ligne, phrase qui suit, tableau.
+  expect(answerAwaitsPerson('**Q1. Quel seuil ?** Options : (a) 300 000 (Recommandé) ; (b) 450 000.')).toBe(true)
+  expect(answerAwaitsPerson('Laquelle préfères-tu ? Je recommande (a).')).toBe(true)
+  expect(answerAwaitsPerson('| Q1 | Quel seuil ? |\n|---|---|')).toBe(true)
+  // Une ligne « needs input » qui n'est pas la dernière.
+  expect(answerAwaitsPerson('needs input: Q1\n\nJe reste en attente.')).toBe(true)
+  // Une ligne « needs input » en titre, sans « ? » dans ses options ; un « ? » suivi d'un crochet de lien ou d'un guillemet courbe.
+  expect(answerAwaitsPerson('## Needs input\n- Q1 : 300k ou 450k')).toBe(true)
+  expect(answerAwaitsPerson('[Je lance ?](#lancer)')).toBe(true)
+  expect(answerAwaitsPerson('“Ship it?” Then I wait.')).toBe(true)
+  // Un bloc de code mal fermé n'efface pas un « ? » final.
+  expect(answerAwaitsPerson('Voici :\n```\nx\nOn y va ?')).toBe(true)
+  // Ni une adresse ni un « ? » de code en ligne ne sont des questions.
+  expect(answerAwaitsPerson('Voir https://exemple.org/page?id=3 et `a ? b : c`. Fait.')).toBe(false)
+  expect(answerAwaitsPerson(undefined)).toBe(false)
 })

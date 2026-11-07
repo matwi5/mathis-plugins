@@ -191,6 +191,9 @@ test('Le brief d’une mission en auto : workers autonomes quel que soit leur ef
   expect(text).toContain('jamais xhigh')
   expect(text).toContain('ne me pose pas la question « xhigh (Recommandé) / high »')
   expect(text).toContain('déclare dans decided que xhigh n’a pas été proposé')
+  // En auto aussi, la ligne de chaque groupe porte l'effort calculé par le mod (tickets muets : high).
+  expect(text).toContain('1) a1 — Worker — effort calculé : medium')
+  expect(text).toContain('l’effort calculé sur la ligne de son groupe')
   expect(text).not.toContain('pose-moi une question à boutons « xhigh (Recommandé) / high »')
   expect(text).not.toContain('et, si son effort est xhigh,')
 })

@@ -23,6 +23,18 @@ Ce qui en dépend, dans `plugins/flow-board/hooks/register.tsx` :
 
 Le reste de la description touche le texte de lancement : `initiation` « user_asked » lance tout de suite, et demande un `prompt` (le brief) ; `context` « fresh » demande aussi un `background`, d'une longueur minimale (`${dS}` caractères dans le code de l'app, une valeur que le script ne résout pas). Ce qui en dépend : `missionLaunchText` (le lancement d'une mission depuis une carte de lancement du COO) et `launchHow` (le lancement des groupes), dans `register.tsx`.
 
+## `start_session` : `model`, un modèle de la même famille ou moins cher
+
+Paramètre `model`, lu dans l'app 4.23118.0 le 06/11/2026 (texte cherché directement dans `app.asar` : le script ci-dessus y dit « introuvable » pour la description de `start_session`) : « "fresh" only, optional: a cheaper model id for mechanical or read-only pieces (e.g. a Sonnet or Haiku id). Same family or cheaper than yours; anything higher is ignored. Omit to inherit yours. » Les groupes partent déjà en `context` « fresh » ; Sonnet est moins cher qu'Opus, donc accepté depuis une discussion sur Opus. Dans le CLI, `claude --bg` prend `--model` (« Provide an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name », Claude Code 2.1.319).
+
+Ce qui en dépend : l'option fusion, qui lance un groupe sans logique en worker Sonnet high.
+
+- `SONNET_APP_ID`, `SONNET_CLI_ALIAS` et `SONNET_LAUNCH_FR` (`plugins/flow-board/hooks/effort.ts`) : l'id passé à `model`, l'alias de `--model` et la phrase de la demande de lancement qui les donne ;
+- `groupLaunchNote` (`effort.ts`) et `delegationText` (`plugins/flow-board/hooks/register.tsx`) : la ligne « Sonnet high, sans logique » d'un groupe sans logique (`isNoLogicGroup`), jamais sous un effort imposé ;
+- test : `plugins/flow-board/tests/effort-calcule.test.ts`.
+
+Une discussion sur un modèle moins cher que Sonnet (Haiku) verrait ce `model` ignoré : le groupe partirait sur le modèle de la discussion. À revoir si l'app change cette règle, ou à la sortie d'un nouveau Sonnet (l'id de `SONNET_APP_ID`).
+
 ## `archive_session` : un accord explicite, pour une session précise
 
 Description : « Only call it after the user has explicitly agreed to archive a specific session — never speculatively. » Refus (« Session … was not archived: … ») : une session n'est pas archivée quand elle travaille encore (un tour en cours), qu'elle a du travail vivant (un agent, un client Remote Control, un message en file ou une tâche de fond), qu'elle garde l'ordinateur éveillé, ou que l'app la garde pour la personne (épinglée ou ouverte).

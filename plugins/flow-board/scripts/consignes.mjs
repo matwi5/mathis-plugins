@@ -3,7 +3,7 @@
 // écrit depuis le gabarit reference/consignes-revue.md au lieu d'être recopié à la main :
 //
 //   node <dossier de flow-board>/scripts/consignes.mjs <fichier de ticket> <base>..<fin> <sortie>
-//        [--chemins <chemin>…] [--choix <fichier des choix>] [--faits <fichier de ticket>…] [--declares <fichier>]
+//        [--chemins <chemin>…] [--choix <fichier des choix>] [--faits <fichier ou id de ticket>…] [--declares <fichier>]
 //        [--relecteur <id du ticket>]
 //
 // à lancer depuis la racine du worktree. Le ticket donne son id et son titre (sa première ligne,
@@ -14,7 +14,9 @@
 // y est : la copie d'un worktree date du départ de sa branche. `--chemins` limite le diff aux chemins
 // de la mission quand d'autres commitent sur la branche ; `--choix` donne le fichier des choix déjà
 // déclarés de la mission ; `--faits` les tickets déjà faits du groupe qui touchent les mêmes fichiers,
-// dont les critères sont recopiés ; `--declares` un fichier des choix de la session pas encore dans
+// dont les critères sont recopiés (un chemin, ou l'id d'un ticket, dont le fichier `<id>-*.md` se cherche
+// dans le dossier du ticket relu, l'id passant le garde `isTicketId`) ; `--chemins` et `--faits` prennent
+// un argument par chemin ou id, une chaîne à espaces est refusée avec la forme répétée ; `--declares` un fichier des choix de la session pas encore dans
 // le fichier des choix, un par ligne ; `--relecteur` crée le dossier du relecteur de ce ticket (celui de
 // `snapshot.mjs --dossier`, dans le dossier git du worktree) et le nomme comme le seul où il écrit : l'id
 // vient de la session, jamais du fichier de ticket, et passe la forme d'un id de `snapshot.mjs`. Le texte de chaque ligne est celui du gabarit, ses trous `<…>`
@@ -24,7 +26,7 @@
 // passent une liste blanche. Sans dépendance hors de Node.
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -177,6 +179,27 @@ const parse = argv => {
   return { positional, options }
 }
 
+/** L'id d'un ticket que `--faits` accepte à la place d'un chemin : lettres et chiffres seulement. */
+const TICKET_ID = /^[A-Za-z0-9]{1,12}$/
+
+/** Un id de ticket que `--faits` accepte. */
+export const isTicketId = value => typeof value === 'string' && TICKET_ID.test(value)
+
+/** Le fichier d'un ticket fait : le chemin donné, ou, pour un id, le seul fichier `<id>-*.md` (ou `<id>.md`)
+ * du dossier d'issues du ticket relu. */
+const doneTicketPath = (cwd, ticketPath, ref) => {
+  const full = resolve(cwd, ref)
+  if (existsSync(full) && statSync(full).isFile()) return ref
+  if (!isTicketId(ref)) throw new ConsignesError(`fichier de ticket fait introuvable : ${ref} (un chemin, ou l'id d'un ticket du dossier d'issues)`)
+  const issues = dirname(resolve(cwd, ticketPath))
+  const found = readdirSync(issues).filter(name => name === `${ref}.md` || (name.startsWith(`${ref}-`) && name.endsWith('.md')))
+  if (found.length !== 1) {
+    const where = relative(cwd, issues) || '.'
+    throw new ConsignesError(`ticket fait « ${ref} » : ${found.length} fichier(s) ${ref}-*.md dans ${where}${found.length ? ` (${found.join(', ')})` : ''}`)
+  }
+  return join(issues, found[0])
+}
+
 const readFile = (cwd, path, what) => {
   const full = resolve(cwd, path)
   if (!existsSync(full) || !statSync(full).isFile()) throw new ConsignesError(`${what} introuvable : ${path}`)
@@ -208,13 +231,20 @@ const decisionsFile = (cwd, ticketPath, top) => {
 export const writeConsignes = (argv, cwd = process.cwd()) => {
   const { positional: [ticketPath, range, output], options } = parse(argv)
   if (!isSafeRange(range)) throw new ConsignesError(`cible hors forme : ${JSON.stringify(range)} (une plage <base>..<fin> de révisions simples, jamais un hash seul)`)
+  for (const option of ['--chemins', '--faits']) {
+    const spaced = options[option].find(p => /\s/.test(p.trim()))
+    if (spaced === undefined) continue
+    const repeated = spaced.trim().split(/\s+/).map(p => `${option} ${p}`).join(' ')
+    throw new ConsignesError(`${option} prend un chemin ou un id par argument, jamais une chaîne à espaces : ${repeated}`)
+  }
   const bad = options['--chemins'].find(p => !isSafePath(p))
   if (bad !== undefined) throw new ConsignesError(`chemin hors forme : ${JSON.stringify(bad)} (lettres, chiffres, _ . / -, sans « .. » ni « - » en tête)`)
   const ticket = readTicket(readFile(cwd, ticketPath, 'fichier de ticket'), ticketPath)
   const top = gitOut(cwd, ['rev-parse', '--show-toplevel']) || cwd
   const decisions = decisionsFile(cwd, ticketPath, top)
   const standards = existsSync(join(top, 'CODING_STANDARDS.md')) ? join(top, 'CODING_STANDARDS.md') : null
-  const done = options['--faits'].flatMap(p => {
+  const done = options['--faits'].flatMap(ref => {
+    const p = doneTicketPath(cwd, ticketPath, ref)
     const text = readFile(cwd, p, 'fichier de ticket fait')
     return criteria(text, readTicket(text, p).id)
   })

@@ -30,7 +30,7 @@ Le lecteur est celui que nomme la ligne « Lecteur » du ticket, recopiée dans 
 
 ## 5. Lecture seule
 
-N'écris rien dans l'arbre de travail, même un instant, et ne lance aucune commande qui modifie quelque chose : la session choisit ce qu'elle applique. Ne relance ni les tests ni les contrôles.
+N'écris rien dans l'arbre de travail, même un instant, et ne lance aucune commande qui modifie quelque chose : la session choisit ce qu'elle applique. Ne relance ni les tests ni les contrôles. Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport.
 
 ## 6. Rapport
 

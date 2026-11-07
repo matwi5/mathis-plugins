@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Remplace un texte unique dans un fichier, avec assertion ; ou un lot de remplacements, tout ou rien.
+"""Remplace un texte unique dans un fichier, avec assertion ; ou un lot de remplacements, tout ou rien ;
+ou ajoute un texte à la fin d'un fichier.
 
     python3 scripts/patch.py <fichier> <ancien> <nouveau>
     python3 scripts/patch.py <fichier> @<fichier de l'ancien texte> @<fichier du nouveau texte>
     python3 scripts/patch.py --lot <fichier de paires>
+    python3 scripts/patch.py --append <fichier> <texte>
 
 Pour une édition que l'outil Edit ne peut pas faire et qu'aucun script jetable ne devrait refaire :
 un paragraphe trop long, ou une commande composée que le garde-fou d'un worktree refuse (un heredoc
@@ -11,6 +13,8 @@ ou un `sed` dont le texte cite git). Un argument qui commence par `@` est lu dan
 nomme (UTF-8), sans sa fin de ligne finale (`\\n` ou `\\r\\n`) : un texte qui doit finir par une fin
 de ligne en met deux dans son fichier ; `@@` au début écrit un `@` littéral. L'ancien texte doit
 paraître exactement une fois : sinon rien n'est écrit, et le message dit combien de fois il paraît.
+La forme simple refuse un fichier dont la première ligne est `::: fichier …` (un fichier de paires) :
+elle l'aurait modifié au lieu d'appliquer ses paires, et renvoie à `--lot`.
 Le fichier garde son encodage UTF-8 et ses fins de ligne. Dans chaque texte (argument, `@fichier`
 ou lot), le marqueur `{{u}}` devient `\\u` : l'outil Write change un échappement à quatre chiffres
 hexadécimaux en caractère brut, alors que `{{u}}2028` donne l'échappement `\\u2028` tel quel ; le
@@ -31,7 +35,13 @@ les lignes vides entre deux paires sont permises, aucun autre texte. Les paires 
 l'ordre, une paire sur le texte que laissent les précédentes. Tout ou rien : si une paire échoue
 (ancien texte absent ou non unique, fichier introuvable, lot mal formé), aucun fichier n'est écrit,
 et le message liste chaque paire en échec ; une écriture refusée par le système (droits) arrête le
-lot, et le message nomme les fichiers déjà écrits. Sans dépendance hors de la bibliothèque standard.
+lot, et le message nomme les fichiers déjà écrits.
+
+`--append` ajoute le texte (argument, ou `@<fichier>`, marqueur `{{u}}` compris) à la fin du fichier,
+suivi d'une fin de ligne, comme un heredoc `cat >> <fichier> <<EOF` que le garde-fou d'un worktree
+refuse dès que le texte cite git : les fins de ligne du fichier sont gardées (CRLF s'il en a), une
+fin de ligne s'ajoute d'abord si le fichier n'en a pas à sa fin, et un fichier absent est une erreur,
+sans création. Sans dépendance hors de la bibliothèque standard.
 """
 
 import re
@@ -42,6 +52,8 @@ from pathlib import Path
 # `{{u}}`, `{{uuu}}` s'écrit `{{uu}}`, etc. La barre oblique inverse est donnée par son code.
 U_MARKER = re.compile(r"\{\{(u+)\}\}")
 U_LITERAL = chr(92) + "u"
+# Les formes de la commande, lues dans la docstring.
+USAGE = [line.strip() for line in __doc__.splitlines() if line.strip().startswith("python3 scripts/")]
 # Le préfixe des lignes de marqueur d'un fichier de paires.
 MARK = "::: "
 
@@ -100,10 +112,32 @@ def read_target(path):
 
 
 def patch(path, old, new):
-    """Remplace dans `path` l'unique occurrence de `old` par `new` ; rend la ligne où elle commence."""
-    text, line = replace_once(path, read_target(path), old, new)
+    """Remplace dans `path` l'unique occurrence de `old` par `new` ; rend la ligne où elle commence. Un
+    fichier de paires (première ligne `::: fichier …`) est refusé : la forme simple l'aurait modifié
+    au lieu d'appliquer ses paires, que `--lot` applique."""
+    current = read_target(path)
+    if current.split("\n", 1)[0].rstrip("\r").startswith(MARK + "fichier"):
+        raise PatchError(f"{path} est un fichier de paires (première ligne « {MARK}fichier … ») : "
+                         f"python3 scripts/patch.py --lot {path} applique ses paires")
+    text, line = replace_once(path, current, old, new)
     Path(path).write_bytes(text.encode("utf-8"))
     return line
+
+
+def append(path, text):
+    """Ajoute `text` à la fin de `path`, suivi d'une fin de ligne, comme un heredoc `cat >>` : aux
+    fins de ligne du fichier (CRLF s'il en a), après une fin de ligne de plus si le fichier n'en a pas
+    à sa fin ; rend le nombre de lignes ajoutées. Un fichier absent est une erreur, sans création."""
+    if text == "":
+        raise PatchError("texte vide ; rien n'est écrit")
+    current = read_target(path)
+    newline = "\r\n" if "\r\n" in current else "\n"
+    lines = text.replace("\r\n", "\n").split("\n")
+    added = newline.join(lines) + newline
+    if current and not current.endswith("\n"):
+        added = newline + added
+    Path(path).write_bytes((current + added).encode("utf-8"))
+    return len(lines)
 
 
 def pair_text(buffer):
@@ -186,8 +220,12 @@ def main(argv):
             files = len({Path(target).resolve() for _, target, _ in done})
             print(f"{len(done)} remplacement{'s' if len(done) > 1 else ''} dans {files} fichier{'s' if files > 1 else ''}")
             return 0
-        if len(argv) != 3 or argv[0] == "--lot":
-            print("\n".join(line.strip() for line in __doc__.strip().splitlines()[2:5]), file=sys.stderr)
+        if argv[:1] == ["--append"] and len(argv) == 3:
+            count = append(argv[1], argument(argv[2]))
+            print(f"{argv[1]} : ajouté ({count} ligne{'s' if count > 1 else ''} à la fin)")
+            return 0
+        if len(argv) != 3 or argv[0] in {"--lot", "--append"}:
+            print("\n".join(USAGE), file=sys.stderr)
             return 2
         line = patch(argv[0], argument(argv[1]), argument(argv[2]))
     except PatchError as err:

@@ -75,7 +75,7 @@ test('dans la discussion, chaque revue reçoit ses consignes par un fichier, sur
   expect(implement).toContain('Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id>')
   expect(implement).toContain('a next ticket that touches the same files waits')
   expect(implement).not.toContain('git worktree add')
-  expect(implement).toContain("The ticket's real commit still comes after its review: git add each of its files again")
+  expect(implement).toContain("The ticket's real commit still comes after its review: when a file of the ticket changed after the last snapshot (a fix, its Status: line), first pin the snapshot again with all the ticket\'s files, right before the git add of the fixes; then git add each of its files again")
   expect(implement).not.toMatch(/\$\(/)
 })
 
@@ -89,7 +89,17 @@ test('le découpage borne les groupes à 5 tickets, range le ticket sensible, et
   const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
   expect(tickets).toContain('A group holds 5 tickets at most: its tickets share the same area of the code, so the worker reuses the context loaded by one ticket for the next, and an extra group (a new worker that rereads the area, its group reviews, the follow-up by the manager) costs far more than a compaction; the first ticket brings the context of the worker to 200 to 400k tokens depending on the project, each next one adds 20 to 150k, and past about 600k the automatic compaction is the safety net')
   expect(tickets).toContain('keep a sensitive ticket with other tickets rather than alone')
-  expect(tickets).toContain('In a group, a sensitive ticket goes first only when it blocks the next one')
+  expect(tickets).toContain('In a group, a sensitive ticket goes first when it blocks the next one, or when it is heavy and independent (its bug pass runs in xhigh: it deletes data or touches concurrency), before the context fills up')
+  expect(tickets).not.toContain('goes first only when it blocks the next one')
+  // Rétro de la mission « Coordinateur de parcours » : groupes de 5 tickets sensibles compactés vers le 4e, ticket
+  // posé sur un moment que la procédure ne donne presque jamais, cycle de vie posé après les revues, liste recopiée périmée.
+  expect(tickets).toContain('a group whose every ticket is sensitive holds 3 to 4 tickets')
+  expect(tickets).toContain('a ticket copies the useful sentence of a series word for word in its text, besides the series\' title, instead of only pointing to it')
+  expect(tickets).toContain('Before grouping, check the overlap with the other missions in progress')
+  expect(tickets).toContain('quotes the real order of its steps, read in that procedure (path and line), never from memory')
+  expect(tickets).toContain('A ticket that writes persisted data asks, at the split and not during the reviews, the lifecycle question of the framing of a sensitive ticket')
+  expect(tickets).toContain('a ticket that replaces a rule copied on several surfaces (a common rule, the procedure, the mod\'s instructions, a skill) adds, for each copy, a distinctive fragment of its old wording in that copy\'s language to the termes-retires.txt of the plugin whose checks read that copy')
+  expect(tickets).not.toContain('reread ask-matt')
   expect(tickets).toContain('A write planned outside the repository (a file of another repository, of ~/.claude or anywhere else on the machine) is a decision to take with the user before the group is launched')
   expect(tickets).toContain('erasures that overlap, a resume after an interruption, the state after /reload-plugins, and what a failure message says')
   expect(tickets).toContain('the one-sentence invariant of its persisted data')
@@ -105,7 +115,10 @@ test('la spec fait trancher les cas sensibles et nomme le skill dont elle a beso
   expect(spec).toContain('For a ticket in a sensitive area, settle with the user while framing')
   expect(spec).toContain('the instructions file of its bug pass copies it')
   expect(spec).toContain('says « charger le skill <name> » where it needs it')
+  // Rétro de la mission « Coordinateur de parcours » : l'index des décisions en vigueur, et la phrase utile recopiée.
+  expect(spec).toContain('The mission\'s DECISIONS.md starts with a short index « Décisions en vigueur » (one line per series still in force: its title, the tickets it governs)')
   expect(spec).not.toContain('A group holds 5 tickets at most')
+  expect(spec).not.toContain('reread ask-matt')
   await grouped($)
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   expect(implement).toContain("and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it")
@@ -194,4 +207,19 @@ test('la spec se demande si un texte écrit à un moment est lu plus tard, et ce
   expect(spec).toContain('« un texte écrit à un moment est-il lu plus tard, et que dit-il si la valeur a changé entre-temps ? »')
   const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
   expect(tickets).not.toContain('un texte écrit à un moment est-il lu plus tard')
+})
+
+// Rétro de la mission « Coordinateur de parcours » : ask-matt relu au cadrage avant de proposer un départ.
+test('le cadrage relit ask-matt avant de proposer un point de départ', async ($, on) => {
+  mock.clock(on, { now: 96_400_000 })
+  memoryDisk(on)
+  world(on)
+  await start($)
+  const grill = (await $.skill.prompt({ skill: 'mattpocock-skills:grill-with-docs', text: 'x' })).text as string
+  expect(grill).toContain('Before proposing a starting point (the next skill once the framing is agreed, or the start of a mission), reread ask-matt, a skill that cannot be invoked by you:')
+  expect(grill).toContain('quote the line that justifies the start')
+  // Le chemin vient de flow-board (relu sous le dossier des plugins, sans « .. ») : Claude ne le construit jamais
+  // d'après un autre fichier. Introuvable ici (aucun registre des plugins) : la consigne le dit.
+  expect(grill).toContain('flow-board did not find it among the installed plugins: say so to the user, never read a path written from memory or built from another file')
+  expect(grill).not.toContain('installed_plugins.json')
 })

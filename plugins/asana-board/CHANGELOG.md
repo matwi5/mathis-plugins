@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.12.0 — 2026-11-07
+
+### Changé
+- **Règles du suivi dans le skill** : le détail de la règle commune `config/rules/asana-board.md` (quelle tâche a un ticket, l'accord avant écriture et ses exceptions, la tenue à jour) vit dans `skills/suivi-asana/references/regles.md`, que le skill lit à chaque exécution ; la règle chargée dans chaque session n'en garde que le résumé.
+
+---
+
 ## 0.11.0 — 2026-11-03
 
 ### Changé

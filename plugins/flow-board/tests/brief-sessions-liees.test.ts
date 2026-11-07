@@ -44,17 +44,20 @@ const world = (on: any) => {
   return filled
 }
 
-/** Le brief d'un worker pour le groupe E ; `isSource` : le projet contient la source de flow-board. */
-const brief = async ($: any, on: any, isSource = false): Promise<string> => {
+/**
+ * Le brief d'un worker pour le groupe E ; `isSource` : le projet contient la source de flow-board ;
+ * `lot` et `key` : un autre lot, un autre bouton.
+ */
+const brief = async ($: any, on: any, isSource = false, lot: Record<string, unknown> = LOT, key = 'launch-linked-E'): Promise<string> => {
   mock.clock(on, { now: 80_000_000 })
   const filled = world(on)
   on('session.root', () => ({ value: 'C:/proj' }))
   on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: isSource && e.path.endsWith('/plugins/flow-board/reference/procedure-groupe.md') }) as any)
   await $.session.start({ cwd: '', surface: null, isInteractive: true })
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
-  await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...lot } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  await ui.press({ key: 'launch-linked-E' })
+  await ui.press({ key })
   await ui.unmount()
   return filled.at(-1)!
 }
@@ -113,14 +116,52 @@ test('le brief : dans le dépôt de flow-board, la procédure et les méthodes d
   expect(text).toMatch(/puis lire la procédure d'un worker de groupe, plugins\/flow-board\/reference\/procedure-groupe\.md du dossier de travail \(source du dépôt, qui fait foi ; sinon \S*reference\/procedure-groupe\.md\), et la suivre/)
   expect(text).toContain('revue de sécurité, plugins/flow-board/reference/revue-securite.md (dossier de travail, sinon à côté de la procédure installée)')
   expect(text).toContain('fond et de la forme, plugins/flow-board/reference/relecture-fond-forme.md (dossier de travail, sinon à côté de la procédure installée)')
+  // Aucun worker n'avait ouvert l'index du README : 110 à 220k de contexte à chercher dans model.ts.
+  expect(text).toContain('« Index : concept → fichier et fonction » de plugins/flow-board/README.md')
+  expect(text).toContain('lus par fonction')
+  // Un groupe qui corrigeait flow-board avait pris son correctif pour actif.
+  expect(text).toContain('le mod qui tourne est sa version installée, pas celle du dépôt')
   expect(lengthOf(text)).toBeLessThan(12000)
+})
+
+// L'option fusion ajoute au plus une ligne de groupe et la phrase du lancement sur Sonnet : un groupe sans
+// logique seul, ou mêlé à un groupe avec logique, reste sous le plafond.
+const FUSION = {
+  tickets: [
+    { id: 'a1', name: 'Code', files: ['src/a.ts'], sensitive: false, logic: true },
+    { id: 'e1', name: 'Icône', files: ['assets/icon.svg'], sensitive: false, logic: false },
+  ],
+  groups: LOT.groups,
+}
+
+test('le brief : un groupe sans logique (Sonnet), seul ou avec un autre, reste sous le plafond', async ($, on) => {
+  const alone = await brief($, on, true, FUSION, 'launch-linked-E')
+  expect(alone).toContain('Sonnet high, sans logique')
+  expect(lengthOf(alone)).toBeLessThan(12000)
+})
+
+test('le brief : deux groupes, l’un sur Sonnet et l’autre sur Opus, restent sous le plafond', async ($, on) => {
+  const both = await brief($, on, true, FUSION, 'launch-parallel-linked')
+  expect(both).toContain('Groupe A (Code)')
+  expect(both).toContain('Sonnet high, sans logique')
+  expect(lengthOf(both)).toBeLessThan(12000)
 })
 
 test('le brief : ailleurs, les seuls chemins installés', async ($, on) => {
   const text = await brief($, on)
   expect(text).not.toContain('du dossier de travail (source du dépôt')
   expect(text).not.toContain('sinon à côté de la procédure installée')
+  expect(text).not.toContain('Index : concept → fichier et fonction')
+  expect(text).not.toContain('est sa version installée')
   expect(text).toMatch(/puis lire la procédure d'un worker de groupe, \S*reference\/procedure-groupe\.md, et la suivre/)
+})
+
+// Les décisions prises après le départ d'une branche manquaient à la copie du worktree que lisaient
+// la session et ses relecteurs : le fichier se cite par son chemin absolu dans ce dossier, lu par Read.
+test('le brief : le fichier de décisions par son chemin absolu dans ce dossier, lu par Read', async ($, on) => {
+  const text = await brief($, on)
+  expect(text).toContain('par son chemin absolu dans ce dossier (C:/proj)')
+  expect(text).toContain('lu par Read')
 })
 
 // Au démarrage, le groupe A avait lu d'un bloc la spec, les décisions et les choix (45 Ko).

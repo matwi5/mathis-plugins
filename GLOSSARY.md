@@ -113,6 +113,10 @@ _Avoid_: compactage, résumé, compression
 Ce qu'on demande au résumé de garder lors d'une compaction, selon le rôle de la discussion (COO, manager, worker de groupe).
 _Avoid_: consignes de /compact, instructions de résumé
 
+**Contexte de départ** :
+Ce qu'une discussion ou un spécialiste porte avant son premier échange (règles chargées, outils, liste des skills), et qu'il relit à chaque requête jusqu'à sa première compaction.
+_Avoid_: contexte initial, overhead, frais fixes
+
 ## Échanges avec l'utilisateur
 
 **Question à boutons** :

@@ -93,7 +93,7 @@ test('le panneau : ⇉ seulement pour le lot, dans des workers', async ($, on) =
   await ui.press({ key: 'launch-parallel-linked' })
   await ui.unmount()
   const text = filled.at(-1)!
-  expect(text).toMatch(/Groupe A \(Worker\) : 1\) a1 — Un ∥ Groupe C \(App\) : 1\) c1 — Trois/)
+  expect(text).toMatch(/Groupe A \(Worker\) : 1\) a1 — Un — effort calculé : medium ∥ Groupe C \(App\) : 1\) c1 — Trois/)
   expect(text).not.toMatch(/Résumé/)
 
   // A et C commencés : plus de ⇉, B attend qu'ils soient finis.

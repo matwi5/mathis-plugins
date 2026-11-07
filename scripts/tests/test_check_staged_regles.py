@@ -1,10 +1,10 @@
 """Tests du hook pre-commit (scripts/check.py --staged) et de ses contrôles statiques. Sur un commit qui
 ne touche que la règle d'un plugin (`config/rules/<plugin>.md`) ou une liste d'admis
-(`scripts/renvois-admis.json`, `scripts/interpolations-admises.json`) : il lance les contrôles statiques
+(`scripts/renvois-admis.json`, `scripts/interpolations-admises.json`, `scripts/exports-admis.json`) : il lance les contrôles statiques
 qui les lisent, sur la copie de l'index, et refuse une liste d'admis qui augmente face à HEAD. Sur un
 commit qui indexe un fichier de code d'un plugin : il lance sur la copie de l'index les contrôles
 statiques de check.sh hors arbre « Architecture » et appels du moteur (renvois, termes retirés, valeurs
-relues brutes, termes de l'export public, règles du code). python3 -m unittest discover -s scripts/tests."""
+relues brutes, exports morts, termes de l'export public, règles du code). python3 -m unittest discover -s scripts/tests."""
 
 import json
 import subprocess
@@ -21,6 +21,8 @@ RULE = "config/rules/flow-board.md"
 REFS = "scripts/renvois-admis.json"
 INTERPOLATIONS = "scripts/interpolations-admises.json"
 HOOK = "plugins/flow-board/hooks/model.ts"
+USES = "plugins/flow-board/hooks/view.tsx"
+EXPORTS = "scripts/exports-admis.json"
 # Un site brut admis (`${run.title}`) et un renvoi admis (« Q3 ») dans les hooks du plugin.
 CODE = "// la règle (Q3)\nexport const titre = (run: any) => `Parcours ${run.title}`\n"
 
@@ -47,6 +49,8 @@ class StagedRepo(unittest.TestCase):
         self.write("plugins/flow-board/.claude-plugin/plugin.json", json.dumps({"name": "flow-board", "version": "0.1.0"}))
         self.write("plugins/flow-board/termes-retires.txt", "# termes retirés\n0.1.0\tvague suivante\n")
         self.write(HOOK, CODE)
+        # Un autre module nomme ses exports : aucun n'est mort (exports-admis.json, absent, n'en admet aucun).
+        self.write(USES, "import { titre } from './model'\n")
         self.write(RULE, "# Règle\n\n- en mode auto, le mod lance lui-même les groupes suivants.\n")
         self.write(REFS, admitted({"flow-board/hooks/model.ts": 1}))
         self.write(INTERPOLATIONS, admitted({"flow-board/hooks/model.ts": 1}))
@@ -90,6 +94,34 @@ class StagedRulesTest(StagedRepo):
         self.stage(RULE, "# Règle\n\n- en mode auto, le mod lance la vague suivante.\n")
         self.assertIn("flow-board", self.refused())
 
+    def test_un_renvoi_de_la_regle_vers_une_section_absente_est_refuse(self):
+        self.stage("config/rules/agents.md", "# Agents\n\n## Revues dans un spécialiste Opus\n")
+        self.stage(RULE, "# Règle\n\n- voir la section « Revues par Haiku » de `agents.md`.\n")
+        refused = self.refused()
+        self.assertIn(f"{RULE}:3", refused)
+        self.assertIn("« Revues par Haiku »", refused)
+        self.stage(RULE, "# Règle\n\n- voir la section « Revues dans un spécialiste Opus » de `agents.md`.\n")
+        check.staged()
+
+    def test_un_titre_renomme_dans_une_regle_commune_relit_les_renvois_de_chaque_plugin(self):
+        self.stage("config/rules/agents.md", "# Agents\n\n## Revues dans un spécialiste Opus\n")
+        self.stage(RULE, "# Règle\n\n- voir la section « Revues dans un spécialiste Opus » de `agents.md`.\n")
+        check.staged()
+        git(self.repo, "commit", "-q", "--no-verify", "-m", "renvoi juste")
+        for renamed in ("config/rules/agents.md", "config/reference/revues.md"):
+            with self.subTest(renamed=renamed):
+                if renamed == "config/reference/revues.md":
+                    self.stage(RULE, "# Règle\n\n- voir la section « Tableau » de `config/reference/revues.md`.\n")
+                    self.stage(renamed, "# Revues\n\n## Tableau\n")
+                    check.staged()
+                    git(self.repo, "commit", "-q", "--no-verify", "-m", "renvoi vers une référence")
+                    self.stage(renamed, "# Revues\n\n## Tableau des efforts\n")
+                else:
+                    self.stage(renamed, "# Agents\n\n## Revues par Opus\n")
+                refused = self.refused()
+                self.assertIn(f"{RULE}:3", refused)
+                git(self.repo, "checkout", "HEAD", "--", renamed)
+
     def test_une_regle_sans_terme_retire_passe(self):
         self.stage(RULE, "# Règle\n\n- en mode auto, le mod lance lui-même les groupes suivants, vague close.\n")
         check.staged()
@@ -101,6 +133,16 @@ class StagedRulesTest(StagedRepo):
                 self.stage(path, admitted({"flow-board/hooks/model.ts": 2}))
                 self.assertIn(path, self.refused())
                 git(self.repo, "checkout", "HEAD", "--", path)
+
+    def test_la_liste_des_exports_admis_se_releve_une_fois_puis_n_augmente_plus(self):
+        self.stage(HOOK, CODE + "export const mort = 1\n")
+        self.stage(EXPORTS, admitted({"flow-board/hooks/model.ts": 1}))
+        check.staged()
+        git(self.repo, "commit", "-q", "--no-verify", "-m", "relevé des exports morts")
+        self.stage(EXPORTS, admitted({"flow-board/hooks/model.ts": 2}))
+        self.assertIn(EXPORTS, self.refused())
+        self.stage(EXPORTS, admitted({}))
+        self.assertIn("« mort »", self.refused())
 
     def test_une_cle_nouvelle_dans_une_liste_d_admis_est_une_augmentation(self):
         self.stage(REFS, admitted({"flow-board/hooks/model.ts": 1, "flow-board/hooks/view.tsx": 1}))
@@ -118,10 +160,12 @@ class StagedRulesTest(StagedRepo):
         self.stage(INTERPOLATIONS, admitted({}))
         self.assertIn("brute", self.refused())
 
-    def test_une_regle_qui_n_est_pas_celle_d_un_plugin_ne_copie_pas_l_index(self):
+    def test_une_regle_qui_n_est_pas_celle_d_un_plugin_ne_relit_que_les_renvois_de_section(self):
+        # Ni les termes retirés d'un plugin ni ses autres contrôles : seuls les renvois de section des plugins.
         self.stage("config/rules/general.md", "# Règles générales\n\nla vague suivante\n")
-        check.staged()
-        self.assertEqual(self.exported, 0)
+        with mock.patch.object(check, "check_code", side_effect=AssertionError("contrôle du code lancé")):
+            check.staged()
+        self.assertEqual(self.exported, 1)
 
     def test_une_cle_d_admis_hors_des_plugins_ne_designe_aucun_plugin(self):
         # Une clé baissée qui ne nomme pas un plugin (« .. », un nom inconnu) : rien à contrôler hors de plugins/.
@@ -132,6 +176,23 @@ class StagedRulesTest(StagedRepo):
         git(self.repo, "commit", "-q", "--no-verify", "-m", "liste avec une clé hors des plugins")
         self.stage(REFS, admitted({"flow-board/hooks/model.ts": 1, "../x.ts": 1}))
         self.assertEqual(check.admitted_changes(REFS)[1], set())
+
+    def test_un_terme_retire_ajoute_que_la_regle_porte_encore_est_refuse(self):
+        self.stage("plugins/flow-board/termes-retires.txt", "# termes retirés\n0.1.0\tvague suivante\n0.2.0\tlui-même\n")
+        refused = self.refused()
+        self.assertIn(f"{RULE}:3", refused)
+        self.assertIn("lui-même", refused)
+
+    def test_la_liste_des_termes_retires_seule_ne_lance_que_les_controles_statiques(self):
+        self.stage("plugins/flow-board/termes-retires.txt", "# termes retirés\n0.1.0\tvague suivante\n0.2.0\tvague close\n")
+        self.stage("plugins/flow-board/README.md", "# flow-board\n")
+        heavy = AssertionError("contrôle du code lancé pour une liste de termes retirés")
+        with mock.patch.object(check, "check_code", side_effect=heavy), \
+                mock.patch.object(check, "validate", side_effect=heavy), \
+                mock.patch.object(check, "typecheck", side_effect=heavy), \
+                mock.patch.object(check, "plugin_tests", side_effect=heavy):
+            check.staged()
+        self.assertEqual(self.exported, 1)
 
     def test_un_commit_de_documentation_sans_ces_fichiers_reste_sans_controle(self):
         self.stage("README.md", "# Dépôt\n\nla vague suivante, Q4, Q5\n")
@@ -183,12 +244,19 @@ class StagedCodeTest(StagedRepo):
         self.assertIn("flow-board/hooks/model.ts:3", refused)
         self.assertIn("U+2028", refused)
 
+    def test_un_export_que_personne_ne_nomme_est_refuse_avec_le_fichier_la_ligne_et_le_nom(self):
+        self.stage(HOOK, CODE + "export function oublie() {}\n")
+        refused = self.refused()
+        self.assertIn("flow-board/hooks/model.ts", refused)
+        self.assertIn("3 « oublie »", refused)
+
     def test_un_bloc_de_doc_detache_est_refuse(self):
         self.stage(HOOK, CODE + "/** premier */\n/** second */\nexport const b = 2\n")
         self.assertIn("flow-board/hooks/model.ts:4", self.refused())
 
     def test_un_code_propre_passe(self):
         self.stage(HOOK, CODE + "export const b = 2\n")
+        self.stage(USES, "import { titre, b } from './model'\n")
         check.staged()
         self.assertEqual(self.exported, 1)
 

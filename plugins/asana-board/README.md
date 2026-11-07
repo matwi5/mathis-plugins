@@ -6,7 +6,7 @@ Les tâches Asana du projet dans Claude Code, en **panneau** et en **bandeau** a
 - **Il permet d'agir.** Créer, cocher, changer le statut, assigner, commenter, modifier, abandonner ou supprimer une tâche, sans quitter Claude Code.
 - **Il suit Claude.** Quand Claude écrit dans Asana pendant la discussion, le panneau se relit, et la ligne de l'appel dit l'écriture avec le nom des tâches (« Asana · coche « Corriger le bandeau » ») au lieu des GID et du JSON.
 
-Version actuelle : **0.11.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.12.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -138,7 +138,7 @@ Depuis la 0.6.0, quand Claude appelle un outil d'écriture du connecteur Asana (
 | `/asana hide` | Masque le bandeau ; une ligne d'état prend le relais. |
 | `/asana show` | Réaffiche le bandeau et ouvre le panneau. |
 
-**Skill `suivi-asana`** (`/asana-board:suivi-asana`, depuis la 0.3.0) : la règle d'écriture des tâches (nom `[code] …`, ligne « Statut : », assignation, un seul niveau de sous-tâches) que le panneau suppose. Claude le déclenche de lui-même dès que du travail est fait, découvert ou modifié dans un projet suivi, mais n'écrit dans Asana qu'après l'accord de Mathis sur la liste des changements (depuis la 0.4.0).
+**Skill `suivi-asana`** (`/asana-board:suivi-asana`, depuis la 0.3.0) : la règle d'écriture des tâches (nom `[code] …`, ligne « Statut : », assignation, un seul niveau de sous-tâches) que le panneau suppose. Claude le déclenche de lui-même dès que du travail est fait, découvert ou modifié dans un projet suivi, mais n'écrit dans Asana qu'après l'accord de Mathis sur la liste des changements (depuis la 0.4.0). Depuis la 0.12.0, le détail de la règle commune `config/rules/asana-board.md` (quelle tâche a un ticket, l'accord avant écriture et ses exceptions, la tenue à jour) vit dans `skills/suivi-asana/references/regles.md`, que le skill lit à chaque exécution : la règle chargée dans chaque session n'en garde que le résumé.
 
 **Dès le premier message : `/asana-board:asana`.** `/asana` est déclarée par le mod au démarrage de la session ; sur le desktop, ce démarrage n'a lieu qu'à l'envoi du premier message. `/asana-board:asana`, déclarée par `commands/asana.md`, est disponible tout de suite et accepte les mêmes arguments. Le mod y répond lui-même, sans passer par le modèle. Une fois le mod démarré, `/asana` sort du menu, mais reste utilisable tapée en entier.
 

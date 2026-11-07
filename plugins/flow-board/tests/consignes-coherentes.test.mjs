@@ -24,6 +24,10 @@ const SURFACES = {
   'reference/procedure-groupe.md': read('reference/procedure-groupe.md'),
   'reference/revue-securite.md': read('reference/revue-securite.md'),
   'reference/consignes-revue.md': read('reference/consignes-revue.md'),
+  'reference/prompt-relecteur.md': read('reference/prompt-relecteur.md'),
+  'reference/relecture-fond-forme.md': read('reference/relecture-fond-forme.md'),
+  'agents/researcher.md': repoFile('plugins/agents/agents/researcher.md'),
+  'agents/explorer.md': repoFile('plugins/agents/agents/explorer.md'),
   'README.md': read('README.md'),
   'hooks/register.tsx': read('hooks/register.tsx'),
   'hooks/catalog.ts': read('hooks/catalog.ts'),
@@ -35,9 +39,14 @@ const SURFACES = {
   'to-spec/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-spec/SKILL.md'),
   'to-tickets/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-tickets/SKILL.md'),
   'docs/evenements-moteur.md': repoFile('docs/evenements-moteur.md'),
+  'asana-board/suivi-asana/SKILL.md': repoFile('plugins/asana-board/skills/suivi-asana/SKILL.md'),
 }
 
-/** Chaque consigne : ses mots-clés, et les surfaces qui la recopient (la procédure ne reçoit de la règle d'effort que le worker autonome). */
+/**
+ * Chaque consigne : ses mots-clés, les surfaces qui la recopient, et ses anciennes formulations (`old`), refusées
+ * partout. Ce tableau est la carte des
+ * endroits qui recopient une règle : une règle changée se reporte sur chacune de ses surfaces.
+ */
 const CONSIGNES = [
   {
     // Un ticket sensible ou très sensible n'a que l'axe Spec, en high : l'axe Standards refait sa passe « bogues ».
@@ -66,6 +75,9 @@ const CONSIGNES = [
       "l'accès comprend l'authentification et les règles d'accès d'une application, et le réseau vaut dans les deux sens",
     ],
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'reference/revue-securite.md', 'README.md'],
+    // La liste d'avant la limite du compte (02/11/2026), qui faisait entrer une valeur relue sous ~/.claude et la suppression ;
+    // une copie restée dans le README passait le test à mots-clés, qui les trouvait ailleurs dans le même fichier.
+    old: ["entrées de l'utilisateur jusqu'à une requête", 'user input reaching a query', 'uploads, dependencies', 'accès réseau ou fichiers, envois de fichiers', "commande ou chemin construit à partir d'une entrée", 'a command or a path built from an input', 'données personnelles ou contenu de messages', 'personal data or message content stored on disk', "n'est **pas** de confiance"],
   },
   {
     name: 'la liste qui déclenche la revue de sécurité, en anglais',
@@ -102,8 +114,67 @@ const CONSIGNES = [
   {
     name: "l'effort d'une session de groupe",
     keywords: ['medium par défaut', 'xhigh (Recommandé) / high', 'tâche de jugement', "tâche d'exécution", 'worker autonome'],
-    // Le brief d'un worker la tient de hooks/effort.ts, la règle d'effort des workers en un seul endroit.
-    surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/effort.ts'],
+    // Le brief d'un worker la tient de hooks/effort.ts ; la règle des lots la renvoie à la section 11 de la procédure,
+    // qui s'adresse au manager : elle n'est plus chargée dans chaque session.
+    surfaces: ['reference/procedure-groupe.md', 'README.md', 'hooks/effort.ts'],
+  },
+  {
+    // Le mod calcule l'effort de chaque groupe et l'écrit dans la demande ; Claude ne juge que le choix de conception restant.
+    name: "l'effort calculé au lancement",
+    keywords: ['effort calculé', 'choix de conception', "s'écarte du calcul", 'section 11'],
+    surfaces: ['reference/procedure-groupe.md', 'README.md', 'hooks/effort.ts'],
+  },
+  {
+    // Option fusion : un groupe sans logique part en worker Sonnet high ; ses revues restent sur Opus.
+    name: "l'option fusion",
+    keywords: ['option fusion', 'Sonnet high', '--model sonnet --effort high', 'Zone sensible : non', 'Logique : non'],
+    surfaces: ['reference/procedure-groupe.md', 'README.md'],
+  },
+  { name: "l'option fusion, dans la demande de lancement", keywords: ['Sonnet high, sans logique', 'Un groupe annoncé « Sonnet high » part sur Sonnet'], surfaces: ['hooks/effort.ts'] },
+  {
+    // Un worker sur Sonnet garde le moment (c) de l'advisor : l'advisor (Opus) relit un modèle moins fort que lui.
+    name: "le moment (c) de l'advisor pour un worker sur Sonnet",
+    keywords: ['worker sur Sonnet', 'moment (c)'],
+    surfaces: ['config/rules/general.md', 'reference/procedure-groupe.md', 'README.md'],
+  },
+  {
+    // Le mod impose l'effort du COO (medium) et du manager selon sa phase (medium pendant le suivi des groupes).
+    name: "l'effort du COO et du manager selon la phase",
+    keywords: ['siège du COO', 'fin du découpage', 'xhigh et max'],
+    surfaces: ['reference/procedure-groupe.md', 'README.md', 'hooks/effort.ts'],
+    old: ['COO tourne en high', 'Un manager tourne en high', 'un manager tournent en high', "l'effort revient à high après le lot"],
+  },
+  {
+    // « Plusieurs modules » : du code, pas de la documentation ; la même définition pour Claude et pour le mod (codeModuleOf).
+    // Le mod calcule l'effort au lancement : la demande ne donne plus la définition, la section 11 de la procédure la porte.
+    name: 'plusieurs modules de code',
+    keywords: ['plusieurs modules de code', 'paquet sous', 'la racine comptant pour un', 'ne comptent pas'],
+    surfaces: ['reference/procedure-groupe.md', 'README.md'],
+    old: ['touche plusieurs modules à la fois', 'touchent plusieurs modules)', "s'il touche plusieurs modules,"],
+  },
+  { name: "l'effort du COO, dans son skill", keywords: ['Le COO tourne en medium', 'xhigh et max'], surfaces: ['skills/coo/SKILL.md', 'README.md'] },
+  {
+    // La règle des lots ne garde de l'effort des workers et du retour d'un worker que le renvoi à la section 11.
+    name: 'le renvoi de la règle des lots à la section 11 de la procédure',
+    keywords: ["section 11 de la procédure d'un worker de groupe", 'reference/procedure-groupe.md'],
+    surfaces: ['config/rules/flow-board.md'],
+  },
+  {
+    // Seuls les constats antérieurs de gravité moyenne ou plus, ou qui violent un invariant, font un groupe « durcissement ».
+    name: 'le filtre du groupe « durcissement »',
+    keywords: ['Seuls les constats de gravité moyenne ou plus, ou qui violent un invariant, sont proposés comme groupe « durcissement » ; les autres vont au journal, sous « À reprendre ».'],
+    surfaces: ['config/rules/flow-board.md'],
+  },
+  { name: 'le filtre du groupe « durcissement », ailleurs', keywords: ['gravité moyenne ou plus, ou qui violent un invariant', 'sous « À reprendre »'], surfaces: ['README.md', 'skills/compte-rendu/SKILL.md'] },
+  // Le filtre a besoin d'une gravité : la consigne des relecteurs la fait donner à chaque constat antérieur.
+  { name: 'la gravité d’un constat antérieur, dans la consigne des relecteurs', keywords: ['avec sa gravité : haute, moyenne ou basse', 'ceux de gravité moyenne ou plus me sont proposés'], surfaces: ['reference/procedure-groupe.md', 'reference/consignes-revue.md'] },
+  { name: 'la gravité d’un constat antérieur, en anglais', keywords: ['with its severity: high, medium or low', 'those of medium severity or more go to the user'], surfaces: ['hooks/catalog.ts'] },
+  { name: 'le filtre du groupe « durcissement », en anglais', keywords: ['propose those of medium severity or more, or that break an invariant', 'the others go to the journal, under « À reprendre »'], surfaces: ['hooks/register.tsx'] },
+  {
+    // La règle asana-board chargée partout n'en garde que le résumé : le détail est dans une référence du skill.
+    name: 'le renvoi de la règle asana-board à sa référence',
+    keywords: ['references/regles.md'],
+    surfaces: ['config/rules/asana-board.md', 'asana-board/suivi-asana/SKILL.md'],
   },
   { name: 'le worker autonome', keywords: ['worker autonome', 'Worker autonome'], surfaces: ['reference/procedure-groupe.md'] },
   {
@@ -130,6 +201,15 @@ const CONSIGNES = [
     keywords: ['une seule passe high', 'depuis son instantané', 'un nouveau, posé après les correctifs'],
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'README.md'],
   },
+  {
+    // Un changement sans effet sur le comportement n'a ni passe « bogues » ni nouvelle passe : la dispense est
+    // définie dans la règle des revues, et la procédure la cite par son nom (aux deux passes qu'elle saute).
+    name: 'la dispense d’un changement sans effet sur le comportement',
+    keywords: ['« Changement sans effet sur le comportement »', 'sans effet sur le comportement'],
+    surfaces: ['config/reference/revues.md', 'reference/procedure-groupe.md'],
+  },
+  { name: 'la dispense d’un changement sans effet, ailleurs', keywords: ['sans effet sur le comportement'], surfaces: ['config/rules/flow-board.md', 'README.md'] },
+  { name: 'la dispense d’un changement sans effet, en anglais', keywords: ['no effect on behaviour', '« Changement sans effet sur le comportement »'], surfaces: ['hooks/catalog.ts'] },
   {
     name: 'la plage de la passe unique, dans la procédure',
     keywords: ['une seule passe high', 'depuis son instantané', '<hash d\'un nouvel instantané>'],
@@ -167,6 +247,42 @@ const CONSIGNES = [
     keywords: ['invariant déjà validé', 'la plus prudente', 'ne perd rien, n', 'ne supprime rien sans retour', '« Décidé sans toi »'],
     surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/view.tsx'],
   },
+  {
+    // --clean supprime la référence d'un instantané dès que chaque fichier figé est dans un commit de la branche,
+    // fichier par fichier, fusions exclues (rétro « Coordinateur de parcours ») : la procédure et sa copie anglaise.
+    name: 'la référence d’instantané supprimée fichier par fichier',
+    keywords: ['fusions exclues, pas forcément le même pour tous', 'juste avant le `git add` des correctifs'],
+    surfaces: ['reference/procedure-groupe.md'],
+    old: ["si un commit de la branche depuis le parent de l'instantané porte chaque fichier", 'only once a commit of the branch carries every file of the snapshot', '`--clean` compare le commit à ce dernier instantané'],
+  },
+  { name: 'la référence d’instantané supprimée fichier par fichier, au README', keywords: ['fichier par fichier, fusions exclues', 'juste avant le `git add` des correctifs'], surfaces: ['README.md'] },
+  { name: 'la référence d’instantané supprimée fichier par fichier, en anglais', keywords: ['merges excluded, not necessarily the same one for all', 'right before the git add of the fixes'], surfaces: ['hooks/catalog.ts'] },
+  {
+    // Sans --max-findings, /code-review s'arrête à 10 constats en high et 15 en xhigh, quel que soit le diff : la passe
+    // « bogues » passe --max-findings all (rétro « Coordinateur de parcours »). La règle des revues, la procédure (avec
+    // sa variante sans git), la consigne du mod et le README.
+    name: 'le plafond de constats de la passe « bogues »',
+    keywords: ['--max-findings all', '10 constats en high et 15 en xhigh'],
+    surfaces: ['config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md'],
+  },
+  { name: 'le plafond de constats de la passe « bogues », en anglais', keywords: ['<level> --max-findings all', '10 findings in high and 15 in xhigh'], surfaces: ['hooks/catalog.ts'] },
+  {
+    // Un groupe dont tous les tickets sont sensibles compte 3 à 4 tickets, et un ticket sensible lourd et indépendant
+    // passe en premier : la règle des lots, le README, et la consigne de découpage en anglais.
+    name: 'la taille d’un groupe de tickets sensibles',
+    keywords: ['3 à 4', 'lourd et indépendant'],
+    surfaces: ['config/rules/flow-board.md', 'README.md'],
+  },
+  { name: 'la taille d’un groupe de tickets sensibles, en anglais', keywords: ['holds 3 to 4 tickets', 'heavy and independent'], surfaces: ['hooks/register.tsx'], old: ['goes first only when it blocks the next one'] },
+  {
+    // En auto, une violation de l'invariant que la passe d'après les correctifs trouve encore, corrigée de la
+    // façon la plus prudente, part en une ligne d'information, pas en question : la règle « Mode auto », le README.
+    name: 'la violation corrigée au plus prudent, en mode auto',
+    keywords: ["Une violation de l'invariant que trouve encore la passe high d'après les correctifs de la passe « bogues », corrigée de la façon la plus prudente, s'écrit en test et part en une ligne d'information, déclarée comme une reco prise « Zone sensible : … », pas en question"],
+    surfaces: ['config/rules/flow-board.md'],
+  },
+  { name: 'la violation corrigée au plus prudent, en mode auto, ailleurs', keywords: ["corrigée de la façon la plus prudente", "une ligne d'information"], surfaces: ['README.md', 'reference/procedure-groupe.md'] },
+  { name: 'la violation corrigée au plus prudent, en mode auto, en anglais', keywords: ['fixed in the most prudent way, is written as a test and goes out as one line of information'], surfaces: ['hooks/register.tsx'] },
   {
     // Le choix sensible tranché en auto se reconnaît à son texte, et le compte rendu le range à part.
     name: 'la marque d’un choix sensible tranché en auto',
@@ -237,6 +353,14 @@ const CONSIGNES = [
     name: 'la logique d’un ticket qui modifie une règle, une référence ou un skill',
     keywords: ['ticket qui modifie les règles communes (`config/rules`), un fichier de référence ou un skill', 'ces textes guident ce que fait Claude'],
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md'],
+    old: ['une règle qui ne fait rien lancer'],
+  },
+  {
+    // Au retour d'un groupe, le manager vérifie que la revue du groupe a tourné, sauf là où elle n'est pas due :
+    // la consigne de délégation (register.tsx) et le README.
+    name: "les revues vérifiées au retour d'un groupe",
+    keywords: ['que la revue du groupe a tourné', "pas de revue du groupe pour un groupe d'un seul ticket", 'ni revue du groupe ni revue de sécurité sans logique ni zone sensible', '"returned"', '"reviewed"'],
+    surfaces: ['README.md', 'hooks/register.tsx'],
   },
   { name: 'le worker autonome en mode auto, au glossaire', keywords: ['quel que soit son effort', 'mode auto'], surfaces: ['GLOSSARY.md'] },
   {
@@ -282,7 +406,54 @@ const CONSIGNES = [
     keywords: ['## Ce que le moteur refuse', 'a text beginning with / would run a command as the user', 'UiNotifyResult', 'écrits par Claude Code 2.1.310', 'essai du 30/10/2026', 'With no terminal the hooks alone run; unbound or exiting, none'],
     surfaces: ['docs/evenements-moteur.md'],
   },
+  {
+    // Les trois moments de l'advisor valent pour une discussion ; un spécialiste ne le consulte jamais, puisque
+    // la discussion qui le lance relit son rapport (21 % de la dépense, surtout des relecteurs avant leur rapport).
+    name: "l'advisor réservé aux discussions, dans la règle commune",
+    keywords: ['dans une discussion (COO, manager, worker, discussion ordinaire)', "Un spécialiste ne consulte jamais l'advisor"],
+    surfaces: ['config/rules/general.md'],
+  },
+  {
+    // Chaque relecteur porte la ligne dans ce qu'il lit d'abord : le bloc de ses consignes (fork de /code-review
+    // compris), son prompt, sa méthode, et la consigne du mod qui le lance (catalog.ts, importée par register.tsx).
+    name: "la ligne « Ne consulte pas l'advisor » des relecteurs",
+    keywords: ["Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport."],
+    surfaces: ['reference/consignes-revue.md', 'reference/procedure-groupe.md', 'reference/prompt-relecteur.md', 'reference/revue-securite.md', 'reference/relecture-fond-forme.md', 'hooks/catalog.ts'],
+  },
+  { name: "la ligne de l'advisor, dans les consignes du mod qui lancent un relecteur", keywords: ['NO_ADVISOR_LINE'], surfaces: ['hooks/register.tsx'] },
+  {
+    // Le relecteur de sécurité cherche et vérifie lui-même : une revue coûtait 2 à 5 agents, chacun avec environ
+    // 70k de contexte de départ, et 82 % des revues ne trouvaient rien. Les sous-tâches ne reviennent nulle part.
+    name: 'la revue de sécurité en un seul agent',
+    keywords: ['cherche et vérifie lui-même, sans lancer d\'agent'],
+    surfaces: ['reference/revue-securite.md', 'reference/procedure-groupe.md', 'config/reference/revues.md', 'hooks/register.tsx', 'README.md'],
+    old: ['sous-tâche de vérification', 'sous-tâche de recherche', 'verification subtask', 'à ses sous-tâches', 'recherche et vérifications comprises', 'pour sa recherche et ses vérifications', 'for its search and its verifications'],
+  },
+  { name: 'la revue de sécurité en un seul agent, en anglais', keywords: ['it searches and verifies by itself, launching no agent'], surfaces: ['hooks/register.tsx'] },
+  {
+    // La revue de sécurité désactivée pour un projet (réglage du tableau de bord) : l'avis se juge et s'envoie quand
+    // même, sans relecteur, et le compte rendu le note ; chaque règle qui dit quand la conseiller le rappelle.
+    name: 'la revue de sécurité désactivée pour le projet',
+    keywords: ["sauf si la revue de sécurité est désactivée pour le projet : l'avis se donne quand même et se note au compte rendu"],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md'],
+  },
+  { name: 'la revue de sécurité désactivée, dans la méthode', keywords: ["Sauf si la revue de sécurité est désactivée pour le projet : l'avis se donne quand même et se note au compte rendu"], surfaces: ['reference/revue-securite.md'] },
+  { name: 'la revue de sécurité désactivée, dans le critère anglais', keywords: ['unless the security review is turned off for the project: the advice is still given and noted in the report'], surfaces: ['hooks/catalog.ts'] },
+  { name: 'la revue de sécurité désactivée, dans les consignes d’avis', keywords: ['launch no security reviewer', 'SECURITY_OFF_NOTE'], surfaces: ['hooks/register.tsx'] },
+  { name: 'la ligne du compte rendu de la revue désactivée', keywords: ['revue de sécurité désactivée pour ce projet ; ', 'touchait :'], surfaces: ['hooks/model.ts', 'hooks/catalog.ts', 'skills/compte-rendu/SKILL.md'] },
+  { name: 'la ligne du compte rendu de la revue désactivée, pour un groupe et pour un lot', keywords: ['le groupe touchait :', 'le lot touchait'], surfaces: ['skills/compte-rendu/SKILL.md'] },
+  {
+    // Les agents de plugin refusent l'outil dans leur en-tête, et leur consigne le dit.
+    name: "l'advisor refusé aux agents de plugin",
+    keywords: ['disallowedTools: advisor', "N'appelle jamais l'outil `advisor`"],
+    surfaces: ['agents/researcher.md', 'agents/explorer.md'],
+  },
 ]
+
+test("la ligne de l'advisor est dans les deux variantes du prompt du relecteur de ticket", () => {
+  const line = "Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport."
+  assert.equal(SURFACES['reference/prompt-relecteur.md'].split(line).length - 1, 2)
+})
 
 for (const consigne of CONSIGNES) {
   test(`${consigne.name} : chaque surface qui la recopie en porte les mots-clés`, () => {
@@ -294,6 +465,13 @@ for (const consigne of CONSIGNES) {
     }
     assert.deepEqual(missing, [], `mots-clés absents de ${consigne.name}`)
   })
+  // Une copie restée à l'ancienne formulation dans un fichier qui porte aussi la nouvelle passait le test à
+  // mots-clés : les anciennes formulations d'une consigne sont refusées dans toutes les surfaces.
+  if (consigne.old)
+    test(`${consigne.name} : plus aucune surface ne garde son ancienne formulation`, () => {
+      const stale = Object.entries(SURFACES).flatMap(([name, text]) => (text === null ? [] : consigne.old.filter(k => text.includes(k)).map(k => `${name} : « ${k} »`)))
+      assert.deepEqual(stale, [])
+    })
 }
 
 // Hors de la règle « Mode auto » des lots, les règles chargées dans toutes les sessions ne parlent du mode auto
@@ -315,19 +493,4 @@ test('les règles communes ne recopient pas les exceptions du mode auto, hors de
     }
   }
   assert.deepEqual(copied, [], 'exceptions du mode auto recopiées hors de la règle « Mode auto »')
-})
-
-test('aucune surface ne dit qu’une règle qui ne fait rien lancer n’a pas de logique', () => {
-  const stale = ['config/rules/flow-board.md', 'config/reference/revues.md', 'README.md'].filter(
-    surface => SURFACES[surface] !== null && SURFACES[surface].includes('une règle qui ne fait rien lancer'),
-  )
-  assert.deepEqual(stale, [])
-})
-
-test('la liste qui déclenche la revue de sécurité : plus aucune surface ne garde l’ancienne liste', () => {
-  // Une copie restée dans le README passait le test à mots-clés, qui les trouvait ailleurs dans le même fichier.
-  // Puis la liste d'avant la limite du compte (02/11/2026), qui faisait entrer une valeur relue sous ~/.claude et la suppression.
-  const OLD = ["entrées de l'utilisateur jusqu'à une requête", 'user input reaching a query', 'uploads, dependencies', 'accès réseau ou fichiers, envois de fichiers', "commande ou chemin construit à partir d'une entrée", 'a command or a path built from an input', 'données personnelles ou contenu de messages', 'personal data or message content stored on disk', "n'est **pas** de confiance"]
-  const stale = Object.entries(SURFACES).flatMap(([name, text]) => (text === null ? [] : OLD.filter(k => text.includes(k)).map(k => `${name} : « ${k} »`)))
-  assert.deepEqual(stale, [])
 })

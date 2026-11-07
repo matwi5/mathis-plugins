@@ -6,9 +6,9 @@
     scripts/check.sh sonde                 la sonde des événements du moteur (scripts/sonde/) : export, API, tsc, tests
     scripts/check.sh <plugin> --no-desktop sans le Claude Code de l'app desktop (poste sans l'app)
     scripts/check.sh --staged              le hook pre-commit : les plugins dont un fichier est indexé
-    scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README, sans rien contrôler
+    scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README et retire les blocs /** */ détachés, sans rien contrôler
     scripts/check.sh --test <fichier>... <plugin>  ces seuls fichiers de test (nom nu ou chemin), terminal seulement
-    scripts/check.sh --quick <plugin>...   pré-contrôle rapide : tsc et les fichiers de test touchés face à HEAD
+    scripts/check.sh --quick <plugin>...   pré-contrôle rapide : contrôles statiques, tsc, tests Node et fichiers de test touchés face à HEAD
     scripts/check.sh --tsc <plugin>...     le seul `tsc` des plugins (types du moteur copiés dans un worktree)
 
 Les contrôles d'un plugin, chacun seulement s'il s'applique :
@@ -18,20 +18,27 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    les contrôles suivants, et la commande échoue à la fin ;
    les termes retirés du plugin (`termes-retires.txt`, une version et un terme par ligne) sont absents
    de son README, de ses consignes (`hooks/`, `skills/`, `commands/`, `reference/`, hors fichiers de
-   test), de sa règle (`config/rules/<plugin>.md`) et des entrées de son CHANGELOG plus récentes que la
-   version qui les a retirés, au-delà des sites gardés exprès, admis fichier par fichier
-   (`scripts/termes-retires-admis.json`) ;
+   test), de ses types (`types/*.d.ts`), de sa règle (`config/rules/<plugin>.md`) et des entrées de son
+   CHANGELOG plus récentes que la version qui les a retirés, au-delà des sites gardés exprès, admis
+   fichier par fichier (`scripts/termes-retires-admis.json`) ;
+   un renvoi « section « X » de `<fichier>.md` » de ses fichiers (hors tests et CHANGELOG) et de sa
+   règle vers les règles et les références communes (`config/rules/`, `config/reference/`, un nom nu
+   lu à côté du fichier qui renvoie ou parmi elles ; depuis une règle commune, un nom nu disparu est
+   introuvable) vise un fichier qui existe et un titre X qu'il a ;
    ses fichiers (tests compris) passent les termes de l'export public (`scripts/export_public.py` :
    adresses mail hors de la liste permise, dossiers personnels, termes de la liste privée), contrôle
    sans objet sans ce script ;
    le code (hors `tests/`) n'étale pas une liste dans `Math.min` ou `Math.max` (au-delà de 100 000
    éléments, l'étalement lève une erreur) et n'a pas de bloc `/** */` suivi directement d'un autre
-   (le premier ne documente plus rien) ; aucune source `.ts`, `.tsx` ou `.mjs` (tests compris) n'a de
+   (le premier ne documente plus rien ; `--fix` le retire et garde le second) ; aucune source `.ts`, `.tsx` ou `.mjs` (tests compris) n'a de
    caractère invisible ou séparateur brut (U+0085, U+2028, U+2029, U+200B à U+200F, U+202A à U+202E,
    U+2060 à U+2069, U+FEFF) : seulement son échappement ; les hooks de flow-board n'insèrent pas
    dans un texte une valeur relue du parcours brute (`${run.title}`, `${run.id}`, `${g.id}`,
    `${…why}`) hors d'une fonction de neutralisation, au-delà des sites admis fichier par fichier
-   (`scripts/interpolations-admises.json`) ;
+   (`scripts/interpolations-admises.json`) ; un module de `hooks/` n'exporte pas de valeur
+   (`function`, `const`, `let`, `class`, `enum`, pas un type) qu'aucun autre fichier de code du
+   plugin ne nomme, hors l'entrée `register` de `hooks/register.tsx`, au-delà des exports admis
+   fichier par fichier (`scripts/exports-admis.json`) ;
    la forme du CHANGELOG : chaque entrée (`## <version> — <date>`) précédée d'une ligne `---`, versions
    uniques, de la plus récente à la plus ancienne, la première égale à la version de `plugin.json`
    (un séparateur perdu au déplacement d'une entrée n'avait été vu qu'au compte rendu) ;
@@ -58,13 +65,17 @@ fichier de décisions indexé (`travail/<sujet>/DECISIONS.md`), même pour un co
 « ## Série N » ajouté (face à `HEAD`) avec un numéro déjà pris dans le fichier est refusé, les doublons déjà commités
 passent ; puis chaque ticket indexé (`travail/<sujet>/issues/*.md`) qui dit « Zone sensible : oui » porte une
 ligne « Recherche » avec une commande et son résultat (sur la ligne, ou dans le bloc de code qui la suit),
-sauf un ticket que `HEAD` portait déjà sensible sans elle ;
+sauf un ticket que `HEAD` portait déjà sensible sans elle, et n'a aucune case mal formée hors bloc de code
+(seules `- [ ] ` et `- [x] ` sont des cases : `- [x ]`, `- [ x]`, `- []` sont refusées) ;
 puis, même pour un commit de documentation seule, une liste d'admis indexée (`scripts/renvois-admis.json`,
-`scripts/interpolations-admises.json`, `scripts/termes-retires-admis.json`) qui augmente un compte face à `HEAD` (une clé nouvelle comprise) est
+`scripts/interpolations-admises.json`, `scripts/termes-retires-admis.json`, `scripts/exports-admis.json`) qui augmente un compte face à `HEAD` (une clé nouvelle comprise) est
 refusée, et chaque plugin dont la règle (`config/rules/<plugin>.md`) est indexée, ou dont une liste d'admis
 indexée change un compte, passe sur la copie de l'index les contrôles statiques qui les lisent (termes
-retirés, renvois admis, valeurs relues brutes ; ni `tsc` ni tests) : un commit de la règle seule passait
-comme de la documentation ;
+retirés, renvois admis, valeurs relues brutes, exports morts, renvois de section ; ni `tsc` ni tests) : un commit de la règle seule passait
+comme de la documentation ; une règle ou une référence commune indexée (`config/rules/`, `config/reference/`)
+fait relire les renvois de section de chaque plugin, son titre ayant pu changer sous eux ; une liste de termes retirés indexée (`plugins/<plugin>/termes-retires.txt`) fait
+passer son plugin par ces mêmes contrôles statiques, et rien de plus (ni `validate`, ni `tsc`, ni tests)
+quand le commit n'a pas d'autre fichier hors documentation ;
 puis la forme du CHANGELOG, la version et
 la liste « État » de chaque plugin dont le CHANGELOG ou le `plugin.json` est indexé, même
 pour un commit de documentation seule ; puis rien de
@@ -135,6 +146,13 @@ RUN_VALUES = {("run", "title"), ("run", "id"), ("g", "id")}
 NEUTRAL_CALL = re.compile(r"(?<![\w$.])(?:shown\w*|neutral\w*|asciiJson)\(\s*$")
 CONDITION_AFTER = re.compile(r"\s*(?:\?(?![.?])|===|!==|==|!=)")
 ADMITTED_INTERPOLATIONS = Path(__file__).resolve().parent / "interpolations-admises.json"
+# Une valeur exportée par un module de `hooks/` (pas un type) : son nom, en tête de ligne.
+EXPORTED_VALUE = re.compile(r"^export\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?"
+                            r"(?:function\s*\*?|const\s+enum|const|let|var|abstract\s+class|class|enum)\s+([A-Za-z_$][\w$]*)")
+EXPORT_READERS = {".ts", ".tsx", ".js", ".mjs", ".cjs"}
+# L'entrée du mod, que le moteur charge sans qu'aucun fichier l'importe.
+MOD_ENTRY = ("hooks/register.tsx", "register")
+ADMITTED_EXPORTS = Path(__file__).resolve().parent / "exports-admis.json"
 # Contrôles 1 et 2 pas encore tenus par un plugin : signalés sans échec, jusqu'à leur reprise.
 PENDING = {}
 # Les défauts signalés sans couper les contrôles (fichiers absents de l'arbre « Architecture ») :
@@ -162,6 +180,14 @@ RETIRED_FILE = "termes-retires.txt"
 ADMITTED_RETIRED = Path(__file__).resolve().parent / "termes-retires-admis.json"
 # Les dossiers des consignes d'un plugin (le texte que Claude lit), où un terme retiré ne revient pas.
 INSTRUCTION_DIRS = ("hooks", "skills", "commands", "reference")
+# Un renvoi à une section d'un fichier (« section « X » de `<fichier>.md` », ou par un lien markdown
+# dont le texte est ce chemin) : le titre X doit exister dans les règles communes et les références
+# (`config/rules/`, `config/reference/`) ; un titre renommé laissait des renvois vers rien.
+SECTION_REF = re.compile(r"section « ([^«»]+) » de \[?`([^`\s]+\.md)`")
+# Le chemin installé d'une règle ou d'une référence commune (`~/.claude/plugins/marketplaces/<nom>/config/…`) :
+# il vise le même fichier que `config/…` du dépôt.
+INSTALLED_CONFIG = re.compile(r".*/(config/(?:rules|reference)/[^/]+\.md)")
+SECTION_HOMES = ("config/rules", "config/reference")
 # La liste privée des termes que la version publique refuse (absente de celle-ci, comme le script
 # d'export : le contrôle ne garde alors que les adresses et les dossiers personnels, ou se saute).
 EXPORT_DENYLIST = REPO / "config" / "personal" / "public-denylist.txt"
@@ -204,10 +230,17 @@ SEARCH_LINE = re.compile(r"^\*{0,2}Recherche\b")
 # Sur la ligne : une commande (un bout entre accents graves qui porte une espace : un nom et ses
 # arguments, pas un hash seul) suivie d'un texte, son résultat, accents graves permis.
 INLINE_SEARCH = re.compile(r"`[^`\n]*\S [^`\n]*\S[^`\n]*`\s*\S")
+# Une case de liste d'un ticket (`- [x]`, `- [ ]`, et leurs formes mal écrites `- [x ]`, `- []`, `* [X]`…),
+# et les deux seules formes bien écrites, suivies d'une espace.
+CHECKBOX = re.compile(r"^\s*[-*+]\s*\[[\sxX]*\]")
+CHECKBOX_OK = re.compile(r"^\s*- \[[ x]\] ")
 # La règle d'un plugin et les listes d'admis : un commit qui ne touchait qu'elles passait le hook comme
 # de la documentation, sans les contrôles de `check.sh <plugin>` qui les lisent.
 RULE_FILE = re.compile(r"config/rules/([\w-]+)\.md")
 ADMITTED_FILE = re.compile(r"scripts/[\w-]+-admi(?:s|ses)\.json")
+# La liste des termes retirés d'un plugin : seuls les contrôles statiques qui la lisent la concernent ; un
+# commit qui ne changeait qu'elle relançait `validate`, `tsc` et les tests du plugin.
+RETIRED_LIST_FILE = re.compile(r"plugins/([\w-]+)/" + re.escape(RETIRED_FILE))
 
 
 class Failed(Exception):
@@ -528,7 +561,9 @@ def retired_terms(plugin, admitted_path=None):
     # il peut citer un terme retiré pour vérifier qu'il a disparu.
     sources = [(path, f"{plugin.name}/{rel}", rel == "CHANGELOG.md") for path, rel in files_of(plugin)
                if rel in ("README.md", "CHANGELOG.md")
-               or (rel.split("/")[0] in INSTRUCTION_DIRS and ".test." not in path.name)]
+               or (rel.split("/")[0] in INSTRUCTION_DIRS and ".test." not in path.name)
+               # Les types du plugin (`types/*.d.ts`) aussi : six anciens mots y étaient restés.
+               or (rel.startswith("types/") and rel.endswith(".d.ts"))]
     if rule.is_file():
         sources.append((rule, f"config/rules/{plugin.name}.md", False))
     for path, where, is_changelog in sources:
@@ -542,6 +577,58 @@ def retired_terms(plugin, admitted_path=None):
         allowed = admitted.get(where, 0)
         if len(found) > allowed:
             problems += [f"{p} ({allowed} admis dans le fichier, {ADMITTED_RETIRED.name})" if allowed else p for p in found]
+    return problems
+
+
+def headings(path):
+    """Les titres markdown d'un fichier (`#` à `######`), sans leurs dièses ni leurs espaces de bord."""
+    return {m.group(1).strip() for m in re.finditer(r"^#{1,6}\s+(.+)$", path.read_text(encoding="utf-8", errors="replace"), re.M)}
+
+
+def section_target(root, source, ref):
+    """Le fichier que vise un renvoi de section : depuis le dépôt, à côté du fichier qui renvoie, ou parmi
+    les règles et les références communes (un nom nu, `agents.md`) ; None hors de `SECTION_HOMES`. Rend
+    (chemin depuis le dépôt, chemin, existe)."""
+    homes = [root / home for home in SECTION_HOMES]
+    installed = INSTALLED_CONFIG.fullmatch(ref)
+    if installed:
+        ref = installed.group(1)
+    candidates = [root / ref, source.parent / ref] + ([home / ref for home in homes] if "/" not in ref else [])
+    for path in candidates:
+        if path.is_file() and any(path.resolve().is_relative_to(h.resolve()) for h in homes):
+            return path.resolve().relative_to(root.resolve()).as_posix(), path, True
+    if ref.split("/")[0] == "config" and "/".join(ref.split("/")[:2]) in SECTION_HOMES:
+        return ref, None, False
+    # Un nom nu écrit depuis une règle ou une référence commune vise un fichier voisin : disparu, il est
+    # introuvable, jamais hors du contrôle.
+    beside = source.parent / ref
+    if "/" not in ref and any(source.resolve().is_relative_to(h.resolve()) for h in homes):
+        return beside.resolve().relative_to(root.resolve()).as_posix(), None, False
+    return None
+
+
+def section_refs(plugin):
+    """Les renvois de section du plugin (hors tests et CHANGELOG, qui raconte des titres d'hier) et de sa
+    règle (`config/rules/<plugin>.md`) vers un titre absent des règles et des références communes."""
+    root = plugin.parent.parent
+    rule = root / "config" / "rules" / f"{plugin.name}.md"
+    sources = [(path, f"{plugin.name}/{rel}") for path, rel in files_of(plugin)
+               if not rel.startswith("tests/") and ".test." not in path.name and rel != "CHANGELOG.md"
+               and path.suffix in {".md", ".ts", ".tsx", ".js", ".mjs", ".py", ".txt"}]
+    if rule.is_file():
+        sources.append((rule, f"config/rules/{plugin.name}.md"))
+    problems, titles = [], {}
+    for path, where in sources:
+        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            for m in SECTION_REF.finditer(line):
+                found = section_target(root, path, m.group(2))
+                if found is None:
+                    continue
+                shown, target, exists = found
+                if not exists:
+                    problems.append(f"{where}:{n} : renvoi à la section « {m.group(1)} » de {shown}, fichier introuvable")
+                elif m.group(1).strip() not in titles.setdefault(shown, headings(target)):
+                    problems.append(f"{where}:{n} : renvoi à la section « {m.group(1)} » de {shown}, qui n'a pas ce titre")
     return problems
 
 
@@ -618,30 +705,70 @@ def spreads_into_minmax(code):
     return False
 
 
+def code_files(plugin):
+    """Les fichiers de code du plugin hors tests, que relisent les règles du code."""
+    for path, rel in files_of(plugin):
+        if path.suffix in {".ts", ".tsx", ".js", ".mjs", ".cjs"} and not rel.startswith("tests/") and ".test." not in path.name:
+            yield path, rel
+
+
+def detached_doc_blocks(lines):
+    """Les blocs `/** */` suivis directement d'un autre (des lignes vides au plus entre eux) :
+    [(première ligne du bloc, sa dernière, première ligne du bloc suivant)], numérotées depuis 1."""
+    found = []
+    in_doc = False
+    start = prev = None
+    for n, line in enumerate(lines, 1):
+        s = line.strip()
+        if not in_doc and s.startswith("/**"):
+            if prev is not None:
+                found.append((prev[0], prev[1], n))
+            start = n
+            # Le bloc se ferme sur la ligne où paraît `*/` ; du code après lui (`/** @x */ export …`)
+            # fait de la ligne une ligne de code, jamais un bloc détaché que `--fix` effacerait.
+            close = s.find("*/", 2)
+            in_doc = close < 0
+            prev = None if in_doc or s[close + 2:].strip() else (start, n)
+        elif in_doc:
+            close = s.find("*/")
+            if close >= 0:
+                in_doc = False
+                prev = None if s[close + 2:].strip() else (start, n)
+        elif s:
+            prev = None
+    return found
+
+
 def code_rules(plugin):
     """Hors tests : pas de liste étalée dans Math.min/max, pas de bloc /** */ suivi directement d'un autre."""
     problems = []
-    for path, rel in files_of(plugin):
-        if path.suffix not in {".ts", ".tsx", ".js", ".mjs", ".cjs"} or rel.startswith("tests/") or ".test." in path.name:
-            continue
-        in_doc = False
-        prev_end = None
-        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            if spreads_into_minmax(code_of(line)):
-                problems.append(f"{plugin.name}/{rel}:{n} : liste étalée dans Math.min/max (une boucle à la place)")
-            s = line.strip()
-            if not in_doc and s.startswith("/**"):
-                if prev_end is not None:
-                    problems.append(f"{plugin.name}/{rel}:{n} : bloc /** */ suivi directement d'un autre (ligne {prev_end}) : le premier ne documente rien")
-                in_doc = not s.endswith("*/")
-                prev_end = None if in_doc else n
-            elif in_doc:
-                if s.endswith("*/"):
-                    in_doc = False
-                    prev_end = n
-            elif s:
-                prev_end = None
+    for path, rel in code_files(plugin):
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        found = [(n, "liste étalée dans Math.min/max (une boucle à la place)")
+                 for n, line in enumerate(lines, 1) if spreads_into_minmax(code_of(line))]
+        found += [(nxt, f"bloc /** */ suivi directement d'un autre (ligne {end}) : le premier ne documente rien (scripts/check.sh --fix le retire)")
+                  for _, end, nxt in detached_doc_blocks(lines)]
+        problems += [f"{plugin.name}/{rel}:{n} : {what}" for n, what in sorted(found)]
     return problems
+
+
+def fix_detached_docs(plugin):
+    """Retire chaque bloc `/** */` suivi directement d'un autre, et les lignes vides qui l'en séparent :
+    le dernier d'une suite, qui documente le code, reste. Rend ce qui a été retiré, fichier et lignes."""
+    said = []
+    for path, rel in code_files(plugin):
+        text = path.read_text(encoding="utf-8")
+        lines = text.split("\n")
+        blocks = detached_doc_blocks(lines)
+        if not blocks:
+            continue
+        drop = {i for start, _, nxt in blocks for i in range(start, nxt)}
+        kept = [line for n, line in enumerate(lines, 1) if n not in drop]
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(kept))
+        said += [f"{plugin.name}/{rel}:{start} : bloc /** */ détaché retiré (lignes {start}-{end}), le bloc de la ligne {nxt} gardé"
+                 for start, end, nxt in blocks]
+    return said
 
 
 def invisible_chars(plugin):
@@ -710,6 +837,36 @@ def raw_interpolations(plugin, admitted_path=None):
             problems.append(f"{plugin.name}/{rel} : {len(found)} valeur(s) relue(s) insérée(s) brute(s) dans un texte, "
                             f"{allowed} admis ({ADMITTED_INTERPOLATIONS.name}) ; la passer par une fonction de "
                             f"neutralisation (shown*, neutral*, asciiJson) : lignes {', '.join(found[:8])}{' …' if len(found) > 8 else ''}")
+    return problems
+
+
+def dead_exports(plugin, admitted_path=None):
+    """Les modules de `hooks/` qui exportent plus de valeurs mortes (`export function`, `const`, `let`,
+    `class`, `enum` dont le nom ne paraît dans aucun autre fichier de code du plugin, hooks, tests et
+    scripts compris, `.claude-plugin/` exclu) que n'en admet `exports-admis.json` ; l'entrée du mod
+    (`register` de `hooks/register.tsx`) ne compte pas. 14 fonctions avaient été exportées sans
+    qu'aucun fichier les importe pendant un seul lot. `admitted_path` : une autre liste (celle de la
+    copie de l'index au hook pre-commit)."""
+    readers = {rel: path.read_text(encoding="utf-8", errors="replace") for path, rel in files_of(plugin)
+               if path.suffix in EXPORT_READERS and not rel.startswith(".claude-plugin/")}
+    names = {rel: set(re.findall(r"[A-Za-z_$][\w$]*", text)) for rel, text in readers.items()}
+    admitted = admitted_counts(admitted_path or ADMITTED_EXPORTS)
+    problems = []
+    for rel, text in readers.items():
+        if not rel.startswith("hooks/") or Path(rel).suffix not in {".ts", ".tsx"} or ".test." in rel:
+            continue
+        found = []
+        for n, line in enumerate(text.splitlines(), 1):
+            m = EXPORTED_VALUE.match(line)
+            if not m or (rel, m.group(1)) == MOD_ENTRY:
+                continue
+            if not any(m.group(1) in words for other, words in names.items() if other != rel):
+                found.append(f"{n} « {m.group(1)} »")
+        allowed = admitted.get(f"{plugin.name}/{rel}", 0)
+        if len(found) > allowed:
+            problems.append(f"{plugin.name}/{rel} : {len(found)} valeur(s) exportée(s) qu'aucun autre fichier du plugin ne nomme, "
+                            f"{allowed} admis ({ADMITTED_EXPORTS.name}) ; retirer le mot « export » ou l'importer là où elle sert : "
+                            f"lignes {', '.join(found)}")
     return problems
 
 
@@ -806,8 +963,10 @@ def static_checks(plugin):
         log("  ok")
     log("→ termes retirés")
     retired = retired_terms(plugin)
-    log("→ règles du code (Math.min/max étalé, doc détachée, caractères invisibles bruts, valeurs relues brutes)")
-    rules = retired + code_rules(plugin) + invisible_chars(plugin) + raw_interpolations(plugin)
+    log("→ renvois de section vers les règles et les références communes")
+    sections = section_refs(plugin)
+    log("→ règles du code (Math.min/max étalé, doc détachée, caractères invisibles bruts, valeurs relues brutes, exports morts)")
+    rules = retired + sections + code_rules(plugin) + invisible_chars(plugin) + raw_interpolations(plugin) + dead_exports(plugin)
     if rules:
         log("\n".join(f"  {p}" for p in rules))
         raise Failed(f"{plugin.name} : {len(rules)} terme(s) retiré(s) ou entorse(s) aux règles du code")
@@ -1200,14 +1359,23 @@ def touched_tests(plugin):
 
 
 def quick_check(plugin):
-    """Le pré-contrôle rapide d'un plugin : `tsc`, puis ses seuls fichiers de test touchés (terminal)."""
-    log(f"\n=== {plugin.name} (pré-contrôle rapide)")
+    """Le pré-contrôle rapide d'un plugin : ses contrôles statiques (l'arbre « Architecture » signalé
+    dans `DEFERRED`, en échec à la fin), `tsc`, tous ses tests Node (`*.test.mjs`, qui relisent les
+    sources), puis ses seuls fichiers de test du moteur touchés (terminal). Un module hors de la
+    marketplace (la sonde) passe par ses propres contrôles statiques, les termes de l'export public.
+    Plus de 20 suites complètes avaient échoué sur un contrôle statique que ce pré-contrôle ne voyait pas."""
+    log(f"\n=== {label_of(plugin)} (pré-contrôle rapide)")
+    if plugin in TOOLS.values():
+        check_export_terms(plugin)
+    else:
+        DEFERRED.extend(static_checks(plugin))
     typecheck(plugin)
-    tests = touched_tests(plugin)
+    node_tests(plugin)
+    tests = [t for t in touched_tests(plugin) if not t.endswith(".test.mjs")]
     if tests:
         single_test(plugin, tests)
     else:
-        log("→ aucun fichier de test touché face à HEAD")
+        log("→ aucun fichier de test du moteur touché face à HEAD")
 
 
 def validate(target, claude, label=None):
@@ -1445,12 +1613,33 @@ def tickets_without_search(paths, sources=None):
     return problems
 
 
+def malformed_checkboxes(paths):
+    """Les cases mal écrites des tickets indexés (`- [x ]`, `- [ x]`, `- []`, `- [X]`…), hors blocs de
+    code, avec le fichier et la ligne : seules `- [ ] ` et `- [x] ` sont des cases. Une case `- [x ]`
+    était passée inaperçue au cochage d'un ticket."""
+    problems = []
+    for path in paths:
+        in_fence = False
+        for n, line in enumerate((git_show(REPO, f":{path}") or "").split("\n"), 1):
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+            elif not in_fence and CHECKBOX.match(line) and not CHECKBOX_OK.match(line):
+                problems.append(f"{path}:{n} : case mal formée « {line.strip()[:40]} » ; écrire « - [ ] » ou « - [x] », suivi d'une espace")
+    return problems
+
+
 def check_tickets(paths):
     log("→ recherche citée des tickets sensibles")
     problems = tickets_without_search(paths, staged_sources())
     if problems:
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} ticket(s) sensible(s) sans recherche citée")
+    log("  ok")
+    log("→ cases des tickets")
+    problems = malformed_checkboxes(paths)
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} case(s) mal formée(s) : " + " ; ".join(problems))
     log("  ok")
 
 
@@ -1476,9 +1665,10 @@ def is_plugin(name):
 
 def ruled_problems(copy, tree):
     """Les défauts que relèvent les contrôles statiques qui lisent la règle d'un plugin et les listes
-    d'admis (termes retirés, renvois admis, valeurs relues brutes), sur la copie de l'index `tree`."""
+    d'admis (termes retirés, renvois admis, valeurs relues brutes, exports morts, renvois de section), sur la copie de l'index `tree`."""
     return retired_terms(copy, tree / "scripts" / ADMITTED_RETIRED.name) + ticket_refs(copy, tree / "scripts" / ADMITTED_REFS.name) \
-        + raw_interpolations(copy, tree / "scripts" / ADMITTED_INTERPOLATIONS.name)
+        + raw_interpolations(copy, tree / "scripts" / ADMITTED_INTERPOLATIONS.name) + dead_exports(copy, tree / "scripts" / ADMITTED_EXPORTS.name) \
+        + section_refs(copy)
 
 
 def refuse(name, problems):
@@ -1496,8 +1686,16 @@ def check_rules(names, tree):
         copy = tree / "plugins" / name
         if not (copy / ".claude-plugin" / "plugin.json").is_file():
             continue
-        log(f"→ plugins/{name} : termes retirés, renvois admis, valeurs relues brutes (règle ou liste d'admis indexée)")
+        log(f"→ plugins/{name} : termes retirés, renvois admis, valeurs relues brutes, exports morts, renvois de section (règle ou liste indexée)")
         refuse(name, ruled_problems(copy, tree))
+
+
+def check_sections(names, tree):
+    """Les renvois de section de chaque plugin nommé, sur la copie de l'index : une règle ou une référence
+    commune indexée a pu renommer le titre qu'ils visent."""
+    log("→ renvois de section de chaque plugin (règle ou référence commune indexée)")
+    problems = [p for name in names for p in section_refs(tree / "plugins" / name)]
+    refuse("renvois de section", problems)
 
 
 def check_code(name, tree, ruled):
@@ -1507,7 +1705,7 @@ def check_code(name, tree, ruled):
     qui restent à `check.sh`. Quatre commits de code étaient entrés dans `main` avec ce que seul
     `check.sh` relevait."""
     copy = tree / "plugins" / name
-    log(f"→ plugins/{name} : renvois, termes retirés, valeurs relues brutes, termes de l'export public, règles du code")
+    log(f"→ plugins/{name} : renvois, termes retirés, valeurs relues brutes, exports morts, termes de l'export public, règles du code")
     problems = [] if name in ruled else ruled_problems(copy, tree)
     problems += (export_terms(copy) or []) + code_rules(copy) + invisible_chars(copy)
     refuse(name, problems)
@@ -1526,7 +1724,7 @@ def staged():
         check_tickets(tickets)
     # La règle d'un plugin et les listes d'admis : leurs contrôles statiques, même en documentation seule,
     # et une liste d'admis qui augmente face à HEAD refusée.
-    ruled = {m.group(1) for p in paths if (m := RULE_FILE.fullmatch(p)) and is_plugin(m.group(1))}
+    ruled = {m.group(1) for p in paths if (m := RULE_FILE.fullmatch(p) or RETIRED_LIST_FILE.fullmatch(p)) and is_plugin(m.group(1))}
     lists = [p for p in paths if ADMITTED_FILE.fullmatch(p)]
     if lists:
         log("→ listes d'admis indexées (jamais plus qu'à HEAD)")
@@ -1541,14 +1739,19 @@ def staged():
         log("  ok")
     # Une édition du CHANGELOG seul est de la documentation : sa forme se contrôle quand même.
     shaped = sorted({p.split("/")[1] for p in paths if re.fullmatch(r"plugins/[^/]+/(?:CHANGELOG\.md|\.claude-plugin/plugin\.json)", p)})
-    code_paths = [p for p in paths if not is_doc(p)]
-    if not shaped and not code_paths and not ruled:
+    code_paths = [p for p in paths if not is_doc(p) and not RETIRED_LIST_FILE.fullmatch(p)]
+    # Une règle ou une référence commune indexée : son titre a pu changer sous les renvois des autres plugins.
+    homes_changed = any(p.startswith(home + "/") for p in paths for home in SECTION_HOMES)
+    if not shaped and not code_paths and not ruled and not homes_changed:
         log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets else "pre-commit : documentation seule, pas de contrôle")
         return
     # Tous les contrôles lisent la copie de l'index : ce qui part, jamais l'arbre de travail.
     tree = export_index()
     try:
         check_rules(sorted(ruled), tree)
+        if homes_changed:
+            check_sections(sorted(p.parent.parent.name for p in (tree / "plugins").glob("*/.claude-plugin/plugin.json")
+                                  if p.parent.parent.name not in ruled), tree)
         for name in shaped:
             if (tree / "plugins" / name / ".claude-plugin" / "plugin.json").is_file():
                 log(f"pre-commit : plugins/{name}")
@@ -1585,11 +1788,12 @@ def main():
     parser.add_argument("--all", action="store_true", help="tous les plugins, et la sonde")
     parser.add_argument("--no-desktop", action="store_true", help="sans le Claude Code de l'app desktop")
     parser.add_argument("--staged", action="store_true", help="hook pre-commit : les plugins dont un fichier est indexé")
-    parser.add_argument("--fix", action="store_true", help="réécrit l'arbre « Architecture » du README des plugins, sans rien contrôler")
+    parser.add_argument("--fix", action="store_true",
+                        help="réécrit l'arbre « Architecture » du README des plugins et retire les blocs /** */ détachés, sans rien contrôler")
     parser.add_argument("--test", metavar="FICHIER", nargs="+", action="extend",
                         help="lance ces seuls fichiers de test du plugin nommé (terminal), sans les autres contrôles")
     parser.add_argument("--quick", action="store_true",
-                        help="pré-contrôle rapide : tsc et les seuls fichiers de test touchés face à HEAD (terminal)")
+                        help="pré-contrôle rapide : contrôles statiques, tsc, tests Node et seuls fichiers de test du moteur touchés face à HEAD (terminal)")
     parser.add_argument("--tsc", action="store_true", help="le seul tsc des plugins nommés")
     args = parser.parse_args()
     known = {p.parent.parent.name for p in PLUGINS.glob("*/.claude-plugin/plugin.json")} | set(TOOLS)
@@ -1620,12 +1824,15 @@ def main():
         if args.quick:
             for name in names:
                 quick_check(target(name))
+            fail_deferred(DEFERRED)
             log(f"\nPré-contrôle passé ; la suite complète reste à lancer (scripts/check.sh {' '.join(names)}).")
             return
         if args.fix:
             for name in names:
                 if name not in TOOLS:
                     fix_architecture(PLUGINS / name)
+                    for said in fix_detached_docs(PLUGINS / name):
+                        log(f"  {said}")
             log(f"\nRelancer scripts/check.sh {' '.join(names)} pour les contrôles.")
             return
         desktop = None

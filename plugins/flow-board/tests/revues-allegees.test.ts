@@ -147,7 +147,10 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   expect(implement).not.toContain('the diff of those fixes only')
   // La recherche part d'abord, et seuls les candidats moyens ou hauts sont vérifiés.
   expect(implement).toContain('the search starts at once, without a reading of the diff beforehand')
-  expect(implement).toContain('one verification subtask per finding of medium or high severity only')
+  expect(implement).toContain('its own verification of each finding of medium or high severity only')
+  // La consigne des relecteurs, recopiée mot pour mot dans le fichier de consignes que le fork de /code-review
+  // lit d'abord, porte la ligne de l'advisor : un fork n'a pas d'autre prompt où la recevoir.
+  expect(implement).toContain("in a group review. Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport.")
   // Un groupe sans logique ni zone sensible n'a ni revue du groupe ni revue de sécurité.
   // Une règle commune, une référence ou un skill a toujours de la logique : l'exemple ne vise que les autres règles.
   expect(implement).toContain('A group whose every ticket was sent with "sensitive": false and "logic": false (documents, an icon, a rule that makes Claude run or build nothing; a common rule, a reference file or a skill always has logic) has neither a group review nor a security review')

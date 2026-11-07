@@ -87,6 +87,18 @@ export const isSecuritySettled = (check: SecurityCheck | undefined): boolean => 
   return check.isAdvised === false
 }
 
+/** Un avis « conseillée » dont la revue n'a pas tourné : ni lancement, ni comptes, ni comptes illisibles. */
+export const isAdvisedUnrun = (check: SecurityCheck | undefined): check is SecurityCheck =>
+  !!check && typeof check === 'object' && check.isAdvised === true && check.ranAt === undefined && check.findings === undefined && !hasUnreadableCounts(check)
+
+/**
+ * La sécurité tranchée, le réglage du projet compris : tranchée comme avant, ou conseillée sans revue faite
+ * quand la revue est désactivée (`review` lu « off » à l'instant, ou `isClosedOff` : un groupe clos avec sa
+ * marque). Seul « off » désactive : `on` et `unread` (une lecture ratée) gardent la revue due.
+ */
+export const isSecuritySettledFor = (check: SecurityCheck | undefined, review: 'on' | 'off' | 'unread' = 'on', isClosedOff = false): boolean =>
+  isSecuritySettled(check) || ((review === 'off' || isClosedOff) && isAdvisedUnrun(check))
+
 /** Le plus grand compte de sécurité plausible, à l'envoi comme à la relecture (relais compris). */
 export const SECURITY_COUNT_MAX = 10_000
 

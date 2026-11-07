@@ -156,16 +156,14 @@ test('« ↗ Worker » : la règle d’effort propose xhigh pour une tâche de j
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'launch-linked-B' })
   const text = filled.at(-1)!
-  // medium et high ne changent pas.
-  expect(text).toContain('Effort de la session (<effort>) : medium par défaut ; high si le groupe a un ticket qui touche une zone sensible')
-  expect(text).toContain("Dis-moi en une ligne l'effort choisi et pourquoi.")
-  // La suggestion : les deux sortes de tâche de jugement, jamais pour une tâche d'exécution.
+  // medium et high : l'effort calculé par le mod, sur la ligne du groupe.
+  expect(text).toContain('Effort de la session (<effort>) : l’effort calculé sur la ligne du groupe')
+  expect(text).toContain("Dis-moi en une ligne l'effort pris et, s'il s'écarte du calcul, pourquoi.")
+  // La suggestion : une tâche de jugement, jamais une tâche d'exécution ; ses signes et exemples sont
+  // à la section 11 de la procédure, que la demande fait lire avant de lancer.
   expect(text).toContain('tâche de jugement')
-  expect(text).toContain('jugement sur un existant')
-  expect(text).toContain('objectif ouvert')
-  expect(text).toContain("Jamais pour une tâche d'exécution")
-  expect(text).toContain('grosse migration')
-  expect(text).toContain('sensible mais local, il reste en high')
+  expect(text).toContain("jamais pour une tâche d'exécution")
+  expect(text).toMatch(/section 11 de \S*reference\/procedure-groupe\.md, à lire avant de lancer/)
   // Une question à boutons, jamais xhigh choisi seul.
   expect(text).toContain('question à boutons « xhigh (Recommandé) / high »')
   expect(text).toContain('Tu ne choisis jamais xhigh toi-même')

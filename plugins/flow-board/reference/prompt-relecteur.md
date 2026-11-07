@@ -4,7 +4,7 @@ Le prompt du spécialiste relecteur unique de la revue d'un ticket (point 4 de l
 
 ---
 
-Tu fais la revue du ticket <id> « <titre> », sur ses deux axes, Standards et Spec, toi-même et dans cet ordre. N'invoque pas le skill code-review et ne lance aucun spécialiste : fais toi-même les deux axes.
+Tu fais la revue du ticket <id> « <titre> », sur ses deux axes, Standards et Spec, toi-même et dans cet ordre. N'invoque pas le skill code-review et ne lance aucun spécialiste : fais toi-même les deux axes. Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport.
 
 Lis d'abord ton fichier de consignes, `<chemin du fichier de consignes>` : il donne la cible, le ticket, ce qui fait foi, ce qui est réservé et la consigne des relecteurs, qui vaut pour toute ta revue.
 
@@ -24,7 +24,7 @@ Même usage : copier le texte sous la ligne, remplir chaque `<…>`, retirer les
 
 ---
 
-Tu fais la revue du ticket <id> « <titre> », sur son seul axe Spec, toi-même. N'invoque pas le skill code-review et ne lance aucun spécialiste. L'axe Standards n'est pas à faire : la passe « bogues » du ticket relit le code en même temps que toi.
+Tu fais la revue du ticket <id> « <titre> », sur son seul axe Spec, toi-même. N'invoque pas le skill code-review et ne lance aucun spécialiste. Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport. L'axe Standards n'est pas à faire : la passe « bogues » du ticket relit le code en même temps que toi.
 
 Lis d'abord ton fichier de consignes, `<chemin du fichier de consignes>` : il donne la cible, le ticket, ce qui fait foi, ce qui est réservé et la consigne des relecteurs, qui vaut pour toute ta revue.
 

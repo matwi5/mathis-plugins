@@ -18,6 +18,7 @@ import {
   type OutsideHold,
   activeDetour,
   autoStateOf,
+  awaitedExternals,
   isAutoOn,
   CHOICES_LISTED,
   openQuestions,
@@ -40,6 +41,7 @@ import {
   isTicketReviewEnough,
   isLotReviewEnough,
   isLotSecurityDue,
+  isClosedTurnedOff,
   isLotAdvicePrevious,
   attachedIdsOf,
   groupProgress,
@@ -76,6 +78,7 @@ import {
   currentPhase,
   hasUnreadableCounts,
   isSecuritySettled,
+  isSecuritySettledFor,
   hasGroupReview,
   clip,
 } from './basics.ts'
@@ -84,9 +87,10 @@ import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
 import { seatState } from './seat.ts'
-import { managerWorkEffort } from './effort.ts'
+import { leadEffort, leadEffortPill, type LeadEffort } from './effort.ts'
 import type { CooStatement } from './coo.ts'
-import { cooBandParts, coordinationRows, type CooDo, type CooPart } from './coo-view.tsx'
+import { cooBandParts, coordinationRows, securitySettingRows, type CooDo, type CooPart } from './coo-view.tsx'
+import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
 import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
 import { archiveConsent, consentDay, neutralLine, reopenText, type ReopenText } from './closing.ts'
@@ -179,8 +183,12 @@ export type View = {
   relay?: Relay | null
   /** Le registre des spécialistes de cette session (onglet Agents). */
   agents?: SessionRegistry | null
+  /** Dans un worker : la règle d'effort que le mod a appliquée à sa dernière requête (un ticket sensible en cours), null sinon. */
+  workerEffort?: LeadEffort | null
   /** Le suivi en défaut (S11, R2) : `true`, une écriture du registre refusée ; `'lost'`, un changement perdu. */
   agentsAlert?: boolean | 'lost'
+  /** Le réglage « revue de sécurité » du projet, relu à ce rendu ; absent ou `unread` : montré « activée ». Jamais lu par une décision. */
+  security?: SecurityReview
   /** Les effacements que cette discussion fait en ce moment (R1, S36) : `run:<id>` ou `session:<id>`, et leur titre. */
   erasing?: readonly { key: string; title: string }[]
   /** Les prix des modèles tirés de ccusage (Q15) ; null tant qu'ils manquent : « coût indisponible ». */
@@ -262,6 +270,8 @@ export type Actions = {
   closeLinkedItems: () => unknown
   /** Demande à Claude la revue de sécurité d'un groupe (ou du lot, `lot`) par un spécialiste relecteur. */
   securityReview: (id: string) => unknown
+  /** La bascule du réglage « revue de sécurité » du projet : pose l'état visé, relu juste avant. */
+  securityToggle: (to: 'on' | 'off') => unknown
   /** Demande à Claude un diagnostic de bug dans un worker, en détour de la phase en cours. */
   launchBugLinked: () => unknown
   /** Ajoute un élément de la phase (une piste de rétro) à la sélection, ou l'en retire. */
@@ -1012,18 +1022,38 @@ const lotRow = (k: Kit, ids: readonly string[], at: number, act: Actions): unkno
  * utile), puis son résultat. Rien tant que Claude n'a pas donné d'avis (groupes d'avant la 0.23.0
  * compris). Le bouton la lui demande quand il ne l'a pas lancée. `id` : le groupe, ou « lot ».
  */
-const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Actions): unknown => {
+const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Actions, review: SecurityReview, isClosedOff = false): unknown => {
   const { Box, Button } = k
   const group = { id }
   if (!sec) return null
-  if (sec.ranAt !== undefined) {
-    const counts = hasUnreadableCounts(sec)
-      ? ` · comptes relus hors forme (—), à renvoyer`
-      : sec.findings !== undefined
-        ? ` · ${plural(sec.findings, 'constat')}${(sec.fixed ?? 0) > 0 ? ` · ${sec.fixed} corrigé${sec.fixed! > 1 ? 's' : ''}` : ''}${(sec.dismissed ?? 0) > 0 ? ` · ${sec.dismissed} laissée${sec.dismissed! > 1 ? 's' : ''}` : ''}${(sec.proposedDismissed ?? 0) > 0 && !isSecuritySettled(sec) ? ` · ${sec.proposedDismissed} à laisser, proposé${sec.proposedDismissed! > 1 ? 'es' : 'e'} par la session` : ''}`
-        : ''
+  const toggle = securityToggleParts(k, id, review, act)
+  const counts = hasUnreadableCounts(sec)
+    ? ` · comptes relus hors forme (—), à renvoyer`
+    : sec.findings !== undefined
+      ? ` · ${plural(sec.findings, 'constat')}${(sec.fixed ?? 0) > 0 ? ` · ${sec.fixed} corrigé${sec.fixed! > 1 ? 's' : ''}` : ''}${(sec.dismissed ?? 0) > 0 ? ` · ${sec.dismissed} laissée${sec.dismissed! > 1 ? 's' : ''}` : ''}${(sec.proposedDismissed ?? 0) > 0 && !isSecuritySettled(sec) ? ` · ${sec.proposedDismissed} à laisser, proposé${sec.proposedDismissed! > 1 ? 'es' : 'e'} par la session` : ''}`
+      : ''
+  // Un avis « inutile » prime sur des comptes envoyés avec lui (un worker envoyait l'avis et des comptes à zéro) :
+  // il ne se dit « relue » que par les failles trouvées quand même, ou des comptes illisibles à renvoyer.
+  const isRunAnyway = sec.isAdvised === false && (hasUnreadableCounts(sec) || (sec.findings ?? 0) > 0)
+  // Une revue lancée (ou des comptes reçus) : « La lancer quand même » ne se propose plus.
+  const isLaunched = sec.ranAt !== undefined
+  if (sec.ranAt !== undefined && sec.isAdvised !== false) {
     const isOpen = !isSecuritySettled(sec)
-    return <Box key={`sec-${group.id}`} marginLeft={2}>{T(k, `⛨${NB}sécurité relue${counts}`, { color: isOpen ? C.amber : C.green })}</Box>
+    return (
+      <Box key={`sec-${group.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" marginLeft={2}>
+        <Box marginRight={1} flexShrink={1}>{T(k, `⛨${NB}sécurité relue${counts}`, { color: isOpen ? C.amber : C.green })}</Box>
+        {toggle}
+      </Box>
+    )
+  }
+  if (isRunAnyway) {
+    const isOpen = !isSecuritySettled(sec)
+    return (
+      <Box key={`sec-${group.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" marginLeft={2}>
+        <Box marginRight={1} flexShrink={1}>{T(k, `⛨${NB}sécurité jugée inutile${sec.why ? ` : ${neutralLine(sec.why)}` : ''} · relue quand même${counts}`, { color: isOpen ? C.amber : C.green, wrap: 'wrap' })}</Box>
+        {toggle}
+      </Box>
+    )
   }
   if (sec.isAdvised === undefined) return null
   const launch = (
@@ -1033,16 +1063,35 @@ const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Ac
       onPress={() => act.securityReview(group.id)}
     />
   )
+  // Conseillée sans revue, la revue désactivée pour le projet (relue « off », ou groupe clos avec sa marque) : tranchée,
+  // pas « due » ; le bouton reste pour une revue ponctuelle.
+  const isOff = sec.isAdvised === true && isSecuritySettledFor(sec, review, isClosedOff) && !isSecuritySettled(sec)
   return (
     <Box key={`sec-${group.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" marginLeft={2}>
       {sec.isAdvised && <Box marginRight={1}>{launch}</Box>}
       <Box marginRight={1} flexShrink={1}>
-        {T(k, `${sec.isAdvised ? 'conseillée' : `⛨${NB}sécurité jugée inutile`}${sec.why ? ` : ${sec.why}` : ''}`, { color: sec.isAdvised ? C.amber : undefined, dim: !sec.isAdvised, wrap: 'wrap' })}
+        {T(k, `${sec.isAdvised ? 'conseillée' : `⛨${NB}sécurité jugée inutile`}${sec.why ? ` : ${sec.why}` : ''}${isOff ? ` · revue de sécurité désactivée pour ce projet` : ''}`, { color: sec.isAdvised && !isOff ? C.amber : undefined, dim: !sec.isAdvised || isOff, wrap: 'wrap' })}
       </Box>
-      {!sec.isAdvised && launch}
+      {!sec.isAdvised && !isLaunched && <Box marginRight={1}>{launch}</Box>}
+      {toggle}
     </Box>
   )
 }
+
+/**
+ * La bascule de la revue de sécurité du projet, à côté du bouton « ⛨ Revue de sécurité » : son état relu à
+ * ce rendu ; une lecture ratée se montre « activée », avec sa ligne ambre ; un clic pose l'état inverse.
+ */
+const securityToggleParts = (k: Kit, id: string, review: SecurityReview, act: Actions): unknown[] => [
+  <k.Box key={`security-toggle-${id}-box`} marginRight={1}>
+    <k.Button key={`security-toggle-${id}`} plain={true} label={securityToggleLabel(review)} onPress={() => act.securityToggle(securityToggleTarget(review))} />
+  </k.Box>,
+  review === 'unread' && (
+    <k.Box key={`security-unread-${id}`} flexShrink={1}>
+      {T(k, `⚠${NB}${SECURITY_UNREAD_FR}`, { color: C.amber, wrap: 'wrap' })}
+    </k.Box>
+  ),
+]
 
 /**
  * La ligne de sécurité d'un lot sans groupes : comme celle d'un groupe ; un lot fini dispensé (aucun
@@ -1050,7 +1099,7 @@ const securityRow = (k: Kit, sec: SecurityCheck | undefined, id: string, act: Ac
  * tickets, sans revue du lot ni de sécurité ; relu sans avis du passage en cours, elle dit l'avis
  * attendu, avec le bouton qui le demande.
  */
-const lotSecurityRow = (k: Kit, run: Run, act: Actions): unknown => {
+const lotSecurityRow = (k: Kit, run: Run, act: Actions, review: SecurityReview): unknown => {
   const { Box, Button } = k
   const isDone = run.tickets.length > 0 && run.tickets.every(t => t.status === 'done')
   if (isDone && run.security === undefined && isLotReviewEnough(run)) {
@@ -1062,20 +1111,21 @@ const lotSecurityRow = (k: Kit, run: Run, act: Actions): unknown => {
   const sec = run.security
   // Relu, pas dispensé, sans avis du passage (aucun, d'un passage précédent, ou sans avis ni lancement) :
   // le compte rendu attend l'avis de Claude ; la ligne le dit, et son bouton lui demande la revue de sécurité.
-  if (isLotSecurityDue(run) && (sec === undefined || isPrevious || (sec.isAdvised === undefined && sec.ranAt === undefined))) {
+  if (isLotSecurityDue(run, review) && (sec === undefined || isPrevious || (sec.isAdvised === undefined && sec.ranAt === undefined))) {
     return (
       <Box key="sec-lot" flexDirection="row" flexWrap="wrap" alignItems="center" marginLeft={2}>
         <Box marginRight={1}>
           <Button key="security-group-lot" label={`⛨${NB}Revue de sécurité · spécialiste relecteur`} onPress={() => act.securityReview('lot')} />
         </Box>
-        <Box flexShrink={1}>
+        <Box marginRight={1} flexShrink={1}>
           {T(k, isPrevious ? 'avis de sécurité d’avant la dernière fin de ticket ou la dernière revue : celui de ce passage est attendu' : 'avis de sécurité attendu : le compte rendu attend que Claude le donne', { color: C.amber, wrap: 'wrap' })}
         </Box>
+        {securityToggleParts(k, 'lot', review, act)}
       </Box>
     )
   }
   if (isPrevious) return null
-  return securityRow(k, sec, 'lot', act)
+  return securityRow(k, sec, 'lot', act, review)
 }
 
 /** « ↺ Rouvrir » d'une session fermée, quand la commande (pour l'app, celle qui recrée son worktree) a pu s'écrire. */
@@ -1178,7 +1228,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
             reopenText({ run, target: { kind: 'group', id: g.group.id, name: g.group.name }, closing: g.group.delegated.closing, session: g.group.delegated.session, seq: g.group.delegated.seq, root: view.board?.root ?? '' }),
             act,
           )}
-        {!g.isFallback && securityRow(k, g.group.security, g.group.id, act)}
+        {!g.isFallback && securityRow(k, g.group.security, g.group.id, act, view.security ?? 'unread', isClosedTurnedOff(g.group))}
         {/* « tout voir » déplie aussi les groupes finis : leurs tickets restent consultables. */}
         {view.ui.showAllTickets && g.tickets.map(ticket => ticketRow(k, run, ticket, view, act))}
         </Box>
@@ -1657,7 +1707,7 @@ const phaseCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
       {foundBlock(k, run, view, act)}
       {showTests && testsBlock(k, run, cells)}
       {reviewBlock(k, run)}
-      {(run.groups ?? []).length === 0 && lotSecurityRow(k, run, act)}
+      {(run.groups ?? []).length === 0 && lotSecurityRow(k, run, act, view.security ?? 'unread')}
       {detour !== null && detourCard(k, detour, view, act)}
     </Box>
   )
@@ -2572,7 +2622,7 @@ const launchParts = (rec: NextLaunch, act: Actions): { buttons: NextButton[]; no
  * rétro ou qu'il n'y en a pas. Jamais la compaction, la rétro ni « xhigh » ; rien en pleine étape.
  */
 const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: string; buttons: NextButton[]; lead: NextButton | null; preview: string[] } | null => {
-  const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet, versionUnits: view.sync.versionUnits })
+  const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet, versionUnits: view.sync.versionUnits, security: view.security ?? 'unread' })
   const rec = nextLaunchFor(run, outsideOf(view))
   const phase = currentPhase(run)
   if (rec === null && sug.primary === null && !sug.canFinish) return null
@@ -2675,9 +2725,9 @@ const shownTab = (view: View): Tab => {
 /** Une ligne de morceaux de texte décrite par la vue du COO (`coo-view.tsx`). */
 const cooLine = (k: Kit, parts: readonly CooPart[]): unknown => line(k, parts.map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })), true)
 
-/** L'onglet Coordination : le point, ce qui t'attend, les missions, la feuille de route (variante A des planches). */
-const coordinationTab = (k: Kit, s: CooStatement, act: Actions): unknown[] =>
-  coordinationRows(s).map(row =>
+/** L'onglet Coordination : le point, ce qui t'attend, les missions, la feuille de route (variante A des planches), la bascule de la revue de sécurité. */
+const coordinationTab = (k: Kit, s: CooStatement, act: Actions, security: SecurityReview): unknown[] =>
+  [...coordinationRows(s), ...securitySettingRows(security)].map(row =>
     row.kind === 'heading' ? (
       <k.Box key={row.key} marginTop={1}>
         {cooLine(k, row.parts)}
@@ -2697,7 +2747,7 @@ const coordinationTab = (k: Kit, s: CooStatement, act: Actions): unknown[] =>
 /** Le panneau de la discussion du COO. */
 const cooPane = (k: Kit, view: View, s: CooStatement, act: Actions): unknown => {
   const tab = shownTab(view)
-  const body: unknown = tab === 'commands' ? commandsTab(k, act) : tab === 'agents' ? agentsTab(k, view, act) : tab === 'history' && view.board ? historyTab(k, view.board, view, act) : coordinationTab(k, s, act)
+  const body: unknown = tab === 'commands' ? commandsTab(k, act) : tab === 'agents' ? agentsTab(k, view, act) : tab === 'history' && view.board ? historyTab(k, view.board, view, act) : coordinationTab(k, s, act, view.security ?? 'unread')
   return (
     <k.Box flexDirection="column" paddingX={1} paddingBottom={1}>
       {tabsRow(k, view, null, act)}
@@ -2968,8 +3018,10 @@ const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
     ? 'La reprendre ici la retire de l’autre discussion.'
     : isAside
       ? 'Elle reprend telle quelle avec « Reprendre » ; un skill lancé d’ici ouvre une autre mission.'
-      : run.status === 'paused'
+      : run.status === 'paused' && view.board?.session !== undefined && run.bornIn === view.board.session
         ? 'Elle reprend toute seule quand tu relances un de ses skills.'
+        : run.status === 'paused'
+          ? 'Elle reprend telle quelle avec « Reprendre » ; un skill lancé d’ici ouvre une autre mission.'
         : 'La suivante démarre au prochain skill.'
   // Le mode auto d'une mission qui n'est pas actif ici : en pause (déduite ou posée), ou envoyé d'ailleurs.
   const auto = view.board ? autoStateOf(run, view.board, view.here ?? view.board.session ?? '') : ({ kind: 'off' } as const)
@@ -3269,13 +3321,15 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
   // La discussion du COO ne reprend pas de mission : pas de proposition de reprise.
   const latest = view.board && !delegated && !isCoo && !isCooAway ? [...resumable(view.board)].sort((x, y) => y.updatedAt - x.updatedAt)[0] : undefined
   const def = latest ? SKILLS[latest.entry] : undefined
+  // Dans un worker : l'effort que le mod impose pendant un ticket sensible en cours, quand il change celui de la session.
+  const effortPill = delegated !== undefined && view.workerEffort ? leadEffortPill(view.workerEffort, view.agents?.main?.effort) : null
   if (isCoo || isCooAway) {
     return (
       <Box key="flow-welcome" flexDirection="row" alignItems="center" justifyContent="space-between" width={width}>
         <Box flexShrink={1}>
           {line(k, [
             bandTag(k, 'Flow', C.violet),
-            ...(isCoo && view.coo ? cooBandParts(view.coo).map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })) : [T(k, `◆${NB}COO`, { color: C.teal, bold: true })]),
+            ...(isCoo && view.coo ? cooBandParts(view.coo, view.agents?.main?.effort).map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })) : [T(k, `◆${NB}COO`, { color: C.teal, bold: true })]),
             isCooAway && T(k, '·', { dim: true }),
             isCooAway && <Box flexShrink={1}>{T(k, seat === 'other' ? 'siège tenu par une autre discussion' : 'siège libre', { color: C.amber, wrap: 'truncate-end' })}</Box>,
             isCooAway && <Button key="band-coo-take" plain={true} label={`↻${NB}Reprendre${NB}ici`} onPress={() => act.cooTake()} />,
@@ -3299,6 +3353,8 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
           delegated !== undefined && T(k, `↗${NB}Worker`, { color: C.blue, bold: true }),
           delegated !== undefined && T(k, '·', { dim: true }),
           delegated !== undefined && <Box flexShrink={1}>{T(k, `« ${delegated} »`, { wrap: 'truncate-end' })}</Box>,
+          effortPill !== null && T(k, '·', { dim: true }),
+          effortPill !== null && T(k, effortPill.replace(/ /g, NB), { color: C.blue }),
           delegated === undefined && T(k, width < 40 ? 'Aucune mission' : `Aucune${NB}mission${NB}sélectionnée`, { dim: true }),
           latest && def && T(k, '·', { dim: true }),
           latest && def && T(k, def.glyph, { color: def.color, bold: true }),
@@ -3338,6 +3394,7 @@ const relayPills = (run: Run, view: View): BandPill[] =>
 
 /**
  * Dans le bandeau, le mode auto de la mission : « ⚡ Auto · en cours » quand il envoie d'ici, « ⚡ Auto ·
+ * en attente de <tâche> » quand il n'attend plus qu'une tâche externe pas faite (`awaitedExternals`), « ⚡ Auto ·
  * attend ta réponse (N) » quand des questions bloquantes l'attendent,
  * « ⚡ Auto en pause : <raison> » quand il s'est arrêté sans un geste de la personne ni la fin de la
  * mission, ou que la pause se déduit (discussion changée) ; rien, éteint. À part des autres
@@ -3350,6 +3407,13 @@ const autoPill = (run: Run, view: View): BandPill | null => {
   if (state.kind === 'on' && view.planUnread && !view.coordUnread) return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}plan${NB}du${NB}projet${NB}illisible`, color: C.amber, bold: true }
   if (state.kind === 'on' && view.coordUnread) return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}fichier${NB}de${NB}coordination${NB}illisible`, color: C.amber, bold: true }
   if (state.kind === 'on' && waiting > 0) return { text: `⚡${NB}Auto${NB}·${NB}attend${NB}ta${NB}réponse${NB}(${waiting})`, color: C.amber, bold: true }
+  // Une tâche externe que l'auto attend : son nom (relu de la mission, neutralisé), sans pause.
+  const awaited = state.kind === 'on' ? awaitedExternals(run, false, outsideOf(view), view.security ?? 'unread') : []
+  if (awaited.length > 0) {
+    const first = awaited[0]!
+    const name = clip(neutralLine(typeof first.name === 'string' && first.name !== '' ? first.name : first.id), 48).replace(/ /g, NB)
+    return { text: `⚡${NB}Auto${NB}·${NB}en${NB}attente${NB}de${NB}${name}${awaited.length > 1 ? `${NB}(+${awaited.length - 1})` : ''}`, color: C.teal, bold: true }
+  }
   if (state.kind === 'on') return { text: `⚡${NB}Auto${NB}·${NB}en${NB}cours`, color: C.teal, bold: true }
   if (state.kind === 'paused') return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}${state.why.replace(/ /g, NB)}`, color: C.amber, bold: true }
   return null
@@ -3360,10 +3424,11 @@ const bandPills = (run: Run, view: View): BandPill[] => {
   const t = countTickets(run.tickets)
   const running = agentsAtWork(view)
   const unseen = unseenDecisions(run, view.relay)
-  // Le manager fait lui-même le travail d'un worker : le mod applique l'effort de sa règle, et le dit.
-  const work = managerWorkEffort(run)
+  // L'effort que le mod impose à chaque requête du manager, et sa raison (règle des workers, suivi des groupes, phase), quand il joue.
+  const effort = leadEffort(run)
+  const pill = effort ? leadEffortPill(effort, view.agents?.main?.effort) : null
   return [
-    ...(work ? [{ text: `effort${NB}${work.rule === 'group' ? 'du lot' : 'du diagnostic'}${NB}:${NB}${work.level},${NB}règle${NB}des${NB}workers`, color: C.blue }] : []),
+    ...(pill ? [{ text: pill.replace(/ /g, NB), color: C.blue }] : []),
     ...(t.total > 0 ? [{ text: `${t.done}/${t.total}`, bold: true }] : []),
     ...relayPills(run, view),
     // Retenu par une autre mission : ce qui attend, et quoi (titre neutralisé).

@@ -46,7 +46,7 @@ const keysOf = name => {
 }
 
 const UUID = '178bd61c-0416-4d88-8317-cc583d9f0d47'
-const CLOSING = { state: 'closed', why: 'fermée', at: 9_000, sessionId: UUID, branch: 'worktree-groupe-essai-A-2', worktree: '/r/.claude/worktrees/groupe-essai-a-2', cleanupAt: 9_500 }
+const CLOSING = { state: 'closed', why: 'fermée', at: 9_000, sessionId: UUID, branch: 'worktree-groupe-essai-A-2', worktree: '/r/.claude/worktrees/groupe-essai-a-2', cleanupAt: 9_500, securityOff: true }
 const CLOSED_LINK = { at: 3_000, session: 'sess-1', seq: 1, closing: { ...CLOSING, at: 3_500, branch: 'worktree-groupe-essai-A' } }
 const GROUP_LINK = { at: 4_000, session: 'sess-2', closeAskedAt: 8_000, seq: 2, closing: CLOSING, touchedAt: 7_000, earlier: [CLOSED_LINK] }
 const LINKED_WORK = { items: ['p1'], at: 4_000, session: 'sess-p', missedAt: 4_500, closing: CLOSING, touchedAt: 7_000, closeAskedAt: 8_000, seq: 2 }
@@ -201,7 +201,7 @@ test('fusion de deux copies d’une rétro : la fermeture des pistes et l’envo
 test('le test voit un champ perdu : un lien sans « earlier » échoue', () => {
   const { earlier: _, ...without } = GROUP_LINK
   assert.deepEqual(lost('GroupLink', without), ['earlier'])
-  assert.deepEqual(lost('GroupLink', { ...GROUP_LINK, closing: { state: 'closed', at: 1 } }), ['closing.why', 'closing.sessionId', 'closing.branch', 'closing.worktree', 'closing.cleanupAt'])
+  assert.deepEqual(lost('GroupLink', { ...GROUP_LINK, closing: { state: 'closed', at: 1 } }), ['closing.why', 'closing.sessionId', 'closing.branch', 'closing.worktree', 'closing.cleanupAt', 'closing.securityOff'])
 })
 
 // Les données d'un groupe qui viennent de son plan (`groups` de l'outil) ; tout autre champ se garde

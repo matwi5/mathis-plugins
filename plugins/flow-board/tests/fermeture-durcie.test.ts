@@ -126,15 +126,18 @@ test('« déjà retiré » demande aussi que le dossier ait disparu (test -e), p
   expect(text).toContain("git worktree list --porcelain n’a plus de bloc pour <worktree> et test -e '<worktree>' échoue")
 })
 
-test('les types générés d’un mod sont jetables seulement identiques à ceux du clone principal (série 13)', () => {
+test('les types générés d’un mod sont jetables en entier, sans comparaison au clone principal : ils se régénèrent', () => {
   const text = closingProcedure({ run, target: group, isRepo: true, session: '178bd61c' })
-  expect(text).toContain(
-    "les types générés d’un mod, un dossier <plugin>/.claude-plugin/types/, seulement s’ils sont identiques à ceux du clone principal au même chemin (diff -rq '<worktree>/<plugin>/.claude-plugin/types' '<dossier du dépôt>/<plugin>/.claude-plugin/types' ne dit rien et rend 0) ; s’ils diffèrent, ou si le clone principal n’en a pas, ils arrêtent la fermeture comme tout autre fichier ignoré",
-  )
-  // Pas exclus d'office : ils restent listés par ls-files, pour être comparés ; « jetables en entier » ne vaut que pour les dossiers exclus.
-  expect(text).not.toContain('.claude-plugin/types/**')
+  expect(text).toContain('les types générés d’un mod, un dossier .claude-plugin/types/ à toute profondeur, en entier : ils se régénèrent')
+  // Plus de comparaison : une version différente de celle du clone principal ne bloque plus la fermeture.
+  expect(text).not.toContain('diff -rq')
+  expect(text).not.toContain('identiques à ceux du clone principal')
+  // Exclus de la liste des ignorés par leur seul chemin `.claude-plugin/types/` : jamais un `types/` écrit à la main.
+  expect(text).toContain("':(exclude,glob)**/.claude-plugin/types/**'")
+  expect(text).not.toContain("':(exclude,glob)**/types/**'")
   expect(text).not.toContain('les dossiers de la liste sont jetables en entier')
-  expect(text).toContain('les types générés d’un mod, eux, seulement après ce diff -rq')
+  // `git status` reste entier : un fichier modifié ou non suivi sous ce dossier arrête toujours la fermeture.
+  expect(text).toContain("git -C '<worktree>' status --porcelain --untracked-files=all doit être vide ; puis")
   // Une valeur à apostrophe arrête la fermeture.
   expect(text).toContain('<worktree>, <dossier>, <dossier du dépôt> et <plugin> n’ont ni apostrophe, ni saut de ligne, ni caractère de contrôle')
 })

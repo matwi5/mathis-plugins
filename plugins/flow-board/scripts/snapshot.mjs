@@ -28,13 +28,17 @@
 // (la fermeture d'un groupe ne le voit pas) et effacé avec lui ; dans le clone principal, il est
 // `.git/flow-board/revue-<id>`, commun à ses discussions et jamais effacé ; des noms génériques de /tmp
 // avaient écrasé les copies d'une autre session. Les deux premières formes le créent et l'impriment aussi.
-// `--clean` supprime la référence du ticket nommé, et elle seule, une fois son vrai commit posé : un
-// commit de la première lignée de HEAD depuis le parent de l'instantané (`git rev-list --first-parent
-// <instantané>^..HEAD`, ce parent ancêtre de HEAD : un commit venu d'une fusion ne compte pas) doit porter chaque fichier que l'instantané change, à sa
-// version figée (suppressions comprises) ; le commit du ticket peut porter d'autres fichiers (son fichier
-// de ticket) et d'autres commits venir entre-temps. Sinon, ou sans référence, rien n'est supprimé.
-// L'invariant : une référence d'instantané n'est supprimée qu'une fois le commit de son ticket
-// (correctifs compris) dans la branche, et jamais celle d'un autre ticket.
+// `--clean` supprime la référence du ticket nommé, et elle seule, une fois son vrai commit posé : chaque
+// fichier que l'instantané change doit être amené à sa version figée (suppressions comprises) par un
+// commit de la première lignée de HEAD depuis le parent de l'instantané qui change ce fichier face à son
+// premier parent (`git rev-list --first-parent --no-merges <instantané>^..HEAD -- <fichier>`, ce parent
+// lui-même sur la première lignée de HEAD : ni une fusion, ni un commit qui ne fait qu'hériter de la
+// version, ni la première lignée d'une autre branche ne comptent), fichier par fichier : un commit plus
+// récent (le ticket suivant) peut les avoir changés depuis, et le commit du ticket peut porter d'autres
+// fichiers (son fichier de ticket).
+// Sinon, tant qu'un fichier de l'instantané a un changement non commité, ou sans référence, rien n'est
+// supprimé. L'invariant : une référence d'instantané n'est supprimée que si chaque fichier de
+// l'instantané, à sa version figée, se trouve dans un commit de la branche ; jamais celle d'un autre ticket.
 // Un id hors forme, un fichier qui commence par « - », un index qui porte un autre fichier ou aucun
 // changement : rien n'est posé ni écrit, le message dit pourquoi, code 1 ; un refus venu après
 // l'indexation de la première forme (instantané reposé, casse) laisse l'index tel que `git add` l'a fait,
@@ -181,8 +185,10 @@ const pinned = (cwd, ref) => {
 const hasPending = (cwd, file) => !sameFiles(cwd, ['--cached', 'HEAD'], [file]) || !sameFiles(cwd, ['HEAD'], [file])
 
 /**
- * Supprime la référence d'instantané de `ticket`, seulement si un commit de la branche porte chaque
- * fichier que l'instantané change à sa version figée ; rend la référence, l'instantané et ce commit.
+ * Supprime la référence d'instantané de `ticket`, seulement si chaque fichier que l'instantané change est
+ * amené à sa version figée par un commit de la première lignée de HEAD, hors fusions, qui change ce fichier
+ * (pas forcément le même pour tous), le parent de l'instantané étant lui-même sur cette lignée ; rend la
+ * référence, l'instantané, et pour chaque fichier le premier commit qui l'y amène.
  */
 export const clean = (ticket, cwd = process.cwd()) => {
   if (!isSafeTicket(ticket)) throw new SnapshotError(`id de ticket hors forme : ${JSON.stringify(ticket)} (lettres, chiffres, _ et -, 64 au plus)`)
@@ -197,21 +203,34 @@ export const clean = (ticket, cwd = process.cwd()) => {
   // Un correctif encore dans l'index ou l'arbre n'est pas commité : le commit égal à l'instantané ne suffit pas.
   const pending = files.filter(f => hasPending(top, f))
   if (pending.length > 0) throw new SnapshotError(`l'index ou l'arbre de travail portent encore un changement de ${pending.join(', ')} face à HEAD : un correctif du ticket pas encore commité (reposer son instantané sur la version à commiter, puis commiter), ou le travail d'un ticket suivant dans ces fichiers (relancer --clean après son commit, sans reposer l'instantané, qui l'y ferait entrer) ; la référence ${ref} (${snap}) reste`)
-  // Seule la première lignée de HEAD depuis le parent de l'instantané : un commit venu d'une fusion
-  // (une autre branche, où un fichier supprimé par le ticket n'a jamais existé) ne passe pas pour le sien.
+  // Seule la première lignée de HEAD depuis le parent de l'instantané, sans ses fusions, et pour chaque
+  // fichier les seuls commits qui le changent : un commit d'une autre branche (où un fichier supprimé par le
+  // ticket n'a jamais existé), la fusion qui l'apporte ou un commit qui ne fait qu'hériter de la version ne
+  // passent pas pour celui du ticket.
   if (spawnSync('git', ['merge-base', '--is-ancestor', `${snap}^`, 'HEAD'], { cwd: top, stdio: 'ignore' }).status !== 0) throw new SnapshotError(`le parent de l'instantané ${snap} n'est pas un ancêtre de HEAD (branche réécrite ou changée) : rien ne montre que le ticket y est commité ; la référence ${ref} reste`)
-  const commits = names(top, ['rev-list', '--first-parent', '-z', `${snap}^..HEAD`])
-  const found = commits.find(c => sameFiles(top, [c, snap], files))
-  if (found === undefined) {
-    const differ = names(top, ['diff', '--no-renames', '--name-only', '-z', 'HEAD', snap, '--', ...files])
-    throw new SnapshotError(`aucun commit de la branche depuis ${snap.slice(0, 12)}^ ne porte ensemble les fichiers de l'instantané à leur version figée (à HEAD, diffèrent : ${differ.join(', ') || 'aucun'}) ; si le ticket est commité avec un fichier changé après l'instantané (sa ligne Status:, un correctif), l'instantané n'a pas été reposé avant le commit : le dire au manager ; la référence ${ref} (${snap}) reste`)
+  // Le parent de l'instantané sur la première lignée de HEAD : sinon (une avance rapide sur une fusion, la
+  // branche du ticket entrée par un second parent), cette lignée est celle d'une autre branche, dont un commit
+  // passerait pour celui du ticket. Le plus ancien commit de la lignée depuis ce parent doit l'avoir pour
+  // premier parent.
+  const parent = git(top, ['rev-parse', '--verify', `${snap}^{commit}^`])
+  const lineage = names(top, ['rev-list', '--first-parent', '-z', `${parent}..HEAD`])
+  if (lineage.length > 0 && git(top, ['rev-parse', '--verify', `${lineage.at(-1)}^`]) !== parent) throw new SnapshotError(`le parent de l'instantané ${snap} n'est pas sur la première lignée de HEAD (une avance rapide sur une fusion, ou la branche du ticket entrée par un second parent) : les commits de cette lignée ne sont pas ceux du ticket ; vérifier à la main que le commit du ticket porte chaque fichier à sa version figée, puis le dire au manager ; la référence ${ref} reste`)
+  // Fichier par fichier, du plus ancien au plus récent : le premier commit qui amène le fichier à sa version
+  // figée (le commit du ticket), même si un commit plus récent l'a changé depuis.
+  const found = new Map()
+  for (const f of files) {
+    const commits = names(top, ['rev-list', '--first-parent', '--no-merges', '--reverse', '-z', `${snap}^..HEAD`, '--', f])
+    const c = commits.find(c => sameFiles(top, [c, snap], [f]))
+    if (c !== undefined) found.set(f, c)
   }
+  const left = files.filter(f => !found.has(f))
+  if (left.length > 0) throw new SnapshotError(`fichiers de l'instantané sans commit qui les porte à leur version figée : ${left.join(', ')} (aucun commit de la première lignée depuis ${snap.slice(0, 12)}^ ne les y amène, fusions exclues) ; soit le ticket n'est pas encore commité, soit il l'est avec un fichier changé après l'instantané (sa ligne Status:, un correctif) sans l'avoir reposé avant le commit : le dire au manager ; la référence ${ref} (${snap}) reste`)
   // Supprimée seulement si elle désigne encore l'instantané vérifié : une référence déplacée entre-temps reste.
   git(top, ['update-ref', '--no-deref', '-d', ref, snap])
   // Relue après coup : seule une référence qui désigne encore l'instantané vérifié est un échec (une
   // pose venue entre-temps en a posé une autre).
   if (pinned(top, ref) === snap) throw new SnapshotError(`la référence ${ref} désigne toujours l'instantané ${snap} après sa suppression`)
-  return { ref, snap, commit: found, files }
+  return { ref, snap, commits: Object.fromEntries(found), files }
 }
 
 const BACKSLASH = String.fromCharCode(92)
@@ -284,8 +303,9 @@ const main = argv => {
   try {
     if (argv[0] === '--clean') {
       if (argv.length !== 2) throw new SnapshotError('--clean <id du ticket>')
-      const { ref, snap, commit, files } = clean(argv[1])
-      console.log(`Référence ${ref} supprimée (instantané ${snap}) : le commit ${commit} de la branche porte ${files.length > 1 ? `les ${files.length} fichiers` : 'le fichier'} de l'instantané à leur version figée.`)
+      const { ref, snap, commits, files } = clean(argv[1])
+      const by = [...new Set(Object.values(commits))]
+      console.log(`Référence ${ref} supprimée (instantané ${snap}) : ${by.length > 1 ? `les commits ${by.join(', ')} de la branche portent` : `le commit ${by[0]} de la branche porte`} ${files.length > 1 ? `les ${files.length} fichiers` : 'le fichier'} de l'instantané à leur version figée.`)
       return 0
     }
     if (argv[0] === '--dossier') {

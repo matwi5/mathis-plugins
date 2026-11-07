@@ -22,7 +22,7 @@ Le projet de suivi vient du bloc « Suivi Asana » du `CLAUDE.md` de l'utilisate
 
 L'utilisateur est `"me"` dans les outils. Sans ce bloc, dis-le en une phrase, propose `/setup:install` et arrête-toi.
 
-Limites du plan gratuit et conventions par défaut : `references/conventions.md`. Lis-le à chaque exécution, puis le fichier de conventions du bloc s'il y en a un : il prime. La section et la tâche mère d'un projet viennent de son `CLAUDE.md` ou de ses instructions ; à défaut, de la liste réelle des sections (étape 2). Ce skill ne garde aucune correspondance projet → section.
+Les règles du suivi (quelle tâche a un ticket, l'accord avant écriture et ses exceptions, la tenue à jour), dont la règle commune `config/rules/asana-board.md` ne garde que le résumé : `references/regles.md`, à lire à chaque exécution. Limites du plan gratuit et conventions par défaut : `references/conventions.md`. Lis-le à chaque exécution, puis le fichier de conventions du bloc s'il y en a un : il prime. La section et la tâche mère d'un projet viennent de son `CLAUDE.md` ou de ses instructions ; à défaut, de la liste réelle des sections (étape 2). Ce skill ne garde aucune correspondance projet → section.
 
 ## Connexion au connecteur Asana
 

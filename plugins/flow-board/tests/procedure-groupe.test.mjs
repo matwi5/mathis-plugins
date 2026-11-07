@@ -35,6 +35,7 @@ test('la procédure a chaque étape : questions, tickets, règles, revue du grou
     '8. Le fichier des choix déjà déclarés',
     '9. Sans git',
     '10. Worker autonome',
+    '11. Pour le manager : effort des workers, après leur compte rendu',
   ])
 })
 
@@ -84,7 +85,7 @@ test('worker autonome : seulement sur le dire du prompt, choix tranchés après 
   // Les règles se citent, elles ne se recopient pas.
   assert.doesNotMatch(s, /effort high, passés explicitement|Standards et Spec dans un seul/)
   // Hors d'un worker autonome, les choix de conception attendent toujours la réponse.
-  has(section(1), "Seules les questions sensibles et les choix de conception attendent ma réponse (sauf dans un worker autonome : section 10)")
+  has(section(1), "Seules les questions sensibles et les choix de conception me sont posés (sauf dans un worker autonome : section 10), la recommandation codée en attendant : le commit d'un ticket n'attend que les cas de la section 3")
   // Le texte de délégation la cite par la procédure, quand l'effort est xhigh.
   assert.match(register, /elle applique la section « Worker autonome » de la procédure\"/)
 })
@@ -133,7 +134,7 @@ test('avant le premier ticket : les questions sensibles en une fois, trouvées p
     'Me poser en une fois les questions sensibles du groupe',
     'une passe en lecture seule « ce qui viole l\'invariant » sur chaque ticket sensible et le code qu\'il touche',
     'remonte toutes ses questions d\'un coup',
-    'En attendant mes réponses, avancer les tickets qui n\'en dépendent pas',
+    'En attendant mes réponses, coder l\'option recommandée de façon réversible et continuer : seul le commit d\'un ticket touché par une question des cas bloquants de la section 3 attend sa réponse',
     'Un choix qui change qui écrit, fusionne ou efface une donnée est une question, jamais un choix déclaré',
   )
   assert.ok(!section(1).includes('et attendre mes réponses'), 'la session attend encore à vide')
@@ -151,11 +152,11 @@ test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un r
     'un ticket devenu très sensible sans invariant dans son texte est une question sensible (section 3) avant d\'être commencé',
     'le relais y reconnaît la passe « bogues » d\'un ticket en cours',
     'n\'est pas un blocage externe : le ticket reste « en cours », ligne « Statut : en attente (porteur) », jamais « blocked » au tableau de bord',
-    '`<tdd>` par l\'outil Skill (le sauter pour un ticket sans comportement testable : une ressource visuelle, un document)',
+    '`<tdd>` ne sert qu\'à un ticket qui change un comportement testable : le sauter pour un ticket de texte ou de renommage',
     'sur les seuls changements du ticket (point fixe : le commit d\'avant le ticket). Pour un ticket hors zone sensible, les deux axes dans un seul spécialiste relecteur (outil Agent, modèle opus, effort medium, passés explicitement), quelle que soit la taille du diff',
     'Pour un ticket sensible ou très sensible (un ticket muet compte comme sensible), l\'axe Spec seul, sans l\'axe Standards que sa passe « bogues » refait, dans un seul spécialiste relecteur (outil Agent, modèle opus, effort high, passés explicitement), nommé « Spec · <ticket> », d\'après la variante « axe Spec seul » du gabarit `prompt-relecteur.md`',
     'il ne juge pas le code sur `CODING_STANDARDS.md`, et ses constats partent avec `"standards": 0` (point 8)',
-    'arguments « <niveau> <plage de l\'instantané> consignes : <chemin> »',
+    'arguments « <niveau> --max-findings all <plage de l\'instantané> consignes : <chemin> »',
     '<niveau> valant xhigh si le ticket supprime des données ou touche la concurrence',
     'l\'invariant du ticket quand il en a un',
     'Après la passe « bogues », une seule passe high relit tout ce qui a changé depuis son instantané : ses correctifs, et le code ajouté après elle',
@@ -217,7 +218,7 @@ test('revue de sécurité : relecteur en lecture seule sur le diff du groupe, ja
     section(5),
     'Un groupe sans logique ni zone sensible n\'a ni revue du groupe ni revue de sécurité. Pour tout autre groupe, juger si une revue de sécurité vaut la peine : dans le même message que la revue du groupe (elle est en lecture seule et n\'attend pas ses correctifs), ou, pour un groupe d\'un seul ticket, qui n\'a pas de revue du groupe, à la fin de son ticket',
     'dans le même message que la revue du groupe',
-    'type general-purpose, modèle opus, effort high pour sa recherche et ses vérifications, en une seule passe',
+    'type general-purpose, modèle opus, effort high, en une seule passe : il cherche et vérifie lui-même, sans lancer d\'agent',
     'les changements du groupe font franchir quelque chose à la limite du compte',
     'un fichier sous `~/.claude` écrit par une autre session du compte n\'est pas une entrée hostile, et ni une suppression de données ni la concurrence seule n\'en font partie',
     'avec pour seul périmètre `git diff <base>..<lancement>`',
@@ -233,7 +234,7 @@ test('compte rendu : complet au relais, une ligne au manager', () => {
   has(
     section(6),
     'les fichiers modifiés, sa branche, les contrôles lancés et leur résultat',
-    'la revue du groupe (constats, corrigés, et à part les constats sur du code antérieur au lot), la revue de sécurité (lancée ou non, pourquoi, failles trouvées)',
+    'la revue du groupe (constats, corrigés, et à part les constats sur du code antérieur au lot, chacun avec sa gravité), la revue de sécurité (lancée ou non, pourquoi, failles trouvées)',
     '`{"report": "<le compte rendu entier>"}`',
     'une seule ligne qui renvoie au relais',
   )
@@ -268,7 +269,7 @@ test('sans git : copies avant chaque ticket, points fixes et périmètres par ce
 test('une lecture d’une décision hors zone sensible se code, se déclare et la session continue', () => {
   has(
     section(1),
-    'Seules les questions sensibles et les choix de conception attendent ma réponse',
+    'Seules les questions sensibles et les choix de conception me sont posés',
     'la coder selon l\'option la plus proche de la décision, la déclarer dans `{"decided": …}` avec sa raison, et continuer',
   )
 })
@@ -374,12 +375,26 @@ test('un constat de passe « bogues » qui ne viole pas l’invariant va aux pis
   has(template, 'un constat qui ne le viole pas se range sous « Pistes », sans question ni correctif')
 })
 
-test('une question sensible née en cours de ticket part tout de suite, le commit attend la réponse', () => {
+test('une question sensible née en cours de ticket part tout de suite, la recommandation codée ; le commit n’attend que les cas bloquants', () => {
   has(
     section(3),
     'Une question sensible née en cours de ticket part tout de suite au manager par SendMessage (ses options, la recommandée en tête), sans attendre le compte rendu',
-    'le commit du ticket attend la réponse, et la session avance ce qui n\'en dépend pas',
+    'avec l\'option recommandée déjà codée de façon réversible',
+    'Le commit du ticket n\'attend la réponse que pour une question des cas qui bloquent en mode auto',
+    'ou un choix sensible dont l\'option recommandée ne respecte pas l\'invariant ou n\'est pas la plus prudente)',
+    'pour toute autre question, le ticket se commite avec la recommandation, et un refus la défait dans un commit à part, qui suit la procédure du ticket',
+    'la session avance ce qui n\'en dépend pas',
   )
+  assert.ok(!section(3).includes('le commit du ticket attend la réponse'), 'le commit attend encore toute réponse')
+})
+
+test('en mode auto, une violation corrigée au plus prudent après les correctifs est une ligne d’information', () => {
+  has(section(2), 'dans une mission en mode auto, une violation ainsi corrigée de la façon la plus prudente (section 10) n\'est pas une question : elle part en une ligne d\'information')
+  has(section(10), 'de même pour une violation de l\'invariant que la passe d\'après les correctifs trouve encore')
+})
+
+test('un fichier nouveau d’un ticket suivant attend dans le dossier temporaire jusqu’au commit du ticket courant', () => {
+  has(section(2), 'un fichier qu\'un ticket suivant crée s\'écrit dans le dossier temporaire de la session (section 3) jusqu\'au commit du ticket courant', 'il en va de même de tout fichier nouveau d\'un ticket suivant (point 6)')
 })
 
 test('du code écrit après la passe « bogues » repasse en revue, la ligne « Zone sensible » du ticket qui reçoit une garde se relit', () => {
@@ -440,6 +455,34 @@ test('les tests écrits d’avance pour un ticket suivant attendent hors du doss
   )
 })
 
+// À 6 tickets, la compaction automatique est tombée pendant la rédaction du compte rendu : seul un fichier
+// de notes ouvert de lui-même l'a sauvé.
+test('un fichier de notes du compte rendu, tenu en route et relu pour rédiger', () => {
+  has(section(1), '`notes-compte-rendu.md`', 'dans le dossier temporaire de la session', 'ce que le CHANGELOG devra dire', 'les choix déclarés')
+  has(section(6), 'Relire en entier le fichier de notes du compte rendu, `notes-compte-rendu.md`')
+})
+
+// La passe « questions sensibles d'abord », faite dans la session, avait fait monter son contexte d'environ 110k.
+test('la passe des questions sensibles se confie à un spécialiste en lecture seule', () => {
+  has(section(1), 'spécialiste en lecture seule', 'modèle opus, effort high', 'fichier:ligne')
+})
+
+// Les décisions prises après le départ d'une branche manquaient à sa copie du fichier : il se lit au clone principal.
+test('le fichier de décisions se lit par Read à son chemin absolu dans le clone principal, pour la session et ses relecteurs', () => {
+  has(section(2), 'par Read, à son chemin absolu dans le clone principal, que donne le prompt')
+  has(template, 'se lit par Read à ce chemin absolu, celui du clone principal quand il y est')
+})
+
+// Une session avait envoyé au manager un point d'étape sans question réelle, qui le réveillait pour rien.
+test('un worker n’écrit au manager que pour une question dont il attend la réponse, ou son compte rendu', () => {
+  has(section(3), "n'écrit au manager que pour une question dont il attend la réponse, ou pour son compte rendu")
+})
+
+// Aucun worker de la rétro « Pistes de rétro en groupes » n'avait ouvert l'index du README de flow-board.
+test('un index « concept → fichier et fonction » du README se lit d’abord, les gros fichiers par fonction', () => {
+  has(section(3), '« Index : concept → fichier et fonction »', 'par fonction')
+})
+
 test('les phrases jamais suivies sont retirées', () => {
   for (const old of ['se cochent par l\'outil Edit, sans script', 'sans nouvelles depuis 10 à 15 minutes']) assert.ok(!procedure.includes(old), `reste : « ${old} »`)
 })
@@ -476,7 +519,7 @@ test('un worker ne demande jamais d’envoyer "sensitive" lui-même : il corrige
 
 test('un ticket reclassé par un worker : la description de l’outil fait renvoyer "sensitive" par le manager', () => {
   // L'outil ne relaie pas "tickets" depuis un worker : au retour du groupe, le manager renvoie le ticket.
-  assert.ok(register.includes('and resend in "tickets", with "sensitive": true, every ticket its report says it reclassified (a worker cannot send it)'))
+  assert.ok(register.includes('and resend with "sensitive": true each ticket its report reclassified (a worker cannot send it)'))
 })
 
 test('la passe « bogues » d’un ticket sensible cite le critère d’effort qui lui est propre, dans la méthode de sécurité', () => {
@@ -484,4 +527,12 @@ test('la passe « bogues » d’un ticket sensible cite le critère d’effort q
   const method = read('reference/revue-securite.md')
   assert.ok(method.includes('### Critère d\'effort de la passe « bogues » d\'un ticket sensible'))
   assert.ok(register.includes('as the bug pass effort criterion of the security review method file decides') || read('hooks/catalog.ts').includes('as the bug pass effort criterion of the security review method file decides'))
+})
+
+// Rétro de la mission « Coordinateur de parcours » : les passes « bogues » rendaient exactement 15 constats en xhigh et
+// 10 en high, le plafond de /code-review quelle que soit la taille du diff.
+test('la passe « bogues » passe --max-findings all, avec ou sans git', () => {
+  has(section(2), 'sans `--max-findings all`, elle s\'arrête, avec la table de recettes par défaut, à 10 constats en high et 15 en xhigh, quelle que soit la taille du diff')
+  has(section(9), 'la passe « bogues » prend pour arguments « <niveau> --max-findings all consignes : <chemin> », sans plage')
+  has(template, 'lancée avec `--max-findings all`, elle range ses constats par gravité, les bogues d\'abord')
 })

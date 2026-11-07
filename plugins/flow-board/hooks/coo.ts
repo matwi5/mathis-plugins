@@ -6,11 +6,12 @@
 // neutralisé, entre guillemets, et le relevé le dit.
 
 import type { Board, Run, TicketGroup, WaitsUser } from '../types'
-import { currentPhase } from './basics.ts'
+import { currentPhase, shownGroupId } from './basics.ts'
 import { SKILLS } from './catalog.ts'
-import { asciiJson, isSafeId, neutralInPrompt, neutralLine } from './closing.ts'
+import { COO_EFFORT, effortSent } from './effort.ts'
+import { asciiJson, consentDay, isGroupId, isOwnBranch, isSafeId, neutralInPrompt, neutralLine } from './closing.ts'
 import { isClosedLink } from './link.ts'
-import { OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, crossedLaunches, isAutoOn, isStoredPause, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
+import { OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, crossZones, crossedLaunches, isAutoOn, isStoredPause, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
 import { RELAY_PENDING_MS, type CoordAnswer, type CoordGesture } from './coordination.ts'
 import type { PlanWait, ProjectPlan } from './plan-projet.ts'
 import type { Roadmap, RoadmapEntry, RoadmapGone, RoadmapGoneText } from './roadmap.ts'
@@ -112,7 +113,9 @@ export type CooStatement = {
   holds: CooHold[]
   /** Deux groupes en cours de deux missions sur un fichier ou une ressource en commun : deux lancements croisés. */
   crossed: ReturnType<typeof crossedLaunches>
-  /** L'effort actif de la discussion du COO, relevé sur sa dernière requête ; null s'il n'est pas connu. */
+  /** Les groupes en cours dont des fichiers ont reçu des commits hors mission dans la branche de travail depuis leur départ. */
+  outside?: OutsideCommits[]
+  /** L'effort choisi dans la discussion du COO, relevé sur sa dernière requête (avant la règle du COO) ; null s'il n'est pas connu. */
   effort: string | null
   /** `BRIEF.md` à la racine du projet ; null quand la lecture n'a pas répondu. */
   hasBrief: boolean | null
@@ -138,6 +141,11 @@ export type CooStatement = {
   plan?: CooPlan
   /** La prochaine vague du projet, à lancer d'un clic, et ce que sont devenues les vagues lancées. */
   wave?: CooWave
+  /**
+   * L'archivage d'office (`/flow archive on`) : la date de l'accord, null s'il est éteint, absent quand
+   * l'accord n'a pas été relu (le relevé ne devine pas : il renvoie à `/flow archive`).
+   */
+  archive?: number | null
 }
 
 /**
@@ -246,6 +254,119 @@ export type CooRoadmap = {
 /** Les tickets d'un groupe, rattachés par le plan compris, comme le panneau les compte. */
 const groupIds = (run: Run, g: TicketGroup): string[] => [...new Set([...g.tickets, ...attachedIdsOf(run, g)])]
 
+// ─── Commits hors mission sur les fichiers d'un groupe en cours ────────────
+
+/**
+ * Un groupe en cours (chez un worker, pas rendu) d'une mission : depuis quand, les chemins comparables de ses
+ * fichiers, et la reconnaissance de la branche de son worker parmi celles que git liste (les noms que flow-board
+ * donne à cette session : `worktree-<worktree>`, `<worktree>`, `claude/<worktree>-<suffixe>`), jamais un nom passé à git.
+ */
+export type WatchedGroup = { missionId: string; mission: string; group: string; since: number; paths: string[]; isBranch: (name: string) => boolean }
+
+/**
+ * Les groupes chez un worker de chaque mission, close ou archivée comprise (leur worker écrit encore, comme pour
+ * les retenues), avec les fichiers du groupe et de ses tickets (rattachés compris), comparables comme les retenues
+ * les comparent (`crossZones` : barres obliques, « ./ », casse, sans les documents communs) ; un groupe sans fichier
+ * n'est pas relevé. Ces chemins, relus du fichier des missions, ne servent qu'à comparer : aucun n'entre dans une commande git.
+ */
+export const watchedGroups = (board: Board): WatchedGroup[] =>
+  board.runs
+    .filter(r => isSafeId(r.id))
+    .flatMap(run =>
+      (run.groups ?? []).flatMap(g => {
+        const link = g.linked
+        if (!isGroupId(g.id) || typeof link?.at !== 'number' || !Number.isFinite(link.at)) return []
+        const raw: unknown[] = [...(Array.isArray(g.files) ? g.files : []), ...groupIds(run, g).flatMap(id => run.tickets.find(t => t.id === id)?.files ?? [])]
+        const paths = crossZones(raw.filter((p): p is string => typeof p === 'string')).map(z => z.key)
+        const target = { kind: 'group' as const, id: g.id, name: g.name }
+        return paths.length === 0 ? [] : [{ missionId: run.id, mission: run.title, group: g.id, since: link.at, paths, isBranch: (name: string) => isOwnBranch(run, target, link.seq, name) }]
+      }),
+    )
+
+/** Un sha que git a écrit. */
+export const isSha = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{40,64}$/.test(value)
+
+/**
+ * Un commit lu par `git log --format=%x1e%H%x1f%ct%x1f%P%x1f%s --name-only` : son heure (ms), s'il est une fusion,
+ * son sujet et ses fichiers, déjà comparables (`crossZones` : les documents communs n'y sont plus).
+ */
+export type LoggedCommit = { sha: string; at: number; files: string[]; subject?: string; isMerge?: boolean }
+
+/** Les commits de la sortie de `git log` (un enregistrement par `\u001e`) ; un enregistrement qui ne se lit pas est laissé. */
+export const parseLoggedCommits = (stdout: string): LoggedCommit[] =>
+  stdout.split('\u001e').flatMap(block => {
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l !== '')
+    const [sha, ct, parents, ...subject] = (lines[0] ?? '').split('\u001f')
+    const at = Number(ct) * 1000
+    if (!isSha(sha) || !ct || !Number.isFinite(at)) return []
+    const files = crossZones(lines.slice(1)).map(z => z.key)
+    return [{ sha, at, files, ...(subject.length > 0 ? { subject: subject.join('\u001f') } : {}), ...((parents ?? '').trim().split(/\s+/).length > 1 ? { isMerge: true } : {}) }]
+  })
+
+/**
+ * Un commit d'un manager, relevé dans le journal de sa mission (« ⎇ Commit », ou « ⤞ Merge » pour une fusion qui crée
+ * son commit, à la fin de la commande) : un commit de la branche daté de 2 minutes avant au plus (le hook pre-commit
+ * tourne avant la date du commit) jusqu'à 2 secondes après ; chaque ligne du journal n'excuse qu'un commit, le plus proche.
+ */
+const MANAGER_BEFORE_MS = 120_000
+const MANAGER_AFTER_MS = 2_000
+
+/** Les commits sans ceux des managers des missions (leur journal, archivées comprises) : les commits hors mission. */
+const withoutManagerCommits = (commits: readonly LoggedCommit[], board: Board): LoggedCommit[] => {
+  const left = [...commits]
+  const marks = board.runs
+    .flatMap(r => (Array.isArray(r.log) ? r.log : []))
+    .filter(e => typeof e?.at === 'number' && typeof e.text === 'string' && ((e.glyph === '⎇' && e.text.startsWith('Commit')) || (e.glyph === '⤞' && e.text.startsWith('Merge'))))
+  for (const m of marks) {
+    // « Commit : <sujet> » (un message donné par -m, tel quel) n'excuse qu'un commit de ce sujet, espaces réduits ; un
+    // message composé par le shell (« $( », « << », guillemet échappé) ne se compare pas : la fenêtre seule décide.
+    const raw = m.glyph === '⎇' && m.text.startsWith('Commit : ') ? m.text.slice('Commit : '.length) : null
+    const said = raw !== null && !/\$\(|<<|\\/.test(raw) ? squeeze(raw) : null
+    const isSame = (c: LoggedCommit): boolean => {
+      // Une ligne « ⤞ Merge » n'excuse qu'une fusion (une avance rapide, « --squash » ou « --abort » n'en créent pas).
+      if (m.glyph === '⤞' && c.isMerge !== true) return false
+      if (said === null) return true
+      const subject = squeeze(c.subject ?? '')
+      return subject === said || (said.endsWith('…') && subject.startsWith(said.slice(0, -1))) || subject.startsWith(`${said} `)
+    }
+    let best = -1
+    left.forEach((c, i) => {
+      if (c.at >= m.at - MANAGER_BEFORE_MS && c.at <= m.at + MANAGER_AFTER_MS && isSame(c) && (best < 0 || Math.abs(m.at - c.at) < Math.abs(m.at - left[best]!.at))) best = i
+    })
+    if (best >= 0) left.splice(best, 1)
+  }
+  return left
+}
+
+/** Un fichier d'un commit qui tombe sur un chemin d'un groupe : le même, ou sous ce dossier. */
+const isUnder = (file: string, path: string): boolean => file === path || file.startsWith(`${path}/`)
+
+/** Un texte aux espaces réduits, comme git écrit le sujet d'un message. */
+const squeeze = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
+/** Les commits hors mission sur les fichiers d'un groupe en cours, comptés depuis son départ. */
+export type OutsideCommits = { missionId: string; mission: string; group: string; count: number }
+
+/** La clé d'un groupe surveillé, pour ses commits propres. */
+export const watchedKey = (g: Pick<WatchedGroup, 'missionId' | 'group'>): string => `${g.missionId}/${g.group}`
+
+/**
+ * Par groupe en cours, les commits de la première lignée de la branche de travail (une fusion y compte une fois,
+ * avec ses fichiers face à son premier parent) faits depuis son départ sur ses fichiers, hors commits des managers
+ * et hors commits de la branche de son propre worker (`own`, par `watchedKey` : une fusion en avance rapide met ses
+ * commits dans la première lignée) ; seuls les groupes touchés.
+ */
+export const outsideCommitCounts = (groups: readonly WatchedGroup[], commits: readonly LoggedCommit[], board: Board, own: ReadonlyMap<string, ReadonlySet<string>> = new Map()): OutsideCommits[] => {
+  const outside = withoutManagerCommits(commits, board)
+  return groups
+    .map(g => {
+      const mine = own.get(watchedKey(g))
+      return { missionId: g.missionId, mission: g.mission, group: g.group, count: outside.filter(c => c.at >= g.since && !mine?.has(c.sha) && c.files.some(f => g.paths.some(p => isUnder(f, p)))).length }
+    })
+    .filter(x => x.count > 0)
+}
+
+
 const doneOf = (run: Run, ids: readonly string[]): number => ids.filter(id => run.tickets.find(t => t.id === id)?.status === 'done').length
 
 /** Les workers d'une mission : un groupe confié en cours, ou rendu sans être fermé. */
@@ -292,6 +413,10 @@ export const cooStatement = (
     retroPicks?: CooRetroPicks[]
     /** Les gestes et les réponses écrites du fichier de coordination, relus à l'instant. */
     relays?: readonly (CoordGesture | CoordAnswer)[]
+    /** L'accord d'archivage d'office relu à l'instant : sa date, ou null s'il est éteint. */
+    archive?: number | null
+    /** Les commits hors mission sur les fichiers des groupes en cours, relevés à l'instant. */
+    outside?: OutsideCommits[]
   },
 ): CooStatement => {
   const runs = board.runs.filter(r => r.archivedAt === undefined).sort((x, y) => RANK[x.status] - RANK[y.status] || y.updatedAt - x.updatedAt)
@@ -348,8 +473,8 @@ export const cooStatement = (
   const extra = { ...(pistes ? { pistes } : {}), ...(ctx.boxesUnread && ctx.boxesUnread.length > 0 ? { boxesUnread: ctx.boxesUnread } : {}), ...(ctx.setAside ? { setAside: ctx.setAside } : {}), ...(ctx.toGlean ? { toGlean: ctx.toGlean } : {}), ...(ctx.existingGleaned !== undefined ? { existingGleaned: ctx.existingGleaned } : {}) }
   // L'état d'une carte se lit sur toutes les missions du fichier, archivées comprises : une carte lancée le reste.
   const cards = (ctx.cards ?? []).map(c => ({ ...c, state: cardStateOf(c, board.runs, ctx.now) }))
-  const launch = { ...(cards.length > 0 ? { cards } : {}), ...(ctx.askMatt !== undefined ? { askMatt: ctx.askMatt } : {}), ...(ctx.plan ? { plan: ctx.plan } : {}), ...(ctx.wave ? { wave: ctx.wave } : {}) }
-  return { ...extra, ...launch, at: ctx.now, missions, waits, relays, ...(ctx.reports && ctx.reports.length > 0 ? { reports: ctx.reports } : {}), ...(ctx.delivery ? { delivery: ctx.delivery } : {}), ...(ctx.decisions ? { decisions: ctx.decisions } : {}), ...(ctx.retroPicks && ctx.retroPicks.length > 0 ? { retroPicks: ctx.retroPicks } : {}), waiting, holds, crossed: crossedLaunches(board, ctx.forces), effort: ctx.effort ?? null, hasBrief: ctx.hasBrief ?? null, ...(ctx.roadmap ? { roadmap: ctx.roadmap } : {}), ...(ctx.coordination ? { coordination: ctx.coordination } : {}) }
+  const launch = { ...(cards.length > 0 ? { cards } : {}), ...(ctx.askMatt !== undefined ? { askMatt: ctx.askMatt } : {}), ...(ctx.plan ? { plan: ctx.plan } : {}), ...(ctx.wave ? { wave: ctx.wave } : {}), ...(ctx.archive !== undefined ? { archive: ctx.archive } : {}) }
+  return { ...extra, ...launch, at: ctx.now, missions, waits, relays, ...(ctx.reports && ctx.reports.length > 0 ? { reports: ctx.reports } : {}), ...(ctx.delivery ? { delivery: ctx.delivery } : {}), ...(ctx.decisions ? { decisions: ctx.decisions } : {}), ...(ctx.retroPicks && ctx.retroPicks.length > 0 ? { retroPicks: ctx.retroPicks } : {}), waiting, holds, crossed: crossedLaunches(board, ctx.forces), ...(ctx.outside && ctx.outside.length > 0 ? { outside: ctx.outside } : {}), effort: ctx.effort ?? null, hasBrief: ctx.hasBrief ?? null, ...(ctx.roadmap ? { roadmap: ctx.roadmap } : {}), ...(ctx.coordination ? { coordination: ctx.coordination } : {}) }
 }
 
 /**
@@ -435,6 +560,16 @@ const neutralQuoted = (text: string, max = 160): string => {
 
 const hhmm = (at: number): string => new Date(at).toISOString().slice(11, 16)
 
+/**
+ * L'archivage d'office des sessions de l'app, tel que le mod l'a relu : la ligne dit son état en français
+ * (ce que la personne lit), et d'où le tenir. Une discussion qui avait lu un fichier du store pour le dire
+ * avait donné un état faux.
+ */
+const archiveLine = (at: number | null | undefined): string => {
+  const state = at === undefined ? 'état pas relu' : at === null ? 'éteint' : `allumé depuis le ${consentDay(at)}`
+  return `Archivage d’office : ${state}. Its state comes from this line, or from /flow archive (no argument), which the user types; never by reading a file of flow-board's store (~/.claude/plugins/store/).`
+}
+
 /** Le relevé tel que le Claude du COO le lit à chaque message. */
 export const statementText = (s: CooStatement): string => {
   const lines = [
@@ -502,8 +637,14 @@ export const statementText = (s: CooStatement): string => {
     lines.push(`LAUNCHED TOGETHER on something in common, tell the user at once (${s.crossed.length}):`)
     for (const c of s.crossed) lines.push(`- ${neutralQuoted(c.a.title, 80)} ${c.a.group === '*' ? 'lot' : `group ${neutralQuoted(c.a.group, 12)}`} and ${neutralQuoted(c.b.title, 80)} ${c.b.group === '*' ? 'lot' : `group ${neutralQuoted(c.b.group, 12)}`}: ${neutralQuoted(c.shared, 60)}.`)
   }
-  lines.push(`Active effort of this discussion: ${s.effort === null ? 'unknown (ask the user once)' : s.effort}.`)
+  if ((s.outside ?? []).length > 0) {
+    lines.push(`Commits on the working branch outside any mission (no worker branch, no manager's commit), on files of a group in progress since it started (${s.outside!.length}); shown as is in the Coordination view, no notification; tell the user when it bears on that group:`)
+    for (const o of s.outside!) lines.push(`- ⚠ main a reçu ${o.count} commit(s) hors mission sur des fichiers du groupe ${shownGroupId(o.group)} de ${neutralQuoted(o.mission, 80)} (mission id ${neutralQuoted(o.missionId, 40)}).`)
+  }
+  const sent = s.effort === null ? null : effortSent(COO_EFFORT, s.effort)
+  lines.push(`Effort chosen in this discussion: ${s.effort === null ? 'unknown (ask the user once)' : s.effort}${sent !== null && sent !== s.effort ? `; the mod sends its requests in ${sent} (COO rule)` : ''}.`)
   lines.push(`BRIEF.md at the project root: ${s.hasBrief === null ? 'unknown' : s.hasBrief ? 'present' : 'missing (offer to write it with the user, never invent a goal)'}.`)
+  lines.push(archiveLine(s.archive))
   if (s.roadmap) lines.push(...roadmapLines(s.roadmap))
   if (s.coordination) lines.push(coordinationLine(s.coordination))
   lines.push(...setAsideLines(s))

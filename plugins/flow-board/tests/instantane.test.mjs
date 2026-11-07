@@ -366,8 +366,8 @@ test('--dossier refuse un id hors forme, ou un nombre d’arguments faux, sans r
   }
 })
 
-// --clean : son invariant, « une référence d'instantané n'est supprimée qu'une fois le commit
-// de son ticket (correctifs compris) dans la branche, et jamais celle d'un autre ticket ».
+// --clean : son invariant, « une référence d'instantané n'est supprimée que si chaque fichier de
+// l'instantané, à sa version figée, se trouve dans un commit de la branche », et jamais celle d'un autre ticket.
 const T = ticket => `refs/worktree/flow-board/${ticket}`
 const commitAll = (cwd, message, ...files) => {
   git(cwd, 'add', '-A', '--', ...files)
@@ -390,6 +390,176 @@ test('--clean supprime la référence une fois le ticket commité, fichier de ti
     assert.equal(out.status, 0, out.stderr)
     assert.match(out.stdout, /refs\/worktree\/flow-board\/T20 supprimée/)
     assert.ok(!hasRef(dir, T('T20')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Rétro « Coordinateur de parcours » : invariant de --clean, « une référence d'instantané n'est supprimée que si
+// chaque fichier de l'instantané, à sa version figée, se trouve dans un commit de la branche ». --clean juge chaque
+// fichier à part : un ticket commité en deux fois, le ticket suivant entre les deux, ne le fait plus refuser.
+test('--clean réussit quand chaque fichier figé est dans un commit de la branche, même si aucun ne les porte tous ensemble', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T40', 'a.txt', 'b.txt').status, 0)
+    // a.txt se commite seul (par son chemin : l'instantané a indexé les deux) ; le ticket suivant le change et se
+    // commite ; puis b.txt se commite.
+    git(dir, 'commit', '-q', '-m', 'ticket T40, a', '--', 'a.txt')
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket suivant\n')
+    git(dir, 'commit', '-q', '-m', 'ticket suivant', '--', 'a.txt')
+    git(dir, 'commit', '-q', '-m', 'ticket T40, b', '--', 'b.txt')
+    const first = git(dir, 'rev-parse', 'HEAD~2')
+    const last = git(dir, 'rev-parse', 'HEAD')
+    const out = snap(dir, '--clean', 'T40')
+    assert.equal(out.status, 0, out.stderr)
+    assert.match(out.stdout, /refs\/worktree\/flow-board\/T40 supprimée/)
+    // Les deux commits du ticket, pas celui du ticket suivant.
+    assert.ok(out.stdout.includes(`les commits ${first}, ${last} de la branche portent les 2 fichiers`), out.stdout)
+    assert.ok(!hasRef(dir, T('T40')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Déjà vrai avec la recherche d'un seul commit ; gardé contre une régression de la recherche fichier par fichier.
+test('--clean réussit après un commit du ticket suivant qui change les mêmes fichiers', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T41', 'a.txt').status, 0)
+    commitAll(dir, 'ticket T41', 'a.txt')
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket suivant\n')
+    commitAll(dir, 'ticket suivant', 'a.txt')
+    const ticketCommit = git(dir, 'rev-parse', 'HEAD~1')
+    const out = snap(dir, '--clean', 'T41')
+    assert.equal(out.status, 0, out.stderr)
+    // Le commit nommé est celui du ticket, le plus ancien qui amène la version figée.
+    assert.ok(out.stdout.includes(`le commit ${ticketCommit} de la branche porte le fichier`), out.stdout)
+    assert.ok(!hasRef(dir, T('T41')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean refuse un fichier figé jamais commité, et ne nomme que les fichiers sans commit', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T42', 'a.txt', 'b.txt').status, 0)
+    git(dir, 'commit', '-q', '-m', 'ticket T42', '--', 'a.txt')
+    // b.txt est commité à une autre version que la figée (un correctif sans instantané reposé), puis a.txt change encore.
+    writeFileSync(join(dir, 'b.txt'), 'b corrigé sans instantané reposé\n')
+    commitAll(dir, 'reste', 'b.txt')
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket suivant\n')
+    commitAll(dir, 'ticket suivant', 'a.txt')
+    const out = snap(dir, '--clean', 'T42')
+    assert.equal(out.status, 1, out.stdout)
+    assert.match(out.stderr, /sans commit qui les porte à leur version figée : b\.txt\b/)
+    assert.doesNotMatch(out.stderr, /sans commit qui les porte à leur version figée : [^;]*a\.txt/)
+    assert.ok(hasRef(dir, T('T42')), 'la référence a été supprimée')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--clean ne compte pas un commit de fusion de la première lignée, même s’il porte la version figée', () => {
+  const dir = repo()
+  try {
+    const base = git(dir, 'rev-parse', 'HEAD')
+    // Le ticket donne à a.txt une version que porte aussi une autre branche, fusionnée ensuite.
+    writeFileSync(join(dir, 'a.txt'), 'même texte\n')
+    assert.equal(snap(dir, 'T43', 'a.txt').status, 0)
+    git(dir, 'restore', '--staged', 'a.txt')
+    git(dir, 'checkout', '--', 'a.txt')
+    git(dir, 'branch', 'cote', base)
+    git(dir, 'checkout', '-q', 'cote')
+    writeFileSync(join(dir, 'a.txt'), 'même texte\n')
+    commitAll(dir, 'côté', 'a.txt')
+    git(dir, 'checkout', '-q', '-')
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'fusion', 'cote')
+    let out = snap(dir, '--clean', 'T43')
+    assert.equal(out.status, 1, out.stdout)
+    assert.match(out.stderr, /sans commit qui les porte à leur version figée : a\.txt \(/)
+    assert.ok(hasRef(dir, T('T43')), 'supprimée sur la seule foi d’un commit de fusion')
+    // Un commit venu après la fusion hérite de sa version de a.txt sans la changer : il ne compte pas non plus.
+    writeFileSync(join(dir, 'b.txt'), 'b après la fusion\n')
+    commitAll(dir, 'après', 'b.txt')
+    out = snap(dir, '--clean', 'T43')
+    assert.equal(out.status, 1, out.stdout)
+    assert.match(out.stderr, /sans commit qui les porte à leur version figée : a\.txt \(/)
+    assert.ok(hasRef(dir, T('T43')), 'supprimée sur un commit qui n’a fait qu’hériter de la fusion')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Passe « bogues » du ticket : une branche de travail ramenée par une avance rapide sur une fusion (la branche du
+// groupe fusionnée dans main, puis main repris) met les commits de main sur sa première lignée ; un fichier que le
+// ticket supprime n'y a jamais existé, et ne doit pas passer pour « supprimé par un commit de la branche ».
+test('--clean ne prend pas pour la suppression du ticket un commit d’une autre branche ramené par une avance rapide', () => {
+  const dir = repo()
+  try {
+    const trunk = git(dir, 'rev-parse', '--abbrev-ref', 'HEAD')
+    git(dir, 'checkout', '-q', '-b', 'groupe')
+    writeFileSync(join(dir, 'x.txt'), 'x\n')
+    commitAll(dir, 'x créé', 'x.txt')
+    // Le ticket supprime x.txt et change a.txt ; la suppression se perd avant le commit, a.txt se commite.
+    unlinkSync(join(dir, 'x.txt'))
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    assert.equal(snap(dir, 'T44', 'x.txt', 'a.txt').status, 0)
+    git(dir, 'restore', '--staged', 'x.txt')
+    git(dir, 'checkout', '--', 'x.txt')
+    git(dir, 'commit', '-q', '-m', 'ticket T44', '--', 'a.txt')
+    // main avance sans x.txt, fusionne le groupe, et le groupe reprend main par une avance rapide.
+    git(dir, 'checkout', '-q', trunk)
+    writeFileSync(join(dir, 'b.txt'), 'b de main\n')
+    commitAll(dir, 'main avance', 'b.txt')
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'fusion du groupe', 'groupe')
+    git(dir, 'checkout', '-q', 'groupe')
+    git(dir, 'merge', '-q', '--ff-only', trunk)
+    writeFileSync(join(dir, 'c.txt'), 'c\n')
+    commitAll(dir, 'ensuite', 'c.txt')
+    assert.ok(existsSync(join(dir, 'x.txt')), 'HEAD porte toujours x.txt')
+    const out = snap(dir, '--clean', 'T44')
+    assert.equal(out.status, 1, out.stdout)
+    // Le parent de l'instantané est entré par le second parent de la fusion : refusé avant toute recherche.
+    assert.match(out.stderr, /n'est pas sur la première lignée de HEAD/)
+    assert.ok(hasRef(dir, T('T44')), 'supprimée alors que la suppression de x.txt n’est dans aucun commit de la branche')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Passe d'après les correctifs : une autre branche dont la première lignée a repris le parent de l'instantané par
+// un second parent, et dont un commit a supprimé son propre x.txt, ne passe pas pour la branche du ticket.
+test('--clean refuse quand le parent de l’instantané n’est pas sur la première lignée de HEAD', () => {
+  const dir = repo()
+  try {
+    const trunk = git(dir, 'rev-parse', '--abbrev-ref', 'HEAD')
+    git(dir, 'checkout', '-q', '-b', 'groupe')
+    writeFileSync(join(dir, 'x.txt'), 'x\n')
+    commitAll(dir, 'x créé', 'x.txt')
+    unlinkSync(join(dir, 'x.txt'))
+    assert.equal(snap(dir, 'T45', 'x.txt').status, 0)
+    git(dir, 'restore', '--staged', 'x.txt')
+    git(dir, 'checkout', '--', 'x.txt')
+    // main reprend le groupe par une fusion (second parent), puis supprime x.txt pour son compte.
+    git(dir, 'checkout', '-q', trunk)
+    writeFileSync(join(dir, 'b.txt'), 'b de main\n')
+    commitAll(dir, 'main avance', 'b.txt')
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'fusion du groupe', 'groupe')
+    git(dir, 'rm', '-q', 'x.txt')
+    git(dir, 'commit', '-q', '-m', 'main supprime x')
+    // Le worktree du groupe reprend main par une avance rapide.
+    git(dir, 'checkout', '-q', 'groupe')
+    git(dir, 'merge', '-q', '--ff-only', trunk)
+    const out = snap(dir, '--clean', 'T45')
+    assert.equal(out.status, 1, out.stdout)
+    assert.match(out.stderr, /n'est pas sur la première lignée de HEAD/)
+    assert.ok(hasRef(dir, T('T45')), 'supprimée sur la suppression de x.txt faite par main')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -437,7 +607,7 @@ test('--clean refuse tant que le ticket n’est pas commité, ou commité sans s
     commitAll(dir, 'reste', 'b.txt')
     out = snap(dir, '--clean', 'T23')
     assert.equal(out.status, 1)
-    assert.match(out.stderr, /diffèrent : b\.txt\)/)
+    assert.match(out.stderr, /sans commit qui les porte à leur version figée : b\.txt \(/)
     assert.ok(hasRef(dir, T('T23')), 'la référence a été supprimée')
     // Une fois le ticket commité, l'instantané ne se repose plus (plus rien à figer) : il se repose avant le commit.
     assert.equal(snap(dir, 'T23', 'b.txt').status, 1, 'plus rien à figer : le correctif est déjà commité')
@@ -674,6 +844,11 @@ test('--clean ne prend jamais la référence d’un autre ticket par la casse', 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('la procédure fait reposer l’instantané avant le git add des correctifs, et dit la règle fichier par fichier de --clean', () => {
+  assert.ok(procedure.includes("d'abord reposer l'instantané par la même commande, juste avant le `git add` des correctifs, quand un fichier du ticket a changé depuis le dernier"), 'la procédure ne fait pas reposer l’instantané avant le git add des correctifs')
+  assert.ok(procedure.includes('par un commit de la branche depuis le parent de l\'instantané qui change ce fichier, fusions exclues, pas forcément le même pour tous, même si un commit plus récent (le ticket suivant) l\'a changé depuis'), 'la procédure garde l’ancienne règle de --clean')
 })
 
 test('la procédure fait supprimer la référence par --clean, plus par update-ref -d seul', () => {

@@ -89,7 +89,9 @@ test('sans groupes, Claude lance lui-même la revue du lot, et la ligne de fin a
   // L'avis daté avant le chargement de la revue du lot ne compte pas : il part après lui.
   expect(text).toContain('send the advice only once /code-review has loaded, never before it: an advice dated before the lot review counts for no pass')
   expect(text).toContain('When every ticket of the lot is done, the lot review done and its security settled (or the lot dispensed: every ticket sent with "sensitive": false and "logic": false): {"complete": true}')
-  expect(text).toContain('propose them to the user as a « durcissement » group')
+  // Seuls les constats antérieurs de gravité moyenne ou plus, ou qui violent un invariant ; les autres vont au journal.
+  expect(text).toContain('propose those of medium severity or more, or that break an invariant, to the user as a « durcissement » group')
+  expect(text).toContain('the others go to the journal, under « À reprendre »')
 })
 
 test('sans groupes, les étapes de ticket gardent leurs ids et renvoient aux points de la section 2', async ($, on) => {

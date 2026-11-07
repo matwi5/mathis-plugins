@@ -298,18 +298,17 @@ test('sans git : les lots partent dans des workers ; raisons et autres lots affi
   // Un autre lot, dans des workers : une session par groupe, la mission reste ici.
   await ui.press({ key: 'launch-parallel-linked-1' })
   const text = filled.at(-1)!
-  expect(text).toMatch(/^Confie chacun de ces groupes à son worker, en parallèle, pour la mission « Boutique » : Groupe C \(Statut de commande\) : 1\) c1 — Statut de commande ∥ Groupe E \(Enquêtes\) : 1\) e1 — Enquête transporteur\./)
+  expect(text).toMatch(/^Confie chacun de ces groupes à son worker, en parallèle, pour la mission « Boutique » : Groupe C \(Statut de commande\) : 1\) c1 — Statut de commande — effort calculé : medium ∥ Groupe E \(Enquêtes\) : 1\) e1 — Enquête transporteur — effort calculé : medium\./)
   expect(text).toMatch(/Puis lance une session par groupe, avec un titre qui commence par « Boutique > Groupe <id> · »/)
   expect(text).toMatch(/start_session une fois par groupe, avec initiation user_asked/)
   expect(text).toMatch(/puis lance chaque session par le shell : claude --bg -n 'Boutique > Groupe <id> · <thème>' --effort <effort>/)
-  // Plusieurs groupes : l'effort se choisit groupe par groupe.
-  expect(text).toContain("Effort de chaque session (<effort>, choisi groupe par groupe) : medium par défaut ; high si son groupe a un ticket qui touche une zone sensible")
-  expect(text).toContain("Dis-moi en une ligne l'effort choisi pour chaque groupe et pourquoi.")
+  // Plusieurs groupes : l'effort calculé se lit groupe par groupe.
+  expect(text).toContain('Effort de chaque session (<effort>) : l’effort calculé sur la ligne de son groupe ; high si un choix de conception reste à faire à son groupe.')
+  expect(text).toContain("Dis-moi en une ligne, pour chaque groupe, l'effort pris et, s'il s'écarte du calcul, pourquoi.")
   // xhigh proposé groupe par groupe pour une tâche de jugement, jamais choisi seul.
-  expect(text).toContain('quand un ticket de son groupe est une tâche de jugement')
-  expect(text).toContain("Jamais pour une tâche d'exécution")
+  expect(text).toContain("quand un ticket de son groupe est une tâche de jugement (jamais pour une tâche d'exécution)")
   expect(text).toContain('Tu ne choisis jamais xhigh toi-même')
-  expect(text).toContain('question à boutons « xhigh (Recommandé) / high » par groupe concerné, quatre au plus par encadré (au-delà de quatre groupes concernés, plusieurs encadrés)')
+  expect(text).toContain('question à boutons « xhigh (Recommandé) / high » par groupe concerné, quatre au plus par encadré')
   expect(text).toContain('si son effort est xhigh, qu\'elle est un worker autonome')
   expect(text).toMatch(/use_worktree false \(ce dossier n’a pas de git\)/)
   expect(text).toMatch(/, ce que font les autres sessions en même temps/)
@@ -345,7 +344,7 @@ test('dans un dépôt git aussi, chaque lot part dans des workers, jamais par /i
   expect(await ui.find({ key: 'launch-parallel-2' })).toBeUndefined()
   await ui.press({ key: 'launch-parallel-linked-2' })
   await ui.unmount()
-  expect(filled.at(-1)).toMatch(/^Confie chacun de ces groupes à son worker, en parallèle, pour la mission « Boutique » : Groupe D \(Commandes\) : 1\) d1 — Délai de livraison ∥ Groupe E \(Enquêtes\)/)
+  expect(filled.at(-1)).toMatch(/^Confie chacun de ces groupes à son worker, en parallèle, pour la mission « Boutique » : Groupe D \(Commandes\) : 1\) d1 — Délai de livraison — effort calculé : medium ∥ Groupe E \(Enquêtes\)/)
 })
 
 test('le worker se déclare : son panneau le dit, ses skills ne lancent aucune mission', { timeoutMs: 15000 }, async ($, on) => {
@@ -832,7 +831,7 @@ test('un groupe rendu sans revue : « Revue du groupe · worker » la demande à
   // La consigne des relecteurs : celle de la procédure des sessions de groupe, citée par son chemin.
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des workers de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un spécialiste relecteur limité aux commits du groupe, jamais /security-review.
-  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un spécialiste relecteur \(outil Agent, type general-purpose, modèle opus, effort high pour sa recherche et ses vérifications, en une seule passe\), en lecture seule, avec pour seul périmètre les commits du groupe/)
+  expect(text).toMatch(/4\) juger si une revue de sécurité vaut la peine .* la confier à un spécialiste relecteur \(outil Agent, type general-purpose, modèle opus, effort high, en une seule passe : il cherche et vérifie lui-même, sans lancer d'agent\), en lecture seule, avec pour seul périmètre les commits du groupe/)
   expect(text).not.toMatch(/sécurité[^;]*effort xhigh\)/)
   expect(text).toContain('{"reviewed": ["E"]}')
   expect(text).not.toMatch(/copie/)

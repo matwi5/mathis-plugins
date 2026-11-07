@@ -7,7 +7,7 @@ Panneau de statistiques Claude Code et bandeau au-dessus du prompt, sur le termi
 - **Messages, outils, heures et blocs de 5 h ne concernent que ce poste.** Ils viennent du cache de `/stats` (`~/.claude/stats-cache.json`) et de ccusage, qui ne sont pas publiés.
 - **Ce qu'il écrit** : son propre stockage (`$.store`) ; les fichiers de relevé des requêtes (`~/.claude/stats-board/requetes/`, un par ouverture de session) et les totaux de durée (`~/.claude/stats-board/totaux/`, un par mois), sans aucun texte de message et jamais supprimés ; et, dans `~/.claude/claude-usage`, le seul fichier de ce poste (`machines/<nom>.json`), qu'il commite et pousse.
 
-Version actuelle : **0.13.0**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
+Version actuelle : **0.13.1**. Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

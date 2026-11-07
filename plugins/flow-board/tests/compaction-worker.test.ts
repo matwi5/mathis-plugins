@@ -251,3 +251,15 @@ test('sous le seuil, rien n’est dit ni envoyé ; une marque qui ne s’écrit 
   expect(compactions(w)).toBe(0)
   expect(w.prompts.at(-1)).toMatch(/no compaction was made/)
 })
+
+// Rétro de la mission « Coordinateur de parcours » : après une compaction, un worker avait relu son propre transcript
+// (environ 25 appels) pour retrouver les constats de revue d'un ticket, et relancé ToolSearch trois fois.
+test('les consignes du groupe gardent les constats de revue pas encore appliqués et font recharger les outils différés', () => {
+  for (const role of [{ kind: 'group' as const, run: 'r', group: 'A' }, { kind: 'group' as const, run: 'r', group: 'A', between: { done: 't1', next: 't2' } }]) {
+    const text = compactionInstructions(role)
+    expect(text).toContain('the review findings not yet applied (each with its file:line and the expected fix), or the path of the file that holds them (the notes-compte-rendu.md of the session\'s temporary folder')
+    expect(text).toContain('after the compaction, reload with ToolSearch, in one call (select:<names>), the deferred tools the session was using before calling any of them (SendMessage, TaskCreate, TaskUpdate, Monitor)')
+  }
+  // Le manager et le COO n'ont pas ces lignes : elles tiennent au travail d'un worker.
+  expect(compactionInstructions({ kind: 'coo', missions: [] })).not.toContain('review findings not yet applied')
+})

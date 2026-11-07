@@ -287,6 +287,38 @@ export const isWorktreePath = (value: unknown, root: string): value is string =>
 }
 
 /**
+ * Le dossier temporaire du système, relu de l'environnement (`TMPDIR`, `TEMP` ou `TMP`), avant qu'il
+ * entre dans le chemin d'un brief et dans la commande de lancement qui le cite : absolu (POSIX ou lettre
+ * de lecteur, jamais un partage réseau `\\` ou `//`), sans apostrophe (ni ‘ ’ ‚ ‛), guillemet, `$`, accent
+ * grave, caractère de contrôle ou invisible, ni segment `.` ou `..`, autre que la racine d'un disque, 300
+ * signes au plus. Rendu à barres
+ * obliques, sans barre finale ; null hors forme.
+ */
+export const tempDirForm = (value: unknown): string | null => {
+  if (typeof value !== 'string' || value.length > 300) return null
+  if (/['"`$\u2018-\u201b\u2028\u2029]/.test(value) || /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u.test(value)) return null
+  const path = value.replace(/\\/g, '/')
+  if (!/^(?:\/(?!\/)|[A-Za-z]:\/)/.test(path)) return null
+  const trimmed = path.replace(/\/+$/, '')
+  // La racine d'un disque n'est pas un dossier temporaire.
+  if (trimmed === '' || /^[A-Za-z]:$/.test(trimmed)) return null
+  if (trimmed.split('/').some((part, i) => part === '.' || part === '..' || (i > 0 && part === ''))) return null
+  return trimmed
+}
+
+/**
+ * Le nom du fichier d'un brief de worker, un par lancement et par groupe :
+ * `flow-board-brief-<mission>-<groupe>-<horodatage>.md`, fait des seuls ids contrôlés (`isSafeId`,
+ * `isGroupId`) et de l'heure du lancement, jamais du titre ; null hors forme. Le nom entier ne garde
+ * que `[A-Za-z0-9._-]`.
+ */
+export const briefFileName = (runId: unknown, groupId: unknown, at: unknown): string | null => {
+  if (!isSafeId(runId) || !isGroupId(groupId) || typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) return null
+  const name = `flow-board-brief-${runId}-${groupId}-${at}.md`
+  return /^[A-Za-z0-9._-]{1,200}$/.test(name) ? name : null
+}
+
+/**
  * La première commande d'une fermeture dans un dépôt : `core.fsmonitor` fait exécuter une commande
  * à chaque `git status`, que la procédure lance ensuite dans le worktree.
  */
@@ -303,11 +335,12 @@ export const shellQuote = (value: string, shell: 'posix' | 'powershell' = 'posix
 
 /**
  * La liste jetable, fermée, validée au cadrage (ses dossiers le sont en entier) : ce qu'un worktree
- * peut emporter sans demander. Les types générés d'un mod (série 13) le sont seulement s'ils sont
- * identiques à ceux du clone principal, d'où `scripts/check.sh` les copie dans chaque worktree.
+ * peut emporter sans demander. Les types générés d'un mod (`.claude-plugin/types/`, écrits par Claude
+ * Code ou copiés par `scripts/check.sh`) le sont en entier, quelle que soit leur version : ils se
+ * régénèrent, et une version différente de celle du clone principal avait arrêté des fermetures.
  */
 const DISPOSABLE =
-  'liste jetable : les liens symboliques, quelle que soit leur cible (test -L) ; __pycache__/ et *.pyc ; .show-your-work/ ; .pytest_cache/, .mypy_cache/, .ruff_cache/, node_modules/, .DS_Store ; les types générés d’un mod, un dossier <plugin>/.claude-plugin/types/, seulement s’ils sont identiques à ceux du clone principal au même chemin (diff -rq \'<worktree>/<plugin>/.claude-plugin/types\' \'<dossier du dépôt>/<plugin>/.claude-plugin/types\' ne dit rien et rend 0) ; s’ils diffèrent, ou si le clone principal n’en a pas, ils arrêtent la fermeture comme tout autre fichier ignoré'
+  'liste jetable : les liens symboliques, quelle que soit leur cible (test -L) ; __pycache__/ et *.pyc ; .show-your-work/ ; .pytest_cache/, .mypy_cache/, .ruff_cache/, node_modules/, .DS_Store ; les types générés d’un mod, un dossier .claude-plugin/types/ à toute profondeur, en entier : ils se régénèrent'
 
 /**
  * La forme de chaque valeur avant qu'elle entre dans une commande : une valeur hors forme arrête la
@@ -317,7 +350,7 @@ const FORMS =
   'Forme des valeurs, avant toute commande : <branche> ne s’emploie que si elle est l’un des noms connus du point 1 ou la ligne branch exacte d’un bloc de git worktree list --porcelain (sans refs/heads/), et ne contient que [A-Za-z0-9._/-], sans - en tête ; <branche de travail> a la même forme ; <worktree> ne se retire que s’il est sous <dossier du dépôt>/.claude/worktrees/ (<dossier du dépôt> : la ligne worktree du premier bloc de git worktree list --porcelain, le clone principal), chemin absolu sans segment . ni .. ; un <pid> n’a que des chiffres ; <worktree>, <dossier>, <dossier du dépôt> et <plugin> n’ont ni apostrophe, ni saut de ligne, ni caractère de contrôle ; chaque valeur se cite pour le shell entre apostrophes (\'…\'), dans chaque commande ; une valeur hors forme arrête la fermeture : ne lance aucune commande avec elle, dis-la-moi.'
 
 /** Les dossiers de la liste jetable, exclus par pathspec : la liste des fichiers ignorés ne montre que ce qui reste à juger. */
-const DISPOSABLE_DIRS = ['__pycache__', '.show-your-work', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'node_modules']
+const DISPOSABLE_DIRS = ['__pycache__', '.show-your-work', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'node_modules', '.claude-plugin/types']
 const IGNORED_FILES = `git -C '<worktree>' ls-files --others --ignored --exclude-standard -- . ${DISPOSABLE_DIRS.map(dir => `':(exclude,glob)**/${dir}/**'`).join(' ')}`
 
 /** La ligne de chaque compte rendu de fermeture : le travail est en sécurité avant tout avertissement. */
@@ -506,7 +539,7 @@ const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g,
  * envoi d'un groupe lancé avant la 0.59.0. La session des pistes gardée à côté du lien n'a pas noté
  * son numéro d'envoi : sans lui, tout numéro de cette mission est admis, ou le libellé seul (envoi d'avant la numérotation).
  */
-const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch: string): boolean => {
+export const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch: string): boolean => {
   const n = sendNumber(seq)
   // `cli` : le worktree tel qu'en worktree-<…> et <…> ; `app` : celui avant le suffixe de claude/<…>-<suffixe>.
   let cli: string
@@ -702,7 +735,7 @@ export const closingProcedure = ({ run, target, isRepo, session, seq }: CloseInp
     `1) la branche : celle du bloc de git worktree list --porcelain dont la ligne worktree est le cwd de son entrée dans claude agents --json (list_sessions dans l’app Desktop) ; à défaut, l’un des noms connus : ${d.branches} ; une branche que nomme sa note de fin ne s’emploie que si elle est l’une de celles-là, sinon arrête la fermeture et dis-le-moi ; vérifie par git log '<branche>' --oneline -10 que ses commits sont ceux ${d.owner} ; au moindre doute (nom différent, branche sans commit ${d.owner}, une autre mission), arrête-toi et demande-moi ; ` +
     `2) la ligne du worktree : dans git worktree list --porcelain, le bloc dont la ligne branch est refs/heads/<branche> ; sa ligne worktree donne <worktree>, et note s’il porte locked ; le worktree se désigne toujours par cette ligne, jamais par un chemin deviné ; si <worktree> est ce dossier, ou <branche> la branche sortie ici, arrête la fermeture ; sans bloc pour cette branche, cherche un bloc dont la ligne worktree est le dossier de la session, <dossier> (son cwd dans claude agents --json quand elle tourne encore, list_sessions dans l’app Desktop ; sinon <dossier du dépôt>/.claude/worktrees/${d.worktree}, le worktree de cet envoi : après claude stop, son cwd n’est plus le worktree) : s’il y en a un (HEAD détachée, rebase ou bisect en cours), arrête la fermeture et dis-le-moi ; seulement si aucun bloc ne le porte et que test -e '<dossier>' échoue (le dossier n’existe plus), le worktree est déjà retiré : fais quand même le point 3, puis passe au point 6, sans les points 8, 9 et 10 : pas de claude rm (son worktree n’a pas été vu retiré ici) ; une session du CLI que le point 6 trouve encore dans claude agents y reste : dis-le-moi ; un dossier encore là sans bloc arrête la fermeture : dis-le-moi, ne touche à rien ; ` +
     `3) la fusion : git branch --show-current dans ce dossier donne <branche de travail> ; git branch --merged '<branche de travail>' doit lister <branche> ; sinon, arrête la fermeture et dis-moi combien de commits ne sont pas fusionnés (git log '<branche de travail>..<branche>' --oneline) ; N, le nombre de ses commits que le CLI dit non poussés : git rev-list --count '<branche>' --not --remotes ; ` +
-    `4) l’arbre : git -C '<worktree>' status --porcelain --untracked-files=all doit être vide ; puis ${IGNORED_FILES} (les dossiers de la liste, exclus, sont jetables en entier, quel que soit leur contenu) : chaque fichier listé doit être de la ${DISPOSABLE} ; les dossiers de la liste exclus ci-dessus (${DISPOSABLE_DIRS.map(dir => `${dir}/`).join(', ')}) sont jetables en entier, quel que soit leur contenu ; les types générés d’un mod, eux, seulement après ce diff -rq ; un lien, un .pyc ou un .DS_Store le sont où qu’ils soient ; tout autre fichier ignoré, tout fichier modifié ou non suivi arrête la fermeture : liste-les-moi, ne retire rien ; ` +
+    `4) l’arbre : git -C '<worktree>' status --porcelain --untracked-files=all doit être vide ; puis ${IGNORED_FILES} (les dossiers de la liste, exclus, sont jetables en entier, quel que soit leur contenu) : chaque fichier listé doit être de la ${DISPOSABLE} ; les dossiers de la liste exclus ci-dessus (${DISPOSABLE_DIRS.map(dir => `${dir}/`).join(', ')}) sont jetables en entier, quel que soit leur contenu ; un lien, un .pyc ou un .DS_Store le sont où qu’ils soient ; tout autre fichier ignoré, tout fichier modifié ou non suivi arrête la fermeture : liste-les-moi, ne retire rien ; ` +
     `5) les instantanés de revue : git -C '<worktree>' for-each-ref refs/worktree/flow-board/ ; pour chacun, si l’arbre de l’instantané (git -C '<worktree>' rev-parse '<ref>^{tree}') est identique à l’arbre d’un commit déjà dans la branche de travail (cherche-le dans git log '<branche de travail>' --format=%T, filtré sur cet arbre, sans afficher tout l’historique), la fermeture continue, et dis-le dans le compte rendu ; sinon, arrête la fermeture et dis-le-moi ; ` +
     `6) la session ne travaille pas : ${idle} ; ${busy} ; ` +
     `7) seulement si tout tient : arrête la session : ${stop} ; ` +

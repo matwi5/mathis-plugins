@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.13.1 — 2026-11-07
+
+### Corrigé
+- **CHANGELOG** : le titre de la 0.12.0, perdu par l'entrée de la 0.13.0, est remis.
+
+---
+
 ## 0.13.0 — 2026-11-02
 
 ### Ajouté

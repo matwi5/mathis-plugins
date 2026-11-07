@@ -4,7 +4,7 @@
   "files": {
     "flow-board/README.md": 3,
     "flow-board/hooks/catch-up.ts": 17,
-    "flow-board/hooks/closing.ts": 6,
+    "flow-board/hooks/closing.ts": 5,
     "flow-board/hooks/cost.ts": 1,
     "flow-board/hooks/erase-run.ts": 54,
     "flow-board/hooks/erase.ts": 20,

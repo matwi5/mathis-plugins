@@ -362,6 +362,78 @@ async function missedAgentsOf($: any, run: Run, runs: readonly Run[], carriers: 
   return { agents, failed }
 }
 
+/**
+ * Les familles de données gardées par mission (ou par worker d'une mission) : la clé de `$.store` et le
+ * fichier de chacune, calculés d'après les ids, jamais lus ailleurs. `eraseRunNow` efface chaque famille
+ * de ces deux listes, et le test de l'effacement les crée toutes : une famille ajoutée ici part avec la
+ * mission, et une famille gardée par mission hors de ces listes fait échouer le relevé des sources
+ * (`tests/familles-effacees.test.mjs`). Des `switch` plutôt qu'une table de fonctions : le moteur refuse
+ * `$` passé à une fonction lue dans une table.
+ */
+export const MISSION_FAMILIES = ['fichier à part de la mission', 'référence du manager', 'relais', 'choix déclarés', 'rapport du compte rendu', 'consignes du COO appliquées'] as const
+type MissionFamily = (typeof MISSION_FAMILIES)[number]
+
+/** Les familles de chaque worker de la mission, à côté du relais. */
+export const WORKER_FAMILIES = ['compte rendu entier d’un worker', 'entrée d’un worker au relais'] as const
+type WorkerFamily = (typeof WORKER_FAMILIES)[number]
+
+/** La clé de `$.store` d'une famille de la mission ; null quand elle n'en a pas. */
+export const missionFamilyKey = (family: MissionFamily, runId: string): string | null => {
+  switch (family) {
+    case 'fichier à part de la mission':
+      return rebuiltKey(runFileId(runId))
+    case 'référence du manager':
+      return mainRefKey(runId)
+    case 'relais':
+      return relayKey(runId)
+    case 'rapport du compte rendu':
+      return missionReportKey(runId)
+    case 'consignes du COO appliquées':
+      return appliedKey(runId)
+    case 'choix déclarés':
+      return null
+  }
+}
+
+/** Le fichier d'une famille de la mission ; null sans dossier de Claude, ou quand elle n'en a pas. */
+export function missionFamilyPath($: any, family: MissionFamily, runId: string): string | null {
+  switch (family) {
+    case 'fichier à part de la mission':
+      return rebuiltPath($, runFileId(runId))
+    case 'référence du manager':
+      return mainRefPath($, runId)
+    case 'relais':
+      return relayPath($, runId)
+    case 'choix déclarés':
+      return decidedPath($, runId)
+    case 'rapport du compte rendu':
+      return missionReportPath($, runId)
+    case 'consignes du COO appliquées':
+      return null
+  }
+}
+
+/** La clé de `$.store` d'une famille d'un worker ; null quand elle n'en a pas. */
+export const workerFamilyKey = (family: WorkerFamily, runId: string, session: string): string | null => {
+  switch (family) {
+    case 'entrée d’un worker au relais':
+      return relayEntryKey(runId, session)
+    case 'compte rendu entier d’un worker':
+      return null
+  }
+}
+
+/** Le fichier d'une famille d'un worker ; null sans dossier de Claude. */
+export function workerFamilyPath($: any, family: WorkerFamily, runId: string, session: string): string | null {
+  switch (family) {
+    case 'compte rendu entier d’un worker':
+      return reportPath($, runId, session)
+    case 'entrée d’un worker au relais':
+      return relayEntryPath($, runId, session)
+  }
+}
+// Fin des familles (relue par tests/familles-effacees.test.mjs).
+
 async function eraseRunNow($: any, run: Run): Promise<boolean> {
   const now = await $.clock.now()
   const self: SessionRegistry | null = await read($, registryAtom)
@@ -447,34 +519,28 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
     // Ouverte aussi, sa délégation gardée part (S23) : rechargée, elle ne reprend pas la mission effacée.
     else await eraseKey($, delegateKey(id))
   }
-  // Les fichiers à part se compactent (seul le rattrapage les écrit : leur session ne le fera pas) ;
-  // le sien, son relais et ses choix s'effacent.
+  // Les fichiers à part se compactent (seul le rattrapage les écrit : leur session ne le fera pas).
   for (const id of sideIds) await updateRebuilt($, id, id, before => before)
-  await eraseFile($, rebuiltPath($, runFileId(run.id)))
-  await eraseKey($, rebuiltKey(runFileId(run.id)))
-  // Les comptes rendus entiers des workers et la référence du manager :
-  // leurs chemins se calculent d'après les ids, jamais lus dans le relais (un fichier d'une autre session).
-  for (const id of Object.keys(relay?.sessions ?? {})) await eraseFile($, reportPath($, run.id, id))
-  // Ceux que le relais ne nomme plus (relais illisible, entrée sortie du plafond, écrit après) : par le dossier.
-  for (const path of await reportFilesOf($, run.id)) await eraseFile($, path)
-  await eraseFile($, mainRefPath($, run.id))
-  await eraseKey($, mainRefKey(run.id))
-  await eraseFile($, relayPath($, run.id))
-  await eraseKey($, relayKey(run.id))
-  // L'entrée de chaque session, son fichier à elle (un fichier par worker) : par son chemin calculé
-  // d'après les ids, puis par le dossier et par les clés du store (celles que le relais ne nomme plus).
+  // Ce que chaque worker garde à côté du relais (compte rendu entier, entrée) : par son chemin calculé
+  // d'après les ids, jamais lu dans le relais (un fichier d'une autre session) ; puis ce que le relais ne
+  // nomme plus (relais illisible, entrée sortie du plafond, écrit après), par le dossier et par les clés du store.
   for (const id of new Set([...linkedIds, ...Object.keys(relay?.sessions ?? {})])) {
-    await eraseFile($, relayEntryPath($, run.id, id))
-    await eraseKey($, relayEntryKey(run.id, id))
+    for (const f of WORKER_FAMILIES) {
+      await eraseFile($, workerFamilyPath($, f, run.id, id))
+      const key = workerFamilyKey(f, run.id, id)
+      if (key) await eraseKey($, key)
+    }
   }
+  for (const path of await reportFilesOf($, run.id)) await eraseFile($, path)
   for (const path of await relayEntryFilesOf($, run.id)) await eraseFile($, path)
   for (const key of await relayEntryKeysOf($, run.id)) await eraseKey($, key)
-  await eraseFile($, decidedPath($, run.id))
-  // Le rapport de son compte rendu, gardé pour le COO : par son chemin calculé d'après l'id.
-  await eraseFile($, missionReportPath($, run.id))
-  await eraseKey($, missionReportKey(run.id))
-  // Les consignes du COO appliquées à la mission (ids notés par son manager) partent avec elle.
-  await eraseKey($, appliedKey(run.id))
+  // Ce que la mission garde elle-même : son fichier à part, la référence du manager, son relais, ses
+  // choix, le rapport de son compte rendu gardé pour le COO, les consignes du COO appliquées.
+  for (const f of MISSION_FAMILIES) {
+    await eraseFile($, missionFamilyPath($, f, run.id))
+    const key = missionFamilyKey(f, run.id)
+    if (key) await eraseKey($, key)
+  }
   await reportEraseFailures($)
   if (missed.failed > 0) await quietly(() => $.ui.toast(`${missed.failed} ${missed.failed > 1 ? 'transcripts non relus' : 'transcript non relu'} : un spécialiste manqué pourrait revenir sans mission.`))
   await refreshHistory($)

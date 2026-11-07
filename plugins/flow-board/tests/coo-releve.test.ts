@@ -39,7 +39,7 @@ test('le relevé liste chaque mission non archivée et les questions bloquantes 
   expect(text).toMatch(/Missions not archived \(2\)/)
   expect(text).toMatch(/« Mode auto »: in progress, phase .+, mode auto, tickets 1\/2 done, waiting for the user: 1 blocking question/)
   expect(text).toMatch(/question « q3 »: « Garder le refus \? »/)
-  expect(text).toMatch(/Active effort of this discussion: high\./)
+  expect(text).toMatch(/Effort chosen in this discussion: high; the mod sends its requests in medium \(COO rule\)\./)
   expect(text).toMatch(/BRIEF\.md at the project root: missing/)
   expect(text).not.toMatch(/Vieille mission/)
   expect(cooPoint(s)).toEqual(['1 mission en cours, 1 en pause, 1 en auto.', '1 chose t’attend : 1 question bloquante (Mode auto).', 'Prochaine étape du projet : à confirmer (pas encore de feuille de route).'])
@@ -70,7 +70,7 @@ test('les workers d’une mission : un groupe confié au travail, un groupe rend
 
 test('un effort inconnu fait demander à la personne une fois ; rien en cours, rien n’attend', () => {
   const s = cooStatement(board(), { now: NOW })
-  expect(statementText(s)).toMatch(/Active effort of this discussion: unknown \(ask the user once\)/)
+  expect(statementText(s)).toMatch(/Effort chosen in this discussion: unknown \(ask the user once\)/)
   expect(cooPoint(s).slice(0, 2)).toEqual(['Aucune mission en cours.', 'Rien ne t’attend.'])
 })
 
@@ -83,4 +83,25 @@ test('un titre ou une question relus d’une mission n’ajoutent ni ligne ni ci
     // Les seules citations « … » sont celles du relevé : 2 dans la ligne de la mission, 3 dans celle de la question.
     expect((text.match(/«/g) ?? []).length, name).toBe((reference.match(/«/g) ?? []).length)
   }
+})
+
+test('le relevé dit l’état de l’archivage d’office et renvoie à /flow archive, jamais à un fichier du store', () => {
+  const on = statementText(cooStatement(board(), { now: NOW, archive: Date.UTC(2026, 10, 2, 9) }))
+  expect(on).toMatch(/Archivage d’office : allumé depuis le 2026-11-02\b/)
+  const off = statementText(cooStatement(board(), { now: NOW, archive: null }))
+  expect(off).toMatch(/Archivage d’office : éteint\b/)
+  expect(off).not.toMatch(/allumé/)
+  // Pas relu (lecture ratée) : le relevé ne devine pas, il renvoie à la commande.
+  const unread = statementText(cooStatement(board(), { now: NOW }))
+  expect(unread).toMatch(/Archivage d’office : état pas relu\b/)
+  for (const text of [on, off, unread]) {
+    expect(text).toMatch(/\/flow archive \(no argument\)/)
+    expect(text).toMatch(/never by reading a file of flow-board's store/)
+  }
+})
+
+test('un budget gardé en texte par le registre (« 32000 ») part tel quel : le relevé ne dit pas que le mod envoie en medium', () => {
+  const text = statementText(cooStatement(board(), { now: NOW, effort: '32000' }))
+  expect(text).toMatch(/Effort chosen in this discussion: 32000\./)
+  expect(text).not.toMatch(/the mod sends its requests in/)
 })

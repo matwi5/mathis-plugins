@@ -382,6 +382,70 @@ describe("session-tools", () => {
     expect(calls.toasts).toEqual(["Effort demandé : low"]);
   });
 
+  // Plafonds de la règle « Jamais d'effort max, jamais Haiku au-dessus de high » : `model` est le
+  // modèle de la session (absent : aucune réponse du moteur, `"échec"` : la lecture lève).
+  const cappedEffort = async ($: any, on: any, reply: string, model?: string) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($: any, e: any) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    if (model === "échec")
+      on("session.model", () => {
+        throw new Error("modèle illisible");
+      });
+    else if (model) on("session.model", () => ({ value: model }));
+    const calls = rewriteSetup(on, ["brouillon"], reply);
+    const runs = effortRuns(on);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "effort" });
+    return { runs, toasts: calls.toasts };
+  };
+
+  test("Effort auto : une réponse max est ramenée à xhigh, et la notification le dit", async ($, on) => {
+    const { runs, toasts } = await cappedEffort($, on, '{"effort": "max", "raison": "Un coup."}', "claude-opus-5-5");
+    expect(runs).toEqual(["xhigh"]);
+    expect(toasts).toEqual(["Effort demandé : xhigh (Un coup.) · max ramené à xhigh"]);
+  });
+
+  test("Effort auto : xhigh sur une session Haiku est ramené à high, et la notification le dit", async ($, on) => {
+    const { runs, toasts } = await cappedEffort($, on, '{"effort": "xhigh", "raison": "Long."}', "claude-haiku-5-5");
+    expect(runs).toEqual(["high"]);
+    expect(toasts).toEqual(["Effort demandé : high (Long.) · xhigh ramené à high (session Haiku)"]);
+  });
+
+  test("Effort auto : max sur une session Haiku est ramené à high", async ($, on) => {
+    const { runs, toasts } = await cappedEffort($, on, '{"effort": "max", "raison": "Un coup."}', "claude-haiku-5-5");
+    expect(runs).toEqual(["high"]);
+    expect(toasts).toEqual(["Effort demandé : high (Un coup.) · max ramené à high (session Haiku)"]);
+  });
+
+  test("Effort auto : xhigh sur une session Opus reste xhigh, même quand les boutons tournent sur Haiku", { options: { model: "haiku" } }, async ($, on) => {
+    const { runs, toasts } = await cappedEffort($, on, '{"effort": "xhigh", "raison": "Long."}', "claude-opus-5-5");
+    expect(runs).toEqual(["xhigh"]);
+    expect(toasts).toEqual(["Effort demandé : xhigh (Long.)"]);
+  });
+
+  test("Effort auto : une lecture ratée du modèle ne plafonne que max", async ($, on) => {
+    const { runs, toasts } = await cappedEffort($, on, '{"effort": "xhigh", "raison": "Long."}', "échec");
+    expect(runs).toEqual(["xhigh"]);
+    expect(toasts).toEqual(["Effort demandé : xhigh (Long.)"]);
+  });
+
+  test("Effort auto : la consigne ne propose plus max", async ($, on) => {
+    mock.clock(on, { now: 1_000_000 });
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    engineDraws(on);
+    const calls = rewriteSetup(on, ["brouillon"], '{"effort": "low"}');
+    effortRuns(on);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await $.ui.mount({ plugin: "session-tools", surface: "terminal", component: "SessionMode", props: { modes: [] } } as any);
+    await ui.press({ key: "effort" });
+    const system = calls.requests[0].system;
+    expect(system).toContain('{"effort": "<low|medium|high|xhigh>"');
+    expect(system).not.toContain("|max>");
+    expect(system).toContain("(low, medium, high, xhigh)");
+  });
+
   test("Effort auto : un champ vide ne lance pas le modèle", async ($, on) => {
     mock.clock(on, { now: 1_000_000 });
     on("session.start", ($, e) => ({ cwd: e.cwd }));

@@ -18,25 +18,25 @@
       "name": "project",
       "source": "./plugins/project",
       "description": "Project conventions for Claude Code: set up a new project or audit an existing one against the convention, plus generic git commands (commit, sync, push, pr, version)",
-      "version": "1.6.0"
+      "version": "1.7.0"
     },
     {
       "name": "agents",
       "source": "./plugins/agents",
       "description": "Spécialistes de Mathis : explorer (cartographie en lecture seule, Haiku), researcher (recherche documentaire sourcée, Sonnet). Appelés agents:explorer, agents:researcher.",
-      "version": "1.1.0"
+      "version": "1.2.0"
     },
     {
       "name": "session-tools",
       "source": "./plugins/session-tools",
       "description": "Outils autour du champ de saisie : boutons Fichiers (navigateur files-board) et Diff au terminal, boutons Réécrire (le brouillon réécrit en prompt par Opus, Sonnet ou Haiku au choix, sans envoi) et Effort auto (le niveau d'effort choisi pour le brouillon), chrono de la requête (jusqu'à la fin de ses tâches de fond, avec leur nombre en attendant), vitesse du modèle (tokens/s), cache de prompt et heure dans le pied du prompt (dans un bandeau sur desktop) ; /session-tools:start démarre les mods (et leurs bandeaux) sans solliciter Claude.",
-      "version": "0.24.0"
+      "version": "0.24.1"
     },
     {
       "name": "flow-board",
       "source": "./plugins/flow-board",
       "description": "Tableau de bord du workflow mattpocock-skills : une mission adaptée au skill de départ (phases, étapes, tickets, spécialistes, tests, livrables) en panneau et en bandeau ; /flow (onglet Commandes : toutes les commandes).",
-      "version": "0.79.0"
+      "version": "0.80.0"
     },
     {
       "name": "mattpocock-skills",
@@ -50,7 +50,7 @@
       "name": "asana-board",
       "source": "./plugins/asana-board",
       "description": "Tâches Asana du projet en panneau (/asana, ou /asana-board:asana dès le premier message) et en bandeau au-dessus du prompt : les tâches non terminées de la section, rangées par statut, à créer, modifier, cocher, commenter ou supprimer.",
-      "version": "0.11.0"
+      "version": "0.12.0"
     },
     {
       "name": "git-board",
@@ -68,7 +68,7 @@
       "name": "stats-board",
       "source": "./plugins/stats-board",
       "description": "Panneau de statistiques Claude Code (/ccstats) et bandeau au-dessus du prompt : discussion ouverte (coût, contexte, rythme horaire), récap de la journée, coût équivalent API (ccusage), tokens, modèles, projets, sessions, blocs de 5 h, calendrier d'activité et rythme, pour tous les postes (Portable, Mac, Serveur) partagés par le dépôt claude-usage. /stats-board:ccstats dès le premier message ; /stats-board:recap fait le récap de la discussion et de la journée, ou d'un parcours entier, dans le chat.",
-      "version": "0.13.0"
+      "version": "0.13.1"
     }
   ]
 }

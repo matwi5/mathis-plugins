@@ -512,7 +512,9 @@ export const closingOf = (e: Record<string, unknown>, state: Closing['state'], w
   }
   // Une fermeture « closed » renvoyée garde sa marque de suppression tant que sa branche notée ne change pas.
   const isMarked = state === 'closed' && was?.state === 'closed' && was.cleanupAt !== undefined && fields.branch === was.branch
-  return { state, at: now, ...why, ...fields, ...(isMarked ? { cleanupAt: was.cleanupAt } : {}) }
+  // Clos alors que la revue de sécurité était désactivée : posé à la première fermeture, gardé par un « closed » renvoyé.
+  const isSecurityOff = state === 'closed' && was?.state === 'closed' && was.securityOff === true
+  return { state, at: now, ...why, ...fields, ...(isMarked ? { cleanupAt: was.cleanupAt } : {}), ...(isSecurityOff ? { securityOff: true as const } : {}) }
 }
 
 /** La fermeture que l'autre copie a notée pour le même lien : sur ce lien, ou dans ceux qu'un nouvel envoi y a remplacés. */
@@ -545,6 +547,10 @@ export const keepClosings = (kept: Run, other: Run | undefined): Run => {
     // Le même lien seulement (même envoi, même session) : un groupe confié de nouveau a une autre session.
     const theirs = sameLinkClosing(g.delegated, link, earlierOf(link))
     let delegated = theirs && isAhead(g.delegated.closing, theirs) ? { ...g.delegated, closing: theirs } : g.delegated
+    // Clos revue de sécurité désactivée dans l'une des deux copies (sa première fermeture lue « off ») : la fermeture
+    // gardée le reste, quelle que soit celle qui l'emporte (`isAhead` ne compare que l'état et la marque de suppression).
+    const isOffElsewhere = theirs?.state === 'closed' && theirs.securityOff === true
+    if (isOffElsewhere && delegated.closing?.state === 'closed' && delegated.closing.securityOff !== true) delegated = { ...delegated, closing: { ...delegated.closing, securityOff: true } }
     // Les sessions précédentes, chacune avec la fermeture la plus avancée des deux copies.
     const mine = earlierOf(g.delegated)
     const mergedEarlier = mine.map(prev => {

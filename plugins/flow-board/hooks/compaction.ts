@@ -108,6 +108,8 @@ export const compactionInstructions = (role: CompactionRole): string => {
       '- the work plan or spec path, the current task (N of M), a summary of the progress, what is done, left or blocked, the files changed, the results of the checks, the last error, the branch and the worktree;',
       '- the ticket in progress and its review step (Standards and Spec axes, or the Spec axis alone for a sensitive ticket, bug pass, snapshot ref refs/worktree/flow-board/<ticket>), and the commit hash of each ticket done;',
       '- the questions sent to the manager still without an answer, word for word, and the choices already declared (the "decided" sent to the flow tool);',
+      '- the review findings not yet applied (each with its file:line and the expected fix), or the path of the file that holds them (the notes-compte-rendu.md of the session\'s temporary folder, kept up to date with them before the compaction): a worker had reread its own transcript to find them again;',
+      '- after the compaction, reload with ToolSearch, in one call (select:<names>), the deferred tools the session was using before calling any of them (SendMessage, TaskCreate, TaskUpdate, Monitor): their schemas do not survive it;',
       role.main ? `- the manager to report to: ${role.main};` : '- the reference of the manager to report to, as the brief gives it;',
       '- the paths of the brief, of DECISIONS.md and of the procedure of a worker (reference/procedure-groupe.md of flow-board).',
     ].join('\n')
@@ -174,6 +176,36 @@ export const compactionMoment = (run: Run): { key: string; at: number } | null =
  * au lieu de 14, coût 94,8 pour 100 sans rien, d'après l'étude des seuils d'un worker du 02/11/2026 (317 sessions Claude Code, dont 64 workers).
  */
 export const WORKER_COMPACT_TOKENS = 450_000
+
+/**
+ * Le contexte au-delà duquel le COO se compacte lui-même quand rien n'attend la personne : le même seuil que
+ * celui d'un worker, car une discussion du COO démarre déjà vers 150 000 tokens (décision de la personne du 03/11/2026).
+ */
+export const COO_COMPACT_TOKENS = WORKER_COMPACT_TOKENS
+
+/** Un « ? » de question : suivi d'un blanc, d'une balise de fin (gras, italique, parenthèse, crochet de lien, guillemet, cellule de tableau, « ! ») ou de la fin du texte ; pas celui d'une adresse (`?id=`). */
+const QUESTION_MARK = /\?(?=[\s*_)\]"”’»|!]|$)/
+
+/** Une ligne « needs input: … », avec ou sans balises devant (gras, citation, puce, titre, code). */
+const NEEDS_INPUT_LINE = /^[\s>*_`#-]*needs input\b/im
+
+/**
+ * La dernière réponse du COO attend la personne : elle finit sur « ? » (même règle que `endsWithQuestion`), une de
+ * ses lignes est une ligne « needs input », ou elle pose une question ailleurs, hors code (une question suivie de ses
+ * options, sur sa ligne ou en dessous, ou dans un tableau). Prudente : une question de trop retarde la compaction
+ * jusqu'au tour suivant, une question manquée la fait tomber avant la réponse de la personne.
+ */
+export const answerAwaitsPerson = (answer: unknown): boolean => {
+  if (typeof answer !== 'string') return false
+  const text = answer.trim()
+  if (/\?[\s*_)"»]*$/.test(text) || NEEDS_INPUT_LINE.test(text)) return true
+  let isInCode = false
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) isInCode = !isInCode
+    else if (!isInCode && QUESTION_MARK.test(line.replace(/`[^`]*`/g, ''))) return true
+  }
+  return false
+}
 
 /**
  * Ce que fait le mod d'un worker au repos, un ticket clos au-delà du seuil (`workerCompactStep`) : `compact`

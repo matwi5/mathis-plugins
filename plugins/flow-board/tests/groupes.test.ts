@@ -115,10 +115,11 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
 
   const text = filled.at(-1)!
   expect(text).toMatch(/^Confie ce groupe à un worker, pour la mission « Lot SC » : Groupe B \(App revue\) : 1\) /)
-  expect(text).toContain(`${N} — Nettoyages revue.`)
+  // La ligne du groupe porte l'effort calculé par le mod : un ticket muet sur sa sensibilité ne compte plus au lancement.
+  expect(text).toContain(`${N} — Nettoyages revue — effort calculé : medium.`)
   expect(text).toMatch(/Puis lance la session, avec un titre qui commence par « Lot SC > Groupe <id> · »/)
-  // L'effort de la session : medium par défaut, high pour un groupe délicat, dit en une ligne.
-  expect(text).toContain("Effort de la session (<effort>) : medium par défaut ; high si le groupe a un ticket qui touche une zone sensible, s'il reste des choix de conception à faire ou s'il touche plusieurs modules à la fois. Dis-moi en une ligne l'effort choisi et pourquoi.")
+  // L'effort de la session : celui calculé, high pour un choix de conception restant, dit en une ligne avec tout écart.
+  expect(text).toContain("Effort de la session (<effort>) : l’effort calculé sur la ligne du groupe ; high si un choix de conception reste à faire au groupe. Pendant un ticket sensible, le mod de la session la passe lui-même en high : ne relève pas son effort pour ce ticket. Dis-moi en une ligne l'effort pris et, s'il s'écarte du calcul, pourquoi.")
   // Dans l'app Desktop : start_session ; dans le CLI : claude --bg, le compte rendu revient par SendMessage.
   expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(ce dossier n’a pas de git\)\./)
   expect(text).toMatch(/Dans le CLI \(pas de start_session\) : appelle d'abord ListAgents pour lire le nom de cette discussion et sa référence entre crochets/)
@@ -143,7 +144,10 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   // commande qui n'affiche qu'elle, avant d'écrire que le geste est fait. La fusion d'une branche de
   // travail qui a bougé se teste dans un dépôt : lots-sessions-liees.test.ts.
   expect(text).toContain('chacune par le titre de son entrée, jamais par une date')
-  expect(text).toContain(`avant de dire que c'est fait, lis cette seule valeur par ${TRUST_COMMAND} (python sous Windows), jamais le fichier entier, qui peut porter des jetons`)
+  // Pour un groupe, la commande est celle de la section 3 de la procédure, que le brief cite : recopiée, elle
+  // portait le brief au-delà de son plafond (les autres lancements la gardent : bug, pistes).
+  expect(text).toContain("avant de dire que c'est fait, lis cette seule valeur par la commande de la section 3 de la procédure, jamais le fichier entier, qui peut porter des jetons")
+  expect(text).not.toContain(TRUST_COMMAND)
   // Seule la valeur s'imprime ; sous Windows, la clé peut être écrite avec des « / ».
   expect(TRUST_COMMAND).toContain('print((p.get(r) or p.get(r.replace(os.sep, "/")) or {}).get("hasTrustDialogAccepted"))')
   expect(text).toContain('un essai : dans un dépôt déjà de confiance')

@@ -35,6 +35,18 @@ class RetiredTermsTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("essai/reference/procedure.md:1", problems[0])
 
+    def test_un_terme_retire_dans_les_types_du_plugin_est_refuse(self):
+        (self.plugin / "types").mkdir()
+        (self.plugin / "types" / "index.d.ts").write_text("/** la vague suivante */\nexport type A = 1\n", encoding="utf-8")
+        problems = check.retired_terms(self.plugin, self.root / "absent.json")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("essai/types/index.d.ts:1", problems[0])
+
+    def test_les_types_du_moteur_ne_sont_pas_lus(self):
+        (self.plugin / ".claude-plugin" / "types").mkdir(parents=True)
+        (self.plugin / ".claude-plugin" / "types" / "index.d.ts").write_text("// la vague suivante\n", encoding="utf-8")
+        self.assertEqual(check.retired_terms(self.plugin, self.root / "absent.json"), [])
+
     def test_la_regle_d_un_autre_plugin_n_est_pas_lue(self):
         (self.root / "config" / "rules" / "autre.md").write_text("la vague suivante\n", encoding="utf-8")
         self.assertEqual(check.retired_terms(self.plugin), [])
