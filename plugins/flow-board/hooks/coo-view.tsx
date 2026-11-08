@@ -123,7 +123,7 @@ export const coordinationRows = (s: CooStatement): CooRow[] => {
     ...(s.missions.length === 0
       ? [{ key: 'coo-missions-none', kind: 'line' as const, parts: [{ text: 'Aucune mission dans ce projet.', dim: true }] }]
       : s.missions.map(m => ({ key: `coo-mission-${m.id}`, kind: 'line' as const, parts: missionParts(m) }))),
-    ...cardRows(s.cards ?? []),
+    ...cardRows(s.cards ?? [], s.quota),
     ...planRows(s),
     ...waveRows(s),
     ...(s.roadmap ? roadmapRows(s.roadmap) : []),
@@ -202,6 +202,9 @@ const reportRows = (r: CooReport): CooRow[] => {
   return rows
 }
 
+/** Des titres de missions entre guillemets, neutralisés, séparés par des virgules. */
+const quotedTitles = (titles: readonly string[]): string => titles.map(t => `« ${neutralLine(t)} »`).join(', ')
+
 /**
  * La carte de livraison : avant le clic, ce qui partira (commits par mission, « hors mission » sinon) et les
  * missions à attendre ; puis les étapes et leur état, avec le seul bouton que l'état permet.
@@ -214,8 +217,12 @@ const deliveryRows = (d: CooDelivery): CooRow[] => {
     for (const [i, c] of d.commits.entries())
       rows.push({ key: `coo-delivery-commits-${i}`, kind: 'line', parts: [{ text: '·', dim: true }, { text: `${c.mission === null ? 'hors mission' : `« ${neutralLine(c.mission)} »`} : ${c.lines.length} commit${c.lines.length > 1 ? 's' : ''}`, dim: true }, { text: c.lines.slice(0, 3).map(l => neutralLine(l)).join(' · '), dim: true }] })
     if (d.more !== undefined && d.more > 0) rows.push({ key: 'coo-delivery-more', kind: 'line', parts: [{ text: '·', dim: true }, { text: `et ${d.more} commit${d.more > 1 ? 's' : ''} de plus`, dim: true }] })
-    if (d.waitFor.length > 0)
-      rows.push({ key: 'coo-delivery-wait', kind: 'line', parts: [{ text: '⚠', color: C.amber, bold: true }, { text: `Mieux vaut attendre : ${d.waitFor.map(t => `« ${neutralLine(t)} »`).join(', ')} pas finie${d.waitFor.length > 1 ? 's' : ''}, avec des groupes déjà fusionnés.`, color: C.amber }] })
+    const waits = [
+      ...(d.waitFor.length > 0 ? [`${quotedTitles(d.waitFor)} pas finie${d.waitFor.length > 1 ? 's' : ''}, avec des groupes déjà fusionnés`] : []),
+      ...(d.waitCommits.length > 0 ? [`${quotedTitles(d.waitCommits)} pas finie${d.waitCommits.length > 1 ? 's' : ''}, des commits partent`] : []),
+    ]
+    if (waits.length > 0)
+      rows.push({ key: 'coo-delivery-wait', kind: 'line', parts: [{ text: '⚠', color: C.amber, bold: true }, { text: `Mieux vaut attendre : ${waits.join(' ; ')}.`, color: C.amber }] })
     return rows
   }
   const GLYPH = { todo: '○', running: '◷', done: '✓', failed: '✗' } as const
@@ -296,9 +303,10 @@ const launchButtons = (c: CooCard): CooAction[] => {
 /**
  * Les cartes de lancement : le départ (et sa ligne d'ask-matt), le mode et l'effort recommandés avec leur
  * raison, le dossier ; un clic lance (une carte ne lance qu'une fois : « lancement en cours », puis la
- * mission lancée) ; les autres départs se choisissent avant le clic.
+ * mission lancée) ; les autres départs se choisissent avant le clic. `quota` : celui de la discussion, sous une
+ * carte prête en xhigh (une limite atteinte arrêterait la mission en plein travail).
  */
-const cardRows = (cards: readonly CooCard[]): CooRow[] => {
+const cardRows = (cards: readonly CooCard[], quota?: string): CooRow[] => {
   if (cards.length === 0) return []
   const rows: CooRow[] = [{ key: 'coo-cards', kind: 'heading', parts: [{ text: `Lancements · ${cards.length}`, bold: true }] }]
   for (const c of cards) {
@@ -332,6 +340,7 @@ const cardRows = (cards: readonly CooCard[]): CooRow[] => {
     })
     // Pourquoi ce départ, ce mode, cet effort : la ligne d'ask-matt et les raisons, telles que Claude les a écrites.
     rows.push({ key: `coo-card-why-${c.id}`, kind: 'line', parts: [{ text: `${c.of ? 'rétro' : 'ask-matt'} : ${neutralLine(c.askMatt)}${c.modeWhy ? ` · mode : ${neutralLine(c.modeWhy)}` : ''}${c.effortWhy ? ` · effort : ${neutralLine(c.effortWhy)}` : ''}`, dim: true }] })
+    if (quota && c.effort === 'xhigh' && c.state.kind === 'ready') rows.push({ key: `coo-card-quota-${c.id}`, kind: 'line', parts: [{ text: `quota de la discussion${NB}·${NB}${quota}`, dim: true }] })
   }
   return rows
 }

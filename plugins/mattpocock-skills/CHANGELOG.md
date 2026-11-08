@@ -4,6 +4,16 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.8 — 2026-11-08
+
+### Modifié
+- **`to-tickets`** : un ticket sensible nomme aussi, par une recherche citée, les chemins qui lisent sa donnée pour décider, et ce que devient une valeur déjà gardée hors forme ; un ticket qui change un prédicat de rattachement porte le tableau des formes qu'il reçoit ; un critère sur les tests existants cite la recherche des tests qui lisent la fonction changée ; la mesure de ce que charge une session se fait en session interactive, et un critère de fini ne compare que les fichiers du ticket.
+- **`to-spec`** : les mêmes ajouts pour une spec en zone sensible (chemins qui lisent la donnée pour décider, valeur hors forme, tableau des formes d'un prédicat de rattachement).
+- **`diagnosing-bugs`** : le test de régression affirme mot pour mot l'attente écrite par l'utilisateur ; s'il ne peut pas passer, Claude le dit et demande avant de l'assouplir.
+- **`grilling`** : chaque question se lit seule, sans le rapport qui l'a amenée.
+
+---
+
 ## 1.3.1-mathis.7 — 2026-11-03
 
 ### Modifié

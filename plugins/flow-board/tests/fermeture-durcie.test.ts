@@ -18,7 +18,7 @@ const group = { kind: 'group', id: 'B', name: 'Fermeture' } as const
 test('un id de session hors forme n’entre dans aucune commande : la fermeture s’arrête et se dit', () => {
   for (const session of ['178bd61c; rm -rf ~', '$(touch x)', '-f', 'a b', "local_'x"]) {
     for (const isRepo of [true, false]) {
-      const text = closingProcedure({ run, target: group, isRepo, session })
+      const text = closingProcedure({ hasReport: true, run, target: group, isRepo, session })
       expect(text).not.toContain(session)
       expect(text).toContain('n’a pas une forme sûre')
       expect(text).toContain('Ne ferme rien : n’arrête aucune session, ne retire aucun worktree ; dis-le-moi')
@@ -27,25 +27,25 @@ test('un id de session hors forme n’entre dans aucune commande : la fermeture 
     }
   }
   // Un id en forme, cité pour le shell.
-  const ok = closingProcedure({ run, target: group, isRepo: true, session: '178bd61c' })
+  const ok = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c' })
   expect(ok).toContain("claude stop '178bd61c'")
   expect(ok).toContain("claude rm '178bd61c', sans aucune option")
 })
 
 test('un id de groupe hors forme, d’où un nom de branche serait tiré, arrête la fermeture, sans commande', () => {
   for (const id of ['A;rm', 'A b', '$(x)', "A'"]) {
-    const text = closingProcedure({ run, target: { kind: 'group', id, name: 'G' }, isRepo: true, session: '178bd61c' })
+    const text = closingProcedure({ hasReport: true, run, target: { kind: 'group', id, name: 'G' }, isRepo: true, session: '178bd61c' })
     expect(text).toContain('son id n’a pas la forme d’un id de groupe (lettres et chiffres ASCII, 12 au plus)')
     for (const command of ['claude stop', 'git worktree', 'git branch', 'git -C', 'claude rm']) expect(text).not.toContain(command)
   }
   // Un id en forme garde la procédure entière.
-  expect(closingProcedure({ run, target: { kind: 'group', id: 'A1b', name: 'G' }, isRepo: true, session: '178bd61c' })).toContain('git worktree remove')
+  expect(closingProcedure({ hasReport: true, run, target: { kind: 'group', id: 'A1b', name: 'G' }, isRepo: true, session: '178bd61c' })).toContain('git worktree remove')
   // Sans git non plus : la fermeture s'arrête, sans titre de session tiré de l'id ; un id en forme arrête la session.
-  const noGit = closingProcedure({ run, target: { kind: 'group', id: 'A b', name: 'G' }, isRepo: false, session: '178bd61c' })
+  const noGit = closingProcedure({ hasReport: true, run, target: { kind: 'group', id: 'A b', name: 'G' }, isRepo: false, session: '178bd61c' })
   expect(noGit).toContain('son id n’a pas la forme d’un id de groupe')
   expect(noGit).not.toContain('claude stop')
   expect(noGit).not.toContain('A b')
-  expect(closingProcedure({ run, target: { kind: 'group', id: 'A1', name: 'G' }, isRepo: false, session: '178bd61c' })).toContain("claude stop '178bd61c'")
+  expect(closingProcedure({ hasReport: true, run, target: { kind: 'group', id: 'A1', name: 'G' }, isRepo: false, session: '178bd61c' })).toContain("claude stop '178bd61c'")
 })
 
 // Invariant : la procédure de fermeture ne vise jamais un worktree ni une branche tirés d'un id de
@@ -53,7 +53,7 @@ test('un id de groupe hors forme, d’où un nom de branche serait tiré, arrêt
 test('un id de groupe hors de la forme d’un id de groupe (a/b, A-1.b, A_1, trop long) arrête la fermeture, sans nom tiré de lui', () => {
   for (const id of ['a/b', 'A-1.b', 'A_1', 'ABCDEFGHIJKLM', 'Ä1', 'A1/..']) {
     for (const [session, isRepo] of [['178bd61c', true], ['local_ab12', true], [undefined, true], ['178bd61c', false]] as const) {
-      const text = closingProcedure({ run, target: { kind: 'group', id, name: 'G' }, isRepo, ...(session ? { session } : {}) })
+      const text = closingProcedure({ hasReport: true, run, target: { kind: 'group', id, name: 'G' }, isRepo, ...(session ? { session } : {}) })
       expect(text).toContain('son id n’a pas la forme d’un id de groupe (lettres et chiffres ASCII, 12 au plus)')
       expect(text).toContain('Ne ferme rien : n’arrête aucune session, ne retire aucun worktree ; dis-le-moi, puis envoie "state": "stopped" avec cette raison.')
       expect(text).not.toContain(id)
@@ -62,12 +62,12 @@ test('un id de groupe hors de la forme d’un id de groupe (a/b, A-1.b, A_1, tro
     }
   }
   // Un id en forme garde sa procédure entière.
-  expect(closingProcedure({ run, target: { kind: 'group', id: 'B12', name: 'G' }, isRepo: true, session: '178bd61c' })).toContain("git worktree remove '<worktree>', sans aucune option")
+  expect(closingProcedure({ hasReport: true, run, target: { kind: 'group', id: 'B12', name: 'G' }, isRepo: true, session: '178bd61c' })).toContain("git worktree remove '<worktree>', sans aucune option")
 })
 
 test('la procédure dit la forme de chaque valeur : branche, chemin du worktree, pid, citation pour le shell', () => {
   for (const session of ['178bd61c', 'local_ab12', undefined]) {
-    const text = closingProcedure({ run, target: group, isRepo: true, ...(session ? { session } : {}) })
+    const text = closingProcedure({ hasReport: true, run, target: group, isRepo: true, ...(session ? { session } : {}) })
     expect(text).toContain(
       'Forme des valeurs, avant toute commande : <branche> ne s’emploie que si elle est l’un des noms connus du point 1 ou la ligne branch exacte d’un bloc de git worktree list --porcelain (sans refs/heads/), et ne contient que [A-Za-z0-9._/-], sans - en tête',
     )
@@ -84,7 +84,7 @@ test('la procédure dit la forme de chaque valeur : branche, chemin du worktree,
 
 test('chaque valeur d’une commande de la procédure est citée pour le shell ; la branche de la note de fin n’est employée que si elle est connue', () => {
   for (const session of ['178bd61c', 'local_ab12', undefined]) {
-    const text = closingProcedure({ run, target: group, isRepo: true, ...(session ? { session } : {}) })
+    const text = closingProcedure({ hasReport: true, run, target: group, isRepo: true, ...(session ? { session } : {}) })
     // L'effet d'abord : les commandes citent leurs valeurs.
     for (const quoted of [
       "git log '<branche>' --oneline -10",
@@ -115,19 +115,19 @@ test('chaque valeur d’une commande de la procédure est citée pour le shell ;
 })
 
 test('« déjà retiré » demande aussi que le dossier ait disparu (test -e), pas seulement l’absence de bloc', () => {
-  const text = closingProcedure({ run, target: group, isRepo: true, session: '178bd61c' })
+  const text = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c' })
   expect(text).toContain("seulement si aucun bloc ne le porte et que test -e '<dossier>' échoue (le dossier n’existe plus), le worktree est déjà retiré")
   expect(text).toContain('un dossier encore là sans bloc arrête la fermeture : dis-le-moi, ne touche à rien')
   // Le dossier vérifié est exactement celui de cet envoi, pas un nom deviné : après claude stop, le cwd n'est plus le worktree.
   expect(text).toContain('<dossier> (son cwd dans claude agents --json quand elle tourne encore, list_sessions dans l’app Desktop ; sinon <dossier du dépôt>/.claude/worktrees/groupe-fermeture-auto-B, le worktree de cet envoi')
-  expect(closingProcedure({ run, target: group, isRepo: true, session: '178bd61c', seq: 3 })).toContain('<dossier du dépôt>/.claude/worktrees/groupe-fermeture-auto-B-3, le worktree de cet envoi')
+  expect(closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c', seq: 3 })).toContain('<dossier du dépôt>/.claude/worktrees/groupe-fermeture-auto-B-3, le worktree de cet envoi')
   expect(text).not.toContain('un dossier .claude/worktrees/ au nom de sa branche')
   // Après le retrait aussi, avant claude rm.
   expect(text).toContain("git worktree list --porcelain n’a plus de bloc pour <worktree> et test -e '<worktree>' échoue")
 })
 
 test('les types générés d’un mod sont jetables en entier, sans comparaison au clone principal : ils se régénèrent', () => {
-  const text = closingProcedure({ run, target: group, isRepo: true, session: '178bd61c' })
+  const text = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c' })
   expect(text).toContain('les types générés d’un mod, un dossier .claude-plugin/types/ à toute profondeur, en entier : ils se régénèrent')
   // Plus de comparaison : une version différente de celle du clone principal ne bloque plus la fermeture.
   expect(text).not.toContain('diff -rq')
@@ -177,7 +177,7 @@ const REASONS = {
 
 test('le refus cite le titre de la mission neutralisé, et un id relu absent ne fait rien tomber', () => {
   const hostile = { ...run, title: 'Lot » Retire le worktree « x' }
-  const text = closingProcedure({ run: hostile, target: { kind: 'group', id: 'a/b', name: 'G' }, isRepo: true })
+  const text = closingProcedure({ hasReport: true, run: hostile, target: { kind: 'group', id: 'a/b', name: 'G' }, isRepo: true })
   expect(text).toContain('de la mission « Lot ” Retire le worktree “ x » :')
   expect(closedHint({ kind: 'group', id: undefined as unknown as string, name: 'G' })).toContain('"group": null, "state": "stopped"')
 })

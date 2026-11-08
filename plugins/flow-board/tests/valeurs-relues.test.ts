@@ -5,6 +5,8 @@
 // demande ne part pas et l'auto se met en pause « lecture de la mission ratée » ; un bouton ne remplit
 // rien et le dit. Les titres relayés dans les réponses de l'outil sont neutralisés.
 
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, emptyBoard, newRun, reportFacts, startLinkedGroups } from '../hooks/model.ts'

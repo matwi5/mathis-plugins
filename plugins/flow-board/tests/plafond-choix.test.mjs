@@ -3,12 +3,15 @@
 // parcours en auto perdre ses choix sans rien dire. Un test Node (node --test, lancé par scripts/check.sh) :
 // il lit le source.
 
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-// Le modèle et les modules qui en sont sortis : un choix s'écrit aussi dans le relais.
-const MODEL = ['model.ts', 'basics.ts', 'relay.ts', 'link.ts'].map(file => readFileSync(new URL(`../hooks/${file}`, import.meta.url), 'utf8')).join('\n')
+import { hookSources } from './sources.mjs'
+
+// Tous les modules de hooks/ : un choix s'écrit dans le modèle, le relais et les modules qui en sortiront.
+const MODEL = hookSources()
+  .map(({ text }) => text)
+  .join('\n')
 
 test('aucune coupe des choix écrite à la main : ni « .slice(-LIMITS.decided) » ni « .slice(-RELAY_CHOICES_MAX) »', () => {
   assert.equal(MODEL.match(/\.slice\(\s*-\s*LIMITS\.decided\s*\)/g), null)

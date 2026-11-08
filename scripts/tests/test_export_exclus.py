@@ -6,6 +6,7 @@ porte le piège : ni son réglage, ni son script, ni ses tests ne partent dans l
 le détail de check.sh (docs/check-sh.md) et les pièges des mods (.claude/rules/), sortis du CLAUDE.md privé.
 Sans scripts/export_public.py (la version publique), ces tests sont sans objet."""
 
+import re
 import sys
 import tempfile
 import unittest
@@ -40,6 +41,28 @@ class ExportExclusTest(unittest.TestCase):
             self.assertFalse((staging / "docs" / "check-sh.md").exists())
             self.assertFalse((staging / ".claude" / "rules" / "pieges-des-mods.md").exists())
             self.assertTrue((staging / "docs" / "evenements-moteur.md").is_file())
+
+    def test_aucun_test_exporte_ne_charge_un_script_qui_ne_part_pas(self):
+        # Un test exporté qui importe au chargement (en tête de fichier) ou charge par son nom de fichier un
+        # script exclu (scripts/sync.py, export_public.py…) tomberait sur une erreur dans le dépôt public. Un
+        # import placé dans une méthode, sous un skipUnless, ne joue qu'à l'exécution de son test.
+        import export_public
+        with tempfile.TemporaryDirectory() as tmp:
+            staging = Path(tmp) / "public"
+            staging.mkdir()
+            export_public.build_snapshot("HEAD", staging)
+            exported = {p.stem for p in (staging / "scripts").rglob("*.py")}
+            missing = sorted({p.stem for p in SCRIPTS.rglob("*.py")} - exported)
+            self.assertIn("sync", missing)
+            imports = re.compile("|".join(rf"^import {re.escape(n)}\b|^from {re.escape(n)} import" for n in missing), re.M)
+            # Un chargement par nom de fichier (`spec_from_file_location`) ; un simple test d'existence
+            # (`(… / "export_public.py").is_file()`, pour se sauter dans le dépôt public) n'en est pas un.
+            files = re.compile("|".join(rf"\"{re.escape(n)}\.py\"" for n in missing))
+            # Ce fichier-ci cite ces motifs pour les chercher, sans rien charger : il se met à part.
+            loaders = [p.name for p in (staging / "scripts" / "tests").glob("*.py")
+                       if p.name != Path(__file__).name and imports.search(text := p.read_text(encoding="utf-8"))
+                       or ("spec_from_file_location(" in text and files.search(text))]
+            self.assertEqual(loaders, [])
 
 
 if __name__ == "__main__":

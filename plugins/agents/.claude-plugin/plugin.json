@@ -1,7 +1,7 @@
 {
   "name": "agents",
   "description": "Spécialistes de Mathis : explorer (cartographie en lecture seule, Haiku), researcher (recherche documentaire sourcée, Sonnet). Appelés agents:explorer, agents:researcher.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": { "name": "Mathis" },
   "license": "MIT",
   "keywords": ["agents", "subagents", "explorer", "researcher"]

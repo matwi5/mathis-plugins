@@ -121,7 +121,7 @@ A correct seam is one where the test exercises the **real bug pattern** as it oc
 
 If a correct seam exists:
 
-1. Turn the minimised repro into a failing test at that seam.
+1. Turn the minimised repro into a failing test at that seam. When the user wrote the expected behaviour (a test to write, an expected outcome), the test asserts that expectation word for word; if the fix cannot make it pass, tell the user and ask whether to keep it or loosen it (written as a loosened expectation), and keep the user's assertion until they answer.
 2. Watch it fail. If you forced the red by mutating code or a fixture, `diff` against a pristine copy to prove the mutation landed before you trust it.
 3. Apply the fix.
 4. Watch it pass.

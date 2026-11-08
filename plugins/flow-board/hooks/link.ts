@@ -10,11 +10,11 @@
 // `openLinkedWork`) attend un clone, jamais le tableau de bord enregistré. Il n'importe que basics, relay et des modules sans lien avec le modèle, jamais le
 // modèle (un test le vérifie).
 
-import type { Board, ClosedLink, Closing, FlowItem, FlowPhase, GroupLink, LinkedWork, Run, SecurityCheck, TicketGroup } from '../types'
+import type { Board, ClosedLink, Closing, FlowItem, FlowPhase, GroupLink, LinkedLaunch, LinkedWork, Run, SecurityCheck, TicketGroup } from '../types'
 import { SKILLS } from './catalog.ts'
-import { activeRun, clip, clone, currentPhase, hasGroupReview, hasUnreadableCounts, isoMinute, isTime, log, noFx, type Outcome, reviewTimeOf, sentGroupOf, setStep, shownGroupId, str, bugsText } from './basics.ts'
-import { ownPart } from './linked.ts'
-import { branchFate, type CloseTarget, isSafeBranch, isSessionId, isWorktreePath, neutralRelayed, readClosing, sendNumber } from './closing.ts'
+import { activeRun, addedCount, clip, clone, currentPhase, formText, hasGroupReview, hasUnreadableCounts, isoMinute, isTime, log, noFx, type Outcome, reviewTimeOf, sentGroupOf, setStep, shownGroupId, str, bugsText } from './basics.ts'
+import { hasSeparator, type LinkedSession, ownPart } from './linked.ts'
+import { branchFate, type CloseTarget, isSafeBranch, isSessionId, isWorktreePath, linkedPrefix, neutralRelayed, readClosing, sendNumber } from './closing.ts'
 import { isRelay, keepDecisions, relayedDecisions, relayForGroup, UNREADABLE_COUNT } from './relay.ts'
 import { maxOf } from './timeline.ts'
 
@@ -290,6 +290,45 @@ export const linkGroupSession = (board: Board, title: string, session: string, n
   return { board: b, fx: noFx() }
 }
 
+/** Un groupe lancé hors de la demande du mod : le groupe et l'id du lancement. */
+export type OffRequestLaunch = { group: string; launch: string }
+
+/** Un titre ramené à ses lettres et chiffres, en minuscules : la comparaison du début d'un titre de worker au préfixe de la mission. */
+const titleKey = (text: string): string => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+
+/**
+ * Les sessions que cette discussion a lancées (`launches`, son registre) avec un titre « Groupe X · » pour un
+ * groupe de la mission, qui ne sont liées à aucune demande : le tableau de bord ne les voit pas (choix de la personne :
+ * signalées, jamais rattachées d'après leur titre ; le lien reste posé seulement par une demande en attente,
+ * `linkGroupSession`). Pas signalées : le worker que le groupe a noté (envoi en cours, rendu ou précédent), un groupe
+ * dont la demande attend son lancement, un lancement plus ancien que le dernier envoi du groupe (lié depuis par
+ * une demande), une session arrêtée ou absente des workers relus (`sessions`, l'onglet Agents), un titre qui
+ * nomme une autre mission (son début ne répond pas au préfixe de celle-ci), un lancement d'avant la mission.
+ */
+export const offRequestLaunches = (run: Run, launches: readonly LinkedLaunch[], sessions: readonly LinkedSession[]): OffRequestLaunch[] => {
+  const prefix = titleKey(linkedPrefix(run))
+  const out: OffRequestLaunch[] = []
+  for (const l of launches) {
+    if (typeof l?.id !== 'string' || typeof l.title !== 'string' || !isTime(l.at) || l.at < run.startedAt) continue
+    const named = /^\s*groupe\s+([^\s·:,()]+)\s*(?:Â)?·/i.exec(ownPart(l.title))?.[1]?.toLowerCase()
+    const group = named !== undefined ? (run.groups ?? []).find(g => g.id.toLowerCase() === named) : undefined
+    if (!group) continue
+    if (hasSeparator(l.title)) {
+      const head = titleKey(l.title.slice(0, l.title.length - ownPart(l.title).length))
+      if (head === '' || prefix === '' || !(head.startsWith(prefix) || prefix.startsWith(head))) continue
+    }
+    if (group.linked !== undefined && group.linked.session === undefined) continue
+    const links = [group.linked, group.delegated].filter((x): x is GroupLink => x !== undefined && x !== null && typeof x === 'object')
+    const known = links.flatMap(x => [x.session, ...(Array.isArray(x.earlier) ? x.earlier.map(e => e?.session) : [])])
+    if (known.includes(l.id)) continue
+    if (links.some(x => isTime(x.at) && x.at >= l.at)) continue
+    const state = sessions.find(s => s.key === l.id)?.state
+    if (state !== 'working' && state !== 'returned') continue
+    out.push({ group: group.id, launch: l.id })
+  }
+  return out
+}
+
 /** « ↻ Relancer la fermeture » de la session des éléments de la phase en cours, arrêtée. */
 export const askCloseLinkedItems = (board: Board, now: number): Outcome => {
   const run0 = activeRun(board)
@@ -361,9 +400,11 @@ export const returnGroups = (run: Run, value: unknown, now: number, stored?: unk
         s.standards = Math.max(0, s.standards) + relayed.reviews.standards
         s.spec = Math.max(0, s.spec) + relayed.reviews.spec
         s.fixed = (s.fixed ?? 0) + relayed.reviews.fixed
-        // Ses bogues, comme dans la discussion de la mission : cités, et comptés dans l'alerte « constats > corrigés ».
-        const { standards, spec, fixed, bugs } = relayed.reviews
-        log(run, now, '◈', `Revues du groupe ${g.id} (worker) : ${standards} Standards · ${spec} Spec${bugsText(bugs)} · ${fixed} corrigé(s)`, standards + spec + (bugs ?? 0) > fixed ? 'warn' : 'info')
+        // Ses bogues et ses constats de forme, comme dans la discussion de la mission : cités, et comptés dans
+        // l'alerte « constats > corrigés » ; un compte de forme absent reste absent des stats.
+        const { standards, spec, fixed, bugs, form } = relayed.reviews
+        if (form !== undefined) s.form = addedCount(s.form, form)
+        log(run, now, '◈', `Revues du groupe ${g.id} (worker) : ${standards} Standards · ${spec} Spec${bugsText(bugs)}${formText(form)} · ${fixed} corrigé(s)`, standards + spec + (bugs ?? 0) + (form ?? 0) > fixed ? 'warn' : 'info')
       }
       // La revue de sécurité relayée vaut celle que la discussion n'a pas encore reçue (un envoi d'ici
       // l'emporte) ; ses failles laissées ne sont qu'une proposition : seul un envoi d'ici tranche.

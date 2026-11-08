@@ -95,6 +95,8 @@ test('⇉ confie le seul lot A ∥ B à des workers, sans /implement-spec', { ti
   expect(text).toMatch(/^Confie chacun de ces groupes à son worker, en parallèle, pour la mission « Lot SC » : Groupe A \(Worker SC\/VSC\) : 1\) .* ∥ Groupe B \(App revue\) : 1\) /)
   // C attend A et B : il n'est pas du lot, il viendra par un lancement suivant.
   expect(text).not.toMatch(/Alignement/)
+  // Un lancement à part n'est lié à aucune demande, ni vu : la demande le dit.
+  expect(text).toContain("Lance chaque worker seulement depuis cette demande : un lancement à part n'est pas vu.")
   await ui.unmount()
 })
 

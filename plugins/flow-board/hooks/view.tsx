@@ -62,6 +62,7 @@ import {
 import {
   closingReason,
   linkedInFlight,
+  offRequestLaunches,
   pickableItems,
 } from './link.ts'
 import {
@@ -87,13 +88,13 @@ import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
 import { seatState } from './seat.ts'
-import { leadEffort, leadEffortPill, type LeadEffort } from './effort.ts'
+import { leadEffort, leadEffortPill, quotaText, type LeadEffort, type QuotaWindow } from './effort.ts'
 import type { CooStatement } from './coo.ts'
 import { cooBandParts, coordinationRows, securitySettingRows, type CooDo, type CooPart } from './coo-view.tsx'
 import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
 import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
-import { archiveConsent, consentDay, neutralLine, reopenText, type ReopenText } from './closing.ts'
+import { archiveConsent, consentDay, isKeptForReport, neutralLine, reopenText, type ReopenText } from './closing.ts'
 import { advisorCostOf, costOf, costText, familyOf, pricesFor, type UnitPrices } from './cost.ts'
 import { HOUR_MS, TOOL_FAMILIES, WORKING_KINDS, activityOf, buildAxis, laneMarks, laneParts, laneTree, rulerTicks, sliceAxis, summaryOf, unionOf, windowBounds, zoomWindow, type Axis, type AxisPiece, type LanePart } from './timeline.ts'
 import { DEFAULT, FAMILY_CELL, WAIT_COLOR, WAIT_GLYPH, laneCells, laneRaster, markLook, pack, rulerCells, textColorOf, type LaneCell } from './cells.ts'
@@ -193,6 +194,8 @@ export type View = {
   erasing?: readonly { key: string; title: string }[]
   /** Les prix des modèles tirés de ccusage (Q15) ; null tant qu'ils manquent : « coût indisponible ». */
   agentPrices?: Readonly<Record<string, UnitPrices>> | null
+  /** Le quota de la discussion (`$.session.usage().rateLimits`), relu à ce rendu ; vide ou absent : rien sur la carte de lancement. */
+  quota?: readonly QuotaWindow[]
   /** Le relevé d'état du projet, dans la seule discussion qui tient le siège du COO (sans mission ici) : sa vue Coordination. */
   coo?: CooStatement | null
   /** Le fichier de coordination ne se lit pas ici : l'auto ne lance rien (pause qui se lève seule à la relecture). */
@@ -1139,9 +1142,10 @@ const reopenButton = (k: Kit, id: string, reopen: ReopenText | null | undefined,
  * Où en est la fermeture d'un worker rendu : rien tant que rien n'a été tenté (elle part
  * d'office par la réponse de l'outil), puis fermée, à archiver dans l'app, ou arrêtée avec sa
  * raison et « ↻ Relancer la fermeture », le seul bouton, pour relancer une fois la cause réglée.
- * Fermée avec de quoi la rouvrir : « ↺ Rouvrir ».
+ * Fermée avec de quoi la rouvrir : « ↺ Rouvrir ». `isKept` : arrêtée après le retrait du worktree, la session
+ * gardée faute de compte rendu au relais (`isKeptForReport`) : la ligne le dit.
  */
-const closingRow = (k: Kit, id: string, closing: Closing | undefined, relaunch: () => unknown, reopen?: ReopenText | null, act?: Actions): unknown => {
+const closingRow = (k: Kit, id: string, closing: Closing | undefined, relaunch: () => unknown, reopen?: ReopenText | null, act?: Actions, isKept = false): unknown => {
   const { Box, Button } = k
   if (!closing) return null
   if (closing.state === 'closed')
@@ -1158,7 +1162,7 @@ const closingRow = (k: Kit, id: string, closing: Closing | undefined, relaunch: 
   return (
     <Box key={`close-row-${id}`} flexDirection="row" flexWrap="wrap" alignItems="center">
       <Box marginRight={1} flexShrink={1}>
-        {T(k, `!${NB}fermeture arrêtée${reason ? ` : ${reason}` : ''}`, { color: C.amber, wrap: 'wrap' })}
+        {T(k, isKept ? `!${NB}compte rendu absent du relais : la session est gardée` : `!${NB}fermeture arrêtée${reason ? ` : ${reason}` : ''}`, { color: C.amber, wrap: 'wrap' })}
       </Box>
       <Button key={`close-linked-${id}`} plain={true} dimColor={true} label={`↻${NB}Relancer la fermeture`} onPress={relaunch} />
     </Box>
@@ -1170,6 +1174,8 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
   const { Box, Button } = k
   const colorOf = (g: GroupView) => (g.isFallback ? C.gray : GROUP_COLORS[plan.groups.indexOf(g) % GROUP_COLORS.length]!)
   const done = plan.groups.filter(g => g.state === 'done')
+  // Un worker lancé par une commande à part, hors de la demande : le tableau de bord ne le voit pas et ne le rattache pas d'après son titre.
+  const offRequest = view.board?.delegate ? [] : offRequestLaunches(run, view.agents?.linked ?? [], (view.linked ?? []).map(x => x.session))
   const groupBox = (g: GroupView) => {
     const resources = g.group.resources ?? []
     // Les chemins servent au calcul du parallélisme ; la carte n'en montre que le nombre.
@@ -1181,7 +1187,12 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
     return (
       <Box key={`g-${g.group.id}`} flexDirection="column" marginTop={1}>
         {groupHead(k, run, g, colorOf(g), view, act)}
-        {about !== '' && <Box paddingLeft={2}>{T(k, about, { dim: true, wrap: 'wrap' })}</Box>}
+        {offRequest.some(o => o.group === g.group.id) && (
+          <Box key={`off-request-${g.group.id}`} paddingLeft={2}>
+            {T(k, `⚠${NB}Groupe ${g.group.id} lancé hors de la demande : arrête-le, puis relance-le depuis la demande`, { color: C.amber, wrap: 'wrap' })}
+          </Box>
+        )}
+        {about !== '' &&<Box paddingLeft={2}>{T(k, about, { dim: true, wrap: 'wrap' })}</Box>}
         {rows.map(ticket => ticketRow(k, run, ticket, view, act, relay?.tickets[ticket.id]))}
       </Box>
     )
@@ -1227,6 +1238,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
             () => act.closeLinkedGroup(g.group.id),
             reopenText({ run, target: { kind: 'group', id: g.group.id, name: g.group.name }, closing: g.group.delegated.closing, session: g.group.delegated.session, seq: g.group.delegated.seq, root: view.board?.root ?? '' }),
             act,
+            isKeptForReport(run, { kind: 'group', id: g.group.id, name: g.group.name }, g.group.delegated.seq, g.group.delegated.closing),
           )}
         {!g.isFallback && securityRow(k, g.group.security, g.group.id, act, view.security ?? 'unread', isClosedTurnedOff(g.group))}
         {/* « tout voir » déplie aussi les groupes finis : leurs tickets restent consultables. */}
@@ -2621,7 +2633,7 @@ const launchParts = (rec: NextLaunch, act: Actions): { buttons: NextButton[]; no
  * a un ; sinon, l'étape finie, la suite principale, ou « Clore la mission » quand elle n'est que la
  * rétro ou qu'il n'y en a pas. Jamais la compaction, la rétro ni « xhigh » ; rien en pleine étape.
  */
-const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: string; buttons: NextButton[]; lead: NextButton | null; preview: string[] } | null => {
+const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: string; buttons: NextButton[]; lead: NextButton | null; preview: string[]; quota?: string } | null => {
   const sug = suggestionsFor(run, { hasPullRequests: view.sync.isGitHub !== false, isVersionSet: view.sync.isVersionSet, versionUnits: view.sync.versionUnits, security: view.security ?? 'unread' })
   const rec = nextLaunchFor(run, outsideOf(view))
   const phase = currentPhase(run)
@@ -2648,7 +2660,9 @@ const nextStepOf = (run: Run, view: View, act: Actions): { title: string; note: 
     // Après /to-tickets, avant les groupes : alléger le manager d'abord (bouton secondaire).
     if (view.live.ask === null && suggestsCompaction(view.board, view.agents)) buttons.push({ key: 'next-compact', label: `⇣${NB}Compacter d’abord`, onPress: () => act.compactFirst() })
     if (phase.skill !== 'retro') buttons.push({ key: 'go-retro', label: `${SKILLS.retro!.glyph} ${SKILLS.retro!.label}`, onPress: () => act.launch('retro') })
-    return { title, note, buttons, lead, preview: [] }
+    // Un lancement de groupe sur la carte : le quota de la discussion à côté, avant de choisir l'effort (« ↗ xhigh »).
+    const quota = parts.buttons.length > 0 && (rec.kind === 'group' || rec.kind === 'parallel') ? quotaText(view.quota, view.now) : null
+    return { title, note, buttons, lead, preview: [], ...(quota ? { quota } : {}) }
   }
   if (sug.primary !== null) {
     const skill = sug.primary
@@ -2677,6 +2691,7 @@ const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
   return (
     <Box key="next" flexDirection="column" borderStyle="round" borderDimColor={true} paddingX={1} marginTop={1}>
       {line(k, [T(k, next.title, { bold: true }), T(k, next.note, { dim: true })])}
+      {next.quota ? T(k, `quota de la discussion${NB}·${NB}${next.quota}`, { dim: true, wrap: 'wrap' }) : null}
       {next.buttons.length > 0 && (
         <Box flexDirection="row" flexWrap="wrap" marginTop={1}>
           {next.buttons.map(b => (

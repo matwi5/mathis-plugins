@@ -21,7 +21,7 @@ Format a round like so:
 ➡️ <your recommended answer>
 ```
 
-Word each question so "yes" accepts your recommended answer.
+Word each question so "yes" accepts your recommended answer. Each question reads on its own: it restates in one or two sentences the fact or the finding it rests on, instead of pointing to a report the user may not have read.
 
 Each round the user answers reshapes the tree: settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one. When the user imposes a mechanism (a tool, a format, an approach), the next round's first question is about the mechanism itself; its settings wait for the round after, since they fall if the mechanism changes.
 

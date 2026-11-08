@@ -64,3 +64,21 @@ test('la consigne auto du compte rendu renvoie à la rubrique du code antérieur
   assert.ok(auto, 'consigne auto du compte rendu absente')
   assert.ok(auto[1].includes('« Code antérieur au lot »'), 'la consigne auto ne nomme pas la rubrique')
 })
+
+// Un compte rendu avait cherché les fichiers de suivi dans travail/tasks/ seulement, pas dans
+// travail/<sujet>/, sans voir qu'une autre discussion avait posé une version en route, ni quels
+// commits de la mission étaient déjà sur le dépôt distant.
+test('le compte rendu lit les fichiers de suivi là où le CLAUDE.md les range, les versions posées en route et les commits déjà envoyés', () => {
+  const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
+  assert.ok(sources.includes('là où le `CLAUDE.md` du projet les range (par exemple `travail/<sujet>/`'), 'les fichiers de suivi ne suivent pas le CLAUDE.md du projet')
+  assert.ok(!/fichiers de suivi de la mission \(`travail\/tasks\/…`\)/.test(sources), 'travail/tasks/ reste le seul lieu cité')
+  assert.ok(sources.includes('les versions posées depuis le début de la mission, par cette discussion ou une autre'), 'les versions posées en route ne sont pas relevées')
+  assert.ok(sources.includes('`git log --oneline origin/<branche>..HEAD`'), 'les commits déjà envoyés ne sont pas relevés')
+  const delivery = skill.slice(skill.indexOf('## Ce que la livraison enverra'), skill.indexOf('**À toi**'))
+  assert.ok(delivery.includes('les commits de la mission déjà sur le dépôt distant') && delivery.includes('les versions déjà posées en route'), 'la livraison ne dit ni les commits déjà envoyés ni les versions posées')
+})
+
+test('le compte rendu cite à part les constats de la relecture du fond et de la forme', () => {
+  const done = skill.slice(skill.indexOf('## Fait'), skill.indexOf('## Décidé sans toi'))
+  assert.ok(done.includes('ceux de la relecture du fond et de la forme, chacun à part'), 'les constats de forme ne sont pas cités à part')
+})

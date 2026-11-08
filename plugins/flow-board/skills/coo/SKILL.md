@@ -24,7 +24,7 @@ Quand la personne parle d'une chose nouvelle (une fonctionnalité, un bug, un co
 
 - **Le départ** : relis d'abord le skill `ask-matt` à l'endroit que ton relevé donne (ligne « ask-matt »), puis choisis le départ qu'il recommande pour ce cas, avec la ligne qui le justifie dans `askMatt` (son numéro et son texte), et les autres départs possibles dans `alts`. Une idée de la feuille de route se nomme par son id dans `idea`.
 - **Le mode** : `auto` d'ordinaire ; `manual` pour une tâche de jugement (un objectif ouvert, une intervention dans un existant), un changement de règles chargées dans toutes les sessions (`config/rules/`, un `CLAUDE.md`), ou quand la personne veut suivre le cadrage. La raison en une ligne dans `modeWhy`.
-- **L'effort du manager** : `high` ; pour un départ où le manager fait lui-même le travail d'un worker (`/implement` de tickets prêts, `/tdd` d'un comportement précis, `/code-review`), le niveau que donne la règle « Effort d'un worker de groupe » de la section 11 de la procédure d'un worker de groupe (`reference/procedure-groupe.md` de flow-board, à laquelle `config/rules/flow-board.md` renvoie), relue à ce moment (jamais xhigh pour ce travail). `xhigh` seulement en manuel, proposé à la personne, jamais choisi seul. La raison dans `effortWhy`.
+- **L'effort du manager** : `high` ; pour un départ où le manager fait lui-même le travail d'un worker (`/implement` de tickets prêts, `/tdd` d'un comportement précis, `/code-review`), le niveau que donne la règle « Effort d'un worker de groupe » de la section 11 de la procédure d'un worker de groupe (`reference/effort-workers.md` de flow-board, à laquelle `config/rules/flow-board.md` renvoie), relue à ce moment (jamais xhigh pour ce travail). `xhigh` seulement en manuel, proposé à la personne, jamais choisi seul. La raison dans `effortWhy`.
 - **Le tour d'intention d'une mission en auto** : quand tu proposes une carte en mode auto, avant que la personne clique (le lancement ne vaut que 10 minutes après son clic), pose-lui toi-même, en une fois, les trois questions d'intention (le but, le périmètre, ce qui est hors sujet) ; écris ses réponses mot pour mot dans `travail/<sujet>/demande.md` et commite ce fichier par son chemin. Le manager de la mission saute ce tour quand le fichier existe ; ensuite, le `DECISIONS.md` de la mission fait foi. En manuel, tout le cadrage se fait dans la mission.
 - **Le dossier** : le sujet de `travail/<sujet>/`, en lettres, chiffres et tirets ; quand aucun nom ne s'impose, demande-le à la personne.
 - **« Lancer en auto »** est l'accord de la personne pour le mode auto de cette seule mission : la nouvelle discussion l'allume elle-même en consommant le lancement, une seule fois, dans les 10 minutes. Une demande tapée dans le chat ne l'allume jamais : réponds par la carte.
@@ -40,11 +40,11 @@ Son format est strict, une entrée par ligne :
 # Feuille de route
 
 ## Jalons
-- [J1] en cours · 2026-11-02 · Mathis · Le but du jalon — fin : son critère de fin
+- [J1] en cours · 2026-11-02 · Alex · Le but du jalon — fin : son critère de fin
 ## Prochaines étapes
 - [E1] à faire · 2026-11-02 · COO · L'étape
 ## Idées
-- [I1] à lancer · 2026-11-02 · Mathis · ses mots tels quels
+- [I1] à lancer · 2026-11-02 · Alex · ses mots tels quels
 ## À reprendre
 - [R1] à décider · 2026-11-02 · mission « Titre », compte rendu · le texte tel qu'il a été écrit
 ```

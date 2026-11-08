@@ -3,10 +3,13 @@
 // répondue. Invariant : une question bloquante ne disparaît jamais par une fusion ou une
 // reconstruction ; seuls son retrait par Claude ou l'effacement de la mission la font disparaître.
 
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyReport, autoNotices, blockingQuestions, clampFuture, emptyBoard, mergeBoards, newRun, openQuestions, parkActive, stopAutoUnread, switchOffAuto, switchOnAuto } from '../hooks/model.ts'
+import { applyReport, autoNotices, blockingQuestions, emptyBoard, mergeBoards, newRun, openQuestions, parkActive, stopAutoUnread, switchOffAuto, switchOnAuto } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
+import { settle, stored, world as worldOnDisk, writeBoard } from './monde-coordination.ts'
 
 const T0 = 95_000_000
 
@@ -113,44 +116,61 @@ test('La fusion garde l’union des questions et applique les retraits tracés :
   expect(openIds(taken)).toEqual(['q2'])
 })
 
-test('Une question reposée sous le même id après son retrait est de nouveau ouverte, même face à la trace', () => {
-  const board = ask(ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board, [{ id: 'q1', answered: true }], T0 + 3).board
-  const again = ask(board, [{ id: 'q1', ticket: 't1', text: 'Un, encore ?' }], T0 + 4).board
-  expect(openIds(again)).toEqual(['q1'])
-  expect(openIds(mergeBoards(again, board))).toEqual(['q1'])
-  expect(openIds(mergeBoards(board, again))).toEqual(['q1'])
+// Une question déjà répondue avait été reposée sous son id, et redevenait ouverte. Invariant : une question répondue
+// ne redevient jamais ouverte par le renvoi de son id, et une question ouverte n'est jamais perdue par une fusion.
+test('Un « waiting » sous l’id d’une question répondue est refusé pour elle seule, avec la date de la réponse ; les autres sont enregistrées', () => {
+  const answered = ask(ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board, [{ id: 'q1', answered: true }], T0 + 60_000).board
+  const out = ask(answered, [{ id: 'q1', ticket: 't1', text: 'Un, encore ?' }, { id: 'q2', group: 'A', text: 'Deux ?' }], T0 + 120_000)
+  expect(openIds(out.board)).toEqual(['q2'])
+  expect(out.text).toContain(`"q1" a été répondue le ${new Date(T0 + 60_000).toISOString().slice(0, 16).replace('T', ' ')} UTC : une nouvelle question prend un nouvel id`)
+  expect(runOf(out.board).answered).toEqual([{ id: 'q1', at: T0 + 60_000 }])
+  // Sous un nouvel id, elle s'enregistre.
+  expect(openIds(ask(out.board, [{ id: 'q1b', ticket: 't1', text: 'Un, encore ?' }], T0 + 130_000).board)).toEqual(['q1b', 'q2'])
+  // Une question encore ouverte se met à jour sous son id (une autre cible, un autre texte), sans refus.
+  const retarget = ask(out.board, [{ id: 'q2', ticket: 't2', text: 'Deux, sur t2 ?' }], T0 + 140_000)
+  expect(retarget.text).not.toContain('a été répondue')
+  expect(runOf(retarget.board).waiting!.find(q => q.id === 'q2')).toMatchObject({ blocks: { kind: 'ticket', id: 't2' } })
 })
 
-test('Retirée puis reposée dans le même appel, une question reste ouverte après la fusion ; une date illisible ne la fait pas effacer par une trace', () => {
+test('Retirée puis reposée dans le même appel : la repose est refusée, la question reste répondue, dans toutes les copies', () => {
   const asked = ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board
-  const again = ask(asked, [{ id: 'q1', answered: true }, { id: 'q1', ticket: 't1', text: 'Un, encore ?' }], T0 + 3).board
-  expect(openIds(again)).toEqual(['q1'])
-  for (const merged of [mergeBoards(again, asked), mergeBoards(asked, again), mergeBoards(again, again)]) expect(openIds(merged)).toEqual(['q1'])
-  // Une question dont la date s'est abîmée dans le fichier, face à une trace de son id : elle reste.
-  const damaged: Board = { ...again, runs: again.runs.map(r => ({ ...r, waiting: r.waiting!.map(q => ({ ...q, at: 'hier' })) }) as unknown as Run) }
-  expect(openIds(mergeBoards(damaged, again))).toEqual(['q1'])
-  expect(openIds(mergeBoards(again, damaged))).toEqual(['q1'])
-  // Elle se retire encore par Claude, et ce retrait tient face à la copie abîmée qui la porte encore.
+  const out = ask(asked, [{ id: 'q1', answered: true }, { id: 'q1', ticket: 't1', text: 'Un, encore ?' }], T0 + 3)
+  expect(openIds(out.board)).toEqual([])
+  expect(out.text).toContain('"q1" a été répondue le')
+  for (const merged of [mergeBoards(out.board, asked), mergeBoards(asked, out.board)]) expect(openIds(merged)).toEqual([])
+})
+
+test('Une trace datée dans le futur (horloge en avance) : le refus dit la date ramenée à maintenant', () => {
+  const now = T0 + 1_000_000
+  const asked = ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board
+  const ahead: Board = { ...asked, runs: asked.runs.map(r => ({ ...r, waiting: [], answered: [{ id: 'q1', at: now + 3_600_000 }] })) }
+  const out = ask(ahead, [{ id: 'q1', ticket: 't1', text: 'Un, encore ?' }], now)
+  expect(openIds(out.board)).toEqual([])
+  expect(out.text).toContain(`"q1" a été répondue le ${new Date(now).toISOString().slice(0, 16).replace('T', ' ')} UTC`)
+})
+
+test('Une fusion de deux copies, l’une avec la trace et l’autre avec la question encore ouverte : la question répondue ne se rouvre pas, aucune question ouverte ne se perd', () => {
+  const asked = ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }, { id: 'q2', group: 'A', text: 'Deux ?' }], T0 + 2).board
+  // Ici : q1 répondue (sa trace). Là : la copie d'avant, q1 encore ouverte, et q3 posée seulement là.
+  const here = ask(asked, [{ id: 'q1', answered: true }], T0 + 5).board
+  const there = ask(asked, [{ id: 'q3', phase: 'implement', text: 'Trois ?' }], T0 + 4).board
+  for (const merged of [mergeBoards(here, there), mergeBoards(there, here)]) expect(openIds(merged)).toEqual(['q2', 'q3'])
+})
+
+test('Une question ouverte dont la date s’est abîmée, face à une trace plus ancienne de son id : elle reste ; retirée par Claude, ce retrait tient face à la copie abîmée', () => {
+  const asked = ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board
+  // Une trace de q1 plus ancienne que la question (venue d'une autre copie), puis la date de la question abîmée dans le fichier.
+  const traced: Board = { ...asked, runs: asked.runs.map(r => ({ ...r, answered: [{ id: 'q1', at: T0 + 1 }] })) }
+  expect(openIds(traced)).toEqual(['q1'])
+  const damaged: Board = { ...traced, runs: traced.runs.map(r => ({ ...r, waiting: r.waiting!.map(q => ({ ...q, at: 'hier' })) }) as unknown as Run) }
+  expect(openIds(mergeBoards(damaged, traced))).toEqual(['q1'])
+  expect(openIds(mergeBoards(traced, damaged))).toEqual(['q1'])
+  // Ouverte, elle se met encore à jour sous son id malgré la trace (rien ne la rouvre : elle l'est).
+  expect(ask(damaged, [{ id: 'q1', ticket: 't2', text: 'Un, sur t2 ?' }], T0 + 3).text).not.toContain('a été répondue')
   const withdrawn = ask(damaged, [{ id: 'q1', answered: true }], T0 + 4).board
   expect(openIds(withdrawn)).toEqual([])
   expect(openIds(mergeBoards(withdrawn, damaged))).toEqual([])
   expect(openIds(mergeBoards(damaged, withdrawn))).toEqual([])
-  // Reposée ensuite, datée, elle reste ouverte malgré la trace de ce retrait.
-  const reposed = ask(withdrawn, [{ id: 'q1', ticket: 't1', text: 'Un, de nouveau ?' }], T0 + 5).board
-  expect(openIds(mergeBoards(reposed, damaged))).toEqual(['q1'])
-})
-
-test('Une trace datée dans le futur (horloge en avance) ne fait pas effacer une question reposée ensuite, dans aucune copie', () => {
-  const now = T0 + 1_000_000
-  const asked = ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board
-  // q1 retirée à une date future.
-  const ahead: Board = { ...asked, runs: asked.runs.map(r => ({ ...r, waiting: [], answered: [{ id: 'q1', at: now + 3_600_000 }] })) }
-  // Reposée maintenant : elle passe après la trace, et les dates restent les mêmes dans toutes les copies.
-  const reposed = ask(ahead, [{ id: 'q1', ticket: 't1', text: 'Un, encore ?' }], now).board
-  expect(openIds(reposed)).toEqual(['q1'])
-  for (const merged of [mergeBoards(reposed, ahead), mergeBoards(ahead, reposed), mergeBoards(clampFuture(reposed, now + 5), clampFuture(ahead, now + 9))]) {
-    expect(openIds(merged)).toEqual(['q1'])
-  }
 })
 
 test('Un id de plus de 60 caractères est refusé, jamais rogné sur un autre ; une question relue sous un tel id se retire quand même ; un id ou une cible en chiffres sont admis', () => {
@@ -422,4 +442,70 @@ test('Un worker ne déclare pas de question : « waiting » n’y est pas enregi
   await $.tool.call({ tool: TOOL, delegate: 'run-1', group: 'A', main: '[e5eb08]' } as any)
   const reply = JSON.stringify(await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', ticket: 't1', text: 'Un ?' }] } as any))
   expect(reply).toContain('is not recorded in a worker: send your question to the manager by SendMessage')
+})
+
+test('Une question ouverte à la date abîmée, mise à jour face à une trace plus récente que maintenant : elle passe après la trace et survit à la fusion', () => {
+  const now = T0 + 10
+  const asked = ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board
+  const damaged: Board = { ...asked, runs: asked.runs.map(r => ({ ...r, waiting: r.waiting!.map(q => ({ ...q, at: 'hier' })), answered: [{ id: 'q1', at: now + 30_000 }] }) as unknown as Run) }
+  expect(openIds(damaged)).toEqual(['q1'])
+  const updated = ask(damaged, [{ id: 'q1', ticket: 't2', text: 'Un, sur t2 ?' }], now)
+  expect(updated.text).not.toContain('a été répondue')
+  expect(runOf(updated.board).waiting!.find(x => x.id === 'q1')).toMatchObject({ blocks: { kind: 'ticket', id: 't2' }, at: now + 30_001 })
+  for (const merged of [mergeBoards(updated.board, damaged), mergeBoards(damaged, updated.board)]) expect(openIds(merged)).toEqual(['q1'])
+})
+
+test('Un id du mod (sans-suite:, relance:) répondu, renvoyé par Claude : refusé de même ; le mod repose les siens sans passer par « waiting »', () => {
+  const board = lot()
+  const traced: Board = { ...board, runs: board.runs.map(r => ({ ...r, answered: [{ id: 'sans-suite:x#1', at: T0 + 2 }, { id: 'relance:A#3', at: T0 + 2 }] })) }
+  const out = ask(traced, [{ id: 'sans-suite:x#1', phase: 'implement', text: 'x' }, { id: 'relance:A#3', group: 'A', text: 'y' }], T0 + 3)
+  expect(openIds(out.board)).toEqual([])
+  expect(out.text).toContain('"sans-suite:x#1" a été répondue le')
+  expect(out.text).toContain('"relance:A#3" a été répondue le')
+})
+
+test('Une réponse donnée dans une autre discussion (sa trace au fichier des missions, pas encore relue ici) fait refuser ici le renvoi de son id : l’état d’ici se relit avant une question posée', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 96_000_000
+  const clock = mock.clock(on, { now })
+  const w = worldOnDisk(on)
+  await start($)
+  await $.tool.call({ tool: TOOL, open: { title: 'Ma mission' } } as any)
+  await settle(clock, 2)
+  const runId = stored(w).activeId!
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', phase: 'implement', text: 'Un ?' }] } as any)
+  await settle(clock, 2)
+  // Une autre discussion répond à q1 : la question retirée et sa trace, écrites au fichier des missions.
+  writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === runId ? { ...r, waiting: [], answered: [{ id: 'q1', at: now + 3_000 }], updatedAt: now + 3_000 } : r)) }))
+  const out = (await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', phase: 'implement', text: 'Un, encore ?' }] } as any)) as { result: string }
+  expect(out.result).toContain('"q1" a été répondue le')
+  await settle(clock, 2)
+  expect(openQuestions(stored(w).runs.find(r => r.id === runId)!).map(q => q.id)).toEqual([])
+})
+
+test('Une question ouverte ici que sa trace répond (gardée par les traces d’ici) : sa mise à jour est refusée comme un renvoi, elle reste telle quelle', () => {
+  const asked = ask(lot(), [{ id: 'q1', ticket: 't1', text: 'Un ?' }], T0 + 2).board
+  // Une trace plus récente que la question, la question encore là (une copie gardée par ses traces d'ici, auto allumé).
+  const kept: Board = { ...asked, runs: asked.runs.map(r => ({ ...r, answered: [{ id: 'q1', at: T0 + 5 }] })) }
+  const out = ask(kept, [{ id: 'q1', ticket: 't2', text: 'Un, sur t2 ?' }], T0 + 6)
+  expect(out.text).toContain(`"q1" a été répondue le ${new Date(T0 + 5).toISOString().slice(0, 16).replace('T', ' ')} UTC`)
+  expect(runOf(out.board).waiting!.find(q => q.id === 'q1')).toMatchObject({ blocks: { kind: 'ticket', id: 't1' }, text: 'Un ?', at: T0 + 2 })
+})
+
+test('Le fichier des missions ne se relit pas avant une question posée : les questions posées sont refusées et la réponse le dit ; les retraits du même appel s’appliquent', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 97_000_000
+  const clock = mock.clock(on, { now })
+  const w = worldOnDisk(on)
+  await start($)
+  await $.tool.call({ tool: TOOL, open: { title: 'Ma mission' } } as any)
+  await settle(clock, 2)
+  const runId = stored(w).activeId!
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', phase: 'implement', text: 'Un ?' }] } as any)
+  await settle(clock, 2)
+  w.disk.unreadable = true
+  const out = (await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }, { id: 'q2', phase: 'implement', text: 'Deux ?' }] } as any)) as { result: string }
+  expect(out.result).toContain('waiting refused: the missions file could not be re-read')
+  w.disk.unreadable = false
+  await settle(clock, 2)
+  const run = stored(w).runs.find(r => r.id === runId)!
+  expect(openQuestions(run).map(q => q.id)).toEqual([])
 })

@@ -57,6 +57,7 @@ import {
   applyAnswer,
   applyAsana,
   askCloseLinkedGroup,
+  relayedReportAt,
   reloadText,
   restoreDelegate,
   applyCommand,
@@ -176,6 +177,7 @@ import {
   linkSession,
   linkedSessionsOf,
   noteUnlaunched,
+  offRequestLaunches,
   retryLinked,
   linkedInFlight,
   pickableItems,
@@ -201,10 +203,16 @@ import {
   relayEntryFileName,
   relayFileSlug,
   relayRefusal,
+  isRepeatedReview,
+  isRelay,
   reportFileName,
   mainRefFileName,
   parseMainRef,
   updateDelegateMain,
+  isMainRefNewer,
+  mainRefAsk,
+  mainRefAskText,
+  newestMainRef,
   type MainRef,
   reportedDecisions,
   type RelayEvent,
@@ -253,7 +261,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { GROUP_ID_FORM, GROUP_ID_FORM_FR, OLD_SEPARATORS, archiveConsent, asciiJson, consentAt, consentDay, plainArgs, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, isGroupId, isSafeBranch, isSafeId, itemsWorktree, tempDirForm, briefFileName, neutralInPrompt, neutralLine, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
+import { GROUP_ID_FORM, GROUP_ID_FORM_FR, OLD_SEPARATORS, archiveConsent, asciiJson, closingScript, consentAt, consentDay, plainArgs, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, isGroupId, isSafeBranch, isSafeId, isVersionForm, itemsWorktree, tempDirForm, briefFileName, neutralInPrompt, neutralLine, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
 import {
   COMPACT_FIRST_TOAST,
   COO_COMPACT_TOKENS,
@@ -274,7 +282,7 @@ import {
 import { applyTraces } from './erase.ts'
 import { hasRetro, holdsPick, pickedOf, picksPrint, retroCard, retroOf, retroTranscripts } from './retro-coo.ts'
 import { NEW_MAX, contradictionQuestion, contradictionQuestionId, markSeen, newDecisionsOf, parseSeen, seriesOf, type DecisionsSeen, type NewDecision } from './oppositions.ts'
-import { DELIVERY_COMMAND, DELIVERY_FR, DELIVERY_KEYS, abandonDelivery, failedStep, isDelivered, isDeliveryOpen, newDelivery, nextStep, parseDelivery, reportStep, retryStep, runningStep, startStep, type Delivery, type DeliveryKey } from './delivery.ts'
+import { DELIVERY_COMMAND, DELIVERY_FR, DELIVERY_KEYS, abandonDelivery, deliveryWaits, failedStep, isDelivered, isDeliveryOpen, newDelivery, nextStep, parseDelivery, reportStep, retryStep, runningStep, startStep, type Delivery, type DeliveryKey } from './delivery.ts'
 import { REPORT_CHANGED, REPORT_PAUSED, cooStatement, isModQuestion, isOpenMission, isSha, outsideCommitCounts, parseLoggedCommits, statementText, watchedGroups, watchedKey, type LoggedCommit, type OutsideCommits, type CooGlean, type CooDecisions, type CooRetroPicks, type CooDelivery, type CooReport, type CooRoadmap, type CooSetAside, type CooStatement } from './coo.ts'
 import type { CooDo } from './coo-view.tsx'
 import { RETRO_START, soundRunLaunch, askMattCandidates, LAUNCH_CLAIM_SETTLE_MS, LAUNCH_KEY_PREFIX, LAUNCH_STALE, LAUNCH_STARTS, cardStateOf, consumeRefusal, liveLaunchOf, otherCarrierOf, runOfCard, sameFolder, isLaunchId, isRecordStale, launchKey, newLaunchId, parseCard, runOfLaunch, soundCard, soundRecord, type LaunchCard, type LaunchMode, type LaunchRecord, type LaunchStart } from './launch.ts'
@@ -285,7 +293,7 @@ import type { CooPlan, CooWave } from './coo.ts'
 import type { RunLaunch } from '../types'
 import { isRoadmapId, parseRoadmap, partialSeen, roadmapTextPrint, unionSeen, watchRoadmap, type Roadmap, type RoadmapSeen } from './roadmap.ts'
 import { parseSecuritySetting, securitySettingRecord, type SecurityReview, type SecuritySettingRead, type SecurityStored } from './security-setting.ts'
-import { AUTO_GROUP_EFFORT, COO_EFFORT, GROUP_EFFORT, SONNET_LAUNCH_FR, effortSent, groupLaunchNote, leadEffort, workerTicketEffort, type ImposedEffort, type LeadEffort } from './effort.ts'
+import { AUTO_GROUP_EFFORT, COO_EFFORT, GROUP_EFFORT, SONNET_LAUNCH_FR, effortSent, groupLaunchNote, leadEffort, quotaText, workerTicketEffort, type ImposedEffort, type LeadEffort, type QuotaWindow } from './effort.ts'
 import { sameLabel, soundEntry, takenFor, takenLabels, unreadTakenFor, type CoordTaken } from './coordination.ts'
 import { BOX_MAX, SET_ASIDE_SOURCE_MAX, SET_ASIDE_TEXT_MAX, SET_ASIDE_UNWRITTEN, copiedIn, copiesOf, keepsItems, roadmapText, newSetAsideId, parseBox, soundSetAside, withoutCopied, type BoxRead, type SetAside } from './a-reprendre.ts'
 import { COORD_MAX, COORD_UNREAD, WAKE_TEXT, copiedDecls, gleanedRuns, isReleasedMark, isEntryGone, keepsEntries, liveEntries, forcesFor, markClosesDone, newEntryId, parseCoordination, pendingFor, refOf, soundApplied, withoutGone, type CoordEntry, type CoordRead } from './coordination.ts'
@@ -398,13 +406,15 @@ export const TOOL_SCHEMA = {
     },
     review: {
       type: 'object',
-      description: 'After each code review: its real findings per axis and how many you fixed; a sensitive ticket\'s bug pass in "bugs"; a group review with its "group"',
+      description: 'After each review: findings per axis, fixed; bug pass in "bugs", content/form reading in "form" (never "spec"); its "ticket" or "group"',
       properties: {
         standards: { type: 'number' },
         spec: { type: 'number' },
-        bugs: { type: 'number', description: 'Findings of the bug pass, apart from the two axes' },
-        group: { type: 'string', description: 'Id of the finished group reviewed' },
-        fixed: { type: 'number' },
+        bugs: { type: 'number', description: 'All findings of a bug pass, tracks included; one send per pass; group review: standards/spec' },
+        form: { type: 'number', description: 'From a worker after its group is back: not counted' },
+        ticket: { type: 'string' },
+        group: { type: 'string' },
+        fixed: { type: 'number', description: 'Fixed by a commit, not just noted or documented' },
       },
     },
     security: {
@@ -417,7 +427,7 @@ export const TOOL_SCHEMA = {
         why: { type: 'string', description: "Why, short, in the user's language" },
         findings: { type: 'number', description: 'Kept findings (confidence 8/10 or more, high or medium severity), not the "to watch" list' },
         fixed: { type: 'number', description: 'How many of them were fixed' },
-        dismissed: { type: 'number', description: 'The total of kept findings the user confirmed to leave unfixed, not one more; a send that changes "findings" without it resets it to 0, so resend it whenever those decisions change. Only the manager\'s send settles the security; a worker\'s is a proposal' },
+        dismissed: { type: 'number', description: 'The total of kept findings the user confirmed to leave unfixed; a send that changes "findings" without it resets it to 0, so resend it as the user decides. Only the manager\'s send settles the security; a worker\'s is a proposal' },
       },
     },
     closed: {
@@ -487,11 +497,11 @@ export const TOOL_SCHEMA = {
     },
     externals: {
       type: 'array',
-      description: 'Tasks outside the lot that tickets depend on (their ids in those tickets\' blockedBy); added or updated, never removed',
+      description: 'Tasks outside the lot that tickets depend on (ids in their blockedBy); updated field by field, lifted by "status": "done", never removed',
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Asana task GID' },
+          id: { type: 'string', description: 'Asana task GID, or a local id (another mission\'s session on the same files)' },
           name: { type: 'string' },
           kind: { type: 'string', enum: ['decision', 'task'], description: 'decision: a choice someone must make; task: work outside the lot' },
           status: { type: 'string', enum: ['todo', 'done'] },
@@ -502,7 +512,7 @@ export const TOOL_SCHEMA = {
     groups: {
       type: 'array',
       description:
-        'Execution plan, the full list (it replaces the previous one; every ticket in exactly one group): tickets grouped by shared context (same files or modules, or a dependency chain), one worker per group, never this discussion; the flow-board instructions of /to-tickets give the grouping rules. A group id has ' + GROUP_ID_FORM + '. A group already sent to a worker is never dropped (omitted, it stays last, even empty) and keeps its tickets while in flight or returned and not closed (the answer says so). Never a single group: a one-group plan is ignored (do the lot here with /implement); except in a retro mission, where it goes to a worker, and where, while the retro phase is current, a refused plan records nothing of the call',
+        'Execution plan, the full list (it replaces the previous one; every ticket in exactly one group): tickets grouped by shared context (same files or modules, or a dependency chain), one worker per group, never this discussion; /to-tickets gives the grouping rules. A group id has ' + GROUP_ID_FORM + '. A group already sent to a worker is never dropped (omitted, it stays last, even empty) and keeps its tickets while in flight or returned and not closed. Never a single group: a one-group plan is ignored (do the lot here with /implement); except in a retro mission, where it goes to a worker, and where, while the retro phase is current, a refused plan records nothing of the call',
       items: {
         type: 'object',
         properties: {
@@ -537,7 +547,7 @@ export const TOOL_SCHEMA = {
     delegate: {
       type: 'string',
       description:
-        'Only when a worker\'s brief gives it, sent first with "group" and "main": the id of the mission this discussion works for. Nothing is recorded on it from here: your progress (tracker statuses, commits, tests) reaches its dashboard on its own. Afterwards only "set" (a status changed without a tracker update or an edit of a local ticket file), "decided", "withdrawn", "review", "security", "report" or "reportPath", and "note" are accepted; your brief and procedure say when to send each',
+        'Only when a worker\'s brief gives it, sent first with "group" and "main": the id of the mission this discussion works for. Nothing is recorded on it from here; your progress reaches its dashboard on its own. Afterwards only "set" (a status changed without a tracker update or an edit of a local ticket file), "decided", "withdrawn", "review", "security", "report" or "reportPath", and "note" are accepted; your brief and procedure say when to send each',
     },
     group: {
       type: 'string',
@@ -580,9 +590,9 @@ export const TOOL_SCHEMA = {
     waiting: {
       type: 'array',
       description:
-        'Questions waiting for the user that hold back part of the mission (in auto mode, each decision left to the user): "id", exactly one of "phase", "group" or "ticket" it blocks, and "text" (dashboard only, never in a notification). Send {"id", "answered": true} once answered; the mod\'s own excepted: « ' + STALE_PREFIX + '… » (answered by « ↻ Renvoyer »), and « ' + RELAUNCH_PREFIX + '… » while its group has open tickets and is not resent (relaunch it, or set those tickets done or "remove" them, then withdraw it). At most ' +
+        'Questions waiting for the user that hold back part of the mission (in auto mode, each decision left to the user): "id", exactly one of "phase", "group" or "ticket" it blocks, and "text" (dashboard only, never in a notification). Before asking, reread DECISIONS.md: a settled question is not asked again; an answered id never reopens (new question, new id). Send {"id", "answered": true} once answered; not the mod\'s own « ' + STALE_PREFIX + '… », nor « ' + RELAUNCH_PREFIX + '… » while its group waits for its relaunch. At most ' +
         WAITING_MAX +
-        ' open at once. Not in a worker: ask the manager by SendMessage',
+        ' open at once. Not in a worker: SendMessage the manager',
       items: {
         type: 'object',
         properties: {
@@ -591,7 +601,7 @@ export const TOOL_SCHEMA = {
           group: { type: 'string', description: 'Id of the group it blocks' },
           ticket: { type: 'string', description: 'Id of the ticket it blocks' },
           text: { type: 'string', description: "The question, short, in the user's language" },
-          answered: { type: 'boolean', description: 'true once the user has answered: it leaves the list' },
+          answered: { type: 'boolean', description: 'true once answered (a user\'s answer: once in DECISIONS.md): it leaves the list' },
           gesture: { type: 'string', enum: ['spend', 'external', 'flaw'], description: 'A click of the user in the COO\'s dashboard, applied here: allow or refuse a spending ("spend") or an external action ("external"), leave a kept security finding unfixed or fix it ("flaw", with "dismissed")' },
           dismissed: { type: 'number', description: 'With "flaw": the total of kept findings left unfixed once the user agrees (its group\'s "security.dismissed")' },
         },
@@ -677,7 +687,7 @@ export const TOOL_SCHEMA = {
     card: {
       type: 'object',
       description:
-        'COO only, alone in its call: a launch card for a new mission, which the user launches with one click (never without it). Start from ask-matt (the COO statement gives its path). Mode: "auto" by default; "manual" for a judgement task, a change of rules loaded in every session (config/rules/, a CLAUDE.md), or when the user wants to follow the framing. Effort: "high"; for a start where the manager does a worker\'s work (/implement of ready tickets, /tdd, /code-review), the level of « Effort d’un worker de groupe », section 11 of reference/procedure-groupe.md of flow-board, never xhigh there; "xhigh" only proposed, in manual. Folder: travail/<subject>/, letters, digits and dashes; ask the user when none fits. The same folder again updates the card, unless launching or launched',
+        'COO only, alone in its call: a launch card for a new mission, which the user launches with one click (never without it). Start from ask-matt (the COO statement gives its path). Mode: "auto" by default; "manual" for a judgement task, a change of rules loaded in every session (config/rules/, a CLAUDE.md), or when the user wants to follow the framing. Effort: "high"; for a start where the manager does a worker\'s work (/implement of ready tickets, /tdd, /code-review), the level of « Effort d’un worker de groupe », section 11 in reference/effort-workers.md of flow-board, never xhigh there; "xhigh" only proposed, in manual. Folder: travail/<subject>/, letters, digits and dashes; ask the user when none fits. The same folder again updates the card, unless launching or launched',
       properties: {
         title: { type: 'string', description: "The mission's title, 3 to 6 words, in the user's language" },
         idea: { type: 'string', description: 'The id of the roadmap idea it launches, if any' },
@@ -825,17 +835,25 @@ export function claudeHome($: any): string | null {
 /** Le fichier de méthode de la revue de sécurité, à la racine du mod. */
 const SECURITY_METHOD_FILE = 'reference/revue-securite.md'
 /**
- * La procédure d'un worker de groupe (tickets, revues, compte rendu) : le texte de
- * délégation la cite par son chemin au lieu de la recopier (15 000 signes par lancement, que le
+ * Le noyau de la procédure d'un worker de groupe (tickets, revues, règles ; la fin du groupe, le cas sans git,
+ * le worker autonome et l'effort des workers dans ses annexes, à côté) : le texte de délégation le cite par son chemin au lieu de la recopier (15 000 signes par lancement, que le
  * manager recopiait à son tour dans le prompt de la session).
  */
 const PROCEDURE_FILE = 'reference/procedure-groupe.md'
 /** Le fichier de méthode de la relecture du fond et de la forme d'un document lu par d'autres. */
 const READING_METHOD_FILE = 'reference/relecture-fond-forme.md'
+/** L'annexe de la procédure pour le manager (section 11) : l'effort d'un worker qu'il lance, et la suite de son compte rendu. */
+const EFFORT_FILE = 'reference/effort-workers.md'
+/** Le script qui imprime les rapports des spécialistes d'une session, nommé par la consigne de `/retro`. */
+const REPORTS_SCRIPT_FILE = 'scripts/rapports-specialistes.mjs'
+/** Le script des vérifications d'une fermeture, que cite la procédure de fermeture (`closingScript`). */
+const CLOSING_SCRIPT_FILE = 'scripts/fermeture.mjs'
 /** Leurs chemins, tirés de `$.plugin.root` au premier hook qui construit une consigne qui les cite. */
 let securityMethod = SECURITY_METHOD_FILE
 let procedurePath = PROCEDURE_FILE
 let readingMethod = READING_METHOD_FILE
+let effortPath = EFFORT_FILE
+let reportsScript = REPORTS_SCRIPT_FILE
 const noteReferences = ($: any) => {
   try {
     const root = String($.plugin.root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
@@ -843,9 +861,52 @@ const noteReferences = ($: any) => {
     securityMethod = `${root}/${SECURITY_METHOD_FILE}`
     procedurePath = `${root}/${PROCEDURE_FILE}`
     readingMethod = `${root}/${READING_METHOD_FILE}`
+    effortPath = `${root}/${EFFORT_FILE}`
+    reportsScript = `${root}/${REPORTS_SCRIPT_FILE}`
+    // Un chemin hors forme (apostrophe, relatif…) est ignoré par la procédure, qui se recopie alors en entier.
+    closingScript.path = `${root}/${CLOSING_SCRIPT_FILE}`
   } catch {
     // Racine inconnue : les chemins relatifs au mod.
   }
+}
+
+/** La version d'un `plugin.json` à ce chemin, en forme x.y.z (suffixe de préversion admis) ; null si elle ne se lit pas. */
+const manifestVersion = async ($: any, path: string): Promise<string | null> => {
+  try {
+    const version: unknown = JSON.parse(String(await $.fs.read(path)))?.version
+    return isVersionForm(version) ? version : null
+  } catch {
+    return null
+  }
+}
+
+/** La version du mod qui tourne, lue dans son `plugin.json` sous `$.plugin.root` ; null si elle ne se lit pas. */
+const installedVersion = async ($: any): Promise<string | null> => {
+  let root = ''
+  try {
+    root = String($.plugin.root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+  return root === '' ? null : manifestVersion($, `${root}/.claude-plugin/plugin.json`)
+}
+
+/** Les clés que le moteur met dans l'appel d'un outil, à côté de ses arguments : jamais « inconnues ». */
+const ENGINE_CALL_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta'])
+
+/**
+ * La fin de la réponse de l'outil quand l'appel porte des clés absentes de son schéma : le mod les ignore,
+ * et un worker qui suivait une procédure plus récente que le mod installé (`reportPath`, inconnu de la
+ * 0.79.0) avait annoncé « déposé au relais » sans que rien y soit. Vide sans clé inconnue.
+ */
+const unknownFieldsText = async ($: any, call: Readonly<Record<string, unknown>>): Promise<string> => {
+  const known = TOOL_SCHEMA.properties as Record<string, unknown>
+  const unknown = Object.keys(call).filter(k => !ENGINE_CALL_KEYS.has(k) && !Object.hasOwn(known, k) && call[k] !== undefined)
+  if (unknown.length === 0) return ''
+  const version = await installedVersion($)
+  const shown = unknown.slice(0, 8).map(k => neutralInPrompt(clip(k, 30))).join(', ')
+  const more = unknown.length > 8 ? ` and ${unknown.length - 8} more` : ''
+  return ` · Not read: ${shown}${more} (unknown to ${version ? `flow-board ${version}` : 'this flow-board'})`
 }
 
 /** Un fichier par projet, nommé d'après sa racine. */
@@ -1206,39 +1267,107 @@ const readReportPath = async ($: any, raw: unknown): Promise<{ text: string } | 
   return { text }
 }
 
-/** Dans le manager, à la reprise : sa référence du moment, que les workers relisent. */
-const writeMainRef = async ($: any, ref: MainRef) => {
+/**
+ * Les missions dont la demande de référence est close depuis le démarrage de ce processus, le dernier
+ * rechargement (`session.start` la vide) ou la dernière reprise ici (qui en retire la mission) : la référence
+ * écrite, une plus récente en place, un refus (cette discussion ne la porte pas), ou trois tentatives ratées
+ * (`mainRefFailures`). Tant qu'une mission portée ici avec des groupes confiés n'y est pas, chaque tour demande à
+ * Claude de l'envoyer (`mainRefAsk`).
+ */
+const mainRefWritten = new Set<string>()
+
+/** Les tentatives ratées (fichier des missions illisible, aucune copie écrite) par mission, depuis le démarrage. */
+const mainRefFailures = new Map<string, number>()
+
+/** Au-delà de ce nombre de tentatives ratées, la demande s'arrête : chaque reprise recite les comptes rendus. */
+const MAIN_REF_TRIES = 3
+
+/** `pull` qui rend faux quand il lève : le fichier des missions ne s'est pas relu. */
+const pullOk = async ($: any): Promise<boolean> => {
+  try {
+    return await pull($)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Dans le manager, à la reprise : sa référence du moment, que les workers relisent. Seulement par la
+ * discussion qui porte la mission (relue juste avant : active ici, `owner` cette discussion, pas un
+ * worker, pas effacée), et seulement plus récente que celle en place. Écrite dans le fichier et dans
+ * `$.store` : une écriture coupée de l'un laisse l'autre lisible, et la lecture prend la plus récente.
+ * Rend `written`, `older` (une plus récente est en place), `failed` (aucune des deux ne s'est écrite) ou
+ * `refused` (cette discussion ne porte pas la mission), `unread` (le fichier des missions ne s'est pas relu). Les
+ * écritures se suivent une à une (`mainRefChain`) : deux appels qui se chevauchent ne lisent jamais la même
+ * référence en place, et le plus ancien ne recouvre pas le plus récent. Une écriture qui ne rend pas la main
+ * dans `MAIN_REF_WRITE_MS` (une lecture du moteur suspendue) compte comme ratée : ni l'outil ni la file ne
+ * l'attendent plus.
+ */
+const writeMainRef = ($: any, ref: MainRef): Promise<MainRefOutcome> => {
+  const late = new Promise<MainRefOutcome>(resolve => $.clock.after(MAIN_REF_WRITE_MS, () => resolve('failed')))
+  const next = Promise.race([mainRefChain.then(() => writeMainRefNow($, ref)), late])
+  mainRefChain = next.catch(() => undefined)
+  return next
+}
+
+/** Le plus long qu'attend une écriture de la référence du manager (deux copies et la relecture des missions). */
+const MAIN_REF_WRITE_MS = 15_000
+
+type MainRefOutcome = 'written' | 'older' | 'failed' | 'refused' | 'unread'
+
+/** La file des écritures de la référence du manager : une à la fois. */
+let mainRefChain: Promise<unknown> = Promise.resolve()
+
+const writeMainRefNow = async ($: any, ref: MainRef): Promise<MainRefOutcome> => {
+  if (!(await pullOk($))) return 'unread'
+  const board: Board | null = await read($, boardAtom)
+  const run = activeRun(board)
+  await quietly(() => readTraces($))
+  // L'id qui pose `owner` (`board.session`, celui de `sessionId`), pas `hereId` : un /clear change le second, pas le premier.
+  if (!board || board.delegate || run?.id !== ref.run || run.owner !== board.session || erasedRuns.has(ref.run)) return 'refused'
+  if (!isMainRefNewer(await readMainRef($, ref.run), ref)) return 'older'
+  let isWritten = false
   const path = mainRefPath($, ref.run)
   if (path) {
     try {
       await $.fs.write(path, JSON.stringify(ref))
-      return
+      isWritten = true
     } catch {
-      // Repli sur `$.store`.
+      // L'autre copie reste.
     }
   }
   try {
     await $.store.set(mainRefKey(ref.run), ref)
+    isWritten = true
   } catch {
-    // Rien à écrire cette fois : le worker garde la référence de son brief.
+    // L'autre copie reste.
   }
+  return isWritten ? 'written' : 'failed'
 }
 
-/** Dans un worker : la référence du manager écrite à côté du relais, null sinon. */
+/**
+ * La référence du manager écrite à côté du relais : la plus récente du fichier et de `$.store`, chacune
+ * bornée (`parseMainRef`) ; null quand aucune ne se lit.
+ */
 const readMainRef = async ($: any, runId: string): Promise<MainRef | null> => {
+  // Une date au-delà de l'heure d'ici plus la marge ne se lit pas : elle refuserait à jamais les plus récentes.
+  const now = await $.clock.now()
+  let fromFile: MainRef | null = null
   const path = mainRefPath($, runId)
   if (path) {
     try {
-      if (await $.fs.exists(path)) return parseMainRef(JSON.parse(String(await $.fs.read(path))), runId)
+      if (await $.fs.exists(path)) fromFile = parseMainRef(JSON.parse(String(await $.fs.read(path))), runId, now)
     } catch {
-      // Fichier hors d'atteinte ou abîmé : l'ancien stockage prend le relais.
+      // Fichier hors d'atteinte ou abîmé : la copie de `$.store` reste.
     }
   }
+  let fromStore: MainRef | null = null
   try {
-    return parseMainRef(await $.store.get(mainRefKey(runId)), runId)
+    fromStore = parseMainRef(await $.store.get(mainRefKey(runId)), runId, now)
   } catch {
-    return null
+    // Stockage hors d'atteinte : la copie du fichier reste.
   }
+  return newestMainRef(fromFile, fromStore)
 }
 
 // ─── Fichier des choix déjà déclarés ──────────────────────────────────────
@@ -1430,9 +1559,12 @@ const writeOwnEntry = async ($: any, file: RelayEntryFile): Promise<'file' | 'st
 
 /**
  * Ce qu'un signal est devenu au relais : gardé (ou déjà là), ou pas gardé, avec la raison ; `isFinal` : le
- * renvoyer tel quel ne servirait à rien ou recompterait ; `isReview` : un refus de la revue de l'appel (ses bogues ou ses autres comptes) ; `isSecurity` : un refus de sa revue de sécurité (un compte de sécurité gardé illisible).
+ * renvoyer tel quel ne servirait à rien ou recompterait ; `isReview` : un refus de la revue de l'appel (ses bogues ou ses autres comptes) ; `isSecurity` : un refus de sa revue de sécurité (un compte de sécurité gardé illisible) ;
+ * `isRepeated` : la revue de l'appel était déjà reçue (`isRepeatedReview`), laissée de côté, le reste de l'appel traité.
  */
-type RelayOutcome = { isKept: true; note?: string; closed?: string[] } | { isKept: false; why: string; isFinal?: true; isReview?: true; isSecurity?: true }
+type RelayOutcome =
+  | { isKept: true; note?: string; closed?: string[]; isRepeated?: true }
+  | { isKept: false; why: string; isFinal?: true; isReview?: true; isSecurity?: true; isRepeated?: true }
 
 /** Les signaux de cette session, un à la fois : deux crochets en même temps ne relisent pas la même entrée. */
 let relayQueue: Promise<unknown> = Promise.resolve()
@@ -1459,15 +1591,24 @@ const relaySignalNow = async ($: any, event: RelayEvent): Promise<RelayOutcome> 
   const session = await sessionId($)
   const own = await readOwnEntry($, runId, session)
   if ('why' in own) return { isKept: false, why: own.why }
-  const refusal = relayRefusal(own.entry, event)
-  if (refusal !== null) return { isKept: false, why: refusal.why, isFinal: true, ...(refusal.isReview ? { isReview: true as const } : {}), ...(refusal.isSecurity ? { isSecurity: true as const } : {}) }
+  // La même revue renvoyée (mêmes comptes, pas d'autre ticket relu) sans changement de statut ni revue lancée depuis :
+  // déjà comptée, elle est laissée de côté (jamais comptée deux fois pour un même envoi), avant tout refus : la raison
+  // d'un refus ferait renvoyer autrement, ou redonner au compte rendu, une revue déjà comptée. Une revue de sécurité
+  // du même appel part seule, et seule elle peut être refusée.
+  const counts = event.kind === 'counts' ? event : null
+  const isRepeated = counts !== null && isRepeatedReview(own.entry, counts.review)
+  const repeated = isRepeated ? { isRepeated: true as const } : {}
+  if (isRepeated && !counts?.security) return { isKept: true, ...repeated }
+  const sent: RelayEvent = isRepeated && counts ? { kind: 'counts', security: counts.security } : event
+  const refusal = relayRefusal(own.entry, sent)
+  if (refusal !== null) return { isKept: false, why: refusal.why, isFinal: true, ...(refusal.isReview ? { isReview: true as const } : {}), ...(refusal.isSecurity ? { isSecurity: true as const } : {}), ...repeated }
   // Toujours après l'entrée relue : à la lecture, la plus récente l'emporte, jamais une égalité.
   const now = nextRelayTime(own.entry, await $.clock.now())
-  const entry = applyRelayEntry(own.entry, runId, session, event, now)
+  const entry = applyRelayEntry(own.entry, runId, session, sent, now)
   // Rien de neuf (le même compte rendu, un choix déjà gardé) : il est déjà au relais.
-  if (!entry) return { isKept: true }
+  if (!entry) return { isKept: true, ...repeated }
   const where = await writeOwnEntry($, { v: 1, run: runId, session, entry })
-  if (!where) return { isKept: false, why: 'the relay could not be written, neither its file nor the store' }
+  if (!where) return { isKept: false, why: 'the relay could not be written, neither its file nor the store', ...repeated }
   // Relue là où elle vient de s'écrire : un disque qui n'a rien gardé se dit.
   const path = relayEntryPath($, runId, session)
   let back: unknown
@@ -1479,14 +1620,14 @@ const relaySignalNow = async ($: any, event: RelayEvent): Promise<RelayOutcome> 
   })
   // Écrite, mais pas relue : ne pas la faire renvoyer (des comptes s'ajouteraient deux fois).
   if (parseRelayEntryFile(back, runId)?.entry.at !== now)
-    return { isKept: false, why: 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the manager checks the relay', isFinal: true }
+    return { isKept: false, why: 'it was written, but its relay entry could not be read back to confirm it: do not send it again before the manager checks the relay', isFinal: true, ...repeated }
   // Le fichier voulu ne s'est pas écrit : le store de cette session n'est pas celui d'une discussion
   // principale lancée dans l'autre application (desktop ou CLI), qui ne le lit donc pas.
   // Les tickets que ce signal fait passer « done » depuis un autre statut déjà relayé par cette session : la clôture
   // d'un de ses tickets (un ticket déjà fait, ou d'un autre groupe, qu'une commande ou un fichier relu redit, n'en est pas une).
   const closed = event.kind === 'tickets' ? event.changes.filter(c => { const before = own.entry?.tickets?.[c.id]?.status; return c.status === 'done' && before !== undefined && before !== 'done' }).map(c => c.id) : []
-  if (where === 'store' && path) return { isKept: true, note: 'kept only in the store of this session, its relay file could not be written: a manager running in the other app (desktop or CLI) does not read it', ...(closed.length > 0 ? { closed } : {}) }
-  return { isKept: true, ...(closed.length > 0 ? { closed } : {}) }
+  if (where === 'store' && path) return { isKept: true, note: 'kept only in the store of this session, its relay file could not be written: a manager running in the other app (desktop or CLI) does not read it', ...(closed.length > 0 ? { closed } : {}), ...repeated }
+  return { isKept: true, ...(closed.length > 0 ? { closed } : {}), ...repeated }
 }
 
 /**
@@ -4508,7 +4649,10 @@ const deliverables = (board: Board, last: Delivery | null): Run[] =>
   )
 
 /** Ce que la carte dit avant le clic : les commits non poussés, par mission quand on sait les situer, et les missions pas finies à attendre. */
-let deliveryPreview: { key: string; commits: { mission: string | null; lines: string[] }[]; waitFor: string[]; more: number } | null = null
+let deliveryPreview: { key: string; commits: { mission: string | null; lines: string[] }[]; waitFor: string[]; waitCommits: string[]; more: number } | null = null
+
+/** Les commits relevés pour l'aperçu (HEAD et la base de la branche dans `key`), relus seulement quand l'une change. */
+let previewLog: { key: string; entries: { line: string; at: number }[]; more: number } | null = null
 
 /** Le plus de commits listés par la carte ; au-delà, elle dit combien d'autres partiront. */
 const PREVIEW_MAX = 60
@@ -4516,7 +4660,9 @@ const PREVIEW_MAX = 60
 /**
  * Les commits que la livraison enverra (ceux de la branche absents du distant), rangés par mission d'après
  * la fenêtre de temps de chaque mission (un commit dans une seule fenêtre lui revient, sinon « hors mission »),
- * et les missions pas finies dont des groupes sont déjà fusionnés : la carte recommande alors d'attendre.
+ * et les missions pas finies dont des groupes sont déjà fusionnés ou dont des commits partent (`deliveryWaits`) :
+ * la carte recommande alors d'attendre. Les commits ne se relisent que quand HEAD ou la base changent ; leur
+ * rangement et les missions à attendre se recalculent à chaque fois, d'après les missions du moment.
  * Rien à relever sans mission à livrer, ni pendant une livraison ouverte.
  */
 const measureDeliveryPreview = async ($: any, board: Board): Promise<void> => {
@@ -4530,25 +4676,32 @@ const measureDeliveryPreview = async ($: any, board: Board): Promise<void> => {
   const upstream = await runGit($, root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], 5000)
   const base = upstream.exitCode === 0 && upstream.stdout ? '@{u}' : 'origin/HEAD'
   const baseSha = (await runGit($, root, ['rev-parse', base], 5000)).stdout
-  const waitFor = board.runs.filter(r => r.archivedAt === undefined && r.status !== 'done' && !isReportValidated(r) && (r.groups ?? []).some(g => g.delegated !== undefined)).map(r => r.title)
-  const key = `${head}|${baseSha}|${waitFor.join('\u0001')}`
-  if (deliveryPreview?.key === key) return
-  const count = await runGit($, root, ['rev-list', '--no-merges', '--count', `${base}..HEAD`], 5000)
-  const log = await runGit($, root, ['log', '--no-merges', `--max-count=${PREVIEW_MAX}`, '--format=%h%x1f%ct%x1f%s', `${base}..HEAD`], 10_000)
+  const logKey = `${head}|${baseSha}`
+  if (previewLog?.key !== logKey) {
+    const count = await runGit($, root, ['rev-list', '--no-merges', '--count', `${base}..HEAD`], 5000)
+    const log = await runGit($, root, ['log', '--no-merges', `--max-count=${PREVIEW_MAX}`, '--format=%h%x1f%ct%x1f%s', `${base}..HEAD`], 10_000)
+    const entries: { line: string; at: number }[] = []
+    for (const line of log.exitCode === 0 ? log.stdout.split('\n') : []) {
+      const [sha, ct, subject] = line.split('\u001f')
+      if (!sha || !subject) continue
+      entries.push({ line: `${sha} ${subject}`, at: Number(ct) * 1000 })
+    }
+    const total = Number(count.stdout)
+    // Une relecture ratée ne se garde pas : la suivante la refait, sinon les missions à attendre resteraient tues jusqu'au prochain commit.
+    previewLog = { key: log.exitCode === 0 ? logKey : '', entries, more: count.exitCode === 0 && Number.isFinite(total) && total > entries.length ? total - entries.length : 0 }
+  }
   const groups = new Map<string | null, string[]>()
   const windows = board.runs.filter(r => r.archivedAt === undefined).map(r => ({ title: r.title, from: r.startedAt, to: r.finishedAt ?? Number.MAX_SAFE_INTEGER }))
-  let listed = 0
-  for (const line of log.exitCode === 0 ? log.stdout.split('\n') : []) {
-    const [sha, ct, subject] = line.split('\u001f')
-    if (!sha || !subject) continue
-    listed++
-    const at = Number(ct) * 1000
+  for (const { line, at } of previewLog.entries) {
     const inside = windows.filter(w => at >= w.from && at <= w.to)
     const mission = inside.length === 1 ? inside[0]!.title : null
-    groups.set(mission, [...(groups.get(mission) ?? []), `${sha} ${subject}`])
+    groups.set(mission, [...(groups.get(mission) ?? []), line])
   }
-  const total = Number(count.stdout)
-  deliveryPreview = { key, commits: [...groups.entries()].map(([mission, lines]) => ({ mission, lines })), waitFor, more: count.exitCode === 0 && Number.isFinite(total) && total > listed ? total - listed : 0 }
+  // Une mission qui livre déjà elle-même pousse ses propres commits : rien à attendre d'elle (comme `deliverables`).
+  const waits = deliveryWaits(board.runs.filter(r => !isDeliveringHere(r)), previewLog.entries.map(e => e.at))
+  // La clé dit ce que montre la carte (la branche relevée et les missions à attendre) : le clic « ▶ Livrer » ne vaut que pour elle.
+  const key = `${logKey}|${waits.groups.join('\u0001')}|${waits.commits.join('\u0001')}`
+  deliveryPreview = { key, commits: [...groups.entries()].map(([mission, lines]) => ({ mission, lines })), waitFor: waits.groups, waitCommits: waits.commits, more: previewLog.more }
 }
 
 /** Les commits de la branche de travail depuis le départ du plus ancien groupe en cours, et ceux de la branche du worker de chaque groupe ; relus quand HEAD, ce départ ou la pointe d'une de ces branches changent. */
@@ -4614,7 +4767,7 @@ const deliveryCardKey = (ready: readonly Run[]): string => `${ready.map(r => `${
 /** La carte de livraison vue du COO. */
 const cooDeliveryOf = async ($: any, board: Board): Promise<CooDelivery | undefined> => {
   const d = await readDelivery($, board.root ?? '')
-  if (d === 'unread') return { state: 'unread', missions: [], commits: [], waitFor: [], isArmed: false }
+  if (d === 'unread') return { state: 'unread', missions: [], commits: [], waitFor: [], waitCommits: [], isArmed: false }
   if (d && isDeliveryOpen(d)) {
     const failed = failedStep(d)
     const running = runningStep(d)
@@ -4624,6 +4777,7 @@ const cooDeliveryOf = async ($: any, board: Board): Promise<CooDelivery | undefi
       missions: d.missions.map(m => m.title),
       commits: [],
       waitFor: [],
+      waitCommits: [],
       steps: d.steps.map(s => ({ label: DELIVERY_FR[s.key], status: s.status, ...(s.detail ? { detail: s.detail } : {}) })),
       ...(failed ? { step: DELIVERY_FR[failed.key] } : running ? { step: DELIVERY_FR[running.key] } : next ? { step: DELIVERY_FR[next.key] } : {}),
       isArmed: chainArmed === d.id,
@@ -4633,7 +4787,7 @@ const cooDeliveryOf = async ($: any, board: Board): Promise<CooDelivery | undefi
   if (coordNow?.state === 'unread') return undefined
   const ready = deliverables(board, d)
   if (ready.length === 0) return undefined
-  return { state: 'ready', missions: ready.map(r => r.title), commits: deliveryPreview?.commits ?? [], waitFor: deliveryPreview?.waitFor ?? [], ...(deliveryPreview && deliveryPreview.more > 0 ? { more: deliveryPreview.more } : {}), key: deliveryCardKey(ready), isArmed: false }
+  return { state: 'ready', missions: ready.map(r => r.title), commits: deliveryPreview?.commits ?? [], waitFor: deliveryPreview?.waitFor ?? [], waitCommits: deliveryPreview?.waitCommits ?? [], ...(deliveryPreview && deliveryPreview.more > 0 ? { more: deliveryPreview.more } : {}), key: deliveryCardKey(ready), isArmed: false }
 }
 
 /**
@@ -5797,6 +5951,29 @@ const refreshLinkedOnce = async ($: any) => {
   $.ui.invalidate('ui.render')
 }
 
+/** Les lancements hors de la demande déjà dits dans une réponse de l'outil, une fois chacun (`<mission>:<lancement>`). */
+const offRequestTold = new Set<string>()
+
+/**
+ * Un groupe lancé ici par une commande à part, hors de la demande du mod (signalé, jamais rattaché d'après son titre) : la réponse de l'outil
+ * le dit une fois par session lancée, d'après le registre d'ici et les workers de la dernière relecture.
+ */
+const offRequestNotice = async ($: any, run: Run): Promise<string> => {
+  const self: SessionRegistry | null = await read($, registryAtom)
+  let text = ''
+  for (const o of offRequestLaunches(run, self?.linked ?? [], await read($, linkedAtom))) {
+    const key = [run.id, o.launch].join(':')
+    if (offRequestTold.has(key)) continue
+    offRequestTold.add(key)
+    // Un id relu hors forme n'entre dans aucune commande dictée (comme à la fermeture) : la personne l'arrête elle-même.
+    const stop = isSafeId(o.launch)
+      ? `stop it only with their agreement and only once it is idle (CLI: claude stop ${shellQuote(o.launch)} once claude agents --json shows it "status": "idle"; app: archive it with archive_session after the user agrees for this session)`
+      : 'its session id is out of form, so no command is given for it: the user stops it themselves'
+    text += ` · Group ${o.group} was launched outside its launch request (session ${isSafeId(o.launch) ? o.launch : 'id de session hors forme'}): the dashboard does not tie it to the group and does not see its work. Tell the user, and ${stop}; then relaunch the group from its launch request (« ↗ Worker »): a separate launch is not seen.`
+  }
+  return text
+}
+
 /** Le registre lu d'un worker, pour l'onglet ; null tant qu'il ne se lit pas. */
 const linkedRegistryOf = (session: string | undefined): SessionRegistry | null => (session !== undefined ? (otherRegistries.get(session)?.reg ?? null) : null)
 
@@ -6829,6 +7006,19 @@ const hasModSource = async ($: any): Promise<boolean> => {
   return isThere
 }
 
+/**
+ * Dans le dépôt de flow-board, la phrase des deux versions quand elles diffèrent (celle du mod installé,
+ * qui tourne, et celle du dépôt) ; vide quand elles sont égales ou que l'une ne se lit pas. Le worker du
+ * groupe B avait suivi la procédure du dépôt, qui citait un champ que le mod installé ne connaissait pas.
+ */
+const modVersionsNote = async ($: any): Promise<string> => {
+  const root = (await read($, boardAtom))?.root || (await sessionRoot($))
+  if (!root) return ''
+  const installed = await installedVersion($)
+  const source = await manifestVersion($, `${normRoot(root)}/${MOD_SOURCE}/.claude-plugin/plugin.json`)
+  return installed && source && installed !== source ? `flow-board installé : ${installed} ; dépôt : ${source} : le mod qui tourne est l'installé. ` : ''
+}
+
 /** Ce que la procédure d'un worker attend de son prompt, donné à la discussion qui fait elle-même un lot sans groupes. */
 type LotProcedure = { procedure: string; tdd: string; ticketReview: string; securityMethod: string; readingMethod: string }
 
@@ -6940,7 +7130,7 @@ const securityAdvice = (isRepo: boolean): string =>
  * les axes Standards et Spec ne relisent ni la clarté, ni la structure, ni le ton pour son lecteur.
  */
 const contentFormReview = (): string =>
-  `- Content and form review: for a ticket with a « Lecteur : <who> » line, launch in the same message as the ticket's reviewer, on the same target, a reviewer subagent (Agent tool, general-purpose, model opus, effort high, passed explicitly), read-only, that rereads the document for that reader; give it in its prompt the path of the content and form review method file, ${readingMethod} (it follows it: the reader, the content, the form, numbered findings each with a proposed fix, the minor ones as a count), next to ${INSTRUCTIONS_IN_PROMPT}; its instructions file gives the reader (the « Lecteur » line, or the one you named). For an older ticket without that line whose deliverable is clearly a document for others, run it too: name the reader yourself and declare it in {"decided": …}. Apply what you keep of it in the commit of the review fixes, before the ticket turns done; its findings count with the Spec axis in "review", in a single report with those of the two axes.`
+  `- Content and form review: for a ticket with a « Lecteur : <who> » line, launch in the same message as the ticket's reviewer, on the same target, a reviewer subagent (Agent tool, general-purpose, model opus, effort high, passed explicitly), read-only, that rereads the document for that reader; give it in its prompt the path of the content and form review method file, ${readingMethod} (it follows it: the reader, the content, the form, numbered findings each with a proposed fix, the minor ones as a count), next to ${INSTRUCTIONS_IN_PROMPT}; its instructions file gives the reader (the « Lecteur » line, or the one you named). For an older ticket without that line whose deliverable is clearly a document for others, run it too: name the reader yourself and declare it in {"decided": …}. Apply what you keep of it in the commit of the review fixes, before the ticket turns done; its findings go in "form" of "review", never in "spec", in a single report with those of the two axes.`
 
 /**
  * La revue de sécurité désactivée pour le projet (réglage relu au chargement de la consigne) : l'avis se donne
@@ -6973,7 +7163,7 @@ const lotProcedureLines = (lot: LotProcedure, isRepo: boolean): string[] => {
     ? "/code-review high --fix <lot base>..HEAD consignes : <path> (high without --fix when a ticket of the lot is sensitive or did not say; <lot base>: the commit before the lot's first ticket)"
     : "/code-review high --fix consignes : <path> (high without --fix when a ticket of the lot is sensitive or did not say; its fixed point: for each file, the oldest copy among the lot's tickets, section 9)"
   return [
-    `- This lot has no groups: you do it in this discussion and follow the procedure of a worker of a group, ${lot.procedure}, the single text of how a lot is done: its sections ${sections.slice(0, -1).join(', ')} and ${sections.at(-1)}, in order. Read it with this correspondence: « le manager » is you, and « je », « me », « moi » the user; what the procedure sends to it (SendMessage, the relay) you tell the user directly, and questions go as text in your message (options, the recommended one first; the ticket concerned waits, the rest goes on); « le groupe » reads « the lot »; its <base> is the commit before the lot's first ticket; « au retour du groupe » reads « at the mission's report »; the pause of the mission seen by a worker (section 3) does not concern you; a visual to validate is shown and asked directly; what the procedure sends with "group" (section 2, point 8, and section 5) you send without it, the security advice on its own once /code-review has loaded, the counts after the security reviewer (« The lot review » below). What the procedure expects from its prompt: <tdd>: ${lot.tdd}; <revue du ticket>: ${lot.ticketReview}; the security review method file, ${lot.securityMethod}; the content and form review method file, ${lot.readingMethod}; the declared choices and the project judgement rules: below ("Declared choices", "Project judgement rules"); ${isRepo ? 'this folder is a git repository' : 'this folder has no git (section 9, and "Without git" below)'}.`,
+    `- This lot has no groups: you do it in this discussion and follow the procedure of a worker of a group, ${lot.procedure}, the single text of how a lot is done: its sections ${sections.slice(0, -1).join(', ')} and ${sections.at(-1)}, in order (sections 4 and 5 are in procedure-groupe-fin.md, section 9 in procedure-groupe-sans-git.md, next to it). Read it with this correspondence: « le manager » is you, and « je », « me », « moi » the user; what the procedure sends to it (SendMessage, the relay) you tell the user directly, and questions go as text in your message (options, the recommended one first; the ticket concerned waits, the rest goes on); « le groupe » reads « the lot »; its <base> is the commit before the lot's first ticket; « au retour du groupe » reads « at the mission's report »; the pause of the mission seen by a worker (section 3) does not concern you; a visual to validate is shown and asked directly; what the procedure sends with "group" (section 2, point 8, and section 5) you send without it, the security advice on its own once /code-review has loaded, the counts after the security reviewer (« The lot review » below). What the procedure expects from its prompt: <tdd>: ${lot.tdd}; <revue du ticket>: ${lot.ticketReview}; the security review method file, ${lot.securityMethod}; the content and form review method file, ${lot.readingMethod}; the declared choices and the project judgement rules: below ("Declared choices", "Project judgement rules"); ${isRepo ? 'this folder is a git repository' : 'this folder has no git (section 9, and "Without git" below)'}.`,
     `- Five exceptions, and no other: ${LOT_EXCEPTIONS.join('; ')}. Section 6 (« Compte rendu ») is replaced by /flow-board:compte-rendu, which takes its content (what the CHANGELOG must say, the findings on code older than the lot, the tracks): no report of the lot apart.`,
     `- The lot review: launch the lot review yourself (section 4), in this discussion, once the last ticket is committed and reviewed (its review fixes committed) and every ticket of the lot is done on the dashboard (a /code-review loaded while one is not done is not the lot review: it counts for no pass): ${review}, with its security advice in the same message (section 5), sent without "group" (send the advice only once /code-review has loaded, never before it: an advice dated before the lot review counts for no pass; ${LOT_DISMISSED_HINT}); the dashboard's « ◆ Revue » button stays for a relaunch by hand. Otherwise, /code-review (Claude Code) runs here only as the bug pass of a ticket that touches a sensitive area. A lot whose every ticket was sent with "sensitive": false and "logic": false is dispensed (section 4): neither a lot review nor a security review, and no security advice is sent for it.`,
   ]
@@ -7028,10 +7218,11 @@ const OUTSIDE_WRITE =
 /**
  * Les cas à trancher au cadrage d'un ticket sensible : 26 décisions sensibles étaient nées des
  * revues en cours de route (rétro de l'onglet Agents). L'invariant vient de la règle « Invariant
- * d'un ticket en zone concurrence ou suppression » de config/rules/flow-board.md.
+ * d'un ticket en zone concurrence ou suppression » de config/rules/flow-board.md. L'exemple d'un compte
+ * (« never counted twice ») vient d'un renvoi de la borne des choix qui doublait des comptes de revue.
  */
 const SENSITIVE_FRAMING =
-  'For a ticket in a sensitive area, settle with the user while framing, among the cases that apply: erasures that overlap, a resume after an interruption, the state after /reload-plugins, and what a failure message says. A ticket in the concurrency or deletion area also fixes with the user the one-sentence invariant of its persisted data, what it must never become whatever happens (crossed writes, a cut write, a failed read), for example « a totals file is never deleted nor rewritten empty »; the ticket carries it, and the instructions file of its bug pass copies it'
+  'For a ticket in a sensitive area, settle with the user while framing, among the cases that apply: erasures that overlap, a resume after an interruption, the state after /reload-plugins, and what a failure message says. A ticket in the concurrency or deletion area also fixes with the user the one-sentence invariant of its persisted data, what it must never become whatever happens (crossed writes, a cut write, a failed read), for example « a totals file is never deleted nor rewritten empty »; for a count (a value added up from one send to the next), the invariant also says « never counted twice »; the ticket carries it, and the instructions file of its bug pass copies it'
 
 /**
  * Un ticket sensible s'écrit d'après le code : un critère supposait qu'une copie en pause gardait
@@ -7039,7 +7230,7 @@ const SENSITIVE_FRAMING =
  * trois questions venaient d'un cycle de vie jamais posé. Règle « Vérifier avant d'écrire ».
  */
 const CODE_CHECKED_FRAMING =
-  'For a sensitive ticket, read the function it names before writing a done criterion or an option offered to the user; list the paths that write, merge or erase its data by a search quoted in the ticket (the command and its result); ask the lifecycle question (the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated); and leave no « à confirmer » in a ticket: it is a question at framing'
+  'For a sensitive ticket, read the function it names before writing a done criterion or an option offered to the user; list the paths that write, merge, erase its data or read it to make a decision (a view, a sort, a cleanup), by a search quoted in the ticket (the command and its result), on a line of its own: « Recherche : `<command>` — <result> », starting the line (no list bullet before it, which the pre-commit check refuses); ask the lifecycle question (the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated); and leave no « à confirmer » in a ticket: it is a question at framing'
 
 /**
  * Un champ ajouté à des données persistées est en zone sensible : trois tickets qui ajoutaient un
@@ -7094,14 +7285,43 @@ const TICKET_FLAGS =
 const RETIRED_TERMS =
   "A ticket that removes a button, a command or an option adds its label and its key to the termes-retires.txt of its plugin when the plugin has one (the project's checks then refuse them in its texts), in its done criteria, each with the plugin's current version (its plugin.json, never a version the ticket sets): the release that describes the removal moves those lines to its new version, or the checks refuse its CHANGELOG entry when it names the term; likewise, a ticket that replaces a rule copied on several surfaces (a common rule, the procedure, the mod's instructions, a skill) adds, for each copy, a distinctive fragment of its old wording in that copy's language to the termes-retires.txt of the plugin whose checks read that copy (its README, hooks, skills, commands, reference, and its rule config/rules/<plugin>.md), so that a copy left at the old wording is refused (a list copied on three surfaces was found stale by three reviews in a row); a copy that no such list reads (config/reference/, another plugin without the file) is named in its done criteria, to be searched"
 
+/**
+ * Un ticket sensible ne porte que son changement sensible : un renommage sensible de 4 lignes, découpé avec
+ * un analyseur de test de 185 lignes, avait fait relire surtout le test à une passe « bogues » en xhigh.
+ */
+const SENSITIVE_NARROW =
+  'A sensitive ticket carries only the sensitive change: a tool or a large test with no link to the sensitive area makes a ticket of its own, in the same group, ordered by the rule on sensitive tickets in a group; otherwise its bug pass (high or xhigh) reads mostly what is not sensitive'
+
+/**
+ * Les fichiers des appelants d'une fonction dont le contrat change : un ticket changeait une fonction appelée
+ * par un fichier d'un autre groupe, que son champ files ne nommait pas ; les deux groupes étaient partis dans
+ * la même vague, et il avait fallu fusionner la branche principale dans l'un d'eux en plein ticket.
+ */
+const CALLER_FILES =
+  'a ticket that changes the contract of a function (a parameter, the returned value, its meaning) also names in "files" the files of its callers, found by a search quoted in the ticket (the command and its result): otherwise two groups that share those files leave in the same wave'
+
+/**
+ * Le groupe « durcissement » proposé en fin de lot attend la réponse : `complete` était parti avant elle, le
+ * tableau de bord était passé à la suite, et le message qui demandait « Dis-moi si je crée le groupe »
+ * proposait juste en dessous le compte rendu, lancé ensuite par erreur. En mode auto, la consigne des
+ * constats (`AUTO_FINDINGS`) vaut : `AUTO_HARDENING` remplace cette consigne, pour qu'aucune question ne retienne
+ * `complete` (elle arrêterait l'auto sur un cas qui n'est pas réservé à l'utilisateur).
+ */
+const AUTO_HARDENING =
+  'In auto mode there is no « durcissement » group: list the findings that reviews kept apart on code older than the lot for the report, without a question.'
+
+const HARDENING_PROPOSAL =
+  'If reviews kept apart findings on code older than the lot, propose those of medium severity or more, or that break an invariant, to the user as a « durcissement » group (one ticket per finding), without creating it before they agree: until they answer, declare that question in "waiting" on the implement phase instead of sending {"complete": true} ({"waiting": [{"id": "durcissement", "phase": "implement", "text": "<the proposal, short>"}]}), withdraw it as soon as they answer ({"waiting": [{"id": "durcissement", "answered": true}]}: an answered question left open stays on the dashboard as waiting for them), and send {"complete": true} only once the answer came (the group refused, or the group created and done); the message that proposes the group suggests neither /flow-board:compte-rendu nor the delivery; the others go to the journal, under « À reprendre » (and in "setAside", which the COO copies to its « À reprendre » list).'
+
 /** Les consignes de découpage de /to-tickets, reprises telles quelles par la demande de découpage des pistes d'une rétro. */
 const TICKET_RULES: readonly string[] = [
-  'Give each ticket the repo paths it touches, read from its acceptance criteria: {"tickets": [{"id": "...", "files": ["<pages, tables, shared files such as a model or a measures file>"]}]}. Name files, not a whole folder, unless the ticket creates files in it: a folder blocks every group that names a file inside it. README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files": almost every ticket cites them, their additions merge without trouble, and the dashboard ignores them anyway',
+  'Give each ticket the repo paths it touches, read from its acceptance criteria: {"tickets": [{"id": "...", "files": ["<pages, tables, shared files such as a model or a measures file>"]}]}. Name files, not a whole folder, unless the ticket creates files in it: a folder blocks every group that names a file inside it. README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files": almost every ticket cites them, their additions merge without trouble, and the dashboard ignores them anyway; ' + CALLER_FILES,
   TICKET_FLAGS,
   READER_LINE,
   PERSISTED_FIELD,
   GROUP_SIZE,
   SENSITIVE_ORDER,
+  SENSITIVE_NARROW,
   SPLIT_CHECKS,
   OUTSIDE_WRITE,
   RETIRED_TERMS,
@@ -7166,7 +7386,7 @@ const AUTO_PHASE_NOTES: Record<string, string> = {
  * flow-board la relance, puis sa sécurité conseillée, quand elles n'ont pas été lancées ; le compte
  * rendu ne part qu'après le `{"complete": true}` du lot relu et tranché, ou dispensé.
  */
-const AUTO_LOT_IMPLEMENT = `- Implementation in auto mode, without groups: launch the lot review yourself, as the /implement instructions say (section 4 of the procedure, on <lot base>..HEAD, <lot base> being the commit before the lot's first ticket), with its security advice once the review has loaded, never before it; if it has not been launched (an interrupted discussion), flow-board itself sends it at the end of a turn, then the lot's advised security review when it was not launched: do not ask the user to press the dashboard buttons. Neither leaves while a background task runs or a question blocks this phase. Once every ticket is done, the lot reviewed and its security settled, or the lot dispensed, send {"complete": true}: the auto mode sends the report only after it. Leaving a security finding unfixed is the user's decision, a blocking question on this phase ("phase": "implement"): it holds back the lot's sends and the report.\n${AUTO_FINDINGS}`
+const AUTO_LOT_IMPLEMENT = `- Implementation in auto mode, without groups: launch the lot review yourself, as the /implement instructions say (section 4 of the procedure, in procedure-groupe-fin.md, on <lot base>..HEAD, <lot base> being the commit before the lot's first ticket), with its security advice once the review has loaded, never before it; if it has not been launched (an interrupted discussion), flow-board itself sends it at the end of a turn, then the lot's advised security review when it was not launched: do not ask the user to press the dashboard buttons. Neither leaves while a background task runs or a question blocks this phase. Once every ticket is done, the lot reviewed and its security settled, or the lot dispensed, send {"complete": true}: the auto mode sends the report only after it. Leaving a security finding unfixed is the user's decision, a blocking question on this phase ("phase": "implement"): it holds back the lot's sends and the report.\n${AUTO_FINDINGS}`
 
 /** Le bloc du cadrage (un grilling) : un seul tour d'intention avec la personne, puis les recos prises. */
 const AUTO_FRAMING_REST =
@@ -7242,7 +7462,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   }
   if (id === 'to-tickets') {
     lines.push('- When the tickets are published, send them all with their blocking edges in "blockedBy" (an empty list for a ticket nothing blocks).')
-    lines.push('- Also check in the tracker whether a ticket depends on tasks outside this lot. Add the code tickets among them to the lot; send the others (decisions to make, work of someone else) as {"externals": [{"id": "<GID>", "name": "...", "kind": "decision|task", "status": "todo|done"}]} and keep their ids in the blocked tickets\' blockedBy. When one is done or decided, send it again with "status": "done".')
+    lines.push('- Also check in the tracker whether a ticket depends on tasks outside this lot. Add the code tickets among them to the lot; send the others (decisions to make, work of someone else) as {"externals": [{"id": "<GID>", "name": "...", "kind": "decision|task", "status": "todo|done"}]} and keep their ids in the blocked tickets\' blockedBy. Without a tracker task, a blocker is local: a short id of your own, for example the session of another mission that touches the same files. When one is done, decided or merged, send it again with "status": "done"; a resend without "status" keeps the recorded one.')
     lines.push(...TICKET_RULES.map(rule => `- ${rule}.`))
     if (otherFiles.length > 0)
       lines.push(
@@ -7252,7 +7472,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
     lines.push('- Last, group the tickets for execution: {"groups": [{"id": "A", "name": "<short theme>", "tickets": ["<ids in execution order>"], "why": "<the shared context>", "files": ["<other repo paths it touches>"], "resources": ["<what it cannot share>"]}]}. Each group runs in a worker, never in this discussion. Same group = same files or modules, or a chain of dependencies: its worker does them in a row with /implement. A different context = another group; a group of one ticket is fine when its context is its own, and a ticket that blocks nothing in its theme but could start now (an export, a query, a data check) is often better in a group of its own or with other data work. Groups that share no file, no resource and do not depend on each other can later run at the same time, one worker per group. "resources": what a group cannot share with another group working at the same time, with the same name in every group: an application driven on screen and checked by screenshots (e.g. "PowerBI Desktop"), a single database, device or account; check the project\'s CLAUDE.md for such constraints. Every ticket in exactly one group. Send no groups when there would be only one (one group, or one group plus tickets left outside it): a single group brings nothing, the dashboard ignores such a plan, and the lot is done in this discussion with /implement.')
   }
   if (id === 'implement') {
-    lines.push('- For each ticket, the steps above restart from "read". With "review", send the findings of the ticket\'s reviewer: {"step": "review", "review": {"standards": <findings>, "spec": <findings>, "fixed": <fixed>}} ("standards": 0 for the Spec axis alone of a sensitive ticket).')
+    lines.push('- For each ticket, the steps above restart from "read". With "review", send the findings of the ticket\'s reviewer: {"step": "review", "review": {"ticket": "<its id>", "standards": <findings>, "spec": <findings>, "fixed": <fixed by a commit>}} ("standards": 0 for the Spec axis alone of a sensitive ticket).')
     if (lotHere) lines.push(...lotProcedureLines(lotHere, isRepo))
     else lines.push('- In this discussion, /code-review (Claude Code) runs only as the bug pass of a ticket that touches a sensitive area. The review of a group, /code-review high --fix <group base>..HEAD consignes : <path> (high without --fix for a group with a sensitive ticket; <group base>: the commit before the group\'s first ticket), is launched by the user from the dashboard once the group\'s tickets are committed: do not launch it yourself.')
   }
@@ -7347,10 +7567,11 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
         : `- Declared choices: their file is out of reach; give every reviewer the list of the choices sent in "decided" of the flow tool, with this reviewer brief, word for word: ${REVIEWER_BRIEF}. To that end, ${reviewInstructions(isRepo)}.`,
     )
   }
+  const hardening = isAuto ? `. ${AUTO_HARDENING}` : `, unless you propose a « durcissement » group. ${HARDENING_PROPOSAL}`
   if (lotHere) {
-    lines.push(`- When every ticket of the lot is done, the lot review done and its security settled (or the lot dispensed: every ticket sent with "sensitive": false and "logic": false): {"complete": true}. If reviews kept apart findings on code older than the lot, propose those of medium severity or more, or that break an invariant, to the user as a « durcissement » group (one ticket per finding), without creating it before they agree; the others go to the journal, under « À reprendre » (and in "setAside", which the COO copies to its « À reprendre » list). Do not suggest /flow-board:compte-rendu or the delivery before then. Add {"note": "<one short line>"} for a decision worth keeping.`)
+    lines.push(`- When every ticket of the lot is done, the lot review done and its security settled (or the lot dispensed: every ticket sent with "sensitive": false and "logic": false): {"complete": true}${hardening} Do not suggest /flow-board:compte-rendu or the delivery before then. Add {"note": "<one short line>"} for a decision worth keeping.`)
   } else if (id === 'implement') {
-    lines.push('- When every ticket of the lot is done: {"complete": true}. If reviews kept apart findings on code older than the lot, propose those of medium severity or more, or that break an invariant, to the user as a « durcissement » group (one ticket per finding), without creating it before they agree; the others go to the journal, under « À reprendre » (and in "setAside", which the COO copies to its « À reprendre » list). A finished group is not the end: while tickets of the lot remain open, the next step is the next group, which the user launches from the dashboard, in its worker (↗ Worker). Do not suggest /flow-board:compte-rendu or the delivery before every ticket is done. Add {"note": "<one short line>"} for a decision worth keeping.')
+    lines.push(`- When every ticket of the lot is done: {"complete": true}${hardening} A finished group is not the end: while tickets of the lot remain open, the next step is the next group, which the user launches from the dashboard, in its worker (↗ Worker). Do not suggest /flow-board:compte-rendu or the delivery before every ticket is done. Add {"note": "<one short line>"} for a decision worth keeping.`)
   } else if (id !== 'compte-rendu' && def.role !== 'event') {
     lines.push(`- When the work of ${id} is finished: {"complete": true}. Add {"note": "<one short line>"} for a decision worth keeping.`)
   }
@@ -8205,7 +8426,10 @@ const retroTail = async ($: any): Promise<string> => {
   if (session === undefined) await quietly(async () => {
     session = (await read($, boardAtom))?.session
   })
-  return retroTranscriptNote(self?.transcript, session, lastCompactionAt(self) !== null)
+  // Le script des rapports des spécialistes : celui du dépôt quand le projet contient la source du mod, l'installé en repli.
+  noteReferences($)
+  const reports = (await hasModSource($)) ? { script: `${MOD_SOURCE}/${REPORTS_SCRIPT_FILE}`, fallback: reportsScript } : { script: reportsScript }
+  return retroTranscriptNote(self?.transcript, session, lastCompactionAt(self) !== null, reports)
 }
 
 /** Le texte d'un skill, suivi d'une consigne (vide : tel quel). */
@@ -8391,6 +8615,18 @@ const leadEffortHere = async <E extends string | number>($: any, current: E): Pr
 
 /** L'effort relevé de cette discussion, sur sa propre piste du registre des agents ; inconnu avant sa première réponse. */
 const sessionEffort = async ($: any): Promise<string | undefined> => ((await read($, registryAtom)) as SessionRegistry | null)?.main?.effort
+
+/**
+ * Les fenêtres de quota de la discussion (`$.session.usage().rateLimits`) ; vide quand le moteur n'en donne pas
+ * (hors abonnement, avant la première réponse) ou que la lecture échoue : rien ne s'affiche ni ne se cite alors.
+ */
+const quotaWindows = async ($: any): Promise<readonly QuotaWindow[]> => {
+  let limits: unknown
+  await quietly(async () => {
+    limits = (await $.session.usage())?.rateLimits
+  })
+  return Array.isArray(limits) ? (limits as QuotaWindow[]) : []
+}
 
 /**
  * Ce que le background d'un worker garde : ce qui varie d'une session à l'autre. Les règles
@@ -8636,14 +8872,16 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   // fichiers de méthode, à côté de la procédure, se retrouvent sans répéter leur chemin installé.
   const isSource = await hasModSource($)
   const procedure = isSource ? `${MOD_SOURCE}/${PROCEDURE_FILE} du dossier de travail (source du dépôt, qui fait foi ; sinon ${procedurePath})` : procedurePath
-  // Le chemin seul, pour la consigne d'effort qui renvoie à la section 11 (la demande « brief » ne cite pas la procédure ailleurs).
-  const shortProcedure = isSource ? `${MOD_SOURCE}/${PROCEDURE_FILE}` : procedurePath
+  // Le chemin seul de l'annexe de la section 11, pour la consigne d'effort qui y renvoie.
+  const effortFile = isSource ? `${MOD_SOURCE}/${EFFORT_FILE}` : effortPath
   const cite = (installed: string, file: string): string =>
     isSource ? `${MOD_SOURCE}/${file} (dossier de travail, sinon à côté de la procédure installée)` : installed
-  const autonomous = "qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure"
+  const autonomous = "qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure (procedure-groupe-autonome.md)"
   // Dans le dépôt de flow-board : l'index du README (aucun worker ne l'ouvrait), et le mod qui tourne n'est pas celui du dépôt.
   const sourceBody = `l'« Index : concept → fichier et fonction » de ${MOD_SOURCE}/README.md d'abord, puis les fichiers lus par fonction ; le mod qui tourne est sa version installée, pas celle du dépôt. `
   const sourceNote = isSource ? `Le prompt dit aussi : ${sourceBody}` : ''
+  // Dans le dépôt de flow-board, les deux versions quand elles diffèrent : un correctif du dépôt n'agit pas dans la session.
+  const versionsNote = isSource ? await modVersionsNote($) : ''
   // Les trois points du prompt de la session, écrits une fois : `here` désigne la discussion principale
   // (« ici », « cette discussion » dans la demande ; « la discussion principale » dans le brief).
   const steps = (call: string, isBrief: boolean): string => {
@@ -8652,7 +8890,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     return (
       `1) d'abord, appeler une seule fois l'outil flow de flow-board avec ${call} : la mission reste ${here}, et l'avancement de la session (statuts Asana des tickets, commits, tests) est relayé tout seul au tableau de bord ${isBrief ? 'de la discussion principale' : "d'ici"} ; ` +
       `2) puis lire la procédure d'un worker de groupe, ${procedure}, et la suivre jusqu'au bout : questions sensibles d'abord, puis chaque section dans l'ordre jusqu'au compte rendu déposé au relais puis une ligne ${back} ; chaque fichier lu à part, et de la spec les seules sections que cite le ticket ; ` +
-      `3) ce qui varie, que la procédure attend du prompt : les commandes de ce poste (TDD : ${tdd} ; revue du ticket : ${ticketReview} ; ${implement} est réservé à l'utilisateur), le fichier de méthode de la revue de sécurité, ${cite(securityMethod, SECURITY_METHOD_FILE)}, le fichier de méthode de la relecture du fond et de la forme, ${cite(readingMethod, READING_METHOD_FILE)}, ${decidedAt ? `le fichier des choix déjà déclarés de la mission, ${decidedAt}` : 'la liste des choix déjà déclarés (leur fichier est hors d\'atteinte : section 8 de la procédure)'}, ${standards ? 'que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)' : "que le projet n'a pas de CODING_STANDARDS.md à sa racine"}, ${isRepo ? 'que son dossier est un dépôt git' : "que son dossier n'a pas de git (section 9 de la procédure)"}, ${isAuto ? `et qu'elle est un worker autonome quel que soit son effort (la mission est en mode auto${imposed ? '' : ', jamais en xhigh'}) : elle applique la section « Worker autonome » de la procédure` : imposed ? `et ${autonomous}` : `et, si son effort est xhigh, ${autonomous}`}. `
+      `3) ce qui varie, que la procédure attend du prompt : les commandes de ce poste (TDD : ${tdd} ; revue du ticket : ${ticketReview} ; ${implement} est réservé à l'utilisateur), le fichier de méthode de la revue de sécurité, ${cite(securityMethod, SECURITY_METHOD_FILE)}, le fichier de méthode de la relecture du fond et de la forme, ${cite(readingMethod, READING_METHOD_FILE)}, ${decidedAt ? `le fichier des choix déjà déclarés de la mission, ${decidedAt}` : 'la liste des choix déjà déclarés (leur fichier est hors d\'atteinte : section 8 de la procédure)'}, ${standards ? 'que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)' : "que le projet n'a pas de CODING_STANDARDS.md à sa racine"}, ${isRepo ? 'que son dossier est un dépôt git' : "que son dossier n'a pas de git (section 9 de la procédure)"}, ${isAuto ? `et qu'elle est un worker autonome quel que soit son effort (la mission est en mode auto${imposed ? '' : ', jamais en xhigh'}) : elle applique la section « Worker autonome » de la procédure (procedure-groupe-autonome.md)` : imposed ? `et ${autonomous}` : `et, si son effort est xhigh, ${autonomous}`}. `
     )
   }
   const head =
@@ -8660,8 +8898,9 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     (isAuto
       ? `Avant de lancer : ce dont ${many ? 'une session aura' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé), déclare-le en question bloquante sur son groupe ("waiting") et ne lance ce groupe qu'une fois ma réponse donnée${many ? ' ; lance les autres tout de suite' : ''}. `
       : `Avant de lancer : repère ce dont ${many ? 'les sessions auront' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé) et règle-le d'abord avec moi ici, sinon ${many ? 'elles y buteront' : 'elle y butera'}. `) +
-    `Puis lance ${many ? 'une session par groupe' : 'la session'}, avec un titre qui commence par « ${prefix}Groupe <id> · » : le début dit de quelle discussion ${many ? 'elles viennent' : 'elle vient'}, et « Groupe <id> » relie la session à son groupe au tableau de bord. `
-  const effortRule = isAuto && !imposed ? AUTO_GROUP_EFFORT(many, shortProcedure) : GROUP_EFFORT(many, imposed, await sessionEffort($), shortProcedure)
+    `Puis lance ${many ? 'une session par groupe' : 'la session'}, avec un titre qui commence par « ${prefix}Groupe <id> · » : le début dit de quelle discussion ${many ? 'elles viennent' : 'elle vient'}, et « Groupe <id> » relie la session à son groupe au tableau de bord. ` +
+    `Lance ${many ? 'chaque' : 'le'} worker seulement depuis cette demande : un lancement à part n'est pas vu. `
+  const effortRule = isAuto && !imposed ? AUTO_GROUP_EFFORT(many, effortFile) : GROUP_EFFORT(many, imposed, await sessionEffort($), effortFile, quotaText(await quotaWindows($), await $.clock.now()))
   // La phrase sur Sonnet suit la consigne d'effort, séparée d'une espace (celle hors auto finit sur un point).
   const how = { many, isRepo, ownFolder: true, trustInProcedure: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: views.some(isSonnet) ? `${effortRule.trimEnd()} ${SONNET_LAUNCH_FR}` : effortRule }
   const resent = (isRepo ? resentWorktrees(run, views) : '') + (isAuto ? resentFindings(views) : '')
@@ -8687,6 +8926,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     const list = briefs.paths.map(b => `brief du groupe ${b.group} : ${shellQuote(b.path)}`).join(' ; ')
     return (
       head +
+      versionsNote +
       launchHow({ ...how, brief: true }) +
       resent +
       `Briefs écrits par flow-board (un par groupe, à passer tels quels) : ${list}. ` +
@@ -8698,6 +8938,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   const fallback = `Le brief n'a pas pu être écrit par flow-board (${neutralInPrompt(briefs.why)}) : rédige-le toi-même, comme suit. `
   return (
     head +
+    versionsNote +
     launchHow(how) +
     resent +
     fallback +
@@ -8941,7 +9182,12 @@ const closeLinkedGroup = async ($: any, groupId: string) => {
   if (!(await commit($, b => askCloseLinkedGroup(b, groupId, now)))) return
   const isRepo = await measureRepo($)
   const target = { kind: 'group', id: group.id, name: group.name } as const
-  const text = `${closingProcedure({ run, target, isRepo, ...(group.delegated.session ? { session: group.delegated.session } : {}), ...(group.delegated.seq !== undefined ? { seq: group.delegated.seq } : {}) })} ${closedHint(target)}`
+  // Le compte rendu de sa session, relu au relais à l'instant : absent, ou relais illisible, pas de claude rm (session gardée).
+  // Sa fenêtre s'arrête au nouvel envoi du groupe, s'il y en a un : le compte rendu de la nouvelle session ne vaut pas pour elle.
+  const stored = await readRelay($, run.id)
+  const relay = isRelay(stored, run.id) ? stored : null
+  const hasReport = relayedReportAt(relay, group, run.groups, group.delegated, group.linked?.at ?? Infinity) !== undefined
+  const text = `${closingProcedure({ run, target, isRepo, ...(group.delegated.session ? { session: group.delegated.session } : {}), ...(group.delegated.seq !== undefined ? { seq: group.delegated.seq } : {}), hasReport, noted: group.delegated.closing })} ${closedHint(target)}`
   await fillRequest(
     $,
     text,
@@ -8970,7 +9216,7 @@ const closeLinkedItems = async ($: any) => {
   const seq = phase.linked?.seq
   await fillRequest(
     $,
-    `${closingProcedure({ run, target, isRepo, session, ...(seq !== undefined ? { seq } : {}) })} ${closedHint(target)}`,
+    `${closingProcedure({ run, target, isRepo, session, ...(seq !== undefined ? { seq } : {}), hasReport: false })} ${closedHint(target)}`,
     `Fermeture de la session des ${label} : la demande est dans le prompt, Entrée pour la lancer`,
     `Demande à taper : ferme la session des ${label} et son worktree, en vérifiant d'abord, sans rien forcer, la branche gardée`,
   )
@@ -9345,6 +9591,9 @@ const actionsFor = ($: any): Actions => ({
   resume: async (id: string) => {
     const now = await $.clock.now()
     await commit($, board => resumeRun(board, id, now))
+    // Reprise ici : la référence du moment se redemande au tour suivant (une autre discussion a pu l'écrire entre-temps).
+    mainRefWritten.delete(id)
+    mainRefFailures.delete(id)
     await update($, uiAtom, ui => ({ ...ui, tab: 'flow' as const }))
   },
   drop: async (id: string) => {
@@ -9773,6 +10022,7 @@ const readView = async ($: any): Promise<View> => {
     security: await securityReviewNow($),
     erasing: [...erasingNow].map(([key, title]) => ({ key, title })),
     agentPrices: (await read($, pricesAtom))?.prices ?? null,
+    quota: await quotaWindows($),
     coo: board ? await cooView($, board) : null,
     coordUnread: coordSeen?.state === 'unread',
     planUnread: isPlanUnreadHere(board),
@@ -9787,7 +10037,10 @@ const readView = async ($: any): Promise<View> => {
 const cooView = async ($: any, board: Board): Promise<CooStatement | null> => {
   if (board.delegate || activeRun(board)) return null
   const now = await $.clock.now()
-  return seatState(board.coo, await hereId($), now) === 'mine' ? cooStatement(board, { now, ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), cards: await cardsHere($), relays: relaysLive(), reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board) }) : null
+  if (seatState(board.coo, await hereId($), now) !== 'mine') return null
+  // Le quota de la discussion, montré sous une carte prête en xhigh.
+  const quota = quotaText(await quotaWindows($), now)
+  return { ...cooStatement(board, { now, ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), cards: await cardsHere($), relays: relaysLive(), reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board) }), ...(quota ? { quota } : {}) }
 }
 
 /** Le relevé d'état que lit le Claude du COO, recalculé à chaque tour : missions, attentes, effort actif, `BRIEF.md`. */
@@ -9983,6 +10236,8 @@ export const register: Register = on => {
     // Un enregistrement refusé ne doit pas empêcher la minuterie (durées, relecture du stockage).
     await quietly(() => $.tool.register({ name: 'flow', description: TOOL_DESCRIPTION, inputSchema: TOOL_SCHEMA }))
     await quietly(() => loadArchiveConsent($))
+    // Les chemins des références et du script de fermeture, cités dès la première réponse de l'outil.
+    noteReferences($)
     await quietly(() => $.command.register({
       name: 'flow',
       description: 'Tableau de bord du workflow mattpocock : /flow [activity | history | commands | hide | show | pause | done | reset | rename <titre> | archive on|off]',
@@ -10000,6 +10255,12 @@ export const register: Register = on => {
     }
     // Un board déjà là au démarrage, hors d'un /clear : le mod a été rechargé (/reload-plugins), son état est intact.
     isReloadToAnnounce = !isAfterClear && (await read($, boardAtom)) !== null
+    // Démarrage ou rechargement : la référence « [ref] » de la discussion a pu changer ; chaque mission portée
+    // ici avec des groupes confiés la redemande à Claude (`mainRefAsk`).
+    mainRefWritten.clear()
+    mainRefFailures.clear()
+    // Une écriture restée en suspens (une lecture du moteur qui ne rend jamais la main) ne bloque pas les suivantes.
+    mainRefChain = Promise.resolve()
     isAfterClear = false
     hereCache = null
     // Les traces gardées ici se relisent de `$.store` : après /reload-plugins, comme un mod rechargé.
@@ -10030,8 +10291,10 @@ export const register: Register = on => {
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
     const now = await $.clock.now()
+    // Les clés que le schéma ne connaît pas : dites à la fin de chaque réponse, après le reste de l'appel lu comme avant.
+    const unknownTail = await unknownFieldsText($, e as unknown as Readonly<Record<string, unknown>>)
     // Un appel qui déclare une délégation vient d'un worker : il garde le fichier de son worktree.
-    if (!(await ensureBoard($, typeof (e as { delegate?: unknown }).delegate === 'string'))) return { result: mainUnread ? MAIN_UNREAD : 'Dashboard unavailable.' }
+    if (!(await ensureBoard($, typeof (e as { delegate?: unknown }).delegate === 'string'))) return { result: `${mainUnread ? MAIN_UNREAD : 'Dashboard unavailable.'}${unknownTail}` }
     let text = 'Dashboard unavailable.'
     let input = e as unknown as Readonly<Record<string, unknown>>
     // Une piste marquée prise ailleurs n'entre jamais dans un découpage : l'appel qui la ferait avancer est refusé en entier
@@ -10039,30 +10302,30 @@ export const register: Register = on => {
     const cutBoard = (await read($, boardAtom)) as Board | null
     if (Array.isArray(input.items) && cutBoard && activeRun(cutBoard)) await quietly(() => refreshCoordSeen($, cutBoard))
     const cut = takenMoves(input, cutBoard)
-    if (cut !== '') return { result: cut }
+    if (cut !== '') return { result: `${cut}${unknownTail}` }
     // Après un rechargement, l'état retrouvé se dit tel qu'il était, avant ce que l'appel change.
     const found = isReloadToAnnounce ? reloadText((await read($, boardAtom)) ?? emptyBoard('', '')) : ''
     isReloadToAnnounce = false
     // Les consignes du COO (`coordinate`) : seulement dans sa discussion, rien d'autre de l'appel n'est lu.
     if (input.coordinate !== undefined && input.coordinate !== null && (typeof input.coordinate !== 'object' || Array.isArray(input.coordinate))) {
-      return { result: `${found}${found === '' ? '' : ' '}Refused: "coordinate" must be a JSON object, {"close": [{"mission": "<mission id>"}]}, alone in its call; nothing of this call was recorded.` }
+      return { result: `${found}${found === '' ? '' : ' '}Refused: "coordinate" must be a JSON object, {"close": [{"mission": "<mission id>"}]}, alone in its call; nothing of this call was recorded.${unknownTail}` }
     }
     // Une carte de lancement du COO (`card`) : seulement dans sa discussion, seule dans son appel.
     if (input.card !== undefined && input.card !== null) {
       const others = Object.keys(input).filter(k => k !== 'card' && k !== 'tool' && input[k] !== undefined && input[k] !== null)
       const ignored = others.length > 0 ? ` The rest of this call was not read (${others.slice(0, 8).map(k => neutralInPrompt(clip(k, 30))).join(', ')}): "card" goes alone in its call.` : ''
-      return { result: `${found}${found === '' ? '' : ' '}${await cardCall($, input.card)}${ignored}` }
+      return { result: `${found}${found === '' ? '' : ' '}${await cardCall($, input.card)}${ignored}${unknownTail}` }
     }
     // L'issue d'une étape de la livraison (`delivery`) : seulement chez le COO, seule dans son appel.
     if (input.delivery !== undefined && input.delivery !== null) {
       const others = Object.keys(input).filter(k => k !== 'delivery' && k !== 'tool' && input[k] !== undefined && input[k] !== null)
       const ignored = others.length > 0 ? ` The rest of this call was not read (${others.slice(0, 8).map(k => neutralInPrompt(clip(k, 30))).join(', ')}): "delivery" goes alone in its call.` : ''
-      return { result: `${found}${found === '' ? '' : ' '}${await deliveryCall($, input.delivery)}${ignored}` }
+      return { result: `${found}${found === '' ? '' : ' '}${await deliveryCall($, input.delivery)}${ignored}${unknownTail}` }
     }
     if (input.coordinate !== null && typeof input.coordinate === 'object' && !Array.isArray(input.coordinate)) {
       const others = Object.keys(input).filter(k => k !== 'coordinate' && k !== 'tool' && input[k] !== undefined && input[k] !== null)
       const ignored = others.length > 0 ? ` The rest of this call was not read (${others.slice(0, 8).map(k => neutralInPrompt(clip(k, 30))).join(', ')}): "coordinate" goes alone in its call.` : ''
-      return { result: `${found}${found === '' ? '' : ' '}${await coordinateCall($, input.coordinate)}${ignored}` }
+      return { result: `${found}${found === '' ? '' : ' '}${await coordinateCall($, input.coordinate)}${ignored}${unknownTail}` }
     }
 
     // Un compte rendu donné par son chemin (`reportPath`), dans le fil principal d'un worker : lu une fois, il suit
@@ -10090,8 +10353,23 @@ export const register: Register = on => {
       }
     }
 
-    // Avant une reprise, l'état d'ici rattrape ce que l'autre discussion a enregistré.
-    if (typeof input.resume === 'string' && input.resume.trim() !== '') await pull($)
+    // Avant une reprise, l'état d'ici rattrape ce que l'autre discussion a enregistré ; de même avant une question
+    // posée ou mise à jour (`waiting` sans `answered`), hors d'un worker (qui n'en enregistre pas) : une réponse donnée
+    // ailleurs (sa trace) fait refuser le renvoi de son id ici, au lieu de rouvrir la question. Le fichier ne se relit
+    // pas : les questions posées ne s'enregistrent pas (une réponse donnée ailleurs n'y serait pas vue), les retraits si.
+    const asked: unknown[] = Array.isArray(input.waiting) ? input.waiting : input.waiting === undefined || input.waiting === null ? [] : [input.waiting]
+    const isAnswer = (w: unknown) => w !== null && typeof w === 'object' && !Array.isArray(w) && (w as Record<string, unknown>).answered === true
+    const isAsking = asked.some(w => !isAnswer(w))
+    const isResuming = typeof input.resume === 'string' && input.resume.trim() !== ''
+    const isWorkerCall = Boolean(cutBoard?.delegate) || typeof input.delegate === 'string'
+    const isPulled = isResuming || (isAsking && !isWorkerCall) ? await pull($) : true
+    let waitingUnreadText = ''
+    if (isAsking && !isWorkerCall && !isPulled) {
+      const answers = asked.filter(isAnswer)
+      const { waiting: _waiting, ...others } = input
+      input = answers.length > 0 ? { ...others, waiting: answers } : others
+      waitingUnreadText = ' · waiting refused: the missions file could not be re-read to check the answers given in other discussions; nothing recorded for the questions asked: send them again'
+    }
     const delegateTitle = typeof input.delegate === 'string' ? await mainRepoTitle($, input.delegate.trim()) : undefined
     // Le relais de la mission reprise ou actif : un groupe rendu y trouve les revues relayées par sa
     // session, et la réponse y cite les comptes rendus finals déposés (un SendMessage peut se perdre).
@@ -10134,11 +10412,43 @@ export const register: Register = on => {
     // Une mission lancée par le COO : son lancement, consommé une fois, la rattache à sa carte.
     const launchText = input.launch !== undefined && input.launch !== null && e.agentId === undefined ? await consumeLaunch($, input.launch) : ''
     const resumed = typeof input.resume === 'string' ? input.resume.trim() : ''
+    // Ce que la réponse dit de la référence du moment envoyée avec `resume` (vide sans `main`).
+    let mainRefText = ''
     // Seulement une reprise faite, ici : un id mal recopié ou ignoré (avec "open") n'écrit rien.
     const after: Board | null = await read($, boardAtom)
-    if (resumed !== '' && typeof input.main === 'string' && input.main.trim() !== '' && !after?.delegate && activeRun(after)?.id === resumed) {
+    // Une reprise sans référence (la mission reprise ici) : la référence se redemande au tour suivant.
+    // Jamais d'un spécialiste ni d'un worker : seule la discussion qui porte la mission, la reprise faite ici.
+    const isResumedHere = resumed !== '' && e.agentId === undefined && !after?.delegate && activeRun(after)?.id === resumed
+    if (isResumedHere && (typeof input.main !== 'string' || input.main.trim() === '')) {
+      mainRefWritten.delete(resumed)
+      mainRefFailures.delete(resumed)
+    }
+    if (isResumedHere && typeof input.main === 'string' && input.main.trim() !== '') {
       const ref = parseMainRef({ run: resumed, main: input.main, at: now }, resumed)
-      if (ref) await quietly(() => writeMainRef($, ref))
+      let outcome: MainRefOutcome | 'thrown' = 'thrown'
+      if (ref) {
+        try {
+          outcome = await writeMainRef($, ref)
+        } catch {
+          // Une lecture du moteur qui lève : rien d'écrit, la réponse le dit.
+        }
+        // Écrite, une plus récente en place, ou un refus : la demande s'arrête. Une tentative ratée la laisse, jusqu'à
+        // trois : au-delà, chaque tour la referait, et chaque reprise recite les comptes rendus.
+        const failures = outcome === 'written' || outcome === 'older' || outcome === 'refused' ? 0 : (mainRefFailures.get(resumed) ?? 0) + 1
+        mainRefFailures.set(resumed, failures)
+        if (failures === 0 || failures >= MAIN_REF_TRIES) mainRefWritten.add(resumed)
+      }
+      mainRefText = !ref
+        ? ` Your reference was not written: "main" must end with your [ref] as ListAgents shows it (4 to 12 lowercase letters or digits between brackets), not ${asciiJson(clip(input.main, 40))}.`
+        : outcome === 'written'
+          ? ' Your reference of the moment is written next to the relay: each worker follows it at its next call.'
+          : outcome === 'older'
+            ? ' Your reference was not written: a newer one is already next to the relay.'
+            : outcome === 'refused'
+              ? ' Your reference was not written: this discussion does not carry this mission.'
+              : outcome === 'unread'
+                ? ' Your reference was not written: the missions file could not be re-read just before; send it again later.'
+                : ' Your reference could not be written next to the relay (file and storage out of reach): your workers keep the one of their brief; send it again later.'
     }
     // Ce que le relais garde se dit une fois les écritures faites : la phrase que le modèle a écrite
     // d'avance (`relayedSentence(input)`) est remplacée par celle des pertes, ou ajoutée si elle manque.
@@ -10146,6 +10456,8 @@ export const register: Register = on => {
     // qu'une perte d'ici lui aurait donnée (une déclaration ratée) ; dans une revue refusée en entier pour
     // ses autres comptes (`refusedRelayText`), seul le refus de la revue se dit.
     const lost: RelayLoss[] = []
+    // Une revue déjà reçue, laissée de côté : la réponse le dit à la place de « relayée ».
+    let isReviewRepeated = false
     const notes = new Set<string>()
     let startText = ''
     // Un ticket clos au-delà du seuil de compaction d'un worker : la réponse le dit à la fin.
@@ -10163,8 +10475,9 @@ export const register: Register = on => {
       // renvoyait à chaque appel, et tout le reste se perdait). Ce que le relais ne garde pas se dit.
       const send = async (parts: RelayPart[], event: RelayEvent): Promise<RelayOutcome> => {
         const outcome = await relaySignal($, event)
+        if (outcome.isRepeated) isReviewRepeated = true
         if (outcome.isKept && outcome.note) notes.add(outcome.note)
-        if (!outcome.isKept) for (const part of parts) lost.push({ part, why: outcome.why, ...(outcome.isFinal ? { isFinal: true as const } : {}) })
+        if (!outcome.isKept) for (const part of parts) if (!(outcome.isRepeated && part === 'review')) lost.push({ part, why: outcome.why, ...(outcome.isFinal ? { isFinal: true as const } : {}) })
         return outcome
       }
       const changes = reportedChanges(input)
@@ -10183,8 +10496,11 @@ export const register: Register = on => {
         // Une revue refusée pour ses comptes (`relayRefusal`, bogues compris) n'emporte pas la revue de sécurité : elle part seule ;
         // de même, un avis refusé pour un compte de sécurité gardé illisible n'emporte pas la revue.
         const outcome = await relaySignal($, counts)
+        if (outcome.isRepeated) isReviewRepeated = true
         if (outcome.isKept && outcome.note) notes.add(outcome.note)
-        if (!outcome.isKept && outcome.isReview) {
+        // La revue déjà reçue est laissée de côté : seul l'avis de sécurité a pu se perdre.
+        if (!outcome.isKept && outcome.isRepeated) lost.push({ part: 'security', why: outcome.why, ...(outcome.isFinal ? { isFinal: true as const } : {}) })
+        else if (!outcome.isKept && outcome.isReview) {
           lost.push({ part: 'review', why: outcome.why, isFinal: true })
           await send(['security'], { kind: 'counts', security: counts.security })
         } else if (!outcome.isKept && outcome.isSecurity) {
@@ -10214,8 +10530,11 @@ export const register: Register = on => {
       if (kept !== '') text = `${text} · ${kept}`
     }
     const sentence = relayedSentence(input)
-    if (lost.length > 0 && sentence !== '') text = text.includes(sentence) ? text.replace(sentence, relayedSentence(input, lost)) : `${text} · ${relayedSentence(input, lost)}`
-    text += startText + reportPathText
+    if ((lost.length > 0 || isReviewRepeated) && sentence !== '') {
+      const told = relayedSentence(input, lost, isReviewRepeated)
+      text = text.includes(sentence) ? text.replace(sentence, told) : `${text} · ${told}`
+    }
+    text += startText + reportPathText + waitingUnreadText
     // Coupé ou en pause depuis une consigne qui portait le bloc du mode auto : la réponse le dit une fois.
     // Seulement à Claude, le fil principal : l'appel d'un spécialiste ne prévient pas Claude, ni ne consomme l'avis.
     const shown: Board | null = await read($, boardAtom)
@@ -10240,9 +10559,12 @@ export const register: Register = on => {
     if (found !== '') text = `${found} ${text}`
     if (asideText !== '') text = `${text} · ${asideText}`
     if (launchText !== '') text = `${text} · ${launchText}`
+    if (mainRefText !== '') text = `${text}${mainRefText}`
     if (closureText !== '') text = `${text} · ${closureText}`
+    // Un groupe lancé hors de la demande : dit une fois par session lancée, à Claude seulement (fil principal du manager).
+    if (shownRun) text += await offRequestNotice($, shownRun)
 
-    return { result: text }
+    return { result: text + unknownTail }
   })
 
   // Corrélation : l'outil Skill porte l'agent et les arguments, `skill.prompt` non.
@@ -10787,6 +11109,14 @@ export const register: Register = on => {
       const isHeld = isRead && fresh !== null && seatState(fresh.coo, await hereId($), await $.clock.now()) === 'mine'
       const statement = isHeld && fresh && note !== null ? await cooStatementFor($, fresh) : null
       if (note !== null) return next({ ...e, context: [...(e.context ?? []), note, ...(statement !== null ? [statement] : [])] })
+    }
+    // La mission portée ici avec des groupes confiés, sa référence pas encore envoyée depuis ce démarrage ou cette
+    // reprise : Claude la relit et l'envoie. Jugé sur le fichier des missions relu : une mission reprise ailleurs
+    // entre-temps ne se demande pas (l'appel la reprendrait).
+    if (mainRefAsk(asked, asked?.session ?? '', mainRefWritten)) {
+      const fresh: Board | null = (await pullOk($)) ? await read($, boardAtom) : null
+      const askedRun = mainRefAsk(fresh, fresh?.session ?? '', mainRefWritten)
+      if (askedRun) return next({ ...e, context: [...(e.context ?? []), mainRefAskText(askedRun)] })
     }
     return next(e)
   })

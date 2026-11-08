@@ -82,3 +82,21 @@ export const CORPUS = {
   // Une chaîne très longue.
   'chaîne très longue': 'a'.repeat(5000),
 }
+
+/**
+ * Les valeurs qui ne sont pas du texte, qu'un fichier relu ou un envoi peut porter à la place d'une
+ * chaîne : elles se passent entières (pas glissées dans une valeur, où `ab${null}cd` deviendrait
+ * « abnullcd »). Un garde de forme les refuse toutes ; une neutralisation les accepte sans lever
+ * d'erreur et rend un texte.
+ */
+export const NON_TEXT = {
+  null: null,
+  undefined: undefined,
+  nombre: 42,
+  'nombre non fini': Number.POSITIVE_INFINITY,
+  booléen: true,
+  'tableau vide': [],
+  'tableau de texte': ['ab'],
+  'objet vide': {},
+  'objet avec toString': { toString: () => 'ab' },
+}

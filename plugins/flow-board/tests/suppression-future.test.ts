@@ -4,6 +4,8 @@
 // trace datée à plus d'une minute dans le futur, ou mal formée (sans id texte, sans date numérique),
 // n'est jamais appliquée, tombe à la lecture, et le fichier se réécrit sans elle.
 
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import { clampFuture, detachOnLoad, dropRun, emptyBoard, mergeBoards, newRun } from '../hooks/model.ts'

@@ -10,11 +10,11 @@
 // quel ordre, et des lignes vides :
 //
 //   ## Jalons
-//   - [J1] en cours · 2026-11-02 · Mathis · Le COO suit les missions — fin : chaque mission passe par lui
+//   - [J1] en cours · 2026-11-02 · Alex · Le COO suit les missions — fin : chaque mission passe par lui
 //   ## Prochaines étapes
 //   - [E1] à faire · 2026-11-02 · COO · Lancer le groupe C
 //   ## Idées
-//   - [I1] à lancer · 2026-11-02 · Mathis · ses mots tels quels
+//   - [I1] à lancer · 2026-11-02 · Alex · ses mots tels quels
 //   ## À reprendre
 //   - [R1] à décider · 2026-11-02 · mission « Mode auto », compte rendu · le texte tel qu'écrit
 //
@@ -29,11 +29,11 @@
 export const ROADMAP_EXAMPLE = `# Feuille de route
 
 ## Jalons
-- [J1] en cours · 2026-11-02 · Mathis · Le but du jalon — fin : son critère de fin
+- [J1] en cours · 2026-11-02 · Alex · Le but du jalon — fin : son critère de fin
 ## Prochaines étapes
 - [E1] à faire · 2026-11-02 · COO · L'étape
 ## Idées
-- [I1] à lancer · 2026-11-02 · Mathis · ses mots tels quels
+- [I1] à lancer · 2026-11-02 · Alex · ses mots tels quels
 ## À reprendre
 - [R1] à décider · 2026-11-02 · mission « Titre », compte rendu · le texte tel qu'il a été écrit
 `

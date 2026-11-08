@@ -103,7 +103,7 @@ test('/to-spec et /to-tickets font lire le code avant un ticket sensible, et lis
   for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
     const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
     expect(text).toContain('read the function it names before writing a done criterion or an option offered to the user')
-    expect(text).toContain('by a search quoted in the ticket (the command and its result)')
+    expect(text).toContain('by a search quoted in the ticket (the command and its result), on a line of its own: « Recherche : `<command>` — <result> », starting the line (no list bullet before it, which the pre-commit check refuses)')
     expect(text).toContain('the name at the second send, who writes the data, when it goes stale, how what gets deleted is designated')
     expect(text).toContain('leave no « à confirmer » in a ticket: it is a question at framing')
     expect(text).toContain('concurrency, a command or path built from a value read elsewhere: a shared file, another session, a report)')
@@ -119,7 +119,7 @@ test('/to-spec et /to-tickets listent les cas du cycle de vie d’un champ persi
   for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
     const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
     expect(text).toContain('a failed read, a failed write, its bounds (empty, too long, a date in the future or the past), the erasure of what must be kept, a forged copy')
-    expect(text).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back), with what the mark becomes at each one')
+    expect(text).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back), with what the mark becomes at each one, and what becomes of a value already kept out of form when a new one arrives')
   }
 })
 
@@ -136,6 +136,9 @@ test('/to-tickets et le découpage d’une rétro relisent chaque critère d’u
   }
   const retro = (await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })).text as string
   expect(retro).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back)')
+  expect(retro).toContain('a value already kept out of form when a new one arrives')
+  // Le tableau des formes d'un prédicat de rattachement : le découpage d'une rétro le reçoit aussi (catalog.ts).
+  expect(retro).toContain('carries the table of the forms that predicate receives: absent, template not filled in, old id (out of form), valid but unknown to the plan')
   // Le découpage d'une rétro reçoit aussi la logique d'une règle et la fusion en question.
   expect(retro).toContain('a ticket that changes the common rules (config/rules), a reference file or a skill says « Logique : oui »')
   expect(retro).toContain('a choice of how a persisted field merges (several discussions or sessions write it) is a concurrency question for the user')
@@ -152,7 +155,7 @@ test('/to-tickets fait lire le code des tickets sensibles, consulter l’advisor
   mock.store(on)
   world(on)
   const text = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
-  expect(text).toContain('read the code of each sensitive ticket (the functions it names, the paths that write, merge or erase its data) before writing it, even when the spec seems to say enough')
+  expect(text).toContain('read the code of each sensitive ticket (the functions it names, the paths that write, merge, erase its data or read it to make a decision) before writing it, even when the spec seems to say enough')
   expect(text).toContain('consult the advisor (advisor tool), not a reviewer subagent, before the button question, or, when that validation is skipped, before declaring it skipped; without that tool, reread the breakdown yourself in this discussion')
   expect(text).toContain('a ticket that changes the common rules (config/rules), a reference file or a skill says « Logique : oui », even when it makes Claude run no command: these texts steer what Claude does')
   expect(text).toContain('a choice of how a persisted field merges (several discussions or sessions write it) is a concurrency question for the user, never a declared choice')
@@ -170,5 +173,18 @@ test('/to-spec et /to-tickets font vérifier une API du moteur par plugin-author
     expect(text).toContain('before specifying a notification, check its surfaces in the engine types: $.ui.notify answers no-surface')
     // Sans terminal (l'app desktop), les hooks Notification de la personne tournent encore ; non liée ou en fermeture, aucun.
     expect(text).toContain('only the Notification hooks of the person then run, no channel writes) and, with no hook run at all, before a session is bound or while it is exiting')
+  }
+})
+
+// Un renvoi de la borne des choix doublait des comptes de revue : l'invariant d'un compte, fixé au
+// cadrage, dit aussi « jamais compté deux fois », à /to-spec et à /to-tickets (le découpage d'une rétro :
+// decoupage-pistes.test.ts).
+test('la consigne de cadrage d’un ticket sensible donne l’exemple d’un compte jamais compté deux fois', async ($, on) => {
+  mock.clock(on, { now: 56_000_000 })
+  mock.store(on)
+  world(on)
+  for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('for a count (a value added up from one send to the next), the invariant also says « never counted twice »')
   }
 })

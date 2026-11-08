@@ -5,6 +5,8 @@
 // (`newDelivery`), une étape ne démarre que si toutes celles d'avant sont faites (`startStep`), et une
 // livraison pas finie (une étape en cours, échouée ou à faire) en refuse une autre (`isDeliveryOpen`).
 
+import type { Run } from '../types'
+import { isReportValidated } from './basics.ts'
 import { neutralLine } from './closing.ts'
 
 /** Les étapes, dans l'ordre : les trois skills réservés du plugin project, puis celles du `CLAUDE.md` du projet. */
@@ -43,6 +45,28 @@ export const newDelivery = (id: string, missions: readonly { id: string; title: 
 
 /** Toutes les étapes faites. */
 export const isDelivered = (d: Delivery): boolean => d.steps.every(s => s.status === 'done')
+
+/** Les missions à attendre avant de livrer, par titre : à groupes déjà confiés, ou sans eux mais dont des commits partent. */
+export type DeliveryWaits = { groups: string[]; commits: string[] }
+
+/**
+ * Les missions pas finies (ni archivées, ni closes, sans rapport validé) que la carte de livraison recommande
+ * d'attendre : celles qui ont un groupe confié, comme avant, et les autres, si elles sont actives, dès qu'un commit de l'aperçu
+ * (`commitTimes`, en ms) tombe dans leur fenêtre `startedAt..finishedAt`, même partagée avec une autre mission :
+ * une mission validée qui attend sa livraison n'a pas de fin de fenêtre, et l'aperçu range alors en « hors
+ * mission » chaque commit de la mission pas finie (la livraison 0.80.0 en avait envoyé sans avertissement).
+ */
+export const deliveryWaits = (runs: readonly Run[], commitTimes: readonly number[]): DeliveryWaits => {
+  const waits: DeliveryWaits = { groups: [], commits: [] }
+  for (const r of runs) {
+    if (r.archivedAt !== undefined || r.status === 'done' || isReportValidated(r)) continue
+    const to = r.finishedAt ?? Number.MAX_SAFE_INTEGER
+    if ((r.groups ?? []).some(g => g.delegated !== undefined)) waits.groups.push(r.title)
+    // Une mission en pause n'a pas de fin de fenêtre non plus : comptée, elle se signalerait à chaque livraison.
+    else if (r.status === 'active' && commitTimes.some(at => at >= r.startedAt && at <= to)) waits.commits.push(r.title)
+  }
+  return waits
+}
 
 /** Une livraison pas encore finie : elle occupe le siège, et aucune autre ne part. */
 export const isDeliveryOpen = (d: Delivery | null): boolean => d !== null && d.finishedAt === undefined

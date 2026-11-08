@@ -1,3 +1,5 @@
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'

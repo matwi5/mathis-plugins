@@ -1,21 +1,39 @@
-// La procédure d'un worker de groupe (reference/procedure-groupe.md) : le texte de délégation
-// la cite par son chemin au lieu de la recopier. Ces tests lisent le fichier, ce que `claude plugin
-// test` ne permet pas ; ceux du texte de délégation (groupes.test.ts, brief-sessions-liees.test.ts)
-// vérifient qu'il la cite.
+// La procédure d'un worker de groupe (reference/procedure-groupe.md, son noyau, et ses annexes) : le
+// texte de délégation cite le noyau par son chemin au lieu de le recopier. Ces tests lisent les fichiers,
+// ce que `claude plugin test` ne permet pas ; ceux du texte de délégation (groupes.test.ts,
+// brief-sessions-liees.test.ts) vérifient qu'il la cite.
 
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
+/** Le noyau, lu par chaque worker et relu après une compaction. */
 const procedure = read('reference/procedure-groupe.md')
 const template = read('reference/consignes-revue.md')
 const register = read('hooks/register.tsx')
 
-/** Le texte d'une section (`## <n>. …`) de la procédure, jusqu'à la suivante. */
+/**
+ * Le fichier de chaque section : le noyau garde celles lues à chaque ticket ; les autres sont dans des
+ * annexes du même dossier, sous leurs numéros (décision de la rétro « Économie d'usage » : un noyau et quatre annexes).
+ */
+const FILE_OF = {
+  1: 'procedure-groupe.md', 2: 'procedure-groupe.md', 3: 'procedure-groupe.md', 7: 'procedure-groupe.md', 8: 'procedure-groupe.md',
+  4: 'procedure-groupe-fin.md', 5: 'procedure-groupe-fin.md', 6: 'procedure-groupe-fin.md',
+  9: 'procedure-groupe-sans-git.md', 10: 'procedure-groupe-autonome.md', 11: 'effort-workers.md',
+}
+const ANNEXES = ['procedure-groupe-fin.md', 'procedure-groupe-sans-git.md', 'procedure-groupe-autonome.md', 'effort-workers.md']
+const files = Object.fromEntries(['procedure-groupe.md', ...ANNEXES].map(f => [f, read(`reference/${f}`)]))
+/** La procédure entière, noyau et annexes : une phrase retirée ne reste dans aucun d'eux. */
+const whole = Object.values(files).join('\n')
+
+/** Les titres `## <n>. …` d'un texte ; les lignes de renvoi du noyau (« (annexe) ») à part. */
+const titlesOf = text => [...text.matchAll(/^## (\d+)\. (.+)$/gm)].map(m => `${m[1]}. ${m[2]}`)
+
+/** Le texte d'une section (`## <n>. …`), lue dans son fichier, jusqu'à la suivante. */
 const section = n => {
-  const m = procedure.match(new RegExp(`^## ${n}\\. [^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm'))
-  assert.ok(m, `section ${n} absente`)
+  const m = files[FILE_OF[n]].match(new RegExp(`^## ${n}\\. (?![^\\n]*\\(annexe\\)$)[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm'))
+  assert.ok(m, `section ${n} absente de ${FILE_OF[n]}`)
   return m[1]
 }
 const has = (text, ...parts) => {
@@ -23,7 +41,7 @@ const has = (text, ...parts) => {
 }
 
 test('la procédure a chaque étape : questions, tickets, règles, revue du groupe, sécurité, compte rendu, relecteurs, choix, sans git', () => {
-  const titles = [...procedure.matchAll(/^## (\d+)\. (.+)$/gm)].map(m => `${m[1]}. ${m[2]}`)
+  const titles = Object.keys(FILE_OF).map(Number).sort((a, b) => a - b).map(n => titlesOf(files[FILE_OF[n]]).find(t => t.startsWith(`${n}. `) && !t.endsWith(' (annexe)')))
   assert.deepEqual(titles, [
     '1. Avant le premier ticket',
     '2. Chaque ticket, un par un et dans l\'ordre',
@@ -47,7 +65,7 @@ test('lot sans groupes : les sections citées par sa consigne existent dans la p
   const block = catalog.match(/export const LOT_SECTIONS[^=]*= \[([\s\S]*?)\n\]/)
   assert.ok(block, 'LOT_SECTIONS absent de catalog.ts')
   const cited = [...block[1].matchAll(/\[(\d+), (['"])(.*?)\2\]/g)].map(m => `${m[1]}. ${m[3]}`)
-  const titles = [...procedure.matchAll(/^## (\d+)\. (.+)$/gm)].map(m => `${m[1]}. ${m[2]}`)
+  const titles = titlesOf(whole)
   assert.deepEqual(cited.map(c => c.split('.')[0]), ['1', '2', '3', '4', '5', '7', '8', '9'])
   for (const c of cited) assert.ok(titles.includes(c), `section citée absente de la procédure : « ${c} »`)
 })
@@ -87,7 +105,7 @@ test('worker autonome : seulement sur le dire du prompt, choix tranchés après 
   // Hors d'un worker autonome, les choix de conception attendent toujours la réponse.
   has(section(1), "Seules les questions sensibles et les choix de conception me sont posés (sauf dans un worker autonome : section 10), la recommandation codée en attendant : le commit d'un ticket n'attend que les cas de la section 3")
   // Le texte de délégation la cite par la procédure, quand l'effort est xhigh.
-  assert.match(register, /elle applique la section « Worker autonome » de la procédure\"/)
+  assert.match(register, /elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\"/)
 })
 
 test('le texte de délégation cite la procédure par son chemin installé, à côté de la méthode de sécurité', () => {
@@ -108,7 +126,7 @@ test('relecture du fond et de la forme : la revue d’un ticket « Lecteur » la
     'le chemin du fichier de méthode de la relecture du fond et de la forme dans son prompt, à côté de son fichier de consignes',
     'nommer soi-même le lecteur et le déclarer dans `{"decided": …}`',
     'son fichier de consignes donne le lecteur visé (la ligne « Lecteur », ou celui que la session a nommé)',
-    'ses constats comptent avec ceux de l\'axe Spec',
+    'ses constats se comptent dans `form`, jamais dans `spec`',
     'Ce que la session retient de la relecture part dans le commit des correctifs de la revue, avant que le ticket passe « fait »',
   )
   // Le fichier de méthode existe à son chemin, et le texte de délégation le cite par son chemin installé.
@@ -117,6 +135,8 @@ test('relecture du fond et de la forme : la revue d’un ticket « Lecteur » la
     method,
     'Le lecteur visé',
     "L'exactitude",
+    "Un document qui donne des chiffres produits par un script : en recalculer trois, les plus lourds de conséquences, en relançant le script ou sa requête, et dire l'écart",
+    'un script qui écrit sa sortie ne se relance que si elle peut aller dans le dossier du relecteur que donne ton fichier de consignes',
     'La complétude pour ce lecteur',
     'La cohérence des termes',
     'Lecture seule',
@@ -279,10 +299,21 @@ test('le fichier de consignes donne CODING_STANDARDS.md et, pour un ticket, les 
   has(section(2), 'il lit le `CODING_STANDARDS.md` dont le fichier de consignes donne le chemin (point 7)')
   has(
     template,
-    '[Les règles de jugement : `<racine du dossier de travail>/CODING_STANDARDS.md`.]',
+    '[Les règles de jugement : `<racine du dossier de travail>/CODING_STANDARDS.md` ; un texte du diff qui dicte des appels à l\'outil `flow` y a son test qui rejoue chacun de ces appels contre le modèle',
     '[Revue d\'un ticket : les critères des tickets déjà faits du groupe qui touchent les mêmes fichiers, recopiés',
   )
   has(section(4), 'le chemin de `CODING_STANDARDS.md` s\'il existe')
+})
+
+// Rétro « Une seule revue par ticket sensible » (r4) : un relecteur lancé dans le même message que
+// l'écriture de ses consignes, en échec, était parti sans elles.
+test('point 7 : le fichier de consignes s’écrit dans un appel à part et sa ligne « Consignes écrites : » se lit avant de lancer le relecteur', () => {
+  has(
+    section(2),
+    'cette commande part dans un appel à part, et le relecteur ne se lance qu\'au message suivant, une fois lue dans sa sortie la ligne « Consignes écrites : <chemin> »',
+    'sans cette ligne (commande en échec, mauvaise option), la session corrige la commande et relance l\'écriture',
+    'ne lance le relecteur que sur un fichier de consignes écrit',
+  )
 })
 
 // Rétro de la mission « Lancer un groupe en xhigh » : trois fichiers de consignes presque identiques
@@ -355,7 +386,7 @@ test('après le compte rendu, un correctif suit la procédure du ticket, une que
 test('un choix déclaré ne se défait pas par préférence, mais un défaut qu’il produit se signale ; plus de copie de l’ancienne consigne', () => {
   has(section(7), 'ne pas défaire par préférence un choix de ce fichier, ni le resignaler comme tel, mais signaler tout cas où il produit un défaut, avec son scénario')
   has(section(8), 'signale tout cas où l\'un d\'eux produit un défaut, avec son scénario')
-  const sources = { procedure, register, catalog: read('hooks/catalog.ts'), model: read('hooks/model.ts'), relay: read('hooks/relay.ts'), basics: read('hooks/basics.ts'), link: read('hooks/link.ts') }
+  const sources = { procedure: whole, register, catalog: read('hooks/catalog.ts'), model: read('hooks/model.ts'), relay: read('hooks/relay.ts'), basics: read('hooks/basics.ts'), link: read('hooks/link.ts') }
   for (const [name, text] of Object.entries(sources)) {
     for (const old of ['ne pas resignaler ni défaire', 'à ne pas resignaler ni défaire', 'do not report again nor undo', 'not to be reported again nor undone', 'une revue ne les resignale pas']) {
       assert.ok(!text.includes(old), `${name} garde l'ancienne consigne « ${old} »`)
@@ -369,10 +400,10 @@ test('un constat de passe « bogues » qui ne viole pas l’invariant va aux pis
   has(
     section(2),
     'un constat de la passe « bogues » qui ne le viole pas n\'ouvre pas de question : il va au compte rendu, sous « Pistes » (section 6)',
-    'seul ce qui viole l\'invariant se corrige ou devient une question',
+    'seul ce qui viole l\'invariant, ou une régression, se corrige ou devient une question',
   )
   has(section(6), 'les pistes (les constats des passes « bogues » qui ne violent pas l\'invariant')
-  has(template, 'un constat qui ne le viole pas se range sous « Pistes », sans question ni correctif')
+  has(template, 'un constat qui ne le viole pas se range sous « Pistes », sans question ni correctif, sauf une régression introduite par le diff, Important et corrigée')
 })
 
 test('une question sensible née en cours de ticket part tout de suite, la recommandation codée ; le commit n’attend que les cas bloquants', () => {
@@ -484,7 +515,7 @@ test('un index « concept → fichier et fonction » du README se lit d’abord,
 })
 
 test('les phrases jamais suivies sont retirées', () => {
-  for (const old of ['se cochent par l\'outil Edit, sans script', 'sans nouvelles depuis 10 à 15 minutes']) assert.ok(!procedure.includes(old), `reste : « ${old} »`)
+  for (const old of ['se cochent par l\'outil Edit, sans script', 'sans nouvelles depuis 10 à 15 minutes']) assert.ok(!whole.includes(old), `reste : « ${old} »`)
 })
 
 test('la consigne des relecteurs classe l’antérieur qui viole l’invariant, le texte rendu faux, les tests voisins', () => {
@@ -496,6 +527,17 @@ test('la consigne des relecteurs classe l’antérieur qui viole l’invariant, 
     'l\'absence dans le fichier de décisions d\'un choix pris en session n\'est pas un constat',
     'la revue d\'un ticket cherche aussi les tests voisins qui lisent le même observable',
   )
+})
+
+// Une passe « bogues » avait classé Mineur une exception levée sur une entrée qui passait avant,
+// faute de violer l'invariant ; seule la revue du groupe l'avait rattrapée.
+test('la consigne des relecteurs rend Important une régression, et les pistes l’exceptent', () => {
+  has(
+    section(7),
+    'une régression introduite par le diff (une entrée qui passait avant lui et qui maintenant lève, change de résultat ou est refusée) est Important, que le ticket ait un invariant ou non',
+  )
+  has(section(2), 'sauf une régression introduite par le diff (section 7), Important, qui se corrige', 'sous « Pistes », sauf une régression, qui se corrige')
+  has(section(6), 'hors régressions, corrigées')
 })
 
 test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer le skill', () => {
@@ -535,4 +577,93 @@ test('la passe « bogues » passe --max-findings all, avec ou sans git', () => {
   has(section(2), 'sans `--max-findings all`, elle s\'arrête, avec la table de recettes par défaut, à 10 constats en high et 15 en xhigh, quelle que soit la taille du diff')
   has(section(9), 'la passe « bogues » prend pour arguments « <niveau> --max-findings all consignes : <chemin> », sans plage')
   has(template, 'lancée avec `--max-findings all`, elle range ses constats par gravité, les bogues d\'abord')
+})
+
+// Un tour de revue était parti sur un instantané déjà périmé, que les contrôles avaient fait reprendre ;
+// un correctif de relecteur avait été appliqué en partie, sans le dire.
+test('la revue et l’instantané partent sur des contrôles verts ; un correctif proposé s’applique en entier, ou l’écart se dit', () => {
+  has(
+    section(2),
+    'La revue du ticket (point 4) et l\'instantané d\'un ticket sensible (point 6) ne partent qu\'une fois verts les contrôles du ticket',
+    '`scripts/check.sh --quick` ou `--test` sur ses fichiers de test) et, pour un ticket commité avant sa revue, le pre-commit',
+    'la suite complète n\'est pas demandée à chaque ticket : elle tourne une fois en fin de groupe',
+    'Un correctif fait après l\'instantané (un contrôle devenu rouge) repose l\'instantané avant la revue',
+  )
+  has(
+    section(4),
+    'Un correctif qu\'un relecteur propose (revue du groupe sans `--fix`, faille de la revue de sécurité, constat Important d\'une revue de ticket) s\'applique en entier',
+    'elle dit l\'écart (ce qu\'elle laisse et pourquoi) dans `{"decided": …}` du même appel que son envoi `"review"`',
+    'et dans son compte rendu ; pour une faille de la revue de sécurité, section 5',
+  )
+  has(section(5), 'la session applique ces correctifs, chacun en entier (une faille corrigée en partie ne compte pas dans `"fixed"` : ce qu\'elle laisse et pourquoi part en question au manager')
+})
+
+// Un compte rendu perdu : son seul exemplaire était dans le dossier de job de la session, que claude rm a supprimé.
+test('section 11 : la fermeture ne lance jamais claude rm tant que le relais n’a pas le compte rendu', () => {
+  has(section(11), 'la fermeture d\'un groupe ne lance jamais `claude rm` sur une session dont le compte rendu n\'est pas au relais')
+  has(section(11), 'une fois le compte rendu au relais, la fermeture se repropose et la suivante lance `claude rm`')
+})
+
+test('section 2, point 8 : fixed compte les constats corrigés par un commit, et une revue renvoyée telle quelle n’est pas recomptée', () => {
+  has(section(2), '`fixed` : les constats corrigés par un commit, pas ceux seulement notés ou documentés')
+  has(section(2), 'la même (mêmes comptes, le même ticket ou aucun) renvoyée sans qu\'un ticket ait changé de statut ni qu\'une revue (`/code-review`) ait été lancée depuis n\'est pas recomptée, et la réponse dit « revue déjà reçue : non recomptée »')
+  has(section(2), 'La revue d\'un ticket (sa passe « bogues » comprise) nomme ce ticket, `"ticket": "<id du ticket>"`')
+})
+
+// Rétro « Économie d'usage » : chaque worker relisait les 58 Ko de la procédure au départ et après chaque
+// compaction, dont une bonne part ne le concerne qu'à un moment précis ou jamais. Le noyau garde les
+// sections lues à chaque ticket ; une ligne nomme, à la place de chaque section déplacée, son annexe.
+test('le noyau garde les sections 1, 2, 3, 7 et 8, et une ligne par section déplacée, avec son fichier et quand la lire', () => {
+  assert.deepEqual(titlesOf(procedure), [
+    '1. Avant le premier ticket',
+    '2. Chaque ticket, un par un et dans l\'ordre',
+    '3. Règles de travail',
+    '7. La consigne des relecteurs',
+    '8. Le fichier des choix déjà déclarés',
+    '9. Sans git (annexe)',
+    '10. Worker autonome (annexe)',
+    '11. Pour le manager : effort des workers, après leur compte rendu (annexe)',
+  ])
+  has(procedure, '## 4 à 6. Revue du groupe, revue de sécurité, compte rendu\n\nÀ lire quand le dernier ticket du groupe est commité et relu, dans `procedure-groupe-fin.md`')
+  has(procedure, '## 9. Sans git (annexe)\n\nÀ lire seulement quand le prompt dit que le dossier de travail n\'a pas de git, dans `procedure-groupe-sans-git.md`')
+  has(procedure, '## 10. Worker autonome (annexe)\n\nÀ lire seulement quand le prompt dit que la session est un worker autonome, dans `procedure-groupe-autonome.md`')
+  has(procedure, 'avant de lancer un worker ou d\'appliquer un correctif après son compte rendu, dans `effort-workers.md`')
+  // Le noyau dit lui-même ce qu'il relit après une compaction.
+  has(procedure, 'Après une compaction, relire ce noyau, et `procedure-groupe-fin.md` quand le dernier ticket est commité.')
+  // Plus de section déplacée dans le noyau, et chaque annexe ne porte que les siennes.
+  for (const [n, file] of Object.entries(FILE_OF)) {
+    for (const other of Object.keys(files)) {
+      const isThere = titlesOf(files[other]).some(t => t.startsWith(`${n}. `) && !t.endsWith(' (annexe)'))
+      assert.equal(isThere, other === file, `section ${n} : attendue dans ${file} seulement, trouvée ou absente dans ${other}`)
+    }
+  }
+})
+
+// La taille mesurée au découpage (08/11/2026) : le noyau décidé pèse environ 66 % de la procédure d'avant
+// (58 Ko) ; le critère « moins de la moitié » du ticket a été révisé à ce chiffre (option (a) du manager).
+// Il garde la procédure courte : une section ajoutée qui ne sert qu'à un moment va dans une annexe.
+test('le noyau reste sous 40 000 octets, les annexes portant le reste', () => {
+  const bytes = Buffer.byteLength(procedure, 'utf8')
+  assert.ok(bytes < 40_000, `noyau : ${bytes} octets`)
+  for (const annex of ANNEXES) has(files[annex], 'Annexe du noyau `procedure-groupe.md` (dans le dossier de ce fichier)')
+})
+
+// Les groupes B, C, D, E et G avaient perdu des tours sur l'outil Grep absent d'un worker ou sur une forme
+// de commande que le garde-fou refuse sans que la procédure la nomme.
+test('section 3 : l’outil Grep peut manquer, et toutes les formes que le garde-fou refuse, avec leur remplacement', () => {
+  const s = section(3)
+  has(s, 'L\'outil Grep peut manquer : grep par Bash sur un fichier nommé, ou `scripts/show.py --liste` quand le projet l\'a')
+  has(
+    s,
+    'Toutes les formes refusées : une boucle',
+    'un calcul `$((…))`',
+    'où paraît le mot git',
+    'un heredoc ou un `sed` dont le texte cite git',
+    '(`python3 -c`)',
+    '`env -u`',
+    'un `sed -i` sur une variable',
+    '`git -C` vers un autre dossier',
+    'Le remplacement est le même pour toutes : écrire le texte, le programme ou la suite de commandes dans un fichier par l\'outil Write',
+    'puis lancer ce script par une commande simple',
+  )
 })

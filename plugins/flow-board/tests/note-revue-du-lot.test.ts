@@ -143,7 +143,7 @@ test('en auto, sans groupes, la consigne d’/implement dit la relance de la rev
   }
   await clock.advance(1000)
   const text = String((await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text)
-  expect(text).toContain('Implementation in auto mode, without groups: launch the lot review yourself, as the /implement instructions say (section 4 of the procedure, on <lot base>..HEAD')
+  expect(text).toContain('Implementation in auto mode, without groups: launch the lot review yourself, as the /implement instructions say (section 4 of the procedure, in procedure-groupe-fin.md, on <lot base>..HEAD')
   expect(text).toContain('flow-board itself sends it at the end of a turn, then the lot\'s advised security review when it was not launched')
   expect(text).toContain('its security advice once the review has loaded, never before it')
   expect(text).toContain('send {"complete": true}: the auto mode sends the report only after it')

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { closingProcedure } from '../hooks/closing.ts'
+import { closingProcedure, groupWorktree } from '../hooks/closing.ts'
 import { newRun } from '../hooks/model.ts'
 
 // La procédure de fermeture d'un worker : vérifier d'abord, n'arrêter et ne retirer
@@ -10,11 +10,11 @@ import { newRun } from '../hooks/model.ts'
 
 const run = { ...newRun('implement', 1_000, 'Fermeture auto') }
 const group = { kind: 'group', id: 'B', name: 'Fermeture' } as const
-const cli = closingProcedure({ run, target: group, isRepo: true, session: '178bd61c' })
-const app = closingProcedure({ run, target: group, isRepo: true, session: 'local_ab12' })
-const unknown = closingProcedure({ run, target: group, isRepo: true })
-const pistes = closingProcedure({ run, target: { kind: 'items', skill: 'retro' }, isRepo: true, session: '9f9f9f9f' })
-const noGit = closingProcedure({ run, target: group, isRepo: false, session: '178bd61c' })
+const cli = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c' })
+const app = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: 'local_ab12' })
+const unknown = closingProcedure({ hasReport: true, run, target: group, isRepo: true })
+const pistes = closingProcedure({ hasReport: true, run, target: { kind: 'items', skill: 'retro' }, isRepo: true, session: '9f9f9f9f' })
+const noGit = closingProcedure({ hasReport: true, run, target: group, isRepo: false, session: '178bd61c' })
 const all = [cli, app, unknown, pistes, noGit]
 
 test('la procédure ne force jamais rien, ne fusionne jamais et garde la branche', () => {
@@ -143,7 +143,7 @@ test('le refus de claude rm pour commits non poussés, et le geste dans l’app 
 })
 
 test('les branches d’un envoi suivant d’un groupe portent son numéro', () => {
-  const second = closingProcedure({ run, target: group, isRepo: true, session: '178bd61c', seq: 2 })
+  const second = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c', seq: 2 })
   expect(second).toContain('worktree-groupe-fermeture-auto-B-2 (lancée par le CLI), groupe-fermeture-auto-B-2 ou claude/groupe-fermeture-auto-B-2-<suffixe> (lancée par l’app) ;')
   // Ni le nom d'avant la 0.59.0, ni le titre du premier envoi : le sien, numéroté.
   expect(second).not.toContain('groupe-B pour un groupe lancé avant')
@@ -151,7 +151,7 @@ test('les branches d’un envoi suivant d’un groupe portent son numéro', () =
   expect(second).not.toContain('« Fermeture auto > Groupe B · »')
   // Le premier envoi exclut les noms et titres des suivants.
   expect(cli).toContain('jamais celles d’un envoi suivant du groupe (groupe-fermeture-auto-B-2, claude/groupe-fermeture-auto-B-2-<suffixe>…), ni une session au titre « Groupe B (envoi <n°>) · »')
-  expect(closingProcedure({ run, target: group, isRepo: true, session: '178bd61c', seq: 1 })).toBe(cli)
+  expect(closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c', seq: 1 })).toBe(cli)
 })
 
 test('les branches possibles du groupe et de la session de pistes', () => {
@@ -172,7 +172,54 @@ test('sans git : l’arrêt seul, après avoir vérifié que les tickets sont fa
   const body = (text: string) => text.replace('ce dossier n’a pas de git, donc pas de worktree', '')
   expect(body(noGit)).not.toMatch(/git |worktree|claude rm|branche de travail/)
   expect(noGit).toContain('claude --resume <sessionId>')
-  const noGitApp = closingProcedure({ run, target: group, isRepo: false, session: 'local_ab12' })
+  const noGitApp = closingProcedure({ hasReport: true, run, target: group, isRepo: false, session: 'local_ab12' })
   expect(body(noGitApp)).not.toMatch(/git |worktree|claude rm|branche de travail|claude --resume <sessionId> \(le champ/)
   expect(noGitApp).toContain('sa conversation est gardée dans l’app')
+})
+
+// Invariant : la fermeture ne lance jamais claude rm sur une session dont le compte rendu n'est pas au relais.
+const noReport = closingProcedure({ hasReport: false, run, target: group, isRepo: true, session: '178bd61c' })
+const keptStop = { state: 'stopped', at: 2_000, why: 'compte rendu absent du relais : session gardée', worktree: '/r/.claude/worktrees/groupe-x-b' } as const
+const head = (text: string): string => text.slice(0, text.indexOf('10) '))
+const tail = (text: string): string => text.slice(text.indexOf('11) '))
+
+test('sans compte rendu au relais : les points 0 à 9 et 11 inchangés, le point 10 sans claude rm, qui dit pourquoi', () => {
+  expect(head(noReport)).toBe(head(cli))
+  expect(tail(noReport)).toBe(tail(cli))
+  expect(noReport).not.toContain("claude rm '178bd61c'")
+  expect(noReport).toContain('10) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage) ; la fermeture se repropose d\'elle-même quand il arrive au relais, ou la personne la relance par « ↻ Relancer la fermeture »')
+  // L'état à rapporter : « stopped », jamais « closed », qui ne recule plus et ne se reproposerait jamais.
+  expect(noReport).toContain('rapporte cette fermeture en "state": "stopped", pas "closed" (la session reste), avec "why": "compte rendu absent du relais : session gardée", "worktree": "<le worktree retiré>" et "sessionId"')
+})
+
+test('avec un compte rendu au relais, le texte d’avant : une fermeture notée sans worktree retiré n’y change rien', () => {
+  expect(cli).toContain("claude rm '178bd61c', sans aucune option")
+  for (const noted of [undefined, null, { state: 'stopped', at: 2_000, why: 'fichier ignoré inconnu' }, { ...keptStop, state: 'closed' }, { ...keptStop, worktree: '/r/.claude/worktrees/groupe-autre-b' }] as const) {
+    expect(closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c', noted: noted as never })).toBe(cli)
+  }
+})
+
+test('une fermeture précédente qui a gardé la session faute de compte rendu : avec le compte rendu, claude rm malgré le worktree déjà retiré', () => {
+  const name = keptStop.worktree.replace('groupe-x-b', groupWorktree(run, 'B')!)
+  const after = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c', noted: { ...keptStop, worktree: name } })
+  expect(after).toContain('le worktree est déjà retiré, par la fermeture précédente de cette session, notée, qui l’a gardée faute de compte rendu au relais (il l’a maintenant) : fais quand même le point 3')
+  expect(after).toContain("claude rm '178bd61c', sans aucune option")
+  // Toujours sans compte rendu : pas de claude rm, même après une fermeture gardée.
+  const stillMissing = closingProcedure({ hasReport: false, run, target: group, isRepo: true, session: '178bd61c', noted: { ...keptStop, worktree: name } })
+  expect(stillMissing).not.toContain("claude rm '178bd61c'")
+  expect(stillMissing).toBe(noReport)
+})
+
+test('une session de l’app n’a jamais claude rm, ni la session des pistes, qui ne dépose pas de compte rendu au relais', () => {
+  const name = keptStop.worktree.replace('groupe-x-b', groupWorktree(run, 'B')!)
+  for (const hasReport of [true, false]) {
+    for (const noted of [undefined, { ...keptStop, worktree: name }]) {
+      const inApp = closingProcedure({ hasReport, run, target: group, isRepo: true, session: 'local_ab12', noted })
+      expect(inApp).not.toMatch(/claude rm '/)
+      expect(inApp).toContain('10) pas de claude rm : une session de l’app n’est pas dans la liste du CLI')
+      const items = closingProcedure({ hasReport, run, target: { kind: 'items', skill: 'retro' }, isRepo: true, session: '9f9f9f9f', noted })
+      expect(items).not.toMatch(/claude rm '/)
+      expect(items).toContain('10) pas de claude rm : la session des pistes ne dépose pas son compte rendu au relais')
+    }
+  }
 })

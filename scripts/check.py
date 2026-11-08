@@ -55,10 +55,15 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
 4. `node --test` des tests Node des skills et du plugin (`skills/**/*.test.mjs`, `tests/**/*.test.mjs` :
    ceux qui lisent les sources, ce que `claude plugin test` ne permet pas) ;
 5. `claude plugin test` avec le Claude Code du terminal, puis avec le binaire le plus récent de
-   l'app desktop, trouvé ici (Mac et Windows) ;
+   l'app desktop, trouvé ici (Mac et Windows) ; chacun (et celui de --test, --quick et du hook)
+   relance ensuite, sur une copie posée dans l'autre mode de stockage de flow-board, les fichiers
+   de test qui portent « Stockage : les deux modes » (`other_storage_tests`) ;
 6. `claude plugin validate` du plugin, puis du dépôt ;
 7. les versions des plugins contrôlés citées dans la liste « État » d'ETAT_DU_PROJET.md (fichier
-   personnel, lu seulement ; contrôle sans objet sans lui) égales à celles de leur `plugin.json`.
+   personnel, lu seulement ; contrôle sans objet sans lui) égales à celles de leur `plugin.json` ;
+8. les règles du dépôt, que --quick relit aussi : pas de prénom (« Mathis » seul) dans `config/rules/*.md` ni
+   `config/reference/*.md`, un en-tête `paths:` non vide dans chaque `.claude/rules/*.md`, les exceptions
+   `!/.claude/settings.json` et `!/.claude/rules/` dans `.gitignore`.
 
 --staged (hook pre-commit, décision « Hook »), tout sur une copie de l'index : d'abord les numéros de série de chaque
 fichier de décisions indexé (`travail/<sujet>/DECISIONS.md`), même pour un commit de documentation seule : un titre
@@ -67,6 +72,8 @@ passent ; puis chaque ticket indexé (`travail/<sujet>/issues/*.md`) qui dit « 
 ligne « Recherche » avec une commande et son résultat (sur la ligne, ou dans le bloc de code qui la suit),
 sauf un ticket que `HEAD` portait déjà sensible sans elle, et n'a aucune case mal formée hors bloc de code
 (seules `- [ ] ` et `- [x] ` sont des cases : `- [x ]`, `- [ x]`, `- []` sont refusées) ;
+puis, même pour un commit de documentation seule, la version indexée d'une règle ou d'une référence commune,
+d'une règle de projet (`.claude/rules/*.md`) ou de `.gitignore` passe les contrôles des règles du dépôt (point 8) ;
 puis, même pour un commit de documentation seule, une liste d'admis indexée (`scripts/renvois-admis.json`,
 `scripts/interpolations-admises.json`, `scripts/termes-retires-admis.json`, `scripts/exports-admis.json`) qui augmente un compte face à `HEAD` (une clé nouvelle comprise) est
 refusée, et chaque plugin dont la règle (`config/rules/<plugin>.md`) est indexée, ou dont une liste d'admis
@@ -150,6 +157,12 @@ ADMITTED_INTERPOLATIONS = Path(__file__).resolve().parent / "interpolations-admi
 EXPORTED_VALUE = re.compile(r"^export\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?"
                             r"(?:function\s*\*?|const\s+enum|const|let|var|abstract\s+class|class|enum)\s+([A-Za-z_$][\w$]*)")
 EXPORT_READERS = {".ts", ".tsx", ".js", ".mjs", ".cjs"}
+# Le début d'une déclaration de premier niveau, exportée ou non, de toute sorte : la fin de la plage
+# de la déclaration d'avant, pour le pré-contrôle rapide (`changed_exports`).
+TOP_LEVEL = re.compile(r"^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:async\s+)?"
+                       r"(?:function\b|const\b|let\b|var\b|abstract\s+class\b|class\b|enum\b|type\b|interface\b|namespace\b)")
+# L'en-tête d'un bloc de `git diff -U0`, côté nouveau : sa ligne de début et son nombre de lignes.
+HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 # L'entrée du mod, que le moteur charge sans qu'aucun fichier l'importe.
 MOD_ENTRY = ("hooks/register.tsx", "register")
 ADMITTED_EXPORTS = Path(__file__).resolve().parent / "exports-admis.json"
@@ -188,6 +201,18 @@ SECTION_REF = re.compile(r"section « ([^«»]+) » de \[?`([^`\s]+\.md)`")
 # il vise le même fichier que `config/…` du dépôt.
 INSTALLED_CONFIG = re.compile(r".*/(config/(?:rules|reference)/[^/]+\.md)")
 SECTION_HOMES = ("config/rules", "config/reference")
+# Les règles du dépôt que gardent check.sh et le pre-commit. Une règle ou une référence commune part
+# dans la version publique, où elle s'adresse à tout utilisateur : un prénom y avait été écrit, vu par la
+# seule revue du ticket (le nom du dépôt, « mathis-plugins », passe). Une règle de projet ne se charge
+# que par la liste `paths:` de son en-tête, et `.claude/rules/` n'est suivi que par une exception de
+# `.gitignore` : aucun contrôle ne gardait l'une ni l'autre.
+COMMON_RULE_FILE = re.compile(r"config/(?:rules|reference)/[^/]+\.md")
+FIRST_NAME = re.compile(r"\bmathis\b(?!-plugins)", re.I)
+PROJECT_RULE_FILE = re.compile(r"\.claude/rules/[^/]+\.md")
+FRONT_MATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
+GITIGNORE_FILE = ".gitignore"
+# Un fichier que `.gitignore` doit laisser suivre, et l'exception qui le garde.
+GITIGNORE_KEPT = {".claude/settings.json": "!/.claude/settings.json", ".claude/rules/regle.md": "!/.claude/rules/"}
 # La liste privée des termes que la version publique refuse (absente de celle-ci, comme le script
 # d'export : le contrôle ne garde alors que les adresses et les dossiers personnels, ou se saute).
 EXPORT_DENYLIST = REPO / "config" / "personal" / "public-denylist.txt"
@@ -1120,6 +1145,81 @@ def state_mismatches(names, root=REPO):
     return problems
 
 
+def has_paths(text):
+    """Vrai si l'en-tête d'une règle de projet (entre deux lignes `---`, en tête du fichier) porte une
+    clé `paths:` à au moins un motif, en ligne (`paths: ["a"]`) ou en liste (`  - "a"`)."""
+    header = FRONT_MATTER.match(text.lstrip("﻿").replace("\r\n", "\n"))
+    # Sans commentaire YAML (` # …`) : `paths: # à remplir` est vide.
+    lines = [re.sub(r"(^|\s)#.*$", "", line).rstrip() for line in header.group(1).split("\n")] if header else []
+    for i, line in enumerate(lines):
+        if not line.startswith("paths:"):
+            continue
+        inline = line[len("paths:"):].strip()
+        if inline:
+            return inline.strip("[]").strip(" \"',") != ""
+        items = []
+        for item in lines[i + 1:]:
+            if not item.startswith((" ", "\t", "-")):
+                break
+            if item.strip().startswith("-"):
+                items.append(item.strip()[1:].strip(" \"'"))
+        return any(items)
+    return False
+
+
+def gitignore_drops(text):
+    """Les fichiers gardés du dépôt que ce `.gitignore` ferait ignorer, d'après git lui-même
+    (`git check-ignore`, dans un dépôt jetable, sans le fichier d'exclusions global) : une exception
+    retirée, mal placée, ou un dossier `.claude/` ignoré en entier. Chacun avec l'exception qui le garde."""
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["git", "init", "-q", tmp], capture_output=True, timeout=30, check=True)
+        (Path(tmp) / GITIGNORE_FILE).write_text(text or "", encoding="utf-8")
+        res = subprocess.run(["git", "-c", f"core.excludesFile={os.devnull}", "check-ignore", "--no-index", *GITIGNORE_KEPT],
+                             cwd=tmp, capture_output=True, text=True, timeout=30)
+    if res.returncode not in (0, 1):
+        raise Failed(f"git check-ignore : {res.stderr.strip()}")
+    ignored = set(res.stdout.split())
+    return [(path, rule) for path, rule in GITIGNORE_KEPT.items() if path in ignored]
+
+
+def rules_problems(files):
+    """Ce que refusent les contrôles des règles du dépôt dans les fichiers donnés, (chemin depuis la
+    racine, texte ou None pour un fichier absent) : le prénom dans une règle ou une référence commune
+    (avec la ligne), une règle de projet sans `paths:` non vide, un `.gitignore` (absent : vide) qui fait
+    ignorer `.claude/settings.json` ou les règles de `.claude/rules/`."""
+    problems = []
+    for rel, text in files:
+        if rel == GITIGNORE_FILE:
+            problems += [f"{rel} : git y ignore {path} ; l'exception « {rule} » manque ou ne joue pas, et git ne suit plus ce fichier du dépôt"
+                         for path, rule in gitignore_drops(text)]
+        elif text is None:
+            continue
+        elif COMMON_RULE_FILE.fullmatch(rel):
+            problems += [f"{rel}:{n} : prénom dans une règle commune exportée : écrire « l'utilisateur »"
+                         for n, line in enumerate(text.split("\n"), 1) if FIRST_NAME.search(line)]
+        elif PROJECT_RULE_FILE.fullmatch(rel) and not has_paths(text):
+            problems.append(f"{rel} : pas d'en-tête `paths:` non vide ; une règle de projet ne se charge que par lui")
+    return problems
+
+
+def repo_rules_problems(root=REPO):
+    """Les contrôles des règles du dépôt sur ses fichiers (`root`) : règles et références communes,
+    règles de projet, `.gitignore`."""
+    rels = sorted(p.relative_to(root).as_posix() for home in (*SECTION_HOMES, ".claude/rules")
+                  for p in (root / home).glob("*.md"))
+    paths = [root / rel for rel in [*rels, GITIGNORE_FILE]]
+    return rules_problems((path.relative_to(root).as_posix(), path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None)
+                          for path in paths)
+
+
+def check_repo_rules(problems):
+    log("→ règles du dépôt (prénom dans les règles communes, `paths:` des règles de projet, exceptions de .gitignore)")
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} entorse(s) aux règles du dépôt : " + " ; ".join(problems))
+    log("  ok")
+
+
 def check_state(names, root=REPO):
     log(f"→ versions de la liste « État » de {STATE_FILE}")
     problems = state_mismatches(names, root)
@@ -1288,6 +1388,59 @@ def node_tests(plugin):
 def plugin_tests(plugin, claude, label):
     if (plugin / "tests").is_dir():
         step(f"claude plugin test {shown_dir(plugin)} ({label})", [claude, "plugin", "test", plugin], 900, r"\d+ pass")
+        other_storage_tests(plugin, plugin, claude, label, None)
+
+
+# Un fichier de test qui porte cette ligne dépend du mode de stockage de flow-board, que le mod tire de
+# l'emplacement de son dossier (`claudeHome` de hooks/register.tsx : sous un dossier `.claude/`, le
+# fichier commun des missions ; ailleurs, `$.store`) et qu'un test ne peut pas fixer lui-même. Chaque
+# lancement de `claude plugin test` le relance donc sur une copie posée dans l'autre mode : un test
+# vert sous `--test` (copie hors de `.claude/`) et rouge dans un worktree (sous `.claude/`) s'y voit.
+BOTH_STORAGES = "Stockage : les deux modes"
+
+
+def storage_mode(folder):
+    """Le mode de stockage du mod chargé depuis ce dossier, par la règle de `claudeHome`."""
+    return "fichier" if "/.claude/" in Path(folder).resolve().as_posix().lower() else "$.store"
+
+
+def both_storage_tests(plugin, targets):
+    """Les fichiers de test du moteur du plugin (chemins depuis lui) qui portent `BOTH_STORAGES`,
+    parmi `targets` (tous quand None), triés."""
+    found = sorted(t.relative_to(plugin) for t in (plugin / "tests").rglob("*.test.ts*")
+                   if t.name.endswith((".test.ts", ".test.tsx")) and BOTH_STORAGES in t.read_text(encoding="utf-8"))
+    return [t for t in found if targets is None or t in targets]
+
+
+def plugin_copy(plugin, copy, keep):
+    """Une copie du plugin dans `copy`, sans ses types du moteur (`.claude-plugin/types/`, qui ne
+    servent qu'à `tsc` ; le `types/` du plugin reste) ni `node_modules`, avec les seuls fichiers de
+    test `keep` (chemins depuis le plugin ; les aides de `tests/` sans `.test.` restent)."""
+    engine_types = (plugin / ".claude-plugin").resolve()
+    shutil.copytree(plugin, copy, ignore=lambda folder, names: [
+        n for n in names if n == "node_modules" or (n == "types" and Path(folder).resolve() == engine_types)])
+    for other in copy.rglob("*.test.*"):
+        if other.relative_to(copy) not in keep:
+            other.unlink()
+
+
+def other_storage_tests(plugin, ran_at, claude, label, targets):
+    """Relance les fichiers marqués `BOTH_STORAGES` (parmi `targets`) sur une copie du plugin dans le
+    mode de stockage qu'ils n'ont pas eu à `ran_at`, le dossier d'où ils viennent de tourner."""
+    marked = both_storage_tests(plugin, targets)
+    if not marked:
+        return
+    want = "$.store" if storage_mode(ran_at) == "fichier" else "fichier"
+    tmp = Path(tempfile.mkdtemp(prefix="check-stockage-"))
+    try:
+        copy = (tmp / plugin.name) if want == "$.store" else (tmp / ".claude" / "plugins" / plugin.name)
+        if storage_mode(copy.parent) != want:
+            raise Failed(f"copie pour le mode {want} impossible : {copy} donne le mode {storage_mode(copy.parent)}")
+        plugin_copy(plugin, copy, set(marked))
+        rel = " ".join(f"{shown_dir(plugin)}/{t.as_posix()}" for t in marked)
+        step(f"claude plugin test {rel} ({label}, stockage {want})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_file(plugin, name):
@@ -1321,16 +1474,11 @@ def single_test(plugin, names):
     tmp = Path(tempfile.mkdtemp(prefix="check-test-"))
     try:
         copy = tmp / plugin.name
-        # Les types du moteur (`.claude-plugin/types/`) ne servent qu'à `tsc` ; le `types/` du plugin reste.
-        engine_types = (plugin / ".claude-plugin").resolve()
-        shutil.copytree(plugin, copy, ignore=lambda folder, names: [
-            n for n in names if n == "node_modules" or (n == "types" and Path(folder).resolve() == engine_types)])
-        for other in copy.rglob("*.test.*"):
-            if other.relative_to(copy) not in targets:
-                other.unlink()
+        plugin_copy(plugin, copy, targets)
         code, out = run([claude, "--version"], 60)
         version = out.strip().split(" ")[0] if code == 0 else "?"
         step(f"claude plugin test {rel} (terminal {version})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
+        other_storage_tests(plugin, copy, claude, f"terminal {version}", targets)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1358,10 +1506,71 @@ def touched_tests(plugin):
     return sorted(Path(p).relative_to(rel).as_posix() for p in found)
 
 
+def changed_exports(plugin):
+    """Les noms des valeurs exportées de premier niveau des modules `.ts`/`.tsx` de `hooks/` (motif
+    `EXPORTED_VALUE`) dont le corps a changé face à `HEAD` (arbre de travail ou index) : un bloc de
+    `git diff -U0 HEAD` compte pour chaque déclaration dont la plage (de sa ligne de début à la
+    déclaration de premier niveau suivante, de toute sorte, exportée ou non, dans la version de l'arbre)
+    croise la sienne côté nouveau, un bloc qui ne fait que retirer valant sa seule ligne de début ; un
+    module non suivi compte toutes ses valeurs exportées."""
+    hooks = plugin / "hooks"
+    if not hooks.is_dir():
+        return set()
+    rel = hooks.relative_to(REPO).as_posix()
+    out = git(["diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", rel], 60)
+    untracked = git(["ls-files", "--others", "--exclude-standard", "--", rel], 60)
+    if out is None or untracked is None:
+        raise Failed(f"git diff ou git ls-files de {rel} : échec")
+    hunks = {}
+    current = None
+    for line in out.splitlines():
+        if line.startswith("+++ "):
+            current = line[6:] if line.startswith("+++ b/") else None
+        elif current and (m := HUNK.match(line)):
+            start, count = int(m[1]), int(m[2] if m[2] is not None else 1)
+            hunks.setdefault(current, []).append((start, start + max(count, 1) - 1))
+    for path in untracked.splitlines():
+        hunks[path] = [(1, float("inf"))]
+    names = set()
+    for path, ranges in hunks.items():
+        source = REPO / path
+        if source.suffix not in {".ts", ".tsx"} or ".test." in source.name or not source.is_file():
+            continue
+        lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        starts = [n for n, text in enumerate(lines, 1) if TOP_LEVEL.match(text)] + [len(lines) + 1]
+        for begin, end in zip(starts, starts[1:]):
+            m = EXPORTED_VALUE.match(lines[begin - 1])
+            if m and any(a <= end - 1 and b >= begin for a, b in ranges):
+                names.add(m[1])
+    return names
+
+
+def named_tests(plugin):
+    """Les fichiers de test du moteur du plugin (`tests/**/*.test.ts`, `*.test.tsx`) qui nomment, mot
+    entier, une valeur de `changed_exports` : {chemin depuis le plugin : noms triés}. Le pré-contrôle ne
+    lançait que les fichiers de test modifiés, et quatre fichiers qui appelaient une fonction changée
+    n'avaient cassé qu'à la suite complète, trois fois."""
+    names = sorted(changed_exports(plugin))
+    tests = plugin / "tests"
+    if not names or not tests.is_dir():
+        return {}
+    words = {name: re.compile(rf"(?<![\w$]){re.escape(name)}(?![\w$])") for name in names}
+    found = {}
+    for path in sorted(tests.rglob("*.test.ts*")):
+        if not path.is_file() or not path.name.endswith((".test.ts", ".test.tsx")):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        hits = [name for name in names if words[name].search(text)]
+        if hits:
+            found[path.relative_to(plugin).as_posix()] = hits
+    return found
+
+
 def quick_check(plugin):
     """Le pré-contrôle rapide d'un plugin : ses contrôles statiques (l'arbre « Architecture » signalé
     dans `DEFERRED`, en échec à la fin), `tsc`, tous ses tests Node (`*.test.mjs`, qui relisent les
-    sources), puis ses seuls fichiers de test du moteur touchés (terminal). Un module hors de la
+    sources), puis, en un seul lancement (terminal), ses fichiers de test du moteur touchés et ceux qui
+    nomment une valeur exportée de `hooks/` changée (`named_tests`), sans plafond. Un module hors de la
     marketplace (la sonde) passe par ses propres contrôles statiques, les termes de l'export public.
     Plus de 20 suites complètes avaient échoué sur un contrôle statique que ce pré-contrôle ne voyait pas."""
     log(f"\n=== {label_of(plugin)} (pré-contrôle rapide)")
@@ -1372,6 +1581,11 @@ def quick_check(plugin):
     typecheck(plugin)
     node_tests(plugin)
     tests = [t for t in touched_tests(plugin) if not t.endswith(".test.mjs")]
+    chosen = {t: names for t, names in named_tests(plugin).items() if t not in tests}
+    if chosen:
+        log("→ tests qui nomment une fonction modifiée : "
+            + ", ".join(f"{Path(t).name} ({', '.join(names)})" for t, names in chosen.items()))
+        tests = sorted([*tests, *chosen])
     if tests:
         single_test(plugin, tests)
     else:
@@ -1609,7 +1823,7 @@ def tickets_without_search(paths, sources=None):
         if lacks_search(git_show(REPO, f":{path}")) and not lacks_search(git_show(REPO, f"HEAD:{before}")) \
                 and not (merging and lacks_search(git_show(REPO, f"MERGE_HEAD:{before}"))):
             problems.append(f"{path} : « Zone sensible : oui » sans ligne « Recherche … : `<commande>` — <résultat> » (ou la ligne « Recherche » suivie d'un bloc de code : la commande, puis son résultat) "
-                            "(la recherche des chemins qui écrivent, fusionnent ou effacent ses données, citée avec son résultat)")
+                            "(la recherche des chemins qui écrivent, fusionnent, effacent ses données ou les lisent pour décider, citée avec son résultat)")
     return problems
 
 
@@ -1722,6 +1936,11 @@ def staged():
     tickets = [p for p in paths if TICKET_FILE.fullmatch(p)]
     if tickets:
         check_tickets(tickets)
+    # Les règles du dépôt indexées (règle ou référence commune, règle de projet, .gitignore), même en
+    # documentation seule : leur version indexée, celle que le commit enregistre.
+    repo_rules = [p for p in paths if p == GITIGNORE_FILE or COMMON_RULE_FILE.fullmatch(p) or PROJECT_RULE_FILE.fullmatch(p)]
+    if repo_rules:
+        check_repo_rules(rules_problems((p, git_show(REPO, f":{p}")) for p in repo_rules))
     # La règle d'un plugin et les listes d'admis : leurs contrôles statiques, même en documentation seule,
     # et une liste d'admis qui augmente face à HEAD refusée.
     ruled = {m.group(1) for p in paths if (m := RULE_FILE.fullmatch(p) or RETIRED_LIST_FILE.fullmatch(p)) and is_plugin(m.group(1))}
@@ -1743,7 +1962,7 @@ def staged():
     # Une règle ou une référence commune indexée : son titre a pu changer sous les renvois des autres plugins.
     homes_changed = any(p.startswith(home + "/") for p in paths for home in SECTION_HOMES)
     if not shaped and not code_paths and not ruled and not homes_changed:
-        log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets else "pre-commit : documentation seule, pas de contrôle")
+        log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets or repo_rules else "pre-commit : documentation seule, pas de contrôle")
         return
     # Tous les contrôles lisent la copie de l'index : ce qui part, jamais l'arbre de travail.
     tree = export_index()
@@ -1824,6 +2043,7 @@ def main():
         if args.quick:
             for name in names:
                 quick_check(target(name))
+            check_repo_rules(repo_rules_problems())
             fail_deferred(DEFERRED)
             log(f"\nPré-contrôle passé ; la suite complète reste à lancer (scripts/check.sh {' '.join(names)}).")
             return
@@ -1847,6 +2067,7 @@ def main():
                 check_plugin(PLUGINS / name, desktop)
         validate(REPO, tool("claude"))
         check_state(names)
+        check_repo_rules(repo_rules_problems())
         fail_deferred(DEFERRED)
     except Failed as err:
         if DEFERRED and not isinstance(err, DeferredFailed):

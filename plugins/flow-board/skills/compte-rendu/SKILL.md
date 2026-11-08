@@ -11,7 +11,9 @@ disable-model-invocation: true
 Avant d'écrire, vérifie chaque fait au lieu de te fier à ta mémoire de la discussion :
 
 - `git log` depuis le début de la mission (le tableau de bord en donne la date plus bas ; sinon, depuis le début du travail de la discussion) et `git status` : commits, fichiers non commités ;
-- **tous** les fichiers de suivi de la mission (`travail/tasks/…`), pas seulement celui de cette discussion : une mission en plusieurs groupes passe souvent par plusieurs discussions, et ce que les autres ont fait, trouvé ou décidé n'est plus que là, dans `git log`, dans le journal de `ETAT_DU_PROJET.md` et dans les commentaires des tickets ;
+- les commits de la mission déjà sur le dépôt distant : `git fetch`, puis `git log --oneline origin/<branche>..HEAD` (ce qui reste à envoyer) face au `git log` de la mission ; ceux qui n'y sont pas sont déjà livrés, et le rapport le dit ;
+- les versions posées depuis le début de la mission, par cette discussion ou une autre : `git log` depuis cette date du `CHANGELOG.md` et du fichier de version de chaque plugin ou paquet touché ; une entrée déjà publiée ne se redemande pas dans « Ce que le CHANGELOG devra dire », et « Ce que la livraison enverra » nomme la version qu'elle porte ;
+- **tous** les fichiers de suivi de la mission, là où le `CLAUDE.md` du projet les range (par exemple `travail/<sujet>/` : spec, tickets, `DECISIONS.md` ; sinon `travail/tasks/…`), pas seulement celui de cette discussion : une mission en plusieurs groupes passe souvent par plusieurs discussions, et ce que les autres ont fait, trouvé ou décidé n'est plus que là, dans `git log`, dans le journal de `ETAT_DU_PROJET.md` et dans les commentaires des tickets ;
 - les tâches du tracker (Asana) du lot et celles créées en route : statut, assignation ;
 - les faits du tableau de bord, quand ils sont donnés plus bas : tickets, tâches trouvées en route, choix signalés comme faits sans la personne, plans, tests.
 
@@ -35,6 +37,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 ## Fait
 (Un sous-titre par groupe quand la mission en a plusieurs : « Groupe A · <nom> », puis ses tickets.)
 - <ticket ou changement> : ce qui change concrètement (comportement, données), pas le code. Commit <hash>. Vérifié par <commande> : <résultat>.
+- Revues (une ligne par groupe) : constats Standards et Spec, ceux des passes « bogues » et ceux de la relecture du fond et de la forme, chacun à part (les revues envoyées par cette discussion, que tu relis, et les comptes rendus des workers les donnent ; les faits plus bas ne citent du journal que ses alertes), et combien sont corrigés.
 - Sécurité (une ligne par groupe) : revue faite, avec ce qu'elle a trouvé et corrigé ; ou conseillée mais pas lancée, et pourquoi elle était conseillée ; ou, quand les faits le disent (revue désactivée pour le projet par son réglage du tableau de bord), « revue de sécurité désactivée pour ce projet ; le groupe touchait : <zone> » (« le lot touchait » pour une mission sans groupes) ; ou jugée inutile, et pourquoi.
 
 ## Décidé sans toi
@@ -52,10 +55,10 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 (Rangé par thème : un thème par point, ses constats à la suite sur la même ligne quand ils sont petits.)
 
 ## Code antérieur au lot
-- <constat sur du code que le lot n'a pas changé, classé à part par une revue> : gravité en un mot. Pour que tu décides d'un groupe « durcissement » (un ticket par constat), que je ne crée qu'avec ton accord ; seuls les constats de gravité moyenne ou plus, ou qui violent un invariant, y sont proposés, les autres vont au journal, sous « À reprendre ».
+- <constat sur du code que le lot n'a pas changé, classé à part par une revue> : gravité en un mot. Pour que tu décides d'un groupe « durcissement » (un ticket par constat), que je ne crée qu'avec ton accord, sauf si tu y as déjà répondu en fin de lot : ta réponse se recopie alors (groupe refusé, ou fait), sans le reproposer ; seuls les constats de gravité moyenne ou plus, ou qui violent un invariant, y sont proposés, les autres vont au journal, sous « À reprendre ».
 
 ## Pistes
-- <constat d'une passe « bogues » qui ne viole pas l'invariant du ticket, ou cas limite relevé en route> : ce qu'il faudrait trancher ou surveiller.
+- <constat d'une passe « bogues » qui ne viole pas l'invariant du ticket (hors régression introduite par le diff, corrigée), ou cas limite relevé en route> : ce qu'il faudrait trancher ou surveiller.
 
 ## Documentation
 - <document> : à jour (commit <hash>), complété avant ce rapport (commit <hash>), rien à changer (pourquoi, en quelques mots), ou à faire (par qui, pourquoi).
@@ -66,7 +69,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 (Un point par plugin ou paquet changé ; « Rien. » quand le projet n'a pas de CHANGELOG.)
 
 ## Ce que la livraison enverra
-- Branche, nombre de commits et plage (<premier>..<dernier>), contrôles passés.
+- Branche, nombre de commits et plage (<premier>..<dernier>), contrôles passés ; les commits de la mission déjà sur le dépôt distant, et les versions déjà posées en route (avec leur plugin ou paquet).
 - Risques, et ce que je te conseille de vérifier avant de livrer.
 
 **À toi** : valide le rapport dans le panneau (✓ Valider le rapport), ou dis-moi ce qui ne va pas.

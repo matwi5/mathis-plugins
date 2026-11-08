@@ -13,7 +13,8 @@
 
 import type { Board, DecisionOrigin, GroupLink, Relay, RelayEntry, RelayEntryFile, Run, SoloDecision, TicketGroup, TicketStatus } from '../types'
 import { asciiJson, isGroupId, neutralInPrompt, neutralRelayed } from './closing.ts'
-import { asanaChange, asList, choiceRoom, clip, hasBeenAuto, isoMinute, isSecurityCount, isTime, keepChoices, LIMITS, ORIGIN_LABELS, originOf, parseChanges, sameTicket, type StatusChange, str, TEXT_MAX, unreadableCounts, BUGS_REFUSED, isBugCount, BUGS_MAX } from './basics.ts'
+import { refOf } from './coordination.ts'
+import { activeRun, asanaChange, asList, choiceRoom, clip, hasBeenAuto, isoMinute, isSecurityCount, isTime, keepChoices, LIMITS, ORIGIN_LABELS, originOf, parseChanges, sameTicket, type StatusChange, str, TEXT_MAX, unreadableCounts, BUGS_REFUSED, isBugCount, BUGS_MAX } from './basics.ts'
 // Le prédicat des bogues vaut pour tous les comptes d'une revue relayée (count, standards, spec, fixed),
 // à l'envoi comme à la lecture : un entier de 0 à 10 000, sans arrondi ; la borne s'écrit « 10 000 ».
 import { isBugCount as isReviewCount, BUGS_MAX as COUNT_MAX_TEXT } from './basics.ts'
@@ -69,11 +70,23 @@ export const relayedReportsText = (run: Run, relay: Relay | null | undefined, se
 
 /**
  * Ce qu'un appel de l'outil dans un worker envoie au relais, chaque part avec son libellé ; `bugs`
- * n'est une part que quand il ne part pas (un compte hors forme), pour que la réponse le dise, sauf dans une
+ * (et `form`, de même) n'est une part que quand il ne part pas (un compte hors forme), pour que la réponse le dise, sauf dans une
  * revue refusée à l'envoi pour un autre compte hors forme (`refusedReviewCounts`), qui n'est pas une part ;
  * une revue refusée ensuite par le relais (`relayRefusal`) et ses bogues se disent chacun.
  */
-export type RelayPart = 'set' | 'decided' | 'withdrawn' | 'review' | 'bugs' | 'security' | 'report' | 'note'
+export type RelayPart = 'set' | 'decided' | 'withdrawn' | 'review' | OptionalCount | 'security' | 'report' | 'note'
+
+/**
+ * Les comptes facultatifs d'une revue : les constats de la passe « bogues » et ceux de la relecture du fond
+ * et de la forme. Absents ne vaut pas 0 : ils ne se posent qu'à la première revue qui en envoie, ne sont
+ * jamais touchés par une revue qui n'en envoie pas, et un compte hors forme ne part pas sans faire tomber
+ * le reste de la revue. Chacun avec le nom de son compte dans les réponses.
+ */
+const OPTIONAL_COUNTS = { bugs: 'bug count', form: 'form count' } as const
+/** Ce que compte chaque compte facultatif, au pluriel, dans la raison d'un refus au-delà de la borne. */
+const OPTIONAL_FINDINGS: Record<OptionalCount, string> = { bugs: 'bugs', form: 'form findings' }
+export type OptionalCount = keyof typeof OPTIONAL_COUNTS
+const OPTIONAL_KEYS = Object.keys(OPTIONAL_COUNTS) as OptionalCount[]
 
 /**
  * Une part que le relais n'a pas gardée, et pourquoi : dite par l'enregistrement, après l'écriture, ou, pour
@@ -92,7 +105,7 @@ const relayedParts = (input: Readonly<Record<string, unknown>>): { part: RelayPa
     decided.length > 0 ? { part: 'decided', label: `${decided.length} choice(s) made without the user` } : null,
     withdrawn.length > 0 ? { part: 'withdrawn', label: `${withdrawn.length} withdrawn choice(s)` } : null,
     counts.review ? { part: 'review', label: 'the review findings' } : null,
-    refusedBugs(input) ? { part: 'bugs', label: 'the bug count' } : null,
+    ...refusedOptional(input).map(key => ({ part: key, label: `the ${OPTIONAL_COUNTS[key]}` })),
     counts.security ? { part: 'security', label: 'the security review' } : null,
     reportedReport(input) !== '' ? { part: 'report', label: 'the final report' } : null,
     str(input.note) !== '' ? { part: 'note', label: 'the note' } : null,
@@ -100,28 +113,32 @@ const relayedParts = (input: Readonly<Record<string, unknown>>): { part: RelayPa
   return parts.filter((p): p is { part: RelayPart; label: string } => p !== null)
 }
 
-/** Les parts qu'un appel dans un worker envoie au relais (et `bugs` quand il ne part pas, seul de sa revue). */
+/** Les parts qu'un appel dans un worker envoie au relais (et `bugs` ou `form` quand il ne part pas, seul de sa revue). */
 export const relayedPartsOf = (input: Readonly<Record<string, unknown>>): RelayPart[] => relayedParts(input).map(p => p.part)
 
 /**
  * La phrase de ce que le relais a gardé de l'appel, et de ce qu'il n'a pas gardé, avec la raison
  * (`lost`, connu une fois l'écriture faite) : un dépôt perdu se dit, il ne passe plus pour relayé
- * (le compte rendu du groupe C était annoncé relayé sans l'être). Vide quand l'appel n'envoie rien.
+ * (le compte rendu du groupe C était annoncé relayé sans l'être). `isRepeated` : la revue de l'appel était déjà reçue,
+ * laissée de côté (`isRepeatedReview`) : elle ne se dit pas relayée. Vide quand l'appel n'envoie rien.
  */
-export const relayedSentence = (input: Readonly<Record<string, unknown>>, lost: readonly RelayLoss[] = []): string => {
+export const relayedSentence = (input: Readonly<Record<string, unknown>>, lost: readonly RelayLoss[] = [], isRepeated = false): string => {
   const parts = relayedParts(input)
   if (parts.length === 0) return ''
-  // Un compte de bogues hors forme ne part jamais : la réponse dit sa raison à lui, quelle que soit celle
+  // Un compte facultatif (bogues, forme) hors forme ne part jamais : la réponse dit sa raison à lui, quelle que soit celle
   // du reste de l'appel (une déclaration ratée, un relais qui ne s'écrit pas) ; dans une revue refusée en
   // entier pour ses autres comptes, il n'a pas de raison à part : la réponse dit le refus de la revue.
-  if (refusedBugs(input)) {
+  for (const key of refusedOptional(input)) {
     const review = lost.find(l => l.part === 'review')
-    // La revue perdue se renvoie (sans bogues) seulement quand sa propre raison le permet.
-    const why = !review ? BUGS_NOT_SENT : review.isFinal ? `${BUGS_REFUSED}; give the bug count in your final report` : `${BUGS_REFUSED}; ${BUGS_INSTEAD}`
-    lost = [...lost.filter(l => l.part !== 'bugs'), { part: 'bugs', why, isFinal: true }]
+    // La revue perdue se renvoie (sans ce compte) seulement quand sa propre raison le permet.
+    const why = !review ? notSent(key) : review.isFinal ? `${BUGS_REFUSED}; give the ${OPTIONAL_COUNTS[key]} in your final report` : `${BUGS_REFUSED}; ${resendWithout(key)}`
+    lost = [...lost.filter(l => l.part !== key), { part: key, why, isFinal: true }]
   }
-  const kept = parts.filter(p => !lost.some(l => l.part === p.part))
-  const gone = parts.filter(p => lost.some(l => l.part === p.part))
+  // Une revue déjà reçue est laissée de côté avec ses comptes facultatifs hors forme : rien d'elle n'est dit relayé ni à renvoyer.
+  const isAside = (p: { part: RelayPart }) => isRepeated && (p.part === 'review' || (OPTIONAL_KEYS as readonly string[]).includes(p.part))
+  const kept = parts.filter(p => !lost.some(l => l.part === p.part) && !isAside(p))
+  const gone = parts.filter(p => lost.some(l => l.part === p.part) && !isAside(p))
+  const asideText = parts.some(isAside) ? `The review findings: ${REPEATED_REVIEW}. ` : ''
   const lossOf = (p: { part: RelayPart }) => lost.find(l => l.part === p.part)!
   const whyOf = (p: { part: RelayPart }) => lossOf(p).why
   // Une part qui ne se renvoie pas telle quelle (`isFinal`) : sa raison dit quoi faire.
@@ -137,7 +154,9 @@ export const relayedSentence = (input: Readonly<Record<string, unknown>>, lost: 
     gone.length > 0
       ? `NOT kept in the relay: ${gone.map(p => `${p.label} (${whyOf(p)})`).join('; ')}: the manager does not see ${gone.length > 1 ? 'them' : 'it'}; ${resend}. `
       : ''
-  return `${keptText}${goneText}Nothing else of this call was recorded.`
+  // Un compte de forme relayé ne se cumule qu'au retour du groupe : envoyé après, il n'est plus compté.
+  const lateForm = kept.some(p => p.part === 'review') && reportedCounts(input).review?.form !== undefined ? `${FORM_LATE} ` : ''
+  return `${keptText}${lateForm}${asideText}${goneText}Nothing else of this call was recorded.`
 }
 
 /** Les comptes de revue et de sécurité refusés d'un appel dans un worker, dits dans sa réponse. */
@@ -155,7 +174,7 @@ export type RelayEvent =
   | { kind: 'decided'; items: { what: string; why?: string }[] }
   | { kind: 'withdrawn'; items: { what: string; why?: string; replacedBy?: string }[] }
   | { kind: 'report'; text: string; isWhole?: boolean }
-  | { kind: 'counts'; review?: { standards: number; spec: number; fixed: number; bugs?: number }; security?: { advised?: boolean; why?: string; findings?: number; fixed?: number; dismissed?: number } }
+  | { kind: 'counts'; review?: { standards: number; spec: number; fixed: number; bugs?: number; form?: number; ticket?: string }; security?: { advised?: boolean; why?: string; findings?: number; fixed?: number; dismissed?: number } }
   | { kind: 'review' }
   | { kind: 'security' }
   | { kind: 'end' }
@@ -250,6 +269,9 @@ export const reportedChanges = (input: Readonly<Record<string, unknown>>): Statu
 /** Les comptes d'une revue envoyés par un worker, chacun absent (il vaut 0) ou en forme (`isReviewCount`). */
 const REVIEW_COUNTS = ['standards', 'spec', 'fixed'] as const
 
+/** La longueur d'un id de ticket relu (`ticket` d'une revue) : au-delà, il ne part pas (jamais coupé). */
+const TICKET_ID_MAX = 200
+
 const sentReview = (input: Readonly<Record<string, unknown>>): Record<string, unknown> | null =>
   input.review !== null && typeof input.review === 'object' ? (input.review as Record<string, unknown>) : null
 
@@ -274,7 +296,16 @@ export const reportedCounts = (input: Readonly<Record<string, unknown>>): Extrac
       : null
   // De même pour la revue (`refusedReviewCounts`) ; un compte absent vaut 0.
   const count = (v: unknown): number => (isReviewCount(v) ? v : 0)
-  const rev = review && refusedReviewCounts(input).length === 0 ? { standards: count(review.standards), spec: count(review.spec), fixed: count(review.fixed), ...(isBugCount(review.bugs) ? { bugs: review.bugs } : {}) } : null
+  // Un compte facultatif ne part qu'en forme (`isBugCount`) : absent, ou hors forme, il n'est pas 0.
+  const optional = Object.fromEntries(OPTIONAL_KEYS.filter(key => isBugCount(review?.[key])).map(key => [key, review![key] as number]))
+  // Le ticket relu (`ticket`) : un id, jamais un compte, pris en entier (jamais coupé : deux ids au même début ne se
+  // confondent pas) ; hors forme (ni texte ni nombre, vide, plus de ${TICKET_ID_MAX} signes), il ne part pas, sans faire
+  // tomber la revue. Il distingue deux revues de tickets différents aux mêmes comptes (`isRepeatedReview`).
+  const ticket = typeof review?.ticket === 'string' ? str(review.ticket) : typeof review?.ticket === 'number' && Number.isFinite(review.ticket) ? String(review.ticket) : ''
+  const rev =
+    review && refusedReviewCounts(input).length === 0
+      ? { standards: count(review.standards), spec: count(review.spec), fixed: count(review.fixed), ...optional, ...(ticket !== '' && ticket.length <= TICKET_ID_MAX ? { ticket } : {}) }
+      : null
   return {
     kind: 'counts',
     ...(rev ? { review: rev } : {}),
@@ -283,12 +314,13 @@ export const reportedCounts = (input: Readonly<Record<string, unknown>>): Extrac
 }
 
 /**
- * Une revue relayée envoyée avec un compte de bogues hors forme : il ne part pas (`isBugCount`), et la
- * réponse le dit. Une revue refusée en entier (`refusedReviewCounts`) n'en dit rien à part.
+ * Les comptes facultatifs (bogues, forme) envoyés hors forme dans une revue relayée : ils ne partent pas
+ * (`isBugCount`), et la réponse le dit. Une revue refusée en entier (`refusedReviewCounts`) n'en dit rien à part.
  */
-const refusedBugs = (input: Readonly<Record<string, unknown>>): boolean => {
+const refusedOptional = (input: Readonly<Record<string, unknown>>): OptionalCount[] => {
   const review = sentReview(input)
-  return review !== null && refusedReviewCounts(input).length === 0 && review.bugs !== undefined && !isBugCount(review.bugs)
+  if (review === null || refusedReviewCounts(input).length > 0) return []
+  return OPTIONAL_KEYS.filter(key => review[key] !== undefined && !isBugCount(review[key]))
 }
 
 const sentSecurity = (input: Readonly<Record<string, unknown>>): Record<string, unknown> | null =>
@@ -358,13 +390,16 @@ export const ignoredOrigins = (input: Readonly<Record<string, unknown>>): string
 export const RELAY_CHOICES_MAX = LIMITS.autoDecided
 
 /**
- * Pourquoi un compte de bogues hors forme ne part pas, et ce que la session fait : le reste de sa revue
+ * Pourquoi un compte facultatif hors forme ne part pas, et ce que la session fait : le reste de sa revue
  * est relayé, et la renvoyer recompterait ses autres constats.
  */
-const BUGS_NOT_SENT = `${BUGS_REFUSED}; the rest of this review is relayed: do not send it again, give the bug count in your final report`
+const notSent = (key: OptionalCount): string => `${BUGS_REFUSED}; the rest of this review is relayed: do not send it again, give the ${OPTIONAL_COUNTS[key]} in your final report`
 
-/** Ce que fait une session dont la revue est refusée pour ses bogues. */
-const BUGS_INSTEAD = 'send this review again without "bugs", and give the bug count in your final report'
+/** Ce que dit la réponse d'un compte de forme relayé : il ne compte que jusqu'au retour du groupe. */
+export const FORM_LATE = 'The form count is added to the dashboard when the manager takes your group back; sent after that, it is not counted: give it in your final report.'
+
+/** Ce que fait une session dont la revue est refusée pour un compte facultatif (bogues, forme). */
+const resendWithout = (key: OptionalCount): string => `send this review again without "${key}", and give the ${OPTIONAL_COUNTS[key]} in your final report`
 
 /** Ce que fait une session dont la revue est refusée pour un compte de l'entrée (illisible, ou qui sortirait de sa borne). */
 const COUNTS_INSTEAD = 'give the review counts in your final report'
@@ -375,7 +410,7 @@ const SECURITY_INSTEAD = 'give the security counts in your final report'
 /** Des comptes relus (`reviews`, `security` d'une entrée) : un objet, ni `null` ni une liste ; sinon illisibles en entier. */
 const isCounts = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 
-/** Les comptes de revue d'une entrée, hors `bugs` (qui a sa règle) : absents, ils valent 0. */
+/** Les comptes de revue d'une entrée, hors les comptes facultatifs `bugs` et `form` (qui ont leur règle, `OPTIONAL_COUNTS`) : absents, ils valent 0. */
 const REVIEW_KEPT = ['count', 'standards', 'spec', 'fixed'] as const
 
 /** Les comptes de sécurité d'une entrée : chaque avis remplace ceux qu'il envoie. */
@@ -392,8 +427,8 @@ export type RelayRefusal = { why: string; isReview?: true; isSecurity?: true }
 
 /**
  * Pourquoi le relais ne garderait pas ce signal, ou null : la borne des choix d'une session ; une revue qui
- * ajouterait à un compte de revue gardé illisible (jamais réécrit), dont les bogues ne peuvent pas s'ajouter à
- * ceux de l'entrée (un compte gardé illisible, ou une somme qui sortirait de sa borne), ou dont un autre compte
+ * ajouterait à un compte de revue gardé illisible (jamais réécrit), dont un compte facultatif (bogues, forme) ne
+ * peut pas s'ajouter à celui de l'entrée (un compte gardé illisible, ou une somme qui sortirait de sa borne), ou dont un autre compte
  * sortirait de la sienne (`count` compris) : toute la revue est refusée (`isReview`) ; un avis de sécurité qui
  * remplacerait un compte de sécurité gardé illisible : tout l'avis est refusé (`isSecurity`).
  */
@@ -410,11 +445,16 @@ export const relayRefusal = (own: RelayEntry | undefined, event: RelayEvent): Re
     const unreadable = unreadableKept(keptReviews, REVIEW_KEPT, isReviewCount)
     if (unreadable.length > 0) return { why: `its relay entry holds an unreadable review count (${unreadable.join(', ')}), never rewritten; ${COUNTS_INSTEAD}`, isReview: true }
   }
-  // Un compte de bogues gardé illisible n'est jamais réécrit, ni poussé hors de sa borne : la revue qui en
-  // ajouterait est refusée, et la session donne ses bogues dans son compte rendu.
-  if (event.kind === 'counts' && event.review?.bugs !== undefined && own?.reviews?.bugs !== undefined) {
-    if (!isBugCount(own.reviews.bugs)) return { why: `its relay entry holds an unreadable bug count, never rewritten; ${BUGS_INSTEAD}`, isReview: true }
-    if (!isBugCount(own.reviews.bugs + event.review.bugs)) return { why: `its relay entry would pass ${BUGS_MAX} bugs; ${BUGS_INSTEAD}`, isReview: true }
+  // Un compte facultatif (bogues, forme) gardé illisible n'est jamais réécrit, ni poussé hors de sa borne : la
+  // revue qui en ajouterait est refusée, et la session donne ce compte dans son compte rendu.
+  if (event.kind === 'counts' && event.review) {
+    for (const key of OPTIONAL_KEYS) {
+      const sent = event.review[key]
+      const kept: unknown = (own?.reviews as Record<string, unknown> | undefined)?.[key]
+      if (sent === undefined || kept === undefined) continue
+      if (!isBugCount(kept)) return { why: `its relay entry holds an unreadable ${OPTIONAL_COUNTS[key]}, never rewritten; ${resendWithout(key)}`, isReview: true }
+      if (!isBugCount(kept + sent)) return { why: `its relay entry would pass ${BUGS_MAX} ${OPTIONAL_FINDINGS[key]}; ${resendWithout(key)}`, isReview: true }
+    }
   }
   // Les autres comptes de l'entrée ne passent pas non plus leur borne (relus ensuite 0, ils auraient été
   // perdus) : la revue est refusée, et la session donne ses comptes dans son compte rendu.
@@ -445,6 +485,62 @@ export const relayRefusal = (own: RelayEntry | undefined, event: RelayEvent): Re
   return null
 }
 
+/** Les comptes d'une revue relayée, tels que `reportedCounts` les a lus. */
+type SentReview = NonNullable<Extract<RelayEvent, { kind: 'counts' }>['review']>
+
+/**
+ * L'empreinte d'une revue reçue : ses comptes tels qu'envoyés (un compte facultatif absent n'est pas 0), le statut
+ * de chaque ticket que l'entrée connaît au moment de l'envoi, et le ticket relu qu'elle nomme (`ticket`, ou null).
+ * Gardée par l'entrée (`reviewPrint`) à chaque revue comptée, et remplacée par la suivante.
+ */
+export const reviewPrint = (entry: RelayEntry | undefined, review: SentReview): string => {
+  const { ticket, ...sent } = review
+  const counts = Object.entries(sent)
+    .filter(([, v]) => v !== undefined)
+    .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+  const tickets = Object.entries(entry?.tickets !== null && typeof entry?.tickets === 'object' ? entry.tickets : {})
+    .map(([id, t]) => [id, t !== null && typeof t === 'object' ? (t.status ?? null) : null] as const)
+    .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+  return JSON.stringify({ counts, tickets, ticket: ticket ?? null })
+}
+
+/** Une empreinte relue : ce qu'elle compare sans le ticket relu (`base`), et ce ticket ; null hors forme. */
+const printParts = (print: unknown): { base: string; ticket: string | null } | null => {
+  if (typeof print !== 'string') return null
+  let value: unknown
+  try {
+    value = JSON.parse(print)
+  } catch {
+    return null
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const v = value as Record<string, unknown>
+  if (!Array.isArray(v.counts) || !Array.isArray(v.tickets) || (v.ticket !== null && typeof v.ticket !== 'string')) return null
+  return { base: JSON.stringify({ counts: v.counts, tickets: v.tickets }), ticket: v.ticket }
+}
+
+/**
+ * Une revue déjà reçue : mêmes comptes que la dernière revue comptée par cette entrée, sans qu'aucun ticket ait
+ * changé de statut depuis (le même envoi renvoyé après une reprise ou un doute sur la réception), et pas d'autre
+ * ticket relu (deux tickets nommés différents : deux revues ; un ticket nommé d'un seul côté : le même envoi, renvoyé
+ * avec ou sans lui). Elle ne se recompte pas. Un statut changé ou une revue lancée (`/code-review`) depuis effacent
+ * l'empreinte (`applyRelay`) : la suivante se compte. Invariant : une revue n'est jamais comptée deux fois pour un
+ * même envoi, et une revue réelle n'est jamais perdue : une empreinte absente, illisible ou sans comptes gardés ne
+ * fait rien ignorer, et la réponse dit le recours (`REPEATED_REVIEW`).
+ */
+export const isRepeatedReview = (own: RelayEntry | undefined, review: SentReview | undefined): boolean => {
+  // Sans comptes gardés (une entrée réécrite à la main), une empreinte restée seule ne fait rien ignorer.
+  if (!review || !own || own.reviews === undefined) return false
+  const kept = printParts((own as { reviewPrint?: unknown }).reviewPrint)
+  const now = printParts(reviewPrint(own, review))
+  if (!kept || !now || kept.base !== now.base) return false
+  return kept.ticket === null || now.ticket === null || kept.ticket === now.ticket
+}
+
+/** Ce que dit la réponse d'une revue déjà reçue, laissée de côté. */
+export const REPEATED_REVIEW =
+  'revue déjà reçue : non recomptée (mêmes comptes, même ticket relu ou aucun, aucun statut de ticket changé depuis). Si c’est la revue d’un autre ticket, renvoie-la avec "ticket" (l’id du ticket relu) ; une autre revue du même ticket : donne ses comptes dans ton compte rendu final'
+
 /**
  * Ajoute un signal à l'entrée de la session `session` dans le relais de la mission `runId`.
  * `stored` : le relais lu (ou rien). Null quand le signal ne change rien.
@@ -464,6 +560,9 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
       return !now0 || now0.status !== c.status || now0.why !== c.why
     })
     if (moved.length === 0) return null
+    // Un statut qui change (pas une raison seule) : la revue suivante se compte, même aux mêmes comptes, même si ce
+    // ticket revient ensuite à son statut d'avant (`isRepeatedReview`).
+    if (moved.some(c => entry.tickets[c.id]?.status !== c.status)) delete entry.reviewPrint
     for (const c of moved) entry.tickets[c.id] = { status: c.status, ...(c.why ? { why: c.why } : {}), at: now }
     // Un ticket qui démarre : une revue relayée avant lui était la passe « bogues » d'un ticket (ou
     // une revue lancée trop tôt), pas la revue du groupe, qui vient une fois tous ses tickets faits.
@@ -516,12 +615,19 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
         const v = was[k]
         return v === undefined ? n : isReviewCount(v) ? v + n : v
       }
-      // Les bogues : posés par la première revue qui en envoie, augmentés par les suivantes, jamais touchés
-      // par une revue sans passe « bogues » (absents n'est pas 0) ; un compte gardé illisible a fait
-      // refuser la revue (`relayRefusal`).
-      const isUnreadable = was.bugs !== undefined && !isBugCount(was.bugs)
-      const bugs = review.bugs === undefined || isUnreadable ? was.bugs : ((was.bugs as number | undefined) ?? 0) + review.bugs
-      entry.reviews = { count: add('count', 1), standards: add('standards', review.standards), spec: add('spec', review.spec), fixed: add('fixed', review.fixed), ...(bugs !== undefined ? { bugs } : {}) } as RelayEntry['reviews']
+      // Les comptes facultatifs (bogues, forme) : posés par la première revue qui en envoie, augmentés par les
+      // suivantes, jamais touchés par une revue qui n'en envoie pas (absents n'est pas 0), gardés tels quels
+      // quand l'entrée est réécrite ; un compte gardé illisible a fait refuser la revue (`relayRefusal`).
+      const optional: Record<string, unknown> = {}
+      for (const key of OPTIONAL_KEYS) {
+        const sent = review[key]
+        const isUnreadable = was[key] !== undefined && !isBugCount(was[key])
+        const value = sent === undefined || isUnreadable ? was[key] : ((was[key] as number | undefined) ?? 0) + sent
+        if (value !== undefined) optional[key] = value
+      }
+      entry.reviews = { count: add('count', 1), standards: add('standards', review.standards), spec: add('spec', review.spec), fixed: add('fixed', review.fixed), ...optional } as RelayEntry['reviews']
+      // L'empreinte de cette revue comptée : la même renvoyée sans changement de statut d'un ticket ni autre ticket relu ne se recompte pas (`isRepeatedReview`).
+      entry.reviewPrint = reviewPrint(entry, review)
       entry.last = { kind: 'review', text: `revue : ${review.standards + review.spec} constat(s), ${review.fixed} corrigé(s)`, at: now }
     }
     if (security) {
@@ -534,6 +640,9 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
       entry.last = { kind: 'review', text: 'revue de sécurité', at: now }
     }
   } else if (event.kind === 'review') {
+    // Une revue lancée depuis : ses comptes sont une nouvelle revue, même égaux à ceux de la précédente (la passe
+    // high d'après les correctifs et la passe « bogues » d'un même ticket) : ils se comptent (`isRepeatedReview`).
+    delete entry.reviewPrint
     // Pendant un ticket en cours, `/code-review` est la passe « bogues » de ce ticket (zone
     // sensible), pas la revue du groupe : le groupe n'est pas relu pour autant.
     if (Object.values(entry.tickets).some(t => t.status === 'doing')) {
@@ -641,15 +750,55 @@ export const mainRefFileName = (runId: string): string => `${relayFileSlug(runId
 /** Ce que dit ce fichier : la référence « [ref] » du manager, et quand il l'a écrite. */
 export type MainRef = { v: 1; run: string; main: string; at: number }
 
-/** Le fichier de la référence, lu sur le disque : borné avant usage, null quand il ne se lit pas. */
-export const parseMainRef = (value: unknown, runId: string): MainRef | null => {
+/**
+ * Le fichier de la référence, lu sur le disque : borné avant usage, null quand il ne se lit pas. La référence
+ * finit par une « [ref] » de ListAgents (`refOf`) : un gabarit recopié (« [<ref>] »), une valeur vide ou
+ * invisible ne passe jamais pour une référence. `now` : une date au-delà de `now` plus la marge ne se lit pas.
+ */
+export const parseMainRef = (value: unknown, runId: string, now?: number): MainRef | null => {
   if (value === null || typeof value !== 'object') return null
   const v = value as Record<string, unknown>
   // Une date au-delà de l'an 2286 (1e13 ms) ne se lit pas : elle figerait la référence pour toujours.
   if (v.run !== runId || typeof v.main !== 'string' || typeof v.at !== 'number' || !Number.isFinite(v.at) || v.at < 0 || v.at > 1e13) return null
+  if (now !== undefined && v.at > now + MAIN_REF_FUTURE_MS) return null
   const main = clip(v.main.trim(), 120)
-  return main === '' ? null : { v: 1, run: runId, main, at: v.at }
+  return refOf(main) === null ? null : { v: 1, run: runId, main, at: v.at }
 }
+
+/**
+ * Une date de référence au-delà de l'heure du manager plus cette marge ne compte pas (horloge déréglée,
+ * fichier abîmé) : sinon elle refuserait à jamais les références plus récentes que lui.
+ */
+export const MAIN_REF_FUTURE_MS = 10 * 60_000
+
+/** La plus récente de deux références lues (fichier, `$.store`), l'une ou l'autre pouvant manquer. */
+export const newestMainRef = (a: MainRef | null, b: MainRef | null): MainRef | null => (a === null ? b : b === null || a.at >= b.at ? a : b)
+
+/**
+ * La référence du manager s'écrit-elle sur celle en place ? Seulement plus récente qu'elle : une
+ * référence plus ancienne ne remplace jamais une plus récente. Une référence en place datée au-delà de
+ * l'heure plus la marge ne se lit pas (`parseMainRef` avec `now`) : elle arrive ici absente.
+ */
+export const isMainRefNewer = (current: MainRef | null, ref: MainRef): boolean => current === null || ref.at > current.at
+
+/**
+ * Dans le manager : la mission active ici, que cette discussion porte (`owner`) avec des groupes confiés à
+ * des workers, et dont la demande de référence n'est pas close (`written` : écrite, refusée ou trop ratée
+ * depuis le démarrage, le rechargement ou la reprise ici, qui la rouvrent) : le mod ne connaît pas la
+ * référence « [ref] » que ListAgents montre, seul Claude la lit. `here` : l'id qui pose `owner` (`board.session`),
+ * jamais celui du moment après un /clear, que `owner` ne suit pas. Null quand rien n'est à demander.
+ */
+export const mainRefAsk = (board: Board | null, here: string, written: ReadonlySet<string>): Run | null => {
+  if (!board || board.delegate) return null
+  const run = activeRun(board)
+  if (!run || here === '' || run.owner !== here || written.has(run.id) || !(run.groups ?? []).some(g => g.linked !== undefined)) return null
+  return run
+}
+
+/** La demande faite à Claude pour cette mission : relire sa référence dans ListAgents, l'envoyer avec `resume`. */
+export const mainRefAskText = (run: Run): string =>
+  `flow-board: this discussion carries the mission « ${neutralInPrompt(run.title)} », with groups in workers, and has started, reloaded or resumed it since its reference was last sent: its workers may hold an old one. ` +
+  `Call ListAgents, read this discussion's own [ref] on its first line ("This session is … [<ref>]"), then call the flow tool once with {"resume": ${asciiJson(run.id)}, "main": "[<ref>]"}: flow-board writes it next to the relay, and each worker follows it at its next call.`
 
 /**
  * Dans un worker : la référence du manager lue à côté du relais, plus
@@ -662,7 +811,7 @@ export const updateDelegateMain = (board: Board, ref: MainRef | null): Board | n
 }
 
 /** Longueur gardée du compte rendu final d'un worker. */
-const REPORT_MAX = 8000
+export const REPORT_MAX = 8000
 
 /** Le compte rendu final envoyé par `report` dans un appel de l'outil (worker). */
 export const reportedReport = (input: Readonly<Record<string, unknown>>): string => str(input.report)
@@ -737,14 +886,20 @@ export const relayForGroup = (
   const report = reported?.[1].report
   // Les constats envoyés par toutes les sessions du groupe (une session redémarrée en garde une part).
   // Un fichier d'une autre session : chaque nombre est borné avant d'être additionné.
-  // Les bogues des sessions du lien qui en ont un en forme (`isBugCount`) ; absents si aucune n'en a.
-  const bugsOf = (sum: RelayEntry['reviews'], r: { bugs?: unknown }): { bugs?: number } => {
-    const bugs = isBugCount(r.bugs) ? (sum?.bugs ?? 0) + r.bugs : sum?.bugs
-    return bugs !== undefined ? { bugs } : {}
+  // Les comptes facultatifs (bogues, forme) des sessions du lien qui en ont un en forme (`isBugCount`) ;
+  // chacun absent si aucune n'en a.
+  const optionalOf = (sum: RelayEntry['reviews'], r: Record<string, unknown>): { bugs?: number; form?: number } => {
+    const out: { bugs?: number; form?: number } = {}
+    for (const key of OPTIONAL_KEYS) {
+      const value = r[key]
+      const total = isBugCount(value) ? (sum?.[key] ?? 0) + value : sum?.[key]
+      if (total !== undefined) out[key] = total
+    }
+    return out
   }
   // Les autres comptes, par le même prédicat qu'à l'envoi (`isReviewCount`), sans arrondi : hors forme, un compte ne compte pas pour sa session.
   const n = (v: unknown): number => (isReviewCount(v) ? v : 0)
-  const reviews = mine.reduce<RelayEntry['reviews']>((sum, e) => (isCounts(e.reviews) ? { count: (sum?.count ?? 0) + n(e.reviews.count), standards: (sum?.standards ?? 0) + n(e.reviews.standards), spec: (sum?.spec ?? 0) + n(e.reviews.spec), fixed: (sum?.fixed ?? 0) + n(e.reviews.fixed), ...bugsOf(sum, e.reviews) } : sum), undefined)
+  const reviews = mine.reduce<RelayEntry['reviews']>((sum, e) => (isCounts(e.reviews) ? { count: (sum?.count ?? 0) + n(e.reviews.count), standards: (sum?.standards ?? 0) + n(e.reviews.standards), spec: (sum?.spec ?? 0) + n(e.reviews.spec), fixed: (sum?.fixed ?? 0) + n(e.reviews.fixed), ...optionalOf(sum, e.reviews) } : sum), undefined)
   // Champ par champ, du plus ancien au plus récent : une session redémarrée qui n'envoie que
   // « dismissed » garde les comptes que la précédente a relayés.
   const sent = mine

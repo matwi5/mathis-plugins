@@ -18,13 +18,21 @@ export type TicketStatus = 'todo' | 'doing' | 'done' | 'blocked'
 
 /**
  * Une tâche hors du lot dont un ticket dépend : une décision à prendre, ou le travail de
- * quelqu'un d'autre. Elle bloque ses tickets tant qu'elle n'est pas faite (cochée dans Asana).
+ * quelqu'un d'autre. Elle bloque ses tickets tant qu'elle n'est pas faite (cochée dans Asana, ou levée par
+ * un envoi "status": "done"). Levée, elle ne redevient à faire que par un envoi explicite "status": "todo", ou par
+ * sa tâche Asana décochée.
  */
 export type ExternalBlocker = {
-  /** GID Asana (ou id du tracker). */
+  /** GID Asana (ou id du tracker), ou un id local sans tâche (la session d'une autre mission qui touche les mêmes fichiers). */
   id: string
   name: string
   status: 'todo' | 'done'
+  /**
+   * La date du dernier changement de statut envoyé (un "status" explicite, ou la tâche Asana cochée ou décochée) : la fusion de
+   * deux copies garde le plus récent (`keepExternals`). Absente pour un ajout sans statut envoyé ; au-delà de la
+   * tolérance, à la lecture (`clampFuture`), celle d'un « todo » tombe et celle d'une levée est ramenée à maintenant.
+   */
+  statusAt?: number
   /** Une décision à trancher (statut Asana « à trancher » ou « à confirmer »). */
   isDecision: boolean
 }
@@ -241,6 +249,11 @@ export type PhaseStats = {
   reviews?: number
   /** Constats corrigés, cumulés. */
   fixed?: number
+  /**
+   * Constats de la relecture du fond et de la forme (champ `form` de `review`), cumulés ; absent tant
+   * qu'aucune relecture n'en a rendu (jamais 0 par défaut). Il ne baisse jamais, hors effacement de la mission.
+   */
+  form?: number
 }
 
 /** Un skill lancé hors du fil de la mission, rattaché à la phase en cours. */
@@ -877,7 +890,14 @@ export type RelayEntry = {
     isWhole?: boolean
   }
   /** Les constats des revues que la session a envoyés (`review`), cumulés : comptés au retour du groupe. */
-  reviews?: { count: number; standards: number; spec: number; fixed: number; bugs?: number }
+  reviews?: { count: number; standards: number; spec: number; fixed: number; bugs?: number; form?: number }
+  /**
+   * L'empreinte de la dernière revue comptée (`reviewPrint` de relay.ts) : ses comptes tels qu'envoyés, le ticket
+   * relu qu'elle nomme et le statut de chaque ticket au moment de l'envoi. La même revue renvoyée sans changement de statut d'un ticket ni autre ticket relu ne se recompte pas ;
+   * illisible, elle vaut absente (la revue est comptée). Remplacée à chaque revue comptée ; effacée par un statut de
+   * ticket qui change, une revue lancée (`/code-review`), et avec l'entrée.
+   */
+  reviewPrint?: string
   /** La revue de sécurité que la session a envoyée (`security`) : reprise au retour du groupe. */
   security?: { advised?: boolean; why?: string; findings?: number; fixed?: number; dismissed?: number; at: number }
   /** Le dernier signal reçu : un ticket, un commit, des tests, une note, une revue, le compte rendu. */

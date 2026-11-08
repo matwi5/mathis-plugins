@@ -21,7 +21,7 @@ export type WorkerEffort = 'medium' | 'high'
 
 /**
  * Ce qui fait lancer un worker de groupe en high plutôt qu'en medium (règle « Effort d'un worker de groupe »,
- * section 11 de reference/procedure-groupe.md) ; `isMultiModule` : plusieurs modules de code (`codeModuleOf`).
+ * section 11 de la procédure, dans reference/effort-workers.md) ; `isMultiModule` : plusieurs modules de code (`codeModuleOf`).
  * Un ticket sensible n'y compte pas : le mod passe le worker en high pendant ce ticket (`workerTicketEffort`).
  */
 export type GroupEffortInputs = { hasDesignChoices: boolean; isMultiModule: boolean }
@@ -257,6 +257,50 @@ export const leadEffortPill = (x: LeadEffort, current: string | undefined): stri
   return current !== undefined && effortSent(x, current) !== current ? leadEffortText(x) : null
 }
 
+// ─── Le quota de la discussion, avant un lancement ─────────────────────────────────────────────
+
+/**
+ * Une fenêtre de quota telle que le moteur la donne (`$.session.usage().rateLimits`) : `five_hour`,
+ * `seven_day` (ou `spend_limit` d'une passerelle, laissé de côté), le pourcentage utilisé, la remise à zéro.
+ */
+export type QuotaWindow = { kind: string; percentUsed: number; resetsAt?: string }
+
+/** Les fenêtres montrées, dans cet ordre, avec leur nom court. */
+const QUOTA_WINDOWS: readonly (readonly [string, string])[] = [
+  ['five_hour', '5 h'],
+  ['seven_day', '7 j'],
+]
+
+/** Un délai jusqu'à la remise à zéro, dit court : « dans 40 min », « dans 3 h 05 », « dans 2 j ». */
+const resetIn = (ms: number): string => {
+  const m = Math.max(1, Math.round(ms / 60_000))
+  if (m < 60) return `dans ${m} min`
+  const h = Math.floor(m / 60)
+  return h < 48 ? `dans ${h} h ${String(m % 60).padStart(2, '0')}` : `dans ${Math.floor(h / 24)} j`
+}
+
+/**
+ * Le quota de la discussion en une ligne : « 5 h : 42 % (remise dans 3 h 05) · 7 j : 80 % (remise dans 2 j) ».
+ * Seulement les fenêtres de 5 heures et de 7 jours que le moteur donne avec un pourcentage lisible ; null sans
+ * aucune (hors abonnement, avant la première réponse) : rien ne s'affiche ni ne se cite alors. Une remise
+ * illisible ou passée est tue.
+ */
+export const quotaText = (limits: readonly QuotaWindow[] | null | undefined, now: number): string | null => {
+  if (!Array.isArray(limits)) return null
+  const parts = QUOTA_WINDOWS.flatMap(([kind, label]) => {
+    const w = limits.find(l => l !== null && typeof l === 'object' && l.kind === kind)
+    if (!w || typeof w.percentUsed !== 'number' || !Number.isFinite(w.percentUsed)) return []
+    const at = typeof w.resetsAt === 'string' ? Date.parse(w.resetsAt) : NaN
+    const reset = Number.isFinite(at) && at > now ? ` (remise ${resetIn(at - now)})` : ''
+    return [`${label} : ${Math.round(w.percentUsed)} %${reset}`]
+  })
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** Le quota cité dans la question d'effort xhigh et sous un xhigh imposé : relevé à l'écriture de la demande. */
+const QUOTA_NOTE = (quota: string): string =>
+  `le quota de cette discussion, relevé à l'écriture de cette demande (${quota}) : une session xhigh l'use vite, et une limite atteinte arrête le worker en plein travail`
+
 // ─── Les textes de la règle, donnés à Claude dans le brief d'un worker de groupe ──────────────
 
 /** L'effort qu'un bouton du tableau de bord impose à la session d'un groupe ; sans lui, Claude le choisit. */
@@ -294,30 +338,31 @@ export const SONNET_LAUNCH_FR =
  * (`groupLaunchNote`) ; Claude ne juge que ce que le mod ne sait pas, un choix de conception restant (high),
  * et dit l'effort pris et tout écart ; un ticket sensible ne compte pas, le mod de la session la passant en
  * high pendant ce ticket. Les critères du calcul et l'arbitrage high / xhigh vivent dans la section 11 de la
- * procédure, citée par `procedure` (son chemin).
+ * procédure, dans son annexe pour le manager, citée par `effortFile` (le chemin de `reference/effort-workers.md`).
  */
-const CALCULATED_EFFORT = (many: boolean, procedure: string): string =>
+const CALCULATED_EFFORT = (many: boolean, effortFile: string): string =>
   `Effort de ${many ? 'chaque session (<effort>)' : 'la session (<effort>)'} : l’effort calculé sur la ligne ${many ? 'de son' : 'du'} groupe ; high si un choix de conception reste à faire ${many ? 'à son' : 'au'} groupe. ` +
   'Pendant un ticket sensible, le mod de la session la passe lui-même en high : ne relève pas son effort pour ce ticket. ' +
   `Dis-moi en une ligne${many ? ', pour chaque groupe,' : ''} l'effort pris et, s'il s'écarte du calcul, pourquoi. ` +
-  `Critères du calcul, tâche de jugement et arbitrage high / xhigh : section 11 de ${procedure}, à lire avant de lancer. `
+  `Critères du calcul, tâche de jugement et arbitrage high / xhigh : section 11 de ${effortFile}, à lire avant de lancer. `
 
 /**
  * L'effort d'une session de groupe : celui que calcule le mod (medium par défaut, high pour un groupe
  * délicat), high pour un choix de conception restant ; xhigh proposé pour une tâche de jugement, jamais
- * choisi par Claude seul. Imposé par le bouton, sans question.
+ * choisi par Claude seul. Imposé par le bouton, sans question. `quota` (`quotaText`) : cité dans la question
+ * xhigh, ou avant un lancement en xhigh imposé ; null, rien n'en est dit.
  */
-export const GROUP_EFFORT = (many: boolean, imposed: ImposedEffort | undefined, current: string | undefined, procedure: string): string =>
+export const GROUP_EFFORT = (many: boolean, imposed: ImposedEffort | undefined, current: string | undefined, effortFile: string, quota: string | null = null): string =>
   imposed
-    ? `Effort de ${many ? 'chaque session (<effort>)' : 'la session (<effort>)'} : ${imposed}, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort. ${XHIGH_LAUNCH(many, current)}`
-    : CALCULATED_EFFORT(many, procedure) +
-      `Tu ne choisis jamais xhigh toi-même : quand un ticket ${many ? 'de son' : 'du'} groupe est une tâche de jugement (jamais pour une tâche d'exécution), avant de lancer, pose-moi une question à boutons « xhigh (Recommandé) / high »${many ? ' par groupe concerné, quatre au plus par encadré, chacune' : ''} avec une ligne qui nomme le ticket et la sorte de jugement ; cette question est permise, le bouton cliqué n'ayant pas fixé l'effort. ` +
+    ? `Effort de ${many ? 'chaque session (<effort>)' : 'la session (<effort>)'} : ${imposed}, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort${quota ? ` ; en lançant, cite-moi en une ligne, sans attendre de réponse, ${QUOTA_NOTE(quota)}` : ''}. ${XHIGH_LAUNCH(many, current)}`
+    : CALCULATED_EFFORT(many, effortFile) +
+      `Tu ne choisis jamais xhigh toi-même : quand un ticket ${many ? 'de son' : 'du'} groupe est une tâche de jugement (jamais pour une tâche d'exécution), avant de lancer, pose-moi une question à boutons « xhigh (Recommandé) / high »${many ? ' par groupe concerné, quatre au plus par encadré, chacune' : ''} avec une ligne qui nomme le ticket et la sorte de jugement${quota ? `, et une ligne qui cite ${QUOTA_NOTE(quota)}` : ''} ; cette question est permise, le bouton cliqué n'ayant pas fixé l'effort. ` +
       `Si je réponds xhigh : ${XHIGH_LAUNCH(many, current)}`
 
 /**
  * L'effort d'une session de groupe lancée par le mode auto : la même règle sans xhigh ni sa question,
  * l'absence de proposition déclarée.
  */
-export const AUTO_GROUP_EFFORT = (many: boolean, procedure: string): string =>
-  CALCULATED_EFFORT(many, procedure) +
+export const AUTO_GROUP_EFFORT = (many: boolean, effortFile: string): string =>
+  CALCULATED_EFFORT(many, effortFile) +
   "La mission est en mode auto : jamais xhigh ; ne me pose pas la question « xhigh (Recommandé) / high » ; quand un ticket relèverait de xhigh (une tâche de jugement), lance en high et déclare dans decided que xhigh n’a pas été proposé. "

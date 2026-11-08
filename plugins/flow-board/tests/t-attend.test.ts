@@ -1,3 +1,5 @@
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, archiveRun, clearWaitsUser, detachOnLoad, dropRun, emptyBoard, finishActive, mergeBoards, newRun, openRun, parkActive, resumeRun, setAsideActive, setWaitsUser, switchOnAuto } from '../hooks/model.ts'

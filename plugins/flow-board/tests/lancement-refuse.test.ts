@@ -3,6 +3,8 @@
 // demande dans la saisie, pour que la personne la lance d'un Entrée (un tour à elle), et dit à Claude
 // de ne rien relancer lui-même. Décision de Mathis du 02/11/2026 (« refus capté »).
 
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { Board } from '../types'

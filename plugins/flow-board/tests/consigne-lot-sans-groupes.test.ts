@@ -7,6 +7,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { memoryDisk } from './disque-memoire.ts'
 
+import { applyReport, emptyBoard, newRun, openQuestions } from '../hooks/model.ts'
+import { activeRun, currentPhase } from '../hooks/basics.ts'
+import type { Board } from '../types'
+
 const TOOL = 'mcp__flow-board__flow'
 
 const world = (on: any) => {
@@ -54,6 +58,8 @@ test('sans groupes, la consigne d’/implement cite la procédure par son chemin
   const text = await implement($, on, false)
   expect(text).toMatch(/\S+\/reference\/procedure-groupe\.md/)
   expect(text).toContain('sections 1 (« Avant le premier ticket »), 2 (« Chaque ticket, un par un et dans l\'ordre »), 3 (« Règles de travail »), 4 (« Revue du groupe »), 5 (« Revue de sécurité »), 7 (« La consigne des relecteurs »), 8 (« Le fichier des choix déjà déclarés ») and 9 (« Sans git »)')
+  // La procédure est un noyau et des annexes : les sections 4, 5 et 9 se lisent dans la leur.
+  expect(text).toContain('in order (sections 4 and 5 are in procedure-groupe-fin.md, section 9 in procedure-groupe-sans-git.md, next to it)')
   // La correspondance de lecture, la base du lot comprise.
   expect(text).toContain('« le manager » is you')
   expect(text).toContain('what the procedure sends to it (SendMessage, the relay) you tell the user directly')
@@ -157,4 +163,58 @@ test('un plan de groupes arrivé après un {"complete": true} trop tôt de l’I
 test('sans groupes, les envois « group » de la procédure se lisent sans lui', async ($, on) => {
   const text = await implement($, on, false)
   expect(text).toContain('what the procedure sends with "group" (section 2, point 8, and section 5) you send without it')
+})
+
+// Le groupe « durcissement » proposé attend la réponse : `complete` était parti avant elle, le tableau de bord
+// était passé à la suite, et le message proposait juste en dessous le compte rendu, lancé ensuite par erreur.
+for (const withGroups of [false, true]) {
+  test(`fin de lot ${withGroups ? 'avec' : 'sans'} groupes : un groupe « durcissement » proposé se déclare dans "waiting", et "complete" ne part qu’après la réponse`, async ($, on) => {
+    const text = await implement($, on, withGroups)
+    expect(text).toContain('{"complete": true}, unless you propose a « durcissement » group')
+    expect(text).toContain('until they answer, declare that question in "waiting" on the implement phase instead of sending {"complete": true} ({"waiting": [{"id": "durcissement", "phase": "implement", "text": "<the proposal, short>"}]})')
+    expect(text).toContain('withdraw it as soon as they answer ({"waiting": [{"id": "durcissement", "answered": true}]}: an answered question left open stays on the dashboard as waiting for them)')
+    expect(text).toContain('send {"complete": true} only once the answer came (the group refused, or the group created and done)')
+    expect(text).toContain('the message that proposes the group suggests neither /flow-board:compte-rendu nor the delivery')
+    const waiting = text.indexOf('declare that question in "waiting"')
+    expect(waiting).toBeGreaterThan(-1)
+    expect(text.indexOf('send {"complete": true} only once the answer came')).toBeGreaterThan(waiting)
+  })
+}
+
+// L'appel dicté, rejoué contre le modèle : la question garde la phase d'implémentation ouverte ; la réponse,
+// envoyée avec `complete`, la dit faite et retire la question.
+test('l’appel dicté se rejoue : "waiting" sur la phase d’implémentation la garde courante, puis "answered" et "complete" la disent faite', () => {
+  const run = newRun('implement', 1_000, 'Lot')
+  let board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  board = applyReport(board, { tickets: [{ id: 't1', name: 'Un', status: 'done' }] }, 2_000).board
+  const phase = currentPhase(activeRun(board)!).skill
+  expect(phase).toBe('implement')
+  board = applyReport(board, { waiting: [{ id: 'durcissement', phase: 'implement', text: 'Créer le groupe « durcissement » (F1, F2) ?' }] }, 3_000).board
+  expect(openQuestions(activeRun(board)!).map(q => q.id)).toEqual(['durcissement'])
+  expect(currentPhase(activeRun(board)!)).toMatchObject({ skill: 'implement' })
+  expect(currentPhase(activeRun(board)!).status).not.toBe('done')
+  board = applyReport(board, { waiting: [{ id: 'durcissement', answered: true }], complete: true }, 4_000).board
+  expect(openQuestions(activeRun(board)!)).toEqual([])
+  expect(currentPhase(activeRun(board)!)).toMatchObject({ skill: 'implement', status: 'done' })
+})
+
+// L'autre réponse : le groupe « durcissement » accepté. La question se retire dès la réponse (ouverte, elle
+// resterait « Questions qui t'attendent » pendant tout le groupe), ses tickets s'ajoutent, et `complete` attend
+// qu'ils soient faits.
+test('l’appel dicté se rejoue aussi quand le groupe « durcissement » est créé et fait avant complete', () => {
+  const run = newRun('implement', 1_000, 'Lot')
+  let board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  board = applyReport(board, { tickets: [{ id: 't1', name: 'Un', status: 'done' }] }, 2_000).board
+  board = applyReport(board, { waiting: [{ id: 'durcissement', phase: 'implement', text: 'Créer le groupe « durcissement » (F1) ?' }] }, 3_000).board
+  expect(openQuestions(activeRun(board)!).map(q => q.id)).toEqual(['durcissement'])
+  board = applyReport(board, { waiting: [{ id: 'durcissement', answered: true }], tickets: [{ id: 'd1', name: 'Durcir F1' }] }, 3_500).board
+  expect(openQuestions(activeRun(board)!)).toEqual([])
+  expect(currentPhase(activeRun(board)!)).toMatchObject({ skill: 'implement' })
+  expect(currentPhase(activeRun(board)!).status).not.toBe('done')
+  board = applyReport(board, { set: [{ id: 'd1', status: 'done' }] }, 3_800).board
+  expect(currentPhase(activeRun(board)!).status).not.toBe('done')
+  board = applyReport(board, { complete: true }, 4_000).board
+  expect(openQuestions(activeRun(board)!)).toEqual([])
+  expect(currentPhase(activeRun(board)!)).toMatchObject({ skill: 'implement', status: 'done' })
+  expect(activeRun(board)!.tickets.map(t => [t.id, t.status])).toEqual([['t1', 'done'], ['d1', 'done']])
 })

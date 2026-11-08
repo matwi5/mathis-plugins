@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, reopenText, shellQuote } from '../hooks/closing.ts'
+import { closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isScriptPath, isSessionId, isVersionForm, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, neutralRelayed, reopenText, shellQuote } from '../hooks/closing.ts'
 import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, newRun, startLinkedGroups } from '../hooks/model.ts'
 import { applyRelay, decidedFileText } from '../hooks/relay.ts'
 import { isSeat } from '../hooks/seat.ts'
@@ -8,7 +8,7 @@ import { isEntryId, refOf, soundEntry } from '../hooks/coordination.ts'
 import { isCardId, isFolderName, isLaunchId } from '../hooks/launch.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Closing } from '../types'
-import { CORPUS, ch } from './corpus.mjs'
+import { CORPUS, NON_TEXT, ch } from './corpus.mjs'
 
 // Un même corpus hostile passe par chaque garde de forme : la même classe de défaut (Unicode,
 // sosies, caractères de contrôle, signe Kelvin) était revenue à cinq tours de revue, dans cinq
@@ -62,6 +62,78 @@ test('le fichier de coordination : l’id d’une entrée, sa mission et la réf
 test('le siège du COO relu (isSeat) refuse chaque entrée du corpus dans l’id de sa discussion', () => {
   expect(isSeat({ by: 'ab-cd', at: 1, seenAt: 1 })).toBe(true)
   expect(passing(token => isSeat({ by: `ab${token}cd`, at: 1, seenAt: 1 }))).toEqual([])
+})
+
+test('isSessionId refuse chaque entrée du corpus, dans un UUID comme dans un id local_', () => {
+  expect(isSessionId(UUID)).toBe(true)
+  expect(isSessionId('local_ab-cd')).toBe(true)
+  expect(passing(token => isSessionId(`178bd61c${token}-0416-4d88-8317-cc583d9f0d47`))).toEqual([])
+  expect(passing(token => isSessionId(`local_ab${token}cd`))).toEqual([])
+})
+
+/**
+ * Les gardes de forme exportés par closing.ts et model.ts, et les neutralisations : chacun a sa clé
+ * dans une de ces deux tables, que `gardes-corpus.test.mjs` relit (tout export `is…` ou `neutral…`
+ * de ces modules y est, ou dans sa liste des prédicats sur la mission). Chaque garde de la table
+ * accepte sa valeur valide et refuse chaque entrée du corpus glissée dedans, et toute valeur qui
+ * n'est pas du texte ; chaque neutralisation rend, de chaque entrée du corpus comme d'une valeur qui
+ * n'est pas du texte, un texte sans fin de ligne.
+ */
+type FormGuard = { accepts: (value: unknown) => boolean; valid: string; hostile: (token: string) => string }
+const FORM_GUARDS: Record<string, FormGuard> = {
+  isGroupId: { accepts: isGroupId, valid: 'A1b', hostile: token => `A${token}1` },
+  isSafeId: { accepts: isSafeId, valid: 'ab-cd', hostile: token => `ab${token}cd` },
+  isQuestionIdForm: { accepts: isQuestionIdForm, valid: 'relance:A#2', hostile: token => `relance:A${token}#2` },
+  isSessionId: { accepts: isSessionId, valid: UUID, hostile: token => `178bd61c${token}-0416-4d88-8317-cc583d9f0d47` },
+  isSafeBranch: { accepts: isSafeBranch, valid: 'feat/ab-cd', hostile: token => `feat/ab${token}cd` },
+  isVersionForm: { accepts: isVersionForm, valid: '0.80.0-rc.1', hostile: token => `0.8${token}0.0` },
+  isWorktreePath: { accepts: value => isWorktreePath(value, ROOT), valid: `${ROOT}/.claude/worktrees/groupe-ab-cd`, hostile: token => `${ROOT}/.claude/worktrees/groupe-ab${token}cd` },
+  isScriptPath: { accepts: isScriptPath, valid: '/opt/poste/.claude/plugins/flow-board/scripts/fermeture.mjs', hostile: token => `/opt/po${token}ste/.claude/plugins/flow-board/scripts/fermeture.mjs` },
+}
+const NEUTRALIZERS: Record<string, (value: unknown) => string> = { neutralLine, neutralInPrompt, neutralRelayed }
+
+/** Ce qu'une neutralisation ne rend jamais : une fin de ligne, un contrôle, un caractère de format ou un invisible. */
+const opensALine = (c: string): boolean => /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/u.test(c)
+
+test('chaque garde de la table accepte sa valeur valide et refuse chaque entrée du corpus glissée dedans', () => {
+  for (const [name, guard] of Object.entries(FORM_GUARDS)) {
+    expect({ name, valid: guard.accepts(guard.valid) }).toEqual({ name, valid: true })
+    expect({ name, leaks: passing(token => guard.accepts(guard.hostile(token))) }).toEqual({ name, leaks: [] })
+  }
+})
+
+test('chaque neutralisation de la table rend, de chaque entrée du corpus, un texte sans fin de ligne ni invisible', () => {
+  for (const [name, neutral] of Object.entries(NEUTRALIZERS)) {
+    expect({ name, leaks: passing(token => [...neutral(`avant ${token} après`)].some(opensALine)) }).toEqual({ name, leaks: [] })
+  }
+})
+
+test('chaque garde de forme refuse une valeur qui n’est pas du texte ; chaque neutralisation l’accepte et rend un texte sans fin de ligne', () => {
+  const leaks: string[] = []
+  for (const [value, input] of Object.entries(NON_TEXT)) {
+    for (const [name, guard] of Object.entries(FORM_GUARDS)) if (guard.accepts(input) !== false) leaks.push(`${name} accepte ${value}`)
+    for (const [name, neutral] of Object.entries(NEUTRALIZERS)) {
+      let out: unknown = null
+      try {
+        out = neutral(input)
+      } catch {
+        out = null
+      }
+      if (typeof out !== 'string' || [...out].some(opensALine)) leaks.push(`${name} sur ${value}`)
+    }
+  }
+  expect(leaks).toEqual([])
+  // Une chaîne passe comme avant.
+  expect(neutralLine('a b')).toBe('a b')
+})
+
+test('neutralRelayed ne laisse, d’aucune entrée du corpus, ni fin de ligne, ni sosie de « · », ni crochet de citation', () => {
+  const quotes = ch(0x27e6) + 'x' + ch(0x27e7) + ch(0x301a) + 'y' + ch(0x301b)
+  const leaks = [...entries, ['crochets de citation', quotes] as [string, string]]
+    .filter(([, token]) => breaksASection(neutralRelayed(`avant ${token} après`)))
+    .map(([name]) => name)
+  expect(leaks).toEqual([])
+  expect(neutralRelayed('a · b')).toBe('a • b')
 })
 
 test('isSafeBranch refuse chaque entrée du corpus', () => {
@@ -186,7 +258,7 @@ test('la description d’une fermeture cite le titre de la mission neutralisé, 
   for (const [name, token] of [...entries, ...quotes.map(q => [`guillemet ou crochet ${q}`, q] as [string, string])]) {
     const run = newRun('implement', 1_000, `Avant ${token} après`)
     for (const target of [{ kind: 'group', id: 'A', name: 'Alpha' } as const, { kind: 'items', skill: 'retro' } as const]) {
-      const text = closingProcedure({ run, target, isRepo: true })
+      const text = closingProcedure({ hasReport: true, run, target, isRepo: true })
       const at = text.indexOf('de la mission « Avant')
       const cited = at < 0 ? '' : text.slice(at + 'de la mission « '.length, text.indexOf('»', at))
       // Le titre se retrouve entier entre ses « » (jusqu'à sa fin, coupée ou non) : rien dans sa citation ne la ferme ni ne la coupe.

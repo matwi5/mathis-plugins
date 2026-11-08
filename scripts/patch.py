@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """Remplace un texte unique dans un fichier, avec assertion ; ou un lot de remplacements, tout ou rien ;
-ou ajoute un texte à la fin d'un fichier.
+ou ajoute un texte à la fin d'un fichier ; ou remplace une plage de lignes vérifiée ; ou déplace un bloc
+de lignes d'un fichier à un autre, l'identité prouvée.
 
     python3 scripts/patch.py <fichier> <ancien> <nouveau>
     python3 scripts/patch.py <fichier> @<fichier de l'ancien texte> @<fichier du nouveau texte>
     python3 scripts/patch.py --lot <fichier de paires>
     python3 scripts/patch.py --append <fichier> <texte>
+    python3 scripts/patch.py --plage <fichier> <première ligne> <dernière ligne> <nouveau> --debut <texte> --fin <texte>
+    python3 scripts/patch.py --deplace [--essai] <source> <début> <fin> <cible> <ancre>
 
 Pour une édition que l'outil Edit ne peut pas faire et qu'aucun script jetable ne devrait refaire :
 un paragraphe trop long, ou une commande composée que le garde-fou d'un worktree refuse (un heredoc
 ou un `sed` dont le texte cite git). Un argument qui commence par `@` est lu dans le fichier qu'il
 nomme (UTF-8), sans sa fin de ligne finale (`\\n` ou `\\r\\n`) : un texte qui doit finir par une fin
 de ligne en met deux dans son fichier ; `@@` au début écrit un `@` littéral. L'ancien texte doit
-paraître exactement une fois : sinon rien n'est écrit, et le message dit combien de fois il paraît.
+paraître exactement une fois : sinon rien n'est écrit, et le message dit ce qui ne va pas, pour le
+corriger sans relire le fichier : un ancien texte absent donne « absent ; ligne la plus proche : <n> :
+<texte> », la ligne du fichier la plus proche de sa première ligne (la même mesure que `show.py`) ;
+un ancien texte présent plusieurs fois donne « présent N fois, lignes <n1>, <n2>… », la ligne où
+commence chaque occurrence.
 La forme simple refuse un fichier dont la première ligne est `::: fichier …` (un fichier de paires) :
 elle l'aurait modifié au lieu d'appliquer ses paires, et renvoie à `--lot`.
 Le fichier garde son encodage UTF-8 et ses fins de ligne. Dans chaque texte (argument, `@fichier`
@@ -34,19 +41,53 @@ paire est fait des lignes entre ses marqueurs, sans la fin de ligne qui précèd
 les lignes vides entre deux paires sont permises, aucun autre texte. Les paires s'appliquent dans
 l'ordre, une paire sur le texte que laissent les précédentes. Tout ou rien : si une paire échoue
 (ancien texte absent ou non unique, fichier introuvable, lot mal formé), aucun fichier n'est écrit,
-et le message liste chaque paire en échec ; une écriture refusée par le système (droits) arrête le
+et le message liste chaque paire en échec, avec son numéro et le message d'un remplacement simple
+(ses numéros de ligne sont ceux du texte que laissent les paires précédentes du même fichier, et le
+message le dit quand une paire précédente l'a changé) ; une écriture refusée par le système (droits) arrête le
 lot, et le message nomme les fichiers déjà écrits.
 
 `--append` ajoute le texte (argument, ou `@<fichier>`, marqueur `{{u}}` compris) à la fin du fichier,
 suivi d'une fin de ligne, comme un heredoc `cat >> <fichier> <<EOF` que le garde-fou d'un worktree
 refuse dès que le texte cite git : les fins de ligne du fichier sont gardées (CRLF s'il en a), une
 fin de ligne s'ajoute d'abord si le fichier n'en a pas à sa fin, et un fichier absent est une erreur,
-sans création. Sans dépendance hors de la bibliothèque standard.
+sans création.
+
+`--plage` remplace les lignes <première> à <dernière> (numérotées comme Read, bornes comprises) par le
+nouveau texte, après avoir vérifié que la première ligne porte le texte de `--debut` et la dernière
+celui de `--fin` (une sous-chaîne, comme le motif de `show.py`) : une plage qui a bougé est refusée sans
+rien écrire, et le message dit sur quelles lignes ces textes se trouvent maintenant. Le nouveau texte
+(argument ou `@<fichier>`, marqueur `{{u}}` compris, comme les textes de `--debut` et `--fin`) est coupé
+à ses fins de ligne, chaque morceau devenant une ligne écrite à la fin de ligne du fichier (CRLF s'il
+en a) : « A\\nB » donne deux lignes, « A\\nB\\n » trois, la dernière vide ; vide, il retire la plage ; une
+dernière ligne du fichier sans fin de ligne le reste. Un texte cherché (de `--debut`, `--fin`, <début>,
+<fin> ou <ancre>) qui n'est sur aucune ligne donne, comme l'ancien texte d'un remplacement, la ligne
+la plus proche.
+
+`--deplace` déplace un bloc de lignes de <source> à <cible> : le bloc va de la ligne qui porte le texte
+<début> à celle qui porte <fin> (bornes comprises, chacune la seule de la source à porter son texte,
+la même ligne si les deux textes y sont), et s'insère dans <cible> après la seule ligne qui porte
+<ancre>. Tout ou rien : un texte absent ou présent sur plusieurs lignes, une fin avant le début, ou une
+source qui est aussi la cible arrêtent le script avant toute écriture, avec la raison. Les lignes
+insérées prennent les fins de ligne de la cible (une ancre en dernière ligne sans fin de ligne en
+reçoit une, comme la dernière ligne du bloc quand il finit la source sans fin de ligne) ; la source
+perd ses lignes sans autre changement. Avant d'écrire, puis après avoir relu
+les deux fichiers sur le disque, le script prouve que les lignes insérées sont celles du bloc, octet
+pour octet (fins de ligne comprises quand les deux fichiers ont les mêmes ; sinon le message dit la
+conversion), et que la source n'a perdu que le bloc ; sinon il n'écrit rien, ou remet les deux
+fichiers tels qu'avant. Il écrit la cible d'abord, la source ensuite, et une écriture refusée remet ce
+qui était déjà écrit. `--essai` dit ce qui serait fait, sans rien écrire.
+Sans dépendance hors de la bibliothèque standard.
 """
 
+import hashlib
 import re
 import sys
 from pathlib import Path
+
+# `show.py`, à côté de ce script, donne la mesure de la ligne la plus proche : chemin ajouté à la main
+# (un lancement par `python3 -I` n'ajoute pas le dossier du script).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from show import line_list, nearest_text  # noqa: E402
 
 # Le marqueur qui s'écrit `\u` (voir la docstring), et ses formes échappées : `{{uu}}` s'écrit
 # `{{u}}`, `{{uuu}}` s'écrit `{{uu}}`, etc. La barre oblique inverse est donnée par son code.
@@ -97,11 +138,18 @@ def replace_once(path, text, old, new):
     """Le texte où l'unique occurrence de `old` devient `new`, et la ligne où elle commence."""
     if old == "":
         raise PatchError("ancien texte vide")
-    count = text.count(old)
-    if count != 1:
-        raise PatchError(f"{path} : l'ancien texte paraît {count} fois, il doit paraître exactement une fois ; rien n'est écrit")
-    at = text.index(old)
-    return text.replace(old, new), text.count("\n", 0, at) + 1
+    starts, at = [], text.find(old)
+    while at >= 0:
+        starts.append(at)
+        at = text.find(old, at + len(old))
+    if not starts:
+        lines = [line.rstrip("\r") for line in text.split("\n")]
+        raise PatchError(f"{path} : l'ancien texte est absent{nearest_text(lines, old)} ; rien n'est écrit")
+    lines_at = [text.count("\n", 0, at) + 1 for at in starts]
+    if len(starts) > 1:
+        raise PatchError(f"{path} : l'ancien texte est présent {len(starts)} fois, lignes "
+                         f"{line_list(lines_at)} ; il doit paraître exactement une fois ; rien n'est écrit")
+    return text.replace(old, new), lines_at[0]
 
 
 def read_target(path):
@@ -189,6 +237,7 @@ def patch_batch(lot):
     pairs = parse_batch(decode(Path(lot)))
     # Rangés par chemin résolu : un même fichier nommé deux fois (`a.md`, `./a.md`) garde chaque remplacement.
     texts, done, errors = {}, [], []
+    changed = set()  # les fichiers qu'une paire réussie a déjà changés
     for number, target, old, new in pairs:
         key = Path(target).resolve()
         try:
@@ -196,8 +245,10 @@ def patch_batch(lot):
                 texts[key] = read_target(target)
             texts[key], line = replace_once(target, texts[key], old, new)
             done.append((number, target, line))
+            changed.add(key)
         except PatchError as err:
-            errors.append(f"paire {number} : {err}")
+            note = " (lignes du texte laissé par les paires précédentes)" if key in changed else ""
+            errors.append(f"paire {number} : {err}{note}")
     if errors:
         raise PatchError("aucun fichier écrit :\n  " + "\n  ".join(errors))
     written = []
@@ -211,8 +262,199 @@ def patch_batch(lot):
     return done
 
 
+def split_lines(text):
+    """Les lignes d'un texte : [(contenu, fin de ligne)], la fin valant `\\r\\n`, `\\n`, ou `""` pour une
+    dernière ligne sans fin de ligne ; un texte vide n'a aucune ligne."""
+    parts = text.split("\n")
+    lines = [(part[:-1], "\r\n") if part.endswith("\r") else (part, "\n") for part in parts[:-1]]
+    if parts[-1]:
+        lines.append((parts[-1], ""))
+    return lines
+
+
+def join_lines(lines):
+    return "".join(content + end for content, end in lines)
+
+
+def newline_of(text):
+    """La fin de ligne d'un fichier : CRLF s'il en a, comme `--append`."""
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+def located(lines, needle):
+    """Où se trouve un texte : « sur aucune ligne », « ligne <n> » ou « présent sur N lignes (…) »."""
+    hits = [n for n, (content, _) in enumerate(lines, 1) if needle in content]
+    if not hits:
+        return hits, "sur aucune ligne" + nearest_text([content for content, _ in lines], needle)
+    if len(hits) == 1:
+        return hits, f"ligne {hits[0]}"
+    return hits, f"présent sur {len(hits)} lignes ({line_list(hits)})"
+
+
+def replace_range(path, first, last, new, start_text, end_text):
+    """Remplace les lignes `first` à `last` de `path` par `new`, une fois vérifié que la première porte
+    `start_text` et la dernière `end_text` ; rend le nombre de lignes écrites à la place."""
+    if start_text == "" or end_text == "":
+        raise PatchError("texte de --debut ou de --fin vide ; rien n'est écrit")
+    current = read_target(path)
+    lines = split_lines(current)
+    if not 1 <= first <= last <= len(lines):
+        raise PatchError(f"{path} : la plage {first} à {last} sort du fichier ({len(lines)} lignes) ou finit "
+                         f"avant de commencer ; rien n'est écrit")
+    moved = []
+    for n, needle in ((first, start_text), (last, end_text)):
+        if needle not in lines[n - 1][0]:
+            moved.append(f"la ligne {n} ne porte pas « {needle} » (« {needle} » : {located(lines, needle)[1]})")
+    if moved:
+        raise PatchError(f"{path} : la plage a bougé : {' ; '.join(moved)} ; rien n'est écrit")
+    newline = newline_of(current)
+    added = [] if new == "" else [(line, newline) for line in new.replace("\r\n", "\n").split("\n")]
+    if added and lines[last - 1][1] == "":
+        added[-1] = (added[-1][0], "")
+    Path(path).write_bytes(join_lines(lines[:first - 1] + added + lines[last:]).encode("utf-8"))
+    return len(added)
+
+
+def plan_move(source, start_text, end_text, target, anchor):
+    """Le déplacement calculé, sans rien écrire : un dict (lignes du bloc, ligne de l'ancre, textes
+    d'avant et d'après des deux fichiers, empreinte, conversion des fins de ligne) ; PatchError sinon."""
+    if "" in (start_text, end_text, anchor):
+        raise PatchError("texte de début, de fin ou d'ancre vide ; rien n'est écrit")
+    if Path(source).resolve() == Path(target).resolve():
+        raise PatchError(f"{source} et {target} sont le même fichier : le déplacement va d'un fichier à un autre ; "
+                         f"rien n'est écrit")
+    src, dst = read_target(source), read_target(target)
+    s_lines, t_lines = split_lines(src), split_lines(dst)
+    errors, found = [], {}
+    for label, lines, needle, where in (("début", s_lines, start_text, source), ("fin", s_lines, end_text, source),
+                                        ("ancre", t_lines, anchor, target)):
+        hits, text = located(lines, needle)
+        if len(hits) != 1:
+            errors.append(f"{label} « {needle} » : {text} dans {where}")
+        else:
+            found[label] = hits[0]
+    if not errors and found["fin"] < found["début"]:
+        errors.append(f"la fin (ligne {found['fin']}) précède le début (ligne {found['début']})")
+    if errors:
+        raise PatchError("rien n'est écrit :\n  " + "\n  ".join(errors))
+    a, b, k = found["début"], found["fin"], found["ancre"]
+    block = s_lines[a - 1:b]
+    newline = newline_of(dst) if "\n" in dst else newline_of(src)
+    inserted = [(content, newline) for content, _ in block]
+    anchor_line = t_lines[k - 1] if t_lines[k - 1][1] else (t_lines[k - 1][0], newline)
+    new_dst = join_lines(t_lines[:k - 1] + [anchor_line] + inserted + t_lines[k:])
+    new_src = join_lines(s_lines[:a - 1] + s_lines[b:])
+    moved_bytes = join_lines(block).encode("utf-8")
+    ends = {end for _, end in block if end}
+    name = {"\r\n": "CRLF", "\n": "LF"}
+    others = sorted(name[end] for end in ends - {newline})
+    conversion = f"fins de ligne {', '.join(others)} → {name[newline]}" if others else None
+    return {"first": a, "last": b, "anchor": k, "block": block, "newline": newline, "src": src, "dst": dst,
+            "new_src": new_src, "new_dst": new_dst, "sha": hashlib.sha256(moved_bytes).hexdigest(),
+            "conversion": conversion}
+
+
+def prove_move(plan, new_src, new_dst):
+    """Vrai si `new_dst` porte, juste après la ligne de l'ancre, chaque ligne du bloc à l'identique,
+    terminée par la fin de ligne de la cible, le reste de la cible inchangé (l'ancre gagnant au plus une
+    fin de ligne), et si `new_src` est la source sans le bloc, octet pour octet."""
+    k, block, newline = plan["anchor"], plan["block"], plan["newline"]
+    before, after = split_lines(plan["dst"]), split_lines(new_dst)
+    if len(after) != len(before) + len(block):
+        return False
+    same = after[k:k + len(block)] == [(content, newline) for content, _ in block]
+    anchor_ok = after[k - 1] == before[k - 1] or (before[k - 1][1] == "" and after[k - 1] == (before[k - 1][0], newline))
+    kept = after[:k - 1] == before[:k - 1] and after[k + len(block):] == before[k:]
+    s_before = split_lines(plan["src"])
+    return same and anchor_ok and kept \
+        and new_src == join_lines(s_before[:plan["first"] - 1] + s_before[plan["last"]:])
+
+
+def move(source, start_text, end_text, target, anchor, dry=False):
+    """Déplace le bloc, tout ou rien ; rend le plan calculé (rien n'est écrit avec `dry`)."""
+    plan = plan_move(source, start_text, end_text, target, anchor)
+    if not prove_move(plan, plan["new_src"], plan["new_dst"]):
+        raise PatchError("le calcul ne retrouve pas le bloc à l'identique dans la cible ; rien n'est écrit")
+    if dry:
+        return plan
+    written = []
+    try:
+        Path(target).write_bytes(plan["new_dst"].encode("utf-8"))
+        written.append((target, plan["dst"]))
+        Path(source).write_bytes(plan["new_src"].encode("utf-8"))
+        written.append((source, plan["src"]))
+    except OSError as err:
+        raise PatchError(f"écriture refusée ({err.strerror}) ; {restore(written)}")
+    if not prove_move(plan, read_target(source), read_target(target)):
+        raise PatchError(f"les fichiers relus sur le disque ne portent pas le déplacement attendu ; {restore(written)}")
+    return plan
+
+
+def restore(written):
+    """Remet chaque fichier déjà écrit à son texte d'avant, en sens inverse, et relit chacun ; rend ce
+    qui a été constaté, pour le message : les fichiers remis, et ceux qui ne l'ont pas été."""
+    failed = []
+    for path, text in reversed(written):
+        try:
+            Path(path).write_bytes(text.encode("utf-8"))
+            if Path(path).read_bytes() != text.encode("utf-8"):
+                failed.append(str(path))
+        except OSError:
+            failed.append(str(path))
+    if failed:
+        return f"NON REMIS tels qu'avant, à vérifier à la main : {', '.join(failed)}"
+    return f"remis tels qu'avant et relus : {', '.join(str(p) for p, _ in written) or 'aucun fichier écrit'}"
+
+
+def range_main(argv):
+    """`--plage <fichier> <première> <dernière> <nouveau> --debut <texte> --fin <texte>`."""
+    rest, texts = [], {}
+    k = 0
+    while k < len(argv):
+        if argv[k] in {"--debut", "--fin"} and k + 1 < len(argv) and argv[k] not in texts:
+            texts[argv[k]] = argv[k + 1]
+            k += 2
+        else:
+            rest.append(argv[k])
+            k += 1
+    if len(rest) != 4 or set(texts) != {"--debut", "--fin"} or \
+            not all(n.isascii() and n.isdigit() for n in rest[1:3]):
+        print(USAGE[4], file=sys.stderr)
+        return 2
+    path, first, last, new = rest
+    count = replace_range(path, int(first), int(last), argument(new), argument(texts["--debut"]),
+                          argument(texts["--fin"]))
+    print(f"{path} : lignes {first} à {last} remplacées ({count} ligne{'s' if count > 1 else ''} à la place)")
+    return 0
+
+
+def move_main(argv):
+    """`--deplace [--essai] <source> <début> <fin> <cible> <ancre>`."""
+    dry = "--essai" in argv
+    rest = [a for a in argv if a != "--essai"]
+    if len(rest) != 5 or argv.count("--essai") > 1:
+        print(USAGE[5], file=sys.stderr)
+        return 2
+    source, start, end, target, anchor = rest
+    plan = move(source, argument(start), argument(end), target, argument(anchor), dry)
+    count = plan["last"] - plan["first"] + 1
+    lines = f"{count} ligne{'s' if count > 1 else ''}"
+    if dry:
+        print(f"{source} : lignes {plan['first']} à {plan['last']} ({lines}) à retirer ; {target} : à insérer "
+              f"après la ligne {plan['anchor']} ; sha256 {plan['sha']} ; essai : rien n'est écrit")
+        return 0
+    how = f", {plan['conversion']}" if plan["conversion"] else ""
+    print(f"{source} : lignes {plan['first']} à {plan['last']} retirées ; {target} : {lines} insérées après la "
+          f"ligne {plan['anchor']} ; relus, identiques{how} (sha256 {plan['sha']})")
+    return 0
+
+
 def main(argv):
     try:
+        if argv[:1] == ["--plage"]:
+            return range_main(argv[1:])
+        if argv[:1] == ["--deplace"]:
+            return move_main(argv[1:])
         if argv[:1] == ["--lot"] and len(argv) == 2:
             done = patch_batch(argv[1])
             for number, target, line in done:
@@ -224,7 +466,7 @@ def main(argv):
             count = append(argv[1], argument(argv[2]))
             print(f"{argv[1]} : ajouté ({count} ligne{'s' if count > 1 else ''} à la fin)")
             return 0
-        if len(argv) != 3 or argv[0] in {"--lot", "--append"}:
+        if len(argv) != 3 or argv[0] in {"--lot", "--append", "--plage", "--deplace"}:
             print("\n".join(USAGE), file=sys.stderr)
             return 2
         line = patch(argv[0], argument(argv[1]), argument(argv[2]))
@@ -236,4 +478,11 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    # Les messages portent des caractères hors de cp1252 (« → », « … ») : une sortie Windows en cp1252
+    # ferait échouer l'affichage après une écriture réussie.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     sys.exit(main(sys.argv[1:]))

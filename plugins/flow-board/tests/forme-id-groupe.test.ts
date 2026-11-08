@@ -75,7 +75,7 @@ test('« Do not close » ne demande rien à une session précédente encore acti
   relay = applyRelay(relay, run.id, 'abc123', { kind: 'report', text: 'fini' }, 2_700)!
   relay = applyRelay(relay, run.id, 'abc123', { kind: 'note', text: 'encore un correctif' }, 2_800)!
   expect(closingText(run, relay, false)).not.toContain('Do not close')
-  const procedure = closingProcedure({ run, target: { kind: 'group', id: 'a/b', name: 'G0' }, isRepo: false })
+  const procedure = closingProcedure({ hasReport: true, run, target: { kind: 'group', id: 'a/b', name: 'G0' }, isRepo: false })
   expect(procedure).toContain('Ne ferme rien')
   expect(procedure.match(/Ne ferme rien/g)).toHaveLength(1)
 })

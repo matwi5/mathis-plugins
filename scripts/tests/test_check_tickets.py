@@ -1,6 +1,7 @@
 """Tests du refus d'un ticket sensible sans sa recherche citée, et d'une case mal formée (scripts/check.py, hook pre-commit) :
 python3 -m unittest discover -s scripts/tests."""
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,20 @@ class SensitiveTicketTest(TicketRepo):
         for search in ["Recherche : à faire.\n", "Recherche : `grep -rn x hooks`\n", "**Recherche** :\n```\n$ grep -rn x hooks\n```\n"]:
             self.stage(NEW, SENSITIVE + search)
             self.assertEqual(len(check.tickets_without_search([NEW])), 1, search)
+
+    def test_la_ligne_recherche_ecrite_selon_la_consigne_du_cadrage_passe(self):
+        # La forme que la consigne du cadrage (register.tsx) donne à la ligne « Recherche », remplie : des
+        # tickets sensibles avaient été refusés faute de connaître cette forme avant de l'écrire.
+        source = (Path(__file__).resolve().parents[2] / "plugins/flow-board/hooks/register.tsx").read_text(encoding="utf-8")
+        form = re.search(r"« (Recherche : `<command>` — <result>) »", source)
+        self.assertIsNotNone(form, "la consigne du cadrage ne donne plus la forme de la ligne « Recherche »")
+        line = form.group(1).replace("<command>", 'grep -rn "unlink" hooks').replace("<result>", "2 résultats, `model.ts:12`")
+        self.stage(NEW, SENSITIVE + line + "\n")
+        self.assertEqual(check.tickets_without_search([NEW]), [])
+        check.staged()
+        # Le modèle seul, sans commande ni résultat, ne suffit pas.
+        self.stage(NEW, SENSITIVE + form.group(1) + "\n")
+        self.assertEqual(len(check.tickets_without_search([NEW])), 1)
 
     def test_la_forme_en_gras_avec_un_bloc_de_code_est_reconnue(self):
         fenced = "**Recherche** (01/11/2026, relire avant de coder) :\n```\n$ grep -n -E \"eraseFile\" hooks/erase-run.ts\n→ 460 mainRefPath\n```\nSuite du ticket.\n"

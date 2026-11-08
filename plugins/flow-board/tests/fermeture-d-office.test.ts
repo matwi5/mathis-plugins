@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { memoryDisk } from './disque-memoire.ts'
 
-import { closingProcedure, groupWorktree } from '../hooks/closing.ts'
-import { applyReport, emptyBoard, mergeBoards, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { closingProcedure, closingScript, groupWorktree } from '../hooks/closing.ts'
+import { applyReport, emptyBoard, mergeBoards, newRun, relayedReportAt, startLinkedGroups } from '../hooks/model.ts'
 import { cancelLinkedGroup, closingReason } from '../hooks/link.ts'
 import { applyRelay } from '../hooks/relay.ts'
 import { activeRun } from '../hooks/basics.ts'
@@ -61,13 +61,14 @@ test('un groupe rendu, relu, à la sécurité tranchée est listé « à fermer 
   const out = applyReport(closable(), { note: 'point' }, 6_000, REPO)
   const run = activeRun(out.board)!
   expect(out.text).toContain('Close now: group A (Alpha) is closed (returned, reviewed, security settled).')
-  expect(out.text).toContain(closingProcedure({ run, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: true }))
+  // Sans relais, pas de compte rendu au relais : la procédure garde la session (pas de claude rm).
+  expect(out.text).toContain(closingProcedure({ hasReport: false, run, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: true }))
   expect(out.text).toContain('{"closed": [{"group": "A", "state": "closed", "sessionId": "<full sessionId>", "branch": "<kept branch>", "worktree": "<removed worktree path>"}]}')
   // C n'a pas été confié : pas de session à fermer.
   expect(out.text).not.toMatch(/group C \(Gamma\)/)
   // Sans git, la procédure n'arrête que la session.
   const noGit = applyReport(closable(), { note: 'point' }, 6_000, { isRepo: false })
-  expect(noGit.text).toContain(closingProcedure({ run: activeRun(noGit.board)!, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: false }))
+  expect(noGit.text).toContain(closingProcedure({ hasReport: true, run: activeRun(noGit.board)!, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: false }))
 })
 
 test('un groupe rendu pas encore clos : une ligne dit ce qui lui manque', () => {
@@ -199,7 +200,7 @@ test('un groupe re-confié dont la session précédente n’est pas fermée : l�
   const again = startLinkedGroups(short, ['A'], 5_000)!.board
   const during = applyReport(again, { note: 'point' }, 5_100, REPO)
   expect(during.text).toContain('Close now: the previous worker of group A (Alpha), replaced by a new send (sent at 1970-01-01 00:00 UTC):')
-  expect(during.text).toContain(closingProcedure({ run: activeRun(during.board)!, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: true }))
+  expect(during.text).toContain(closingProcedure({ hasReport: false, run: activeRun(during.board)!, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: true }))
   expect(during.text).toContain(`{"closed": [{"group": "A", "link": ${first.at}, "state": "closed"`)
   expect(during.text).not.toContain('Close now: group A (Alpha) is closed')
   // La nouvelle session qui travaille ne rend pas la précédente « active » : chacune a son relais.
@@ -341,7 +342,9 @@ test('la ligne d’un groupe rendu et relu : rien tant que rien n’est tenté, 
   await r.u.press({ key: 'close-linked-A' })
   await r.u.unmount()
   const run = (mem['board:'] as Board).runs.find(x => x.title === 'Boutique')!
-  expect(filled.at(-1)).toContain(closingProcedure({ run, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: true, session: 'local_A42' }))
+  // Le mod chargé connaît son script de fermeture (`closingScript`, posé au démarrage) : la procédure courte le cite.
+  expect(filled.at(-1)).toMatch(/node '[^']*\/scripts\/fermeture\.mjs' --worktree 'groupe-boutique-A' --branche 'worktree-groupe-boutique-A' --branche 'groupe-boutique-A' --branche 'groupe-A' --session 'local_A42' : sa première ligne est le verdict/)
+  expect(filled.at(-1)).toContain(`Ferme le worker du groupe A (Alpha) de la mission « ${run.title} » et son worktree par le script de vérification`)
   expect(filled.at(-1)).toContain('{"closed": [{"group": "A", "state": "closed"')
   // Le clic relance la fermeture : la réponse suivante la repropose.
   expect(JSON.stringify(await $.tool.call({ tool: TOOL, note: 'point' } as any))).toContain('Close now: group A')
@@ -430,4 +433,146 @@ test('La raison d’une fermeture relue du fichier de mission entre bornée et n
   expect(closingReason(forged)).toHaveLength(200)
   expect(closingReason(forged)).not.toContain(NL)
   expect(closingReason({ x: 1 })).toBe('')
+})
+
+// La fermeture ne lance jamais `claude rm` sur une session dont le compte rendu n'est pas au relais : sans lui,
+// fusion et retrait du worktree faits, session gardée ; son compte rendu arrivé ensuite, la fermeture se repropose
+// et la suivante lance `claude rm`, malgré le worktree déjà retiré par la première.
+const SHORT = '9f3e21aa'
+const FULL = `${SHORT}-1111-2222-3333-444455556666`
+/** Le groupe A clos, sa session lancée par claude --bg sous l'id court SHORT. */
+const closableWithSession = (session = SHORT): Board => {
+  const b = closable()
+  return { ...b, runs: b.runs.map(r => ({ ...r, groups: r.groups!.map(g => (g.id === 'A' ? { ...g, delegated: { ...g.delegated!, session } } : g)) })) }
+}
+
+test('sans compte rendu au relais : session gardée ; le compte rendu arrivé, la fermeture suivante lance claude rm', () => {
+  const b = closableWithSession()
+  const run = activeRun(b)!
+  const runId = run.id
+  const removed = `/p/.claude/worktrees/${groupWorktree(run, 'A')}`
+  // 1. Relais sans compte rendu : « Close now », le point 10 sans claude rm, avec la consigne de rapporter « stopped ».
+  let relay: Relay = applyRelay(undefined, runId, FULL, { kind: 'start', group: 'A' }, 3_500)!
+  const first = applyReport(b, { note: 'point' }, 6_000, { ...REPO, relay })
+  expect(first.text).toContain('Close now: group A (Alpha)')
+  expect(first.text).toContain('10) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage) ; la fermeture se repropose d\'elle-même quand il arrive au relais, ou la personne la relance par « ↻ Relancer la fermeture »')
+  expect(first.text).not.toContain(`claude rm '${SHORT}'`)
+  // 2. Claude rapporte la fermeture arrêtée, worktree retiré, session gardée.
+  const kept = applyReport(first.board, { closed: [{ group: 'A', state: 'stopped', why: 'compte rendu absent du relais : session gardée', worktree: removed }] }, 6_100, { ...REPO, relay })
+  expect(groupOf(kept.board, 'A').delegated!.closing).toMatchObject({ state: 'stopped', worktree: removed })
+  // Sans compte rendu, rien ne se repropose.
+  expect(applyReport(kept.board, { note: 'point' }, 6_200, { ...REPO, relay }).text).not.toContain('Close now: group A')
+  // Un compte rendu coupé sans son fichier ne compte pas : toujours rien.
+  const cut = applyRelay(relay, runId, FULL, { kind: 'report', text: 'x'.repeat(9_000) }, 6_300)!
+  expect(applyReport(kept.board, { note: 'point' }, 6_400, { ...REPO, relay: cut }).text).not.toContain('Close now: group A')
+  // 3. Le compte rendu arrive au relais : la fermeture se repropose d'elle-même.
+  relay = applyRelay(relay, runId, FULL, { kind: 'report', text: 'A fait' }, 6_500)!
+  const again = applyReport(kept.board, { note: 'point' }, 6_600, { ...REPO, relay })
+  expect(again.text).toContain('Close now: group A (Alpha)')
+  // 4. Et elle mène à claude rm, malgré le worktree déjà retiré par la première fermeture.
+  expect(again.text).toContain('le worktree est déjà retiré, par la fermeture précédente de cette session, notée, qui l’a gardée faute de compte rendu au relais (il l’a maintenant)')
+  expect(again.text).toContain(`10) dans le CLI, seulement si le point 2 a constaté le worktree retiré par la fermeture précédente (git worktree list --porcelain n’a aucun bloc pour <dossier> et test -e '<dossier>' échoue ; sinon arrête-toi) : claude rm '${SHORT}', sans aucune option`)
+  // « ↻ Relancer » avec le compte rendu : la même procédure.
+  expect(again.text).toContain(closingProcedure({ hasReport: true, run: activeRun(kept.board)!, target: { kind: 'group', id: 'A', name: 'Alpha' }, isRepo: true, session: SHORT, noted: groupOf(kept.board, 'A').delegated!.closing }))
+  // Un compte rendu déposé entre la demande du point 10 et le rapport « stopped » (plus ancien que la fermeture notée) : reproposée aussi.
+  const early = applyRelay(applyRelay(undefined, runId, FULL, { kind: 'start', group: 'A' }, 3_500)!, runId, FULL, { kind: 'report', text: 'A fait' }, 6_050)!
+  const keptLate = applyReport(first.board, { closed: [{ group: 'A', state: 'stopped', why: 'compte rendu absent du relais : session gardée', worktree: removed }] }, 6_100, { ...REPO, relay: early })
+  expect(applyReport(keptLate.board, { note: 'point' }, 6_600, { ...REPO, relay: early }).text).toContain('Close now: group A (Alpha)')
+  // Une fermeture arrêtée pour une autre raison (sans worktree retiré noté) ne mène jamais là, compte rendu ou non.
+  const other = applyReport(first.board, { closed: [{ group: 'A', state: 'stopped', why: 'fichier ignoré inconnu' }] }, 6_100, { ...REPO, relay })
+  expect(applyReport(other.board, { note: 'point' }, 6_600, { ...REPO, relay }).text).not.toContain('Close now: group A')
+})
+
+test('avec le script de fermeture, les appels que dicte le texte court se rejouent : « stopped » sans compte rendu, puis la fermeture reproposée mène à claude rm', () => {
+  const before = closingScript.path
+  closingScript.path = '/opt/poste/.claude/plugins/flow-board/scripts/fermeture.mjs'
+  try {
+    const b = closableWithSession()
+    const run = activeRun(b)!
+    const removed = `/p/.claude/worktrees/${groupWorktree(run, 'A')}`
+    let relay: Relay = applyRelay(undefined, run.id, FULL, { kind: 'start', group: 'A' }, 3_500)!
+    // 1. Sans compte rendu : le texte court, sans claude rm, avec le rapport « stopped » qu'il dicte.
+    const first = applyReport(b, { note: 'point' }, 6_000, { ...REPO, relay })
+    expect(first.text).toContain('par le script de vérification')
+    expect(first.text).toContain('3) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage), la session est gardée ; rapporte "state": "stopped", "why": "compte rendu absent du relais : session gardée", avec "worktree" et "sessionId"')
+    expect(first.text).not.toContain(`claude rm '${SHORT}'`)
+    // 2. L'appel dicté, rejoué tel quel.
+    const kept = applyReport(first.board, { closed: [{ group: 'A', state: 'stopped', why: 'compte rendu absent du relais : session gardée', worktree: removed, sessionId: FULL }] }, 6_100, { ...REPO, relay })
+    expect(kept.text).not.toContain('refused')
+    expect(applyReport(kept.board, { note: 'point' }, 6_200, { ...REPO, relay }).text).not.toContain('Close now: group A')
+    // 3. Le compte rendu arrivé : reproposée ; DÉJÀ RETIRÉ mène au point 3, claude rm sur un retrait constaté.
+    relay = applyRelay(relay, run.id, FULL, { kind: 'report', text: 'A fait' }, 6_500)!
+    const again = applyReport(kept.board, { note: 'point' }, 6_600, { ...REPO, relay })
+    expect(again.text).toContain('Close now: group A (Alpha)')
+    expect(again.text).toContain('DÉJÀ RETIRÉ dès ce premier lancement : retiré par la fermeture précédente, gardée faute de compte rendu (il est maintenant au relais) : passe au point 3')
+    expect(again.text).toContain(`3) seulement une fois le retrait constaté (la même commande relancée rend DÉJÀ RETIRÉ) : claude rm '${SHORT}', sans aucune option`)
+  } finally {
+    closingScript.path = before
+  }
+})
+
+test('le compte rendu qui compte est celui de la session visée : celui d’une autre session du groupe, un id inconnu ou de l’app, un compte rendu coupé d’avant, ne font jamais lancer claude rm', () => {
+  // Une seule mission : son id est celui que le relais doit porter.
+  const withSession = closableWithSession()
+  const unknownId: Board = { ...withSession, runs: withSession.runs.map(r => ({ ...r, groups: r.groups!.map(g => (g.id === 'A' ? { ...g, delegated: { ...g.delegated!, session: undefined } } : g)) })) }
+  const runId = activeRun(withSession)!.id
+  const relayOf = (session: string, text = 'A fait') => applyRelay(applyRelay(undefined, runId, session, { kind: 'start', group: 'A' }, 3_500)!, runId, session, { kind: 'report', text }, 3_900)!
+  const procedureOf = (b: Board, relay: Relay) => applyReport(b, { note: 'point' }, 6_000, { ...REPO, relay }).text
+  // La session visée a déposé son compte rendu : claude rm.
+  expect(procedureOf(withSession, relayOf(FULL))).toContain(`claude rm '${SHORT}', sans aucune option`)
+  // Une autre session du groupe (redémarrée sous un autre id) l'a déposé, pas celle-ci : pas de claude rm.
+  expect(procedureOf(withSession, relayOf('77aa88bb-0000-1111-2222-333344445555'))).not.toContain(`claude rm '${SHORT}'`)
+  // Id de session inconnu : rien ne rapproche une entrée de la session visée ; pas de claude rm.
+  expect(procedureOf(unknownId, relayOf(FULL))).toContain('10) pas de claude rm : le relais n’a pas son compte rendu')
+  // Un compte rendu de 8000 signes sans longueur notée (une version qui le coupait sans le dire) : absent.
+  const old = relayOf(FULL)
+  old.sessions[FULL]!.report = { text: 'y'.repeat(8_000), at: 3_900 }
+  expect(procedureOf(withSession, old)).not.toContain(`claude rm '${SHORT}'`)
+})
+
+test('la ligne d’un groupe dont la fermeture a gardé la session faute de compte rendu : « compte rendu absent du relais : la session est gardée »', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: 94_000_000 })
+  memoryDisk(on)
+  const { mem } = world(on)
+  on('session.root', () => ({ value: 'C:/proj' }))
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await pane.press({ key: 'launch-linked-A' })
+  await pane.unmount()
+  await $.tool.call({ tool: START, title: 'Boutique > Groupe A · Alpha' } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false, why: 'texte seul' } } as any)
+  for (let i = 0; i < 6; i++) await clock.advance(1000)
+  // La racine connue (C:/proj) range le tableau de bord sous sa propre clé.
+  const board = Object.entries(mem).find(([key]) => key.startsWith('board:'))![1] as Board
+  const run = board.runs.find(x => x.title === 'Boutique')!
+  const removed = `C:/proj/.claude/worktrees/${groupWorktree(run, 'A')}`
+  // Une fermeture arrêtée pour une autre raison garde sa ligne d'avant.
+  await $.tool.call({ tool: TOOL, closed: [{ group: 'A', state: 'stopped', why: 'fichier ignoré .env' }] } as any)
+  for (let i = 0; i < 6; i++) await clock.advance(1000)
+  const before = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  expect(await before.find({ type: 'Text', text: /fermeture arrêtée : fichier ignoré \.env/ })).toBeDefined()
+  expect(await before.find({ type: 'Text', text: /compte rendu absent du relais/ })).toBeUndefined()
+  await before.unmount()
+  // Gardée faute de compte rendu, worktree retiré : la ligne le dit, avec « ↻ Relancer la fermeture ».
+  await $.tool.call({ tool: TOOL, closed: [{ group: 'A', state: 'stopped', why: 'compte rendu absent du relais : session gardée', worktree: removed }] } as any)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    for (let i = 0; i < 6; i++) await clock.advance(1000)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    expect(await ui.find({ type: 'Text', text: /compte rendu absent du relais : la session est gardée/ })).toBeDefined()
+    expect(await ui.find({ key: 'close-linked-A' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('« ↻ Relancer » sur la session précédente d’un groupe confié de nouveau : le compte rendu de la nouvelle session ne compte pas pour elle', () => {
+  const b = closableWithSession()
+  const g = groupOf(b, 'A')
+  const runId = activeRun(b)!.id
+  // Le nouvel envoi part à 7 000 ; sa session, qui commence par le même id court, dépose son compte rendu à 7 500.
+  let relay: Relay = applyRelay(undefined, runId, FULL, { kind: 'start', group: 'A' }, 7_100)!
+  relay = applyRelay(relay, runId, FULL, { kind: 'report', text: 'A refait' }, 7_500)!
+  expect(relayedReportAt(relay, g, activeRun(b)!.groups, g.delegated)).toBe(7_500)
+  expect(relayedReportAt(relay, g, activeRun(b)!.groups, g.delegated, 7_000)).toBeUndefined()
 })

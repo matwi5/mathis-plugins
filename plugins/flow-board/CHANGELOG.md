@@ -4,6 +4,41 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.81.0 — 2026-11-08
+
+Les trois rétros de la nuit (« Économie d'usage », « Pistes de rétro en groupes », « Mode auto : tickets et code ») et les missions closes depuis la 0.80.0 : le relais compte chaque revue une fois, une question répondue ne se rouvre plus, un groupe se ferme par un script qui ne fait que lire, la procédure d'un worker se lit en un noyau et des annexes, et le cadrage s'appuie davantage sur le code lu.
+
+### Ajouté
+- **Groupe lancé hors de sa demande** : une session titrée comme un groupe, lancée par une autre commande que sa demande de lancement, est signalée sur la ligne du groupe (« arrête-le, puis relance-le depuis la demande ») et une fois par la réponse de l'outil ; la demande dit de ne lancer chaque worker que d'elle.
+- **Script de fermeture d'un groupe** (`scripts/fermeture.mjs`) : il vérifie en lecture seule la session, le worktree, les branches et l'arbre, et rend un verdict (SÛR, DÉJÀ RETIRÉ, ATTENDRE, ARRÊT, ÉCHEC) avec le seul geste à faire ; la consigne « Close now » s'y remet et ne recopie la procédure entière que sans lui.
+- **Quota de la discussion avant un xhigh** : la carte « Ensuite » qui propose de lancer un groupe et une carte du COO prête en xhigh affichent le quota restant ; sous « ↗ xhigh », la demande le fait citer en une ligne.
+- **Référence du manager redemandée** après chaque démarrage, rechargement ou reprise, et gardée dans le fichier du relais et dans `$.store` (la plus récente des deux est lue) ; la réponse de l'outil dit si elle est écrite, refusée ou pas écrite.
+- **Bloqueurs externes locaux** : chaque bloqueur garde la date de son dernier changement de statut (`statusAt`) ; la fusion de deux copies garde l'union et le statut changé le plus tard ; un bloqueur levé ne se rouvre que par un renvoi `"status": "todo"` ou sa tâche Asana décochée ; 150 bloqueurs au plus, une liste gardée n'est jamais rognée.
+- **Rapports des spécialistes d'une session** : `scripts/rapports-specialistes.mjs` imprime, pour chacun (ceux d'un Workflow compris), son nom, son type, son modèle, son effort, s'il a fini et son rapport final ; la consigne de transcript de `/retro` le donne.
+- **Consignes d'une revue écrites avant son relecteur**, par `consignes.mjs` dans un appel à part : le relecteur ne part qu'une fois lue la ligne « Consignes écrites : <chemin> ».
+- **Champs inconnus nommés** : la réponse de l'outil `flow` dit les champs qu'elle n'a pas lus, protège les champs cités et montre les deux versions du mod quand elles diffèrent.
+- **Carte de livraison** : elle prévient aussi d'une mission sans groupes, pas finie, dont des commits partiraient (une mission en pause n'en fait pas partie).
+- **Tests** : tableau de fusion de chaque champ gardé (`champs-persistes.test.mjs`, `matrice-fusion.test.ts`), tests qui dépendent du stockage relancés dans l'autre mode (ligne « Stockage : les deux modes », lue par `scripts/check.py`), règles de rejeu, corpus hostile complet pour les gardes exportées, gabarits de test refusés quand une mission arrêtée garde un owner.
+
+### Modifié
+- **Procédure d'un worker de groupe en noyau et annexes** : `reference/procedure-groupe.md` garde l'en-tête et les sections 1, 2, 3, 7 et 8 ; les sections 4 à 6, 9, 10 et 11 passent dans `procedure-groupe-fin.md`, `procedure-groupe-sans-git.md`, `procedure-groupe-autonome.md` et `effort-workers.md`, sous leurs numéros, le noyau disant quand lire chacune.
+- **Relais des revues** : une revue envoyée deux fois au même texte n'est comptée qu'une fois (clé facultative `review.ticket`) ; `review.form` compte à part les constats de la relecture du fond et de la forme, `review.bugs` tous les constats de chaque passe « bogues ».
+- **Questions bloquantes** : renvoyer l'id d'une question déjà répondue ne la rouvre plus ; les questions du mod (`sans-suite:`, `relance:`) gardent leur cycle de vie.
+- **Pas de `claude rm` sans compte rendu au relais** : la fermeture arrête la session et retire le worktree, puis garde la session jusqu'à ce que son compte rendu arrive ; la session des pistes d'une rétro n'a plus jamais `claude rm`.
+- **Cadrage** : un critère se fonde sur une recherche citée (la commande et son résultat), y compris un critère sur les tests existants ; un ticket sensible nomme aussi les chemins qui lisent sa donnée pour décider ; le cadrage demande le tableau des formes d'un prédicat de rattachement et l'invariant « jamais compté deux fois » ; la ligne « Recherche » a une forme fixe ; la mesure de ce que charge une session se fait en session interactive.
+- **Revues** : elles ne partent que sur des contrôles verts ; un correctif proposé s'applique en entier, sinon l'écart se déclare ; une faille corrigée en partie reste une question ; une régression est Important pour chaque relecteur.
+- **Relecture du fond et de la forme** : elle recalcule les chiffres d'un rapport en relançant son script quand sa sortie peut aller dans le dossier du relecteur.
+- **Mode auto** : aucune question « durcissement » ; un groupe « durcissement » proposé attend la réponse avant `complete`.
+- **COO** : les exemples de son skill prennent un prénom neutre.
+- **README** : qui écrit et qui lit chaque champ d'une mission (« Cycle de vie d'une mission »).
+
+### Corrigé
+- Une compaction de worker ne garde plus une régression déjà corrigée dans ses pistes.
+- La réponse au worker nomme les fichiers de ses tickets ; le compte rendu lit les fichiers de suivi là où le `CLAUDE.md` les range.
+- L'indication d'effort de la carte de lancement renvoie à `effort-workers.md`.
+
+---
+
 ## 0.80.0 — 2026-11-07
 
 Moins de dépense par mission : l'effort de chaque discussion et de chaque worker suit son rôle et son travail, un groupe sans logique part sur Sonnet, l'advisor reste aux discussions et la revue de sécurité se règle par projet. Le worker écrit moins pour son manager, et le manager garde mieux la main sur ses missions.

@@ -2,6 +2,8 @@
 // jamais envoyée deux fois ; un groupe renvoyé n'est jamais clos par l'auto sans revue de son dernier
 // envoi ; un groupe ne reste jamais écarté sans question ni pause.
 
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, applySkill, autoDecision, awaitedExternals, emptyBoard, isGroupLotStuck, hereReviewMark, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'

@@ -119,18 +119,18 @@ for (const isBrief of [false, true]) {
 }
 
 test('la consigne d’effort : lancer à l’effort calculé, high pour un choix de conception, l’effort pris et tout écart en une ligne ; les critères à la section 11', () => {
-  for (const text of [GROUP_EFFORT(true, undefined, undefined, 'P/reference/procedure-groupe.md'), AUTO_GROUP_EFFORT(true, 'P/reference/procedure-groupe.md')]) {
+  for (const text of [GROUP_EFFORT(true, undefined, undefined, 'P/reference/effort-workers.md'), AUTO_GROUP_EFFORT(true, 'P/reference/effort-workers.md')]) {
     expect(text).toContain('Effort de chaque session (<effort>) : l’effort calculé sur la ligne de son groupe')
     expect(text).toContain('high si un choix de conception reste à faire')
     expect(text).toContain("Dis-moi en une ligne, pour chaque groupe, l'effort pris et, s'il s'écarte du calcul, pourquoi.")
-    expect(text).toContain('section 11 de P/reference/procedure-groupe.md')
+    expect(text).toContain('section 11 de P/reference/effort-workers.md')
     expect(text).toContain('Pendant un ticket sensible, le mod de la session la passe lui-même en high')
     expect(text).not.toContain('medium par défaut')
   }
-  const manual = GROUP_EFFORT(true, undefined, undefined, 'P/reference/procedure-groupe.md')
+  const manual = GROUP_EFFORT(true, undefined, undefined, 'P/reference/effort-workers.md')
   expect(manual).toContain('xhigh (Recommandé) / high')
   expect(manual).toContain('tâche de jugement')
-  expect(AUTO_GROUP_EFFORT(false, 'P/reference/procedure-groupe.md')).toContain('jamais xhigh')
+  expect(AUTO_GROUP_EFFORT(false, 'P/reference/effort-workers.md')).toContain('jamais xhigh')
 })
 
 // Option fusion : un groupe dont chaque ticket dit « Zone sensible : non » et « Logique : non » part en

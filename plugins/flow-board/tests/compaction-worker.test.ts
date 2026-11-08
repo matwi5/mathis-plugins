@@ -1,3 +1,5 @@
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import { WORKER_COMPACT_TOKENS, compactionInstructions, workerCompactStep, workerResumeText } from '../hooks/compaction.ts'
@@ -68,6 +70,18 @@ test('entre deux tickets, les consignes du groupe gardent le ticket suivant, la 
   expect(text).toContain('the manager to report to: [abc123]')
   // Hors de ce moment (la compaction automatique en plein ticket) : ni ticket fini, ni ticket suivant.
   expect(compactionInstructions({ kind: 'group', run: 'run-w', group: 'A' })).not.toMatch(/between two tickets/)
+})
+
+// La procédure est un noyau et des annexes : la compaction fait relire le noyau, et la fin du groupe dans son annexe.
+test('la consigne de compaction d’un worker nomme le noyau de la procédure, et procedure-groupe-fin.md à la fin du groupe', () => {
+  for (const between of [undefined, { done: 't1', next: 't2' }, { done: 't3' }]) {
+    const text = compactionInstructions({ kind: 'group', run: 'run-w', group: 'A', ...(between ? { between } : {}) })
+    expect(text).toContain('its core, reference/procedure-groupe.md of flow-board, to reread after the compaction')
+    expect(text).toContain('once the last ticket is committed, reference/procedure-groupe-fin.md (group review, security review, report)')
+  }
+  // Le dernier ticket fini : la suite est dans l'annexe de fin.
+  expect(compactionInstructions({ kind: 'group', run: 'run-w', group: 'A', between: { done: 't3' } })).toContain('sections 4 to 6, in reference/procedure-groupe-fin.md of flow-board')
+  expect(workerResumeText('t3', undefined, true)).toContain('your report (sections 4 to 6, in procedure-groupe-fin.md)')
 })
 
 test('un ticket passé « done » au-delà du seuil : la réponse dit de finir le tour ; au repos, une compaction, puis le mod relance le worker', { timeoutMs: 30000 }, async ($, on) => {

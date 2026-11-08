@@ -122,6 +122,15 @@ export const BUGS_REFUSED = `not a whole number from 0 to ${BUGS_MAX}`
 export const bugsText = (bugs: number | undefined): string => (bugs === undefined ? '' : ` · ${bugs} bogue${bugs > 1 ? 's' : ''} (passe « bogues »)`)
 
 /**
+ * Un compte de stats augmenté de `n` : il ne baisse jamais (un compte gardé fini et positif garde sa valeur,
+ * même au-delà de la borne d'un envoi) ; illisible, il repart de `n`.
+ */
+export const addedCount = (was: unknown, n: number): number => (typeof was === 'number' && Number.isFinite(was) && was >= 0 ? was + n : n)
+
+/** Les constats de forme d'une ligne de journal de revue, ou rien sans relecture : « · 2 constats de forme (relecture du fond et de la forme) ». */
+export const formText = (form: number | undefined): string => (form === undefined ? '' : ` · ${form} constat${form > 1 ? 's' : ''} de forme (relecture du fond et de la forme)`)
+
+/**
  * Les comptes présents mais hors forme d'un avis de sécurité : envoyé (refusé), relu du tableau de
  * bord ou venu du relais (un fichier partagé ; jamais tranché, `closeMissing` le dit).
  */

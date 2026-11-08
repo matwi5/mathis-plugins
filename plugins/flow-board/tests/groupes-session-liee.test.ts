@@ -160,15 +160,15 @@ test('« ↗ Worker » : la règle d’effort propose xhigh pour une tâche de j
   expect(text).toContain('Effort de la session (<effort>) : l’effort calculé sur la ligne du groupe')
   expect(text).toContain("Dis-moi en une ligne l'effort pris et, s'il s'écarte du calcul, pourquoi.")
   // La suggestion : une tâche de jugement, jamais une tâche d'exécution ; ses signes et exemples sont
-  // à la section 11 de la procédure, que la demande fait lire avant de lancer.
+  // à la section 11 de la procédure (son annexe pour le manager), que la demande fait lire avant de lancer.
   expect(text).toContain('tâche de jugement')
   expect(text).toContain("jamais pour une tâche d'exécution")
-  expect(text).toMatch(/section 11 de \S*reference\/procedure-groupe\.md, à lire avant de lancer/)
+  expect(text).toMatch(/section 11 de \S*reference\/effort-workers\.md, à lire avant de lancer/)
   // Une question à boutons, jamais xhigh choisi seul.
   expect(text).toContain('question à boutons « xhigh (Recommandé) / high »')
   expect(text).toContain('Tu ne choisis jamais xhigh toi-même')
   // Si xhigh est retenu : worker autonome, plafond de l'app, rappel de redescendre.
-  expect(text).toMatch(/worker autonome : elle applique la section « Worker autonome » de la procédure\. Ici : /)
+  expect(text).toMatch(/worker autonome : elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\. Ici : /)
   expect(text).toContain('start_session ne donne jamais à une session un effort plus haut que celui de cette discussion')
   expect(text).toContain("que je peux redescendre l'effort de cette discussion")
   // Le lancement passe toujours l'effort choisi.
@@ -258,7 +258,7 @@ test('l’appui sur « ↗ xhigh » : xhigh imposé sans suggestion, worker auto
   expect(text).toContain("Effort de la session (<effort>) : xhigh, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort.")
   expect(text).not.toContain('Tu ne choisis jamais xhigh toi-même')
   expect(text).not.toContain('medium par défaut')
-  expect(text).toMatch(/et qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure\. Ici : /)
+  expect(text).toMatch(/et qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\. Ici : /)
   expect(text).toContain("start_session ne donne jamais à une session un effort plus haut que celui de cette discussion (son effort relevé à l'écriture de cette demande : high ; je l'ai peut-être monté depuis, avant Entrée)")
   expect(text).toContain("que je peux redescendre l'effort de cette discussion")
   expect(text).toContain('effort "<effort>"')

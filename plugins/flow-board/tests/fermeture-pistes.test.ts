@@ -45,7 +45,7 @@ test('la session de pistes est à fermer une fois chacune de ses pistes jugée, 
   const out = applyReport(judged(), { note: 'point' }, 5_000, REPO)
   const run = activeRun(out.board)!
   expect(out.text).toContain('Close now: the worker of the Pistes of phase Rétro (session 9f9f9f9f) is closed (every item judged).')
-  expect(out.text).toContain(closingProcedure({ run, target: { kind: 'items', skill: 'retro' }, isRepo: true, session: '9f9f9f9f', seq: 1 }))
+  expect(out.text).toContain(closingProcedure({ hasReport: true, run, target: { kind: 'items', skill: 'retro' }, isRepo: true, session: '9f9f9f9f', seq: 1 }))
   expect(out.text).toContain('{"closed": [{"items": "retro", "state": "closed"')
   // Une piste revenue au choix ne fait pas oublier la session : son id reste.
   expect(linkOf(judged())).toMatchObject({ session: '9f9f9f9f', items: ['p1'] })

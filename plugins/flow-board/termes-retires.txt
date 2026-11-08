@@ -23,3 +23,6 @@
 0.78.0	session autonome
 0.78.0	linked session
 0.78.0	main discussion
+# La règle « Vérifier avant d'écrire » demande aussi les chemins qui lisent la donnée pour décider :
+0.81.0	write, merge or erase its data
+0.81.0	écrivent, fusionnent ou effacent ses données

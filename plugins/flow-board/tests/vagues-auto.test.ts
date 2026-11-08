@@ -5,6 +5,8 @@
 // workers d'une mission en auto sont des workers autonomes, jamais en xhigh. Invariant : une
 // même action auto (phase, vague, groupe, revue) n'est jamais envoyée deux fois.
 
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { Board } from '../types'

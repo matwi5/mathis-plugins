@@ -159,3 +159,13 @@ test('Coupé après une consigne qui portait le bloc du mode auto, la réponse s
   // Une fois seulement.
   expect(String((await $.tool.call({ tool: TOOL, step: 'write' } as any)).result)).not.toContain(OFF)
 })
+
+// La fin de lot hors auto fait déclarer le groupe « durcissement » proposé en question et retenir `complete` :
+// en auto, cette consigne n'est pas donnée (elle arrêterait la mission sur une question qui ne lui est pas réservée).
+test('En auto, la fin de lot ne fait proposer aucun groupe « durcissement » ni déclarer de question qui retienne complete', { timeoutMs: 20000 }, async ($, on) => {
+  await opened($, on, 'grill-with-docs', true)
+  const text = await skill($, 'implement')
+  expect(text).toContain('In auto mode there is no « durcissement » group: list the findings that reviews kept apart on code older than the lot for the report, without a question.')
+  expect(text).not.toContain('unless you propose a « durcissement » group')
+  expect(text).not.toContain('declare that question in "waiting" on the implement phase')
+})

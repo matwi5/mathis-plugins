@@ -296,3 +296,39 @@ test('le fichier des choix s’écrit même quand le titre relu n’est pas un t
   const run = { ...newRun('implement', 1_000, 'Lot'), title: null as never }
   expect(decidedFileText(run, null).split('\n')[0]).toBe('# Choix déjà déclarés · ')
 })
+
+// Un correctif de relecteur avait été appliqué en partie, sans le dire : la procédure fait dire l'écart dans
+// `decided`, dans le même appel que les comptes de la revue. Une `note` ne le gardait pas (l'envoi suivant
+// l'écrase) : l'appel dicté se rejoue ici, des comptes refusés compris.
+test('un correctif appliqué en partie : l’écart déclaré avec les comptes de la revue est gardé au relais, même quand les comptes sont refusés', async ($, on) => {
+  const clock = mock.clock(on, { now: 82_000_000 })
+  const { mem, files } = world(on)
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Relais', ...LOT } as any)
+  await clock.advance(1_000)
+  const runId = runIdOf(mem, files)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'A', main: '[a1b2c3]' } as any)
+  const entryOf = () => {
+    const own = (Object.entries(files).find(([p]) => p.endsWith(`/relais/${relayEntryFileName(runId, 'session-liee')}`))?.[1] ?? JSON.stringify(mem[`relay:${runId}:session-liee`])) as string
+    return (JSON.parse(own) as RelayEntryFile).entry
+  }
+  const gap = { what: 'Correctif du constat 2 appliqué en partie : la garde de lecture est laissée', why: 'elle change le format partagé' }
+  await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 2, fixed: 1 }, decided: [gap] } as any)
+  expect(entryOf().reviews).toMatchObject({ count: 1, spec: 2, fixed: 1 })
+  expect(entryOf().decided!.map(d => d.what)).toContain(gap.what)
+  // Des comptes hors forme sont refusés : l'écart déclaré dans le même appel reste gardé.
+  await clock.advance(1_000)
+  const other = { what: 'Correctif du constat 3 appliqué en partie : le test de bord est laissé', why: 'hors du ticket' }
+  await $.tool.call({ tool: TOOL, review: { standards: -1, spec: 1, fixed: 0 }, decided: [other] } as any)
+  expect(entryOf().reviews).toMatchObject({ count: 1, spec: 2, fixed: 1 })
+  expect(entryOf().decided!.map(d => d.what)).toEqual(expect.arrayContaining([gap.what, other.what]))
+})
+
+test('un manager qui fait le lot lui-même garde l’écart déclaré avec les comptes de sa revue', () => {
+  const gap = { what: 'Correctif du constat 1 appliqué en partie : le renommage est laissé', why: 'il touche un autre groupe' }
+  const board = applyReport(boardWith(LOT), { review: { standards: 1, spec: 0, fixed: 0 }, decided: [gap] }, 3_000).board
+  const run = activeRun(board)!
+  expect(run.phases.find(p => p.skill === 'implement')!.stats).toMatchObject({ standards: 1 })
+  expect(JSON.stringify(run)).toContain(gap.what)
+})

@@ -34,3 +34,14 @@ test('la forme du schéma de l’outil flow ne change pas : clés, types, valeur
 test('la description de l’outil flow et celles de ses clés comptent au moins 30 % de caractères de moins qu’avant', () => {
   expect(TOOL_DESCRIPTION.length + descriptionChars(TOOL_SCHEMA)).toBeLessThanOrEqual(Math.floor(BEFORE * 0.7))
 })
+
+test('la description de fixed (outil flow, review) ne compte que les constats corrigés par un commit', () => {
+  const review = (TOOL_SCHEMA as any).properties.review
+  expect(review.properties.fixed.description).toBe('Fixed by a commit, not just noted or documented')
+})
+
+test('les descriptions de waiting et answered (outil flow) : relire DECISIONS.md avant de poser une question, answered après la réponse écrite là', () => {
+  const waiting = (TOOL_SCHEMA as any).properties.waiting
+  expect(waiting.description).toContain('Before asking, reread DECISIONS.md: a settled question is not asked again; an answered id never reopens (new question, new id)')
+  expect(waiting.items.properties.answered.description).toBe('true once answered (a user\'s answer: once in DECISIONS.md): it leaves the list')
+})

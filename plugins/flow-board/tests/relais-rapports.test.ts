@@ -262,13 +262,14 @@ test('les bogues d’une passe « bogues » partent au relais ; un compte illisi
   // Une revue sans passe « bogues » ne touche pas aux bogues déjà relayés.
   await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 1, fixed: 1 } } as any)
   expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 2, standards: 1, spec: 1, fixed: 4, bugs: 2 })
-  for (const bad of ['3', null, -1, 2.5, 10_001]) {
-    const out = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: bad, fixed: 0 } } as any)) as { result: string }
+  // Cinq revues différentes (`fixed` change) : une revue renvoyée telle quelle ne serait pas recomptée.
+  for (const [i, bad] of (['3', null, -1, 2.5, 10_001] as const).entries()) {
+    const out = (await $.tool.call({ tool: TOOL, review: { standards: 1, spec: 0, bugs: bad, fixed: i } } as any)) as { result: string }
     expect(out.result).toMatch(/Relayed to the manager's dashboard: the review findings\. NOT kept in the relay: the bug count \(not a whole number from 0 to 10 000; the rest of this review is relayed: do not send it again, give the bug count in your final report\): the manager does not see it; do what each reason says, and send your final report by SendMessage too\./)
     expect(out.result).not.toMatch(/again in a new call/)
   }
   // Les autres comptes de ces revues sont gardés, les bogues restent ceux d'avant.
-  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 7, standards: 6, spec: 1, fixed: 4, bugs: 2 })
+  expect(relayOf(mem, files, runId)?.sessions['s-fille']?.reviews).toEqual({ count: 7, standards: 6, spec: 1, fixed: 14, bugs: 2 })
 })
 
 test('une entrée dont le compte de bogues est illisible n’est jamais réécrite : la revue avec bogues est refusée, et la réponse le dit', async ($, on) => {

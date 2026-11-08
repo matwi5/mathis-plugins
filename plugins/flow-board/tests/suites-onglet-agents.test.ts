@@ -49,8 +49,8 @@ test('un relecteur et ses deux chercheurs, coût et tokens sommés ; un lien qui
 })
 
 test('la rétro lancée pendant la mission de cette discussion porte son titre et ne reprend pas une autre mission en pause', () => {
-  // Une autre mission, en pause, qui a une phase Rétro : celui d'une autre discussion du projet.
-  const other = { ...newRun('retro', 500, 'Durée des requêtes'), owner: 'autre', status: 'paused' as const }
+  // Une autre mission, en pause, qui a une phase Rétro : née dans une autre discussion du projet (une pause efface l'owner).
+  const other = { ...newRun('retro', 500, 'Durée des requêtes'), bornIn: 'autre', status: 'paused' as const }
   const here = { ...newRun('implement', 1_000, 'Onglet Agents flow-board'), owner: 's' }
   const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [here, other], activeId: here.id }
   const out = applySkill(board, 'mattpocock-skills:retro', { now: 9_000, isMain: true, args: 'Rétro globale de la mission « Onglet Agents flow-board » : cette discussion et ses sessions filles' })!

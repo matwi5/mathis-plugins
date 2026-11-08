@@ -179,6 +179,9 @@ test('plusieurs groupes, plusieurs discussions : le compte rendu reçoit les gro
   expect(note).toMatch(/Groups, each usually run in its own discussion: A \(Worker SC\): 1\/1 done, reviewed by its ticket review \(a group of one ticket\), its security advice still due; B \(App SC\): 1\/1 done, reviewed by its ticket review/)
   expect(note).toMatch(/write « Fait » group by group/)
   expect(note).toMatch(/Tracking files of this mission .*travail\/tasks\/2026-10-05_sc-vsc-worker\.md \(groupe A/)
+  // Les autres : là où le CLAUDE.md du projet les range, pas seulement dans travail/tasks/.
+  expect(note).toContain("Also look where the project's CLAUDE.md keeps tracking files (for example travail/<subject>/: spec, tickets, DECISIONS.md; else travail/tasks/)")
+  expect(note).not.toContain('Also look in travail/tasks/')
   // Les comptes rendus des workers : leurs fichiers du relais, d'où viennent les trois rubriques.
   expect(note).toMatch(/- The workers' final reports, for the sections « Code antérieur au lot », « Pistes » and « Ce que le CHANGELOG devra dire »: \S*\/flow-board\/relais\/\S+\.<id>\.report\.md/)
 })
@@ -192,4 +195,7 @@ test('sans groupes, la consigne du compte rendu ne renvoie à aucun compte rendu
   const note = (await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'r' })).text
   expect(note).toContain('What the dashboard knows about this mission')
   expect(note).not.toContain("The workers' final reports")
+  // Sans fichier de suivi enregistré : les chercher là où le CLAUDE.md du projet les range, pas seulement dans travail/tasks/.
+  expect(note).toContain("- Tracking files: look where the project's CLAUDE.md keeps them (for example travail/<subject>/: spec, tickets, DECISIONS.md; else travail/tasks/)")
+  expect(note).not.toContain('look in travail/tasks/')
 })

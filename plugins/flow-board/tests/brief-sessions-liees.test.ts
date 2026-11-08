@@ -46,13 +46,20 @@ const world = (on: any) => {
 
 /**
  * Le brief d'un worker pour le groupe E ; `isSource` : le projet contient la source de flow-board ;
- * `lot` et `key` : un autre lot, un autre bouton.
+ * `lot` et `key` : un autre lot, un autre bouton ; `versions` : celles du mod installé et du dépôt
+ * (absentes : leur plugin.json ne se lit pas).
  */
-const brief = async ($: any, on: any, isSource = false, lot: Record<string, unknown> = LOT, key = 'launch-linked-E'): Promise<string> => {
+const brief = async ($: any, on: any, isSource = false, lot: Record<string, unknown> = LOT, key = 'launch-linked-E', versions: { installed?: string; source?: string } = {}): Promise<string> => {
   mock.clock(on, { now: 80_000_000 })
   const filled = world(on)
   on('session.root', () => ({ value: 'C:/proj' }))
   on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: isSource && e.path.endsWith('/plugins/flow-board/reference/procedure-groupe.md') }) as any)
+  // « C:/proj » n'est pas absolu hors de Windows : le moteur des tests le préfixe, d'où endsWith.
+  on('fs.read', (_$: unknown, e: { path: string }) => {
+    const version = e.path.endsWith('C:/proj/plugins/flow-board/.claude-plugin/plugin.json') ? versions.source : e.path.endsWith('/.claude-plugin/plugin.json') ? versions.installed : undefined
+    if (version !== undefined) return { value: JSON.stringify({ name: 'flow-board', version }) } as any
+    throw new Error(`ENOENT ${e.path}`)
+  })
   await $.session.start({ cwd: '', surface: null, isInteractive: true })
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...lot } as any)
@@ -65,6 +72,19 @@ const brief = async ($: any, on: any, isSource = false, lot: Record<string, unkn
 /** La longueur du brief sans les chemins des fichiers de flow-board, qui changent avec le poste
  *  et le dossier où le plugin est copié (une copie de l'index par le pre-commit les allonge). */
 const lengthOf = (text: string): number => text.replace(/\S*(?=reference\/[a-z-]+\.md)/g, '').length
+
+/** Le plafond de la demande de lancement, en signes (sans les chemins des fichiers de flow-board). */
+const CAP = 12000
+
+/**
+ * La demande sous le plafond ; en cas d'échec, le message dit la longueur mesurée et la marge (négative
+ * quand elle dépasse). Le nom d'un test se fixe au chargement et un test vert n'affiche rien : la mesure
+ * ne peut se lire que dans ce message. Le lancer seul : scripts/check.sh --test tests/brief-sessions-liees.test.ts flow-board.
+ */
+const expectUnderCap = (text: string): void => {
+  const length = lengthOf(text)
+  expect(length, `longueur ${length} signes, plafond ${CAP}, marge ${CAP - length}`).toBeLessThan(CAP)
+}
 
 // Toutes les sessions avaient perdu leurs premiers appels : le document qu'elles devaient lire
 // n'existait pas dans un worktree neuf tant que l'installation du projet n'avait pas tourné.
@@ -83,7 +103,7 @@ test('le brief : installation du worktree d’abord, discussion désignée par s
 
 // La procédure (questions sensibles d'abord, relecteur muet relancé, ni Monitor ni /tdd inutiles,
 // visuel à valider) est dans reference/procedure-groupe.md : tests/procedure-groupe.test.mjs.
-test('le brief : la procédure par son chemin, ce qui varie en clair', async ($, on) => {
+test('le brief : la procédure par son chemin, ce qui varie en clair, sous le plafond de 12 000 signes (longueur et marge dans le message d’échec)', async ($, on) => {
   const text = await brief($, on)
   expect(text).toMatch(/puis lire la procédure d'un worker de groupe, \S*reference\/procedure-groupe\.md, et la suivre jusqu'au bout : questions sensibles d'abord/)
   expect(text).toContain('TDD : /mattpocock-skills:tdd')
@@ -92,7 +112,9 @@ test('le brief : la procédure par son chemin, ce qui varie en clair', async ($,
   // le texte au-delà de 15 000 signes ; la règle d'effort, avec la suggestion de xhigh et ses
   // exemples, en porte environ 3 000, d'où 9 000 portés à 12 000. Au-delà, raccourcir une consigne
   // du brief (ou la renvoyer à la procédure) plutôt que relever le plafond.
-  expect(lengthOf(text)).toBeLessThan(12000)
+  expectUnderCap(text)
+  // Un groupe lancé par une commande à part n'était pas lié à sa demande, ni vu : la demande le dit.
+  expect(text).toContain("Lance le worker seulement depuis cette demande : un lancement à part n'est pas vu.")
   // Au retour : les failles corrigées après coup sont renvoyées à l'outil.
   expect(text).toContain('une faille corrigée après coup (avec mon accord) se renvoie aussi, avec "fixed" mis à jour')
 })
@@ -121,7 +143,25 @@ test('le brief : dans le dépôt de flow-board, la procédure et les méthodes d
   expect(text).toContain('lus par fonction')
   // Un groupe qui corrigeait flow-board avait pris son correctif pour actif.
   expect(text).toContain('le mod qui tourne est sa version installée, pas celle du dépôt')
-  expect(lengthOf(text)).toBeLessThan(12000)
+  expectUnderCap(text)
+})
+
+// Le worker du groupe B (rétro « Économie d'usage ») avait suivi la procédure du dépôt, qui citait un
+// champ que le mod installé (0.79.0) ne connaissait pas : la demande dit les deux versions quand elles diffèrent.
+test('la demande, dans le dépôt de flow-board : les deux versions quand elles diffèrent, rien quand elles sont égales', async ($, on) => {
+  const text = await brief($, on, true, LOT, 'launch-linked-E', { installed: '0.79.0', source: '0.80.0' })
+  expect(text).toContain("flow-board installé : 0.79.0 ; dépôt : 0.80.0 : le mod qui tourne est l'installé.")
+  expectUnderCap(text)
+})
+
+test('la demande, dans le dépôt de flow-board : versions égales, pas de phrase', async ($, on) => {
+  const text = await brief($, on, true, LOT, 'launch-linked-E', { installed: '0.80.0', source: '0.80.0' })
+  expect(text).not.toContain('flow-board installé :')
+})
+
+test('la demande, hors du dépôt de flow-board : pas de phrase des versions', async ($, on) => {
+  const text = await brief($, on, false, LOT, 'launch-linked-E', { installed: '0.79.0', source: '0.80.0' })
+  expect(text).not.toContain('flow-board installé :')
 })
 
 // L'option fusion ajoute au plus une ligne de groupe et la phrase du lancement sur Sonnet : un groupe sans
@@ -137,14 +177,14 @@ const FUSION = {
 test('le brief : un groupe sans logique (Sonnet), seul ou avec un autre, reste sous le plafond', async ($, on) => {
   const alone = await brief($, on, true, FUSION, 'launch-linked-E')
   expect(alone).toContain('Sonnet high, sans logique')
-  expect(lengthOf(alone)).toBeLessThan(12000)
+  expectUnderCap(alone)
 })
 
 test('le brief : deux groupes, l’un sur Sonnet et l’autre sur Opus, restent sous le plafond', async ($, on) => {
   const both = await brief($, on, true, FUSION, 'launch-parallel-linked')
   expect(both).toContain('Groupe A (Code)')
   expect(both).toContain('Sonnet high, sans logique')
-  expect(lengthOf(both)).toBeLessThan(12000)
+  expectUnderCap(both)
 })
 
 test('le brief : ailleurs, les seuls chemins installés', async ($, on) => {

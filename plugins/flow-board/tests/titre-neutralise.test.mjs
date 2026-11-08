@@ -6,11 +6,10 @@
 // ne vont pas dans le prompt (la ligne d'état, les réponses de /flow à la personne) gardent le titre
 // tel quel ; ils sont nommés ici, un par un.
 
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
+import { hookSources } from './sources.mjs'
 
 /** Les lignes qui recopient le titre tel quel dans un texte (`${run.title}`, `${run?.title}`). */
 const rawTitleLines = src =>
@@ -19,12 +18,23 @@ const rawTitleLines = src =>
     .map((line, i) => ({ line: line.trim(), at: i + 1 }))
     .filter(({ line }) => /\$\{run\??\.title\}/.test(line))
 
-/** Les textes qui ne vont pas dans le prompt : la ligne d'état et les réponses de /flow à la personne. */
-const NOT_PROMPT = [/\$\.ui\.status\(/, /Mission mise de côté : \$\{run\.title\}/, /Mission archivée : \$\{run\.title\}/]
+/**
+ * Les textes qui ne vont pas dans le prompt : la ligne d'état, les réponses de /flow à la personne,
+ * les toasts du tableau de bord (`fx.toasts`, `toasts: […]`), les phrases du panneau (view.tsx) et les lignes
+ * « info » du journal (les faits du compte rendu n'en citent que les lignes « warn »).
+ */
+const NOT_PROMPT = [
+  /\$\.ui\.status\(/,
+  /Mission mise de côté : \$\{run\.title\}/,
+  /Mission archivée : \$\{run\.title\}/,
+  /toasts(?:\.push\(|: \[)`[^`]*\$\{run\.title\}/,
+  /^log\(run, now, '[^']*', `[^`]*\$\{run\.title\}`, 'info'\)$/,
+  /^\? `La dernière mission, « \$\{run\.title\} », /,
+]
 
-test('register.tsx, closing.ts et relay.ts ne recopient le titre de la mission brut dans aucune demande, description de fermeture ni fichier des choix', () => {
-  const leaks = ['hooks/register.tsx', 'hooks/closing.ts', 'hooks/relay.ts'].flatMap(file =>
-    rawTitleLines(read(file))
+test('aucun module de hooks/ ne recopie le titre de la mission brut dans une demande, une description de fermeture ou le fichier des choix', () => {
+  const leaks = hookSources().flatMap(({ file, text }) =>
+    rawTitleLines(text)
       .filter(({ line }) => !NOT_PROMPT.some(re => re.test(line)))
       .map(({ line, at }) => `${file}:${at} ${line.slice(0, 120)}`),
   )

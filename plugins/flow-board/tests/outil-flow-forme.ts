@@ -542,6 +542,9 @@ export const TOOL_SHAPE: unknown = {
         "fixed": {
           "type": "number"
         },
+        "form": {
+          "type": "number"
+        },
         "group": {
           "type": "string"
         },
@@ -550,6 +553,9 @@ export const TOOL_SHAPE: unknown = {
         },
         "standards": {
           "type": "number"
+        },
+        "ticket": {
+          "type": "string"
         }
       },
       "type": "object"

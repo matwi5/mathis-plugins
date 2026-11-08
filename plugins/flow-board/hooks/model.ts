@@ -39,14 +39,14 @@ import type {
   RunLaunch,
 } from '../types'
 import { CODE_SKILLS, SECURITY_OFF_REPLY, SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
-import { GROUP_ID_FORM, asciiJson, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isQuestionIdForm, isSafeId, sendNumber } from './closing.ts'
+import { GROUP_ID_FORM, asciiJson, closingScript, isScriptPath, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isKeptForReport, isQuestionIdForm, isSafeId, sendNumber } from './closing.ts'
 import { maxOf, minOf } from './timeline.ts'
 import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
 import { soundRunLaunch } from './launch.ts'
 import type { SecurityReview } from './security-setting.ts'
 import type { PlanUnit, PlanWait } from './plan-projet.ts'
-import { activeRun, asanaChange, asList, AUTO_CHOICES_MAX, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
-import { type GroupRelay, ignoredOrigins, inForce, isRelay, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
+import { activeRun, addedCount, asanaChange, asList, AUTO_CHOICES_MAX, formText, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
+import { type GroupRelay, ignoredOrigins, inForce, isRelay, parseMainRef, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, REPORT_MAX, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
 import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, keepClosings, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
 
 export const emptyBoard = (root: string, name: string): Board => ({ v: 1, root, name, runs: [], activeId: null })
@@ -1824,7 +1824,7 @@ export const openRun = (board: Board, ask: { entry?: string; title?: string }, n
   prune(b)
   const left = previous ? ` ${JSON.stringify(shownText(previous.title))} was ${previous.status === 'done' ? 'closed (nothing required left)' : 'paused'}, untouched; the user resumes it from the History tab.` : ''
   const named = title ? nameDiscussion(b, run, fx) : ' Send {"fix": {"title": "..."}} to name it.'
-  return { board: b, fx, text: `New mission "${run.title}" (${SKILLS[entry]!.flowLabel}) opened in this discussion; the rest of this call went to it.${left}${fallback}${named}` }
+  return { board: b, fx, text: `New mission ${JSON.stringify(shownText(run.title))} (${SKILLS[entry]!.flowLabel}) opened in this discussion; the rest of this call went to it.${left}${fallback}${named}` }
 }
 
 /**
@@ -2035,7 +2035,12 @@ export const restoreDelegate = (board: Board, kept: unknown, now?: number): Boar
   // Une délégation ancienne ou sur une mission finie ne revient pas : sinon la session ne la quitterait jamais.
   if ((now !== undefined && now - d.at > DELEGATE_KEEP_MS) || board.runs.some(r => r.id === d.run && r.status === 'done')) return board
   const text = (key: string) => (typeof d[key] === 'string' && d[key] !== '' ? { [key]: d[key] as string } : {})
-  return { ...board, activeId: null, delegate: { run: d.run, at: d.at, ...text('title'), ...text('group'), ...text('main') } }
+  // La date de la référence suivie (`mainAt`) revient avec elle : sinon, après un rechargement, une référence plus
+  // ancienne que celle déjà suivie passerait pour nouvelle. Bornée comme une référence lue (`parseMainRef`, sa marge
+  // dans le futur comprise).
+  const mainAt =
+    typeof d.main === 'string' && d.main !== '' && typeof d.mainAt === 'number' && parseMainRef({ run: d.run, main: d.main, at: d.mainAt }, d.run, now) !== null && d.mainAt >= d.at ? { mainAt: d.mainAt } : {}
+  return { ...board, activeId: null, delegate: { run: d.run, at: d.at, ...text('title'), ...text('group'), ...text('main'), ...mainAt } }
 }
 
 /**
@@ -2085,11 +2090,11 @@ const delegateText = (board: Board): string => {
   const title = delegatedTitle(board)
   return (
     `This discussion works for the mission ${JSON.stringify(shownText(title))}, which stays in the manager: nothing is recorded on it from here (skills, steps, phases). ` +
-    'Your progress is relayed to the manager\'s dashboard on its own: ticket statuses from your Asana updates (« Statut : » line, completion), your commits and your test runs. ' +
-    'Only if a ticket\'s status changes without an Asana update, send it here with {"set": [{"id": "<ticket id>", "status": "doing|done|blocked", "why": "<if blocked>"}]}. ' +
+    'Your progress is relayed to the manager\'s dashboard on its own: ticket statuses from your ticket files or Asana updates (their « **Status:** » or « Statut : » line, completion), your commits and your test runs. ' +
+    'Only if a ticket\'s status changes without a ticket file or Asana update, send it here with {"set": [{"id": "<ticket id>", "status": "doing|done|blocked", "why": "<if blocked>"}]}. ' +
     'Each choice you make that the user neither asked for nor approved goes here at once, in {"decided": [{"what": "<the choice>", "why": "<why>"}]}: the main dashboard shows it for review right away; a choice that touches a sensitive area (' +
     SENSITIVE_AREAS +
-    ') is never declared: ask the user; except when your prompt says you are a worker of a mission in auto mode: there section « Worker autonome » of your procedure says when it is settled by its recommended option and declared. ' +
+    ') is never declared: ask the user; except when your prompt says you are a worker of a mission in auto mode: there section « Worker autonome » of your procedure (procedure-groupe-autonome.md) says when it is settled by its recommended option and declared. ' +
     'End with your report, one line per ticket (done, or not done and why): leave your whole report here, {"report": "<the whole report>"} (or, when it is already in a .md or .txt file under your worktree or your temporary folder CLAUDE_JOB_DIR, {"reportPath": "<its absolute path>"}, without pasting it again): it is kept in your relay file, next to the mission\'s, which the manager reads; then send the manager one line that points to it with SendMessage (that message wakes it up), and end on that same line. The manager checks your work and records the statuses. Nothing else is accepted. ' +
     reachText(board)
   )
@@ -2301,27 +2306,15 @@ const reportHere = (
     }
   }
 
-  const externals = asList(input.externals)
-    .map(one => ({
-      id: str(one.id),
-      name: clip(str(one.name) || str(one.id), TEXT_MAX),
-      status: (str(one.status) === 'done' ? 'done' : 'todo') as ExternalBlocker['status'],
-      isDecision: str(one.kind) === 'decision',
-      // Sans type précisé (une simple mise à jour de statut), l'étiquette connue est gardée.
-      hasKind: str(one.kind) !== '',
-    }))
-    .filter(x => x.id !== '')
-    .map(({ hasKind, ...x }) => ({ ...x, isDecision: hasKind ? x.isDecision : (externalOf(run, x.id)?.isDecision ?? false) }))
+  const externals = externalsSent(input.externals)
+  let externalText = ''
   if (externals.length > 0) {
-    const known = run.externals ?? []
-    // Une entrée gardée hors forme (relue du fichier partagé) reste telle quelle, sans faire échouer l'envoi.
-    const updated = known.map(k => (isSoundExternal(k) ? (externals.find(x => sameTicket(x.id, k.id)) ?? k) : k))
-    const added = externals.filter(x => !known.some(k => isSoundExternal(k) && sameTicket(k.id, x.id)))
-    run.externals = [...updated, ...added].slice(0, LIMITS.tickets)
-    for (const x of externals) {
-      const was = known.find(k => isSoundExternal(k) && sameTicket(k.id, x.id))
-      if (x.status === 'done' && was?.status !== 'done') log(run, now, '✓', `Dépendance externe levée : ${x.name}`, 'ok')
-    }
+    const kept = externalsOf(run).length
+    const out = mergeExternals(externalsOf(run), externals, now)
+    run.externals = out.list
+    for (const x of out.lifted) log(run, now, '✓', `Dépendance externe levée : ${x.name}`, 'ok')
+    for (const x of out.reopened) log(run, now, '↺', `Dépendance externe rouverte : ${x.name}`, 'warn')
+    if (out.refused.length > 0) externalText = ` · externals: not recorded, the mission keeps ${out.list.length} external blockers (at most ${LIMITS.tickets}; ${kept} before this call): ${out.refused.map(x => asciiJson(x.id)).join(', ')}; the updates of the kept ones were applied`
   }
 
   let groupText = ''
@@ -2476,6 +2469,9 @@ const reportHere = (
     // Un compte de bogues hors forme n'est pas noté, au lieu de valoir 0 (`isBugCount`), et la réponse le dit.
     const bugs = isBugCount(review.bugs) ? review.bugs : undefined
     if (review.bugs !== undefined && bugs === undefined) reviewReply = ` · bugs ignored: ${BUGS_REFUSED}; the rest of this review is recorded: do not send it again, put the bug count in your report`
+    // De même pour les constats de la relecture du fond et de la forme : absents ou hors forme, jamais 0.
+    const form = isBugCount(review.form) ? review.form : undefined
+    if (review.form !== undefined && form === undefined) reviewReply += ` · form ignored: ${BUGS_REFUSED}; the rest of this review is recorded: do not send it again, put the form count in your report`
     const reviewGroup = typeof review.group === 'string' ? str(review.group) : typeof review.group === 'number' ? String(review.group) : ''
     const fixed = count(review.fixed)
     const stats = phase.stats
@@ -2483,8 +2479,10 @@ const reportHere = (
     stats.standards = Math.max(0, stats.standards) + st
     stats.spec = Math.max(0, stats.spec) + sp
     stats.fixed = (stats.fixed ?? 0) + fixed
+    // Posé à la première relecture qui en envoie, jamais touché par une revue qui n'en envoie pas.
+    if (form !== undefined) stats.form = addedCount(stats.form, form)
     const what = reviewGroup !== '' && recordedGroup(run, reviewGroup) ? `Revue du groupe ${recordedGroup(run, reviewGroup)!.id}` : 'Revue'
-    log(run, now, '◈', `${what} : ${st} Standards · ${sp} Spec${bugsText(bugs)}${fixed > 0 ? ` · ${fixed} corrigé${fixed > 1 ? 's' : ''}` : ''}`, st + sp + (bugs ?? 0) > fixed ? 'warn' : 'ok')
+    log(run, now, '◈', `${what} : ${st} Standards · ${sp} Spec${bugsText(bugs)}${formText(form)}${fixed > 0 ? ` · ${fixed} corrigé${fixed > 1 ? 's' : ''}` : ''}`, st + sp + (bugs ?? 0) + (form ?? 0) > fixed ? 'warn' : 'ok')
     reachStep(phase, 'review', now)
   }
 
@@ -2733,7 +2731,7 @@ const reportHere = (
     withSession.length > 0
       ? ` · with the worker until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
       : ''
-  return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${itemsText}${groupText}${returnText}${reviewedText}${reviewReply}${securityReply}${closedText}${gateText}${linkedText}${withdrawnText}${decidedText}${waitingText}` }
+  return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${itemsText}${externalText}${groupText}${returnText}${reviewedText}${reviewReply}${securityReply}${closedText}${gateText}${linkedText}${withdrawnText}${decidedText}${waitingText}` }
 }
 
 // ─── Groupes confiés à des workers ─────────────────────────────────
@@ -2832,12 +2830,46 @@ const isStillActive = (relay: Relay | null, g: TicketGroup, plan: readonly Ticke
   return relayed.endedAt === undefined || relayed.endedAt < relayed.last.at
 }
 
+/**
+ * La date du compte rendu de la session que la fermeture vise, s'il est au relais ; undefined sinon. Sans lui, la
+ * fermeture ne lance jamais `claude rm` (invariant de `closingProcedure`). Au relais veut dire :
+ * - déposé par cette session même : l'entrée qui le porte a pour id son id de session, dont l'id court de son
+ *   lancement par `claude --bg` (`link.session`, 8 signes au moins) est le début ; un id inconnu, ou celui d'une
+ *   session de l'app (`local_…`), ne se rapproche d'aucune entrée : absent ;
+ * - entier, ou coupé avec son fichier (`isWhole`) ; un texte de `REPORT_MAX` signes ou plus sans longueur notée
+ *   (une entrée d'une version qui le coupait sans le dire) compte comme coupé sans fichier : absent ;
+ * - relais lisible et de cette mission.
+ * `link` et `until` : la fenêtre d'un envoi, comme pour `isStillActive`.
+ */
+export const relayedReportAt = (relay: Relay | null, g: TicketGroup, plan: readonly TicketGroup[] | undefined, link: { at: number; session?: string } | undefined = g.delegated, until = Infinity): number | undefined => {
+  const session = link?.session
+  if (typeof session !== 'string' || session.length < 8 || session.startsWith('local_')) return undefined
+  const relayed = relayForGroup(relay, g, plan, link as GroupLink | undefined, until)
+  const report = relayed?.report
+  if (report === undefined || report === null || typeof report !== 'object' || !isTime(report.at) || typeof report.text !== 'string') return undefined
+  const by = relayed!.reportSession
+  if (typeof by !== 'string' || !by.toLowerCase().startsWith(session.toLowerCase())) return undefined
+  const isWhole = report.isWhole === true || (report.length === undefined && report.text.length < REPORT_MAX)
+  return isWhole ? report.at : undefined
+}
+
+/**
+ * Une fermeture gardée faute de compte rendu (`isKeptForReport`) dont le compte rendu est au relais : elle se repropose
+ * d'elle-même, et la suivante lance `claude rm`. Sans comparer les dates : un compte rendu déposé entre la demande du
+ * point 10 et le rapport « stopped » de cette fermeture la repropose aussi.
+ */
+const isReportedSinceKept = (run: Run, g: TicketGroup, link: { at: number; seq?: number; closing?: Closing }, reportAt: number | undefined): boolean =>
+  reportAt !== undefined && isKeptForReport(run, { kind: 'group', id: g.id, name: g.name }, link.seq, link.closing)
+
 /** Un groupe rendu, relu, à la sécurité tranchée, sans fermeture en cours : candidat à la fermeture. */
 export const isCloseCandidate = (run: Run, g: TicketGroup, relay: Relay | null = null, review: SecurityReview = 'on'): boolean => {
   const link = g.delegated
   if (!link || typeof link !== 'object' || g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g, review).length > 0 || isStillActive(relay, g, run.groups)) return false
   // Une fermeture relue hors forme (null, un autre type) n'est ni à faire ni relancée.
-  return link.closing === undefined || (link.closing !== null && typeof link.closing === 'object' && link.closing.state === 'stopped' && isRetried(link))
+  return (
+    link.closing === undefined ||
+    (link.closing !== null && typeof link.closing === 'object' && link.closing.state === 'stopped' && (isRetried(link) || isReportedSinceKept(run, g, link, relayedReportAt(relay, g, run.groups))))
+  )
 }
 
 /** Ce que la réponse de l'outil ajoute, dans la discussion de la mission : les groupes à fermer, et ce qui manque aux autres. */
@@ -2845,7 +2877,9 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
   const parts: string[] = []
   // Une session archivée dans l'app : son worktree se retire par la procédure, sans git il n'y en a pas.
   const archived = (procedure: string) =>
-    isRepo
+    isRepo && isScriptPath(closingScript.path)
+      ? `once the user says it is archived, remove its worktree only by its step 2 (the same script with --apres-arret, removal only on SÛR): ${procedure}`
+      : isRepo
       ? `once the user says it is archived, remove its worktree only by the closing procedure from its point 8 on (re-check the merge, the tree and the snapshots, unlock only its own stale lock, git worktree remove without any option): ${procedure}`
       : 'once the user says it is archived (no git here, so no worktree to remove),'
   for (const g of run.groups ?? []) {
@@ -2862,7 +2896,9 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
     for (const { prev, key, isRetried: retried } of previous) {
       if (prev.closing?.state === 'closed') continue
       const target = { kind: 'group', id: g.id, name: g.name } as const
-      const procedure = closingProcedure({ run, target, isRepo, ...(prev.session ? { session: prev.session } : {}), ...(prev.seq !== undefined ? { seq: prev.seq } : {}) })
+      // Le compte rendu de cette session précédente, dans la fenêtre de son envoi : sans lui, pas de claude rm.
+      const prevReportAt = relayedReportAt(relay, g, run.groups, prev, nextSend(prev.at))
+      const procedure = closingProcedure({ run, target, isRepo, ...(prev.session ? { session: prev.session } : {}), ...(prev.seq !== undefined ? { seq: prev.seq } : {}), hasReport: prevReportAt !== undefined, noted: prev.closing })
       // Un id hors forme : la procédure se réduit à son refus, sans consigne autour qui retirerait un worktree.
       if (!isGroupId(g.id) && (prev.closing === undefined || prev.closing?.state === 'app' || retried)) {
         // Comme pour un id en forme : une session qui travaille encore n'a rien à rapporter, elle attend.
@@ -2872,7 +2908,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
       const name = `the previous worker of group ${shownGroupId(g.id)} (${shownGroupName(g.name)}), replaced by a new send (sent at ${isoMinute(prev.at)} UTC)`
       if (prev.closing?.state === 'app') {
         parts.push(` · To archive in the app: ${name}${closingWhy(prev.closing.why)}; ${archived(procedure)} ${closedHint(target, key)}`)
-      } else if ((prev.closing === undefined || retried) && !isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) {
+      } else if ((prev.closing === undefined || retried || isReportedSinceKept(run, g, prev, prevReportAt)) && !isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) {
         parts.push(
           ` · Close now: ${name}: its work came back with its group, a new session took its place. Only in the discussion that leads the mission, never in a worker (a bug-diagnosis session that resumed the mission included: there, ignore this section). The new session of the group may work in a worktree of the same name: the worktree to close is the one of this previous session only, found by its branch and its session's cwd; if that worktree is the new session's (its cwd, or the new session's branch), stop the closing and tell the user. ${procedure} ${closedHint(target, key)}`,
         )
@@ -2882,7 +2918,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
     if (!link || g.linked !== undefined || link.closing?.state === 'closed') continue
     if (!isGroupId(g.id) && (link.closing?.state === 'app' || isCloseCandidate(run, g, relay, review))) {
       const target = { kind: 'group', id: g.id, name: g.name } as const
-      parts.push(` · Do not close: ${closingProcedure({ run, target, isRepo })} ${closedHint(target)}`)
+      parts.push(` · Do not close: ${closingProcedure({ run, target, isRepo, hasReport: false })} ${closedHint(target)}`)
       continue
     }
     const name = `group ${shownGroupId(g.id)} (${shownGroupName(g.name)})`
@@ -2897,13 +2933,15 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
       }
       continue
     }
+    // Le compte rendu de sa session au relais : sans lui, la procédure ne lance pas claude rm (session gardée).
+    const hasReport = relayedReportAt(relay, g, run.groups) !== undefined
     if (link.closing?.state === 'app') {
-      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}) })
+      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}), hasReport, noted: link.closing })
       parts.push(` · To archive in the app: ${name}${closingWhy(link.closing.why)}; ${archived(procedure)} Then send {"closed": [{"group": ${asciiJson(g.id)}, "state": "closed", "sessionId": "<full sessionId>", "branch": "<kept branch>", "worktree": "<removed worktree path>"}]} (the last three when known).`)
       continue
     }
     if (isCloseCandidate(run, g, relay, review)) {
-      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}) })
+      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}), hasReport, noted: link.closing })
       parts.push(
         ` · Close now: ${name} is closed (returned, reviewed, security settled). Only in the discussion that leads the mission, never in a worker (a bug-diagnosis session that resumed the mission included: there, ignore this section). ${procedure} ${closedHint({ kind: 'group', id: g.id, name: g.name })}`,
       )
@@ -2927,7 +2965,8 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
     const target = { kind: 'items', skill: phase.skill } as const
     // Relu du tableau de bord : l'id n'est cité que s'il a une forme sûre, comme dans la procédure.
     const name = `the worker of the ${def.items.label} of phase ${def.label} (session ${isSafeId(link.session) ? link.session : 'id de session hors forme'})`
-    const procedure = closingProcedure({ run, target, isRepo, session: link.session, ...(link.seq !== undefined ? { seq: link.seq } : {}) })
+    // La session des pistes ne dépose pas de compte rendu au relais : jamais de claude rm (closingProcedure).
+    const procedure = closingProcedure({ run, target, isRepo, session: link.session, ...(link.seq !== undefined ? { seq: link.seq } : {}), hasReport: false })
     if (link.closing?.state === 'app') {
       parts.push(` · To archive in the app: ${name}${closingWhy(link.closing.why)}; ${archived(procedure)} ${closedHint(target)}`)
     } else if (isItemsCloseCandidate(phase)) {
@@ -3101,6 +3140,12 @@ export const clampFuture = (board: Board, now: number): Board => {
   // Une fin de ticket datée au-delà de la tolérance, ramenée à maintenant : sinon chaque revue du lot,
   // datée avant elle, le laisserait à relire, et l'auto renverrait la revue à chaque tour.
   const isTicketAhead = (r: Run) => r.tickets.some(t => isTime(t.finishedAt) && t.finishedAt > now + 60_000)
+  // Un changement de statut d'un bloqueur externe daté au-delà de la tolérance : un « todo » perd sa date (jamais
+  // ramenée à l'heure de la lecture, qui gagnerait chaque fusion sur une levée), et sans date il ne gagne aucune
+  // fusion sur un changement daté (`keepExternals`) ; une levée, elle, est ramenée à maintenant, pour ne pas perdre
+  // contre un « todo » daté plus ancien.
+  const isExternalAhead = (x: unknown) => isSoundExternal(x) && isTime(x.statusAt) && x.statusAt > now + 60_000
+  const areExternalsAhead = (r: Run) => externalsOf(r).some(isExternalAhead)
   // Une revue du lot datée au-delà de la tolérance compte comme une revue à refaire : sa date est gardée,
   // en négatif (rien n'est effacé), illisible comme date de revue ; le lot redevient à relire, sous une clé
   // de passage qui la nomme (jamais `lot@0`), et la revue suivante la remplace.
@@ -3109,7 +3154,7 @@ export const clampFuture = (board: Board, now: number): Board => {
   // toute prise), jamais effacées.
   const isSeatFuture = isSeatAhead(board.coo, now)
   const areMarksAhead = (r: Run) => isMarkAhead(r.security, now) || (r.groups ?? []).some(g => isMarkAhead(g.security, now))
-  if (isDeletedSound && !isSeatFuture && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || isReviewAhead(r) || areMarksAhead(r))) return board
+  if (isDeletedSound && !isSeatFuture && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || areExternalsAhead(r) || isReviewAhead(r) || areMarksAhead(r))) return board
   const b = clone(board)
   if (isSeatFuture) b.coo = soundSeat(board.coo, now)
   // Une trace de suppression datée dans le futur, ou mal formée, tombe à la lecture : jamais appliquée.
@@ -3124,6 +3169,7 @@ export const clampFuture = (board: Board, now: number): Board => {
     for (const g of r.groups ?? []) if (isMarkAhead(g.security, now)) g.security = withoutMark(g.security!)
     if (isReviewAhead(r)) r.reviewedAt = -r.reviewedAt!
     if (isTicketAhead(r)) r.tickets = r.tickets.map(t => (isTime(t.finishedAt) && t.finishedAt > now + 60_000 ? { ...t, finishedAt: now } : t))
+    if (areExternalsAhead(r)) r.externals = externalsOf(r).map(x => (!isExternalAhead(x) ? x : x.status === 'done' ? { ...x, statusAt: now } : undated(x)))
     if (areTracesAhead(r, now)) {
       r.autoResent = tracesAtMost(r.autoResent, now) as Run['autoResent']
       r.answered = tracesAtMost(r.answered, now) as Run['answered']
@@ -3707,7 +3753,7 @@ const isFindingTime = (run: Run): boolean => {
 const addFound = (run: Run, task: Omit<FoundTask, 'at'>, now: number): boolean => {
   const isKnown = (id: string) =>
     run.tickets.some(t => sameTicket(t.id, id)) ||
-    (run.externals ?? []).some(x => isSoundExternal(x) && sameTicket(x.id, id)) ||
+    externalsOf(run).some(x => isSoundExternal(x) && sameTicket(x.id, id)) ||
     (run.found ?? []).some(f => sameTicket(f.id, id))
   if (task.id === '' || isKnown(task.id)) return false
   run.found = [...(run.found ?? []), { ...task, at: now }].slice(-LIMITS.found)
@@ -3785,7 +3831,7 @@ const isDecisionNote = (notes: unknown): boolean => {
 
 export const applyAsana = (board: Board, tasks: unknown, now: number): Outcome => {
   const run0 = activeRun(board)
-  if (!run0 || (run0.tickets.length === 0 && (run0.externals ?? []).length === 0 && (run0.found ?? []).length === 0)) return null
+  if (!run0 || (run0.tickets.length === 0 && externalsOf(run0).length === 0 && (run0.found ?? []).length === 0)) return null
   const changes = asList(tasks)
     .map(asanaChange)
     .filter((c): c is StatusChange => c !== null)
@@ -3801,14 +3847,18 @@ export const applyAsana = (board: Board, tasks: unknown, now: number): Outcome =
   }
   for (const t of asList(tasks)) {
     const id = typeof t.task === 'string' ? t.task : ''
-    const at = (run.externals ?? []).findIndex(x => isSoundExternal(x) && sameTicket(x.id, id))
+    const list = externalsOf(run)
+    const at = list.findIndex(x => isSoundExternal(x) && sameTicket(x.id, id))
     if (at < 0) continue
-    const x = run.externals![at]!
+    const x = list[at]!
+    // Cochée, la tâche lève le bloqueur ; décochée, elle le rouvre (décision de Mathis du 08/11/2026) : avec un envoi
+    // explicite "status": "todo", les deux seuls chemins de réouverture. Daté dans les deux cas.
     const status: 'todo' | 'done' = t.completed === true ? 'done' : t.completed === false ? 'todo' : x.status
     const isDecision = typeof t.notes === 'string' ? isDecisionNote(t.notes) : x.isDecision
     if (status === x.status && isDecision === x.isDecision) continue
     if (status === 'done' && x.status !== 'done') log(run, now, '✓', `Dépendance externe levée : ${x.name}`, 'ok')
-    run.externals![at] = { ...x, status, isDecision }
+    if (status === 'todo' && x.status === 'done') log(run, now, '↺', `Dépendance externe rouverte : ${x.name}`, 'warn')
+    list[at] = { ...x, status, isDecision, ...(status !== x.status ? { statusAt: now } : {}) }
     moved += 1
   }
   if (moved === 0) return null
@@ -4565,12 +4615,12 @@ export const awaitedExternals = (run: Run, inFlight: boolean, outside?: Readonly
   const blocking = new Set(open.flatMap(t => openBlockers(run, t)))
   // Relues du fichier partagé : une entrée hors forme (pas un objet, id pas texte) n'est jamais attendue ; un nom illisible
   // ne l'écarte pas (elle reste une tâche, nommée par son id).
-  const tasks = (run.externals ?? []).filter(x => isSoundExternal(x) && x.status !== 'done' && x.isDecision !== true && [...blocking].some(id => sameTicket(id, x.id)))
+  const tasks = externalsOf(run).filter(x => isSoundExternal(x) && x.status !== 'done' && x.isDecision !== true && [...blocking].some(id => sameTicket(id, x.id)))
   if (tasks.length === 0) return []
   // Une décision externe pas tranchée qui bloque un ticket ouvert attend la personne : rien n'est attendu, la
   // pause « plus rien ne peut avancer sans toi » la fait voir, comme une question ouverte.
-  if ((run.externals ?? []).some(x => isSoundExternal(x) && x.status !== 'done' && x.isDecision === true && [...blocking].some(id => sameTicket(id, x.id)))) return []
-  const lifted: Run = { ...run, externals: (run.externals ?? []).map(x => (tasks.includes(x) ? { ...x, status: 'done' as const } : x)) }
+  if (externalsOf(run).some(x => isSoundExternal(x) && x.status !== 'done' && x.isDecision === true && [...blocking].some(id => sameTicket(id, x.id)))) return []
+  const lifted: Run = { ...run, externals: externalsOf(run).map(x => (tasks.includes(x) ? { ...x, status: 'done' as const } : x)) }
   const groups = run.groups ?? []
   if (groups.length === 0) {
     const isAllBlocked = open.length > 0 && open.every(t => openBlockers(run, t).length > 0)
@@ -4957,7 +5007,7 @@ const keepLotReview = (kept: Run, other: Run | undefined): Run => {
  */
 const keepRun = (kept: Run, other: Run | undefined, own: readonly OwnTraces[] = [], isKeptLocal = true): Run => {
   const mine = own.find(o => o.runId === kept.id)
-  return keepLaunch(keepForced(keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent), other), other)
+  return keepExternals(keepLaunch(keepForced(keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent), other), other), other)
 }
 
 /**
@@ -5119,8 +5169,8 @@ const readGesture = (x: Record<string, unknown>): QuestionGesture | undefined =>
 
 /**
  * L'empreinte d'une question telle que la personne la voit : son texte, sa cible et son geste, et la date
- * de sa pose (une question reformulée la garde ; retirée puis reposée sous le même id, elle en a une
- * neuve). Un geste ou une réponse porte celle de la version lue : une question changée depuis, ou reposée
+ * de sa pose (une question reformulée la garde ; une question du mod retirée puis reposée sous le même id en a
+ * une neuve ; une question répondue, sa trace gardée, ne se repose pas sous son id par `waiting`). Un geste ou une réponse porte celle de la version lue : une question changée depuis, ou reposée
  * depuis, a une autre empreinte et n'est pas répondue (invariant des gestes chez le COO).
  */
 export const questionPrint = (q: Pick<OpenQuestion, 'text' | 'blocks' | 'gesture' | 'at'>): string =>
@@ -5273,7 +5323,8 @@ const withdrawQuestion = (run: Run, id: string, now: number): boolean => {
 /**
  * Les questions envoyées par `waiting` sur la mission active ici : `{ id, phase | group | ticket, text }`
  * en ajoute une (ou met à jour la question ouverte du même id), `{ id, answered: true }` la retire et en
- * garde la trace. Une entrée hors forme, une cible inconnue, une question de plus que la borne : refusées,
+ * garde la trace. Une entrée hors forme, une cible inconnue, une question de plus que la borne, l'id d'une question
+ * déjà répondue (sa trace) sans question ouverte de cet id : refusées,
  * et la réponse le dit. Rend la phrase de la réponse.
  */
 const applyWaiting = (run: Run, value: unknown, now: number): string => {
@@ -5303,6 +5354,15 @@ const applyWaiting = (run: Run, value: unknown, now: number): string => {
     // Posée par le mod seul : Claude ne la pose ni ne la change (une autre cible ou un autre texte la ferait cesser de bloquer).
     if (id.startsWith(OPPOSITION_PREFIX)) {
       refused.push(`"${id}": a question of opposed decisions, posed by the dashboard itself: never posed nor changed here`)
+      continue
+    }
+    // Une question répondue (sa trace) ne se rouvre jamais par le renvoi de son id : une nouvelle question prend un
+    // nouvel id. Une question encore ouverte ici que sa trace répond (gardée seulement par les traces d'ici, auto
+    // allumé) l'est aussi : sa mise à jour serait effacée par la fusion d'une autre copie. Une question ouverte que
+    // sa trace ne répond pas (posée après elle, ou à la date illisible) se met à jour sur place.
+    const trace = readAnswered(run).find(t => t.id === id)
+    if (trace && (!was || isAnsweredBy(was, trace))) {
+      refused.push(`"${id}" a été répondue le ${isoMinute(Math.min(trace.at, now))} UTC : une nouvelle question prend un nouvel id`)
       continue
     }
     if (!was && id.length > WAIT_ID_MAX) {
@@ -5341,11 +5401,11 @@ const applyWaiting = (run: Run, value: unknown, now: number): string => {
       refused.push(`"${id}": a "flaw" gesture blocks its group ("group"), or this phase in a mission without groups ("phase"), never a ticket`)
       continue
     }
-    // Une question reposée passe après la trace de son retrait, même dans le même appel ou face à une
-    // trace datée d'une horloge en avance : la fusion ne l'efface pas.
-    const traceAt = readAnswered(run).find(t => t.id === id)?.at
     const gesture = readGesture(x)
-    const question: WaitingQuestion = { id, blocks: target, text, at: was?.at ?? Math.max(now, (traceAt ?? -1) + 1), ...(gesture ? { gesture: gesture.kind, ...(gesture.dismissed !== undefined ? { dismissed: gesture.dismissed } : {}) } : {}) }
+    // Une question ouverte garde sa date ; à la date illisible, mise à jour face à une trace de son id (une fusion, une
+    // horloge en avance), elle passe après cette trace : la fusion ne l'efface pas. Une question nouvelle : maintenant.
+    const at = was ? (was.at ?? Math.max(now, (trace?.at ?? -1) + 1)) : now
+    const question: WaitingQuestion = { id, blocks: target, text, at, ...(gesture ? { gesture: gesture.kind, ...(gesture.dismissed !== undefined ? { dismissed: gesture.dismissed } : {}) } : {}) }
     run.waiting = was ? open.map(q => (q.id === id ? question : (q.raw as WaitingQuestion))) : [...open.map(q => q.raw as WaitingQuestion), question]
     if (!was) log(run, now, '❓', `Question en attente (${id}) : bloque ${waitTargetLabel(run, readQuestion(question))}`, 'warn')
   }
@@ -5531,8 +5591,8 @@ export const detachOnLoad = (board: Board, now: number, session: string): Board 
  * trace future est tombée à la lecture (`clampFuture`).
  * Certains champs se fusionnent à part, quelle que soit la copie gardée (`keepRun`) : les fermetures
  * des workers, qui ne reculent jamais, l'état auto, date par date, les questions bloquantes,
- * une par une, retraits tracés, et, pour une mission qui a été en auto, les choix « décidé sans toi »,
- * un par un. `own` : les traces de retrait que cette discussion a écrites, pour chaque mission dont
+ * une par une, retraits tracés, pour une mission qui a été en auto, les choix « décidé sans toi »,
+ * un par un, et les bloqueurs externes, unis, au statut changé le plus tard (`keepExternals`). `own` : les traces de retrait que cette discussion a écrites, pour chaque mission dont
  * l'auto est allumé en son nom (`isAutoLitBy`) : seules elles y retirent une marque en attente ou une
  * question (`keepRun`) ; les autres missions reçoivent l'union des traces.
  * L'écriture qui suit n'est pas atomique entre discussions : la fusion suivante rattrape.
@@ -5722,8 +5782,8 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
   const tracking = run.artifacts.filter(a => a.kind === 'tracking')
   lines.push(
     tracking.length > 0
-      ? `- Tracking files of this mission (one per discussion; read them all, they hold what the other discussions did, found and decided): ${tracking.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}. Also look in travail/tasks/ for others changed since the mission started (git log).`
-      : '- Tracking files: look in travail/tasks/ for every file changed since the mission started (git log): one per discussion, they hold what the other discussions did, found and decided.',
+      ? `- Tracking files of this mission (one per discussion; read them all, they hold what the other discussions did, found and decided): ${tracking.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}. Also look where the project's CLAUDE.md keeps tracking files (for example travail/<subject>/: spec, tickets, DECISIONS.md; else travail/tasks/) for others changed since the mission started (git log).`
+      : '- Tracking files: look where the project\'s CLAUDE.md keeps them (for example travail/<subject>/: spec, tickets, DECISIONS.md; else travail/tasks/) for every file changed since the mission started (git log): they hold what the other discussions did, found and decided.',
   )
   const found = run.found ?? []
   if (found.length > 0) lines.push(`- Found on the way (tracker tasks created during the mission, outside the lot): ${found.map(f => `${shownInNote(f.name)} [${shownInNote(f.id)}]: ${shownInNote(f.status)}${f.why ? ` (${shownInNote(f.why)})` : ''}${f.isForUser ? ', assigned to the user' : ''}`).join('; ')}.`)
@@ -5847,7 +5907,7 @@ const nameDiscussion = (board: Board, run: Run, fx: Effects): string => {
     !hasLaunchedLinked(run)
   if (!isHere) return ' · this discussion keeps its name'
   fx.discussionTitle = run.title
-  return ` · name this discussion "${run.title}": if you have a tool that renames it (in the app: set_session_title), call it now with this title; otherwise the dashboard renames it itself (/rename at the end of this turn when the session has it, else at the user's next message)`
+  return ` · name this discussion ${JSON.stringify(run.title)}: if you have a tool that renames it (in the app: set_session_title), call it now with this title; otherwise the dashboard renames it itself (/rename at the end of this turn when the session has it, else at the user's next message)`
 }
 
 /**
@@ -5990,7 +6050,7 @@ export const openBlockers = (run: Run, ticket: Ticket): string[] =>
 const groupIdOf = (run: Run, id: string): string | undefined => (run.groups ?? []).find(g => g.tickets.some(x => sameTicket(x, id)))?.id
 
 /** La dépendance externe d'id `id`, si la mission la connaît. */
-export const externalOf = (run: Run, id: string): ExternalBlocker | undefined => (run.externals ?? []).find(x => isSoundExternal(x) && sameTicket(x.id, id))
+export const externalOf = (run: Run, id: string): ExternalBlocker | undefined => externalsOf(run).find(x => isSoundExternal(x) && sameTicket(x.id, id))
 
 /**
  * Une dépendance externe relue du fichier partagé, en forme pour être lue : un objet dont l'id est un texte.
@@ -5998,6 +6058,126 @@ export const externalOf = (run: Run, id: string): ExternalBlocker | undefined =>
  * son nom, lui, peut manquer (il se montre alors par son id).
  */
 const isSoundExternal = (x: unknown): x is ExternalBlocker => x !== null && typeof x === 'object' && typeof (x as { id?: unknown }).id === 'string'
+
+/** Un bloqueur externe tel qu'un envoi le donne : chaque champ seulement s'il est donné et en forme. */
+type SentExternal = { id: string; name?: string; status?: ExternalBlocker['status']; isDecision?: boolean }
+
+/**
+ * Les bloqueurs externes d'un envoi (`externals`) : un id non vide ; le statut seulement s'il vaut
+ * exactement « todo » ou « done » (absent ou autre, le statut gardé reste) ; le nom s'il n'est pas vide ;
+ * le type (`kind`) s'il est donné.
+ */
+const externalsSent = (raw: unknown): SentExternal[] =>
+  asList(raw)
+    .map((one): SentExternal => {
+      const name = clip(str(one.name), TEXT_MAX)
+      const kind = str(one.kind)
+      return {
+        id: str(one.id),
+        ...(name !== '' ? { name } : {}),
+        ...(one.status === 'done' || one.status === 'todo' ? { status: one.status } : {}),
+        ...(kind !== '' ? { isDecision: kind === 'decision' } : {}),
+      }
+    })
+    .filter(x => x.id !== '')
+
+/**
+ * Un envoi de bloqueurs externes appliqué, dans l'ordre, à ceux que la mission garde, champ par champ :
+ * un bloqueur connu (même id, `sameTicket`) ne prend que les champs envoyés, et son statut ne change, daté
+ * (`statusAt`), que sur un « todo » ou un « done » explicite ; un nouveau est à faire sans statut envoyé,
+ * son id pour nom. Au plafond (`LIMITS.tickets`), un nouveau est refusé, jamais un bloqueur gardé rogné ;
+ * une entrée gardée hors forme reste telle quelle.
+ */
+const mergeExternals = (known: readonly ExternalBlocker[], sent: readonly SentExternal[], now: number) => {
+  const list = [...known]
+  const lifted: ExternalBlocker[] = []
+  const reopened: ExternalBlocker[] = []
+  const refused: SentExternal[] = []
+  for (const x of sent) {
+    const at = list.findIndex(k => isSoundExternal(k) && sameTicket(k.id, x.id))
+    if (at < 0) {
+      if (list.length >= LIMITS.tickets) {
+        refused.push(x)
+        continue
+      }
+      // Daté seulement sur un statut envoyé : un ajout « à faire » par défaut (le bloqueur renvoyé sans status à
+      // une copie qui ne le connaissait pas) ne rouvre jamais, à la fusion, un bloqueur levé ailleurs.
+      const added: ExternalBlocker = { id: x.id, name: x.name ?? clip(x.id, TEXT_MAX), status: x.status ?? 'todo', isDecision: x.isDecision ?? false, ...(x.status ? { statusAt: now } : {}) }
+      list.push(added)
+      if (added.status === 'done') lifted.push(added)
+      continue
+    }
+    const was = list[at]!
+    const status = x.status ?? was.status
+    const isMoved = status !== was.status
+    // Un nom gardé illisible (relu du fichier partagé) prend l'id, comme à l'ajout, quand l'envoi n'en donne pas.
+    const isNameRead = typeof was.name === 'string' && was.name !== ''
+    const next: ExternalBlocker = {
+      ...was,
+      ...(x.name !== undefined ? { name: x.name } : isNameRead ? {} : { name: clip(was.id, TEXT_MAX) }),
+      ...(x.isDecision !== undefined ? { isDecision: x.isDecision } : {}),
+      ...(isMoved ? { status, statusAt: now } : {}),
+    }
+    list[at] = next
+    if (isMoved && status === 'done') lifted.push(next)
+    if (isMoved && status === 'todo') reopened.push(next)
+  }
+  return { list, lifted, reopened, refused }
+}
+
+/** La date du dernier changement de statut d'un bloqueur externe ; sans date lisible, avant toutes les autres. */
+const statusTime = (x: ExternalBlocker): number => (isTime(x.statusAt) ? x.statusAt : -1)
+
+/** Un bloqueur externe sans sa date de changement de statut. */
+const undated = (x: ExternalBlocker): ExternalBlocker => {
+  const y = { ...x }
+  delete y.statusAt
+  return y
+}
+
+/** Un statut de bloqueur externe en forme. */
+const isBlockerStatus = (s: unknown): s is ExternalBlocker['status'] => s === 'todo' || s === 'done'
+
+/** Les bloqueurs externes d'une mission, une liste vide quand le champ relu n'en est pas une. */
+const externalsOf = (run: Run | undefined): ExternalBlocker[] => (Array.isArray(run?.externals) ? run.externals : [])
+
+/**
+ * La fusion des bloqueurs externes de deux copies d'une même mission : l'union par id (`sameTicket`), ceux
+ * de la copie gardée d'abord, jamais rognée ; pour un bloqueur des deux copies, le statut changé le plus
+ * tard (`statusAt`, une date l'emporte sur son absence), et à date égale ou sans date, le levé. Une copie en
+ * retard ne rouvre donc jamais un bloqueur levé ailleurs, et un « todo » explicite plus récent tient.
+ */
+const keepExternals = (kept: Run, other: Run | undefined): Run => {
+  const theirs = externalsOf(other).filter(isSoundExternal)
+  if (theirs.length === 0) return kept
+  // Une liste gardée hors forme (relue du fichier partagé) ne porte aucun bloqueur lisible : ceux de l'autre copie
+  // la remplacent, sinon ils seraient effacés à l'écriture.
+  if (kept.externals !== undefined && !Array.isArray(kept.externals)) return { ...kept, externals: [...theirs] }
+  const ours = externalsOf(kept)
+  let isChanged = false
+  const list = ours.map(k => {
+    const t = isSoundExternal(k) ? theirs.find(x => sameTicket(x.id, k.id)) : undefined
+    // Un statut hors forme de l'autre copie ne remplace jamais celui-ci.
+    if (!t || !isBlockerStatus(t.status)) return k
+    if (t.status === k.status) {
+      // Même statut : la date du dernier changement est la plus récente des deux, pour les fusions suivantes.
+      if (statusTime(t) <= statusTime(k)) return k
+      isChanged = true
+      return { ...k, statusAt: t.statusAt }
+    }
+    const isLater = !isBlockerStatus(k.status) || statusTime(t) > statusTime(k) || (statusTime(t) === statusTime(k) && t.status === 'done')
+    if (!isLater) return k
+    isChanged = true
+    // Sans date lisible de l'autre côté, la copie gardée n'en avait pas non plus (égalité) : rien à dater.
+    return { ...k, status: t.status, ...(isTime(t.statusAt) ? { statusAt: t.statusAt } : {}) }
+  })
+  for (const t of theirs) {
+    if (list.some(k => isSoundExternal(k) && sameTicket(k.id, t.id))) continue
+    list.push(t)
+    isChanged = true
+  }
+  return isChanged ? { ...kept, externals: list } : kept
+}
 
 /**
  * Un ticket peut entrer dans la sélection s'il n'est pas fait et que chacun de ses bloqueurs est

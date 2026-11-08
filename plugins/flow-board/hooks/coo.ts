@@ -76,7 +76,10 @@ export type CooDelivery = {
   state: 'ready' | 'running' | 'failed' | 'paused' | 'unread'
   missions: string[]
   commits: { mission: string | null; lines: string[] }[]
+  /** Les missions pas finies à groupes déjà confiés : la carte recommande d'attendre. */
   waitFor: string[]
+  /** Les missions pas finies sans groupe confié dont des commits partent : à attendre aussi. */
+  waitCommits: string[]
   steps?: { label: string; status: 'todo' | 'running' | 'done' | 'failed'; detail?: string }[]
   step?: string
   /** Les commits qui partiront au-delà de ceux que la carte liste. */
@@ -135,6 +138,8 @@ export type CooStatement = {
   existingGleaned?: boolean | null
   /** Les cartes de lancement proposées dans cette discussion, chacune avec son état d'après le fichier des missions. */
   cards?: CooCard[]
+  /** Le quota de cette discussion (`quotaText`), relu à ce rendu : montré sous une carte prête en xhigh ; absent sans quota lu. */
+  quota?: string
   /** Le skill ask-matt du plugin mattpocock-skills installé, à relire avant de proposer un départ ; null quand il n'a pas été trouvé. */
   askMatt?: string | null
   /** Le plan des vagues du projet : le plan calculé, et s'il change l'ordre validé (à valider d'un clic). */
@@ -516,12 +521,21 @@ const decisionLines = (d: CooDecisions): string[] => {
   return lines
 }
 
+/** Les missions à attendre avant de livrer, dans le relevé : à groupes confiés, puis sans groupes dont des commits partent. */
+const waitHint = (d: CooDelivery): string => {
+  const parts = [
+    ...(d.waitFor.length > 0 ? [`${d.waitFor.map(t => neutralQuoted(t, 80)).join(', ')} not finished, with groups already merged`] : []),
+    ...(d.waitCommits.length > 0 ? [`${d.waitCommits.map(t => neutralQuoted(t, 80)).join(', ')} not finished, ${d.waitCommits.length > 1 ? 'their' : 'its'} commits leave with this delivery`] : []),
+  ]
+  return parts.length > 0 ? `; recommend waiting: ${parts.join('; ')}` : ''
+}
+
 /** La livraison dans le relevé : ce que la personne fait de la carte, et ce que Claude rend à chaque étape. */
 const deliveryLine = (d: CooDelivery): string => {
   const missions = d.missions.map(m => neutralQuoted(m, 80)).join(', ')
   if (d.state === 'unread') return '- Delivery: its state could not be read, so nothing runs; tell the user.'
   if (d.state === 'ready')
-    return `- Delivery ready for ${missions}: the user starts it with « ▶ Livrer » on the delivery card of the Coordination view, never by a message (you never run /project:version, /project:push or /project:pr yourself here)${d.waitFor.length > 0 ? `; recommend waiting: ${d.waitFor.map(t => neutralQuoted(t, 80)).join(', ')} not finished, with groups already merged` : ''}.`
+    return `- Delivery ready for ${missions}: the user starts it with « ▶ Livrer » on the delivery card of the Coordination view, never by a message (you never run /project:version, /project:push or /project:pr yourself here)${waitHint(d)}.`
   const step = d.step ? neutralQuoted(d.step, 40) : 'its next step'
   if (d.state === 'running')
     return `- Delivery under way for ${missions}: step ${step} runs; when it ends, report its outcome with the flow tool, {"delivery": {"step": "<version|push|pr|project>", "ok": true or false, "detail": "<what it did: the version set, where it pushed, the PR address; or why it failed>"}}; the dashboard runs the next step only on success${d.isArmed ? '' : ' and a click of the user (« ▶ Reprendre »)'}.`

@@ -5,6 +5,8 @@
 // la marque n'envoie rien et le met en pause ; un envoi resté sans suite devient une question avec
 // « ↻ Renvoyer » ; le rapport écrit et le quota l'arrêtent ; un fichier seul ne le rallume pas.
 
+// Stockage : les deux modes (scripts/check.py relance ce fichier dans le mode qu'il n'a pas eu : tests/stockage.ts).
+
 import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, autoActionOf, autoDecision, autoMarksOf, clampFuture, emptyBoard, isAutoLitBy, markAutoSent, markAutoStarted, mergeBoards, newRun, openQuestions, raiseRelaunchQuestions, raiseStaleAutoSends, resendAutoMark, unmarkAutoSent } from '../hooks/model.ts'
@@ -690,7 +692,8 @@ test('Une trace gardée ici ne compte jamais plus tard que celle de la mission d
   const action = { kind: 'command' as const, key: KEY, skill: 'to-tickets', what: '/to-tickets', blocks: { kind: 'phase' as const, id: 'to-tickets' } }
   const run = runWith({ autoResent: [{ key: KEY, at: 5_000 }], answered: [{ id: 'q1', at: 5_000 }], updatedAt: 2_000 })
   const sent = markAutoSent(boardOf(run), action, 6_000)!.board
-  const asked = applyReport(sent, { waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Q ?' }] }, 6_500).board
+  // q1 reposée après sa trace dans une autre copie (ici, le renvoi d'un id répondu est refusé) : la question à 6 500.
+  const asked: Board = { ...sent, runs: sent.runs.map(r => ({ ...r, waiting: [{ id: 'q1', blocks: { kind: 'phase' as const, id: 'to-tickets' }, text: 'Q ?', at: 6_500 }] })) }
   // Gardée ici loin dans le futur (horloge recalée, marque forgée retirée) : elle ne dépasse pas la trace de la mission.
   const merged = mergeBoards(asked, asked, { runId: run.id, resent: [{ key: KEY, at: 9e12 }], answered: [{ id: 'q1', at: 9e12 }] })
   expect(autoMarksOf(merged.runs[0]!)).toEqual([expect.objectContaining({ key: KEY, at: 6_000 })])

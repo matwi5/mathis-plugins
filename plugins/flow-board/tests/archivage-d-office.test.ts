@@ -16,7 +16,7 @@ const step7 = (text: string): string => text.slice(text.indexOf('7) seulement si
 
 test('sans accord donné d’avance, la fermeture d’une session de l’app fait demander l’accord et dit comment le donner une fois pour toutes', () => {
   archiveConsent.at = null
-  const text = step7(closingProcedure({ run, target, isRepo: true, session: 'local_ab12' }))
+  const text = step7(closingProcedure({ hasReport: true, run, target, isRepo: true, session: 'local_ab12' }))
   expect(text).toContain('l’outil d’archivage de l’app demande mon accord pour cette session')
   expect(text).toContain('/flow archive on')
   expect(text).not.toContain('tu as mon accord')
@@ -26,7 +26,7 @@ test('l’accord donné d’avance est cité en nommant la session : Claude arch
   archiveConsent.at = T0
   try {
     for (const isRepo of [true, false]) {
-      const text = closingProcedure({ run, target, isRepo, session: 'local_ab12' })
+      const text = closingProcedure({ hasReport: true, run, target, isRepo, session: 'local_ab12' })
       expect(text).toContain('tu as mon accord pour l’archiver')
       expect(text).toContain('/flow archive on, le 2026-11-02')
       expect(text).toContain('il vaut pour la session dont le titre commence par « Boutique > Groupe A · »')
@@ -47,7 +47,7 @@ test('la date relue d’un accord est bornée en un seul point : hors de l’ép
 test('une session du CLI ne change pas : claude stop, sans accord à citer', () => {
   archiveConsent.at = T0
   try {
-    const text = step7(closingProcedure({ run, target, isRepo: true, session: '178bd61c' }))
+    const text = step7(closingProcedure({ hasReport: true, run, target, isRepo: true, session: '178bd61c' }))
     expect(text).toContain("claude stop '178bd61c'")
   } finally {
     archiveConsent.at = null

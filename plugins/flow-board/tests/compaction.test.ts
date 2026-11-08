@@ -358,6 +358,7 @@ test('/retro dans une discussion compactée porte la consigne de transcript, ave
   expect(text).not.toContain('If it does')
   expect(text.startsWith('RETRO')).toBe(true)
   expect(text).toContain(TRANSCRIPT)
+  expect(text).toContain(`scripts/rapports-specialistes.mjs' '${TRANSCRIPT}'`)
   expect(text).toContain('compact_boundary')
   expect(text).toContain('read-only')
   expect(text).toContain('logicalParentUuid')
@@ -394,16 +395,34 @@ test('le bouton Rétro d’une mission à workers transmet la règle du fichier 
 })
 
 test('retroTranscriptNote : affirmative quand la compaction est vue, sinon une vérification par grep ; la règle du fichier d’origine dans les deux', () => {
-  const seen = retroTranscriptNote('/t/s.jsonl', 's', true)
+  const reports = { script: '/m/scripts/rapports-specialistes.mjs' }
+  const seen = retroTranscriptNote('/t/s.jsonl', 's', true, reports)
   expect(seen).toContain('Transcript (flow-board): this discussion was compacted')
   expect(seen).not.toContain('grep')
-  const unseen = retroTranscriptNote('/t/s.jsonl', 's', false)
-  expect(unseen).toContain(`grep -c '"subtype":"compact_boundary"' "/t/s.jsonl"`)
+  const unseen = retroTranscriptNote('/t/s.jsonl', 's', false, reports)
+  expect(unseen).toContain(`grep -c '"subtype":"compact_boundary"' '/t/s.jsonl'`)
   // Le texte du skill entre dans le transcript, échappé en JSON : il ne doit pas répondre lui-même au grep.
   for (const note of [seen, unseen]) expect(JSON.stringify(note)).not.toContain('"subtype":"compact_boundary"')
   expect(unseen).toContain('If it does')
   for (const note of [seen, unseen]) expect(note).toContain('logicalParentUuid')
-  expect(retroTranscriptNote(undefined, 's1', false)).toContain('~/.claude/projects/<project folder>/s1.jsonl')
+  expect(retroTranscriptNote(undefined, 's1', false, reports)).toContain('~/.claude/projects/<project folder>/s1.jsonl')
+  // Les rapports des spécialistes par le script, dans les deux branches, au lieu de relire chaque transcript.
+  for (const note of [seen, unseen]) {
+    expect(note).toContain(`node '/m/scripts/rapports-specialistes.mjs' '/t/s.jsonl'`)
+    // Hors de la branche « If it does » : la commande vaut aussi pour une discussion jamais compactée.
+    expect(note).toContain('In every case, compacted or not, the reports of its subagents')
+    expect(note).toContain('--prefixe')
+    expect(note).toContain('the same command on each origin file the rule above leads to')
+    expect(note).not.toContain("the repository's source")
+  }
+  // Dans le dépôt de flow-board : la source du dépôt d'abord, l'installé en repli.
+  const source = retroTranscriptNote('/t/s.jsonl', 's', true, { script: 'plugins/flow-board/scripts/rapports-specialistes.mjs', fallback: '/m/scripts/rapports-specialistes.mjs' })
+  expect(source).toContain(`node 'plugins/flow-board/scripts/rapports-specialistes.mjs' '/t/s.jsonl' (from the root of the working folder: the repository's source, which prevails; else node '/m/scripts/rapports-specialistes.mjs' '/t/s.jsonl')`)
+  // Un chemin relu cité pour le shell : ni `$` ni accent grave interprétés, l'apostrophe échappée.
+  expect(retroTranscriptNote("/t/it's $(x).jsonl", 's', true, reports)).toContain(`node '/m/scripts/rapports-specialistes.mjs' '/t/it'\\''s $(x).jsonl'`)
+  // Le grep de la même note, même classe : le chemin relu cité pour le shell.
+  expect(retroTranscriptNote("/t/it's $(x).jsonl", 's', false, reports)).toContain(`grep -c '"subtype":"compact_boundary"' '/t/it'\\''s $(x).jsonl'`)
+  expect(seen).toContain("write its output to a file named after this session's id in your own temporary folder")
 })
 
 test('/retro dans un worker de groupe : la consigne de transcript seule, sans bloc du tableau de bord', async ($, on) => {

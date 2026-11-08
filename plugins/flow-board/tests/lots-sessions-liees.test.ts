@@ -215,6 +215,9 @@ test('une session déléguée n’ouvre ni ne reprend aucune mission, et n’éc
   const report = applyReport(delegated, { step: 'read', tickets: [{ id: 'x9', name: 'Nouveau' }] }, 3_200)
   expect(report.board).toBe(delegated)
   expect(report.text).toMatch(/relayed to the manager's dashboard on its own/)
+  // Un projet qui suit ses tickets en fichiers : la réponse les nomme, pas seulement Asana.
+  expect(report.text).toContain('ticket statuses from your ticket files or Asana updates (their « **Status:** » or « Statut : » line, completion)')
+  expect(report.text).toContain("Only if a ticket's status changes without a ticket file or Asana update")
   expect(report.text).not.toMatch(/Do not call this tool again/)
   // Un `set` part au relais (écrit par l'enregistrement), jamais sur la mission.
   const relayed = applyReport(delegated, { set: [{ id: 'p1', status: 'done' }] }, 3_250)

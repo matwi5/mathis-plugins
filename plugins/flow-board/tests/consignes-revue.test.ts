@@ -103,6 +103,9 @@ test('le découpage borne les groupes à 5 tickets, range le ticket sensible, et
   expect(tickets).toContain('A write planned outside the repository (a file of another repository, of ~/.claude or anywhere else on the machine) is a decision to take with the user before the group is launched')
   expect(tickets).toContain('erasures that overlap, a resume after an interruption, the state after /reload-plugins, and what a failure message says')
   expect(tickets).toContain('the one-sentence invariant of its persisted data')
+  // Un ticket sensible étroit, et les fichiers des appelants d'une fonction dont le contrat change.
+  expect(tickets).toContain('A sensitive ticket carries only the sensitive change: a tool or a large test with no link to the sensitive area makes a ticket of its own, in the same group')
+  expect(tickets).toContain('also names in "files" the files of its callers, found by a search quoted in the ticket (the command and its result)')
   expect(tickets).not.toContain('« charger le skill <name> »')
 })
 
@@ -172,9 +175,10 @@ test('dans la discussion, la revue d’un ticket qui a une ligne « Lecteur » l
   expect(implement).toContain('name the reader yourself and declare it in {"decided": …}')
   // Le relecteur reçoit le lecteur par son fichier de consignes, celui du ticket ou celui nommé par la session.
   expect(implement).toContain('its instructions file gives the reader (the « Lecteur » line, or the one you named)')
-  // Ses correctifs avec ceux de la revue, ses constats avec l'axe Spec.
+  // Ses correctifs avec ceux de la revue, ses constats dans `form`, à part de l'axe Spec.
   expect(implement).toContain('in the commit of the review fixes, before the ticket turns done')
-  expect(implement).toContain('its findings count with the Spec axis in "review"')
+  expect(implement).toContain('its findings go in "form" of "review", never in "spec"')
+  expect(implement).not.toContain('count with the Spec axis')
   // Ni le découpage ni la spec ne la lancent.
   const spec = (await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })).text as string
   expect(spec).toContain('For a ticket in a sensitive area, settle with the user while framing')

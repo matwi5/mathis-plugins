@@ -166,7 +166,7 @@ test('Un chemin de worktree avec un caractère de contrôle C1 ou un séparateur
 test('Dans un dépôt, la fermeture commence par la vérification de core.fsmonitor, avant toute autre commande git', () => {
   const run = newRun('implement', T0, 'Fermeture')
   for (const session of ['178bd61c', 'local_ab12', undefined]) {
-    const text = closingProcedure({ run, target: { kind: 'group', id: 'A', name: 'G' }, isRepo: true, ...(session ? { session } : {}) })
+    const text = closingProcedure({ hasReport: true, run, target: { kind: 'group', id: 'A', name: 'G' }, isRepo: true, ...(session ? { session } : {}) })
     const check = text.indexOf('git config --get core.fsmonitor')
     expect(check).toBeGreaterThan(0)
     expect(text.indexOf('git ')).toBe(check)
@@ -178,7 +178,7 @@ test('Dans un dépôt, la fermeture commence par la vérification de core.fsmoni
     expect(text).toContain('refais d’abord les deux vérifications de core.fsmonitor, dans ce dossier puis sur le worktree (la session a pu la poser avant son arrêt')
   }
   // Sans git, aucune commande git : pas de vérification.
-  expect(closingProcedure({ run, target: { kind: 'group', id: 'A', name: 'G' }, isRepo: false, session: '178bd61c' })).not.toContain('core.fsmonitor')
+  expect(closingProcedure({ hasReport: true, run, target: { kind: 'group', id: 'A', name: 'G' }, isRepo: false, session: '178bd61c' })).not.toContain('core.fsmonitor')
 })
 
 // ─── Une valeur relue abîmée laisse le groupe ouvert, et la réponse le dit ─────

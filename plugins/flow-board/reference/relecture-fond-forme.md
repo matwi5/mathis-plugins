@@ -16,7 +16,7 @@ Le lecteur est celui que nomme la ligne « Lecteur » du ticket, recopiée dans 
 
 ## 3. Le fond
 
-- **L'exactitude** : chaque fait, chiffre, nom, chemin, commande ou comportement décrit correspond aux sources. Vérifie-le en les lisant, pas de mémoire ; un point que les sources ne permettent pas de trancher se dit « à confirmer » dans le constat.
+- **L'exactitude** : chaque fait, chiffre, nom, chemin, commande ou comportement décrit correspond aux sources. Vérifie-le en les lisant, pas de mémoire ; un point que les sources ne permettent pas de trancher se dit « à confirmer » dans le constat. Un document qui donne des chiffres produits par un script : en recalculer trois, les plus lourds de conséquences, en relançant le script ou sa requête, et dire l'écart ; sans rien écrire dans l'arbre de travail (section 5) : un script qui écrit sa sortie ne se relance que si elle peut aller dans le dossier du relecteur que donne ton fichier de consignes, sinon le calcul se refait à la main depuis ses données, et le constat le dit ; de même pour un script qui écrit aussi ailleurs (un cache dans l'arbre de travail, `~/.claude`) ou qui lance une session de Claude.
 - **La complétude pour ce lecteur** : ce dont il a besoin pour comprendre et agir est là (le contexte, le pourquoi, les limites, ce qu'il doit faire, où aller ensuite).
 - **Ce qui manque ou est de trop** : une étape, une condition ou un cas que le lecteur rencontrera et que le document tait ; à l'inverse, un détail d'implémentation, une répétition ou un historique qui ne lui sert pas.
 
@@ -30,7 +30,7 @@ Le lecteur est celui que nomme la ligne « Lecteur » du ticket, recopiée dans 
 
 ## 5. Lecture seule
 
-N'écris rien dans l'arbre de travail, même un instant, et ne lance aucune commande qui modifie quelque chose : la session choisit ce qu'elle applique. Ne relance ni les tests ni les contrôles. Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport.
+N'écris rien dans l'arbre de travail, même un instant, et ne lance aucune commande qui modifie quelque chose hors du dossier du relecteur que donne ton fichier de consignes (section 3) : la session choisit ce qu'elle applique. Ne relance ni les tests ni les contrôles. Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport.
 
 ## 6. Rapport
 
@@ -49,4 +49,4 @@ Les constats mineurs se rendent en un compte, sans détail (une virgule, un mot 
 
 ## 7. Après la relecture
 
-La session applique ce qu'elle retient dans le commit des correctifs de la revue du ticket, et ne coche le ticket qu'ensuite. Les constats de la relecture comptent avec ceux de l'axe Spec dans le champ `review` de l'outil flow, dans un seul envoi avec ceux des deux axes ; il n'y a pas d'axe à part.
+La session applique ce qu'elle retient dans le commit des correctifs de la revue du ticket, et ne coche le ticket qu'ensuite. Les constats de la relecture se comptent dans `form` du champ `review` de l'outil flow, jamais dans `spec`, dans un seul envoi avec ceux des deux axes ; le compte rendu les cite à part.

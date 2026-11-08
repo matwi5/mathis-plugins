@@ -20,7 +20,7 @@ import { linkedSessionsOf } from './link.ts'
 import { activeRun, currentPhase } from './basics.ts'
 import { lastCompactionAt } from './registry.ts'
 import { seatState } from './seat.ts'
-import { isSafeId } from './closing.ts'
+import { isSafeId, shellQuote } from './closing.ts'
 
 export type CompactionGroup = { id: string; name: string; done: number; total: number; session?: string }
 
@@ -102,7 +102,7 @@ export const compactionInstructions = (role: CompactionRole): string => {
       `Compaction instructions from flow-board: this discussion is a worker working on group ${role.group} of the mission ${run}. The summary must keep:`,
       ...(between
         ? [
-            `- this compaction runs between two tickets: ticket ${between.done} is done${between.next ? `, and the next one to start is ${between.next}` : ''}; keep its commit hashes (the ticket's, and its review fixes') and, for the final report, its tracks (bug-pass findings that do not break the invariant), its findings on code older than the lot and what the CHANGELOG must say for it, but not the rest of the detail of its work (its diffs, its fixed findings, its fixes); the place in the procedure: the next ticket starts at step 1 of section 2 of the procedure${between.next ? '' : ' (when no ticket of the group is left, the group review and the report follow, sections 4 to 6)'};`,
+            `- this compaction runs between two tickets: ticket ${between.done} is done${between.next ? `, and the next one to start is ${between.next}` : ''}; keep its commit hashes (the ticket's, and its review fixes') and, for the final report, its tracks (bug-pass findings that do not break the invariant, except a regression the diff introduces, which gets fixed), its findings on code older than the lot and what the CHANGELOG must say for it, but not the rest of the detail of its work (its diffs, its fixed findings, its fixes); the place in the procedure: the next ticket starts at step 1 of section 2 of the procedure${between.next ? '' : ' (when no ticket of the group is left, the group review and the report follow, sections 4 to 6, in reference/procedure-groupe-fin.md of flow-board)'};`,
           ]
         : []),
       '- the work plan or spec path, the current task (N of M), a summary of the progress, what is done, left or blocked, the files changed, the results of the checks, the last error, the branch and the worktree;',
@@ -111,7 +111,7 @@ export const compactionInstructions = (role: CompactionRole): string => {
       '- the review findings not yet applied (each with its file:line and the expected fix), or the path of the file that holds them (the notes-compte-rendu.md of the session\'s temporary folder, kept up to date with them before the compaction): a worker had reread its own transcript to find them again;',
       '- after the compaction, reload with ToolSearch, in one call (select:<names>), the deferred tools the session was using before calling any of them (SendMessage, TaskCreate, TaskUpdate, Monitor): their schemas do not survive it;',
       role.main ? `- the manager to report to: ${role.main};` : '- the reference of the manager to report to, as the brief gives it;',
-      '- the paths of the brief, of DECISIONS.md and of the procedure of a worker (reference/procedure-groupe.md of flow-board).',
+      '- the paths of the brief, of DECISIONS.md and of the procedure of a worker: its core, reference/procedure-groupe.md of flow-board, to reread after the compaction, and, once the last ticket is committed, reference/procedure-groupe-fin.md (group review, security review, report).',
     ].join('\n')
   }
   const lines = [
@@ -232,7 +232,7 @@ export const workerCompactNotice = (ticket: string, tokens: number): string =>
 
 /** Le message qui relance le worker après la compaction entre deux tickets (`isCompacted`), ou quand elle n'a pas eu lieu. */
 export const workerResumeText = (done: string, next: string | undefined, isCompacted: boolean): string =>
-  `${isCompacted ? `flow-board: this discussion was compacted between two tickets (ticket ${done} done).` : `flow-board: no compaction was made after ticket ${done}.`} Go on with ${next ? `ticket ${next}, from step 1 of section 2 of your procedure` : 'the next ticket of your group, from step 1 of section 2 of your procedure, or, when none is left, with its group review and your report (sections 4 to 6)'} (reread the procedure and DECISIONS.md first); if you already started it, carry on where you are.`
+  `${isCompacted ? `flow-board: this discussion was compacted between two tickets (ticket ${done} done).` : `flow-board: no compaction was made after ticket ${done}.`} Go on with ${next ? `ticket ${next}, from step 1 of section 2 of your procedure` : 'the next ticket of your group, from step 1 of section 2 of your procedure, or, when none is left, with its group review and your report (sections 4 to 6, in procedure-groupe-fin.md)'} (reread the procedure and DECISIONS.md first); if you already started it, carry on where you are.`
 
 /** Le toast du bouton « ⇣ Compacter d'abord ». */
 export const COMPACT_FIRST_TOAST = '/compact est dans le prompt : flow-board ajoute ses consignes de compaction, ajoute les tiennes si tu veux, puis Entrée'
@@ -249,13 +249,20 @@ export const ORIGIN_FILE_RULE =
  * La consigne ajoutée à `/retro` : un spécialiste en lecture seule relit le transcript jusqu'à la
  * dernière compaction ; la discussion fait la suite, puis fusionne. Affirmative quand le mod a vu
  * une compaction (`isSeen`) ; sinon une vérification par grep d'abord, car une discussion reprise
- * dans un nouveau fichier après une compaction n'a pas de repère ici.
+ * dans un nouveau fichier après une compaction n'a pas de repère ici. Dans les deux cas, les rapports
+ * de ses spécialistes se lisent par le script `scripts/rapports-specialistes.mjs` (`reports` : son
+ * chemin à lancer, puis, quand le projet contient la source du mod, son chemin installé en repli), au
+ * lieu de relire chaque transcript.
  */
-export const retroTranscriptNote = (transcript: string | undefined, session: string | undefined, isSeen: boolean): string => {
+export const retroTranscriptNote = (transcript: string | undefined, session: string | undefined, isSeen: boolean, reports: { script: string; fallback?: string }): string => {
   const where = transcript ?? `~/.claude/projects/<project folder>/${session ?? '<session id>'}.jsonl`
   const reading = `have a read-only subagent (general-purpose, not Haiku) read the transcript ${where} from its start to its last "compact_boundary" entry and do the retro of that part along the steps and categories of this skill, which you pass to it as you read them here; do the part after that entry yourself, from your context, then merge both.`
   const head = isSeen
     ? `Transcript (flow-board): this discussion was compacted, so what came before its last compaction is no longer in your context. So ${reading}`
-    : `Transcript (flow-board): first check whether this discussion was compacted, here or before it was resumed, by counting the real compaction entries of its transcript (a mere mention of the word, such as this text, does not count): grep -c '"subtype":"compact_boundary"' "${where}". If it does hold such an entry, what came before the last one is no longer in your context: ${reading}`
-  return ['', '', '---', `${head} ${ORIGIN_FILE_RULE}`].join('\n')
+    : `Transcript (flow-board): first check whether this discussion was compacted, here or before it was resumed, by counting the real compaction entries of its transcript (a mere mention of the word, such as this text, does not count): grep -c '"subtype":"compact_boundary"' ${shellQuote(where)}. If it does hold such an entry, what came before the last one is no longer in your context: ${reading}`
+  // Le chemin du transcript est relu (registre, tableau de bord) : cité entre apostrophes, jamais entre guillemets où `$` et l'accent grave s'interprètent.
+  const run = (script: string): string => `node ${shellQuote(script)} ${shellQuote(where)}`
+  const fallback = reports.fallback === undefined ? '' : ` (from the root of the working folder: the repository's source, which prevails; else ${run(reports.fallback)})`
+  const subagents = `In every case, compacted or not, the reports of its subagents (name, type, model, effort, finished, final report: the last SubagentHandback, else the last text) come from one command, rather than rereading each subagent transcript: ${run(reports.script)}${fallback}, and the same command on each origin file the rule above leads to (the subagents launched before a resumption live beside that file); add --prefixe "<start of the name>" to keep some (« Spec · », « Sécurité · »); with many subagents, write its output to a file named after this session's id in your own temporary folder (never a generic /tmp name another session could overwrite) and read it in parts.`
+  return ['', '', '---', `${head} ${ORIGIN_FILE_RULE} ${subagents}`].join('\n')
 }

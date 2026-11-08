@@ -1,7 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { memoryDisk } from './disque-memoire.ts'
 
-import { closingProcedure } from '../hooks/closing.ts'
 import { applyReport, emptyBoard, newRun, restoreDelegate } from '../hooks/model.ts'
 import type { Board } from '../types'
 
@@ -152,7 +151,7 @@ test('un groupe confié est « en cours » dès que l’id de sa session est rel
 test('un groupe rendu par son worker propose de fermer sa session et son worktree, sans rien forcer', async ($, on) => {
   const clock = mock.clock(on, { now: 93_000_000 })
   memoryDisk(on)
-  const { mem, filled } = world(on)
+  const { filled } = world(on)
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
@@ -182,14 +181,13 @@ test('un groupe rendu par son worker propose de fermer sa session et son worktre
   await ui.press({ key: 'close-linked-E' })
   await ui.unmount()
   const text = filled.at(-1)!
-  // Le texte vient de la procédure partagée (celle de la réponse de l'outil), pour la session relevée.
-  const run = (mem['board:'] as Board).runs.find(r => r.title === 'Boutique')!
-  expect(text.startsWith(closingProcedure({ run, target: { kind: 'group', id: 'E', name: 'Enquêtes' }, isRepo: true, session: 'local_E42' }))).toBe(true)
+  // Le texte vient de la procédure partagée (celle de la réponse de l'outil), pour la session relevée : le mod chargé
+  // connaît son script de fermeture (`closingScript`), la procédure courte le cite avec les noms connus de l'envoi.
+  expect(text).toMatch(/^Ferme le worker du groupe E \(Enquêtes\) de la mission « Boutique » et son worktree par le script de vérification/)
+  expect(text).toMatch(/node '[^']*\/scripts\/fermeture\.mjs' --worktree 'groupe-boutique-E' --branche 'worktree-groupe-boutique-E' --branche 'groupe-boutique-E' --branche 'groupe-E' --session 'local_E42'/)
   expect(text).toContain('Then send {"closed": [{"group": "E", "state": "closed"')
-  expect(text).toContain('Vérifie d’abord, n’arrête et ne retire qu’ensuite')
   // Une session de l'app (id local_…) : archivée par l'outil de l'app, sinon le geste écrit à la personne.
-  expect(text).toContain('c’est une session de l’app Desktop : si l’app te donne l’outil archive_session, l’outil d’archivage de l’app demande mon accord pour cette session')
-  expect(text).toContain('à défaut, l’un des noms connus : worktree-groupe-boutique-E (lancée par le CLI), groupe-boutique-E ou claude/groupe-boutique-E-<suffixe> (lancée par l’app, avec ou sans branch_name), groupe-E pour un groupe lancé avant la 0.59.0')
+  expect(text).toContain('arrêter une session de l’app, c’est l’archiver : si l’app te donne l’outil archive_session, l’outil d’archivage de l’app demande mon accord pour cette session')
   // Plus le texte d'avant, qui disait « jamais claude rm, qui l'efface ».
   expect(text).not.toContain("qui l'efface")
   expect(text).not.toContain('--force')

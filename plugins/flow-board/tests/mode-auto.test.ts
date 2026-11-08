@@ -2,9 +2,13 @@
 // entre deux copies du board, le bouton « ⚡ Auto » et le bandeau. Invariant : le mode auto n'est
 // jamais allumé sans le second clic de l'utilisateur ; une fusion, une reconstruction ou une
 // lecture ratée du fichier de mission le laisse éteint ou l'éteint, jamais l'inverse.
+//
+// Stockage : les deux modes. scripts/check.py lance ce fichier sur une copie du plugin sous un dossier
+// `.claude/` (fichier commun) et sur une hors de lui (`$.store`), quel que soit l'endroit d'où il part.
 
 import { expect, mock, test } from 'claude-code/testing'
 
+import { storageMode, storageModeOf } from './stockage.ts'
 import { applyReport, archiveRun, autoStateOf, clampFuture, emptyBoard, finishActive, isAutoOn, mergeBoards, newRun, openRun, parkActive, resumeRun, setAsideActive, stopAutoUnread, switchOffAuto, switchOnAuto } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
 
@@ -253,8 +257,9 @@ test('Le fichier commun illisible et une copie de secours où l’auto est rallu
   await press($, 'auto-off')
   await settle(clock, 1)
   // Sans fichier commun (le dossier du mod ne dit pas où est ~/.claude), pas de copie de secours :
-  // le cas ne se joue que quand le board s'écrit dans le fichier (contrôles de tout le plugin).
-  if (!w.disk.isUsed) return
+  // le cas ne se joue que dans le mode « fichier », que scripts/check.py lance toujours aussi.
+  expect(w.disk.isUsed).toBe(storageMode() === 'fichier')
+  if (storageMode() === '$.store') return
   // Une copie de secours (`$.store`) porte un allumage plus récent que la coupure d'ici.
   const stale = storedBoard(w)
   w.mem['board:'] = { ...stale, runs: stale.runs.map(r => ({ ...r, auto: { onAt: (r.auto?.offAt ?? T0) + 5, onBy: 'sb' } })) }
@@ -542,4 +547,20 @@ test('Deux missions du même board ont chacun leur état : allumer l’un ne cha
   const merged = mergeBoards(on, elsewhere)
   expect(merged.runs.find(r => r.title === 'Second')!.auto).toMatchObject({ onAt: T0 + 2, onBy: 'sa' })
   expect(merged.runs.find(r => r.title === 'Auto')!.auto).toMatchObject({ onAt: T0 + 3, onBy: 'sb' })
+})
+
+test('Le stockage suit l’emplacement de la copie du plugin : le fichier commun sous un dossier .claude/, $.store ailleurs, et ce test voit celui qu’il attend', { timeoutMs: 20000 }, async ($, on) => {
+  expect(storageModeOf('/Users/x/.claude/plugins/cache/m/flow-board/0.1.0')).toBe('fichier')
+  expect(storageModeOf('C:\\Users\\x\\.Claude\\plugins\\flow-board')).toBe('fichier')
+  expect(storageModeOf('/var/folders/ab/T/check-test-x/flow-board')).toBe('$.store')
+  expect(storageModeOf('/Users/x/claude/flow-board')).toBe('$.store')
+  const { clock, ...w } = await running($, on, T0)
+  await settle(clock, 1)
+  if (storageMode() === 'fichier') {
+    expect(w.disk.isUsed).toBe(true)
+    expect(JSON.parse(w.disk.board!).runs[0].title).toBe('Boutique')
+  } else {
+    expect(w.disk.isUsed).toBe(false)
+    expect((w.mem['board:'] as Board).runs[0]!.title).toBe('Boutique')
+  }
 })

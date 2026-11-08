@@ -130,6 +130,11 @@ test('le bouton des pistes met la demande de découpage dans le prompt, n’enre
   expect(text).toContain('A group holds 5 tickets at most')
   expect(text).toContain('« Lecteur : <who> »')
   expect(text).toContain('A ticket that adds a field to persisted data')
+  // Un ticket sensible étroit, et les fichiers des appelants d'une fonction dont le contrat change.
+  expect(text).toContain('A sensitive ticket carries only the sensitive change: a tool or a large test with no link to the sensitive area makes a ticket of its own, in the same group')
+  expect(text).toContain('also names in "files" the files of its callers, found by a search quoted in the ticket (the command and its result)')
+  // L'invariant d'un compte dit aussi « jamais compté deux fois ».
+  expect(text).toContain('for a count (a value added up from one send to the next), the invariant also says « never counted twice »')
   // Rétro de la mission « Coordinateur de parcours » : l'index des décisions en vigueur, et la phrase utile recopiée.
   expect(text).toContain('starts with a short index « Décisions en vigueur »')
   expect(text).toMatch(/logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path/)
