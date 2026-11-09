@@ -11,14 +11,18 @@ import { SKILLS } from './catalog.ts'
 import { COO_EFFORT, effortSent } from './effort.ts'
 import { asciiJson, consentDay, isGroupId, isOwnBranch, isSafeId, neutralInPrompt, neutralLine } from './closing.ts'
 import { isClosedLink } from './link.ts'
-import { OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, crossZones, crossedLaunches, isAutoOn, isStoredPause, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
+import { LOT_KEY, OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, awaitingArchivePrint, isAwaitingArchive, crossZones, crossedLaunches, holdMapOf, isAutoOn, isStoredPause, nextLaunchFor, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
 import { RELAY_PENDING_MS, type CoordAnswer, type CoordGesture } from './coordination.ts'
 import type { PlanWait, ProjectPlan } from './plan-projet.ts'
 import type { Roadmap, RoadmapEntry, RoadmapGone, RoadmapGoneText } from './roadmap.ts'
 import { cardStateOf, cardStatus, liveLaunchOf, type CardState, type LaunchCard } from './launch.ts'
 
-/** Un worker d'une mission : le groupe qu'il porte, son avancement, au travail ou rendu. */
-export type CooWorker = { group: string; done: number; total: number; state: 'working' | 'returned' }
+/**
+ * Un worker d'une mission : le groupe qu'il porte, son avancement, et son état : `working` (confié, au travail), `reported` (encore confié, mais son compte rendu
+ * final est au relais : le manager ne l'a pas encore repris, ses tickets ne comptent qu'au retour), `returned`
+ * (rendu, sa session pas encore fermée).
+ */
+export type CooWorker = { group: string; done: number; total: number; state: 'working' | 'reported' | 'returned' }
 
 /** Une mission non archivée, telle que le relevé la montre. */
 export type CooMission = {
@@ -38,8 +42,8 @@ export type CooMission = {
 /** Une retenue entre missions vue du COO : la mission retenue (son id et son titre), puis ce qu'elle attend. */
 export type CooHold = OutsideHold & { missionId: string; mission: string }
 
-/** Une mission qui attend la personne : pour quoi, et depuis quand. */
-export type CooWaiting = { missionId: string; mission: string; kind: WaitsUser['kind']; since: number }
+/** Une mission qui attend la personne : pour quoi, et depuis quand ; `heldNow` : la suite de la mission est un groupe retenu (plan du projet ou retenue de fichier) : rien à faire avant qu'il parte. */
+export type CooWaiting = { missionId: string; mission: string; kind: WaitsUser['kind']; since: number; heldNow?: true }
 
 /**
  * Une question bloquante d'une mission en auto : ce qui attend la personne. `print` : l'empreinte du texte
@@ -112,6 +116,11 @@ export type CooStatement = {
   relays: CooRelay[]
   /** Les missions en manuel (ou en auto mis en pause) dont le tour fini demande la personne : le signal « t'attend ». */
   waiting: CooWaiting[]
+  /**
+   * Les missions dont le signal « t'attend » dit « l'étape suivante » alors que leur suite est un groupe (ou leur
+   * lot) retenu : rien à faire avant qu'il parte. Hors de `waiting`, donc ni dans « Ce qui t'attend » ni dans le point.
+   */
+  waitingHeld?: CooWaiting[]
   /** Qui attend qui : les retenues entre missions, chacune avec la mission retenue. */
   holds: CooHold[]
   /** Deux groupes en cours de deux missions sur un fichier ou une ressource en commun : deux lancements croisés. */
@@ -151,6 +160,12 @@ export type CooStatement = {
    * l'accord n'a pas été relu (le relevé ne devine pas : il renvoie à `/flow archive`).
    */
   archive?: number | null
+  /**
+   * Les missions livrées et pas archivées (`isAwaitingArchive`), dans l'ordre des missions, chacune avec sa carte de
+   * rétro prête (`card`, son id) quand elle en a une ici, et l'empreinte de toute la liste que portent les boutons
+   * « ✓ Archiver » et « ✓ Tout archiver (n) » ; absent quand il n'y en a aucune.
+   */
+  delivered?: { list: { id: string; title: string; card?: string }[]; print: string }
 }
 
 /**
@@ -175,7 +190,14 @@ export type CooWave = {
 export type CooPlan = { computed: ProjectPlan; key: string; isValidated: boolean; unread?: boolean }
 
 /** Une carte de lancement vue du COO : la carte, et où elle en est (prête, en lancement, lancée). */
-export type CooCard = LaunchCard & { state: CardState }
+export type CooCard = LaunchCard & { state: CardState; isRemovable?: true }
+
+/**
+ * Une carte de rétro (`of`) dont la mission n'attend pas « ✓ Archiver » (`isAwaitingArchive` faux : déjà archivée,
+ * reprise, un groupe reparti depuis le push, une étape de livraison encore à faire, sa clôture par le COO pas encore
+ * appliquée comprise, un id hors forme, absente du fichier) : « ✕ Retirer » la retire, sans rien écrire sur la mission.
+ */
+export const isRetroCardRemovable = (of: string | undefined, runs: readonly Run[]): boolean => of !== undefined && !runs.some(r => r.id === of && isAwaitingArchive(r))
 
 /**
  * Les pistes d'une rétro lancée par le COO, à cocher chez lui : celles qu'on peut découper (cochées ou non), celles
@@ -374,10 +396,13 @@ export const outsideCommitCounts = (groups: readonly WatchedGroup[], commits: re
 
 const doneOf = (run: Run, ids: readonly string[]): number => ids.filter(id => run.tickets.find(t => t.id === id)?.status === 'done').length
 
-/** Les workers d'une mission : un groupe confié en cours, ou rendu sans être fermé. */
-const workersOf = (run: Run): CooWorker[] =>
+/**
+ * Les workers d'une mission : un groupe confié en cours (`reported` quand son compte rendu final est au relais,
+ * `reported` : ses ids), ou rendu sans être fermé.
+ */
+const workersOf = (run: Run, reported: readonly string[] = []): CooWorker[] =>
   (run.groups ?? []).flatMap(g => {
-    const state = g.linked !== undefined ? 'working' : g.delegated !== undefined && !isClosedLink(g.delegated) ? 'returned' : null
+    const state = g.linked !== undefined ? (reported.includes(g.id) ? 'reported' : 'working') : g.delegated !== undefined && !isClosedLink(g.delegated) ? 'returned' : null
     if (state === null) return []
     const ids = groupIds(run, g)
     return [{ group: g.id, done: doneOf(run, ids), total: ids.length, state }]
@@ -422,6 +447,8 @@ export const cooStatement = (
     archive?: number | null
     /** Les commits hors mission sur les fichiers des groupes en cours, relevés à l'instant. */
     outside?: OutsideCommits[]
+    /** Les groupes encore confiés d'une mission dont le worker a laissé son compte rendu final au relais, relus à l'instant. */
+    reported?: (runId: string) => readonly string[]
   },
 ): CooStatement => {
   const runs = board.runs.filter(r => r.archivedAt === undefined).sort((x, y) => RANK[x.status] - RANK[y.status] || y.updatedAt - x.updatedAt)
@@ -435,7 +462,7 @@ export const cooStatement = (
       mode: isAuto ? ('auto' as const) : ('manual' as const),
       done: run.tickets.filter(t => t.status === 'done').length,
       total: run.tickets.length,
-      workers: workersOf(run),
+      workers: workersOf(run, ctx.reported?.(run.id) ?? []),
       waiting: isAuto ? openQuestions(run).length : 0,
     }
   })
@@ -468,18 +495,35 @@ export const cooStatement = (
       if (!sent.some(x => x.run === run.id && x.question === q.id && x.print === questionPrint(q))) relays.push({ missionId: run.id, mission: run.title, question: q.id, kind: e.kind, state: 'changed' })
     } else if (!isOpenHere(run)) relays.push({ missionId: run.id, mission: run.title, question: q.id, kind: e.kind, state: 'paused' })
   }
-  const waiting = runs.flatMap(run => {
+  // Les retenues de chaque mission, calculées une fois : pour le signal « t'attend » et pour la liste des retenues.
+  const holdsByRun = new Map(runs.map(run => [run.id, [...outsideHolds(board, run.id, ctx.forces?.(run.id) ?? []), ...planHolds(board, run.id, ctx.plans?.(run.id) ?? [], ctx.forces?.(run.id) ?? [])]]))
+  const signals = runs.flatMap(run => {
     // La discussion de la mission ne pose jamais le signal en auto actif (et l'allumage l'efface) : le COO le lit tel quel.
     const w = run.status === 'active' ? soundWaitsUser(run.waitsUser) : null
-    return w ? [{ missionId: run.id, mission: run.title, kind: w.kind, since: w.since }] : []
+    if (!w) return []
+    // « L'étape suivante » d'une mission dont la suite est un groupe retenu, ou son lot sans groupes retenu (pas de
+    // plan de groupes : `nextLaunchFor` rend null) : elle attend sa vague, pas la personne.
+    const held = holdMapOf(holdsByRun.get(run.id) ?? [])
+    const next = nextLaunchFor(run, held)
+    const isHeldNow = w.kind === 'step' && (next?.kind === 'held' || (next === null && (run.groups ?? []).length === 0 && held.has(LOT_KEY)))
+    return [{ missionId: run.id, mission: run.title, kind: w.kind, since: w.since, ...(isHeldNow ? { heldNow: true as const } : {}) }]
   })
-  const holds = runs.flatMap(run => [...outsideHolds(board, run.id, ctx.forces?.(run.id) ?? []), ...planHolds(board, run.id, ctx.plans?.(run.id) ?? [], ctx.forces?.(run.id) ?? [])].map(h => ({ ...h, missionId: run.id, mission: run.title })))
+  const waiting = signals.filter(w => !w.heldNow)
+  const waitingHeld = signals.filter(w => w.heldNow)
+  const holds = runs.flatMap(run => (holdsByRun.get(run.id) ?? []).map(h => ({ ...h, missionId: run.id, mission: run.title })))
   const pistes = retroPistes(runs, ctx.taken)
   const extra = { ...(pistes ? { pistes } : {}), ...(ctx.boxesUnread && ctx.boxesUnread.length > 0 ? { boxesUnread: ctx.boxesUnread } : {}), ...(ctx.setAside ? { setAside: ctx.setAside } : {}), ...(ctx.toGlean ? { toGlean: ctx.toGlean } : {}), ...(ctx.existingGleaned !== undefined ? { existingGleaned: ctx.existingGleaned } : {}) }
   // L'état d'une carte se lit sur toutes les missions du fichier, archivées comprises : une carte lancée le reste.
-  const cards = (ctx.cards ?? []).map(c => ({ ...c, state: cardStateOf(c, board.runs, ctx.now) }))
-  const launch = { ...(cards.length > 0 ? { cards } : {}), ...(ctx.askMatt !== undefined ? { askMatt: ctx.askMatt } : {}), ...(ctx.plan ? { plan: ctx.plan } : {}), ...(ctx.wave ? { wave: ctx.wave } : {}), ...(ctx.archive !== undefined ? { archive: ctx.archive } : {}) }
-  return { ...extra, ...launch, at: ctx.now, missions, waits, relays, ...(ctx.reports && ctx.reports.length > 0 ? { reports: ctx.reports } : {}), ...(ctx.delivery ? { delivery: ctx.delivery } : {}), ...(ctx.decisions ? { decisions: ctx.decisions } : {}), ...(ctx.retroPicks && ctx.retroPicks.length > 0 ? { retroPicks: ctx.retroPicks } : {}), waiting, holds, crossed: crossedLaunches(board, ctx.forces), ...(ctx.outside && ctx.outside.length > 0 ? { outside: ctx.outside } : {}), effort: ctx.effort ?? null, hasBrief: ctx.hasBrief ?? null, ...(ctx.roadmap ? { roadmap: ctx.roadmap } : {}), ...(ctx.coordination ? { coordination: ctx.coordination } : {}) }
+  // Une carte de rétro dont la mission n'attend pas « ✓ Archiver » : « ✕ Retirer » la retire (`isRetroCardRemovable`).
+  const cards = (ctx.cards ?? []).map(c => ({ ...c, state: cardStateOf(c, board.runs, ctx.now), ...(isRetroCardRemovable(c.of, board.runs) ? { isRemovable: true as const } : {}) }))
+  // Les missions livrées qui attendent la rétro ou « ✓ Archiver » : la carte de rétro prête d'une mission lui tient lieu de ligne.
+  const awaiting = runs.filter(isAwaitingArchive).map(r => {
+    const card = cards.find(c => c.of === r.id && c.state.kind === 'ready')
+    return { id: r.id, title: r.title, ...(card ? { card: card.id } : {}) }
+  })
+  const delivered = awaiting.length > 0 ? { delivered: { list: awaiting, print: awaitingArchivePrint(board.runs) } } : {}
+  const launch = { ...delivered, ...(cards.length > 0 ? { cards } : {}), ...(ctx.askMatt !== undefined ? { askMatt: ctx.askMatt } : {}), ...(ctx.plan ? { plan: ctx.plan } : {}), ...(ctx.wave ? { wave: ctx.wave } : {}), ...(ctx.archive !== undefined ? { archive: ctx.archive } : {}) }
+  return { ...extra, ...launch, at: ctx.now, missions, waits, relays, ...(ctx.reports && ctx.reports.length > 0 ? { reports: ctx.reports } : {}), ...(ctx.delivery ? { delivery: ctx.delivery } : {}), ...(ctx.decisions ? { decisions: ctx.decisions } : {}), ...(ctx.retroPicks && ctx.retroPicks.length > 0 ? { retroPicks: ctx.retroPicks } : {}), waiting, ...(waitingHeld.length > 0 ? { waitingHeld } : {}), holds, crossed: crossedLaunches(board, ctx.forces), ...(ctx.outside && ctx.outside.length > 0 ? { outside: ctx.outside } : {}), effort: ctx.effort ?? null, hasBrief: ctx.hasBrief ?? null, ...(ctx.roadmap ? { roadmap: ctx.roadmap } : {}), ...(ctx.coordination ? { coordination: ctx.coordination } : {}) }
 }
 
 /**
@@ -559,7 +603,19 @@ export const roadmapNow = (r: CooRoadmap) => ({
 
 const GESTURE_EN: Record<QuestionGesture['kind'], string> = { spend: 'a spending to allow or refuse', external: 'an external action to allow or refuse', flaw: 'a security finding to leave unfixed or have fixed' }
 
-const STATUS_EN: Record<Run['status'], string> = { active: 'in progress', paused: 'paused', done: 'closed' }
+const STATUS_EN: Record<Run['status'], string> = {
+  active: 'in progress',
+  // Une discussion qui se charge met en pause toute mission muette depuis 30 minutes, même tenue ailleurs.
+  paused: 'paused (set aside, or silent for more than 30 minutes, which pauses it: its discussion may still have it loaded, waiting for its workers or a wave, and « ↻ Reprendre ici » reopens it there)',
+  done: 'closed',
+}
+
+/** Ce que le relevé dit de l'état d'un worker. */
+const WORKER_EN: Record<CooWorker['state'], string> = {
+  working: 'working',
+  reported: 'reported: its worker left its final report in the relay, its manager has not taken the group back yet; its tickets count once it has',
+  returned: 'returned',
+}
 
 const WAITS_EN: Record<WaitsUser['kind'], string> = { question: 'a question', validation: 'a validation', step: 'the next step', report: 'the report' }
 
@@ -593,7 +649,7 @@ export const statementText = (s: CooStatement): string => {
   if (s.missions.length === 0) lines.push('- none')
   for (const m of s.missions) {
     const phase = SKILLS[m.phase]?.label ?? 'unknown phase'
-    const workers = m.workers.length === 0 ? '' : `, workers: ${m.workers.map(w => `group ${neutralQuoted(w.group, 12)} ${w.done}/${w.total} (${w.state})`).join(', ')}`
+    const workers = m.workers.length === 0 ? '' : `, workers: ${m.workers.map(w => `group ${neutralQuoted(w.group, 12)} ${w.done}/${w.total} (${WORKER_EN[w.state]})`).join(', ')}`
     const waiting = m.waiting > 0 ? `, waiting for the user: ${m.waiting} blocking question(s)` : ''
     lines.push(`- ${neutralQuoted(m.title, 80)}: ${STATUS_EN[m.status]}, phase ${phase}, mode ${m.mode}, tickets ${m.done}/${m.total} done${workers}${waiting}; mission id ${neutralQuoted(m.id, 40)}.`)
   }
@@ -624,6 +680,10 @@ export const statementText = (s: CooStatement): string => {
       }; a message of the user that starts with « À reprendre dans le rapport de la mission » (button « ✎ À reprendre ») gives the changes they want: write it, their exact sentence in quotes, as a new series of the mission's DECISIONS.md (${r.decisions ? neutralQuoted(r.decisions, 200) : 'an existing file under travail/, ask the user where when you find none'}), commit it by path, then send {"coordinate": {"redo": [{"mission": "<mission id>", "file": "<path of that DECISIONS.md from the project root>", "series": <its number>}]}}.`,
     )
   if (s.delivery) lines.push(deliveryLine(s.delivery))
+  if (s.delivered)
+    lines.push(
+      `- Delivered missions not archived (${s.delivered.list.length}): ${s.delivered.list.map(d => neutralQuoted(d.title, 80)).join(', ')}. Each waits for the user's choice in the Coordination view: launch its retro (the launch buttons of its retro card, for those that have one${s.delivered.list.some(d => d.card === undefined) ? `; without one: ${s.delivered.list.filter(d => d.card === undefined).map(d => neutralQuoted(d.title, 80)).join(', ')}` : ''}), or « ✓ Archiver »${s.delivered.list.length > 1 ? ` (« ✓ Tout archiver (${s.delivered.list.length}) » archives them all)` : ''}; tell the user when it helps; never archive one yourself, nor by the flow tool.`,
+    )
   if (s.decisions) lines.push(...decisionLines(s.decisions))
   for (const p of s.retroPicks ?? [])
     lines.push(
@@ -638,11 +698,15 @@ export const statementText = (s: CooStatement): string => {
         ? `- The user's answer to question ${neutralQuoted(r.question, 40)} of mission ${neutralQuoted(r.mission, 80)} waits: that mission is not open in any discussion. Tell the user to resume it so that the answer applies (« reprends-la pour que la réponse s'applique »).`
         : `- The user's answer to question ${neutralQuoted(r.question, 40)} of mission ${neutralQuoted(r.mission, 80)} was given on an earlier text: the question changed since, so it is not answered. Show the user its new text above, and let them answer again.`,
     )
-  lines.push(`Missions waiting for the user, their turn over and the next step theirs (${s.waiting.length}):`)
-  if (s.waiting.length === 0) lines.push('- none')
+  lines.push(`Missions waiting for the user, their turn over and the next step theirs (${s.waiting.length + (s.waitingHeld ?? []).length}):`)
+  if (s.waiting.length + (s.waitingHeld ?? []).length === 0) lines.push('- none')
   for (const w of s.waiting)
     lines.push(
       `- mission ${neutralQuoted(w.mission, 80)}: ${WAITS_EN[w.kind]}, since ${hhmm(w.since)} UTC; ${w.kind === 'report' && (s.reports ?? []).some(r => r.missionId === w.missionId) ? 'the user validates it here (see « Reports to validate » above)' : 'the user answers in that mission'}.`,
+    )
+  for (const w of s.waitingHeld ?? [])
+    lines.push(
+      `- mission ${neutralQuoted(w.mission, 80)}: ${WAITS_EN[w.kind]}, since ${hhmm(w.since)} UTC; its next group is held (see « Holds between missions »): nothing for the user to do now but wait, or force it in the Coordination view; never relay it as an action to do.`,
     )
   lines.push(`Holds between missions, a group (or a lot without groups, « * ») that waits for a group in progress of another mission (${s.holds.length}):`)
   if (s.holds.length === 0) lines.push('- none')
@@ -708,8 +772,11 @@ const planLines = (p: CooPlan): string[] => {
       : 'Plan of the project PROPOSED, it changes the order of departures: show it to the user; « ✓ Valider le plan » in the Coordination view makes it the order of departures (missions in auto follow it at once, on their own):',
   ]
   for (const [i, w] of p.computed.waves.entries()) {
-    lines.push(`- wave ${i + 1}: ${waveText(w, t => neutralQuoted(t, 60))}${w.deliveries.length > 0 ? `; then deliver ${w.deliveries.map(d => neutralQuoted(d.title, 60)).join(', ')}` : ''}.`)
+    lines.push(`- wave ${i + 1}: ${waveText(w, t => neutralQuoted(t, 60))}.`)
   }
+  // Une seule livraison pour tout le plan : jamais mission par mission.
+  if (p.computed.delivery.length > 0)
+    lines.push(`- then one delivery for the whole plan, after the last wave: ${p.computed.delivery.map(d => neutralQuoted(d.title, 60)).join(', ')} (never mission by mission).`)
   return lines
 }
 

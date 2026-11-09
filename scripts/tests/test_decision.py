@@ -4,6 +4,8 @@ python3 -m unittest discover -s scripts/tests.
 Chaque test tourne dans un dépôt git jetable, toutes les variables GIT_* retirées de l'environnement :
 sous un hook git, elles viseraient l'index réel du clone."""
 
+import importlib.util
+import io
 import os
 import re
 import signal
@@ -12,9 +14,13 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "decision.py"
+sys.path.insert(0, str(SCRIPT.parent))
+import decision  # noqa: E402
 PATH = "travail/essai/DECISIONS.md"
 BASE = "# Décisions — essai\n\n## Série 1 — La demande (01/11/2026)\n\nTexte de la série 1.\n"
 LOCK_HOLDER = ("import fcntl, os, sys, time\n"
@@ -26,8 +32,42 @@ LOCK_HOLDER = ("import fcntl, os, sys, time\n"
 
 
 # Le verrou des tests (fcntl), SIGKILL, les liens symboliques et les droits des dossiers : POSIX seulement ;
-# la branche Windows du verrou (msvcrt.locking) n'a pas de test.
+# la branche Windows du verrou (msvcrt.locking) se teste sur tout poste par un faux `msvcrt` (FakeMsvcrt).
 POSIX = os.name == "posix"
+
+
+class FakeMsvcrt:
+    """Un faux module `msvcrt` : note chaque appel de `locking` (position du fichier, mode, nombre d'octets) ;
+    avec `refuse`, chaque prise non bloquante échoue, comme quand un autre processus tient l'octet."""
+    LK_UNLCK, LK_NBLCK = 0, 2
+
+    def __init__(self, refuse=False):
+        self.calls, self.refuse = [], refuse
+
+    def locking(self, fd, mode, nbytes):
+        self.calls.append((os.lseek(fd, 0, os.SEEK_CUR), mode, nbytes))
+        if self.refuse and mode == self.LK_NBLCK:
+            raise OSError(36, "Resource deadlock avoided")
+
+
+def windows_decision(fake):
+    """Une copie de decision.py chargée comme sous Windows : `import fcntl` échoue, `msvcrt` est le faux.
+    `sys.path` (où le module ajoute son dossier) et les deux entrées de `sys.modules` sont rendus tels quels."""
+    spec = importlib.util.spec_from_file_location("decision_windows", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    saved_path = list(sys.path)
+    saved = {name: sys.modules[name] for name in ("fcntl", "msvcrt") if name in sys.modules}
+    sys.modules["fcntl"], sys.modules["msvcrt"] = None, fake
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = saved_path
+        for name in ("fcntl", "msvcrt"):
+            if name in saved:
+                sys.modules[name] = saved[name]
+            else:
+                del sys.modules[name]
+    return module
 
 
 def clean_env(**extra):
@@ -69,9 +109,15 @@ class DecisionTest(unittest.TestCase):
         path.write_text(f"{title}\n\n{body}\n", encoding="utf-8")
         return path
 
-    def run_script(self, *args, wait="10"):
+    def run_script(self, *args, wait="10", cwd=None):
         return subprocess.run([sys.executable, str(SCRIPT), *map(str, args)], capture_output=True, text=True,
-                              encoding="utf-8", env=clean_env(DECISION_ATTENTE=wait), cwd=self.dir.name)
+                              encoding="utf-8", env=clean_env(DECISION_ATTENTE=wait), cwd=cwd or self.dir.name)
+
+    def linked_worktree(self):
+        """Un worktree lié du dépôt de test, sur sa propre branche, et son HEAD."""
+        linked = Path(self.dir.name) / "lie"
+        git(self.repo, "worktree", "add", "-q", "-b", "lie", str(linked))
+        return linked, git(linked, "rev-parse", "HEAD")
 
     def hook(self, text):
         hook = self.hooks / "pre-commit"
@@ -312,6 +358,150 @@ class DecisionTest(unittest.TestCase):
             self.assertIn("lien symbolique", out.stderr)
         self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+
+    def test_un_fichier_d_un_worktree_lie_est_refuse_et_renvoie_au_clone_principal(self):
+        linked, linked_head = self.linked_worktree()
+        out = self.run_script(linked / PATH, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=linked)
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("worktree lié", out.stderr)
+        self.assertIn(f"sur sa branche main : relancer avec {self.repo.resolve() / PATH} ; rien n'est écrit", out.stderr)
+        self.assertEqual((linked / PATH).read_text(encoding="utf-8"), BASE)
+        self.assertEqual(git(linked, "rev-parse", "HEAD"), linked_head)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+        self.assertEqual(git(linked, "status", "--porcelain"), "")
+        self.assertFalse(self.lock_path().exists())
+
+    def test_le_chemin_donne_par_le_refus_ecrit_dans_le_clone_principal_depuis_le_worktree_lie(self):
+        linked, linked_head = self.linked_worktree()
+        refused = self.run_script(linked / PATH, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=linked)
+        remedy = re.search(r"relancer avec (.+?) ; rien n'est écrit", refused.stderr)
+        self.assertIsNotNone(remedy, refused.stderr)
+        out = self.run_script(remedy[1], self.series("s.md", "Titre", "Corps."), "-m", "docs: series 2", cwd=linked)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Série 2 : commit", out.stdout)
+        self.assertIn("## Série 2 — Titre", self.committed())
+        self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "HEAD"), "main")
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD^"), self.base_head)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+        self.assertEqual((linked / PATH).read_text(encoding="utf-8"), BASE)
+        self.assertEqual(git(linked, "rev-parse", "HEAD"), linked_head)
+        self.assertEqual(git(linked, "status", "--porcelain"), "")
+
+    def test_une_serie_du_clone_principal_puis_un_lancement_dans_le_worktree_lie_ne_doublent_aucun_numero(self):
+        # Sans le refus, le worktree lié (sa branche partie avant la série 2) prenait aussi le numéro 2 : la fusion
+        # des deux branches aurait porté deux séries 2.
+        linked, linked_head = self.linked_worktree()
+        first = self.run_script(self.file, self.series("a.md", "Celle du manager", "Corps a."), "-m", "x")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn("Série 2 : commit", first.stdout)
+        second = self.run_script(linked / PATH, self.series("b.md", "Celle du worker", "Corps b."), "-m", "y",
+                                 cwd=linked)
+        self.assertEqual(second.returncode, 1, second.stdout)
+        self.assertIn("worktree lié", second.stderr)
+        self.assertNotIn("Série", second.stdout)
+        self.assertEqual((linked / PATH).read_text(encoding="utf-8"), BASE)
+        self.assertEqual(git(linked, "rev-parse", "HEAD"), linked_head)
+        for text in (self.committed(), self.file.read_text(encoding="utf-8")):
+            self.assertEqual(len(re.findall(r"^## Série 2 ", text, re.M)), 1)
+            self.assertNotIn("Celle du worker", text)
+
+    def test_un_worktree_qui_porte_une_serie_absente_du_clone_principal_ne_renvoie_pas_y_reprendre_son_numero(self):
+        # Une série 2 commitée sur la branche du worktree (écrite à la main) : la relance dans le clone principal
+        # reprendrait le numéro 2, et la fusion porterait deux séries 2.
+        linked, linked_head = self.linked_worktree()
+        (linked / PATH).write_text(BASE + "\n## Série 2 — Celle du worktree (02/11/2026)\n\nCorps.\n", encoding="utf-8")
+        git(linked, "commit", "-q", "-am", "serie 2 du worktree")
+        out = self.run_script(linked / PATH, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=linked)
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("des séries que le clone principal n'a pas (2) : les amener d'abord", out.stderr)
+        self.assertNotIn("relancer avec", out.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+        self.assertIn("Celle du worktree", (linked / PATH).read_text(encoding="utf-8"))
+        self.assertNotEqual(git(linked, "rev-parse", "HEAD"), linked_head)
+        self.assertEqual(git(linked, "log", "-1", "--format=%s"), "serie 2 du worktree")
+        self.assertEqual(git(linked, "status", "--porcelain"), "")
+        self.assertFalse(self.lock_path().exists())
+
+    def test_un_chantier_absent_du_clone_principal_est_refuse_sans_renvoyer_a_un_fichier_absent(self):
+        linked, _ = self.linked_worktree()
+        neuf = linked / "travail" / "neuf" / "DECISIONS.md"
+        neuf.parent.mkdir()
+        neuf.write_text(BASE, encoding="utf-8")
+        git(linked, "add", "travail/neuf/DECISIONS.md")
+        git(linked, "commit", "-q", "-m", "chantier neuf")
+        out = self.run_script(neuf, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=linked)
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("n'a pas encore ce fichier", out.stderr)
+        self.assertNotIn("relancer avec", out.stderr)
+        self.assertEqual(neuf.read_text(encoding="utf-8"), BASE)
+
+    def test_avec_un_dossier_git_separe_le_refus_ne_donne_aucune_relance(self):
+        # Le parent du dossier git commun (`sep.git`) n'est alors pas la racine de travail : le clone principal est
+        # introuvable, et une relance vers une racine non vérifiée sauterait le contrôle des séries du worktree.
+        gitdir, main = Path(self.dir.name) / "sep.git", Path(self.dir.name) / "sep"
+        git(self.dir.name, "init", "-q", "-b", "main", "--separate-git-dir", str(gitdir), str(main))
+        git(main, "config", "user.name", "essai")
+        git(main, "config", "user.email", "essai@localhost")
+        git(main, "config", "commit.gpgsign", "false")
+        (main / PATH).parent.mkdir(parents=True)
+        (main / PATH).write_text(BASE, encoding="utf-8")
+        git(main, "add", ".")
+        git(main, "commit", "-q", "--no-verify", "-m", "base")
+        linked = Path(self.dir.name) / "sep-lie"
+        git(main, "worktree", "add", "-q", "-b", "lie", str(linked))
+        out = self.run_script(linked / PATH, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=linked)
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("worktree lié", out.stderr)
+        self.assertIn("racine du clone principal introuvable", out.stderr)
+        self.assertNotIn("relancer", out.stderr)
+        self.assertNotIn(str(main.resolve() / PATH), out.stderr)
+        self.assertNotIn(str(gitdir.resolve() / PATH), out.stderr)
+        self.assertEqual((linked / PATH).read_text(encoding="utf-8"), BASE)
+
+    def test_sous_windows_le_verrou_se_prend_et_se_relache_a_l_octet_lock_offset(self):
+        fake = FakeMsvcrt()
+        module = windows_decision(fake)
+        self.assertIsNone(module.fcntl)
+        handle = module.take_lock(self.repo, 1)
+        try:
+            self.assertEqual(fake.calls, [(4096, fake.LK_NBLCK, 1)])
+            self.assertEqual(self.lock_path().read_text(encoding="utf-8"), f"{os.getpid()}\n")
+        finally:
+            module.release(handle)
+        self.assertEqual(fake.calls[1:], [(4096, fake.LK_UNLCK, 1)])
+        self.assertTrue(handle.closed)
+
+    def test_sous_windows_un_verrou_tenu_fait_abandonner_apres_le_delai_sans_rien_ecrire(self):
+        self.lock_path().write_text("4242\n", encoding="utf-8")
+        fake = FakeMsvcrt(refuse=True)
+        module = windows_decision(fake)
+        started = time.monotonic()
+        with self.assertRaises(module.DecisionError) as raised:
+            module.take_lock(self.repo, 0.3)
+        self.assertGreaterEqual(time.monotonic() - started, 0.3)
+        self.assertIn("processus 4242", str(raised.exception))
+        self.assertIn("rien n'est écrit", str(raised.exception))
+        self.assertEqual(raised.exception.code, 1)
+        self.assertGreater(len(fake.calls), 1)
+        self.assertTrue(all(call == (4096, fake.LK_NBLCK, 1) for call in fake.calls))
+        self.assertEqual(self.lock_path().read_text(encoding="utf-8"), "4242\n")
+
+    def test_un_git_plus_ancien_que_2_36_ou_sans_version_lisible_est_refuse_sans_rien_ecrire(self):
+        real_git = decision.git
+        for answer in ("git version 2.35.1", "git version inconnue"):
+            def fake_git(cwd, *args, **kwargs):
+                if args == ("version",):
+                    return subprocess.CompletedProcess(["git", *args], 0, f"{answer}\n".encode(), b"")
+                return real_git(cwd, *args, **kwargs)
+            err = io.StringIO()
+            with mock.patch.object(decision, "git", fake_git), redirect_stderr(err):
+                code = decision.main([str(self.file), str(self.series("s.md", "Titre", "Corps.")), "-m", "x"])
+            self.assertEqual(code, 1, (answer, err.getvalue()))
+            self.assertIn("plus ancien que 2.36", err.getvalue())
+            self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
+            self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+            self.assertEqual(git(self.repo, "status", "--porcelain"), "")
 
     def test_sans_message_la_commande_est_refusee(self):
         out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."))

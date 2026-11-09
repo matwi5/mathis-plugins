@@ -51,6 +51,18 @@ _Avoid_: parcours, projet, chantier, workflow
 Le skill par lequel une mission commence (cadrage, spec, tickets, implémentation, diagnostic d'un bug…), que le COO recommande avant le lancement.
 _Avoid_: entrée, skill d'entrée
 
+**Livraison** :
+L'envoi en une fois de toutes les missions au rapport validé d'un projet : version, push, pull request et étapes propres au projet, lancé par un clic de l'utilisateur chez le COO.
+_Avoid_: livraison de la mission, release
+
+**Mission livrée** :
+Une mission terminée par une livraison, qui n'a plus rien à livrer. Elle reste visible jusqu'à ce que l'utilisateur l'archive ou lance sa rétro.
+_Avoid_: mission poussée, mission archivée
+
+**Archiver une mission** :
+La retirer des missions en cours, sur un choix de l'utilisateur ; elle se reprend plus tard si besoin.
+_Avoid_: clore, fermer
+
 **Feuille de route** :
 La suite des jalons d'un projet, du jalon en cours aux suivants, que le COO tient pour mener l'utilisateur jusqu'à la fin ; le cap vient des objectifs du projet.
 _Avoid_: roadmap, planning, backlog
@@ -60,7 +72,7 @@ Une étape de la feuille de route, avec un but, un critère de fin et ses missio
 _Avoid_: milestone, étape, sprint
 
 **Idée** :
-Ce que l'utilisateur confie au COO sans le lancer tout de suite, gardé avec ses mots jusqu'à devenir une mission ou être écartée ; elle ne s'efface jamais.
+Ce que l'utilisateur confie au COO sans le lancer tout de suite, écrit par le COO en français clair sans en changer le sens, et gardé jusqu'à devenir une mission ou être écartée ; elle ne s'efface jamais.
 _Avoid_: brouillon, suggestion, note
 
 **À reprendre** :
@@ -70,12 +82,20 @@ _Avoid_: backlog, pour plus tard, TODO, reste à faire
 ## Suivi des agents
 
 **COO** :
-Le directeur des opérations : la discussion, unique pour un projet sur un poste, qui suit toutes ses missions et fait le lien entre elles. Il les empêche de se gêner, garde la feuille de route, les idées et ce qui est à reprendre, lance les missions, livre sur un clic de l'utilisateur, et ne remonte à l'utilisateur que l'essentiel. Il ne code pas, ne cadre pas et ne porte jamais de mission lui-même.
+Le directeur des opérations : la discussion, unique pour un projet sur un poste, qui suit toutes ses missions et fait le lien entre elles. Il les empêche de se gêner, garde la feuille de route, les idées et ce qui est à reprendre, lance les missions, livre sur un clic de l'utilisateur, et ne remonte à l'utilisateur que l'essentiel. Il répond lui-même à une question sur le code et fait faire une petite modification sans logique, mais ne code pas, ne cadre pas et ne porte jamais de mission lui-même.
 _Avoid_: coordinateur, coordinator, chief of staff, chef de projet, PMO, directeur de programme
 
 **Siège du COO** :
 Le droit d'écrire comme COO d'un projet, tenu par une seule discussion à la fois ; une autre le prend par « Reprendre ici », et celle qui l'a perdu n'écrit plus rien.
 _Avoid_: verrou, rôle actif
+
+**Consigne transmise** :
+Ce que le COO transmet à un manager pour sa mission, écrit dans le fichier de décisions de cette mission. Celle que l'utilisateur dicte porte sa phrase exacte et vaut sa décision ; celle que le COO envoie de lui-même n'est qu'une information, qui ne remplace jamais un geste ni une décision de l'utilisateur.
+_Avoid_: consigne (seul), message libre, ordre, instruction
+
+**Surveillance de nuit** :
+La période, allumée par l'utilisateur, pendant laquelle le COO débloque seul les groupes des missions en auto (lancer un groupe de la vague, renvoyer, relancer, forcer une retenue tenue par un worker mort, couper l'auto, rouvrir une mission). Elle s'arrête au retour de l'utilisateur, et le COO n'y prend jamais une décision qui lui revient.
+_Avoid_: mode nuit, veille, pilote automatique
 
 **Manager** :
 La discussion qui lance les autres : celle qui porte une mission, ou, sans mission, la discussion où l'on regarde. Elle ne parle qu'à ses workers et au COO, jamais à un autre manager.
@@ -172,6 +192,10 @@ _Avoid_: blocage, conflit, verrou
 **Piste** :
 Une amélioration qu'une rétro propose pour les prochaines sessions. Une fois choisie, elle entre dans un ticket, seule ou avec des pistes voisines, et se traite comme lui. Une piste déjà choisie par une autre mission y reste ; la seconde rétro la marque « déjà prise ».
 _Avoid_: amélioration, correction de rétro
+
+**Liste d'attente des rétros** :
+Les pistes de toutes les rétros d'un projet, en un seul endroit, chacune avec son état (pas encore validée, validée, écartée, en ticket, en exécution, faite) et les fichiers qu'elle touche. Une piste n'en sort jamais : elle change d'état, et une piste en exécution ne change plus.
+_Avoid_: backlog des rétros, file des pistes
 
 **Groupe rendu** :
 Un groupe dont le worker a rendu son compte rendu, et dont le manager a vérifié le travail et rendu les statuts au tableau de bord.

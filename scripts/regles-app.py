@@ -9,7 +9,9 @@ Lecture seule. À relancer après une mise à jour de l'app : docs/regles-app-de
 règle au texte de flow-board qui en dépend.
 
 Le code de l'app est minifié et ses noms changent d'une version à l'autre : la description d'un outil
-se retrouve par son alias (`X="start_session"`, puis `{name:X,description:…,inputSchema:`) ; un message
+se retrouve par son alias (`X="start_session"`, puis `{name:X,description:…,inputSchema:`), ou, quand
+un autre fichier déclare l'outil (app 4.23118.0), par le nom sous lequel le fichier de l'alias l'exporte
+(`{name:t.y_,description:…`, `t` le module requis de ce fichier) ; un message
 de refus, par une phrase repère fixée ici (REFUSAL_MARKERS), dont le texte entier est imprimé. Un repère
 introuvable est dit : la règle a peut-être changé, et le texte se relit dans app.asar. Bibliothèque
 standard seule.
@@ -164,33 +166,60 @@ def description(text, tool):
     le fichier ne déclare pas cet outil, ou si aucun morceau de sa description ne s'y lit."""
     for alias in re.finditer(rf"(?<![\w$.])({IDENT})=\"{tool}\"", text):
         m = re.search(rf"\{{name:{re.escape(alias.group(1))},description:(.*?),inputSchema:", text)
-        if not m:
-            continue
-        expr, parts, i = m.group(1), [], 0
-        while i < len(expr):
-            conditional = bool(re.search(r"[?:]\s*$", expr[:i]))
-            if expr[i] in QUOTES:
-                # Un littéral se lit en entier : ce qu'il contient n'est ni un nom ni un autre littéral.
-                end = literal_end(expr, i)
-                if end is None:
-                    break
-                found, i = unescape(expr[i + 1:end - 1]), end
-            else:
-                name = re.match(IDENT, expr[i:]) if not re.match(r"[\w$.]", expr[i - 1:i]) else None
-                if name is None:
-                    i += 1
-                    continue
-                i += name.end()
-                # Seul un nom qui vaut lui-même un morceau se résout : pas une condition (`e?`, `e.x?`,
-                # `e===1?`, `a&&`), ni un membre ou un appel (`e.x`, `f(…)`), dont un `e="…"` quelconque
-                # du fichier donnerait un texte étranger.
-                found = assigned_literal(text, name.group(0)) if re.match(r"\s*(?:[+,):]|$)", expr[i:]) else None
-            if found:
-                parts.append((found, conditional))
-        # Une description dont aucun morceau ne se lit est dite introuvable, pas imprimée vide.
+        parts = described(m.group(1), text) if m else None
         if parts:
             return parts
     return None
+
+
+def exported_description(scripts, tool):
+    """La description d'un outil déclaré dans un autre fichier que son alias (forme de l'app 4.23118.0) :
+    le fichier de l'alias l'exporte (`Object.defineProperty(exports,"y_",{…return aga}})`), un autre le
+    requiert (`t=require("./<fichier de l'alias>")`) et déclare l'outil par ce nom (`{name:t.y_,
+    description:…,inputSchema:`), sa description lue dans ce second fichier ; None sans cette forme.
+    `scripts` : [(chemin interne, texte)]."""
+    for path, text in scripts:
+        module = re.escape(path.rsplit("/", 1)[-1])
+        for alias in re.finditer(rf"(?<![\w$.])({IDENT})=\"{tool}\"", text):
+            exports = re.finditer(rf"defineProperty\(exports,\"({IDENT})\",\{{enumerable:!0,get:function\(\){{return {re.escape(alias.group(1))}}}\}}\)", text)
+            for exported in exports:
+                for other_path, other in scripts:
+                    if other_path == path:
+                        continue
+                    for bound in re.finditer(rf"(?<![\w$.])({IDENT})=require\(\"\./{module}\"\)", other):
+                        m = re.search(rf"\{{name:{re.escape(bound.group(1))}\.{re.escape(exported.group(1))},description:(.*?),inputSchema:", other)
+                        parts = described(m.group(1), other) if m else None
+                        if parts:
+                            return parts
+    return None
+
+
+def described(expr, text):
+    """Les morceaux d'une expression `description` lue dans `text`, [(texte, sous condition)] (voir
+    `description`) ; liste vide si aucun ne s'y lit : une description dont aucun morceau ne se lit est
+    dite introuvable, pas imprimée vide."""
+    parts, i = [], 0
+    while i < len(expr):
+        conditional = bool(re.search(r"[?:]\s*$", expr[:i]))
+        if expr[i] in QUOTES:
+            # Un littéral se lit en entier : ce qu'il contient n'est ni un nom ni un autre littéral.
+            end = literal_end(expr, i)
+            if end is None:
+                break
+            found, i = unescape(expr[i + 1:end - 1]), end
+        else:
+            name = re.match(IDENT, expr[i:]) if not re.match(r"[\w$.]", expr[i - 1:i]) else None
+            if name is None:
+                i += 1
+                continue
+            i += name.end()
+            # Seul un nom qui vaut lui-même un morceau se résout : pas une condition (`e?`, `e.x?`,
+            # `e===1?`, `a&&`), ni un membre ou un appel (`e.x`, `f(…)`), dont un `e="…"` quelconque
+            # du fichier donnerait un texte étranger.
+            found = assigned_literal(text, name.group(0)) if re.match(r"\s*(?:[+,):]|$)", expr[i:]) else None
+        if found:
+            parts.append((found, conditional))
+    return parts
 
 
 def app_rules(files):
@@ -200,10 +229,15 @@ def app_rules(files):
         version = json.loads(files.get("/package.json", b"{}")).get("version")
     except ValueError:
         version = None
-    scripts = [data.decode("utf-8", "replace") for path, data in sorted(files.items()) if path.endswith(".js")]
+    named = [(path, data.decode("utf-8", "replace")) for path, data in sorted(files.items()) if path.endswith(".js")]
+    scripts = [text for _, text in named]
     tools = {}
     for tool in TOOLS:
+        # D'abord l'outil déclaré à côté de son alias (jusqu'à l'app 4.4212.0), puis par le nom exporté
+        # de l'alias dans un autre fichier (app 4.23118.0).
         parts = next((p for text in scripts for p in [description(text, tool)] if p is not None), None)
+        if parts is None:
+            parts = exported_description(named, tool)
         refusals, missing = [], []
         for marker in REFUSAL_MARKERS[tool]:
             found = []

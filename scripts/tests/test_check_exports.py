@@ -48,6 +48,11 @@ class DeadExportsTest(unittest.TestCase):
         self.write("tests/model.test.ts", "import { teste } from '../hooks/model'\n")
         self.assertEqual(check.dead_exports(self.plugin), [])
 
+    def test_un_export_lu_seulement_dans_un_mts_du_plugin_passe(self):
+        self.write("hooks/model.ts", "export function lue() {}\n")
+        self.write("scripts/outil.mts", "import { lue } from '../hooks/model.ts'\n")
+        self.assertEqual(check.dead_exports(self.plugin), [])
+
     def test_un_nom_qui_ne_parait_que_dans_son_propre_module_ou_dans_un_mot_plus_long_reste_mort(self):
         self.write("hooks/model.ts", "export const seul = 1\nconst b = seul + 1\n")
         self.write("hooks/view.tsx", "const seulement = 2\n")

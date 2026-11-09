@@ -105,3 +105,89 @@ test('un budget gardé en texte par le registre (« 32000 ») part tel quel : le
   expect(text).toMatch(/Effort chosen in this discussion: 32000\./)
   expect(text).not.toMatch(/the mod sends its requests in/)
 })
+
+test('un groupe encore confié dont le worker a laissé son compte rendu final au relais : « reported », jamais « working »', () => {
+  const run = {
+    ...inAuto('Pistes', 'Q ?'),
+    tickets: [
+      { id: '1', name: 'Un', status: 'todo' },
+      { id: '2', name: 'Deux', status: 'todo' },
+    ],
+    groups: [
+      { id: 'A', name: 'A', tickets: ['1'], linked: { at: NOW - 5_000, session: 'w-a' } },
+      { id: 'B', name: 'B', tickets: ['2'], linked: { at: NOW - 5_000, session: 'w-b' } },
+    ],
+  } as unknown as Run
+  const s = cooStatement(board(run), { now: NOW, reported: id => (id === run.id ? ['A'] : []) })
+  expect(s.missions[0]!.workers.map(w => [w.group, w.state])).toEqual([
+    ['A', 'reported'],
+    ['B', 'working'],
+  ])
+  const text = statementText(s)
+  expect(text).toMatch(/group « A » 0\/1 \(reported: its worker left its final report in the relay, its manager has not taken the group back yet; its tickets count once it has\)/)
+  expect(text).toMatch(/group « B » 0\/1 \(working\)/)
+})
+
+test('une mission en pause : le relevé dit qu’une discussion peut encore la tenir (muette depuis 30 minutes, en attente de ses workers ou d’une vague), et que « ↻ Reprendre ici » la rouvre', () => {
+  const s = cooStatement(board(inManual('Écarts')), { now: NOW })
+  expect(statementText(s)).toMatch(/« Écarts »: paused \(set aside, or silent for more than 30 minutes, which pauses it: its discussion may still have it loaded, waiting for its workers or a wave, and « ↻ Reprendre ici » reopens it there\)/)
+})
+
+test('une mission qui t’attend alors que sa suite est retenue par une autre mission : le relevé dit qu’il n’y a rien à faire maintenant', () => {
+  const busy = {
+    ...newRun('implement', NOW - 90_000, 'Économie'),
+    status: 'active',
+    owner: 'session-E',
+    tickets: [{ id: 'e1', name: 'E', status: 'todo', files: ['src/a.ts'] }],
+    groups: [
+      { id: 'B', name: 'B', tickets: ['e1'], files: ['src/a.ts'], linked: { at: NOW - 50_000, session: 'w-e' } },
+      { id: 'Z', name: 'Z', tickets: [], files: ['src/z.ts'] },
+    ],
+  } as unknown as Run
+  const held = {
+    ...newRun('implement', NOW - 90_000, 'Lien'),
+    status: 'active',
+    owner: 'session-L',
+    waitsUser: { since: NOW - 4_000, kind: 'step' },
+    tickets: [
+      { id: 'c1', name: 'C', status: 'todo', files: ['src/a.ts'] },
+      { id: 'd1', name: 'D', status: 'done', files: ['src/d.ts'] },
+    ],
+    groups: [
+      { id: 'C', name: 'C', tickets: ['c1'], files: ['src/a.ts'] },
+      { id: 'D', name: 'D', tickets: ['d1'], files: ['src/d.ts'], delegated: { at: NOW - 80_000, session: 'w-d', closing: { state: 'closed', at: NOW - 60_000 } }, reviewedAt: NOW - 70_000, security: { isAdvised: false, why: 'rien' } },
+    ],
+  } as unknown as Run
+  const s = cooStatement(board(busy, held), { now: NOW })
+  expect(s.holds.map(h => [h.mission, h.held, h.title, h.group])).toEqual([['Lien', 'C', 'Économie', 'B']])
+  expect(s.waitingHeld?.map(w => [w.mission, w.kind, w.heldNow])).toEqual([['Lien', 'step', true]])
+  // Hors de « Ce qui t'attend » et du point : rien à faire.
+  expect(s.waiting).toEqual([])
+  expect(cooPoint(s).join(' ')).toMatch(/Rien ne t’attend/)
+  expect(statementText(s)).toMatch(/mission « Lien »: the next step, since \d\d:\d\d UTC; its next group is held \(see « Holds between missions »\): nothing for the user to do now but wait, or force it in the Coordination view; never relay it as an action to do\./)
+})
+
+test('une mission qui t’attend alors que son lot sans groupes est retenu : rien à faire maintenant non plus', () => {
+  const busy = {
+    ...newRun('implement', NOW - 90_000, 'Économie'),
+    status: 'active',
+    owner: 'session-E',
+    tickets: [{ id: 'e1', name: 'E', status: 'todo', files: ['src/a.ts'] }],
+    groups: [
+      { id: 'B', name: 'B', tickets: ['e1'], files: ['src/a.ts'], linked: { at: NOW - 50_000, session: 'w-e' } },
+      { id: 'Z', name: 'Z', tickets: [], files: ['src/z.ts'] },
+    ],
+  } as unknown as Run
+  const cut = newRun('to-tickets', NOW - 90_000, 'Lot')
+  const lot = {
+    ...cut,
+    status: 'active',
+    owner: 'session-L',
+    phases: cut.phases.map(p => (p.skill === 'to-tickets' ? { ...p, status: 'done', finishedAt: NOW - 5_000 } : p)),
+    waitsUser: { since: NOW - 4_000, kind: 'step' },
+    tickets: [{ id: 'l1', name: 'L', status: 'todo', files: ['src/a.ts'] }],
+  } as unknown as Run
+  const s = cooStatement(board(busy, lot), { now: NOW })
+  expect(s.holds.map(h => [h.mission, h.held])).toEqual([['Lot', '*']])
+  expect(s.waitingHeld?.map(w => [w.mission, w.heldNow])).toEqual([['Lot', true]])
+})

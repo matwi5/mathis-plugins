@@ -8,7 +8,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, applySkill, autoDecision, awaitedExternals, emptyBoard, isGroupLotStuck, hereReviewMark, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'
 import { cancelLinkedGroup, linkGroupSession } from '../hooks/link.ts'
-import { activeRun } from '../hooks/basics.ts'
+import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
 const T0 = 160_000_000
@@ -757,4 +757,16 @@ test('Une revue lancée qui nomme deux groupes finis ici les marque relus tous l
   const marked = markAutoLaunched(b, hereReviewMark(activeRun(b)!), T0 + 3)!.board
   const both = activeRun(applySkill(marked, 'code-review', { now: T0 + 4, isMain: true })!.board)!.groups!
   expect(both.map(g => [g.id, g.reviewedAt])).toEqual([['A', T0 + 4], ['B', T0 + 4]])
+})
+
+test('Une rétro découpée, sa Rétro finie : un groupe à l’id hors forme met l’auto en pause, comme dans l’implémentation, au lieu d’être écarté en silence', () => {
+  const lot = { ...newRun('implement', T0, 'Boutique'), owner: 's' }
+  const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [lot], activeId: lot.id }
+  const retro = applySkill(board, 'mattpocock-skills:retro', { now: T0 + 1, isMain: true })!.board
+  const cut = activeRun(applyReport(retro, { items: [{ id: 'r1', label: 'Pistes', status: 'done' }], ...LOT, complete: true }, T0 + 2).board)!
+  expect(currentPhase(cut)).toMatchObject({ skill: 'retro', status: 'done' })
+  expect(autoDecision(cut, {}, false)).toMatchObject({ kind: 'send', action: { kind: 'groups' } })
+  // Le fichier retouché à la main : l'id du groupe B n'est plus en forme.
+  const damaged: Run = { ...cut, groups: cut.groups!.map(g => (g.id === 'B' ? { ...g, id: 'B b!' } : g)) }
+  expect(autoDecision(damaged, {}, false)).toEqual({ kind: 'stop', why: 'lecture du parcours ratée', relaunch: [] })
 })

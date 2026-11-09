@@ -246,3 +246,21 @@ test('en auto actif, rien ne se pose : seules ses questions bloquantes attendent
   expect(here.auto?.onAt).toBeDefined()
   expect(here.waitsUser).toBeUndefined()
 })
+
+test('à la fin d’un tour, une suite toute retenue par une autre mission ne pose pas « l’étape suivante » : rien à faire avant qu’elle parte', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  // Une autre mission a un groupe confié à un worker sur src/a.ts.
+  const other = { ...newRun('implement', NOW - 9000, 'Autre'), status: 'active' as const, owner: 'session-B', tickets: [{ id: 'o1', name: 'O', status: 'todo' as const, files: ['src/a.ts'] }], groups: [{ id: 'A', name: 'A', tickets: ['o1'], files: ['src/a.ts'], linked: { at: NOW - 5000, session: 'w-o' } }, { id: 'B', name: 'B', tickets: [], files: ['src/z.ts'] }] } as unknown as Run
+  writeBoard(w, b => ({ ...b, runs: [other] }))
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Ma mission', tickets: [{ id: 't1', name: 'Un', files: ['src/a.ts'] }, { id: 't2', name: 'Deux', files: ['src/a.ts'] }], groups: [{ id: 'A', name: 'Un', tickets: ['t1'] }, { id: 'B', name: 'Deux', tickets: ['t2'] }] } as any)
+  await $.tool.call({ tool: TOOL, complete: true } as any)
+  const here = () => stored(w).runs.find(r => r.title === 'Ma mission')!
+  await $.turn.start({ text: 'x', turnId: 't1' } as any)
+  await $.turn.complete({ answer: 'Fait.', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  await settle(clock, 2)
+  expect(here().phases.find(p => p.skill === 'to-tickets')?.status).toBe('done')
+  expect(here().waitsUser).toBeUndefined()
+})

@@ -2,7 +2,7 @@
 
 import { expect, test } from 'claude-code/testing'
 
-import { LOT_KEY, nextCommandSkill, unitsOfTickets, applyReport, autoDecision, crossedLaunches, emptyBoard, forceHold, groupPlan, holdMapOf, mergeBoards, newRun, nextLaunchFor, outsideHolds } from '../hooks/model.ts'
+import { LOT_KEY, nextCommandSkill, unitsOfTickets, applyReport, autoDecision, crossedLaunches, emptyBoard, forceHold, groupPlan, holdMapOf, mergeBoards, newRun, nextLaunchFor, outsideHolds, projectUnits } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
 import { mock } from 'claude-code/testing'
 import { cooStatement, statementText } from '../hooks/coo.ts'
@@ -51,7 +51,7 @@ test('un groupe qui touche un fichier d’un groupe en cours d’une autre missi
   expect(nextLaunchFor(here, outside)).toEqual({ kind: 'group', group: 'B', isDelegable: true })
 })
 
-test('la retenue se lève quand le groupe attendu est clos ou annulé, ou sa mission close ou archivée sans worker en vol', () => {
+test('la retenue se lève quand le groupe attendu est clos ou annulé, sa mission close sans worker en vol, ou archivée sans groupe pas encore rendu', () => {
   const here = twoGroups('Ici', T0, ['a.ts', 'b.ts'])
   const there = sent(twoGroups('Là-bas', T0, ['a.ts', 'z.ts']), 'A')
   expect(outsideHolds(boardOf(here, there), here.id)).toHaveLength(1)
@@ -63,15 +63,68 @@ test('la retenue se lève quand le groupe attendu est clos ou annulé, ou sa mis
   expect(outsideHolds(boardOf(here, returned), here.id)).toHaveLength(1)
   const closed = { ...there, groups: there.groups!.map(g => (g.id === 'A' ? { ...g, linked: undefined, delegated: { at: T0, closing: { state: 'closed' as const, at: T0 } } } : g)) }
   expect(outsideHolds(boardOf(here, closed), here.id)).toEqual([])
-  // Close ou archivée : son groupe encore confié à un worker (ou rendu, pas clos) retient encore, le worker peut écrire.
+  // Close ou archivée : son groupe encore confié à un worker retient encore, le worker peut écrire ; rendu et pas
+  // clos, il retient encore une mission close, plus une mission archivée (livrée : ce qu'il écrirait reste dans
+  // son worktree, qui n'atteint main que par une fusion).
   expect(outsideHolds(boardOf(here, { ...there, status: 'done' }), here.id)).toHaveLength(1)
   expect(outsideHolds(boardOf(here, { ...there, archivedAt: T0 }), here.id)).toHaveLength(1)
-  expect(outsideHolds(boardOf(here, { ...returned, archivedAt: T0 }), here.id)).toHaveLength(1)
+  expect(outsideHolds(boardOf(here, { ...returned, status: 'done' }), here.id)).toHaveLength(1)
+  expect(outsideHolds(boardOf(here, { ...returned, status: 'done', archivedAt: T0 }), here.id)).toEqual([])
+  // Les groupes rendus jamais clos de deux missions archivées ne se signalent plus « lancés ensemble ».
+  const otherReturned = { ...returned, id: 'autre-mission', title: 'Autre' }
+  expect(crossedLaunches(boardOf({ ...returned, status: 'done', archivedAt: T0 }, { ...otherReturned, status: 'done', archivedAt: T0 }))).toEqual([])
+  expect(crossedLaunches(boardOf({ ...returned, status: 'done' }, { ...otherReturned, status: 'done' }))).toHaveLength(1)
   // Sans worker en vol, une mission close ou archivée ne retient plus rien, même un ticket resté « en cours ».
   const doing = { ...there, groups: there.groups!.map(g => ({ ...g, linked: undefined })), tickets: there.tickets.map(t => ({ ...t, status: 'doing' as const })) }
   expect(outsideHolds(boardOf(here, doing), here.id)).toHaveLength(1)
   expect(outsideHolds(boardOf(here, { ...doing, status: 'done' }), here.id)).toEqual([])
   expect(outsideHolds(boardOf(here, { ...closed, archivedAt: T0 }), here.id)).toEqual([])
+})
+
+test('une mission livrée retient comme une archivée : seulement par ses groupes encore chez un worker ; close sans livraison, comme avant', () => {
+  const here = twoGroups('Ici', T0, ['a.ts', 'b.ts'])
+  const there = sent(twoGroups('Là-bas', T0, ['a.ts', 'z.ts']), 'A')
+  const returned = { ...there, groups: there.groups!.map(g => (g.id === 'A' ? { ...g, linked: undefined, delegated: { at: T0 } } : g)) }
+  // « Version et push » faite, son étape « Sync et push » faite ou sautée (versionnée sans push).
+  const withVersion = (run: Run, pushed: 'done' | 'skipped'): Run => {
+    const version = newRun('project:version', T0, 'v').phases[0]!
+    return { ...run, phases: [...run.phases, { ...version, status: 'done' as const, finishedAt: T0, steps: version.steps.map(s => ({ id: s.id, status: s.id === 'pushed' ? pushed : ('done' as const) })) }] }
+  }
+  const delivered = { ...withVersion(returned, 'done'), status: 'done' as const }
+  // Livrée, pas archivée : son groupe rendu et pas clos ne retient plus, ni ne se signale « lancé ensemble ».
+  expect(outsideHolds(boardOf(here, delivered), here.id)).toEqual([])
+  const otherDelivered = { ...delivered, id: 'autre-mission', title: 'Autre' }
+  expect(crossedLaunches(boardOf(delivered, otherDelivered))).toEqual([])
+  // Son groupe encore chez un worker retient encore.
+  expect(outsideHolds(boardOf(here, { ...withVersion(there, 'done'), status: 'done' }), here.id)).toHaveLength(1)
+  // Close sans livraison, ou versionnée sans push puis close : le groupe rendu retient encore.
+  expect(outsideHolds(boardOf(here, { ...returned, status: 'done' }), here.id)).toHaveLength(1)
+  const unpushed = { ...withVersion(returned, 'skipped'), status: 'done' as const }
+  expect(outsideHolds(boardOf(here, unpushed), here.id)).toHaveLength(1)
+  expect(crossedLaunches(boardOf(unpushed, { ...unpushed, id: 'autre-mission', title: 'Autre' }))).toHaveLength(1)
+  // Archivée : comme avant.
+  expect(outsideHolds(boardOf(here, { ...delivered, archivedAt: T0 }), here.id)).toEqual([])
+  // Livrée, reprise, un groupe confié après le rapport livré puis rendu, close de nouveau : ce travail n'est pas
+  // parti, le groupe retient comme celui d'une mission close.
+  // La date du push : l'étape « Sync et push » (ou la fin de la phase, faute d'elle).
+  const pushedAt = T0 - 10_000
+  const shippedAt = (run: Run, at: number | undefined): Run => ({ ...run, phases: run.phases.map(p => (p.skill === 'project:version' ? { ...p, finishedAt: pushedAt + 5, steps: p.steps.map(s => (s.id === 'pushed' ? { ...s, ...(at === undefined ? {} : { at }) } : s)) } : p)) })
+  const withA = (run: Run, delegated: Record<string, unknown>): Run => ({ ...run, groups: run.groups!.map(g => (g.id === 'A' ? { ...g, delegated } : g)) }) as Run
+  const later = withA(shippedAt(delivered, pushedAt), { at: pushedAt + 1 })
+  expect(outsideHolds(boardOf(here, later), here.id)).toHaveLength(1)
+  expect(crossedLaunches(boardOf(later, { ...later, id: 'autre-mission', title: 'Autre' }))).toHaveLength(1)
+  expect(projectUnits(boardOf(here, later)).filter(u => u.run === later.id && u.isBusy)).toHaveLength(1)
+  // Confiée avant le push (après la validation du rapport comprise) : partie avec la livraison, plus de retenue.
+  expect(outsideHolds(boardOf(here, withA(shippedAt(delivered, pushedAt), { at: pushedAt - 1 })), here.id)).toEqual([])
+  // Sans date sur l'étape : la fin de la phase sert.
+  expect(outsideHolds(boardOf(here, withA(shippedAt(delivered, undefined), { at: pushedAt + 1 })), here.id)).toEqual([])
+  expect(outsideHolds(boardOf(here, withA(shippedAt(delivered, undefined), { at: pushedAt + 10 })), here.id)).toHaveLength(1)
+  // Renvoyé après le push et clos, une session d'avant le push jamais close : plus de retenue.
+  const resent = withA(shippedAt(delivered, pushedAt), { at: pushedAt + 1, closing: { state: 'closed', at: pushedAt + 2 }, earlier: [{ at: pushedAt - 100 }] })
+  expect(outsideHolds(boardOf(here, resent), here.id)).toEqual([])
+  // Le plan du projet suit la même règle : la mission livrée n'y a plus d'unité en cours.
+  expect(projectUnits(boardOf(here, delivered)).filter(u => u.run === delivered.id && u.isBusy)).toEqual([])
+  expect(projectUnits(boardOf(here, unpushed)).filter(u => u.run === unpushed.id && u.isBusy)).toHaveLength(1)
 })
 
 test('les documents communs ne retiennent pas : README, DECISIONS.md, ETAT_DU_PROJET.md, GLOSSARY.md ; une ressource commune retient', () => {

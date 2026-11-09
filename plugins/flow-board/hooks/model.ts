@@ -45,7 +45,7 @@ import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
 import { soundRunLaunch } from './launch.ts'
 import type { SecurityReview } from './security-setting.ts'
 import type { PlanUnit, PlanWait } from './plan-projet.ts'
-import { activeRun, addedCount, asanaChange, asList, AUTO_CHOICES_MAX, formText, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
+import { activeRun, isReportValidated, addedCount, asanaChange, asList, AUTO_CHOICES_MAX, formText, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
 import { type GroupRelay, ignoredOrigins, inForce, isRelay, parseMainRef, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, REPORT_MAX, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
 import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, keepClosings, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
 
@@ -178,7 +178,10 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
     ...(isReviewHere ? ['final-review'] : []),
     ...(isUnfinished || isReviewDue || isLotSecurityHeld ? list.filter(skill => !AFTER_TICKETS.has(skill)) : list)
       .filter(skill => skill !== 'final-review')
-      .filter(skill => !(isReportOpen && DELIVERY.has(skill))),
+      .filter(skill => !(isReportOpen && DELIVERY.has(skill)))
+      // Livrée (phases de livraison faites, push compris), même reprise ensuite : ce qui est parti ne se relivre
+      // pas (invariant des missions livrées) ; un travail que la personne relance les rouvre.
+      .filter(skill => !(isShipped(run) && DELIVERY.has(skill))),
   ]
   // Version faite, push pas encore : la suite est /project:push, avant la pull request, et
   // /project:version reste à côté.
@@ -212,7 +215,9 @@ export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions =>
   // La rétro n'est plus une étape de la mission, mais reste à portée de main.
   if (opts.hasPullRequests === false) kept.splice(0, kept.length, ...kept.filter(skill => skill !== 'project:pr'))
   const others = kept.slice(1, 4).filter(skill => skill !== 'retro')
-  if (phase.skill !== 'retro' && kept[0] !== 'retro') others.push('retro')
+  // Une fois le rapport validé, plus de « Rétro » nue (le seul /retro, sans brief) : la rétro vient de la livraison,
+  // chez le COO, avec son brief entier.
+  if (phase.skill !== 'retro' && kept[0] !== 'retro' && !isReportValidated(run)) others.push('retro')
   // Pendant « Version et push », la clôture se propose à côté du push et de la pull request.
   const canFinish =
     (phase.status === 'done' || phase.skill === 'project:version') &&
@@ -1142,18 +1147,22 @@ export const clearWaitsUser = (board: Board, now: number): Outcome => {
 }
 
 const prune = (board: Board) => {
-  // Les archives ne comptent pas : on ne les perd pas parce que d'autres missions arrivent.
-  const live = board.runs.filter(r => r.archivedAt === undefined)
+  // Les archives ne comptent pas : on ne les perd pas parce que d'autres missions arrivent. Une mission livrée
+  // et pas encore archivée non plus : elle reste dans le fichier jusqu'à « Archiver » ou sa rétro (rien n'est
+  // effacé), la livraison ne l'archivant plus.
+  const isKeptDelivered = (r: Run) => r.archivedAt === undefined && isDeliveredRun(r)
+  const live = board.runs.filter(r => r.archivedAt === undefined && !isKeptDelivered(r))
+  const delivered = board.runs.filter(isKeptDelivered)
   const archived = board.runs
     .filter(r => r.archivedAt !== undefined)
     .sort((x, y) => (y.archivedAt ?? 0) - (x.archivedAt ?? 0))
     .slice(0, LIMITS.archived)
-  if (live.length <= LIMITS.runs && archived.length === board.runs.length - live.length) return
+  if (live.length <= LIMITS.runs && archived.length + delivered.length === board.runs.length - live.length) return
   const open = live.filter(r => r.status !== 'done')
   const done = live
     .filter(r => r.status === 'done')
     .sort((x, y) => (y.finishedAt ?? y.updatedAt) - (x.finishedAt ?? x.updatedAt))
-  const keep = new Set([...open, ...done].slice(0, LIMITS.runs).map(r => r.id).concat(archived.map(r => r.id)))
+  const keep = new Set([...open, ...done].slice(0, LIMITS.runs).map(r => r.id).concat(archived.map(r => r.id), delivered.map(r => r.id)))
   board.runs = board.runs.filter(r => keep.has(r.id))
 }
 
@@ -3099,12 +3108,51 @@ const phaseLabel = (skill: unknown): string => (typeof skill === 'string' ? SKIL
 /** Pour Claude, quand cette discussion n'a pas de mission active : titres et ids des missions relues neutralisés. */
 export const noActiveText = (board: Board): string => {
   const waiting = resumable(board)
-  if (waiting.length === 0) return 'No mission is running on the dashboard: it starts when a mattpocock skill loads.'
+  const delivered = lastDeliveredHere(board)
+  if (waiting.length === 0) return `No mission is running on the dashboard: it starts when a mattpocock skill loads.${delivered}`
   const state = (r: Run) => (r.status === 'active' ? 'in progress in another discussion' : r.asideAt !== undefined ? 'set aside by the user' : 'paused')
   const list = waiting
     .map(r => `${JSON.stringify(shownText(r.title))} (${state(r)}, ${ticketCount(r)}, phase ${phaseLabel(currentPhase(r).skill)}, id ${shownRunId(r.id)})`)
     .join('; ')
-  return `No mission is active in this discussion, so nothing was recorded. This project already has: ${list}. Do not start another lot nor look for tickets elsewhere: ask the user which one to resume (/flow-board:flow, History tab, "↻ Reprendre ici"), then send your report again. Only if the user asks for a new mission, send {"open": {"title": "..."}} with the report.`
+  return `No mission is active in this discussion, so nothing was recorded. This project already has: ${list}. Do not start another lot nor look for tickets elsewhere: ask the user which one to resume (/flow-board:flow, History tab, "↻ Reprendre ici"), then send your report again. Only if the user asks for a new mission, send {"open": {"title": "..."}} with the report.${delivered}`
+}
+
+/**
+ * La dernière mission de cette discussion (née ou portée ici), quand le COO l'a livrée et qu'elle attend sa rétro ou
+ * son archivage : la phrase qui le dit, à rendre telle quelle ; vide sinon.
+ */
+const lastDeliveredHere = (board: Board): string => {
+  const mine = board.runs.filter(r => board.session !== '' && (r.owner === board.session || r.bornIn === board.session))
+  const last = [...mine].sort((a, b) => (b.finishedAt ?? b.updatedAt) - (a.finishedAt ?? a.updatedAt))[0]
+  const at = last ? deliveredByCooAt(last) : null
+  return last && at !== null ? ` The last mission of this discussion, ${JSON.stringify(shownText(last.title))}, was delivered by the COO: tell the user « ${deliveredByCooLine(at, last)} » (nothing to do here).` : ''
+}
+
+/**
+ * La date de la livraison d'une mission par le COO, lue sur sa ligne de journal « Livrée par le COO » ; null pour une
+ * mission qui n'est plus livrée (reprise), archivée (plus rien à choisir), livrée à la main (sans cette ligne, ou avec
+ * une ligne plus ancienne que sa dernière clôture), ou dont la ligne est sortie du journal plafonné.
+ */
+export const deliveredByCooAt = (run: Run): number | null => {
+  if (run.archivedAt !== undefined || !isDeliveredRun(run)) return null
+  const line = run.log.find(l => l.text.startsWith(DELIVERED_BY_COO))
+  // La ligne de sa dernière clôture seulement (`closeDelivered` les date du même instant) : une mission reprise puis
+  // livrée de nouveau à la main garde une vieille ligne, qui ne vaut plus.
+  return line && isTime(line.at) && line.at >= (run.finishedAt ?? 0) ? line.at : null
+}
+
+/** Le début de la ligne de journal qu'écrit la clôture d'une mission livrée par le COO (`closeDelivered`). */
+const DELIVERED_BY_COO = 'Livrée par le COO'
+
+/**
+ * La ligne du tableau de bord d'une mission livrée par le COO, sans bouton : ce qui se choisit chez le COO, seulement
+ * quand la vue Coordination le propose (« ✓ Archiver » pour une mission qui attend son archivage ; une rétro n'a pas
+ * de rétro) ; la date seule sinon (un groupe reparti depuis le push, une étape de livraison à faire).
+ */
+export const deliveredByCooLine = (at: number, run: Run): string => {
+  const day = `${DELIVERED_BY_COO} le ${new Date(at).toLocaleDateString('fr-FR')}`
+  if (!isAwaitingArchive(run)) return day
+  return `${day} : ${run.phases[0]?.skill === 'retro' ? 'archivage' : 'rétro ou archivage'} dans la vue Coordination`
 }
 
 /** Pour la personne (réponse de /flow), quand cette discussion n'a pas de mission active. */
@@ -4325,6 +4373,13 @@ const isUnitMarked = (run: Run, prefix: string, unit: string): boolean => {
 const isGroupSendMarked = (run: Run, unit: string): boolean => isUnitMarked(run, 'groups:', unit)
 
 /**
+ * Une phase où l'auto agit sur les groupes : l'implémentation, ou le découpage une fois fini (la carte « Ensuite »
+ * propose alors les groupes), celui d'une rétro compris (ses pistes découpées, la Rétro finie) ; jamais une autre
+ * phase à tickets. La même pour l'action des groupes, la garde des ids hors forme, le lot bloqué et les tâches attendues.
+ */
+const isGroupActionPhase = (phase: FlowPhase): boolean => phase.skill === 'implement' || ((phase.skill === 'to-tickets' || phase.skill === 'retro') && phase.status === 'done')
+
+/**
  * Ce que l'auto ferait pour les groupes d'une phase à tickets, la suite des boutons de la ligne d'un
  * groupe et de la carte « Ensuite » : la revue d'un groupe rendu fini qui l'attend (texte de « ◆ Revue
  * du groupe · worker »), puis sa revue de sécurité conseillée et pas encore lancée ; sinon, quand
@@ -4335,10 +4390,7 @@ const isGroupSendMarked = (run: Run, unit: string): boolean => isUnitMarked(run,
 export const autoGroupActionOf = (run: Run, outside?: ReadonlyMap<string, readonly OutsideHold[]>, review: SecurityReview = 'on'): { action: AutoAction | null; relaunch: string[] } => {
   const none = { action: null, relaunch: [] as string[] }
   const phase = currentPhase(run)
-  // L'implémentation, ou le découpage une fois fini (la carte « Ensuite » propose alors les groupes) ;
-  // jamais une autre phase à tickets (une rétro), ni une phase qu'une question retient.
-  const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
-  if (!isOwnPhase || run.status !== 'active' || isBlocked(run, { kind: 'phase', id: phase.skill })) return none
+  if (!isGroupActionPhase(phase) || run.status !== 'active' || isBlocked(run, { kind: 'phase', id: phase.skill })) return none
   const groups = run.groups ?? []
   if (!groupPlan(run)) return none
   const finished = groups.filter(x => x.linked === undefined && isGroupDone(run, x) && isGroupId(x.id) && !isBlocked(run, { kind: 'group', id: x.id }))
@@ -4475,9 +4527,7 @@ const autoLotActionOf = (run: Run, inFlight: boolean, review: SecurityReview = '
  * l'écarter en silence. Un tel groupe fini et clos ne retient rien.
  */
 const hasUnsafeOpenGroup = (run: Run, review: SecurityReview = 'on'): boolean => {
-  const phase = currentPhase(run)
-  const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
-  return isOwnPhase && run.status === 'active' && (run.groups ?? []).some(g => !isGroupId(g.id) && (g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g, review).length > 0))
+  return isGroupActionPhase(currentPhase(run)) && run.status === 'active' && (run.groups ?? []).some(g => !isGroupId(g.id) && (g.linked !== undefined || !isGroupDone(run, g) || closeMissing(run, g, review).length > 0))
 }
 
 /**
@@ -4570,10 +4620,8 @@ const isUnitsMarked = (run: Run, key: string): boolean => {
  * (`awaitedExternals`) : il l'attend, sans pause.
  */
 export const isGroupLotStuck = (run: Run, inFlight: boolean, review: SecurityReview = 'on'): boolean => {
-  const phase = currentPhase(run)
-  const isOwnPhase = phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done')
   const groups = run.groups ?? []
-  if (!isOwnPhase || run.status !== 'active' || groups.length === 0 || !groupPlan(run)) return false
+  if (!isGroupActionPhase(currentPhase(run)) || run.status !== 'active' || groups.length === 0 || !groupPlan(run)) return false
   if (inFlight || groups.some(g => g.linked !== undefined)) return false
   const read = readMarks(run)
   if (read.isDamaged || read.marks.some(m => m.startedAt === undefined) || readWaiting(run).length > 0) return false
@@ -4609,8 +4657,7 @@ export const isGroupLotStuck = (run: Run, inFlight: boolean, review: SecurityRev
 export const awaitedExternals = (run: Run, inFlight: boolean, outside?: ReadonlyMap<string, readonly OutsideHold[]>, review: SecurityReview = 'on'): ExternalBlocker[] => {
   // Seulement dans une phase où l'auto agit sur les tickets (comme `isGroupLotStuck`) : pendant un découpage
   // ou un compte rendu, l'auto n'attend aucune tâche.
-  const phase = currentPhase(run)
-  if (inFlight || !(phase.skill === 'implement' || (phase.skill === 'to-tickets' && phase.status === 'done'))) return []
+  if (inFlight || !isGroupActionPhase(currentPhase(run))) return []
   const open = run.tickets.filter(t => t.status !== 'done')
   const blocking = new Set(open.flatMap(t => openBlockers(run, t)))
   // Relues du fichier partagé : une entrée hors forme (pas un objet, id pas texte) n'est jamais attendue ; un nom illisible
@@ -5620,7 +5667,11 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
       // discussion. Seule une copie active d'une autre discussion l'emporte (question au porteur).
       const isTakenOver =
         other !== undefined && other.status === 'active' && other.owner !== undefined && other.owner !== local.session && other.updatedAt > run.updatedAt
-      if (isTakenOver) {
+      // Close comme livrée ailleurs depuis (le mod du COO, sur la mission mise en pause par une autre discussion
+      // pendant que celle-ci se taisait) : la copie relue, plus récente, l'emporte, et Version et Push ne se
+      // proposent plus ici (invariant des missions livrées). Une livraison rouverte ici depuis reste plus récente.
+      const isDeliveredElsewhere = other !== undefined && other.status === 'done' && isShipped(other) && !isShipped(run) && other.updatedAt > run.updatedAt
+      if (isTakenOver || isDeliveredElsewhere) {
         activeId = null
         byId.set(run.id, keepRun(other, run, own, false))
       } else byId.set(run.id, keepRun(run, other, own))
@@ -5841,7 +5892,7 @@ export const resumeRun = (board: Board, id: string, now: number): Outcome => {
  * Range une mission aux archives : elle quitte l'historique visible, n'est plus proposée à la reprise
  * et n'est jamais élaguée. La mission en cours ici est d'abord mise en pause.
  */
-export const archiveRun = (board: Board, id: string, now: number): Outcome => {
+export const archiveRun = (board: Board, id: string, now: number, why = 'Mission archivée'): Outcome => {
   const run0 = board.runs.find(r => r.id === id)
   if (!run0 || run0.archivedAt !== undefined) return null
   const b = clone(board)
@@ -5855,31 +5906,188 @@ export const archiveRun = (board: Board, id: string, now: number): Outcome => {
   run.updatedAt = now
   delete run.waitsUser
   stopAuto(run, now, AUTO_STOPS.archived)
-  log(run, now, '▣', 'Mission archivée', 'info')
+  log(run, now, '▣', why, 'info')
   return { board: b, fx: { ...noFx(), toasts: [`▣ Archivé : ${run.title}`] } }
 }
 
 /**
- * La demande de clôture et d'archivage du COO après la livraison, appliquée par le mod de la discussion qui porte la
- * mission : close d'abord si elle est active ici, puis archivée. Rien quand elle est déjà archivée ou
- * absente ; une application répétée est donc sans effet.
+ * Une mission livrée : close, sa phase
+ * « Version et push » (`project:version`) faite et son étape « Sync et push » (`pushed`) faite. Une mission
+ * versionnée puis close sans push n'est pas livrée (sa clôture a sauté l'étape jamais atteinte), ni une mission
+ * close sans cette phase. Aucun champ gardé : lu sur les phases.
  */
-export const closeAndArchive = (board: Board, id: string, now: number, delivered?: DeliveredResult): Outcome => {
-  const run0 = board.runs.find(r => r.id === id)
-  if (!run0 || run0.archivedAt !== undefined) return null
-  // Livrée par le COO : ses phases de livraison sont faites, et le journal dit ce qui est parti.
-  const base = delivered ? clone(board) : board
-  if (delivered) {
-    const run = base.runs.find(r => r.id === id)!
-    for (const p of run.phases) if (DELIVERY.has(p.skill) && p.status !== 'done') finishPhase(p, now)
-    log(run, now, '⬆', `Livrée par le COO : ${deliveredText(delivered)}`, 'ok')
+export const isDeliveredRun = (run: Run): boolean => run.status === 'done' && run.phases.some(p => p.skill === 'project:version' && p.status === 'done' && isPushDone(p))
+
+/**
+ * Une mission livrée et pas encore archivée, qui attend la rétro ou « ✓ Archiver » (la livraison n'archive plus) :
+ * son id en forme (`isSafeId`), aucune phase de livraison encore à faire ou en cours (une « Pull request » sautée,
+ * comme après une livraison à la main, ne compte pas), et aucun groupe confié à un worker depuis le push (du travail
+ * pas parti, que l'archivage cacherait ; une date du push illisible compte comme un doute). Dans le doute, elle ne
+ * s'archive pas par ces boutons.
+ */
+export const isAwaitingArchive = (run: Run): boolean =>
+  run.archivedAt === undefined &&
+  isSafeId(run.id) &&
+  isDeliveredRun(run) &&
+  // Une phase de livraison encore à faire ou en cours (une clôture par le COO pas encore appliquée, qui la marquera) :
+  // l'archivage attend, pour ne jamais couper cette clôture.
+  !run.phases.some(p => DELIVERY.has(p.skill) && (p.status === 'pending' || p.status === 'active')) &&
+  isNothingSentSincePush(run, false)
+
+/**
+ * L'empreinte de la liste des missions livrées et pas archivées (leurs ids, triés) : un bouton « ✓ Archiver » ou
+ * « ✓ Tout archiver (n) » la porte ; recalculée au clic sur le fichier relu, une liste changée n'archive rien.
+ */
+export const awaitingArchivePrint = (runs: readonly Run[]): string => `a${fingerprint(runs.filter(isAwaitingArchive).map(r => r.id).sort())}`
+
+/**
+ * Archive, d'un seul geste de la personne, les missions qu'elle a vues livrées et pas archivées : seulement si la
+ * liste du board est encore celle de l'affichage (`print`, null pour le lancement d'une rétro, qui ne vise que sa
+ * mission) et que chaque id en fait partie ; chacune par
+ * `archiveRun` (rien d'autre n'est écrit), tout ou rien. Null sinon.
+ */
+export const archiveAwaiting = (board: Board, ids: readonly string[], print: string | null, now: number, why?: string): Outcome => {
+  // `print` null : un geste qui ne vise pas une liste montrée (le lancement d'une rétro, sur sa seule mission).
+  if (ids.length === 0 || (print !== null && awaitingArchivePrint(board.runs) !== print)) return null
+  // Une mission active ici (`archiveRun` la mettrait d'abord en pause) n'est jamais archivée par ce geste.
+  if (!ids.every(id => id !== board.activeId && board.runs.some(r => r.id === id && isAwaitingArchive(r)))) return null
+  let b = board
+  for (const id of new Set(ids)) {
+    const out = archiveRun(b, id, now, why)
+    if (!out) return null
+    b = out.board
   }
-  const finished = base.activeId === id ? finishActive(base, now) : null
-  const b = finished ? finished.board : clone(base)
-  log(b.runs.find(r => r.id === id)!, now, '◆', 'Clôture et archivage demandés par le COO', 'info')
-  const archived = archiveRun(b, id, now)
-  if (!archived) return finished
-  return { board: archived.board, fx: { ...archived.fx, toasts: [...(finished?.fx.toasts ?? []), ...archived.fx.toasts] } }
+  return { board: b, fx: noFx() }
+}
+
+/** L'étape « Sync et push » d'une phase « Version et push » est faite (le code est parti). */
+const isPushDone = (phase: FlowPhase): boolean => phase.steps.some(s => s.id === 'pushed' && s.status === 'done')
+
+/**
+ * La livraison d'une mission est marquée : chacune de ses phases de livraison présentes (`DELIVERY`)
+ * est faite, avec l'étape `pushed` faite pour une phase `project:version`. Sans statut : une mission reprise
+ * (`resumeRun`) le garde, et ne se voit plus proposer Version ni Push (invariant des missions livrées).
+ */
+const isDeliveryMarked = (run: Run): boolean => run.phases.every(p => !DELIVERY.has(p.skill) || (p.status === 'done' && (p.skill !== 'project:version' || isPushDone(p))))
+
+/** Une mission dont la livraison est marquée et qui a une phase « Version et push » : ses suites ne proposent plus la livraison. */
+const isShipped = (run: Run): boolean => {
+  if (!run.phases.some(p => p.skill === 'project:version') || !isDeliveryMarked(run)) return false
+  return isNothingSentSincePush(run, true)
+}
+
+/**
+ * Aucun groupe confié à un worker depuis le push (un travail lancé du tableau de bord, qui ne rouvre aucune phase,
+ * n'est pas parti) ; `ifUnknown` quand la date du push ne se lit pas (`pushTimeOf`).
+ */
+const isNothingSentSincePush = (run: Run, ifUnknown: boolean): boolean => {
+  const at = pushTimeOf(run)
+  return at === undefined ? ifUnknown : !hasGroupSentAfter(run, at)
+}
+
+/**
+ * La date du push d'une mission dont « Version et push » est faite et poussée : l'étape « Sync et push », ou à
+ * défaut la fin de cette phase, chacune contrôlée (`isTime`) ; undefined sinon.
+ */
+const pushTimeOf = (run: Run): number | undefined => {
+  const phase = run.phases.find(p => p.skill === 'project:version' && p.status === 'done' && isPushDone(p))
+  const step = phase?.steps.find(s => s.id === 'pushed')
+  return isTime(step?.at) ? step!.at : isTime(phase?.finishedAt) ? phase!.finishedAt : undefined
+}
+
+/** Un groupe de la mission confié à un worker après `at` : sa session en cours, rendue ou une d'avant, datée après. */
+const hasGroupSentAfter = (run: Run, at: number): boolean =>
+  (run.groups ?? []).some(g => [...(g.linked ? [g.linked] : []), ...(g.delegated ? [g.delegated, ...earlierOf(g.delegated)] : [])].some(s => isTime(s.at) && s.at > at))
+
+/**
+ * La clôture comme livrée est faite : la mission est close et sa livraison marquée. Vraie aussi
+ * pour une mission ancienne sans phase `project:version` : le rattrapage s'arrête là, sans la réécrire à
+ * chaque relevé.
+ */
+export const isCloseDone = (run: Run): boolean => run.status === 'done' && isDeliveryMarked(run)
+
+/**
+ * Plus rien à clore pour une livraison : la clôture est faite, ou la mission a sa livraison marquée (push compris)
+ * même reprise depuis (`resumeRun` la remet active sans toucher ses phases). Une mission livrée puis reprise
+ * n'est jamais refermée par une demande de clôture restée à appliquer ni par le rattrapage : la reprise est le
+ * geste de la personne. Un travail qu'elle relance rouvre la livraison, et la mission redevient à livrer.
+ */
+export const isDeliveryOver = (run: Run): boolean => isCloseDone(run) || isShipped(run)
+
+/**
+ * Ce qu'une livraison a emporté est encore ce que porte la mission (`report` : la date de validation de son rapport,
+ * gardée avec la livraison et dans la demande de clôture) : le même rapport validé, ou rien de relancé depuis. Un
+ * travail relancé (`/implement` sur ses tickets, qui rouvre une phase à tickets d'avant le compte rendu) n'est pas
+ * parti, ni pendant qu'il tourne, ni une fois fini : la clôture de cette livraison ne le marque jamais livré. Un
+ * compte rendu seulement rouvert ou validé de nouveau ne change pas ce qui est parti : la clôture le marque livré
+ * (ce qui a été livré ne se relivre jamais). Sans `report` (une demande d'une version d'avant, qui ne le gardait
+ * pas) : rien à comparer.
+ */
+export const isReportShipped = (run: Run, report: number | undefined): boolean =>
+  report === undefined || (!hasGroupSentAfter(run, report) && ((isReportValidated(run) && run.reportValidatedAt === report) || !isWorkRelaunched(run, report)))
+
+/**
+ * Du travail relancé dans la mission depuis le rapport validé à `report` : une phase à tickets d'avant le dernier
+ * compte rendu rouverte (en cours ou à refaire), ou finie après lui (rouverte puis finie depuis), ou un groupe
+ * confié à un worker après lui (lancé du tableau de bord, sans rouvrir de phase).
+ */
+const isWorkRelaunched = (run: Run, report: number): boolean => {
+  const at = run.phases.map(p => p.skill).lastIndexOf('compte-rendu')
+  return run.phases.some((p, i) => (at < 0 || i < at) && SKILLS[p.skill]?.hasTickets === true && (p.status === 'active' || p.status === 'pending' || (p.finishedAt ?? 0) > report)) || hasGroupSentAfter(run, report)
+}
+
+/**
+ * La clôture d'une mission livrée par le COO (invariant des missions livrées : « Sur une mission en pause, le mod
+ * du COO n'écrit que cette clôture ») : active ici, elle passe d'abord par `finishActive` ; puis ses phases de livraison
+ * faites, l'étape « Sync et push » faite (le COO a poussé), `status: 'done'`, `finishedAt`, `updatedAt`,
+ * `waitsUser` effacé, l'auto arrêté et la ligne « Livrée par le COO : <résultat> ». Rien d'autre : ni
+ * `archivedAt`, ni `owner`, ni `bornIn`, ni les autres phases d'une mission en pause ; jamais d'archivage.
+ * Null pour une mission absente, archivée, dont la clôture est faite ou livrée puis reprise (`isDeliveryOver`) :
+ * une entrée rejouée n'écrit rien.
+ */
+export const closeDelivered = (board: Board, id: string, now: number, delivered: DeliveredResult): Outcome => {
+  const run0 = board.runs.find(r => r.id === id)
+  if (!run0 || run0.archivedAt !== undefined || isDeliveryOver(run0)) return null
+  const finished = board.activeId === id ? finishActive(board, now) : null
+  const b = finished ? finished.board : clone(board)
+  const run = b.runs.find(r => r.id === id)!
+  for (const p of run.phases) {
+    if (!DELIVERY.has(p.skill)) continue
+    if (p.status !== 'done') finishPhase(p, now)
+    if (p.skill !== 'project:version' || isPushDone(p)) continue
+    const at = p.steps.findIndex(s => s.id === 'pushed')
+    const pushed: FlowStep = { id: 'pushed', status: 'done', at: now }
+    p.steps = at < 0 ? [...p.steps, pushed] : p.steps.map((s, i) => (i === at ? pushed : s))
+  }
+  if (!finished) {
+    run.status = 'done'
+    run.finishedAt = now
+    delete run.waitsUser
+    stopAuto(run, now, AUTO_STOPS.closed)
+  }
+  run.updatedAt = now
+  log(run, now, '⬆', `${DELIVERED_BY_COO} : ${deliveredText(delivered)}`, 'ok')
+  return { board: b, fx: { ...noFx(), toasts: finished?.fx.toasts ?? [`★ Livrée : ${neutralLine(run.title)}`] } }
+}
+
+/**
+ * Le geste « clore » du COO hors livraison (`coordinate.close`) sur une mission qui n'est active
+ * nulle part : `status: 'done'`, `finishedAt`, `updatedAt`, `waitsUser` effacé, l'auto arrêté et une ligne de
+ * journal ; ni phases de livraison, ni étape `pushed`, ni archivage. Null pour une mission absente, archivée,
+ * active ou déjà close. (Active ici, sa discussion la clôt par `finishActive` seul.)
+ */
+export const closeIdleRun = (board: Board, id: string, now: number): Outcome => {
+  const run0 = board.runs.find(r => r.id === id)
+  if (!run0 || run0.archivedAt !== undefined || run0.status === 'done' || run0.status === 'active') return null
+  const b = clone(board)
+  const run = b.runs.find(r => r.id === id)!
+  run.status = 'done'
+  run.finishedAt = now
+  run.updatedAt = now
+  delete run.waitsUser
+  stopAuto(run, now, AUTO_STOPS.closed)
+  log(run, now, '★', 'Mission close à la demande du COO', 'ok')
+  return { board: b, fx: { ...noFx(), toasts: [`★ Mission close : ${neutralLine(run.title)}`] } }
 }
 
 /** Ce qu'une livraison du COO a fait partir : la version posée, le push, l'adresse de la pull request (textes rendus par Claude). */
@@ -6320,14 +6528,36 @@ export const unitsOfTickets = (run: Run, ids: readonly string[]): string[] => {
   return groups.filter(g => groupTicketIds(run, g).some(x => ids.some(id => sameTicket(id, x)))).map(g => g.id)
 }
 
-/** Les unités en cours d'une mission, qui retiennent les autres missions ; pour une mission close ou archivée, seuls ses groupes encore confiés à un worker. */
+/**
+ * La date du push d'une mission livrée (`isDeliveredRun`) : l'étape « Sync et push » de sa phase « Version et
+ * push », ou à défaut la fin de cette phase, chacune contrôlée (`isTime`) ; undefined pour une mission qui n'est
+ * pas livrée ou sans date lisible (elle suit alors la règle des missions archivées).
+ */
+const shippedAtOf = (run: Run): number | undefined => (isDeliveredRun(run) ? pushTimeOf(run) : undefined)
+
+/**
+ * Les unités en cours d'une mission, qui retiennent les autres missions ; pour une mission close, seuls ses
+ * groupes encore confiés à un worker ou rendus sans être clos ; pour une mission archivée, seuls ceux encore
+ * confiés (pas rendus) ; pour une mission livrée, ceux encore confiés et ceux dont une session confiée après le
+ * push n'est pas close.
+ */
 const busyUnitsOf = (run: Run): Unit[] => {
   const groups = run.groups ?? []
-  // Close ou archivée : seuls ses groupes encore confiés à un worker (ou rendus, pas clos) retiennent encore ;
-  // le worker peut écrire ses fichiers après la clôture de sa mission.
+  // Close : seuls ses groupes encore confiés à un worker (ou rendus, pas clos) retiennent encore ; le worker peut
+  // écrire ses fichiers après la clôture de sa mission. Archivée, ou livrée (close, « Version et push » faite et
+  // poussée : `isDeliveredRun`) et pas encore archivée, puisque la livraison n'archive plus (décision « une mission
+  // livrée retient comme une archivée ») : un groupe rendu ne retient plus, même jamais clos (ce que son worker
+  // écrirait reste dans son worktree, qui n'atteint main que par une fusion) ; sans quoi une fermeture jamais
+  // enregistrée retenait les autres missions pour toujours. Close sans livraison (versionnée sans push comprise) :
+  // la règle des missions closes. Livrée puis reprise et close de nouveau, une session de worker confiée après le
+  // push et pas close (du travail qui n'est pas parti) retient encore, comme celle d'une mission close ; une
+  // session d'avant le push ne retient plus, même jamais close.
   if (run.archivedAt !== undefined || run.status === 'done') {
+    const isArchived = run.archivedAt !== undefined
+    const shippedAt = isArchived ? undefined : shippedAtOf(run)
+    const isHeldAfterShip = (link: GroupLink) => [link, ...earlierOf(link)].some(s => isTime(s.at) && s.at > shippedAt! && s.closing?.state !== 'closed')
     return groups
-      .filter(g => g.linked !== undefined || (g.delegated !== undefined && !isClosedLink(g.delegated)))
+      .filter(g => g.linked !== undefined || (!isArchived && g.delegated !== undefined && !isClosedLink(g.delegated) && (shippedAt === undefined || isHeldAfterShip(g.delegated))))
       .map(g => ({ run, group: g.id, zones: crossZones([...textsOf(g.files), ...openFilesOf(run, groupTicketIds(run, g))]), resources: textsOf(g.resources) }))
   }
   if (groups.length === 0) return isLotUnderway(run) ? [{ run, group: LOT_KEY, zones: crossZones(openFilesOf(run, run.tickets.map(t => t.id))), resources: [] }] : []
@@ -6444,13 +6674,14 @@ export type ProjectUnit = PlanUnit & { zones: Zone[]; resources: string[] }
 /**
  * Les unités pas encore finies de toutes les missions non archivées : celles déjà parties (`isBusy`), et
  * celles à lancer avec les groupes de leur mission qu'elles attendent ; une mission close ne garde que ses
- * groupes encore confiés à un worker.
+ * groupes encore confiés à un worker ou rendus sans être clos, une mission livrée que ceux encore confiés et
+ * ceux qu'une session confiée après le push, pas close, retient (`busyUnitsOf`).
  */
 export const projectUnits = (board: Board): ProjectUnit[] =>
   board.runs
     .filter(r => r.archivedAt === undefined)
     .flatMap(run => {
-      const busy = busyUnitsOf(run).filter(u => u.group === LOT_KEY || isGroupId(u.group)).map(u => ({ run: run.id, title: run.title, group: u.group, isBusy: true, after: [] as string[], zones: u.zones, resources: u.resources }))
+      const busy = busyUnitsOf(run).filter(u => u.group === LOT_KEY || isGroupId(u.group)).map(u => ({ run: run.id, title: run.title, group: u.group, isBusy: true, after: [] as string[], zones: u.zones, resources: u.resources, ...(run.status === 'done' ? { isClosed: true } : {}) }))
       if (run.status === 'done') return busy
       const plan = groupPlan(run)
       // Un id de groupe hors forme n'entre dans aucun plan (il n'entrerait dans aucune entrée) : ce groupe reste aux retenues de fichiers.

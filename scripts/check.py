@@ -2,8 +2,9 @@
 """Contrôles d'un plugin du dépôt, dans l'ordre, arrêtés au premier échec (sauf l'arbre « Architecture »).
 
     scripts/check.sh <plugin>...           tous les contrôles des plugins nommés (scripts\\check.cmd sous Windows)
-    scripts/check.sh --all                 tous les plugins (et la sonde)
+    scripts/check.sh --all                 tous les plugins (et la sonde, et la suite Python du dépôt)
     scripts/check.sh sonde                 la sonde des événements du moteur (scripts/sonde/) : export, API, tsc, tests
+    scripts/check.sh scripts               la suite Python du dépôt (scripts/tests, unittest), sans l'app desktop
     scripts/check.sh <plugin> --no-desktop sans le Claude Code de l'app desktop (poste sans l'app)
     scripts/check.sh --staged              le hook pre-commit : les plugins dont un fichier est indexé
     scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README et retire les blocs /** */ détachés, sans rien contrôler
@@ -89,7 +90,10 @@ pour un commit de documentation seule ; puis rien de
 plus pour un commit de documentation seule ; sinon, sur une copie de l'index (`git checkout-index`, le
 contenu qui part, pas l'arbre de travail), `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
 (terminal seulement) des plugins touchés : 39 erreurs de types étaient passées inaperçues sur trois
-groupes quand le hook ne lançait que `validate` et les tests. Le test avec l'app desktop reste à
+groupes quand le hook ne lançait que `validate` et les tests. Enfin, quand un fichier indexé est sous
+`scripts/` (documentation comprise) ou est `plugins/flow-board/hooks/register.tsx`, et seulement alors,
+la suite Python du dépôt (`scripts/tests`) tourne sur la copie de l'index, devenue un dépôt git jetable
+commité tel quel, sans les variables `GIT_*` du hook ; un test en échec refuse le commit et se nomme. Le test avec l'app desktop reste à
 `check.sh <plugin>`, avant le push. Un plugin dont tous les contrôles viennent de passer garde
 l'empreinte de son dossier (arbre de travail, fichiers ignorés exclus) ; le hook saute ses contrôles
 quand l'index à commiter porte exactement cette empreinte (un commit juste après `check.sh`). Le hook
@@ -107,6 +111,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -156,7 +161,7 @@ ADMITTED_INTERPOLATIONS = Path(__file__).resolve().parent / "interpolations-admi
 # Une valeur exportée par un module de `hooks/` (pas un type) : son nom, en tête de ligne.
 EXPORTED_VALUE = re.compile(r"^export\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?"
                             r"(?:function\s*\*?|const\s+enum|const|let|var|abstract\s+class|class|enum)\s+([A-Za-z_$][\w$]*)")
-EXPORT_READERS = {".ts", ".tsx", ".js", ".mjs", ".cjs"}
+EXPORT_READERS = {".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"}
 # Le début d'une déclaration de premier niveau, exportée ou non, de toute sorte : la fin de la plage
 # de la déclaration d'avant, pour le pré-contrôle rapide (`changed_exports`).
 TOP_LEVEL = re.compile(r"^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:async\s+)?"
@@ -195,8 +200,9 @@ ADMITTED_RETIRED = Path(__file__).resolve().parent / "termes-retires-admis.json"
 INSTRUCTION_DIRS = ("hooks", "skills", "commands", "reference")
 # Un renvoi à une section d'un fichier (« section « X » de `<fichier>.md` », ou par un lien markdown
 # dont le texte est ce chemin) : le titre X doit exister dans les règles communes et les références
-# (`config/rules/`, `config/reference/`) ; un titre renommé laissait des renvois vers rien.
-SECTION_REF = re.compile(r"section « ([^«»]+) » de \[?`([^`\s]+\.md)`")
+# (`config/rules/`, `config/reference/`) ; un titre renommé laissait des renvois vers rien. Un titre qui
+# porte lui-même « » (« Le mode « auto » ») se lit en entier, guillemets imbriqués compris.
+SECTION_REF = re.compile(r"section « ((?:[^«»]|«[^«»]*»)+) » de \[?`([^`\s]+\.md)`")
 # Le chemin installé d'une règle ou d'une référence commune (`~/.claude/plugins/marketplaces/<nom>/config/…`) :
 # il vise le même fichier que `config/…` du dépôt.
 INSTALLED_CONFIG = re.compile(r".*/(config/(?:rules|reference)/[^/]+\.md)")
@@ -256,9 +262,13 @@ SEARCH_LINE = re.compile(r"^\*{0,2}Recherche\b")
 # arguments, pas un hash seul) suivie d'un texte, son résultat, accents graves permis.
 INLINE_SEARCH = re.compile(r"`[^`\n]*\S [^`\n]*\S[^`\n]*`\s*\S")
 # Une case de liste d'un ticket (`- [x]`, `- [ ]`, et leurs formes mal écrites `- [x ]`, `- []`, `* [X]`…),
-# et les deux seules formes bien écrites, suivies d'une espace.
+# et les deux seules formes bien écrites, suivies d'une espace ; `- [x](lien)` est un lien dont le texte
+# est `x`, pas une case.
 CHECKBOX = re.compile(r"^\s*[-*+]\s*\[[\sxX]*\]")
 CHECKBOX_OK = re.compile(r"^\s*- \[[ x]\] ")
+CHECKBOX_LINK = re.compile(r"^\s*[-*+]\s*\[[ x]\]\(")
+# Une clôture de bloc de code : trois accents graves ou trois tildes au moins, en tête de ligne.
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 # La règle d'un plugin et les listes d'admis : un commit qui ne touchait qu'elles passait le hook comme
 # de la documentation, sans les contrôles de `check.sh <plugin>` qui les lisent.
 RULE_FILE = re.compile(r"config/rules/([\w-]+)\.md")
@@ -266,6 +276,18 @@ ADMITTED_FILE = re.compile(r"scripts/[\w-]+-admi(?:s|ses)\.json")
 # La liste des termes retirés d'un plugin : seuls les contrôles statiques qui la lisent la concernent ; un
 # commit qui ne changeait qu'elle relançait `validate`, `tsc` et les tests du plugin.
 RETIRED_LIST_FILE = re.compile(r"plugins/([\w-]+)/" + re.escape(RETIRED_FILE))
+# La suite Python du dépôt (`scripts/tests`, unittest), contrôlée par ce nom (`check.sh scripts`) : elle
+# n'était lancée par rien, et une régression d'un script du dépôt passait inaperçue.
+SCRIPTS = "scripts"
+SCRIPTS_TIMEOUT = 600
+# Les fichiers indexés qui font lancer la suite au pre-commit : tout fichier sous `scripts/`, et
+# `register.tsx` de flow-board (`test_check_tickets.py` relit la ligne « Recherche » de la consigne du
+# cadrage). D'autres tests lisent d'autres fichiers du dépôt (`.claude/settings.json`, `.gitignore`, des
+# références de flow-board, tous les plugins pour les termes de l'export) sans les faire lancer : la
+# suite ne tourne pas à chaque commit ; un tel changement se vérifie par `check.sh scripts`.
+SCRIPTS_TRIGGERS = ("scripts/", "plugins/flow-board/hooks/register.tsx")
+# Une ligne de test en échec dans la sortie d'unittest : `FAIL: <test> (<classe>)` ou `ERROR: …`.
+UNITTEST_FAILURE = re.compile(r"^(?:FAIL|ERROR): (.+)$", re.M)
 
 
 class Failed(Exception):
@@ -1658,6 +1680,63 @@ def check_tool(module, desktop):
         plugin_tests(module, binary, f"desktop {version}")
 
 
+# --- suite Python du dépôt -----------------------------------------------------
+
+
+def without_git_env():
+    """L'environnement de la session sans ses variables `GIT_*` : le hook pre-commit reçoit de git
+    `GIT_INDEX_FILE` (l'index du commit en cours), parfois `GIT_DIR` ; transmis aux tests, qui créent
+    leurs propres dépôts jetables, chacun de leurs `git add` écrirait dans l'index du vrai commit."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def python_tests(root):
+    """La suite Python d'un dépôt ou d'une copie de son index (`<root>/scripts/tests`), par l'interprète
+    qui lance ce script, depuis `root`, sans les variables `GIT_*` de la session ; un test rouge fait
+    échouer, et le message nomme chaque test en échec (FAIL ou ERROR)."""
+    title = f"python -m unittest discover -s {SCRIPTS}/tests"
+    log(f"→ {title}")
+    try:
+        res = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(Path(root) / SCRIPTS / "tests")],
+                             cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=SCRIPTS_TIMEOUT, env=without_git_env())
+        code, out = res.returncode, (res.stdout or "") + (res.stderr or "")
+    except subprocess.TimeoutExpired:
+        code, out = 124, f"pas fini en {SCRIPTS_TIMEOUT} s"
+    if code != 0:
+        log(failure_excerpt(out))
+        path = keep_log(title, out)
+        if path:
+            log(f"  sortie entière : {path}")
+        failing = UNITTEST_FAILURE.findall(out)
+        raise Failed(f"{title} : échec (code {code})" + (f" ; tests en échec : {', '.join(failing)}" if failing else ""))
+    found = re.findall(r"^Ran \d+ tests? in [\d.]+s", out, re.M)
+    log(f"  ok{' (' + found[-1] + ')' if found else ''}")
+
+
+def index_suite(tree):
+    """La suite Python sur la copie de l'index du pre-commit : la copie devient d'abord un dépôt git
+    jetable, commité tel quel (des tests archivent `HEAD` ou lisent ce qu'ignore `.gitignore`), par des
+    appels git bornés à elle (`GIT_DIR` et `GIT_WORK_TREE` fixés, sans hook ni fsmonitor ni signature),
+    puis la suite tourne sur ses propres `scripts/` : le contenu qui part, pas l'arbre de travail. Une
+    copie sans `scripts/tests` n'a pas de suite à lancer."""
+    if not (tree / SCRIPTS / "tests").is_dir():
+        log(f"→ pas de {SCRIPTS}/tests dans l'index : pas de suite Python")
+        return
+    env ={**without_git_env(), "GIT_DIR": str(tree / ".git"), "GIT_WORK_TREE": str(tree)}
+    settings = ["-c", f"core.hooksPath={(tree / '.git' / 'aucun-hook').as_posix()}", "-c", "core.fsmonitor=false",
+                "-c", "commit.gpgsign=false", "-c", "user.name=pre-commit", "-c", "user.email=pre-commit@localhost"]
+    for args in (["init", "-q"], ["add", "-A", "-f"], ["commit", "-q", "--allow-empty", "-m", "index"]):
+        try:
+            res = subprocess.run(["git", *settings, *args], cwd=str(tree), capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", timeout=300, env=env)
+        except subprocess.TimeoutExpired:
+            raise Failed(f"git {args[0]} dans la copie de l'index : pas fini en 300 s")
+        if res.returncode != 0:
+            raise Failed(f"git {args[0]} dans la copie de l'index : {(res.stdout + res.stderr).strip()}")
+    python_tests(tree)
+
+
 # --- empreinte d'un plugin contrôlé -------------------------------------------
 
 
@@ -1833,11 +1912,14 @@ def malformed_checkboxes(paths):
     était passée inaperçue au cochage d'un ticket."""
     problems = []
     for path in paths:
-        in_fence = False
+        fence = None  # la clôture qui a ouvert le bloc en cours ; il se ferme par la même suite, au moins aussi longue
         for n, line in enumerate((git_show(REPO, f":{path}") or "").split("\n"), 1):
-            if line.lstrip().startswith("```"):
-                in_fence = not in_fence
-            elif not in_fence and CHECKBOX.match(line) and not CHECKBOX_OK.match(line):
+            m = FENCE.match(line)
+            if m and fence is None:
+                fence = m.group(1)
+            elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            elif fence is None and CHECKBOX.match(line) and not CHECKBOX_OK.match(line) and not CHECKBOX_LINK.match(line):
                 problems.append(f"{path}:{n} : case mal formée « {line.strip()[:40]} » ; écrire « - [ ] » ou « - [x] », suivi d'une espace")
     return problems
 
@@ -1925,6 +2007,27 @@ def check_code(name, tree, ruled):
     refuse(name, problems)
 
 
+def staged_code(code_paths, tree, ruled):
+    """Les contrôles d'un commit qui indexe autre chose que de la documentation, sur la copie de
+    l'index : `validate` du dépôt, puis ceux de chaque plugin touché (hors empreinte d'un `check.sh` vert)."""
+    claude = tool("claude")
+    log("pre-commit : contrôles du contenu indexé, sur une copie de l'index (Claude Code du terminal)")
+    validate(tree, claude, ".")
+    touched = sorted({p.split("/")[1] for p in code_paths if p.startswith("plugins/") and p.count("/") >= 2})
+    for name in touched:
+        plugin, copy = PLUGINS / name, tree / "plugins" / name
+        if not (copy / ".claude-plugin" / "plugin.json").is_file():
+            continue
+        if passed_already(plugin):
+            log(f"→ plugins/{name} : identique au dernier check.sh vert, contrôles sautés")
+        else:
+            check_code(name, tree, ruled)
+            staged_types(plugin, copy)
+            validate(copy, claude)
+            typecheck(copy)
+            plugin_tests(copy, claude, "terminal")
+
+
 def staged():
     code, out = run(["git", "diff", "--cached", "--name-only", "-z"], 60)
     if code != 0:
@@ -1961,7 +2064,9 @@ def staged():
     code_paths = [p for p in paths if not is_doc(p) and not RETIRED_LIST_FILE.fullmatch(p)]
     # Une règle ou une référence commune indexée : son titre a pu changer sous les renvois des autres plugins.
     homes_changed = any(p.startswith(home + "/") for p in paths for home in SECTION_HOMES)
-    if not shaped and not code_paths and not ruled and not homes_changed:
+    # La suite Python du dépôt, même pour une documentation de `scripts/` seule : elle tourne en dernier.
+    suite = any(p.startswith(SCRIPTS_TRIGGERS[0]) or p == SCRIPTS_TRIGGERS[1] for p in paths)
+    if not shaped and not code_paths and not ruled and not homes_changed and not suite:
         log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets or repo_rules else "pre-commit : documentation seule, pas de contrôle")
         return
     # Tous les contrôles lisent la copie de l'index : ce qui part, jamais l'arbre de travail.
@@ -1978,33 +2083,33 @@ def staged():
                 check_versions(PLUGINS / name, rev="")
         if shaped:
             check_state(shaped, tree)
-        if not code_paths:
+        if code_paths:
+            staged_code(code_paths, tree, ruled)
+        elif not suite:
             log("pre-commit : documentation seule, pas d'autre contrôle")
-            return
-        claude = tool("claude")
-        log("pre-commit : contrôles du contenu indexé, sur une copie de l'index (Claude Code du terminal)")
-        validate(tree, claude, ".")
-        touched = sorted({p.split("/")[1] for p in code_paths if p.startswith("plugins/") and p.count("/") >= 2})
-        for name in touched:
-            plugin, copy = PLUGINS / name, tree / "plugins" / name
-            if not (copy / ".claude-plugin" / "plugin.json").is_file():
-                continue
-            if passed_already(plugin):
-                log(f"→ plugins/{name} : identique au dernier check.sh vert, contrôles sautés")
-            else:
-                check_code(name, tree, ruled)
-                staged_types(plugin, copy)
-                validate(copy, claude)
-                typecheck(copy)
-                plugin_tests(copy, claude, "terminal")
+        if suite:
+            log("pre-commit : suite Python du dépôt (un fichier indexé sous scripts/ ou register.tsx), sur la copie de l'index")
+            index_suite(tree)
     finally:
-        shutil.rmtree(tree, ignore_errors=True)
+        remove_tree(tree)
+
+
+def remove_tree(path):
+    """Supprime un dossier temporaire, y compris ses fichiers en lecture seule (les objets du dépôt git
+    jetable de `index_suite`, que Windows refuse d'effacer tels quels) ; une erreur restante est ignorée."""
+    def writable_again(func, target, _info):
+        try:
+            os.chmod(target, stat.S_IWRITE | stat.S_IREAD)
+            func(target)
+        except OSError:
+            pass
+    shutil.rmtree(path, onerror=writable_again)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("plugins", nargs="*", help="plugins à contrôler (noms des dossiers de plugins/, ou « sonde » pour scripts/sonde)")
-    parser.add_argument("--all", action="store_true", help="tous les plugins, et la sonde")
+    parser.add_argument("plugins", nargs="*", help="plugins à contrôler (noms des dossiers de plugins/, « sonde » pour scripts/sonde, « scripts » pour la suite Python de scripts/tests)")
+    parser.add_argument("--all", action="store_true", help="tous les plugins, la sonde et la suite Python du dépôt")
     parser.add_argument("--no-desktop", action="store_true", help="sans le Claude Code de l'app desktop")
     parser.add_argument("--staged", action="store_true", help="hook pre-commit : les plugins dont un fichier est indexé")
     parser.add_argument("--fix", action="store_true",
@@ -2015,7 +2120,7 @@ def main():
                         help="pré-contrôle rapide : contrôles statiques, tsc, tests Node et seuls fichiers de test du moteur touchés face à HEAD (terminal)")
     parser.add_argument("--tsc", action="store_true", help="le seul tsc des plugins nommés")
     args = parser.parse_args()
-    known = {p.parent.parent.name for p in PLUGINS.glob("*/.claude-plugin/plugin.json")} | set(TOOLS)
+    known = {p.parent.parent.name for p in PLUGINS.glob("*/.claude-plugin/plugin.json")} | set(TOOLS) | {SCRIPTS}
     if args.test:
         args.test, args.plugins = split_tests(args.test, args.plugins, known)
     try:
@@ -2028,6 +2133,21 @@ def main():
         unknown = [n for n in names if n not in known]
         if unknown:
             raise Failed(f"plugin inconnu : {', '.join(unknown)} (connus : {', '.join(sorted(known))})")
+        # La suite Python du dépôt n'a ni tsc, ni tests du moteur, ni arbre « Architecture » : seule sa
+        # suite complète (`check.sh scripts`, ou `--all`) la lance ; `--all` avec une de ces options la laisse.
+        partial = args.test or args.tsc or args.quick or args.fix
+        if args.all and partial:
+            names = [n for n in names if n != SCRIPTS]
+        if SCRIPTS in names and partial:
+            option = "--test" if args.test else "--tsc" if args.tsc else "--quick" if args.quick else "--fix"
+            raise Failed(f"{option} ne s'applique pas à « {SCRIPTS} » : lancer scripts/check.sh {SCRIPTS} (toute la suite de {SCRIPTS}/tests)")
+        run_suite = SCRIPTS in names
+        names = [n for n in names if n != SCRIPTS]
+        if run_suite and not names:
+            python_tests(REPO)
+            check_repo_rules(repo_rules_problems())
+            log("\nTous les contrôles sont passés.")
+            return
         if args.test:
             if len(names) != 1:
                 parser.error("--test : nommer un seul plugin")
@@ -2065,6 +2185,8 @@ def main():
                 check_tool(TOOLS[name], desktop)
             else:
                 check_plugin(PLUGINS / name, desktop)
+        if run_suite:
+            python_tests(REPO)
         validate(REPO, tool("claude"))
         check_state(names)
         check_repo_rules(repo_rules_problems())

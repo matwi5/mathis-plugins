@@ -19,8 +19,8 @@ import { activeRun, asanaChange, asList, choiceRoom, clip, hasBeenAuto, isoMinut
 // à l'envoi comme à la lecture : un entier de 0 à 10 000, sans arrondi ; la borne s'écrit « 10 000 ».
 import { isBugCount as isReviewCount, BUGS_MAX as COUNT_MAX_TEXT } from './basics.ts'
 
-/** Les comptes rendus finals déposés au relais par les sessions des groupes encore confiés. */
-const relayedReports = (run: Run, relay: Relay | null | undefined) =>
+/** Les comptes rendus finals déposés au relais par les sessions des groupes encore confiés (le manager, et l'état « reported » du COO). */
+export const relayedReports = (run: Run, relay: Relay | null | undefined) =>
   (run.groups ?? [])
     .map(g => {
       const relayed = relayForGroup(relay, g, run.groups)

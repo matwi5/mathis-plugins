@@ -39,6 +39,15 @@ class SectionRefsTest(unittest.TestCase):
                    "Et la section « Tableau des efforts » de `config/reference/revues.md`.\n")
         self.assertEqual(check.section_refs(self.plugin), [])
 
+    def test_un_titre_a_guillemets_imbriques_se_lit_en_entier(self):
+        self.write("config/rules/agents.md", AGENTS + "\n## Le mode « auto »\n")
+        self.write("plugins/essai/reference/a.md", "Voir la section « Le mode « auto » » de `config/rules/agents.md`.\n")
+        self.assertEqual(check.section_refs(self.plugin), [])
+        self.write("config/rules/agents.md", AGENTS + "\n## Le mode auto\n")
+        problems = check.section_refs(self.plugin)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("« Le mode « auto » »", problems[0])
+
     def test_un_renvoi_vers_un_titre_absent_est_refuse(self):
         self.write("plugins/essai/reference/a.md", "Ligne\nVoir la section « Revues par Opus » de `config/rules/agents.md`.\n")
         problems = check.section_refs(self.plugin)

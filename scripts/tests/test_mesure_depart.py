@@ -3,16 +3,20 @@ lancement a créé (`<id>.jsonl` et `<id>/` d'un dossier de projet, vérifiés p
 jamais le transcript d'une autre session ; et la lecture de l'usage de chaque requête. Sur un faux
 `~/.claude` et des fichiers posés, sans lancer Claude Code : python3 -m unittest discover -s scripts/tests."""
 
+import errno
 import importlib.util
 import io
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "mesure-depart.py"
 sys.path.insert(0, str(SCRIPT.parent))
@@ -236,6 +240,220 @@ class CleanTest(Essai):
         self.assertIsNotNone(report.error)
         self.assertTrue(self.transcript.exists())
         self.assertIn(str(self.transcript), " ".join(report.remaining()))
+
+    @unittest.skipIf(not hasattr(os, "geteuid") or os.geteuid() == 0, "droits POSIX (root lit tout)")
+    def test_un_sous_dossier_illisible_fait_garder_tout_le_dossier_de_session(self):
+        locked = self.project / SID / "tool-results"
+        for mode in (0o000, 0o400):
+            with self.subTest(mode=oct(mode)):
+                os.chmod(locked, mode)
+                try:
+                    report = self.clean()
+                finally:
+                    os.chmod(locked, 0o700)
+                self.assertIsNone(report.error)
+                self.assertEqual(report.deleted, [])
+                self.assertTrue((locked / "r.txt").is_file())
+                self.assertTrue(self.transcript.exists())
+                self.assertTrue(any(str(self.project / SID) in k and "illisible" in k for k in report.kept), report.kept)
+
+
+class Broken(io.StringIO):
+    """Une sortie dont le terminal est parti (après un SIGHUP) : chaque écriture lève EIO."""
+
+    def write(self, text):
+        raise OSError(errno.EIO, "Input/output error")
+
+    def flush(self):
+        raise OSError(errno.EIO, "Input/output error")
+
+
+@unittest.skipUnless(hasattr(signal, "SIGHUP"), "SIGHUP et os.kill vers soi : POSIX")
+class SignalTest(Essai):
+    """SIGTERM et SIGHUP : les sessions lancées s'arrêtent, et rien ne s'efface. tmux et claude sont des
+    faux (`tmux_cmd` remplacé) ; le signal est un vrai signal envoyé au processus des tests."""
+
+    def setUp(self):
+        super().setUp()
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+            # Le comportement par défaut, même si les tests tournent sous `nohup` (SIGHUP hérité ignoré).
+            signal.signal(sig, signal.SIG_DFL)
+        self.calls, self.killed = [], set()
+
+    def tree(self):
+        """Chaque chemin sous le faux ~/.claude, avec le contenu de chaque fichier."""
+        return {str(p.relative_to(self.home)): (p.read_bytes() if p.is_file() else None)
+                for p in sorted(self.home.rglob("*"))}
+
+    def fake_tmux(self, on=None):
+        """Un faux tmux : `on` lie une sous-commande (« new-session », « kill-session ») à une action ; une
+        session tuée se dit absente."""
+        on = on or {}
+
+        def fake(tmux, *args):
+            self.calls.append(args)
+            if args[0] == "kill-session":
+                self.killed.add(args[2])
+            if args[0] in on:
+                on[args[0]]()
+            if args[0] == "has-session" and args[2] in self.killed:
+                return subprocess.CompletedProcess(args, 1, "", f"can't find session: {args[2]}\n")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return mock.patch.object(md, "tmux_cmd", side_effect=fake)
+
+    def measure(self, runs, tours=1):
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.object(md.time, "sleep"):
+            code = md.measure("tmux", "claude", self.home, runs, tours, keep=False, settings="{}")
+        return code, out.getvalue()
+
+    def send(self, sig):
+        return lambda: os.kill(os.getpid(), sig)
+
+    def run_(self, sid=SID, folder=None):
+        return md.Run(folder or self.folder, sid, f"mesure-{sid}", [])
+
+    def test_un_sigterm_pendant_le_lancement_arrete_la_session_sans_rien_effacer(self):
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(sig=sig.name):
+                self.calls, self.killed = [], set()
+                before = self.tree()
+                with self.fake_tmux({"new-session": self.send(sig)}):
+                    code, out = self.measure([self.run_()])
+                self.assertEqual(code, 128 + sig)
+                self.assertIn(f"=mesure-{SID}", self.killed)
+                self.assertEqual(self.tree(), before)
+                self.assertIn(str(self.transcript), out)
+                self.assertIn("interrompu par un signal", out)
+                self.assertIn("history.jsonl", out, "les fichiers communs sont nommés aussi")
+
+    def test_un_second_signal_pendant_l_arret_n_empeche_pas_d_arreter_les_autres_sessions(self):
+        folder2 = self.folder.parent / "projet2"
+        folder2.mkdir()
+        runs = [self.run_(), self.run_(OTHER, folder2)]
+        launched = []
+
+        def new_session():
+            launched.append(1)
+            if len(launched) == 2:
+                os.kill(os.getpid(), signal.SIGHUP)
+
+        kills = []
+
+        def kill_session():
+            # Le premier arrêt est celui de la première mesure, finie ; le deuxième, le premier de l'arrêt
+            # de toutes les sessions après le SIGHUP : c'est là que tombe le second signal.
+            kills.append(1)
+            if len(kills) == 2:
+                os.kill(os.getpid(), signal.SIGTERM)
+        with self.fake_tmux({"new-session": new_session, "kill-session": kill_session}), \
+                mock.patch.object(md, "wait_turn", return_value=True):
+            code, _ = self.measure(runs)
+        self.assertEqual(code, 128 + signal.SIGHUP)
+        self.assertIn(f"=mesure-{SID}", self.killed)
+        self.assertIn(f"=mesure-{OTHER}", self.killed)
+
+    def test_une_sortie_partie_apres_un_sighup_n_empeche_pas_l_arret(self):
+        before = self.tree()
+        with self.fake_tmux({"new-session": self.send(signal.SIGHUP)}), \
+                mock.patch.object(sys, "stdout", Broken()), mock.patch.object(sys, "stderr", sys.stderr), \
+                mock.patch.object(md.time, "sleep"):
+            code = md.measure("tmux", "claude", self.home, [self.run_()], 1, keep=False, settings="{}")
+        self.assertEqual(code, 128 + signal.SIGHUP)
+        self.assertIn(f"=mesure-{SID}", self.killed)
+        self.assertEqual(self.tree(), before)
+
+    def test_un_sigterm_pendant_le_nettoyage_arrete_avant_la_suppression_suivante(self):
+        real = shutil.rmtree
+
+        def rmtree_then_signal(path, *args, **kwargs):
+            real(path, *args, **kwargs)
+            os.kill(os.getpid(), signal.SIGTERM)
+        with self.fake_tmux(), mock.patch.object(md.shutil, "rmtree", side_effect=rmtree_then_signal):
+            code, out = self.measure([self.run_()])
+        self.assertEqual(code, 128 + signal.SIGTERM)
+        self.assertFalse((self.project / SID).exists(), "la suppression commencée avant le signal se finit")
+        self.assertTrue(self.transcript.exists(), "la suivante ne commence pas")
+        self.assertTrue(self.other.exists())
+        self.assertIn(str(self.transcript), out)
+        self.assertIn("interrompu par un signal", out)
+
+    def test_un_signal_pendant_la_relecture_d_avant_effacement_n_efface_rien_de_plus(self):
+        real = md.recheck
+
+        def recheck_then_signal(*args, **kwargs):
+            os.kill(os.getpid(), signal.SIGTERM)
+            return real(*args, **kwargs)
+        with self.fake_tmux(), mock.patch.object(md, "recheck", side_effect=recheck_then_signal):
+            code, _ = self.measure([self.run_()])
+        self.assertEqual(code, 128 + signal.SIGTERM)
+        self.assertTrue((self.project / SID).is_dir())
+        self.assertTrue(self.transcript.exists())
+
+    def test_sous_nohup_un_sighup_ignore_au_depart_le_reste(self):
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        with self.fake_tmux({"new-session": self.send(signal.SIGHUP)}), \
+                mock.patch.object(md, "wait_turn", return_value=True):
+            code, _ = self.measure([self.run_()])
+        self.assertTrue(any(call[0] == "new-session" for call in self.calls), "le SIGHUP est bien parti")
+        self.assertEqual(code, 0)
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        self.assertFalse(self.transcript.exists(), "la mesure va au bout et nettoie")
+
+
+class WaitTest(Essai):
+    """L'attente d'un tour, sur une horloge simulée (`time.monotonic` avance à chaque `time.sleep`)."""
+
+    def clock(self):
+        now = [1000.0]
+        return (mock.patch.object(md.time, "monotonic", side_effect=lambda: now[0]),
+                mock.patch.object(md.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + s)), now)
+
+    def test_une_session_sortie_d_emblee_rend_faux_sans_attendre_le_delai(self):
+        self.transcript.unlink()  # claude a échoué au démarrage : aucun transcript
+        run = md.Run(self.folder, SID, f"mesure-{SID}", [])
+        gone = subprocess.CompletedProcess([], 1, "", f"can't find session: mesure-{SID}\n")
+        monotonic, sleep, now = self.clock()
+        with monotonic, sleep, mock.patch.object(md, "tmux_cmd", return_value=gone):
+            self.assertFalse(md.wait_turn("tmux", self.home, run, 1))
+        self.assertLess(now[0] - 1000.0, md.SETTLE, "moins d'un pas d'attente après la sortie constatée")
+        self.assertIn("sortie", run.note)
+
+    def test_une_session_qui_tourne_attend_encore_sa_reponse(self):
+        self.transcript.unlink()
+        run = md.Run(self.folder, SID, f"mesure-{SID}", [])
+        alive = subprocess.CompletedProcess([], 0, "", "")
+        monotonic, sleep, now = self.clock()
+        with monotonic, sleep, mock.patch.object(md, "tmux_cmd", return_value=alive):
+            self.assertFalse(md.wait_turn("tmux", self.home, run, 1))
+        self.assertGreaterEqual(now[0] - 1000.0, md.TURN_TIMEOUT)
+        self.assertIsNone(run.note)
+
+
+class RestesTest(Essai):
+    def test_le_rapport_nomme_history_et_claude_json_sans_les_ouvrir(self):
+        history = self.home / "history.jsonl"
+        history.write_text(json.dumps({"display": "message secret", "sessionId": SID}) + "\n", encoding="utf-8")
+        config = self.home.parent / ".claude.json"
+        config.write_text(json.dumps({"projects": {}, "jeton": "jeton-secret", "lastSessionId": SID}), encoding="utf-8")
+        before = [p.read_bytes() for p in (history, config)]
+        opened = []
+        real_open = io.open
+
+        def spy(file, *args, **kwargs):
+            opened.append(os.fspath(file) if isinstance(file, (str, os.PathLike)) else file)
+            return real_open(file, *args, **kwargs)
+        run = md.Run(self.folder, SID, f"mesure-{SID}", [])
+        with mock.patch("io.open", side_effect=spy), mock.patch("builtins.open", side_effect=spy):
+            report = list(md.clean_runs(self.home, [run], keep=False))[0][1]
+        text = "\n".join(report.lines())
+        self.assertIn(str(history), text)
+        self.assertIn(str(config), text)
+        self.assertEqual([p.read_bytes() for p in (history, config)], before)
+        self.assertFalse([f for f in opened if f in (str(history), str(config))], opened)
+        self.assertNotIn("secret", text)
+        self.assertFalse(self.transcript.exists(), "le nettoyage a bien tourné")
 
 
 class RunsTest(Essai):

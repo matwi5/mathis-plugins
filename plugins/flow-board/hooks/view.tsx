@@ -23,6 +23,8 @@ import {
   CHOICES_LISTED,
   openQuestions,
   pendingAutoMarks,
+  deliveredByCooAt,
+  deliveredByCooLine,
   STALE_PREFIX,
   waitTargetLabel,
   asanaUrl,
@@ -3149,6 +3151,7 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
     const phase = currentPhase(r)
     const ratio = runProgress(r)
     const isMine = r.id === board.activeId
+    const deliveredAt = deliveredByCooAt(r)
     const status = isArchived
       ? T(k, `▣${NB}archivée`, { color: C.gray, bold: true })
       : r.status === 'active' && !isMine
@@ -3174,6 +3177,8 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
           <Box marginRight={1}>{bar}</Box>
           {T(k, pct(ratio), { dim: true })}
         </Box>
+        {/* Livrée par le COO : sa rétro ou son archivage se choisissent chez le COO, sans bouton ici. */}
+        {deliveredAt !== null ? T(k, deliveredByCooLine(deliveredAt, r), { color: C.green }) : null}
         {isArchived ? (
           view.ui.confirmDrop === r.id ? (
             <Box flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>

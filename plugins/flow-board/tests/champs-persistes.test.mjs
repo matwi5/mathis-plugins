@@ -160,6 +160,7 @@ const NOT_FUSIONS = {
   keepRun: 'la chaîne des fusions de champs de la mission, lue à part (ses appels sont les fusions)',
   Map: 'constructeur de la table des missions par id, pas une fusion de champ',
   isGone: 'test local d’une mission effacée par une trace, rangé avec soundTombstones',
+  isShipped: 'prédicat sur la mission (livraison marquée, push compris) qui décide, avec updatedAt, si une copie close comme livrée ailleurs l’emporte sur la mission active d’ici, comme isTakenOver ; pas une fusion de champ (testé par coordination.test.ts)',
   prune: 'plafonne les listes du board fusionné après coup, sans choisir entre deux copies',
 }
 
@@ -174,7 +175,7 @@ const BOARD_FIELDS = {
   runs: 'keepRun',
   deleted: 'soundTombstones',
   coo: 'mergeSeat',
-  activeId: 'sans fusion de valeur : la mission active d’ici, retirée seulement quand une autre discussion l’a reprise ou qu’elle a disparu (testé par mode-auto, « prise en main comprise »)',
+  activeId: 'sans fusion de valeur : la mission active d’ici, retirée seulement quand une autre discussion l’a reprise, que le COO l’a close comme livrée depuis, ou qu’elle a disparu (testé par mode-auto, « prise en main comprise »)',
 }
 
 /** Les champs que `mergeBoards` écrit dans le board fusionné. */

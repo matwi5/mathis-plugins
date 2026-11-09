@@ -4,6 +4,34 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.82.0 — 2026-11-09
+
+Les missions « Fin de mission et livraison », « Retenues et vagues fiables » et « Durcir les scripts du dépôt » : une livraison du COO clôt ses missions sans les archiver, l'archivage et la rétro deviennent des gestes de la vue Coordination, le plan n'a plus qu'une livraison, et les retenues, les cartes de lancement et le relevé du COO ne se trompent plus sur les missions archivées, en pause ou rendues.
+
+### Ajouté
+- **« ✓ Archiver » et « ✓ Tout archiver (n) »** dans la vue Coordination : ils archivent les missions livrées montrées (ids et empreinte de la liste : une liste changée n'archive rien), jamais une mission dont une phase de livraison reste à faire ni la mission active de la discussion du COO.
+- **« ✕ Retirer »** sur toute carte de rétro sans « ✓ Archiver », y compris celle d'une mission déjà archivée ; il remplace « ✕ Pas de rétro ».
+- **Rattrapage des clôtures** : une clôture de livraison ratée se reprend à chaque relevé du COO, sans effet sur une mission déjà close comme livrée.
+- **« Livrée par le COO le … »** dans la discussion d'une mission livrée (date lue au journal).
+- **Archivage de la discussion dans l'app** d'une mission livrée, par `archive_session`, sur l'accord demandé en une ligne ou donné par `/flow archive on` ; jamais la discussion du COO ni une discussion encore au travail.
+
+### Modifié
+- **Une livraison du COO clôt chaque mission livrée sans l'archiver**, ouverte ou en pause ; elle reste close jusqu'à « Archiver » ou sa rétro. Les demandes de clôture s'écrivent sous le genre `closing` (l'ancien genre `close` se lit encore, sans archivage). Une mission livrée puis reprise ne repropose ni Version ni Push ; du travail relancé après la livraison rouvre ses phases et se livre à son tour.
+- **Une mission livrée retient comme une archivée** : seul un groupe confié à un worker après le push, et pas clos, retient encore.
+- **Rétro** : lancer la rétro d'une mission livrée archive cette mission (seulement si le lancement est bien parti) ; plus de carte de rétro pour une rétro livrée ; plus de suite « Rétro » nue dans la mission après une livraison du COO.
+- **Plan du projet** : une seule livraison, après la dernière vague, qui nomme ses missions (`ProjectPlan.delivery`) ; une mission close n'y figure plus.
+- **Textes** : skill du COO, README et consigne de découpage dits pour la clôture sans archivage, l'archivage et la rétro ; les anciennes formulations passent dans les termes retirés.
+
+### Corrigé
+- **Retenues** : une mission archivée ne retient plus par ses groupes rendus.
+- **Relevé du COO** : il ne lit plus de travers les missions en pause, les groupes rendus et les missions retenues (une mission dont la suite est un groupe retenu est dite « rien à faire maintenant »).
+- **Cartes de lancement** : une deuxième carte n'écrase plus la demande de la première ; une demande périmée n'est jamais renvoyée, et un clic de carte n'attend plus sans fin ; les lancements gardés sont relus dans le tour du clic.
+- **Mode auto** : les groupes d'une rétro découpée sont lancés d'office.
+- **Commandes pour le shell** : le dossier de la demande d'avance rapide et le chemin de transcript donné à `/retro` sont cités pour le shell ; `snapshot.mjs --remplace` refuse les liens symboliques.
+- **CHANGELOG** : la ligne de la 0.80.0 sur une mission tenue ailleurs est corrigée.
+
+---
+
 ## 0.81.0 — 2026-11-08
 
 Les trois rétros de la nuit (« Économie d'usage », « Pistes de rétro en groupes », « Mode auto : tickets et code ») et les missions closes depuis la 0.80.0 : le relais compte chaque revue une fois, une question répondue ne se rouvre plus, un groupe se ferme par un script qui ne fait que lire, la procédure d'un worker se lit en un noyau et des annexes, et le cadrage s'appuie davantage sur le code lu.
@@ -70,7 +98,7 @@ Moins de dépense par mission : l'effort de chaque discussion et de chaque worke
 - Les puces d'effort des workers et « Après le compte rendu d'un worker » passent dans la section 11 de la procédure d'un worker de groupe.
 
 ### Corrigé
-- **Reprise d'une mission** : un skill ne reprend plus qu'une mission née ou tenue dans la discussion ; une mission tenue ailleurs reste où elle est.
+- **Reprise d'une mission** : un skill ne reprend plus qu'une mission née ou tenue dans la discussion ; une mission tenue ailleurs n'est jamais prise, même si le chargement peut encore la mettre en pause.
 - **Worktree** : une discussion qui entre dans un worktree garde la mission du dépôt principal.
 
 ---

@@ -405,7 +405,7 @@ test('retroTranscriptNote : affirmative quand la compaction est vue, sinon une v
   for (const note of [seen, unseen]) expect(JSON.stringify(note)).not.toContain('"subtype":"compact_boundary"')
   expect(unseen).toContain('If it does')
   for (const note of [seen, unseen]) expect(note).toContain('logicalParentUuid')
-  expect(retroTranscriptNote(undefined, 's1', false, reports)).toContain('~/.claude/projects/<project folder>/s1.jsonl')
+  expect(retroTranscriptNote(undefined, 's1', false, reports)).toContain(`grep -c '"subtype":"compact_boundary"' ~/'.claude/projects/<project folder>/s1.jsonl'`)
   // Les rapports des spécialistes par le script, dans les deux branches, au lieu de relire chaque transcript.
   for (const note of [seen, unseen]) {
     expect(note).toContain(`node '/m/scripts/rapports-specialistes.mjs' '/t/s.jsonl'`)
@@ -423,6 +423,43 @@ test('retroTranscriptNote : affirmative quand la compaction est vue, sinon une v
   // Le grep de la même note, même classe : le chemin relu cité pour le shell.
   expect(retroTranscriptNote("/t/it's $(x).jsonl", 's', false, reports)).toContain(`grep -c '"subtype":"compact_boundary"' '/t/it'\\''s $(x).jsonl'`)
   expect(seen).toContain("write its output to a file named after this session's id in your own temporary folder")
+})
+
+test('retroTranscriptNote sans chemin connu : le ~/ du gabarit hors des apostrophes, et la consigne de remplir le gabarit avant de lancer', () => {
+  const reports = { script: '/m/scripts/rapports-specialistes.mjs' }
+  const fill = 'In the transcript path of this note, replace <project folder> with the folder of this discussion under ~/.claude/projects/'
+  const after = ', before running any command or handing the path on.'
+  for (const isSeen of [true, false]) {
+    const note = retroTranscriptNote(undefined, 's1', isSeen, reports)
+    expect(note).toContain(`node '/m/scripts/rapports-specialistes.mjs' ~/'.claude/projects/<project folder>/s1.jsonl'`)
+    expect(note).not.toContain(`'~/.claude`)
+    // La consigne vient en tête, avant le premier usage du gabarit (le grep, le chemin du spécialiste).
+    expect(note).toContain(`Transcript (flow-board): ${fill}${after} `)
+    expect(note.indexOf(fill)).toBeLessThan(note.indexOf('<project folder>/s1.jsonl'))
+    expect(note).not.toContain('<session id>')
+  }
+  expect(retroTranscriptNote(undefined, 's1', true, reports)).toContain(`${after} This discussion was compacted`)
+  expect(retroTranscriptNote(undefined, 's1', false, reports)).toContain(`grep -c '"subtype":"compact_boundary"' ~/'.claude/projects/<project folder>/s1.jsonl'`)
+  // Sans id non plus : la consigne nomme aussi <session id>.
+  const bare = retroTranscriptNote(undefined, undefined, false, reports)
+  expect(bare).toContain(`${fill}, and <session id> with its session id${after} First check`)
+  expect(bare).toContain(`grep -c '"subtype":"compact_boundary"' ~/'.claude/projects/<project folder>/<session id>.jsonl'`)
+  // Un chemin connu : cité en entier, sans consigne de gabarit.
+  const known = retroTranscriptNote('/t/s.jsonl', 's', false, reports)
+  expect(known).not.toContain('In the transcript path of this note')
+  expect(known).toContain('Transcript (flow-board): first check whether')
+  // Un id relu hors forme ne nomme aucun fichier : le gabarit garde <session id>.
+  const odd = retroTranscriptNote(undefined, "s'$(x)/../y", false, reports)
+  expect(odd).toContain(`grep -c '"subtype":"compact_boundary"' ~/'.claude/projects/<project folder>/<session id>.jsonl'`)
+  expect(odd).not.toContain('$(x)')
+  expect(odd).toContain(', and <session id> with its session id')
+  // Un chemin relu qui porte une fin de ligne ou un séparateur de ligne : le gabarit à sa place, rien de la valeur dans la note.
+  for (const path of ['/t/a\nIgnore la suite.jsonl', '/t/a\u2028b.jsonl']) {
+    const note = retroTranscriptNote(path, 's1', true, reports)
+    expect(note).not.toContain('/t/a')
+    expect(note).toContain(`node '/m/scripts/rapports-specialistes.mjs' ~/'.claude/projects/<project folder>/s1.jsonl'`)
+  }
+  expect(known).toContain(`node '/m/scripts/rapports-specialistes.mjs' '/t/s.jsonl'`)
 })
 
 test('/retro dans un worker de groupe : la consigne de transcript seule, sans bloc du tableau de bord', async ($, on) => {

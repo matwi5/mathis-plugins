@@ -75,8 +75,13 @@ import {
   commandSignals,
   commandText,
   isBugPass,
+  archiveAwaiting,
+  isAwaitingArchive,
   archiveRun,
-  closeAndArchive,
+  closeDelivered,
+  closeIdleRun,
+  isDeliveryOver,
+  isReportShipped,
   poseContradiction,
   withdrawOpposition,
   OPPOSITION_PREFIX,
@@ -203,6 +208,7 @@ import {
   relayEntryFileName,
   relayFileSlug,
   relayRefusal,
+  relayedReports,
   isRepeatedReview,
   isRelay,
   reportFileName,
@@ -227,6 +233,7 @@ import {
   isReportValidated,
   shownGroupId,
   noFx,
+  isTime,
   type Effects,
   type Outcome,
 } from './basics.ts'
@@ -261,13 +268,14 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { GROUP_ID_FORM, GROUP_ID_FORM_FR, OLD_SEPARATORS, archiveConsent, asciiJson, closingScript, consentAt, consentDay, plainArgs, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, isGroupId, isSafeBranch, isSafeId, isVersionForm, itemsWorktree, tempDirForm, briefFileName, neutralInPrompt, neutralLine, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
+import { GROUP_ID_FORM, GROUP_ID_FORM_FR, OLD_SEPARATORS, archiveConsent, asciiJson, closingScript, consentAt, consentDay, plainArgs, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, isGroupId, isSafeBranch, isSafeId, isVersionForm, itemsWorktree, missionSessionId, missionSessionsArchiveText, tempDirForm, briefFileName, neutralInPrompt, neutralLine, linkedPrefix, linkedTitles, shellQuote, type ReopenText } from './closing.ts'
 import {
   COMPACT_FIRST_TOAST,
   COO_COMPACT_TOKENS,
   ORIGIN_FILE_RULE,
   WORKER_COMPACT_TOKENS,
   answerAwaitsPerson,
+  breaksLine,
   compactionInstructions,
   compactionMoment,
   compactionRoleOf,
@@ -283,7 +291,7 @@ import { applyTraces } from './erase.ts'
 import { hasRetro, holdsPick, pickedOf, picksPrint, retroCard, retroOf, retroTranscripts } from './retro-coo.ts'
 import { NEW_MAX, contradictionQuestion, contradictionQuestionId, markSeen, newDecisionsOf, parseSeen, seriesOf, type DecisionsSeen, type NewDecision } from './oppositions.ts'
 import { DELIVERY_COMMAND, DELIVERY_FR, DELIVERY_KEYS, abandonDelivery, deliveryWaits, failedStep, isDelivered, isDeliveryOpen, newDelivery, nextStep, parseDelivery, reportStep, retryStep, runningStep, startStep, type Delivery, type DeliveryKey } from './delivery.ts'
-import { REPORT_CHANGED, REPORT_PAUSED, cooStatement, isModQuestion, isOpenMission, isSha, outsideCommitCounts, parseLoggedCommits, statementText, watchedGroups, watchedKey, type LoggedCommit, type OutsideCommits, type CooGlean, type CooDecisions, type CooRetroPicks, type CooDelivery, type CooReport, type CooRoadmap, type CooSetAside, type CooStatement } from './coo.ts'
+import { REPORT_CHANGED, REPORT_PAUSED, cooStatement, isModQuestion, isRetroCardRemovable, isOpenMission, isSha, outsideCommitCounts, parseLoggedCommits, statementText, watchedGroups, watchedKey, type LoggedCommit, type OutsideCommits, type CooGlean, type CooDecisions, type CooRetroPicks, type CooDelivery, type CooReport, type CooRoadmap, type CooSetAside, type CooStatement } from './coo.ts'
 import type { CooDo } from './coo-view.tsx'
 import { RETRO_START, soundRunLaunch, askMattCandidates, LAUNCH_CLAIM_SETTLE_MS, LAUNCH_KEY_PREFIX, LAUNCH_STALE, LAUNCH_STARTS, cardStateOf, consumeRefusal, liveLaunchOf, otherCarrierOf, runOfCard, sameFolder, isLaunchId, isRecordStale, launchKey, newLaunchId, parseCard, runOfLaunch, soundCard, soundRecord, type LaunchCard, type LaunchMode, type LaunchRecord, type LaunchStart } from './launch.ts'
 import { attachLaunch, autoMarksOf, isDelegable, liveWaits, loseLaunch, openQuestions, planHolds, PLAN_UNREAD_TEXT, projectUnits, questionPrint, unitsNamedInArgs, unitsOverlap, type ProjectUnit } from './model.ts'
@@ -296,7 +304,7 @@ import { parseSecuritySetting, securitySettingRecord, type SecurityReview, type 
 import { AUTO_GROUP_EFFORT, COO_EFFORT, GROUP_EFFORT, SONNET_LAUNCH_FR, effortSent, groupLaunchNote, leadEffort, quotaText, workerTicketEffort, type ImposedEffort, type LeadEffort, type QuotaWindow } from './effort.ts'
 import { sameLabel, soundEntry, takenFor, takenLabels, unreadTakenFor, type CoordTaken } from './coordination.ts'
 import { BOX_MAX, SET_ASIDE_SOURCE_MAX, SET_ASIDE_TEXT_MAX, SET_ASIDE_UNWRITTEN, copiedIn, copiesOf, keepsItems, roadmapText, newSetAsideId, parseBox, soundSetAside, withoutCopied, type BoxRead, type SetAside } from './a-reprendre.ts'
-import { COORD_MAX, COORD_UNREAD, WAKE_TEXT, copiedDecls, gleanedRuns, isReleasedMark, isEntryGone, keepsEntries, liveEntries, forcesFor, markClosesDone, newEntryId, parseCoordination, pendingFor, refOf, soundApplied, withoutGone, type CoordEntry, type CoordRead } from './coordination.ts'
+import { CLOSE_KIND, COORD_MAX, COORD_UNREAD, WAKE_TEXT, copiedDecls, gleanedRuns, isReleasedMark, isEntryGone, keepsEntries, liveEntries, forcesFor, markClosesDone, newEntryId, parseCoordination, pendingFor, refOf, soundApplied, withoutGone, type CoordClose, type CoordEntry, type CoordRead } from './coordination.ts'
 import { SEAT_REFRESH_MS, SEAT_UNREAD, isSeatBehind, mergeSeat, refreshSeat, releaseSeat, seatState, soundSeat, takeSeat } from './seat.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
 import { minOf, shortArg, toolFamily } from './timeline.ts'
@@ -622,7 +630,7 @@ export const TOOL_SCHEMA = {
     coordinate: {
       type: 'object',
       description:
-        'COO only, alone in its call: its instructions to the missions, written to the coordination file, each key as the COO statement asks. "close": close and archive a delivered mission (at once when paused or closed; an open one\'s manager gets the request and is woken, the answer says how)',
+        'COO only, alone in its call: its instructions to the missions, written to the coordination file, each key as the COO statement asks. "close": close a mission, never archived nor marked delivered (at once when paused; an open one\'s manager gets the request and is woken, the answer says how)',
       properties: {
         close: {
           type: 'array',
@@ -2426,7 +2434,7 @@ const readRoadmapFile = async ($: any, board: Board, isMine: boolean): Promise<C
  * de route vit dans le projet.
  */
 export const roadmapAsk = (d: CooDo, r: CooRoadmap | null): string | null => {
-  if (d.kind === 'security' || d.kind === 'where' || d.kind === 'coord-fresh' || d.kind === 'force' || d.kind === 'launch' || d.kind === 'card-start' || d.kind === 'plan-validate' || d.kind === 'wave' || d.kind === 'gesture' || d.kind === 'answer-fill' || d.kind === 'report-read' || d.kind === 'report-validate' || d.kind === 'report-redo' || d.kind === 'deliver' || d.kind === 'deliver-step' || d.kind === 'deliver-drop' || d.kind === 'retro-tick' || d.kind === 'retro-tick-all' || d.kind === 'retro-pick' || d.kind === 'retro-dismiss' || !r || r.read === 'unread') return null
+  if (d.kind === 'security' || d.kind === 'where' || d.kind === 'coord-fresh' || d.kind === 'force' || d.kind === 'launch' || d.kind === 'card-start' || d.kind === 'plan-validate' || d.kind === 'wave' || d.kind === 'gesture' || d.kind === 'answer-fill' || d.kind === 'report-read' || d.kind === 'report-validate' || d.kind === 'report-redo' || d.kind === 'deliver' || d.kind === 'deliver-step' || d.kind === 'deliver-drop' || d.kind === 'retro-tick' || d.kind === 'retro-tick-all' || d.kind === 'retro-pick' || d.kind === 'archive' || d.kind === 'card-remove' || !r || r.read === 'unread') return null
   const commit = r.where === 'repo' ? ', puis commite-la par son chemin' : ' (elle vit sur ce poste : pas de commit)'
   const guard = ' Si ta dernière ligne « COO seat » dit que tu ne tiens plus le siège, n’écris rien.'
   if (d.kind === 'repair') return `◆ COO : la feuille de route est hors format. Répare-la d'après le format de tes consignes et les dernières versions connues que donne ton relevé, en gardant chaque entrée (aucune ne se retire)${commit} ; dis-moi ce que tu as changé.${guard}`
@@ -2536,8 +2544,13 @@ const cooDo = async ($: any, d: CooDo) => {
     $.ui.invalidate('ui.render')
     return
   }
-  if (d.kind === 'retro-dismiss') {
-    $.ui.toast(await dismissRetro($, d.card))
+  if (d.kind === 'card-remove') {
+    $.ui.toast(await removeRetroCard($, d.card))
+    $.ui.invalidate('ui.render')
+    return
+  }
+  if (d.kind === 'archive') {
+    $.ui.toast(await archiveDelivered($, d.ids, d.print))
     $.ui.invalidate('ui.render')
     return
   }
@@ -2585,15 +2598,15 @@ const cooDo = async ($: any, d: CooDo) => {
   submitCooAsk($, text)
 }
 
-/** Envoie une demande au Claude du COO (l'appelant a vérifié que Claude est au repos) et dit quand elle n'entre pas. */
-const submitCooAsk = ($: any, text: string) => {
+/** Envoie une demande au Claude du COO (l'appelant a vérifié que Claude est au repos) et dit quand elle n'entre pas (`missed`, « reclique » par défaut). */
+const submitCooAsk = ($: any, text: string, missed = '◆ La demande n’est pas partie : reclique.') => {
   void (async () => {
     let isIn = false
     await quietly(async () => {
       const r = await $.prompt.submit({ text })
       isIn = r !== null && typeof r === 'object' && typeof r.text === 'string' && r.drop === undefined
     })
-    if (!isIn) $.ui.toast('◆ La demande n’est pas partie : reclique.')
+    if (!isIn) $.ui.toast(missed)
   })()
 }
 
@@ -2792,7 +2805,7 @@ const watchCoordination = async ($: any, board: Board, isTick = false) => {
   coordPlanBad = entries.some(e => isPlanEntry(e) && soundEntry(e) === null)
   // Les rapports à valider, relus avec le fichier : la vue montre la version que ce clic validera.
   await quietly(() => watchReports($, board))
-  // Les décisions nouvelles des missions, que le Claude du COO compare ; une opposition dont la mission est archivée passe à l'autre.
+  // Les décisions nouvelles des missions, que le Claude du COO compare ; une opposition dont la mission est close ou archivée passe à l'autre.
   await quietly(() => watchDecisions($, board))
   await quietly(() => carryContradictions($, board))
   // La livraison : ce que la carte dira avant le clic, puis l'étape suivante d'une livraison armée ici.
@@ -2810,45 +2823,108 @@ const watchCoordination = async ($: any, board: Board, isTick = false) => {
   await quietly(async () => {
     boxesNow = await watchBoxes($, board, coordLive)
   })
+  // Les clôtures ratées de la dernière livraison poussée : reprises à chaque relevé, jusqu'à ce qu'elles tiennent.
+  await quietly(() => withDeliveryLock(() => catchUpCloses($, board)))
   if (entries.length === 0) return
   const present = new Set(board.runs.map(r => r.id))
-  // Une demande de clôture dont la mission est passée en pause ou close entre-temps : le COO l'archive lui-même.
-  // D'après le fichier des missions relu (pas la copie d'ici : un archivage dont l'écriture a raté s'y réécrit).
+  // Une demande de clôture dont la mission est passée en pause ou close entre-temps : le COO la clôt lui-même,
+  // sans l'archiver ni la marquer livrée sans livraison. D'après le fichier des missions relu
+  // (pas la copie d'ici : une clôture dont l'écriture a raté s'y réécrit).
   const { board: stored, isUnread } = await readStored($, board.root)
   if (isUnread) return
   for (const e of liveEntries(entries, id => erased.has(id))) {
     if (e.kind !== 'close') continue
     const run = (stored ?? board).runs.find(r => r.id === e.run)
-    if (e.doneAt !== undefined || !run || run.archivedAt !== undefined || run.status === 'active') continue
-    const out = await archiveIdle($, e.run)
+    if (e.doneAt !== undefined || !run || run.archivedAt !== undefined || run.status === 'active' || isCloseApplied(run, e)) continue
+    const out = await closeIdle($, e.run, e.delivered, e.report)
     if (out === 'unwritten' || out === 'not-seat') return
   }
-  // Les demandes faites sont notées : seulement d'après le fichier des missions relu à l'instant (un archivage
-  // resté dans la mémoire d'ici, son écriture ratée, ne lève jamais la demande) ; elles ne s'appliquent plus,
+  // Les demandes faites sont notées : seulement d'après le fichier des missions relu à l'instant (une clôture
+  // restée dans la mémoire d'ici, son écriture ratée, ne lève jamais la demande) ; elles ne s'appliquent plus,
   // même à une mission reprise ensuite.
-  const local = new Set(((await read($, boardAtom)) as Board | null)?.runs.filter(r => r.archivedAt !== undefined).map(r => r.id) ?? [])
+  const local = ((await read($, boardAtom)) as Board | null)?.runs ?? []
   const now = await $.clock.now()
-  const isDue = entries.some(e => isEntryGone(e, id => erased.has(id) && !present.has(id))) || markClosesDone(entries, id => local.has(id), now) !== null
-  if (isDue) await writeCoordination($, (base, stored) => markClosesDone(base, id => stored?.runs.some(r => r.id === id && r.archivedAt !== undefined) === true, now))
+  const isDue = entries.some(e => isEntryGone(e, id => erased.has(id) && !present.has(id))) || markClosesDone(entries, e => isCloseOver(local, e), now) !== null
+  if (isDue) await writeCoordination($, (base, stored) => markClosesDone(base, e => isCloseOver(stored?.runs ?? [], e), now))
 }
 
 /**
- * Archive, par le mod du COO, une mission en pause ou close : sur le fichier des missions relu à l'instant
- * et fusionné (jamais sur la seule copie d'ici, qui pourrait la croire encore ouverte), le siège relu
- * juste avant. Rend ce qui s'est passé ; `archived` seulement une fois le fichier écrit.
+ * Le rattrapage des clôtures d'une livraison, à chaque relevé du COO : les missions de la dernière livraison
+ * poussée (son état gardé, qui survit à `/reload-plugins`), sur leur rapport livré, dont la livraison a encore
+ * quelque chose à clore et qui ne sont pas archivées, se closent comme livrées (invariant des missions livrées,
+ * qui tient ainsi après une écriture ratée, un fichier illisible ou une discussion morte avant d'appliquer son
+ * entrée) : active nulle part, par le mod du COO sur le fichier relu à l'instant ; active ailleurs, par une
+ * entrée `close`, réécrite seulement quand aucune n'attend encore (une seule). Une clôture ratée en fin de
+ * livraison laisse aussi son entrée, que le relevé reprend même une fois une autre livraison partie. Une mission livrée puis reprise,
+ * ou dont le travail a été relancé depuis (en cours ou fini : `isReportShipped`), n'est jamais reprise ; une
+ * mission reprise avant que sa clôture ait tenu l'est (invariant : « qu'elle soit ouverte, en pause ou reprise »). Rien ne
+ * s'écrit pour une mission dont la livraison n'a plus rien à clore : deux relevés de suite n'écrivent rien au second.
  */
-const archiveIdle = async ($: any, id: string): Promise<'archived' | 'already' | 'active' | 'absent' | 'unwritten' | 'not-seat'> => {
+const catchUpCloses = async ($: any, board: Board) => {
+  const last = await readDelivery($, board.root ?? '')
+  if (!last || last === 'unread' || !isPushed(last)) return
+  const { board: stored, isUnread } = await readStored($, board.root)
+  if (isUnread) return
+  const runs = (stored ?? board).runs
+  const result = deliveredResultOf(last)
+  for (const m of last.missions) {
+    const run = runs.find(r => r.id === m.id)
+    if (!run || run.archivedAt !== undefined || isDeliveryOver(run) || !isReportShipped(run, m.validatedAt)) continue
+    if (run.status !== 'active') {
+      const out = await closeIdle($, run.id, result, m.validatedAt)
+      if (out === 'unwritten' || out === 'not-seat') return
+      continue
+    }
+    if (isDeliveryWaiting(coordLive, run)) continue
+    const now = await $.clock.now()
+    const written = await writeCoordination($, entries => (isDeliveryWaiting(entries, run) ? null : [...entries, { id: newEntryId(now, Math.random()), kind: CLOSE_KIND, run: run.id, at: now, delivered: result, report: m.validatedAt }]))
+    if (written === 'ok') await wakeManager($, run.id)
+  }
+}
+
+/**
+ * Une demande de clôture d'une livraison attend encore pour la mission : pas faite, et sur ce qui est parti (une
+ * demande d'un rapport dont le travail a été relancé depuis ne compte pas : elle ne s'appliquera plus). Une seule
+ * par mission : ni le rattrapage ni la fin d'une livraison n'en écrivent une deuxième.
+ */
+const isDeliveryWaiting = (entries: readonly unknown[], run: Run): boolean =>
+  liveEntries(entries, () => false).some(e => e.kind === 'close' && e.run === run.id && e.doneAt === undefined && e.delivered !== undefined && isReportShipped(run, e.report))
+
+/**
+ * Une demande de clôture appliquée à la mission : avec le résultat d'une livraison, sa
+ * livraison n'a plus rien à clore (`isDeliveryOver` : close comme livrée, ou livrée puis reprise), ou la mission ne
+ * porte plus le rapport que la livraison a emporté (un travail relancé depuis : la demande ne s'applique plus) ;
+ * sans lui, elle est close.
+ */
+const isCloseApplied = (run: Run, e: Pick<CoordClose, 'delivered' | 'report'>): boolean => (e.delivered ? isDeliveryOver(run) || !isReportShipped(run, e.report) : run.status === 'done')
+
+/** Une demande de clôture qui ne s'applique plus : sa mission, relue dans `runs`, est archivée ou close comme elle le demande. */
+const isCloseOver = (runs: readonly Run[], e: CoordClose): boolean => {
+  const run = runs.find(r => r.id === e.run)
+  return run !== undefined && (run.archivedAt !== undefined || isCloseApplied(run, e))
+}
+
+/**
+ * Clôt, par le mod du COO, une mission qui n'est active nulle part (en pause, ou close sans sa livraison
+ * marquée) : comme livrée avec le résultat d'une livraison (`closeDelivered`), sinon close seule (`closeIdleRun`,
+ * sans marque de livraison) ; jamais archivée (invariant des missions livrées). Sur le fichier des missions relu à l'instant et fusionné
+ * (jamais sur la seule copie d'ici, qui pourrait la croire encore en pause), le siège relu juste avant ; une
+ * mission redevenue active sur ce fichier n'est pas touchée (pas d'écritures croisées) : elle passe par l'entrée
+ * `close`. Rend ce qui s'est passé ; `closed` seulement une fois le fichier écrit.
+ */
+const closeIdle = async ($: any, id: string, delivered?: DeliveredResult, report?: number): Promise<'closed' | 'already' | 'stale' | 'active' | 'absent' | 'unwritten' | 'not-seat'> => {
   if (!(await pull($))) return 'unwritten'
   if (!(await seatForWrite($)).ok) return 'not-seat'
   const now = await $.clock.now()
-  let seen = 'absent' as 'archived' | 'already' | 'active' | 'absent'
+  let seen = 'absent' as 'closed' | 'already' | 'stale' | 'active' | 'absent'
   await commit($, b => {
     const r = b.runs.find(x => x.id === id)
-    seen = !r ? 'absent' : r.archivedAt !== undefined ? 'already' : r.status === 'active' ? 'active' : 'archived'
-    return seen === 'archived' ? archiveRun(b, id, now) : null
+    // `stale` : du travail relancé depuis la livraison, que sa clôture ne marque pas livré.
+    seen = !r ? 'absent' : delivered && !isReportShipped(r, report) ? 'stale' : r.archivedAt !== undefined || isCloseApplied(r, { delivered, report }) ? 'already' : r.status === 'active' ? 'active' : 'closed'
+    return seen !== 'closed' ? null : delivered ? closeDelivered(b, id, now, delivered) : closeIdleRun(b, id, now)
   })
-  if (seen === 'active' || seen === 'absent') return seen
-  // Déjà archivée ici (une écriture d'avant a raté) : la sauvegarde la porte au fichier.
+  if (seen === 'active' || seen === 'absent' || seen === 'stale') return seen
+  // Déjà close ici (une écriture d'avant a raté) : la sauvegarde la porte au fichier.
   return (await saveNow($)) ? seen : 'unwritten'
 }
 
@@ -2945,12 +3021,20 @@ const applyCoordination = async ($: any, board: Board) => {
   for (const entry of pendingFor(entries, run.id, applied)) {
     if (entry.kind === 'close') {
       const now = await $.clock.now()
-      await commit($, b => (b.activeId === entry.run ? closeAndArchive(b, entry.run, now, entry.delivered) : null))
+      // Avec le résultat d'une livraison : close comme livrée ; sans lui (le geste « clore » du COO) : close seule,
+      // par `finishActive`. Jamais archivée (invariant des missions livrées).
+      const delivered = entry.delivered
+      await commit($, b => {
+        const target = b.runs.find(r => r.id === entry.run)
+        if (b.activeId !== entry.run || !target || isCloseApplied(target, entry)) return null
+        return delivered ? closeDelivered(b, entry.run, now, delivered) : finishActive(b, now)
+      })
       const after: Board | null = await read($, boardAtom)
       const target = after?.runs.find(r => r.id === entry.run)
-      // Notée appliquée une fois faite ici (ou déjà faite) : l'écriture du fichier des missions suit, et se refait
-      // à chaque sauvegarde tant qu'elle rate ; la mission n'étant plus active ici, l'entrée ne se rejoue pas.
-      if (!target || target.archivedAt !== undefined) {
+      // Notée appliquée une fois faite ici (ou déjà faite, ou la mission archivée entre-temps) : l'écriture du
+      // fichier des missions suit, et se refait à chaque sauvegarde tant qu'elle rate ; la mission n'étant plus
+      // active ici, l'entrée ne se rejoue pas.
+      if (!target || target.archivedAt !== undefined || isCloseApplied(target, entry)) {
         await noteApplied($, run.id, entry.id)
         await saveNow($)
       }
@@ -3136,6 +3220,8 @@ const waitingKind = (answer: unknown, ask: string | null, board: Board | null, s
   const holds = holdMapOf(holdsHere(board))
   const rec = nextLaunchFor(run, holds)
   if (rec !== null && (rec.kind === 'group' || rec.kind === 'parallel')) return 'step'
+  // Sa suite est un groupe retenu, ou son lot sans groupes retenu : rien à faire avant qu'il parte, pas d'« étape suivante ».
+  if (rec?.kind === 'held' || (rec === null && (run.groups ?? []).length === 0 && holds.has(LOT_KEY))) return null
   return nextCommandSkill(run, { hasPullRequests: sync.isGitHub !== false, isVersionSet: sync.isVersionSet, security }, holds) !== null || currentPhase(run).status === 'done' ? 'step' : null
 }
 
@@ -3700,7 +3786,7 @@ const wakeAddress = async ($: any, runId: string): Promise<{ owner: string | nul
  */
 const wakeManager = async ($: any, runId: string): Promise<string> => {
   const to = await wakeAddress($, runId)
-  if (to.owner === null) return 'No wake-up sent: the mission is not open in any discussion. Once it is paused or closed, the dashboard of this discussion archives it by itself.'
+  if (to.owner === null) return 'No wake-up sent: the mission is not open in any discussion. Once it is paused, the dashboard of this discussion closes it by itself, without archiving it.'
   let reason = 'not tried'
   try {
     const sent = await $.session.send({ to: { sessionId: to.owner }, text: WAKE_TEXT })
@@ -3716,8 +3802,8 @@ const neutralQuoted = (text: string): string => `« ${neutralInPrompt(clip(text,
 
 /**
  * Le champ `coordinate` de l'outil `flow`, dans la discussion du COO seulement : les consignes qu'il
- * écrit. `close` : demander la clôture et l'archivage d'une mission livrée ; une mission en pause ou close
- * est archivée tout de suite par le mod du COO, une mission ouverte reçoit une entrée et un réveil.
+ * écrit. `close` : demander la clôture d'une mission, sans archivage ni marque de livraison ; une mission en
+ * pause est close tout de suite par le mod du COO, une mission ouverte reçoit une entrée et un réveil.
  */
 const coordinateCall = async ($: any, input: unknown): Promise<string> => {
   const board = await ensureBoard($)
@@ -3909,7 +3995,7 @@ const planStamp = (board: Board, units: readonly ProjectUnit[]): string =>
 
 /** Le plan vu du COO, sur le board relu ; le fichier de coordination illisible : aucun plan ne vaut. */
 const cooPlanOf = (board: Board): CooPlan => {
-  if (coordNow?.state === 'unread') return { computed: { waves: [], waits: [] }, key: '', isValidated: true, unread: true }
+  if (coordNow?.state === 'unread') return { computed: { waves: [], waits: [], delivery: [] }, key: '', isValidated: true, unread: true }
   const units = projectUnits(board)
   const stamp = planStamp(board, units)
   if (!planCache || planCache.stamp !== stamp) planCache = { stamp, computed: projectPlan(units, unitsOverlap) }
@@ -4084,24 +4170,28 @@ const launchWave = async ($: any, key: string): Promise<string> => {
   }
 }
 
-/** Une demande de clôture et d'archivage d'une mission, par le COO. */
+/**
+ * Le geste « clore » du COO hors livraison (`coordinate.close`) : la mission se clôt sans marque de
+ * livraison et sans archivage ; en pause, par le mod du COO ; ouverte, par une entrée « close » sans résultat.
+ */
 const requestClose = async ($: any, id: string): Promise<string> => {
   const seat = await seatForWrite($)
   if (!seat.ok) return seat.why === 'unread' ? `Nothing written: ${SEAT_UNREAD}` : 'Nothing written: this discussion does not hold the COO seat.'
   const run = (seat.stored ?? seat.local).runs.find(r => r.id === id)
   if (!run) return `Mission ${neutralQuoted(id)} is not in the missions file: nothing written.`
   if (run.archivedAt !== undefined) return `Mission ${neutralQuoted(run.title)} is already archived.`
+  if (run.status === 'done') return `Mission ${neutralQuoted(run.title)} is already closed: nothing changed (it is not archived).`
   if (run.status !== 'active') {
-    const out = await archiveIdle($, id)
-    if (out === 'archived' || out === 'already') return `Mission ${neutralQuoted(run.title)} was ${run.status === 'done' ? 'closed' : 'paused'}: the dashboard archived it.`
-    if (out === 'unwritten') return `Mission ${neutralQuoted(run.title)}: the missions file could not be read or written just now; if it was archived here, the next save writes it. Check the COO statement of the next message before asking again.`
-    if (out !== 'active') return `Mission ${neutralQuoted(run.title)} could not be archived (${out === 'not-seat' ? 'this discussion does not hold the COO seat' : 'it is no longer in the missions file'}): nothing changed.`
+    const out = await closeIdle($, id)
+    if (out === 'closed' || out === 'already' || out === 'stale') return `Mission ${neutralQuoted(run.title)} was paused: the dashboard closed it, without archiving it and without marking it delivered.`
+    if (out === 'unwritten') return `Mission ${neutralQuoted(run.title)}: the missions file could not be read or written just now; if it was closed here, the next save writes it. Check the COO statement of the next message before asking again.`
+    if (out !== 'active') return `Mission ${neutralQuoted(run.title)} could not be closed (${out === 'not-seat' ? 'this discussion does not hold the COO seat' : 'it is no longer in the missions file'}): nothing changed.`
   }
   const now = await $.clock.now()
   const entryId = newEntryId(now, Math.random())
-  const written = await writeCoordination($, entries => [...entries, { id: entryId, kind: 'close', run: id, at: now }])
+  const written = await writeCoordination($, entries => [...entries, { id: entryId, kind: CLOSE_KIND, run: id, at: now }])
   if (written !== 'ok') return `Nothing written for mission ${neutralQuoted(run.title)}: ${coordWriteWhy(written)}`
-  return `Close and archive requested for mission ${neutralQuoted(run.title)}. ${await wakeManager($, id)}`
+  return `Close requested for mission ${neutralQuoted(run.title)} (without archiving it). ${await wakeManager($, id)}`
 }
 
 // ─── Questions et gestes chez le COO ──────────────────────────────────────
@@ -4761,6 +4851,35 @@ const measureOutsideCommits = async ($: any, board: Board): Promise<void> => {
 /** Ce que la vue et le relevé disent des commits hors mission : rien sans relecture réussie. */
 const cooOutsideOf = (board: Board): OutsideCommits[] => (outsideLog ? outsideCommitCounts(watchedGroups(board), outsideLog.commits, board, outsideLog.own) : [])
 
+/**
+ * Les groupes encore confiés de chaque mission non archivée dont le worker a laissé son compte rendu final au
+ * relais, relus à l'instant (seules les missions qui ont un groupe confié se lisent) : le relevé du COO les dit
+ * « reported », pas « working ». Un relais qui ne se lit pas n'en signale aucun. Gardé 5 secondes tant que les
+ * envois en cours ne changent pas (un groupe rendu puis confié de nouveau se relit) : la vue se redessine souvent,
+ * et chaque relecture parcourt le dossier du relais ; les missions se relisent en parallèle.
+ */
+const cooReportedOf = async ($: any, board: Board): Promise<(runId: string) => readonly string[]> => {
+  const now = await $.clock.now()
+  const runs = board.runs.filter(run => run.archivedAt === undefined && (run.groups ?? []).some(g => g.linked !== undefined))
+  const key = JSON.stringify(runs.map(run => [run.id, (run.groups ?? []).filter(g => g.linked !== undefined).map(g => [g.id, g.linked!.at])]))
+  if (reportedSeen && reportedSeen.key === key && now >= reportedSeen.at && now - reportedSeen.at < REPORTED_TTL_MS) return reportedSeen.of
+  const found = new Map<string, string[]>()
+  await Promise.all(
+    runs.map(async run => {
+      const stored = await readRelay($, run.id)
+      const ids = relayedReports(run, isRelay(stored, run.id) ? stored : null).map(x => x.g.id)
+      if (ids.length > 0) found.set(run.id, ids)
+    }),
+  )
+  const of = (id: string): readonly string[] => found.get(id) ?? []
+  reportedSeen = { at: now, key, of }
+  return of
+}
+
+/** La dernière relecture des comptes rendus déposés au relais, pour le relevé et la vue du COO, avec les envois qu'elle a vus. */
+let reportedSeen: { at: number; key: string; of: (runId: string) => readonly string[] } | null = null
+const REPORTED_TTL_MS = 5_000
+
 /** Ce que la carte montrait au clic « ▶ Livrer » : ses missions (et leur validation) et la branche relevée. */
 const deliveryCardKey = (ready: readonly Run[]): string => `${ready.map(r => `${r.id}@${r.reportValidatedAt ?? 0}`).join(',')}|${deliveryPreview?.key ?? ''}`
 
@@ -4894,9 +5013,9 @@ const dropDelivery = ($: any): Promise<string> =>
     if (!isPushed(out)) return '◆ Livraison abandonnée : les missions restent à livrer.'
     // Le push a réussi : le code est parti, les missions se closent avec ce qui est fait, et ne se relivrent pas.
     const result = deliveredResultOf(out)
-    for (const m of out.missions) await requestDeliveredClose($, m.id, result)
+    for (const m of out.missions) await requestDeliveredClose($, m.id, result, m.validatedAt)
     const { offered } = await offerRetros($, out.missions.map(m => m.id))
-    return `◆ Livraison arrêtée après le push : les missions sont closes avec ce qui est fait.${offered > 0 ? ` Leur rétro est proposée dans « Lancements ».` : ''}`
+    return `◆ Livraison arrêtée après le push : les missions sont closes avec ce qui est fait.${offered > 0 ? ` La rétro des missions livrées qui ne sont pas des rétros est proposée dans « Lancements ».` : ''}`
   })
 
 /**
@@ -4928,9 +5047,9 @@ const deliveryCall = ($: any, raw: unknown): Promise<string> =>
     chainArmed = null
     const result = deliveredResultOf(out)
     const notes: string[] = []
-    for (const m of out.missions) notes.push(await requestDeliveredClose($, m.id, result))
+    for (const m of out.missions) notes.push(await requestDeliveredClose($, m.id, result, m.validatedAt))
     const { offered, away } = await offerRetros($, out.missions.map(m => m.id))
-    return `Delivery done (${deliveredText(result)}). ${notes.join(' ')} Add a « Jalons » line to the roadmap with this result.${offered > 0 ? ` The Coordination view now offers the retro of each delivered mission (${offered} card(s) « Rétrospective · … », recommended or not, launched by the user's click, or removed by « ✕ Pas de rétro »): tell the user, never launch one yourself.${away > 0 ? ` To make room, ${away} older launch card(s) left the view: tell the user, and propose them again if they still want them.` : ''}` : ''}`
+    return `Delivery done (${deliveredText(result)}). ${notes.join(' ')} Add a « Jalons » line to the roadmap with this result.${offered > 0 ? ` The Coordination view now offers the retro of each delivered mission that is not itself a retro (${offered} card(s) « Rétrospective · … »; a delivered retro gets none, only its « livrée » line and « ✓ Archiver »; recommended or not, launched by the user's click, which also archives the mission it studies, or « ✓ Archiver », which archives the mission without a retro): tell the user, never launch one yourself.${away > 0 ? ` To make room, ${away} older launch card(s) left the view: tell the user, and propose them again if they still want them.` : ''}` : ''}`
   })
 
 /** Le résultat de chaque étape faite, pour la mission et le journal (« faite » quand Claude n'en a rien dit). */
@@ -4946,22 +5065,35 @@ const deliveredResultOf = (d: Delivery): DeliveredResult => {
 }
 
 /**
- * La clôture d'une mission livrée : ouverte dans une discussion, une entrée « close » avec le résultat, que son
- * mod inscrit puis applique ; en pause, le COO l'archive lui-même et le résultat reste dans son relevé.
+ * La clôture d'une mission livrée, sans archivage (invariant des missions livrées) :
+ * ouverte dans une discussion, une entrée « close » avec le résultat, que son mod inscrit puis applique ; active
+ * nulle part, le COO la clôt lui-même comme livrée (redevenue active sur le fichier relu : l'entrée).
+ * Rien pour une mission archivée ou dont la clôture est déjà faite, ni pour une mission où du travail a été relancé
+ * depuis le départ de la livraison (`isReportShipped` : `report`, la date du rapport emporté, va dans l'entrée).
  */
-const requestDeliveredClose = async ($: any, id: string, result: DeliveredResult): Promise<string> => {
+const requestDeliveredClose = async ($: any, id: string, result: DeliveredResult, report: number | undefined): Promise<string> => {
   const seat = await seatForWrite($)
-  if (!seat.ok) return `Mission ${neutralQuoted(id)}: not closed (${seat.why === 'unread' ? 'missions file unread' : 'seat lost'}).`
+  if (!seat.ok) return `Mission ${neutralQuoted(id)}: not closed (${seat.why === 'unread' ? 'missions file unread: the dashboard retries by itself at its next statements, until it holds' : 'seat lost'}).`
   const run = (seat.stored ?? seat.local).runs.find(r => r.id === id)
-  if (!run || run.archivedAt !== undefined) return ''
+  if (!run || run.archivedAt !== undefined || isDeliveryOver(run)) return ''
+  // Un travail relancé pendant la livraison (son rapport rouvert ou changé) n'est pas parti : rien ne le clôt.
+  if (!isReportShipped(run, report)) return `Mission ${neutralQuoted(run.title)}: not closed, work was relaunched in it since the delivery started: a later delivery takes it.`
+  let isFailed = false
   if (!isOpenRun(run)) {
-    const out = await archiveIdle($, id)
-    return out === 'archived' || out === 'already' ? `Mission ${neutralQuoted(run.title)} (open nowhere) archived by the dashboard.` : `Mission ${neutralQuoted(run.title)} could not be archived just now: ask again later.`
+    const out = await closeIdle($, id, result, report)
+    if (out === 'stale') return `Mission ${neutralQuoted(run.title)}: not closed, work was relaunched in it since the delivery started: a later delivery takes it.`
+    if (out === 'closed' || out === 'already') return `Mission ${neutralQuoted(run.title)} (open nowhere) closed as delivered by the dashboard, not archived.`
+    if (out === 'absent') return `Mission ${neutralQuoted(run.title)} is no longer in the missions file: nothing closed.`
+    // Ratée (écriture, siège) : l'entrée garde la clôture à faire, que le relevé reprend même une fois une autre
+    // livraison partie (le rattrapage ne suit que la dernière).
+    isFailed = out !== 'active'
   }
   const now = await $.clock.now()
   const entryId = newEntryId(now, Math.random())
-  const written = await writeCoordination($, entries => [...entries, { id: entryId, kind: 'close', run: id, at: now, ...(Object.keys(result).length > 0 ? { delivered: result } : {}) }])
-  if (written !== 'ok') return `Mission ${neutralQuoted(run.title)}: close not written (${coordWriteWhy(written)}).`
+  const written = await writeCoordination($, entries => (isDeliveryWaiting(entries, run) ? null : [...entries, { id: entryId, kind: CLOSE_KIND, run: id, at: now, delivered: result, ...(report !== undefined ? { report } : {}) }]))
+  if (written === 'none') return `Mission ${neutralQuoted(run.title)}: its close is already requested; the dashboard applies it, or retries by itself, until it holds.`
+  if (isFailed) return `Mission ${neutralQuoted(run.title)} could not be closed just now: the dashboard retries by itself at its next statements, until it holds${written === 'ok' ? ' (its close entry is written)' : ''}.`
+  if (written !== 'ok') return `Mission ${neutralQuoted(run.title)}: close not written (${coordWriteWhy(written)}); the dashboard retries by itself at its next statements, until it holds.`
   return `Mission ${neutralQuoted(run.title)}: close requested with the result. ${await wakeManager($, id)}`
 }
 
@@ -5054,7 +5186,8 @@ const cooDecisionsOf = (board: Board, isStatement = false): CooDecisions => {
     .filter((e): e is CoordContradiction => e.kind === 'contradiction')
     .flatMap(e => {
       const run = board.runs.find(r => r.id === e.run)
-      if (!run || run.archivedAt !== undefined || isContradictionAnswered(run, e.id)) return []
+      // Close ou archivée : la question est passée à l'autre mission (`carryContradictions`), ou ne bloque plus rien.
+      if (!run || run.archivedAt !== undefined || run.status === 'done' || isContradictionAnswered(run, e.id)) return []
       const other = board.runs.find(r => r.id === e.other)
       // L'empreinte de la question ouverte : la réponse écrite (`coordinate.answer`) la cite, mission en auto ou non.
       const q = openQuestions(run).find(x => x.id === contradictionQuestionId(e.id))
@@ -5076,7 +5209,7 @@ const isContradictionAnswered = (run: Run, entryId: string): boolean =>
   !openQuestions(run).some(q => q.id === contradictionQuestionId(entryId)) && (Array.isArray(run.answered) ? (run.answered as unknown[]) : []).some(t => t !== null && typeof t === 'object' && (t as { id?: unknown }).id === contradictionQuestionId(entryId))
 
 /**
- * Le COO : une opposition dont la mission qui portait la question a été archivée avant la réponse passe à
+ * Le COO : une opposition dont la mission qui portait la question a été close (une livraison ne l'archive plus) ou archivée avant la réponse passe à
  * l'autre mission, encore ouverte : la question y est posée à son tour (une entrée inverse, une fois).
  */
 const carryContradictions = async ($: any, board: Board) => {
@@ -5084,7 +5217,7 @@ const carryContradictions = async ($: any, board: Board) => {
     if (e.kind !== 'contradiction') continue
     const run = board.runs.find(r => r.id === e.run)
     const other = board.runs.find(r => r.id === e.other)
-    if (!run || run.archivedAt === undefined || !other || other.archivedAt !== undefined || other.status === 'done' || isContradictionAnswered(run, e.id)) continue
+    if (!run || (run.archivedAt === undefined && run.status !== 'done') || !other || other.archivedAt !== undefined || other.status === 'done' || isContradictionAnswered(run, e.id)) continue
     if (coordLive.some(x => x.kind === 'contradiction' && x.run === e.other && x.other === e.run && sameSide(x.mine, e.theirs) && sameSide(x.theirs, e.mine))) continue
     const now = await $.clock.now()
     const id = newEntryId(now, Math.random())
@@ -5264,7 +5397,11 @@ const cardsHere = async ($: any): Promise<LaunchCard[]> => ((await read($, cards
 /** Les pistes cochées chez le COO, par rétro (en mémoire : un rechargement les décoche, rien ne part sans clic). */
 const retroTicks = new Map<string, Set<string>>()
 
-/** Pose la carte de rétro de chaque mission livrée qui n'en a pas encore ; rend le nombre de cartes posées. */
+/**
+ * Pose la carte de rétro de chaque mission livrée qui n'en a pas encore, sauf une mission qui est elle-même une rétro
+ * (sa première phase est `retro`, lancée par le COO ou à la main) : pas de rétro d'une rétro, elle n'a que sa ligne
+ * « livrée » et « ✓ Archiver ». Rend le nombre de cartes posées.
+ */
 const offerRetros = async ($: any, ids: readonly string[]): Promise<{ offered: number; away: number }> => {
   const board: Board | null = await read($, boardAtom)
   if (!board) return { offered: 0, away: 0 }
@@ -5272,7 +5409,7 @@ const offerRetros = async ($: any, ids: readonly string[]): Promise<{ offered: n
   const fresh: LaunchCard[] = []
   for (const id of ids) {
     const run = board.runs.find(r => r.id === id)
-    if (!run || hasRetro(board.runs, id)) continue
+    if (!run || run.phases[0]?.skill === 'retro' || retroOf(run) || hasRetro(board.runs, id)) continue
     const kept = await readMissionReport($, id)
     fresh.push(retroCard(run, kept && kept !== 'unread' ? kept.text : null, now))
   }
@@ -5292,14 +5429,180 @@ const offerRetros = async ($: any, ids: readonly string[]): Promise<{ offered: n
   return { offered: fresh.length, away: gone }
 }
 
-/** « ✕ Pas de rétro » : la carte de rétro prête quitte la vue. */
-const dismissRetro = async ($: any, id: string): Promise<string> => {
+/** Le toast d'un clic d'archivage sur une liste qui a changé depuis l'affichage, mot pour mot comme la personne l'a décidé. */
+const ARCHIVE_LIST_CHANGED = "La liste a changé depuis : rien n'est archivé, regarde-la de nouveau"
+
+/**
+ * « ✓ Archiver » et « ✓ Tout archiver (n) » : par le mod du COO, sur le fichier des missions relu à l'instant et
+ * fusionné, le siège relu juste avant (comme `closeIdle`) ; seulement si la liste des missions livrées et pas
+ * archivées est encore celle de l'affichage (`print`) et que chaque id montré en fait partie (`archiveAwaiting`) :
+ * une mission archivée, reprise, redevenue active ou ajoutée depuis n'archive rien (invariant des missions livrées :
+ * aucune mission n'est archivée sans le choix de la personne). Puis les cartes de rétro encore prêtes des missions
+ * archivées quittent la vue. `print` null : le lancement d'une rétro, qui ne vise que la mission de sa carte. `why` :
+ * la ligne de journal, celle d'`archiveRun` par défaut. Rend les missions
+ * archivées (vide sinon), le toast et la demande au Claude du COO d'archiver aussi leur discussion dans l'app (`ask`,
+ * null quand aucune ne se nomme), formée sur le fichier relu ; sans archivage, `fail` dit ce qui a manqué, et
+ * `board` le fichier relu après la sauvegarde, quand elle a eu lieu.
+ */
+const archiveShown = async ($: any, ids: readonly string[], print: string | null, why?: string): Promise<ArchiveOut> => {
+  if (!(await pull($))) return { archived: [], fail: 'unread', toast: '◆ Rien n’est archivé : le fichier des missions ne se lit pas ; reclique dans un instant.' }
+  const seat = await seatForWrite($)
+  if (!seat.ok) return seat.why === 'unread' ? { archived: [], fail: 'unread', toast: '◆ Rien n’est archivé : le fichier des missions ne se lit pas ; reclique dans un instant.' } : { archived: [], fail: 'seat', toast: '◆ Rien n’est archivé : cette discussion ne tient plus le siège du COO.' }
+  const now = await $.clock.now()
+  let archived: Run[] = []
+  const fx = await commit($, b => {
+    const out = archiveAwaiting(b, ids, print, now, why)
+    archived = out ? out.board.runs.filter(r => ids.includes(r.id)) : []
+    return out
+  })
+  if (fx === null || archived.length === 0) return { archived: [], toast: ARCHIVE_LIST_CHANGED }
+  // Pas sûr d'être écrit (écriture ratée, ou fichier illisible) : la sauvegarde suivante réessaie ; rien ne se fonde dessus
+  // (ni carte retirée, ni discussion à archiver) tant que le fichier relu ne le porte pas.
+  if (!(await saveNow($))) {
+    // Les discussions que la demande aurait nommées (jamais celle d'ici ni une discussion encore au travail) : le toast
+    // ne dit d'archiver à la main que celles-là.
+    const local: Board | null = await read($, boardAtom)
+    const unasked = discussionsOf((local?.runs ?? []).filter(r => ids.includes(r.id)), local?.runs ?? [], await hereId($)).length
+    return { archived: [], fail: 'unsaved', unasked, toast: `◆ L’archivage n’est peut-être pas encore écrit dans le fichier des missions : le tableau de bord réessaie à sa prochaine sauvegarde ; regarde la vue de nouveau dans un instant.${unaskedText(unasked)}` }
+  }
+  // Relu du fichier commun après la sauvegarde (jamais la seule copie d'ici) : seules les missions qui y sont bien
+  // archivées comptent ; une autre discussion qui en a repris une entre-temps garde sa copie, plus récente.
+  // Relu introuvable ou illisible : rien ne se fonde sur la copie d'ici, comme pour une sauvegarde pas sûre.
+  const reread = await readStored($, seat.local.root ?? '')
+  if (reread.isUnread || reread.board === null) {
+    const local: Board | null = await read($, boardAtom)
+    const unasked = discussionsOf((local?.runs ?? []).filter(r => ids.includes(r.id)), local?.runs ?? [], await hereId($)).length
+    return { archived: [], fail: 'unsaved', unasked, toast: `◆ L’archivage n’est peut-être pas encore écrit dans le fichier des missions : le tableau de bord réessaie à sa prochaine sauvegarde ; regarde la vue de nouveau dans un instant.${unaskedText(unasked)}` }
+  }
+  const board: Board = reread.board
+  const held = (board?.runs ?? []).filter(r => ids.includes(r.id) && r.archivedAt !== undefined)
+  const missed = (board?.runs ?? []).filter(r => ids.includes(r.id) && r.archivedAt === undefined)
+  if (held.length === 0) return { archived: [], board, toast: ARCHIVE_LIST_CHANGED }
+  const gone = new Set(held.map(r => r.id))
+  await quietly(() =>
+    update($, cardsAtom, list =>
+      list.filter(c => {
+        const s = soundCard(c)
+        return !(s?.of && gone.has(s.of) && board && cardStateOf(s, board.runs, now).kind === 'ready')
+      }),
+    ),
+  )
+  $.ui.invalidate('ui.render')
+  const named = (runs: Run[]) => runs.map(r => `« ${neutralLine(clip(r.title, 60))} »`).join(', ')
+  const sessions = discussionsOf(held, board?.runs ?? [], await hereId($))
+  return {
+    archived: held,
+    toast: `▣ Archivée${held.length > 1 ? 's' : ''} : ${named(held)}.${missed.length > 0 ? ` Pas archivée${missed.length > 1 ? 's' : ''} (reprise${missed.length > 1 ? 's' : ''} ailleurs entre-temps) : ${named(missed)}.` : ''}`,
+    ask: sessions.length > 0 ? missionSessionsArchiveText(sessions) : null,
+    unasked: sessions.length,
+  }
+}
+
+/**
+ * Les discussions des missions `runs` que la demande d'archivage nomme (`missionSessionId` : jamais celle d'ici ni une
+ * discussion encore au travail), chacune par le titre cité de sa mission, son id sûr et le jour de sa clôture, écrit
+ * comme dans la discussion de la mission (`deliveredByCooLine`).
+ */
+const discussionsOf = (runs: readonly Run[], all: readonly Run[], here: string): { title: string; id?: string; day?: string }[] =>
+  runs.flatMap(r => {
+    const id = missionSessionId(r, all, here)
+    if (id === null) return []
+    const day = isTime(r.finishedAt) ? new Date(r.finishedAt).toLocaleDateString('fr-FR') : undefined
+    return [{ title: neutralQuoted(r.title), ...(id !== undefined ? { id } : {}), ...(day !== undefined ? { day } : {}) }]
+  })
+
+/**
+ * « ✕ Retirer » : la carte de rétro encore prête d'une mission qui n'attend pas « ✓ Archiver » (`isRetroCardRemovable`)
+ * quitte la vue, sans rien écrire sur la mission ; rien quand la carte n'est plus prête ou que sa mission attend
+ * « ✓ Archiver » sur le board d'ici (le bouton qui archive la mission et retire la carte).
+ */
+const removeRetroCard = async ($: any, id: string): Promise<string> => {
   const board: Board | null = await read($, boardAtom)
   const now = await $.clock.now()
   const card = (await cardsHere($)).find(c => c.id === id)
-  if (!card || !card.of || !board || cardStateOf(card, board.runs, now).kind !== 'ready') return '◆ Rien n’est retiré : relis la carte.'
-  await update($, cardsAtom, list => list.filter(c => soundCard(c)?.id !== id))
-  return `◆ Pas de rétro pour « ${neutralLine(clip(card.title.replace(/^Rétrospective · /, ''), 60))} ».`
+  if (!card || !board || !isRetroCardRemovable(card.of, board.runs) || cardStateOf(card, board.runs, now).kind !== 'ready') return '◆ Rien n’est retiré : relis la carte.'
+  await update($, cardsAtom, list =>
+    list.filter(c => {
+      const s = soundCard(c)
+      return !(s?.id === id && cardStateOf(s, board.runs, now).kind === 'ready')
+    }),
+  )
+  return `◆ Carte retirée : « ${neutralLine(clip(card.title, 60))} ».`
+}
+
+/** Ce que dit un toast quand la demande d'archiver `count` discussions n'est pas faite d'ici ; rien pour aucune. */
+const unaskedText = (count: number): string =>
+  count === 0 ? '' : count > 1 ? ' Leurs discussions dans l’app ne te sont pas proposées à l’archivage : archive-les à la main si tu veux.' : ' Sa discussion dans l’app ne t’est pas proposée à l’archivage : archive-la à la main si tu veux.'
+
+/** Ce que rend `archiveShown` ; `unasked` : le nombre de discussions que sa demande nomme, ou aurait nommées. */
+type ArchiveOut = { archived: Run[]; toast: string; ask?: string | null; fail?: 'unread' | 'seat' | 'unsaved'; board?: Board | null; unasked?: number }
+
+/** La ligne de journal d'une mission archivée par le lancement de sa rétro. */
+const ARCHIVED_BY_RETRO = 'Archivée : sa rétro est lancée'
+
+/**
+ * Le lancement de la rétro d'une mission livrée l'archive (chemin de « ✓ Archiver », sur le fichier relu, le siège
+ * revérifié) : rend la fin du toast, ce qui en est d'après `archiveShown` (jamais d'après la copie d'ici, qui porte
+ * l'archivage même quand son écriture a raté).
+ */
+const archiveStudied = async ($: any, id: string): Promise<string> => {
+  let out: ArchiveOut | null = null
+  try {
+    out = await archiveShown($, [id], null, ARCHIVED_BY_RETRO)
+  } catch {
+    // Un archivage qui lève n'arrête pas le lancement : il se dit.
+  }
+  if (!out) return ' La mission étudiée n’a pas pu être archivée : « ✓ Archiver » reste possible.'
+  if (out.fail === 'unread') return ' La mission étudiée n’est pas archivée : le fichier des missions ne se lit pas ; « ✓ Archiver » reste possible.'
+  if (out.fail === 'seat') return ' La mission étudiée n’est pas archivée : cette discussion ne tient plus le siège du COO.'
+  if (out.fail === 'unsaved') return ` L’archivage de la mission étudiée n’est peut-être pas encore écrit : le tableau de bord réessaie à sa prochaine sauvegarde ; regarde sa ligne dans un instant.${unaskedText(out.unasked ?? 0)}`
+  if (out.archived.some(r => r.id === id)) {
+    // La demande d'archiver sa discussion dans l'app suit celle du lancement, dans le prompt : Entrée envoie les deux.
+    if (!out.ask) return ' La mission étudiée est archivée.'
+    const ask = out.ask
+    let isAdded = false
+    await quietly(async () => {
+      isAdded = (await $.prompt.fill({ text: `\n\n${ask}`, mode: 'append' })).isFilled === true
+    })
+    return isAdded ? ' La mission étudiée est archivée ; la demande d’archiver sa discussion dans l’app suit dans le prompt.' : ` La mission étudiée est archivée ; la demande d’archiver sa discussion n’a pas pu s’ajouter au prompt.${unaskedText(1)}`
+  }
+  // Refusé sur le fichier relu par `archiveShown` (sa copie d'ici, sans écriture), ou relu après la sauvegarde.
+  if (out.board !== undefined) return studiedState(id, out.board)
+  return studiedNow($, id)
+}
+
+/** `studiedState` sur le fichier des missions relu à l'instant, sans rien fusionner ici ; rien quand il ne se relit pas. */
+const studiedNow = async ($: any, id: string): Promise<string> => {
+  try {
+    const local: Board | null = await read($, boardAtom)
+    if (!local) return ''
+    const stored = await readStored($, local.root)
+    return stored.isUnread ? '' : studiedState(id, stored.board)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Ce que le toast d'un lancement de rétro dit de la mission étudiée qu'il n'a pas archivée, d'après le board donné
+ * (relu du fichier par l'appelant) : déjà archivée, en attente de « ✓ Archiver », ou ni l'un ni l'autre ; rien pour une
+ * mission absente du fichier.
+ */
+const studiedState = (id: string, board: Board | null): string => {
+  const run = board?.runs.find(r => r.id === id)
+  if (!run) return ''
+  if (run.archivedAt !== undefined) return ' La mission étudiée est déjà archivée.'
+  if (isAwaitingArchive(run)) return ' La mission étudiée n’est pas archivée : « ✓ Archiver » reste possible.'
+  return ' La mission étudiée n’est pas archivée : elle n’attend pas « ✓ Archiver » (pas close comme livrée, reprise, ou une étape de sa livraison reste à faire).'
+}
+
+/** Le clic « ✓ Archiver » ou « ✓ Tout archiver (n) » de la vue Coordination. */
+const archiveDelivered = async ($: any, ids: readonly string[], print: string): Promise<string> => {
+  const out = await archiveShown($, ids, print)
+  // Une seule demande pour toutes les discussions (« ✓ Tout archiver (n) ») ; `cooDo` a vérifié que Claude est au repos.
+  // Refusée à l'envoi, elle ne se refait pas (la mission a quitté la liste) : le toast le dit, sans « reclique ».
+  if (out.ask) submitCooAsk($, out.ask, `◆ La demande d’archiver ${(out.unasked ?? 0) > 1 ? 'leurs discussions' : 'sa discussion'} dans l’app n’est pas partie.${unaskedText(out.unasked ?? 0)}`)
+  return out.toast
 }
 
 /** Les pistes des rétros lancées par le COO, à cocher chez lui : celles encore à faire, celles prises ailleurs, ce qui est coché. */
@@ -5534,15 +5837,71 @@ const launchCard = async ($: any, id: string, mode: LaunchMode, shownAt: number)
       return '◆ Rien n’est lancé : le stockage du tableau de bord refuse l’écriture ; réessaie.'
     }
     const text = await missionLaunchText($, card, launch, mode)
+    // La demande d'une autre carte, dont le lancement vaut encore, attend dans le prompt (deux cartes cliquées coup
+    // sur coup) : celle-ci s'ajoute à sa suite, jamais à sa place, sans quoi la première carte restait « en
+    // lancement » sans demande. Une demande périmée (son lancement n'est plus gardé) est remplacée, jamais renvoyée.
+    // Les clics de cartes différentes lisent et remplissent le prompt chacun à son tour ; un tour précédent resté
+    // sans réponse au-delà de quelques secondes ne retient pas celui-ci, qui ne remplit alors rien.
+    // Rien ne se remplit non plus quand le prompt porte une demande et que les lancements gardés ne se relisent pas,
+    // ou qu'il mêle une demande périmée et une valable : la demande à taper, avec son id, ne perd ni ne renvoie rien.
+    let isQueued = false
     let isFilled = false
-    await quietly(async () => {
-      isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
-    })
-    return isFilled ? `▶ Lancement de « ${neutralLine(clip(card.title, 60))} » : la demande est dans le prompt, Entrée pour la lancer (valable 10 minutes).` : `▶ Demande à taper : lance la mission « ${neutralLine(clip(card.title, 60))} » (lancement ${launch}, valable 10 minutes).`
+    let isHeld = false
+    const previous = launchFillTurn
+    const turn = (async () => {
+      let timer: { cancel: () => void } | null = null
+      const isOnTime = await Promise.race([previous.then(() => true), new Promise<boolean>(resolve => (timer = $.clock.after(LAUNCH_FILL_WAIT_MS, () => resolve(false))))])
+      ;(timer as { cancel: () => void } | null)?.cancel()
+      if (!isOnTime) {
+        isHeld = true
+        return
+      }
+      await quietly(async () => {
+        // Les lancements valables relus dans le tour, leur péremption à l'heure de maintenant : un clic presque
+        // simultané sur une autre carte a écrit le sien avant.
+        const read = await launchRecords($, false)
+        const at = await $.clock.now()
+        const box = String((await $.prompt.read())?.text ?? '')
+        if (!box.includes(LAUNCH_ASK_START)) return
+        const ids = launchIdsIn(box).filter(x => x !== launch)
+        const valid = ids.filter(x => read.records.some(r => r.id === x && !isRecordStale(r, at)))
+        // Une demande dont l'id ne se lit plus (ligne retouchée) : rien n'est remplacé, la demande est à taper.
+        if (read.unread > 0 || ids.length === 0 || (valid.length > 0 && valid.length < ids.length)) isHeld = true
+        else isQueued = valid.length > 0
+      })
+      if (isHeld) return
+      await quietly(async () => {
+        isFilled = (await $.prompt.fill(isQueued ? { text: `\n\n${text}`, mode: 'append' } : { text, mode: 'replace' })).isFilled === true
+      })
+    })()
+    // Le tour suivant attend aussi le précédent : un clic qui a renoncé à l'attendre ne libère pas la file pendant
+    // que son remplissage peut encore arriver (en `replace`) par-dessus la demande d'un clic plus tardif.
+    launchFillTurn = Promise.all([previous, turn]).catch(() => undefined)
+    await turn
+    const shown = neutralLine(clip(card.title, 60))
+    // La rétro d'une mission livrée et pas archivée : son lancement l'archive, une fois, au clic, seulement quand la
+    // demande est bien dans le prompt (sinon rien n'est lancé, et « ✓ Archiver » reste possible) ; un archivage qui rate
+    // n'arrête pas le lancement, et se dit.
+    // La règle (livrée, pas archivée, pas active ici) se juge sur le fichier relu, dans `archiveShown`, jamais sur la copie d'avant le clic.
+    const studied = card.of === undefined ? '' : isFilled ? await archiveStudied($, card.of) : await studiedNow($, card.of)
+    if (!isFilled) return `▶ Demande à taper : lance la mission « ${shown} » (lancement ${launch}, valable 10 minutes).${studied}`
+    return `${isQueued ? `▶ Lancement de « ${shown} » : la demande s'ajoute à celle qui attend dans le prompt, Entrée lance les deux (valable 10 minutes).` : `▶ Lancement de « ${shown} » : la demande est dans le prompt, Entrée pour la lancer (valable 10 minutes).`}${studied}`
   } finally {
     launchingNow.delete(id)
   }
 }
+
+/** Le début de la demande de lancement d'une carte : il la reconnaît dans le prompt du COO. */
+const LAUNCH_ASK_START = '◆ COO : lance maintenant la mission'
+
+/** Les ids de lancement que porte un texte (la ligne `{"launch": "<id>"}` d'une demande de lancement). */
+const launchIdsIn = (text: string): string[] => [...text.matchAll(/\{"launch": "(l[0-9a-z]{1,24})"\}/g)].map(m => m[1]!)
+
+/** Le tour des clics de cartes sur le prompt du COO : chacun lit puis remplit le prompt après le précédent. */
+let launchFillTurn: Promise<unknown> = Promise.resolve()
+
+/** Au-delà, un clic de carte n'attend plus le tour précédent : il ne remplit rien et donne sa demande à taper. */
+const LAUNCH_FILL_WAIT_MS = 5_000
 
 /**
  * Le texte qui fait lancer la nouvelle discussion par le Claude du COO : son premier message (le skill de
@@ -5561,7 +5920,7 @@ const missionLaunchText = async ($: any, card: LaunchCard, launch: string, mode:
       ? "Effort xhigh : si tu as start_session (l'app), demande-moi d'abord de taper /effort xhigh dans cette discussion (l'app ne donne jamais à la session un effort plus haut que le sien), attends que ce soit fait, lance, puis rappelle-moi de redescendre cette discussion en high. "
       : ''
   return (
-    `◆ COO : lance maintenant la mission « ${title} » dans une nouvelle discussion (je viens de cliquer « ${mode === 'auto' ? 'Lancer en auto' : 'Lancer en manuel'} » sur sa carte ; le lancement vaut 10 minutes). ` +
+    `${LAUNCH_ASK_START} « ${title} » dans une nouvelle discussion (je viens de cliquer « ${mode === 'auto' ? 'Lancer en auto' : 'Lancer en manuel'} » sur sa carte ; le lancement vaut 10 minutes). ` +
     (card.of
       ? `Son premier message : ${command} Rétrospective de la mission livrée « ${neutralInPrompt(card.title.replace(/^Rétrospective · /, ''))} », proposée par le COO à sa livraison (son dossier est travail/${card.folder}/), puis cette ligne telle quelle : « ${firstLine} » Rien d'autre : le tableau de bord de la nouvelle discussion lui donne la mission close et ses transcripts ; l'effort part au lancement, ci-dessous. `
       : `Son premier message : ${command} suivi du sujet de la mission en quelques phrases (ce que je t'ai demandé, dans mes mots ; son dossier est travail/${card.folder}/), puis cette ligne telle quelle : « ${firstLine} » Rien d'autre sur le mode : le tableau de bord de la nouvelle discussion le lit lui-même ; l'effort part au lancement, ci-dessous. `) +
@@ -7283,7 +7642,7 @@ const TICKET_FLAGS =
 
 /** Un bouton retiré avait laissé des textes périmés que seules les revues avaient vus : son libellé et sa clé deviennent des termes refusés. */
 const RETIRED_TERMS =
-  "A ticket that removes a button, a command or an option adds its label and its key to the termes-retires.txt of its plugin when the plugin has one (the project's checks then refuse them in its texts), in its done criteria, each with the plugin's current version (its plugin.json, never a version the ticket sets): the release that describes the removal moves those lines to its new version, or the checks refuse its CHANGELOG entry when it names the term; likewise, a ticket that replaces a rule copied on several surfaces (a common rule, the procedure, the mod's instructions, a skill) adds, for each copy, a distinctive fragment of its old wording in that copy's language to the termes-retires.txt of the plugin whose checks read that copy (its README, hooks, skills, commands, reference, and its rule config/rules/<plugin>.md), so that a copy left at the old wording is refused (a list copied on three surfaces was found stale by three reviews in a row); a copy that no such list reads (config/reference/, another plugin without the file) is named in its done criteria, to be searched"
+  "A ticket that removes a button, a command or an option adds its label and its key to the termes-retires.txt of its plugin when the plugin has one (the project's checks then refuse them in its texts), in its done criteria, each with the plugin's current version (its plugin.json, never a version the ticket sets): the release that describes the removal brings those lines to its new version, or the checks refuse its CHANGELOG entry when it names the term (where the project's CLAUDE.md names scripts/bump-version.py, /project:version runs it, and it moves the lines added since the last version on its own; elsewhere, the release moves them by hand); likewise, a ticket that replaces a rule copied on several surfaces (a common rule, the procedure, the mod's instructions, a skill) adds, for each copy, a distinctive fragment of its old wording in that copy's language to the termes-retires.txt of the plugin whose checks read that copy (its README, hooks, skills, commands, reference, and its rule config/rules/<plugin>.md), so that a copy left at the old wording is refused (a list copied on three surfaces was found stale by three reviews in a row); a copy that no such list reads (config/reference/, another plugin without the file) is named in its done criteria, to be searched"
 
 /**
  * Un ticket sensible ne porte que son changement sensible : un renommage sensible de 4 lignes, découpé avec
@@ -8343,9 +8702,22 @@ const fillCommand = async ($: any, command: string, toast?: string) => {
   await quietly(() => $.ui.toast(isFilled ? (toast ?? `${text.trim()} est dans le prompt : ajoute des consignes si tu veux, puis Entrée`) : `Tape ${text.trim()} dans le prompt`))
 }
 
+/**
+ * La demande d'avance rapide mise dans la saisie : le dossier en prose reste lisible et exact, celui de
+ * la commande est cité pour le shell (entre apostrophes : ni `$`, ni accent grave, ni `"` n'y sont lus).
+ * Un dossier qui ouvrirait une ligne ou retournerait l'affichage (`breaksLine` : fin de ligne, contrôle,
+ * forçage bidirectionnel) n'entre pas dans une commande : la prose le montre neutralisé, et la demande
+ * dit de vérifier le chemin, sans rien que Claude lancerait tel quel.
+ */
+export const fastForwardText = (dir: string | null): string => {
+  if (!dir) return 'Mets à jour la branche en avance rapide : git pull --ff-only'
+  if (breaksLine(dir)) return `Mets à jour ${neutralLine(dir)} en avance rapide : git pull --ff-only dans ce dossier, dont le nom porte des fins de ligne ou des caractères invisibles (vérifie son chemin exact avant de lancer)`
+  return `Mets à jour ${dir} en avance rapide : git -C ${shellQuote(dir)} pull --ff-only`
+}
+
 /** L'avance rapide d'un dossier en retard sur origin : une demande à Claude dans le prompt, Entrée la lance. */
 const askFastForward = async ($: any, dir: string | null) => {
-  const text = dir ? `Mets à jour ${dir} en avance rapide : git -C "${dir}" pull --ff-only` : 'Mets à jour la branche en avance rapide : git pull --ff-only'
+  const text = fastForwardText(dir)
   let isFilled = false
   await quietly(async () => {
     isFilled = (await $.prompt.fill({ text, mode: 'replace' })).isFilled === true
@@ -10040,7 +10412,7 @@ const cooView = async ($: any, board: Board): Promise<CooStatement | null> => {
   if (seatState(board.coo, await hereId($), now) !== 'mine') return null
   // Le quota de la discussion, montré sous une carte prête en xhigh.
   const quota = quotaText(await quotaWindows($), now)
-  return { ...cooStatement(board, { now, ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), cards: await cardsHere($), relays: relaysLive(), reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board) }), ...(quota ? { quota } : {}) }
+  return { ...cooStatement(board, { now, reported: await cooReportedOf($, board), ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), cards: await cardsHere($), relays: relaysLive(), reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board) }), ...(quota ? { quota } : {}) }
 }
 
 /** Le relevé d'état que lit le Claude du COO, recalculé à chaque tour : missions, attentes, effort actif, `BRIEF.md`. */
@@ -10063,7 +10435,7 @@ const cooStatementFor = async ($: any, board: Board): Promise<string> => {
   } catch {
     archive = undefined
   }
-  return statementText(cooStatement(board, { now: await $.clock.now(), ...(archive !== undefined ? { archive } : {}), cards: await cardsHere($), askMatt: await askMattPath($), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, await $.clock.now()), effort: (await sessionEffort($)) ?? null, hasBrief, roadmap, ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), taken: id => { const r = board.runs.find(x => x.id === id); return new Set(takenFor(coordLive, id, r ? retroItems(r) : undefined).keys()) }, relays: relaysLive(), reports: cooReportsOf(board, await $.clock.now()), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board, true), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(await cooSetAsideCtx($, board)) }))
+  return statementText(cooStatement(board, { now: await $.clock.now(), reported: await cooReportedOf($, board), ...(archive !== undefined ? { archive } : {}), cards: await cardsHere($), askMatt: await askMattPath($), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, await $.clock.now()), effort: (await sessionEffort($)) ?? null, hasBrief, roadmap, ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), taken: id => { const r = board.runs.find(x => x.id === id); return new Set(takenFor(coordLive, id, r ? retroItems(r) : undefined).keys()) }, relays: relaysLive(), reports: cooReportsOf(board, await $.clock.now()), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board, true), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(await cooSetAsideCtx($, board)) }))
 }
 
 /** Redessine pour faire avancer les durées affichées. */

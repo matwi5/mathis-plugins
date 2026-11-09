@@ -340,3 +340,27 @@ test('Un groupe fini ici, sans worker, a sa revue par /code-review, une fois', {
   await turnEnd($, clock)
   expect(w.commands).toEqual(['code-review'])
 })
+
+test('Une rétro découpée sous l’auto : après la compaction, sa vague part, comme après un découpage', { timeoutMs: 40000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  await $.session.start({ cwd: '', surface: null, isInteractive: true })
+  await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Rétro', items: [{ id: 'r1', label: 'Pistes', status: 'todo' }] } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  // Le découpage de ses pistes : tickets, groupes et fin de la Rétro, la phase restée courante.
+  await $.tool.call({ tool: TOOL, items: [{ id: 'r1', label: 'Pistes', status: 'done' }], ...LOT, complete: true } as any)
+  const phases = () => w.stored()!.runs[0]!.phases.map(p => `${p.skill}:${p.status}`).slice(0, 2)
+  await turnEnd($, clock)
+  // La compaction d'après le découpage, puis la vague prête, en un seul texte au nom du mod, qui ouvre l'Implémentation.
+  expect(w.commands).toEqual(['compact'])
+  expect(phases()).toEqual(['retro:done', 'implement:active'])
+  expect(w.texts.length).toBe(1)
+  expect(w.texts[0]!.text).toContain('Groupe A (Worker)')
+  expect(w.texts[0]!.text).toContain('Groupe B (App)')
+  expect(w.texts[0]!.text).not.toContain('Groupe C')
+  // Rien ne part deux fois.
+  await turnEnd($, clock)
+  expect(w.texts.length).toBe(1)
+})

@@ -43,14 +43,17 @@ l'ordre, une paire sur le texte que laissent les précédentes. Tout ou rien : s
 (ancien texte absent ou non unique, fichier introuvable, lot mal formé), aucun fichier n'est écrit,
 et le message liste chaque paire en échec, avec son numéro et le message d'un remplacement simple
 (ses numéros de ligne sont ceux du texte que laissent les paires précédentes du même fichier, et le
-message le dit quand une paire précédente l'a changé) ; une écriture refusée par le système (droits) arrête le
-lot, et le message nomme les fichiers déjà écrits.
+message le dit quand une paire précédente l'a changé) ; une écriture refusée (droits, ou un lien apparu
+depuis le contrôle) ou coupée arrête le lot, et le message nomme les fichiers déjà écrits, chacun par
+le nom que lui donne le lot.
 
 `--append` ajoute le texte (argument, ou `@<fichier>`, marqueur `{{u}}` compris) à la fin du fichier,
 suivi d'une fin de ligne, comme un heredoc `cat >> <fichier> <<EOF` que le garde-fou d'un worktree
 refuse dès que le texte cite git : les fins de ligne du fichier sont gardées (CRLF s'il en a), une
 fin de ligne s'ajoute d'abord si le fichier n'en a pas à sa fin, et un fichier absent est une erreur,
-sans création.
+sans création. Un texte argument qui finit déjà par une fin de ligne la perd d'abord, comme un
+`@<fichier>`, sans ligne vide de plus ; une seule est retirée (`abc\\n\\n` garde sa ligne vide), et
+un texte fait seulement d'une fin de ligne la garde (il ajoute deux fins de ligne, comme avant).
 
 `--plage` remplace les lignes <première> à <dernière> (numérotées comme Read, bornes comprises) par le
 nouveau texte, après avoir vérifié que la première ligne porte le texte de `--debut` et la dernière
@@ -76,11 +79,23 @@ pour octet (fins de ligne comprises quand les deux fichiers ont les mêmes ; sin
 conversion), et que la source n'a perdu que le bloc ; sinon il n'écrit rien, ou remet les deux
 fichiers tels qu'avant. Il écrit la cible d'abord, la source ensuite, et une écriture refusée remet ce
 qui était déjà écrit. `--essai` dit ce qui serait fait, sans rien écrire.
+
+Chaque mode qui écrit (remplacement simple, `--lot`, `--append`, `--plage`, `--deplace`) refuse, avant
+toute lecture, puis de nouveau juste avant chaque écriture : un chemin dont une composante est `.git`
+(casse ignorée, dans le chemin donné comme dans le chemin réel) ; une cible qui est un lien symbolique ;
+pour un chemin relatif, un dossier du chemin donné qui en est un, sous le dossier courant (ceux
+au-dessus, comme `/var` sur macOS, ne sont pas vérifiés, ni un préfixe qui en sort par `..`, ni les
+dossiers d'un chemin absolu). Le refus
+nomme le chemin et la raison et n'écrit rien : en `--lot`, aucun fichier, chaque nom de chaque paire
+contrôlé ; en `--deplace`, ni la source ni la cible. Le script n'est pas enfermé dans le dépôt : un
+fichier ordinaire hors du clone (dossier temporaire d'une session) s'écrit comme avant.
 Sans dépendance hors de la bibliothèque standard.
 """
 
 import hashlib
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -101,6 +116,10 @@ MARK = "::: "
 
 class PatchError(Exception):
     pass
+
+
+class CutWrite(PatchError):
+    """Une écriture coupée après l'ouverture, qui a déjà vidé le fichier : il est à remettre."""
 
 
 def unmark(text):
@@ -127,11 +146,11 @@ def argument(value):
     return unmark(value)
 
 
-def decode(path):
+def decode(path, outcome="rien n'est écrit"):
     try:
         return path.read_bytes().decode("utf-8")
     except UnicodeDecodeError as err:
-        raise PatchError(f"{path} n'est pas en UTF-8 ({err.reason}, octet {err.start}) ; rien n'est écrit")
+        raise PatchError(f"{path} n'est pas en UTF-8 ({err.reason}, octet {err.start}) ; {outcome}")
 
 
 def replace_once(path, text, old, new):
@@ -152,11 +171,105 @@ def replace_once(path, text, old, new):
     return text.replace(old, new), lines_at[0]
 
 
-def read_target(path):
+def refusal(path):
+    """Pourquoi `path` ne peut pas être écrit, ou None : un chemin dont une composante est `.git` (casse
+    ignorée, dans le chemin donné comme dans le chemin réel), une cible qui est un lien symbolique, ou,
+    pour un chemin relatif, un dossier du chemin donné qui en est un (sous le dossier courant : ceux
+    au-dessus, comme `/var` sur macOS, ne sont pas vérifiés, ni un préfixe qui en sort par `..`, ni les
+    dossiers d'un chemin absolu)."""
+    path = Path(path)
+    try:
+        real = path.resolve()
+    except (OSError, RuntimeError):
+        real = path
+    if any(part.casefold() == ".git" for part in (*path.parts, *real.parts)):
+        return "chemin d'un dossier .git"
+    prefixes = [] if path.is_absolute() else [Path(*path.parts[:i]) for i in range(1, len(path.parts))]
+    # Seuls les préfixes strictement sous le dossier courant sont vérifiés, d'après leur chemin absolu
+    # lexical : `..` et `../tmp` en sortent (non vérifiés), `../ici/lien` y revient (vérifié). Un préfixe
+    # d'avant un `..` (`sous` de `sous/../x`) l'est aussi, et un lien y est refusé avant que `..` le suive.
+    cwd = os.path.abspath(os.curdir)
+    inside = [p for p in prefixes if os.path.abspath(p).startswith(cwd.rstrip(os.sep) + os.sep)]
+    for candidate in (*inside, path):
+        try:
+            kind = link_kind(candidate)
+        except OSError as err:
+            return f"chemin illisible ({candidate} : {err.strerror})"
+        if kind:
+            return f"{kind}{'' if candidate == path else f' ({candidate})'}"
+    return None
+
+
+def link_kind(path):
+    """« lien symbolique » ou « jonction ou lien Windows » (`mklink /J`, que `is_symlink` ne voit pas),
+    ou None ; un chemin absent n'en est pas un ; une autre erreur de lecture lève."""
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        return "lien symbolique"
+    # Windows : seuls les points d'analyse qui renvoient ailleurs (lien, jonction) comptent ; un fichier
+    # OneDrive ou dédupliqué porte aussi l'attribut, avec une autre étiquette, et reste écrit.
+    tags = {getattr(stat, "IO_REPARSE_TAG_SYMLINK", None), getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)} - {None}
+    if getattr(st, "st_reparse_tag", 0) in tags:
+        return "jonction ou lien Windows"
+    return None
+
+
+def guard(path, outcome):
+    """PatchError si `path` ne peut pas être écrit (`refusal`), le message fini par `outcome` (ce qui est
+    écrit ou non à ce moment : « rien n'est écrit » avant toute écriture)."""
+    why = refusal(path)
+    if why:
+        raise PatchError(f"{path} : refusé, {why} ; {outcome}")
+
+
+def read_target(path, outcome="rien n'est écrit"):
+    """Le texte d'un fichier à écrire, contrôlé d'abord (`guard`), avant toute lecture ; `outcome` dit, dans
+    le message d'un refus, ce qui est écrit ou non à ce moment."""
+    guard(path, outcome)
     path = Path(path)
     if not path.is_file():
-        raise PatchError(f"fichier introuvable : {path}")
-    return decode(path)
+        raise PatchError(f"fichier introuvable : {path} ; {outcome}")
+    return decode(path, outcome)
+
+
+def write_target(path, text, original=None):
+    """Écrit `text` dans le fichier existant `path`, contrôlé de nouveau juste avant, ouvert sans suivre un
+    lien (O_NOFOLLOW là où il existe) et sans le créer. Le texte est encodé avant l'ouverture, qui vide le
+    fichier ; un refus (contrôle, lien apparu entre-temps, fichier disparu) est une PatchError qui nomme
+    le chemin et la raison. Une écriture coupée après l'ouverture (CutWrite) remet `original`, le texte
+    d'avant, quand il est donné, et le message dit si elle l'a pu."""
+    try:
+        write_bytes_checked(path, text)
+    except CutWrite as err:
+        if original is None:
+            raise
+        try:
+            write_bytes_checked(path, original)
+        except PatchError:
+            raise CutWrite(f"{err} ; NON REMIS tel qu'avant, à vérifier à la main")
+        raise CutWrite(f"{str(err).replace(' ; le fichier est peut-être tronqué', '')} ; remis tel qu'avant")
+
+
+def write_bytes_checked(path, text):
+    """L'écriture de `write_target`, sans la remise d'une écriture coupée."""
+    try:
+        data = text.encode("utf-8")
+    except UnicodeEncodeError as err:
+        raise PatchError(f"{path} : le texte n'est pas encodable en UTF-8 ({err.reason}) ; ce fichier n'est pas écrit")
+    guard(path, "ce fichier n'est pas écrit")
+    flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as err:
+        raise PatchError(f"{path} : écriture refusée ({err.strerror}) ; ce fichier n'est pas écrit")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+    except OSError as err:
+        raise CutWrite(f"{path} : écriture coupée ({err.strerror}) ; le fichier est peut-être tronqué")
 
 
 def patch(path, old, new):
@@ -168,7 +281,7 @@ def patch(path, old, new):
         raise PatchError(f"{path} est un fichier de paires (première ligne « {MARK}fichier … ») : "
                          f"python3 scripts/patch.py --lot {path} applique ses paires")
     text, line = replace_once(path, current, old, new)
-    Path(path).write_bytes(text.encode("utf-8"))
+    write_target(path, text, current)
     return line
 
 
@@ -184,7 +297,7 @@ def append(path, text):
     added = newline.join(lines) + newline
     if current and not current.endswith("\n"):
         added = newline + added
-    Path(path).write_bytes((current + added).encode("utf-8"))
+    write_target(path, current + added, current)
     return len(lines)
 
 
@@ -236,13 +349,19 @@ def patch_batch(lot):
         raise PatchError(f"fichier de paires introuvable : {lot}")
     pairs = parse_batch(decode(Path(lot)))
     # Rangés par chemin résolu : un même fichier nommé deux fois (`a.md`, `./a.md`) garde chaque remplacement.
-    texts, done, errors = {}, [], []
+    # Chaque nom est contrôlé (`guard`), même quand un autre nom du même fichier a déjà été lu : un lien
+    # vers un fichier déjà nommé passait sinon sans contrôle. Le fichier s'écrit par le premier nom
+    # donné, contrôlé, jamais par son chemin résolu, qui suivrait un lien.
+    texts, names, originals, done, errors = {}, {}, {}, [], []
     changed = set()  # les fichiers qu'une paire réussie a déjà changés
     for number, target, old, new in pairs:
         key = Path(target).resolve()
         try:
             if key not in texts:
-                texts[key] = read_target(target)
+                texts[key] = originals[key] = read_target(target)
+                names[key] = target
+            else:
+                guard(target, "rien n'est écrit")
             texts[key], line = replace_once(target, texts[key], old, new)
             done.append((number, target, line))
             changed.add(key)
@@ -254,11 +373,11 @@ def patch_batch(lot):
     written = []
     for key, text in texts.items():
         try:
-            key.write_bytes(text.encode("utf-8"))
-        except OSError as err:
+            write_target(names[key], text, originals[key])
+        except PatchError as err:
             already = ", ".join(map(str, written)) or "aucun"
-            raise PatchError(f"écriture de {key} refusée ({err.strerror}) ; fichiers déjà écrits : {already}")
-        written.append(key)
+            raise PatchError(f"{err} ; fichiers déjà écrits : {already}")
+        written.append(names[key])
     return done
 
 
@@ -311,7 +430,7 @@ def replace_range(path, first, last, new, start_text, end_text):
     added = [] if new == "" else [(line, newline) for line in new.replace("\r\n", "\n").split("\n")]
     if added and lines[last - 1][1] == "":
         added[-1] = (added[-1][0], "")
-    Path(path).write_bytes(join_lines(lines[:first - 1] + added + lines[last:]).encode("utf-8"))
+    write_target(path, join_lines(lines[:first - 1] + added + lines[last:]), current)
     return len(added)
 
 
@@ -379,13 +498,20 @@ def move(source, start_text, end_text, target, anchor, dry=False):
         return plan
     written = []
     try:
-        Path(target).write_bytes(plan["new_dst"].encode("utf-8"))
-        written.append((target, plan["dst"]))
-        Path(source).write_bytes(plan["new_src"].encode("utf-8"))
-        written.append((source, plan["src"]))
-    except OSError as err:
-        raise PatchError(f"écriture refusée ({err.strerror}) ; {restore(written)}")
-    if not prove_move(plan, read_target(source), read_target(target)):
+        for path, new, old in ((target, plan["new_dst"], plan["dst"]), (source, plan["new_src"], plan["src"])):
+            try:
+                write_target(path, new)
+            except CutWrite:
+                written.append((path, old))  # déjà vidé : à remettre aussi
+                raise
+            written.append((path, old))
+    except PatchError as err:
+        raise PatchError(f"{err} ; {restore(written)}")
+    try:
+        proved = prove_move(plan, read_target(source, "relecture refusée"), read_target(target, "relecture refusée"))
+    except PatchError as err:
+        raise PatchError(f"{err} ; {restore(written)}")
+    if not proved:
         raise PatchError(f"les fichiers relus sur le disque ne portent pas le déplacement attendu ; {restore(written)}")
     return plan
 
@@ -396,10 +522,10 @@ def restore(written):
     failed = []
     for path, text in reversed(written):
         try:
-            Path(path).write_bytes(text.encode("utf-8"))
+            write_target(path, text)
             if Path(path).read_bytes() != text.encode("utf-8"):
                 failed.append(str(path))
-        except OSError:
+        except (OSError, PatchError):
             failed.append(str(path))
     if failed:
         return f"NON REMIS tels qu'avant, à vérifier à la main : {', '.join(failed)}"
@@ -463,7 +589,12 @@ def main(argv):
             print(f"{len(done)} remplacement{'s' if len(done) > 1 else ''} dans {files} fichier{'s' if files > 1 else ''}")
             return 0
         if argv[:1] == ["--append"] and len(argv) == 3:
-            count = append(argv[1], argument(argv[2]))
+            text = argument(argv[2])
+            # Un texte donné en argument perd sa fin de ligne finale, comme un `@<fichier>` : sinon la
+            # fin de ligne qu'ajoute `--append` faisait une ligne vide de plus.
+            if (argv[2].startswith("@@") or not argv[2].startswith("@")) and strip_final_newline(text):
+                text = strip_final_newline(text)
+            count = append(argv[1], text)
             print(f"{argv[1]} : ajouté ({count} ligne{'s' if count > 1 else ''} à la fin)")
             return 0
         if len(argv) != 3 or argv[0] in {"--lot", "--append", "--plage", "--deplace"}:

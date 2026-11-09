@@ -35,7 +35,7 @@ const boxOf = (w: World, session: string): { items: any[] } | undefined => {
   return (path ? JSON.parse(w.files[path]!) : w.mem[`a-reprendre::${session}`]) as { items: any[] } | undefined
 }
 
-test('livrée, la mission reçoit sa carte de rétro, recommandée parce qu’elle a eu des workers ; « Pas de rétro » la retire', { timeoutMs: 20000 }, async ($, on) => {
+test('livrée, la mission reçoit sa carte de rétro, recommandée parce qu’elle a eu des workers ; pas encore close (ouverte ailleurs), elle n’a pas encore « ✓ Archiver »', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
   const run = validated(T0)
@@ -46,17 +46,17 @@ test('livrée, la mission reçoit sa carte de rétro, recommandée parce qu’el
   await settle(clock, 6)
   const done = String(((await $.tool.call({ tool: TOOL, delivery: { step: 'project', ok: true } } as any)) as any).result)
   expect(done).toMatch(/Delivery done/)
-  expect(done).toMatch(/offers the retro of each delivered mission \(1 card/)
+  expect(done).toMatch(/offers the retro of each delivered mission that is not itself a retro \(1 card/)
   await settle(clock, 2)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   const shown = await texts(pane)
   expect(shown).toContain('Rétrospective · Mission de B')
   expect(shown).toMatch(/rétro : recommandée : elle a eu des workers/)
-  await pane.press({ key: `coo-card-dismiss-${retroCardId(run.id)}` })
+  // Sa clôture attend la discussion qui la tient : rien à archiver encore (tests/archiver-livrees.test.ts archive une mission close).
+  expect(await pane.find({ key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
+  // Sa clôture pas encore appliquée, elle n'attend pas « ✓ Archiver » : « ✕ Retirer » retire la carte (toute carte de rétro sans « ✓ Archiver »).
+  expect(await pane.find({ key: `coo-card-remove-${retroCardId(run.id)}` })).toBeDefined()
   await pane.unmount()
-  const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await texts(after)).not.toContain('Rétrospective · Mission de B')
-  await after.unmount()
 })
 
 test('la rétro lancée garde l’id de la mission close, prend son titre, et dit où se cochent ses pistes', { timeoutMs: 20000 }, async ($, on) => {

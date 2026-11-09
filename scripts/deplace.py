@@ -35,10 +35,12 @@ sur un masque de même longueur que la source. Il ne connaît pas le JSX : dans 
 imports d'en-tête sont lus, sauf pour la source et la cible, qui doivent se lire sans littéral ouvert.
 Une instruction de premier niveau commence par un mot en colonne 0 (un accent grave ou une suite
 d'expression en colonne 0 continue la précédente). Les usages d'un nom se trouvent par mot dans le
-code (une propriété `a.nom`, une clé `{ nom: }` ou un membre de type `nom?:` n'en est pas un ; un nom
-local qui en masque un de premier niveau, ou un nom de méthode, si) : l'essai les montre, et
-`tsc` (`scripts/check.sh --tsc <plugin>`) les contrôle après coup. Sans dépendance hors de la
-bibliothèque standard.
+code (une propriété `a.nom`, une clé `{ nom: }`, un membre de type `nom?:` ou la déclaration d'une
+méthode `nom() {`, avec ou sans `async`, `static`, `get`, `set`, n'en est pas un ; un appel `nom(…)`,
+ou un nom local qui en masque un de premier niveau, si) : l'essai les montre, et `tsc`
+(`scripts/check.sh --tsc <plugin>`) les contrôle après coup. Un import ajouté prend le guillemet et le
+point-virgule du premier import du fichier qui le reçoit ; sans import, `'…'` sans point-virgule.
+Sans dépendance hors de la bibliothèque standard.
 """
 
 import hashlib
@@ -55,6 +57,12 @@ DECL = re.compile(r"(export\s+)?(?:declare\s+)?(default\s+)?(?:async\s+)?(?:abst
 IMPORT = re.compile(r"import(\s+type\b)?\s*([^'\"]*?)\s*(?:\bfrom\s*)?(['\"])", re.S)
 EXPORT_FROM = re.compile(r"export(\s+type\b)?\s*(\{[^}]*\}|\*(?:\s*as\s+[\w$]+)?)\s*from\s*(['\"])", re.S)
 WORD = re.compile(r"[A-Za-z_$][\w$]*")
+# La fin d'une déclaration de méthode, après la parenthèse fermante de ses paramètres : un type de retour
+# éventuel (un nom de type, sans parenthèse ni accolade), puis le corps `{`, sur la même ligne.
+# Les mots après lesquels une ligne continue sur la suivante (`extends`, `return`…).
+CONTINUING_WORDS = {"extends", "implements", "return", "new", "await", "yield", "typeof", "void", "delete",
+                    "in", "of", "instanceof", "case", "throw"}
+METHOD_BODY = re.compile(r"[ \t]*(?::[ \t]*[\w$][\w$.<>\[\]|&, \t]*)?\{")
 SPECIFIER = re.compile(r"^(type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$")
 REGEX_AFTER = (re.compile(r"(?:^|[(,=:[&|?{};+\-*%~^<>])\s*$"), re.compile(r"(?:^|[^\w$)\]])\s*!\s*$"),
                re.compile(r"(?:^|[^\w$.])(?:return|typeof|instanceof|new|delete|throw|case|do|else|in|of|void|yield|await)\s*$"))
@@ -278,7 +286,7 @@ class Module:
 def uses(mask_text, ranges):
     """Les noms employés comme valeurs ou types dans les plages `ranges` d'un masque : ni une
     propriété (`a.nom`), ni une clé d'objet ou un membre de type (`nom:` ou `nom?:` après `{`, `,`,
-    `;`, `(` ou en tête de ligne)."""
+    `;`, `(` ou en tête de ligne), ni la déclaration d'une méthode (`is_method_declaration`)."""
     found = set()
     for a, b in ranges:
         for m in WORD.finditer(mask_text, a, b):
@@ -289,8 +297,58 @@ def uses(mask_text, ranges):
             before = mask_text[:i].rstrip(" \t")[-1:] or "\n"
             if re.match(r"\??:(?!:)", after) and before in "{,;(\n":
                 continue
+            if is_method_declaration(mask_text, m.start(), m.end()):
+                continue
             found.add(m.group(0))
     return found
+
+
+def continues_expression(mask_text, line_end):
+    """La ligne qui finit à `line_end` (son saut de ligne) laisse-t-elle une expression ouverte : un
+    opérateur, une parenthèse ou un mot comme `extends` en dernier ? La ligne d'après la continue alors
+    (`class A extends\\n  mixin(Base) {` : un appel, pas une méthode). Seuls les blancs sont relus."""
+    i = line_end
+    while i >= 0 and mask_text[i].isspace():
+        i -= 1
+    if i < 0:
+        return False
+    if mask_text[i] in "=([?:!&|+-*/%<>^~.":
+        return True
+    word = re.search(r"[\w$]+$", mask_text[max(0, i - 15):i + 1])
+    return bool(word) and word.group(0) in CONTINUING_WORDS
+
+
+def is_method_declaration(mask_text, start, end):
+    """Le mot de `start` à `end` déclare-t-il une méthode : en tête de membre (après `{`, `,`, `;`, en
+    tête de ligne, ou après `async`, `static`, `get`, `set`), suivi de ses paramètres, d'un type de
+    retour éventuel (un nom de type, sans parenthèse ni accolade), puis d'un corps `{` sur la même ligne ?
+    Un appel `nom(…)` hors d'une déclaration n'en est pas une, même suivi d'un bloc à la ligne d'après ou
+    d'un `: { … }` de ternaire. Seule la ligne du mot est relue : relire tout ce qui le précède rendait
+    `uses` quadratique (53 s sur un module de 400 Ko)."""
+    head = mask_text[mask_text.rfind("\n", 0, start) + 1:start].rstrip(" \t")
+    while True:
+        modifier = re.search(r"(?<![\w$])(?:async|static|get|set)$", head)
+        if not modifier:
+            break
+        head = head[:modifier.start()].rstrip(" \t")
+    if (head[-1:] or "\n") not in "{,;\n":
+        return False
+    if not head and continues_expression(mask_text, mask_text.rfind("\n", 0, start)):
+        return False
+    at = end
+    while at < len(mask_text) and mask_text[at] in " \t":
+        at += 1
+    if mask_text[at:at + 1] != "(":
+        return False
+    depth = 0
+    for i in range(at, len(mask_text)):
+        if mask_text[i] == "(":
+            depth += 1
+        elif mask_text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return METHOD_BODY.match(mask_text, i + 1) is not None
+    return False
 
 
 def specifier_names(text):
@@ -388,7 +446,11 @@ class Edits:
             else:
                 replaced.append((imp["start"], imp["end"], new))
         if self.added:
-            lines = "".join(f"import {'type ' if t else ''}{{ {', '.join(specs)} }} from '{spec}'\n" for spec, _, t, specs in self.added)
+            # Le guillemet et le point-virgule du premier import du fichier ; sans import, la forme
+            # `'…'` sans point-virgule.
+            first = next((imp for imp in self.module.imports if not imp["export"]), None)
+            q, semi = (first["quote"], ";" if first["semi"] else "") if first else ("'", "")
+            lines = "".join(f"import {'type ' if t else ''}{{ {', '.join(specs)} }} from {q}{spec}{q}{semi}\n" for spec, _, t, specs in self.added)
             at = self.module.import_end()
             if at == 0 and text and not self.module.imports:
                 lines += "\n"

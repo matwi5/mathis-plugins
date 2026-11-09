@@ -46,7 +46,8 @@ export type CooDo =
   | { kind: 'retro-tick'; retro: string; item: string }
   | { kind: 'retro-tick-all'; retro: string }
   | { kind: 'retro-pick'; retro: string; print: string }
-  | { kind: 'retro-dismiss'; card: string }
+  | { kind: 'archive'; ids: string[]; print: string }
+  | { kind: 'card-remove'; card: string }
   | { kind: 'security'; to: 'on' | 'off' }
 /** Un bouton d'une ligne : sa clé, son libellé, son geste. */
 export type CooAction = { key: string; label: string; act: CooDo }
@@ -67,7 +68,7 @@ const missionParts = (m: CooMission): CooPart[] => {
     { text: def ? `${def.glyph}${NB}${def.label}` : m.phase, color: def?.color },
     ...status,
     ...(m.total > 0 ? [{ text: `${m.done}/${m.total}`, bold: true }] : []),
-    ...m.workers.map(w => ({ text: `↗${w.group}${NB}${w.done}/${w.total}${w.state === 'returned' ? `${NB}rendu` : ''}`, color: C.blue, bold: true })),
+    ...m.workers.map(w => ({ text: `↗${w.group}${NB}${w.done}/${w.total}${w.state === 'returned' || w.state === 'reported' ? `${NB}rendu` : ''}`, color: C.blue, bold: true })),
     ...(m.waiting > 0 ? [{ text: `· attend ${m.waiting} question${m.waiting > 1 ? 's' : ''}`, color: C.amber, bold: true }] : []),
   ]
 }
@@ -75,11 +76,15 @@ const missionParts = (m: CooMission): CooPart[] => {
 /** Les lignes de l'onglet Coordination, calculées sur le relevé. */
 export const coordinationRows = (s: CooStatement): CooRow[] => {
   const point = cooPoint(s)
+  // Les lignes des missions livrées sous « Ce qui t'attend » (chacune sans carte de rétro prête, puis « Tout archiver » dès
+  // deux, cartes comprises) : l'en-tête et « Rien pour l'instant » comptent ces mêmes lignes, jamais un autre compte.
+  const delivered = deliveredRows(s)
+  const deliveredCount = delivered.length
   return [
     { key: 'coo-point', kind: 'heading', parts: [{ text: 'Le point', bold: true }] },
     ...point.map((text, i) => ({ key: `coo-point-${i}`, kind: 'line' as const, parts: [{ text }] })),
-    { key: 'coo-waits', kind: 'heading', parts: [{ text: `Ce qui t’attend · ${s.waits.length + s.waiting.length + (s.reports ?? []).length}`, bold: true, ...(s.waits.length + s.waiting.length + (s.reports ?? []).length > 0 ? { color: C.amber } : {}) }] },
-    ...(s.waits.length + s.waiting.length + s.relays.length + (s.reports ?? []).length + (s.delivery ? 1 : 0) === 0
+    { key: 'coo-waits', kind: 'heading', parts: [{ text: `Ce qui t’attend · ${s.waits.length + s.waiting.length + (s.reports ?? []).length + deliveredCount}`, bold: true, ...(s.waits.length + s.waiting.length + (s.reports ?? []).length + deliveredCount > 0 ? { color: C.amber } : {}) }] },
+    ...(s.waits.length + s.waiting.length + s.relays.length + (s.reports ?? []).length + (s.delivery ? 1 : 0) + delivered.length === 0
       ? [{ key: 'coo-waits-none', kind: 'line' as const, parts: [{ text: 'Rien pour l’instant.', dim: true }] }]
       : [
           ...s.waits.map(w => ({
@@ -97,6 +102,7 @@ export const coordinationRows = (s: CooStatement): CooRow[] => {
           })),
           ...(s.reports ?? []).flatMap(reportRows),
           ...(s.delivery ? deliveryRows(s.delivery) : []),
+          ...delivered,
           // Une réponse donnée ici qui ne s'applique pas encore : la mission fermée, ou la question changée depuis.
           ...s.relays.map((r, i) => ({
             key: `coo-relay-${i}`,
@@ -123,7 +129,7 @@ export const coordinationRows = (s: CooStatement): CooRow[] => {
     ...(s.missions.length === 0
       ? [{ key: 'coo-missions-none', kind: 'line' as const, parts: [{ text: 'Aucune mission dans ce projet.', dim: true }] }]
       : s.missions.map(m => ({ key: `coo-mission-${m.id}`, kind: 'line' as const, parts: missionParts(m) }))),
-    ...cardRows(s.cards ?? [], s.quota),
+    ...cardRows(s.cards ?? [], s.quota, s.delivered),
     ...planRows(s),
     ...waveRows(s),
     ...(s.roadmap ? roadmapRows(s.roadmap) : []),
@@ -268,8 +274,8 @@ const waveRows = (s: CooStatement): CooRow[] => {
 }
 
 /**
- * Le plan des vagues du projet : vague par vague, chaque mission et ses groupes, les livraisons qui suivent
- * une vague ; un plan qui change l'ordre validé se propose avec « ✓ Valider le plan ».
+ * Le plan des vagues du projet : vague par vague, chaque mission et ses groupes, puis la livraison unique
+ * après la dernière vague ; un plan qui change l'ordre validé se propose avec « ✓ Valider le plan ».
  */
 const planRows = (s: CooStatement): CooRow[] => {
   const p = s.plan
@@ -288,8 +294,11 @@ const planRows = (s: CooStatement): CooRow[] => {
   ]
   for (const [i, w] of p.computed.waves.entries()) {
     rows.push({ key: `coo-plan-wave-${i}`, kind: 'line', parts: [{ text: `Vague${NB}${i + 1}`, color: C.cyan, bold: true }, { text: waveText(w, t => `« ${neutralLine(t)} »`) }] })
-    for (const d of w.deliveries) rows.push({ key: `coo-plan-deliver-${i}-${d.run}`, kind: 'line', parts: [{ text: '→', dim: true }, { text: `livrer « ${neutralLine(d.title)} »`, dim: true }] })
   }
+  // Une seule livraison, après la dernière vague, pour toutes les missions du plan.
+  const delivery = p.computed.delivery
+  if (delivery.length > 0)
+    rows.push({ key: 'coo-plan-delivery', kind: 'line', parts: [{ text: '→', dim: true }, { text: `une livraison : ${delivery.map(d => `« ${neutralLine(d.title)} »`).join(', ')}`, dim: true }] })
   return rows
 }
 
@@ -306,7 +315,7 @@ const launchButtons = (c: CooCard): CooAction[] => {
  * mission lancée) ; les autres départs se choisissent avant le clic. `quota` : celui de la discussion, sous une
  * carte prête en xhigh (une limite atteinte arrêterait la mission en plein travail).
  */
-const cardRows = (cards: readonly CooCard[], quota?: string): CooRow[] => {
+const cardRows = (cards: readonly CooCard[], quota?: string, delivered?: CooStatement['delivered']): CooRow[] => {
   if (cards.length === 0) return []
   const rows: CooRow[] = [{ key: 'coo-cards', kind: 'heading', parts: [{ text: `Lancements · ${cards.length}`, bold: true }] }]
   for (const c of cards) {
@@ -332,8 +341,10 @@ const cardRows = (cards: readonly CooCard[], quota?: string): CooRow[] => {
             actions: [
               ...launchButtons(c),
               ...c.alts.map(a => ({ key: `coo-card-alt-${c.id}-${a}`, label: `→${NB}/${a}`, act: { kind: 'card-start' as const, card: c.id, start: a } })),
-              // La rétro d'une mission livrée : « Pas de rétro » retire la carte.
-              ...(c.of ? [{ key: `coo-card-dismiss-${c.id}`, label: `✕${NB}Pas${NB}de${NB}rétro`, act: { kind: 'retro-dismiss' as const, card: c.id } }] : []),
+              // La rétro d'une mission livrée et pas archivée : « ✓ Archiver » archive la mission, et sa carte part avec elle.
+              ...(c.of && delivered?.list.some(d => d.id === c.of) ? [archiveAction(`coo-card-archive-${c.id}`, `✓${NB}Archiver`, [c.of], delivered.print)] : []),
+              // Sa mission n'attend pas « ✓ Archiver » : « ✕ Retirer » retire la carte, sans rien écrire sur la mission.
+              ...(c.isRemovable ? [{ key: `coo-card-remove-${c.id}`, label: `✕${NB}Retirer`, act: { kind: 'card-remove' as const, card: c.id } }] : []),
             ],
           }
         : {}),
@@ -342,6 +353,35 @@ const cardRows = (cards: readonly CooCard[], quota?: string): CooRow[] => {
     rows.push({ key: `coo-card-why-${c.id}`, kind: 'line', parts: [{ text: `${c.of ? 'rétro' : 'ask-matt'} : ${neutralLine(c.askMatt)}${c.modeWhy ? ` · mode : ${neutralLine(c.modeWhy)}` : ''}${c.effortWhy ? ` · effort : ${neutralLine(c.effortWhy)}` : ''}`, dim: true }] })
     if (quota && c.effort === 'xhigh' && c.state.kind === 'ready') rows.push({ key: `coo-card-quota-${c.id}`, kind: 'line', parts: [{ text: `quota de la discussion${NB}·${NB}${quota}`, dim: true }] })
   }
+  return rows
+}
+
+/** Un bouton d'archivage : les ids montrés et l'empreinte de la liste affichée, que le clic compare au fichier relu. */
+const archiveAction = (key: string, label: string, ids: string[], print: string): CooAction => ({ key, label, act: { kind: 'archive', ids, print } })
+
+/**
+ * Les missions livrées et pas archivées, sous « Ce qui t'attend » : une ligne « « M » livrée » avec « ✓ Archiver »
+ * pour chacune sans carte de rétro prête (sa carte, dans « Lancements », porte le même bouton), puis, dès deux
+ * missions livrées (avec ou sans carte), « ✓ Tout archiver (n) ».
+ */
+const deliveredRows = (s: CooStatement): CooRow[] => {
+  const d = s.delivered
+  if (!d) return []
+  const rows: CooRow[] = d.list
+    .filter(x => x.card === undefined)
+    .map(x => ({
+      key: `coo-delivered-${neutralLine(x.id)}`,
+      kind: 'line' as const,
+      parts: [{ text: '✓', color: C.green, bold: true }, { text: `« ${neutralLine(x.title)} » livrée` }, { text: 'rétro ou archivage', dim: true }],
+      actions: [archiveAction(`coo-archive-${x.id}`, `✓${NB}Archiver`, [x.id], d.print)],
+    }))
+  if (d.list.length >= 2)
+    rows.push({
+      key: 'coo-delivered-all',
+      kind: 'line',
+      parts: [{ text: `${d.list.length} missions livrées attendent leur rétro ou leur archivage`, dim: true }],
+      actions: [archiveAction('coo-archive-all', `✓${NB}Tout${NB}archiver${NB}(${d.list.length})`, d.list.map(x => x.id), d.print)],
+    })
   return rows
 }
 

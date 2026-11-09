@@ -436,12 +436,56 @@ export const consentAt = (value: unknown, now: number): number | null => {
 /** Le jour d'un accord borné par `consentAt`, en AAAA-MM-JJ. */
 export const consentDay = (at: number): string => new Date(at).toISOString().slice(0, 10)
 
+/** L'outil de l'app qui archive une session, tel que les consignes le nomment. */
+const ARCHIVE_TOOL = 'l’outil archive_session de l’app'
+
+/** Archiver une session par l'outil de l'app, avec la raison donnée (« flow-board : … »). */
+const archiveWith = (reason: string): string => `par ${ARCHIVE_TOOL}, avec une raison (« ${reason} »)`
+
+/** La demande d'accord pour archiver `what` (« cette session », « ces discussions »), en une ligne qui nomme `named`. */
+const askArchiveConsent = (what: string, named: string): string => `l’outil d’archivage de l’app demande mon accord pour ${what} : demande-le-moi en une ligne, en nommant ${named}`
+
 /** Comment Claude archive une session de l'app, avec l'accord donné d'avance ou en le demandant. */
 const appArchive = (title: string): string => {
   const at = archiveConsent.at
   if (at !== null)
-    return `tu as mon accord pour l’archiver : je l’ai donné d’avance par /flow archive on, le ${consentDay(at)}, pour chaque worker que cette fermeture a vérifié ; il vaut pour la session dont le titre commence par ${title}, ne me le redemande pas : archive-la par l’outil archive_session de l’app, avec une raison (« flow-board : rendue, vérifiée, fusionnée »)`
-  return `l’outil d’archivage de l’app demande mon accord pour cette session : demande-le-moi en une ligne, en nommant la session (titre qui commence par ${title}), et dis que /flow archive on, tapé par moi, donne cet accord d’avance pour les fermetures suivantes ; sans attendre ma réponse, continue le reste de la mission (les autres groupes ; la suite de cette fermeture attend l’archivage) ; mon oui donné, archive-la par l’outil archive_session de l’app`
+    return `tu as mon accord pour l’archiver : je l’ai donné d’avance par /flow archive on, le ${consentDay(at)}, pour chaque worker que cette fermeture a vérifié ; il vaut pour la session dont le titre commence par ${title}, ne me le redemande pas : archive-la ${archiveWith('flow-board : rendue, vérifiée, fusionnée')}`
+  return `${askArchiveConsent('cette session', `la session (titre qui commence par ${title})`)}, et dis que /flow archive on, tapé par moi, donne cet accord d’avance pour les fermetures suivantes ; sans attendre ma réponse, continue le reste de la mission (les autres groupes ; la suite de cette fermeture attend l’archivage) ; mon oui donné, archive-la par ${ARCHIVE_TOOL}`
+}
+
+/**
+ * La demande au Claude du COO, après l'archivage de missions livrées (« ✓ Archiver », « ✓ Tout archiver (n) », une
+ * rétro lancée) : archiver aussi leur discussion dans l'app, une seule demande pour toutes. Chaque discussion se nomme
+ * par le titre de sa mission (`title`, déjà neutralisé et cité par l'appelant) et, quand il est sûr, son id de session
+ * (`id`, contrôlé par `isSessionId` ici aussi : un id hors forme n'est jamais passé). L'accord se demande toujours, en
+ * une ligne qui les nomme : celui de /flow archive on ne nomme que les sessions des workers d'une fermeture ; sans id
+ * sûr, une discussion ne s'archive jamais d'office. Au terminal (pas d'outil archive_session), rien.
+ */
+export const missionSessionsArchiveText = (all: readonly { title: string; id?: string; day?: string }[]): string => {
+  // Deux missions nées dans la même discussion la nomment une fois, avec les titres des deux (elle peut porter l'un ou l'autre).
+  const sessions = all.flatMap((s, i) => {
+    if (!isSessionId(s.id)) return [s]
+    if (all.findIndex(o => o.id === s.id) !== i) return []
+    const same = all.filter(o => o.id === s.id)
+    return [same.length === 1 ? s : { ...s, title: same.map(o => o.title).join(' ou '), day: undefined }]
+  })
+  const isMany = all.length > 1
+  const isManyAsks = sessions.length > 1
+  const named = sessions.map(s => `la discussion de la mission ${s.title}${s.day ? `, livrée le ${s.day}` : ''} (${isSessionId(s.id) ? `id de session ${s.id}` : 'pas d’id sûr : cherche-la par ce titre'})`).join(' ; ')
+  return `◆ COO : ${isMany ? 'ces missions livrées sont archivées' : 'cette mission livrée est archivée'} dans le tableau de bord. ${isManyAsks ? 'Leur discussion' : isMany ? 'Leur discussion commune' : 'Sa discussion'} dans l’app Claude Desktop peut s’archiver aussi : ${named}. S’il n’y a pas d’outil archive_session ici (au terminal), ne fais rien et n’en dis rien. Sinon, ${askArchiveConsent(isManyAsks ? 'ces discussions' : 'cette discussion', isManyAsks ? 'chacune' : 'la discussion')} ; mon oui donné, ${isManyAsks ? 'archive celles qu’il nomme, chacune' : 'archive-la'} ${archiveWith('flow-board : mission livrée, archivée')}. Une session se cherche par son id, puis, sans id ou introuvable par lui, par le titre exact de sa mission (ou de l’une d’elles ; un titre cité qui finit par « … » est coupé : son début) : ni une session de ses workers (titre « <mission> > … »), ni sa rétro (« Rétrospective · … ») ; aucune ou plusieurs sessions à ce titre exact, introuvable ou déjà archivée : dis-le, sans autre geste. Jamais la discussion où tu tournes, même si son id ou son titre correspond. Si ta dernière ligne « COO seat » dit que tu ne tiens plus le siège, n’archive rien.`
+}
+
+/**
+ * L'id de session de la discussion d'une mission archivée, pour `missionSessionsArchiveText` : `bornIn`, puis `owner`,
+ * le premier qui a la forme d'un id de session (`isSessionId`). `null` : la discussion ne se nomme pas du tout, parce
+ * qu'un de ces ids est celui de cette discussion-ci (`here`, le COO) ou celui d'une autre mission non archivée (une
+ * discussion partagée, encore au travail) ; `undefined` : pas d'id sûr, la discussion se cherche par son titre.
+ */
+export const missionSessionId = (run: Run, runs: readonly Run[], here: string): string | undefined | null => {
+  const ids = [run.bornIn, run.owner].filter(isSessionId)
+  const isShared = (id: string) => runs.some(o => o.id !== run.id && o.archivedAt === undefined && (o.bornIn === id || o.owner === id))
+  if (ids.some(id => id === here || isShared(id))) return null
+  return ids[0]
 }
 
 /** Ce que la fermeture désigne : la cible, en clair, et ce qui reconnaît sa session. */

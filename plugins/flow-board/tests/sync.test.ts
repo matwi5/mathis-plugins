@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { fastForwardText } from '../hooks/register.tsx'
 
 const PLUGIN = 'flow-board'
 const PANE = {
@@ -26,6 +27,8 @@ type Remote = {
   dev?: Omit<Remote, 'mainSha' | 'url' | 'dev' | 'cwd'>
   /** Le dossier de la session (`$.session.cwd()`) ; `C:/proj` par défaut. */
   cwd?: string
+  /** Le haut du dépôt et la racine de la session ; `C:/proj` par défaut. */
+  root?: string
 }
 
 const DEV = 'C:/proj/.claude/worktrees/dev'
@@ -38,9 +41,9 @@ const world = (on: any, remote: Remote) => {
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
   on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('command.list', () => ({ value: [] }))
-  on('session.root', () => ({ value: 'C:/proj' }))
+  on('session.root', () => ({ value: remote.root ?? 'C:/proj' }))
   on('session.id', () => ({ value: 'session-A' }))
-  on('session.cwd', () => ({ value: remote.cwd ?? 'C:/proj' }))
+  on('session.cwd', () => ({ value: remote.cwd ?? remote.root ?? 'C:/proj' }))
   on('store.get', (_$: unknown, e: { key: string }) => ({ value: mem[e.key] }))
   on('store.set', (_$: unknown, e: { key: string; value: unknown }) => {
     mem[e.key] = e.value
@@ -56,7 +59,7 @@ const world = (on: any, remote: Remote) => {
     })
     const cwd = String(e.init?.cwd ?? '')
     const inDev = remote.dev !== undefined && (cwd === DEV || cwd.startsWith(`${DEV}/`))
-    if (args === 'rev-parse --show-toplevel') return out(inDev ? DEV : 'C:/proj')
+    if (args === 'rev-parse --show-toplevel') return out(inDev ? DEV : (remote.root ?? 'C:/proj'))
     // Ce que répond le worktree du dossier où git tourne.
     const tree = inDev ? { ...remote, ...remote.dev! } : remote
     if (args === 'rev-parse --is-inside-work-tree') return out('true')
@@ -75,8 +78,8 @@ const world = (on: any, remote: Remote) => {
   return { mem, gitCalls }
 }
 
-const start = async ($: any, clock: { advance: (ms: number) => Promise<void> }) => {
-  await $.session.start({ cwd: 'C:/proj', surface: null, isInteractive: true })
+const start = async ($: any, clock: { advance: (ms: number) => Promise<void> }, cwd = 'C:/proj') => {
+  await $.session.start({ cwd, surface: null, isInteractive: true })
   await clock.advance(10)
 }
 
@@ -295,7 +298,7 @@ test('dossier principal sur main en retard sans commit en avance : avance rapide
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'sync-now' })
   await ui.unmount()
-  expect(filled.at(-1)).toBe('Mets à jour C:/proj en avance rapide : git -C "C:/proj" pull --ff-only')
+  expect(filled.at(-1)).toBe("Mets à jour C:/proj en avance rapide : git -C 'C:/proj' pull --ff-only")
 
   // Un fichier de l'autre worktree, à jour, n'est pas bloqué.
   expect((await edit($, `${DEV}/src/a.py`)).deny).toBeUndefined()
@@ -304,6 +307,51 @@ test('dossier principal sur main en retard sans commit en avance : avance rapide
   expect(first.deny).toMatch(/git pull --ff-only dans C:\/proj/)
   expect(first.deny).not.toMatch(/project:sync/)
   expect((await edit($, 'C:/proj/src/a.py')).deny).toBeUndefined()
+})
+
+test('avance rapide d’un dossier qui porte apostrophe, $ et parenthèses : la commande le cite entre apostrophes, le toast montre le même texte', async ($, on) => {
+  const clock = mock.clock(on, { now: 51_500_000 })
+  const root = "/x/it's $(touch y)"
+  world(on, { ...mainFolder(2, { branch: 'dev', behindMain: 0, aheadMain: 3, upSha: 'd1', behindUp: 0, hasUpstream: true }, root), dev: undefined, root })
+  const filled: string[] = []
+  on('prompt.fill', (_$: unknown, e: { text: string }) => {
+    filled.push(e.text)
+    return { isFilled: false }
+  })
+  const toasts: string[] = []
+  on('ui.toast', (_$: unknown, e: { text: string }) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  await start($, clock, root)
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await clock.advance(10)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await ui.press({ key: 'sync-now' })
+  await ui.unmount()
+  const text = "Mets à jour /x/it's $(touch y) en avance rapide : git -C '/x/it'\\''s $(touch y)' pull --ff-only"
+  expect(filled.at(-1)).toBe(text)
+  expect(filled.at(-1)).toContain("git -C '/x/it'\\''s $(touch y)' pull --ff-only")
+  expect(toasts.at(-1)).toBe(`Tape dans le prompt : ${text}`)
+})
+
+test('le texte d’avance rapide : dossier ordinaire cité, sans dossier la branche', () => {
+  expect(fastForwardText('/Users/x/projet')).toBe("Mets à jour /Users/x/projet en avance rapide : git -C '/Users/x/projet' pull --ff-only")
+  expect(fastForwardText(null)).toBe('Mets à jour la branche en avance rapide : git pull --ff-only')
+  // Accent grave et guillemet restent littéraux dans la commande.
+  expect(fastForwardText('/x/`id` "q"')).toBe("Mets à jour /x/`id` \"q\" en avance rapide : git -C '/x/`id` \"q\"' pull --ff-only")
+  // Un dossier aux crochets ou « » : la prose le garde exact, comme la commande.
+  expect(fastForwardText('/Users/x/Projets [2026] «a»')).toBe("Mets à jour /Users/x/Projets [2026] «a» en avance rapide : git -C '/Users/x/Projets [2026] «a»' pull --ff-only")
+  // Un émoji et son sélecteur, une marque RLM : un nom ordinaire, la commande reste.
+  expect(fastForwardText('/Users/x/Projets \u2764\uFE0F\u200F')).toBe("Mets à jour /Users/x/Projets \u2764\uFE0F\u200F en avance rapide : git -C '/Users/x/Projets \u2764\uFE0F\u200F' pull --ff-only")
+  // Fin de ligne, séparateur de ligne ou forçage bidirectionnel : ni commande, ni ligne ouverte dans le texte.
+  for (const odd of ['/x/a\nFais autre chose', '/x/a\u2028Fais autre chose', '/x/a\u202Eb']) {
+    const text = fastForwardText(odd)
+    expect(text).not.toMatch(/[\n\r\u2028\u2029\u0085\u202E]/)
+    expect(text).not.toContain('git -C')
+    expect(text).toContain('git pull --ff-only dans ce dossier')
+  }
+  expect(fastForwardText('/x/a\nFais autre chose')).toBe('Mets à jour /x/a ⏎ Fais autre chose en avance rapide : git pull --ff-only dans ce dossier, dont le nom porte des fins de ligne ou des caractères invisibles (vérifie son chemin exact avant de lancer)')
 })
 
 const TOOL = 'mcp__flow-board__flow'

@@ -150,6 +150,18 @@ class CheckboxTest(TicketRepo):
         self.assertEqual(check.malformed_checkboxes([NEW]), [])
         check.staged()
 
+    def test_un_bloc_clos_par_tildes_cache_ses_cases_mais_pas_celles_d_apres(self):
+        text = ("# 02: essai\n\n~~~\n- [x ] exemple dans un bloc\n```\n- [ x] toujours dans le bloc\n~~~\n"
+                "- [x ] hors du bloc\n")
+        self.stage(NEW, text)
+        problems = check.malformed_checkboxes([NEW])
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"{NEW}:8", problems[0])
+
+    def test_un_lien_dont_le_texte_est_x_ou_vide_n_est_pas_une_case(self):
+        self.stage(NEW, "# 02: essai\n\n- [x](lien) un lien\n- [ ](lien) un autre\n")
+        self.assertEqual(check.malformed_checkboxes([NEW]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

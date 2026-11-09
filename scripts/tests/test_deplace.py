@@ -7,6 +7,7 @@ une vue `.tsx` et un test qui importent de la source."""
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -184,6 +185,46 @@ export function count(run: Run) {
         out = self.move("hooks/model.ts", "hooks/link.ts", "Run")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertNotIn("status }", self.read("hooks/link.ts"))
+
+    def test_un_import_ajoute_prend_le_guillemet_et_le_point_virgule_du_premier_import(self):
+        self.write("hooks/view.tsx", 'import { summary, title } from "./model.ts";\n\nexport const View = (run: any) => [summary(run), title(run)];\n')
+        out = self.move("hooks/model.ts", "hooks/link.ts", "title")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(self.read("hooks/view.tsx").startswith('import { summary } from "./model.ts";\nimport { title } from "./link.ts";\n'))
+        # Un fichier à apostrophes sans point-virgule garde la forme d'avant.
+        self.assertTrue(self.read("tests/model.test.ts").startswith("import { count } from '../hooks/model.ts'\nimport { title } from '../hooks/link.ts'\n"))
+
+    def test_une_declaration_de_methode_n_est_pas_un_usage_un_appel_si(self):
+        for member, kept in (("  summary() {\n    return 1\n  }\n", False), ("  static async summary(): Promise<number> {\n    return 1\n  }\n", False),
+                             ("  show() {\n    return summary(this)\n  }\n", True),
+                             ("  show() {\n    return this.flag ?\n      summary(1) : { a: 1 }\n  }\n", True),
+                             ("  show() {\n    summary(1)\n    {\n      this.flag = 2\n    }\n  }\n", True)):
+            with self.subTest(member=member):
+                self.tearDown()
+                self.setUp()
+                self.write("hooks/model.ts", "export const summary = (n: number) => `${n}`\n\nexport class Box {\n" + member + "}\n")
+                self.write("hooks/view.tsx", "import { Box } from './model.ts'\n\nexport const v = Box\n")
+                out = self.move("hooks/model.ts", "hooks/link.ts", "summary")
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual("import { summary } from './link.ts'" in self.read("hooks/model.ts"), kept)
+
+    def test_un_appel_qui_continue_la_ligne_d_avant_reste_un_usage(self):
+        self.write("hooks/model.ts", "export const summary = (B: any) => B\n\nexport class Box extends\n  summary(Object) {\n}\n")
+        self.write("hooks/view.tsx", "import { Box } from './model.ts'\n\nexport const v = Box\n")
+        out = self.move("hooks/model.ts", "hooks/link.ts", "summary")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("import { summary } from './link.ts'", self.read("hooks/model.ts"))
+
+    def test_la_lecture_des_usages_reste_lineaire_sur_un_gros_module(self):
+        sys.path.insert(0, str(SCRIPT.parent))
+        try:
+            import deplace
+        finally:
+            sys.path.pop(0)
+        text = "export const a = (x: number) => x + 1\n" * 20000  # 760 Ko, 160 000 mots
+        started = time.monotonic()
+        self.assertIn("x", deplace.uses(text, [(0, len(text))]))
+        self.assertLess(time.monotonic() - started, 10)
 
     def test_un_import_renomme_du_nom_deplace_dans_la_cible_est_refuse(self):
         self.write("hooks/link.ts", "import { title as t } from './model.ts'\n\nexport const linked = t\n")

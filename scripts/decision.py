@@ -13,7 +13,15 @@ script fait tout le geste, et ne rend la main qu'avec la série commitée, ou le
    à la mort du processus, ce qui reprend un verrou laissé par un lancement tué ; le pid de celui qui
    le tient y est écrit, pour le message. Un second lancement attend au plus 10 s (la variable
    d'environnement `DECISION_ATTENTE` change ce délai, en secondes), puis abandonne sans rien écrire ;
-2. il refuse, sans rien écrire, un index qui porte déjà quelque chose (il liste ces fichiers), une
+2. il refuse, sans rien écrire, un fichier de décisions d'un worktree lié (son dossier git n'est pas le
+   dossier git commun : le worktree a son propre fichier et son propre HEAD, et une série y prendrait le
+   numéro qu'une autre prend dans le clone principal), avant le verrou ; le dépôt se lit depuis le
+   chemin du fichier, quel que soit le dossier courant, et le message donne le chemin du même fichier
+   dans le clone principal, où les séries s'écrivent, et sa branche ; sans chemin à relancer quand la
+   racine du clone principal est introuvable (dépôt nu, `--separate-git-dir`, sous-module), quand il
+   n'a pas encore ce fichier (« l'y commiter d'abord »), ou quand le worktree porte des numéros de série
+   qu'il n'a pas (« les amener d'abord ») : une relance y reprendrait un numéro déjà pris. Il refuse
+   aussi un index qui porte déjà quelque chose (il liste ces fichiers), une
    fusion, un rebase, un cherry-pick ou un revert en cours, un fichier qui n'est pas suivi dans HEAD,
    un lien symbolique, un chemin qui n'est pas un fichier de décisions d'un chantier (`DECISIONS_FILE`
    de `check.py`), un git plus ancien que 2.36 (sans `git hook run`), et un fichier de travail qui n'a
@@ -160,7 +168,8 @@ def read_series(path):
 
 def target(path):
     """Le fichier de décisions résolu, la racine de son dépôt et son chemin dans le dépôt ; DecisionError
-    pour un lien symbolique, un fichier absent ou un chemin hors de `DECISIONS_FILE`."""
+    pour un lien symbolique, un fichier absent, un chemin hors de `DECISIONS_FILE` ou un fichier d'un
+    worktree lié (`refuse_linked_worktree`)."""
     path = Path(path)
     if path.is_symlink():
         raise DecisionError(f"{path} est un lien symbolique : donner le fichier lui-même{WRITTEN}")
@@ -172,7 +181,64 @@ def target(path):
     if not DECISIONS_FILE.fullmatch(rel):
         raise DecisionError(f"{rel} n'est pas un fichier de décisions d'un chantier (travail/<sujet>/DECISIONS.md)"
                             f"{WRITTEN}")
+    refuse_linked_worktree(top, real, rel)
     return real, top, rel
+
+
+def refuse_linked_worktree(top, real, rel):
+    """DecisionError si `top` est un worktree lié (son dossier git n'est pas le dossier git commun) : chaque
+    worktree a son fichier et son HEAD, et deux séries y prendraient le même numéro. Le message donne le
+    chemin du même fichier dans le clone principal, où les séries s'écrivent, seulement quand la relance
+    y est sûre : sa racine est trouvée, il a ce fichier, et il porte déjà tous les numéros de série du
+    worktree (son fichier et son HEAD) ; sinon il dit quoi faire d'abord, sans chemin à relancer."""
+    git_dir = Path(out(top, "rev-parse", "--absolute-git-dir")).resolve()
+    common = Path(out(top, "rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+    if git_dir == common:
+        return
+    root = main_clone(common)
+    if root is None:
+        # Pas de relance proposée : vers une racine non vérifiée, elle sauterait les contrôles ci-dessous.
+        where = ("racine du clone principal introuvable (dépôt nu, `--separate-git-dir`, sous-module) : ce script "
+                 "ne peut pas désigner où écrire la série")
+    elif not (root / rel).is_file():
+        where = f"le clone principal n'a pas encore ce fichier ({root / rel}) : l'y commiter d'abord"
+    else:
+        missing = sorted(series_numbers(top, real, rel) - series_numbers(root, root / rel, rel))
+        if missing:
+            where = (f"ce worktree porte des séries que le clone principal n'a pas ({', '.join(map(str, missing))}) : "
+                     f"les amener d'abord dans le clone principal (commit dans ce worktree s'il en manque, puis "
+                     f"fusion de sa branche), puis y écrire la série")
+        else:
+            branch = git(root, "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout.decode("utf-8", "replace")
+            where = (f"les séries s'écrivent dans le clone principal, sur sa branche "
+                     f"{branch.strip() or '(HEAD détaché)'} : relancer avec {root / rel}")
+    raise DecisionError(f"{top} est un worktree lié, dont le fichier et le HEAD sont les siens : ne pas y écrire la "
+                        f"série à la main ; {where}{WRITTEN}")
+
+
+def main_clone(common):
+    """La racine du clone principal : le dossier parent du dossier git commun, comme `main_clone` de
+    `check.py`, gardé seulement s'il est la racine d'un arbre de travail dont le dossier git est ce
+    dossier commun ; None sinon (dépôt nu, `--separate-git-dir`, sous-module)."""
+    root = common.parent
+    # Lancé hors d'un arbre de travail (dans un dépôt nu), `--show-toplevel` échoue.
+    found = git(root, "rev-parse", "--show-toplevel", "--absolute-git-dir", check=False)
+    lines = found.stdout.decode("utf-8", "replace").split("\n")
+    if found.returncode != 0 or len(lines) < 2 or Path(lines[0]).resolve() != root \
+            or Path(lines[1]).resolve() != common:
+        return None
+    return root
+
+
+def series_numbers(top, path, rel):
+    """Les numéros de série du fichier de décisions de l'arbre de `top` et de son HEAD ; DecisionError si le
+    fichier ne se lit pas (droits, retiré entre-temps)."""
+    try:
+        text = path.read_bytes().decode("utf-8", "replace")
+    except OSError as err:
+        raise DecisionError(f"{path} illisible ({err}){WRITTEN}")
+    head = git(top, "show", f"HEAD:{rel}", check=False)
+    return numbers(text) | numbers(head.stdout.decode("utf-8", "replace") if head.returncode == 0 else "")
 
 
 def take_lock(top, wait):
@@ -234,13 +300,19 @@ def head_state(top, rel):
     return head, blob, git(top, "cat-file", "blob", blob).stdout.decode("utf-8")
 
 
-def check_repo(top, rel):
-    """Refuse un git sans `git hook run`, un index non vide, une opération en cours ou un fichier non
-    suivi dans HEAD ; rend le mode de l'entrée du fichier, puis `head_state`."""
-    version = re.search(r"(\d+)\.(\d+)", out(top, "version"))
+def check_git_version():
+    """Refuse un git sans `git hook run` (2.36), ou dont la version ne se lit pas : avant tout autre appel,
+    car `rev-parse --path-format=absolute` (git 2.31) du refus du worktree lié et du verrou ne se lirait
+    pas sur un git plus ancien."""
+    version = re.search(r"(\d+)\.(\d+)", out(None, "version"))
     if not version or tuple(map(int, version.groups())) < HOOK_RUN_SINCE:
         raise DecisionError(f"ce git est plus ancien que 2.36 et n'a pas `git hook run`, qui fait tourner le "
                             f"pre-commit{WRITTEN}")
+
+
+def check_repo(top, rel):
+    """Refuse un index non vide, une opération en cours ou un fichier non suivi dans HEAD ; rend le mode
+    de l'entrée du fichier, puis `head_state`."""
     staged = staged_names(top)
     if staged:
         raise DecisionError("l'index porte déjà des changements, qu'un commit d'autrui prendrait avec la série : "
@@ -407,8 +479,9 @@ def commit_series(top, rel, mode, head, head_blob, head_text, block, n, message_
 
 def add_series(decisions, series, message_args, subject, wait=DEFAULT_WAIT):
     """Le geste entier ; rend (numéro, hash court, hash complet)."""
-    title, body = read_series(series)
+    check_git_version()
     real, top, rel = target(decisions)
+    title, body = read_series(series)
     handle = take_lock(top, wait)
     try:
         mode, head, head_blob, head_text = check_repo(top, rel)

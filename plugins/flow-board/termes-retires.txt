@@ -26,3 +26,9 @@
 # La règle « Vérifier avant d'écrire » demande aussi les chemins qui lisent la donnée pour décider :
 0.81.0	write, merge or erase its data
 0.81.0	écrivent, fusionnent ou effacent ses données
+# La fin de mission : la livraison n'archive plus, la rétro ou « ✓ Archiver » au choix (mission « Fin de mission et livraison ») :
+0.82.0	✕ Pas de rétro
+0.82.0	Pas de rétro
+0.82.0	Clôture et archivage demandés par le COO
+0.82.0	Clore et archiver une mission livrée
+0.82.0	retro-dismiss

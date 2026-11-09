@@ -27,16 +27,24 @@ Le journal de la sonde (`journaux/sonde.log`) porte `claude --version` du binair
 à la sortie de Claude Code. À cette sortie (`/exit`), dans un dossier jetable neuf, la sonde supprime
 sous `~/.claude` ce que ce lancement a laissé, et rien d'autre, ses sessions lues dans le journal de la
 sonde (`sid`) : d'abord les registres d'agents de flow-board de ses sessions (`flow-board/agents/<id>.N.json`
-puis `<id>.json`, la tête ayant ce dossier pour racine), puis son fichier de mission
+puis `<id>.json`, la tête ayant ce dossier pour racine), puis les traces rangées par id des sessions qu'il
+a ouvertes (un `classic.SessionStart` au démarrage ou par `/clear`, pas une reprise) : `session-env/<id>/`
+(sans lien, entrée illisible ni sous-dossier non effaçable) et les relevés de stats-board
+`stats-board/requetes/<id>_<heure en ms>.json` (de vrais fichiers), nés dans la fenêtre du lancement (de
+la date de sa marque à la dernière écriture d'un journal de la sonde ; un session-env jamais là où le
+système ne donne pas la date de création, comme Linux), puis son fichier de mission
 (`flow-board/parcours/<nom>.json`, même racine, si le dossier de transcripts part aussi), enfin son dossier
 de transcripts (s'il ne porte que les sessions de ce lancement, chaque transcript citant ce dossier),
-arrêtée à la première suppression qui échoue ; elle liste ce qu'elle a
+arrêtée à la première suppression qui échoue ; `~/.claude.json`, fichier partagé, n'est ni lu ni écrit.
+Elle liste ce qu'elle a
 supprimé et ce qui reste, au journal et dans le volet, qui reste ouvert jusqu'à Entrée. `--garder`, au
 lancement, ne supprime rien (à prendre pour reprendre ensuite la session par `--dir … --reprise`). Rien
 n'est nettoyé avec `--dir`, ni avec `--env CLAUDE_CONFIG_DIR=…`. Après un `tmux kill-session`, qui saute
 cette étape : `--nettoyer <nom du dossier jetable>`, qui refuse un dossier sans le fichier que pose le
-lancement (un essai d'avant cette version, ou une copie du dossier), un dossier qui a servi à un lancement `--dir`, et un dossier
-où une session tourne encore.
+lancement (un essai d'avant cette version, ou une copie du dossier), un dossier qui a servi à un lancement `--dir`,
+un dossier ou son fichier du lancement qui n'appartient pas à l'utilisateur courant ou qui est ouvert en
+écriture au groupe ou aux autres (hors Windows ; l'étape de fin fait le même contrôle), et un dossier où
+une session tourne encore.
 
 Mac et Linux (tmux requis) ; sans dépendance hors de la bibliothèque standard.
 """
@@ -47,6 +55,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -77,6 +86,12 @@ CHUNK = re.compile(r"\.[0-9]{1,6}\.json")
 # Le fichier qu'un lancement `--dir` pose dans un dossier jetable déjà marqué : ce dossier porte alors les
 # traces d'un autre lancement, et `--nettoyer` le refuse.
 REUSED = ".sonde-reprise"
+# Les `source` d'un `classic.SessionStart` qui ouvrent une session sous un id neuf : le démarrage et `/clear`
+# (pas la reprise, `resume`, ni la compaction, `compact`, qui garde l'id).
+OPENING_SOURCES = ("startup", "clear")
+# La fin du nom d'un relevé de requêtes de stats-board après l'id de session (`<id>_<heure d'ouverture en
+# ms>.json`), en chiffres ASCII seulement.
+REQUEST = re.compile(r"_[0-9]{1,20}\.json")
 
 
 class SondeError(Exception):
@@ -96,10 +111,33 @@ def mission_slug(folder):
     return slug or "sans-projet"
 
 
+def access_doubt(path):
+    """La raison de ne pas tenir `path` (le dossier jetable ou sa marque) pour celui de ce compte, ou None :
+    un autre propriétaire que l'utilisateur courant, ou des droits d'écriture au groupe ou aux autres
+    (un autre compte du poste aurait pu le poser ou le modifier). Sans `os.getuid` (Windows, où les droits
+    POSIX sont factices), rien n'est contrôlé ici."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return None
+    # `os.lstat` en direct : le lien lui-même, jamais sa cible. Disparu ou illisible entre-temps : un refus.
+    try:
+        st = os.lstat(path)
+    except OSError as err:
+        return f"{path} illisible ({err.strerror or err})"
+    if st.st_uid != getuid():
+        return f"{path} appartient à un autre compte (uid {st.st_uid})"
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return f"{path} est ouvert en écriture au groupe ou aux autres (droits {stat.S_IMODE(st.st_mode):o})"
+    return None
+
+
 def launch_folder(ref, tmp=None):
     """Le dossier jetable de ce lancement que nomme `ref` (son nom, ou son chemin absolu que donne
-    l'étape de fin) : un nom de `mkdtemp`, un vrai dossier (pas un lien) qui porte le fichier du
-    lancement et pas celui d'une reprise par `--dir` ; sinon SondeError."""
+    l'étape de fin) : un nom de `mkdtemp`, un vrai dossier (pas un lien) qui appartient à l'utilisateur
+    courant et n'est ouvert en écriture ni au groupe ni aux autres, qui porte le fichier du lancement
+    (soumis aux mêmes contrôles de propriétaire et de droits, et qui nomme ce dossier) et pas celui d'une
+    reprise par `--dir` ;
+    sinon SondeError. Sous Windows, propriétaire et droits ne sont pas contrôlés (`access_doubt`)."""
     if not isinstance(ref, str):
         raise SondeError("nom de dossier jetable absent")
     given = Path(ref)
@@ -109,9 +147,17 @@ def launch_folder(ref, tmp=None):
     folder = given if given.is_absolute() else Path(tmp or tempfile.gettempdir()) / name
     if folder.is_symlink() or not folder.is_dir():
         raise SondeError(f"{folder} : pas un dossier (ou un lien symbolique) ; rien à nettoyer")
+    doubt = access_doubt(folder)
+    if doubt:
+        raise SondeError(f"{doubt} : rien ne se supprime")
     marker = read_json(folder / MARKER)
     if not isinstance(marker, dict):
         raise SondeError(f"{folder} n'a pas le fichier {MARKER} d'un lancement de la sonde : rien ne se supprime")
+    doubt = access_doubt(folder / MARKER)
+    if doubt:
+        # Pas de « chmod » conseillé : une marque restée ouverte au groupe a pu être modifiée (son `claude` est
+        # lancé par `--nettoyer`), et la fermer après coup la ferait accepter telle quelle.
+        raise SondeError(f"{doubt} : rien ne se supprime")
     # La marque nomme le dossier où le lancement l'a posée : une copie du dossier (marque comprise) n'est
     # pas ce lancement.
     if marker.get("dossier") != os.path.realpath(folder):
@@ -123,9 +169,15 @@ def launch_folder(ref, tmp=None):
 
 
 def mark_launch(folder, claude):
-    """Pose dans le dossier jetable la marque de ce lancement : le dossier réel et le Claude Code essayé."""
-    (folder / MARKER).write_text(json.dumps({"dossier": os.path.realpath(folder), "claude": str(claude)}) + "\n",
-                                 encoding="utf-8")
+    """Pose dans le dossier jetable la marque de ce lancement : le dossier réel et le Claude Code essayé.
+    Elle est fermée aux autres (0600), quel que soit l'umask : `launch_folder` refuse une marque ouverte en
+    écriture au groupe ou aux autres."""
+    # Dans le dossier neuf de `mkdtemp` : une marque déjà là (ou un lien à sa place) fait échouer le lancement.
+    fd = os.open(folder / MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        if hasattr(os, "fchmod"):
+            os.fchmod(f.fileno(), 0o600)
+        f.write(json.dumps({"dossier": os.path.realpath(folder), "claude": str(claude)}) + "\n")
 
 
 def mark_reused(folder):
@@ -151,6 +203,188 @@ def launch_sessions(folder):
                 if isinstance(sid, str) and SESSION_ID.fullmatch(sid):
                     found.add(sid)
     return found
+
+
+def opened_sessions(folder):
+    """Les sessions que ce lancement a ouvertes : parmi celles du journal (`launch_sessions`), celles qu'un
+    `classic.SessionStart` y dit ouvertes au démarrage ou par `/clear` (`source` « startup » ou « clear »),
+    sous un id neuf. Une session reprise dans la sonde (`/resume`, `source` « resume ») n'y est pas : ses
+    traces rangées par id sont d'avant le lancement."""
+    found = set()
+    for path in sorted((folder / "journaux").glob("*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict) or entry.get("ev") != "classic.SessionStart" \
+                        or entry.get("source") not in OPENING_SOURCES:
+                    continue
+                sid = entry.get("sid")
+                if isinstance(sid, str) and SESSION_ID.fullmatch(sid):
+                    found.add(sid)
+    return found
+
+
+def launch_window(folder):
+    """La fenêtre de ce lancement, (début, fin) en nanosecondes : la date de sa marque (posée avant la
+    première session), et la dernière écriture d'un journal de la sonde (`journaux/*.jsonl`, réécrit à
+    chaque événement de ses sessions) ; None si l'une manque. Une trace rangée par id hors de cette fenêtre
+    n'est pas de ce lancement : la même session reprise ensuite hors de la sonde (`claude --continue` dans
+    le dossier jetable), ou un id hérité d'une autre session (`--env CLAUDE_CODE_SESSION_ID=…`)."""
+    try:
+        start = os.lstat(folder / MARKER).st_mtime_ns
+    except OSError:
+        return None
+    ends = []
+    for path in (folder / "journaux").glob("*.jsonl"):
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode):
+            ends.append(st.st_mtime_ns)
+    return (start, max(ends)) if ends and max(ends) >= start else None
+
+
+def tree_doubts(path, window=None):
+    """Les raisons de garder un dossier à supprimer en entier : un lien symbolique, à tout niveau, une
+    entrée illisible (ce qui n'a pas été relu ne se supprime pas), un dossier où l'on ne peut pas
+    effacer (sans droit d'écriture et de traversée : `rmtree` s'arrêterait à moitié, et le nettoyage avec),
+    ou, avec `window`, une entrée née ou modifiée hors de la fenêtre du lancement (la date du dossier du
+    haut ne dit rien de celles de son contenu). Vide : `rmtree` n'effacerait que des entrées relues, aucune
+    cible de lien."""
+    doubts, unreadable = [], []
+    if not os.access(path, os.W_OK | os.X_OK):
+        doubts.append(f"{path.name} non effaçable (droits)")
+    for base, dirs, files in os.walk(path, onerror=unreadable.append):
+        for name in dirs + files:
+            entry = Path(base) / name
+            # `os.lstat` relu pour chaque entrée : dans un dossier lisible mais non traversable, `os.walk`
+            # range ses entrées sans les relire, et sans appeler `onerror`.
+            try:
+                st = os.lstat(entry)
+            except OSError as err:
+                doubts.append(f"{entry.relative_to(path)} illisible ({err.strerror or err})")
+                continue
+            mode = st.st_mode
+            if stat.S_ISLNK(mode):
+                doubts.append(f"{entry.relative_to(path)} est un lien symbolique")
+            elif stat.S_ISDIR(mode) and not os.access(entry, os.W_OK | os.X_OK):
+                doubts.append(f"{entry.relative_to(path)} non effaçable (droits)")
+            elif window is not None and not born_in(st, window):
+                doubts.append(f"{entry.relative_to(path)} créé ou modifié hors de la fenêtre du lancement")
+    doubts += [f"{err.filename} illisible ({err.strerror or err})" for err in unreadable]
+    return doubts
+
+
+def real_dirs(home, *parts):
+    """Si `home/parts…` est fait de vrais dossiers où l'on peut effacer : (vrai, None) ; si l'un manque :
+    (faux, None) ; si l'un est un lien symbolique, autre chose qu'un dossier ou illisible, ou si le dernier
+    n'est pas effaçable : (faux, la raison de ne rien y prendre)."""
+    path = home
+    for part in parts:
+        path = path / part
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            return False, None
+        except OSError as err:
+            return False, f"{path} illisible ({err.strerror or err}) : rien n'y est pris"
+        if not stat.S_ISDIR(st.st_mode):
+            return False, f"{path} (lien symbolique ou pas un dossier : rien n'y est pris)"
+    if not os.access(path, os.W_OK | os.X_OK):
+        return False, f"{path} non effaçable (droits) : rien n'y est pris"
+    return True, None
+
+
+def in_window(ns, window):
+    return window[0] <= ns <= window[1]
+
+
+def birth_ns(st):
+    """La date de création d'une entrée en nanosecondes, là où le système la donne (macOS), sinon None."""
+    ns = getattr(st, "st_birthtime_ns", None)
+    if ns is None and hasattr(st, "st_birthtime"):
+        ns = int(st.st_birthtime * 1_000_000_000)
+    return ns
+
+
+def born_in(st, window):
+    """Vrai si l'entrée de ce `lstat` est née et a été modifiée dans la fenêtre du lancement : sa date de
+    création et sa date de modification. Sans date de création (Linux), faux : une entrée d'avant le
+    lancement réécrite pendant lui aurait une date de modification dans la fenêtre."""
+    birth = birth_ns(st)
+    return birth is not None and in_window(birth, window) and in_window(st.st_mtime_ns, window)
+
+
+def session_traces(home, sessions, window):
+    """Les traces que ces sessions laissent sous `home`, rangées par leur id, nées dans la fenêtre du
+    lancement (`launch_window`) : `session-env/<id>/` (un vrai dossier dont chaque entrée, lui compris, est
+    née et a été modifiée dans la fenêtre, `born_in` : jamais là où le système ne donne pas la date de
+    création ; sans lien ni entrée illisible ni sous-dossier non effaçable) et les relevés de stats-board
+    `stats-board/requetes/<id>_<heure d'ouverture en ms>.json` (de vrais fichiers, le nom vérifié en entier,
+    l'heure de leur nom dans la fenêtre) ; rend ([(chemin, est un dossier)], [raisons de garder])."""
+    todo, kept = [], []
+    if not sessions:
+        return todo, kept
+    if window is None:
+        # Une horloge revenue en arrière, des journaux absents ou en lien : rien n'est pris, et c'est dit.
+        kept.append("traces rangées par id des sessions (session-env, relevés de stats-board) : fenêtre du "
+                    "lancement illisible (marque ou journaux), rien n'y est pris")
+        return todo, kept
+    ok, reason = real_dirs(home, "session-env")
+    kept += [reason] if reason else []
+    for session in sorted(sessions) if ok else []:
+        path = home / "session-env" / session
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        except OSError as err:
+            kept.append(f"{path} (illisible : {err.strerror or err})")
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            kept.append(f"{path} (lien symbolique ou pas un dossier)")
+        elif birth_ns(st) is None:
+            kept.append(f"{path} (date de création inconnue sur ce système : rien ne prouve qu'il est de ce lancement)")
+        elif not born_in(st, window):
+            kept.append(f"{path} (créé ou modifié hors de la fenêtre du lancement)")
+        else:
+            doubts = tree_doubts(path, window)
+            if doubts:
+                kept.append(f"{path} ({' ; '.join(doubts)})")
+            else:
+                todo.append((path, True))
+    ok, reason = real_dirs(home, "stats-board", "requetes")
+    kept += [reason] if reason else []
+    requests = home / "stats-board" / "requetes"
+    try:
+        names = sorted(os.listdir(requests)) if ok else []
+    except OSError as err:
+        kept.append(f"{requests} illisible ({err.strerror or err}) : rien n'y est pris")
+        names = []
+    for name in names:
+        session, tail = name[:36], name[36:]
+        if session not in sessions or not REQUEST.fullmatch(tail):
+            continue
+        path = requests / name
+        if not in_window(int(tail[1:-5]) * 1_000_000, window):
+            kept.append(f"{path} (ouvert hors de la fenêtre du lancement)")
+            continue
+        try:
+            st = os.lstat(path)
+        except OSError as err:
+            kept.append(f"{path} (illisible : {err.strerror or err})")
+            continue
+        if stat.S_ISREG(st.st_mode):
+            todo.append((path, False))
+        else:
+            kept.append(f"{path} (lien symbolique ou pas un fichier ordinaire)")
+    return todo, kept
 
 
 def roots_of(folder):
@@ -271,8 +505,8 @@ def registry_files(agents, session, folder):
 
 def plan(folder, home):
     """Ce que ce lancement a laissé sous `home` : [(chemin, est un dossier)] à supprimer, dans l'ordre
-    (registres, fichier de mission, dossier de projet en dernier : une reprise relit ses transcripts),
-    et [raisons] de ce qui reste."""
+    (registres, traces rangées par id des sessions qu'il a ouvertes, fichier de mission, dossier de projet
+    en dernier : une reprise relit ses transcripts), et [raisons] de ce qui reste."""
     roots = roots_of(folder)
     sessions = launch_sessions(folder)
     todo, kept = [], []
@@ -295,6 +529,9 @@ def plan(folder, home):
         files, reasons = registry_files(agents, session, folder) if agents.is_dir() else ([], [])
         todo += [(p, False) for p in files]
         kept += reasons
+    traces, reasons = session_traces(home, opened_sessions(folder) & sessions, launch_window(folder))
+    todo += traces
+    kept += reasons
     for slug in sorted({mission_slug(r) for r in roots}):
         path = home / "flow-board" / "parcours" / f"{slug}.json"
         if not path.exists() and not path.is_symlink():
@@ -320,10 +557,18 @@ def clean(folder, home, keep=False):
     if keep:
         report.kept = [f"{p} (--garder)" for p, _ in todo] + report.kept
         return report
+    window = None
     for i, (path, is_dir) in enumerate(todo):
         try:
             if path.is_symlink():
                 raise OSError(f"{path} est devenu un lien symbolique")
+            if is_dir and path.parent == home / "session-env":
+                # Relu juste avant de l'effacer : une session reprise ailleurs entre-temps y a pu écrire.
+                window = window or launch_window(folder)
+                doubts = ([] if window and born_in(os.lstat(path), window) else ["hors de la fenêtre du lancement"]) \
+                    + (tree_doubts(path, window) if window else [])
+                if doubts:
+                    raise OSError(f"changé depuis le relevé ({' ; '.join(doubts)})")
             shutil.rmtree(path) if is_dir else path.unlink()
             if path.exists() or path.is_symlink():
                 raise OSError("toujours là après la suppression")

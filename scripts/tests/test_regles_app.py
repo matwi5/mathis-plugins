@@ -79,6 +79,28 @@ class ReglesAppTest(unittest.TestCase):
         self.assertEqual(tools["set_session_title"]["description"], ["Rename the user's session; it declines."])
         self.assertEqual(tools["set_session_title"]["conditional"], [False])
 
+    def test_un_alias_exporte_par_un_autre_morceau_se_suit_jusqu_a_sa_declaration(self):
+        # La forme de l'app 4.23118.0 (extrait réduit) : l'alias dans une chaîne `var` d'un morceau, qui
+        # l'exporte sous un autre nom ; l'outil déclaré dans un autre morceau, par ce nom exporté, sur le
+        # module requis (`t.y_`), sa description dans une variable de ce second morceau. Un autre morceau
+        # qui exporte aussi un `y_`, sans être celui que requiert la déclaration, ne compte pas.
+        alias = ('var rga="ccd_session",iga="move_to_cloud",aga="start_session",sga=`mcp__${rga}__${aga}`;\n'
+                 'Object.defineProperty(exports,"y_",{enumerable:!0,get:function(){return aga}});\n')
+        other = ('var zz="start_session";\n'
+                 'Object.defineProperty(exports,"y_",{enumerable:!0,get:function(){return zz}});\n')
+        user = ('const e=require("./index.chunk-autre.js"),t=require("./index.chunk-alias.js");\n'
+                'var Ax=`Start a separate Claude Code session. \\`initiation\\` says who wants it.`,Bx="PARASITE";\n'
+                'function h(e,n){return[...e?[{name:e.y_,description:Bx,inputSchema:q},{name:t.y_,description:Ax,inputSchema:jx,...n?{}:{alwaysLoad:!0}}]:[]]}\n')
+        path = Path(self.dir.name) / "app.asar"
+        path.write_bytes(asar({"/package.json": json.dumps({"version": "4.23118.0"}).encode(),
+                               "/.vite/build/index.chunk-alias.js": alias.encode(),
+                               "/.vite/build/index.chunk-autre.js": other.encode(),
+                               "/.vite/build/index.chunk-user.js": user.encode()}))
+        tools = regles_app.app_rules(regles_app.read_asar(path))["tools"]
+        self.assertEqual(tools["start_session"]["description"],
+                         ["Start a separate Claude Code session. `initiation` says who wants it."])
+        self.assertEqual(tools["start_session"]["conditional"], [False])
+
     def test_les_refus_sont_lus_en_entier(self):
         tools = regles_app.app_rules(regles_app.read_asar(self.archive()))["tools"]
         self.assertEqual(tools["start_session"]["refusals"],

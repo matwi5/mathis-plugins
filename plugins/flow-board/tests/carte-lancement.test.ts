@@ -380,3 +380,85 @@ test('une idée « à lancer » a son bouton ▶ Lancer, qui demande la carte au
   // Sans ask-matt trouvé, le relevé dit de le chercher dans le plugin installé.
   expect(statementText(cooStatement(emptyBoard('', 'p'), { now: 3, askMatt: null }))).toMatch(/ask-matt: not found among the installed plugins/)
 })
+
+test('deux cartes cliquées coup sur coup : la demande de la première, pas encore envoyée, reste dans le prompt', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 323_000_000
+  const { w } = await openCooWith($, on, now)
+  const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
+  const second = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, title: 'Durcir les scripts', folder: 'durcir-scripts' } } as any)) as any).result))
+  const ui = await pane($)
+  await ui.press({ key: `coo-card-manual-${first}` })
+  const launched = records(w).find(r => r.card === first)!
+  expect(w.box.text).toContain(`{"launch": "${launched.id}"}`)
+  await ui.press({ key: `coo-card-manual-${second}` })
+  await ui.unmount()
+  // La demande de la première carte n'est jamais écrasée : la seconde s'ajoute à sa suite, Entrée lance les deux.
+  const next = records(w).find(r => r.card === second)!
+  expect(w.box.text).toContain(`{"launch": "${launched.id}"}`)
+  expect(w.box.text.indexOf(`{"launch": "${next.id}"}`)).toBeGreaterThan(w.box.text.indexOf(`{"launch": "${launched.id}"}`))
+})
+
+test('une demande restée dans le prompt au-delà de son lancement (périmée) est remplacée, jamais envoyée avec la nouvelle', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 324_000_000
+  const { clock, w } = await openCooWith($, on, now)
+  const card = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
+  const ui = await pane($)
+  await ui.press({ key: `coo-card-manual-${card}` })
+  await ui.unmount()
+  const old = records(w).find(r => r.card === card)!
+  // Plus de 11 minutes sans Entrée : le lancement est périmé, la carte redevient prête.
+  await clock.advance(LAUNCH_TTL_MS + 2 * 60_000)
+  const again = await pane($)
+  await again.press({ key: `coo-card-manual-${card}` })
+  await again.unmount()
+  const fresh = records(w).find(r => r.card === card && r.id !== old.id)!
+  expect(fresh).toBeDefined()
+  expect(w.box.text).toContain(`{"launch": "${fresh.id}"}`)
+  expect(w.box.text).not.toContain(`{"launch": "${old.id}"}`)
+})
+
+test('deux cartes cliquées en même temps : aucune demande n’écrase l’autre', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 325_000_000
+  const { w } = await openCooWith($, on, now)
+  const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
+  const second = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, title: 'Durcir les scripts', folder: 'durcir-scripts' } } as any)) as any).result))
+  const ui = await pane($)
+  await Promise.all([ui.press({ key: `coo-card-manual-${first}` }), ui.press({ key: `coo-card-manual-${second}` })])
+  await ui.unmount()
+  const ids = records(w).map(r => r.id)
+  expect(ids).toHaveLength(2)
+  for (const id of ids) expect(w.box.text).toContain(`{"launch": "${id}"}`)
+})
+
+test('un prompt qui mêle une demande périmée et une valable ne reçoit rien : la nouvelle demande est à taper, aucune n’est perdue ni renvoyée', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 326_000_000
+  const { clock, w } = await openCooWith($, on, now)
+  const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
+  const second = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, title: 'Durcir les scripts', folder: 'durcir-scripts' } } as any)) as any).result))
+  const press = async (card: string) => {
+    const ui = await pane($)
+    await ui.press({ key: `coo-card-manual-${card}` })
+    await ui.unmount()
+  }
+  await press(first)
+  await clock.advance(6 * 60_000)
+  await press(second)
+  const before = w.box.text
+  // La première est périmée et sa carte de nouveau prête ; la seconde vaut encore.
+  await clock.advance(LAUNCH_TTL_MS + 2 * 60_000 - 6 * 60_000 + 30_000)
+  await press(first)
+  expect(w.box.text).toBe(before)
+  expect(w.toasts.at(-1)).toMatch(/^▶ Demande à taper : lance la mission « Export CSV des tickets » \(lancement l[0-9a-z]+, valable 10 minutes\)\.$/)
+})
+
+test('une demande dont la ligne de lancement a été retouchée reste dans le prompt : la nouvelle est à taper', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 327_000_000
+  const { w } = await openCooWith($, on, now)
+  const card = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
+  w.box.text = '◆ COO : lance maintenant la mission « Autre » dans une nouvelle discussion. Ma note à moi.'
+  const ui = await pane($)
+  await ui.press({ key: `coo-card-manual-${card}` })
+  await ui.unmount()
+  expect(w.box.text).toBe('◆ COO : lance maintenant la mission « Autre » dans une nouvelle discussion. Ma note à moi.')
+  expect(w.toasts.at(-1)).toMatch(/^▶ Demande à taper : lance la mission « Export CSV des tickets »/)
+})

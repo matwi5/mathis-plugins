@@ -291,3 +291,15 @@ test('une opposition ratée n’est pas oubliée par un appel suivant qui écrit
   expect(await call({ contradiction: [{ ...c, first: { ...c.first, mission: a.id } }] })).toMatch(/Opposition recorded/)
   expect(await call({ decisionsSeen: true })).toMatch(/Not marked as reviewed/)
 })
+
+test('une opposition dont la mission qui portait la question est close (livrée, pas archivée) avant la réponse passe à l’autre mission', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  const { a, b } = missions(T0)
+  writeBoard(w, x => ({ ...x, runs: [a, { ...b, status: 'done', owner: undefined, finishedAt: T0 - 1_000 }] }))
+  w.coord.text = coordFile([{ id: 'cabc1234', kind: 'contradiction', run: b.id, at: T0 - 5_000, other: a.id, mine: { ref: 'choix déclaré', text: 'SQLite' }, theirs: { ref: 'série 1', text: 'Postgres' }, subject: 'la base' }])
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  expect(entries(w)).toEqual([expect.objectContaining({ id: 'cabc1234' }), expect.objectContaining({ kind: 'contradiction', run: a.id, other: b.id })])
+})

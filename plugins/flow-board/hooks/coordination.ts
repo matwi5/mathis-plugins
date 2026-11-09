@@ -28,16 +28,32 @@ export const COORD_UNREAD = 'Fichier de coordination illisible : retenues gardé
 /** Au-delà, le COO n'ajoute plus d'entrée (rien n'est jamais retiré pour faire de la place). */
 export const COORD_MAX = 2000
 
-/** Une demande de clôture et d'archivage d'une mission, après sa livraison. */
-export type CoordClose = { id: string; kind: 'close'; run: string; at: number; doneAt?: number; delivered?: { version?: string; push?: string; pr?: string } }
+/**
+ * Le genre écrit des demandes de clôture sans archivage. Les versions d'avant appliquaient le genre `close` en
+ * archivant la mission : une discussion qui n'a pas encore rechargé le mod ignore ce genre, qu'elle ne connaît
+ * pas, au lieu d'archiver sans le choix de la personne, et l'applique une fois le mod rechargé.
+ * Le genre `close` d'un fichier ancien se lit encore, et s'applique sans archivage.
+ */
+export const CLOSE_KIND = 'closing'
 
-/** Le résultat d'une livraison porté par une clôture : des textes courts, rendus par Claude. */
+/**
+ * Une demande de clôture d'une mission, sans archivage : avec `delivered` (le résultat, même vide), à la fin d'une
+ * livraison, qui la clôt comme livrée ; sans lui, le geste « clore » du COO, qui la clôt sans la marquer livrée.
+ * `report` (avec `delivered`) : la date de validation du rapport que la livraison a emporté ; la clôture ne marque
+ * jamais livrée une mission où du travail a été relancé depuis (`isReportShipped`).
+ */
+export type CoordClose = { id: string; kind: 'close'; run: string; at: number; doneAt?: number; delivered?: { version?: string; push?: string; pr?: string }; report?: number }
+
+/**
+ * Le résultat d'une livraison porté par une clôture : des textes courts, rendus par Claude. Un objet sans texte
+ * lisible reste un résultat (vide) : la clôture reste celle d'une livraison.
+ */
 const deliveredOf = (v: unknown): CoordClose['delivered'] | undefined => {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return undefined
   const x = v as Record<string, unknown>
   const out: NonNullable<CoordClose['delivered']> = {}
   for (const k of ['version', 'push', 'pr'] as const) if (typeof x[k] === 'string' && (x[k] as string).length <= 300) out[k] = x[k] as string
-  return Object.keys(out).length > 0 ? out : undefined
+  return out
 }
 
 /**
@@ -240,9 +256,9 @@ export const soundEntry = (raw: unknown): CoordEntry | null => {
   }
   if (e.kind === 'validate') return isReportPrint(e.print) ? { id: e.id, kind: 'validate', run: e.run, at: e.at, print: e.print } : null
   if (e.kind === 'redo') return isDecisionsPath(e.file) && isSeries(e.series) && isRound(e.round) ? { id: e.id, kind: 'redo', run: e.run, at: e.at, file: e.file, series: e.series, round: e.round } : null
-  if (e.kind === 'close') {
+  if (e.kind === 'close' || e.kind === CLOSE_KIND) {
     const delivered = deliveredOf(e.delivered)
-    return { id: e.id, kind: 'close', run: e.run, at: e.at, ...(isTime(e.doneAt) ? { doneAt: e.doneAt } : {}), ...(delivered ? { delivered } : {}) }
+    return { id: e.id, kind: 'close', run: e.run, at: e.at, ...(isTime(e.doneAt) ? { doneAt: e.doneAt } : {}), ...(delivered ? { delivered } : {}), ...(delivered && isTime(e.report) ? { report: e.report } : {}) }
   }
   if (e.kind === 'wave') {
     const groups = Array.isArray(e.groups) ? e.groups : []
@@ -419,15 +435,15 @@ export const forcesFor = (entries: readonly CoordEntry[], run: string): { held: 
   entries.flatMap(e => (e.kind === 'force' && e.run === run ? [{ held: e.held, run: e.awaited.run, group: e.awaited.group, ...(e.on ? { on: e.on } : {}) }] : []))
 
 /**
- * Les demandes de clôture faites, notées par le COO : celles dont la mission est archivée reçoivent
- * `doneAt` (l'entrée reste, elle ne s'applique plus : une mission reprise ensuite n'est pas refermée).
- * Rend les entrées changées, ou null quand rien ne change.
+ * Les demandes de clôture faites, notées par le COO : celles dont `isOver` dit la clôture faite (ou la mission
+ * archivée) reçoivent `doneAt` (l'entrée reste, elle ne s'applique plus : une mission reprise ensuite n'est
+ * pas refermée). Rend les entrées changées, ou null quand rien ne change.
  */
-export const markClosesDone = (entries: readonly unknown[], isArchived: (run: string) => boolean, now: number): unknown[] | null => {
+export const markClosesDone = (entries: readonly unknown[], isOver: (entry: CoordClose) => boolean, now: number): unknown[] | null => {
   let isChanged = false
   const out = entries.map(raw => {
     const e = soundEntry(raw)
-    if (!e || e.kind !== 'close' || e.doneAt !== undefined || !isArchived(e.run)) return raw
+    if (!e || e.kind !== 'close' || e.doneAt !== undefined || !isOver(e)) return raw
     isChanged = true
     return { ...(raw as Record<string, unknown>), doneAt: now }
   })

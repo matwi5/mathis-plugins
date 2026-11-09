@@ -18,14 +18,21 @@ qui porte un `cwd` porte le dossier mesuré, et que ses seules entrées de l'uti
 messages, en texte seul ; un lien
 symbolique, une ligne illisible ou un doute gardent tout. Il liste ce qu'il a effacé et ce qui reste ;
 les autres traces de la session sous `~/.claude` ne sont pas les siennes à effacer : il nomme celles qui
-portent son id (file-history, session-env, debug, tasks, sessions), et laisse sans les nommer ses lignes
-de `~/.claude/history.jsonl`, fichier commun à toutes les sessions. Rien ne s'efface tant que la session
+portent son id (file-history, session-env, debug, tasks, sessions), puis, en une ligne fixe, les fichiers
+communs à toutes les sessions qui peuvent porter cet id (`~/.claude/history.jsonl`, ses lignes ;
+`~/.claude.json`, `lastSessionId` d'un projet), laissés sans être ouverts. Rien ne s'efface tant que la session
 tourne encore (relu juste avant chaque effacement) ; le
 premier effacement qui échoue arrête le nettoyage de tous les dossiers.
 
 Un id tiré qui a déjà une trace sous `~/.claude` fait abandonner avant tout lancement. Une session qui ne
-répond pas en 120 s à un tour est arrêtée, et son transcript s'efface quand même s'il porte cet id. Un
-Ctrl-C passe par le même nettoyage avant de sortir. `--garder` n'efface rien et donne les chemins.
+répond pas en 120 s à un tour est arrêtée, et son transcript s'efface quand même s'il porte cet id ; une
+session sortie d'emblée (claude qui échoue au démarrage) se voit sans attendre ce délai. Un
+Ctrl-C passe par le même nettoyage avant de sortir. Un SIGTERM (`kill`) ou un SIGHUP (terminal fermé), à
+quelque étape qu'il arrive, arrête les sessions lancées et n'efface rien de plus (sauf un signal ignoré
+au lancement du script, comme SIGHUP sous `nohup` : il reste ignoré, et la mesure va au bout) : il nomme les traces de
+chaque session comme restantes et sort en 128 + le numéro du signal ; reçu pendant le nettoyage, il
+l'arrête avant la suppression suivante. Un sous-dossier illisible de `<id>/` le fait garder en entier.
+`--garder` n'efface rien et donne les chemins.
 
 Mac et Linux (tmux requis) ; sans dépendance hors de la bibliothèque standard.
 """
@@ -36,6 +43,8 @@ import math
 import os
 import re
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import time
@@ -68,7 +77,67 @@ PLUGIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}@[A-Za-z0-9][A-Za-z0-9._
 
 
 def log(msg=""):
-    print(msg, flush=True)
+    """Écrit une ligne. Une sortie partie (terminal fermé : SIGHUP, puis EIO) ne doit rien arrêter : à la
+    première écriture qui échoue, la sortie et l'erreur vont à /dev/null pour la suite (y compris le vidage
+    de la sortie à la fin de Python, qui changerait sinon le code de sortie)."""
+    try:
+        print(msg, flush=True)
+    except OSError:
+        sys.stdout = sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
+# --- les signaux d'arrêt ------------------------------------------------------
+
+STOP_SIGNALS = tuple(getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name))
+
+
+class Interrupted(BaseException):
+    """Un SIGTERM ou un SIGHUP reçu pendant le lancement : hors de `Exception`, comme `KeyboardInterrupt`,
+    pour qu'aucun `except Exception` ne l'avale."""
+
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+class Signals:
+    """Les signaux d'arrêt (SIGTERM, SIGHUP) : le premier reçu est noté. Tant que `raising` est vrai (le
+    lancement, où l'on attend tmux ou le transcript), il lève aussi `Interrupted`, une seule fois ; ensuite
+    (l'arrêt des sessions, le nettoyage) les signaux ne font que se noter, et le nettoyage relit la note
+    avant chaque suppression : un signal ne coupe jamais une suppression en cours, ni l'arrêt d'une session."""
+
+    def __init__(self):
+        self.received = None
+        # Faux jusqu'au début du lancement : un signal reçu pendant la pose des gestionnaires est noté.
+        self.raising = False
+        self.previous = {}
+
+    def handle(self, signum, frame):
+        if self.received is None:
+            self.received = signum
+        if self.raising:
+            self.raising = False
+            raise Interrupted(signum)
+
+    def install(self):
+        """Pose le gestionnaire, sauf sur un signal ignoré au départ (`nohup` ignore SIGHUP) : un lancement
+        sous `nohup` survit à la fermeture du terminal, comme avant (Python fait de même pour SIGINT)."""
+        for sig in STOP_SIGNALS:
+            if signal.getsignal(sig) is signal.SIG_IGN:
+                continue
+            self.previous[sig] = signal.signal(sig, self.handle)
+
+    def restore(self):
+        for sig, handler in self.previous.items():
+            signal.signal(sig, handler)
+
+    def reason(self):
+        """La raison d'arrêter le nettoyage, ou None."""
+        return None if self.received is None else interrupted_by(self.received)
+
+
+def interrupted_by(signum):
+    return f"interrompu par un signal ({signal.Signals(signum).name})"
 
 
 # --- ce que le lancement crée, et ce qui le prouve ---------------------------
@@ -179,20 +248,31 @@ def transcript_doubt(path, sid, roots, own=True):
 
 
 def folder_doubts(folder, sid, roots):
-    """Les raisons de garder le dossier `<id>/` d'une session : un lien symbolique, où qu'il soit, ou un
-    transcript (`.jsonl`, ceux des sous-agents) qui n'est pas de cette session."""
+    """Les raisons de garder le dossier `<id>/` d'une session : un lien symbolique, où qu'il soit, un
+    transcript (`.jsonl`, ceux des sous-agents) qui n'est pas de cette session, ou une entrée illisible
+    (un sous-dossier qui ne se liste pas, une entrée qui ne se relit pas) : ce qui n'a pas été relu ne
+    s'efface pas."""
     if folder.is_symlink() or not folder.is_dir():
         return [f"{folder} n'est pas un dossier ordinaire"]
     doubts = []
-    for base, dirs, files in os.walk(folder):
+    unreadable = []
+    for base, dirs, files in os.walk(folder, onerror=unreadable.append):
         for name in dirs + files:
             path = Path(base) / name
-            if path.is_symlink():
+            # `os.lstat` relu pour chaque entrée : dans un dossier lisible mais non traversable, `os.walk`
+            # range ses entrées sans les relire, et sans appeler `onerror`.
+            try:
+                mode = os.lstat(path).st_mode
+            except OSError as err:
+                doubts.append(f"{path} illisible ({err.strerror})")
+                continue
+            if stat.S_ISLNK(mode):
                 doubts.append(f"{path} est un lien symbolique")
             elif name.endswith(".jsonl"):
                 doubt = transcript_doubt(path, sid, roots, own=False)
                 if doubt:
                     doubts.append(doubt)
+    doubts += [f"{err.filename} illisible ({err.strerror})" for err in unreadable]
     return doubts
 
 
@@ -254,10 +334,11 @@ def recheck(path, is_dir, sid, roots):
     return transcript_doubt(path, sid, roots)
 
 
-def clean(home, folder, sid, keep=False, new_dirs=()):
+def clean(home, folder, sid, keep=False, new_dirs=(), halt=None):
     """Efface sous `home` le transcript et le dossier de la session `sid` lancée dans `folder`, puis les
     dossiers de projet que ce lancement a créés (`new_dirs`) s'ils sont vides ; rien d'autre. Avec `keep`,
-    n'efface rien. S'arrête à la première suppression qui échoue ou qu'un Ctrl-C coupe."""
+    n'efface rien. S'arrête à la première suppression qui échoue ou qu'un Ctrl-C coupe, et avant chaque
+    suppression quand `halt()` rend une raison (un signal d'arrêt reçu entre-temps)."""
     todo, kept = plan(home, folder, sid)
     report = Report(kept=list(kept))
     if keep:
@@ -265,6 +346,14 @@ def clean(home, folder, sid, keep=False, new_dirs=()):
         return report
     roots = roots_of(folder)
     todo += [(p, None) for p in new_dirs]
+    def halted(i):
+        """Relu juste avant chaque suppression : un signal noté arrête là, sans commencer la suivante."""
+        stopped = halt() if halt else None
+        if stopped:
+            report.error = stopped
+            report.pending = [str(p) for p, _ in todo[i:] if p.exists() or p.is_symlink()]
+        return stopped
+
     for i, (path, is_dir) in enumerate(todo):
         try:
             if is_dir is None:
@@ -272,6 +361,8 @@ def clean(home, folder, sid, keep=False, new_dirs=()):
                     if path.exists() or path.is_symlink():
                         report.kept.append(f"{path} (dossier de projet créé par ce lancement, pas vide)")
                     continue
+                if halted(i):
+                    return report
                 os.rmdir(path)
             else:
                 # Une session rouverte depuis l'arrêt (`claude --resume` de la mesure) : son registre porte
@@ -282,6 +373,8 @@ def clean(home, folder, sid, keep=False, new_dirs=()):
                 doubt = recheck(path, is_dir, sid, roots)
                 if doubt:
                     raise OSError(doubt)
+                if halted(i):
+                    return report
                 shutil.rmtree(path) if is_dir else path.unlink()
             if path.exists() or path.is_symlink():
                 raise OSError(f"{path} toujours là après la suppression")
@@ -407,8 +500,10 @@ def find_transcript(home, run):
     return None
 
 
-def wait_turn(home, run, tour):
-    """Attend que le transcript porte la réponse du tour `tour` et ne bouge plus ; False au bout du délai."""
+def wait_turn(tmux, home, run, tour):
+    """Attend que le transcript porte la réponse du tour `tour` et ne bouge plus ; False au bout du délai,
+    ou dès que la session n'est plus en vie (`running` : claude sorti d'emblée, par exemple), la note du
+    lancement disant alors qu'elle est sortie avant de répondre."""
     deadline, last = time.monotonic() + TURN_TIMEOUT, None
     while time.monotonic() < deadline:
         run.transcript = run.transcript or find_transcript(home, run)
@@ -418,6 +513,9 @@ def wait_turn(home, run, tour):
             if rows and rows[-1]["tour"] >= tour and size == last:
                 return True
             last = size
+        if not running(tmux, home, run):
+            run.note = f"session sortie avant de répondre au tour {tour}"
+            return False
         time.sleep(SETTLE)
     return False
 
@@ -441,8 +539,8 @@ def launch(tmux, claude, home, run, settings, tours):
                 if res.returncode != 0:
                     run.note = f"tour {tour} pas envoyé (tmux : {res.stderr.strip()})"
                     return
-        if not wait_turn(home, run, tour):
-            run.note = f"pas de réponse au tour {tour} en {TURN_TIMEOUT} s : session arrêtée"
+        if not wait_turn(tmux, home, run, tour):
+            run.note = run.note or f"pas de réponse au tour {tour} en {TURN_TIMEOUT} s : session arrêtée"
             return
 
 
@@ -467,25 +565,47 @@ def stop_all(tmux, home, runs):
             run.alive = True
 
 
-def clean_runs(home, runs, keep):
+def shared_traces(home):
+    """La ligne fixe des fichiers communs à toutes les sessions qui peuvent porter l'id de celle-ci :
+    `history.jsonl` (ses lignes) et `~/.claude.json` (`lastSessionId` d'un projet). Ni ouverts ni modifiés :
+    `~/.claude.json` peut porter des jetons."""
+    return (f"{home / 'history.jsonl'} et {home.parent / '.claude.json'} (fichiers communs qui peuvent porter "
+            f"l'id de la session, laissés sans être ouverts)")
+
+
+def left_behind(home, run, reason):
+    """Le rapport d'un lancement que rien n'efface : chaque trace de sa session (`id_traces`) et chaque
+    dossier de projet qu'il a créé, encore là, avec la raison ; « aucune trace » si la liste est vide."""
+    paths = id_traces(home, run.sid) + [str(p) for p in run.new_dirs if p.exists() or p.is_symlink()]
+    kept = [f"{p} ({reason}, laissé)" for p in paths] or [f"aucune trace de la session {run.sid} ({reason})"]
+    return Report(kept=kept + [shared_traces(home)], error=reason)
+
+
+def clean_runs(home, runs, keep, halt=None):
     """Le nettoyage de chaque lancement, dans l'ordre : rend chaque rapport dès qu'il est fait, pour qu'il
-    s'affiche avant le suivant. Le premier effacement qui échoue, ou un Ctrl-C, arrête le nettoyage de tous
-    les dossiers : les suivants ne sont plus touchés, et leurs traces sont dites restantes. Une session qui
+    s'affiche avant le suivant. Le premier effacement qui échoue, un Ctrl-C ou un signal d'arrêt (`halt()`
+    rend sa raison, relue avant chaque lancement et chaque suppression) arrête le nettoyage de tous les
+    dossiers : les suivants ne sont plus touchés, et leurs traces sont dites restantes. Une session qui
     tourne encore garde tout, sans arrêter les autres."""
     stopped = None
     for run in runs:
         try:
             traces = id_traces(home, run.sid)
+            signalled = halt() if halt else None
             if stopped:
                 report = Report(kept=[f"{p} (nettoyage arrêté plus haut : {stopped})" for p in traces])
+            elif signalled:
+                stopped = signalled
+                report = left_behind(home, run, signalled)
             elif run.alive:
-                report = Report(kept=traces, error="la session tourne encore : rien ne s'efface")
+                report = Report(kept=traces + [shared_traces(home)], error="la session tourne encore : rien ne s'efface")
             else:
-                report = clean(home, run.folder, run.sid, keep=keep, new_dirs=run.new_dirs)
+                report = clean(home, run.folder, run.sid, keep=keep, new_dirs=run.new_dirs, halt=halt)
                 stopped = report.error
                 # Les autres traces de la session sous ~/.claude : nommées, jamais effacées.
                 report.kept += [f"{p} (trace de la session hors de ~/.claude/projects, laissée)"
                                 for p in id_traces(home, run.sid) if Path(p).parent.parent.name != "projects"]
+                report.kept.append(shared_traces(home))
         except KeyboardInterrupt:
             stopped = INTERRUPTED
             report = Report(kept=[f"traces de la session {run.sid} non relues"], error=INTERRUPTED)
@@ -518,21 +638,76 @@ def main():
         runs.append(Run(folder, sid, f"mesure-{sid}", [p for p in project_dirs(home, folder) if not p.exists() and not p.is_symlink()]))
     settings = json.dumps({"enabledPlugins": {m: False for m in mods(home)}})
     log(f"Mods coupés : {', '.join(json.loads(settings)['enabledPlugins']) or 'aucun'}")
+    sys.exit(measure(tmux, claude, home, runs, args.tours, args.garder, settings))
+
+
+def stopped_by_signal(tmux, home, started, signum):
+    """Après un SIGTERM ou un SIGHUP : les sessions lancées s'arrêtent d'abord (avant toute écriture, la
+    sortie a pu partir avec le terminal), puis rien ne s'efface ; les traces de chaque session sont
+    nommées comme restantes. Rend le code de sortie, 128 + le numéro du signal."""
+    stop_all(tmux, home, started)
+    reason = interrupted_by(signum)
+    alive = [run for run in started if run.alive]
+    state = (f"{len(alive)} session(s) tournent encore malgré l'arrêt" if alive
+             else "sessions lancées arrêtées" if started else "aucune session lancée")
+    try:
+        log(f"\n{reason[0].upper()}{reason[1:]} : {state}, rien n'est effacé.")
+        for run in started:
+            log(f"{run.folder} · {run.sid}" + (" (la session tourne encore)" if run.alive else ""))
+            for line in left_behind(home, run, reason).lines():
+                log(f"  {line}")
+    except KeyboardInterrupt:
+        pass
+    except OSError as err:
+        # Une trace illisible (droits) : le rapport s'arrête, le code de sortie reste celui du signal.
+        log(f"Relevé des traces impossible ({err}) : rien n'est effacé.")
+    return 128 + signum
+
+
+def measure(tmux, claude, home, runs, tours, keep, settings):
+    """Lance chaque mesure, l'arrête, affiche l'usage lu, puis nettoie ; rend le code de sortie. Un Ctrl-C
+    ou une erreur arrête les sessions lancées, puis le nettoyage passe quand même (130 ou 1). Un SIGTERM ou
+    un SIGHUP qui n'était pas ignoré au départ (`Signals.install`), à quelque étape qu'il arrive, arrête
+    les sessions lancées et n'efface rien de plus : reçu
+    pendant le nettoyage, il l'arrête avant la suppression suivante (128 + son numéro). Les gestionnaires de
+    signaux d'avant sont remis en sortant."""
+    signals = Signals()
+    try:
+        signals.install()
+        return measure_steps(tmux, claude, home, runs, tours, keep, settings, signals)
+    finally:
+        signals.restore()
+
+
+def measure_steps(tmux, claude, home, runs, tours, keep, settings, signals):
     started, interrupted, failed = [], False, False
     try:
-        for run in runs:
-            log(f"→ {run.folder} : session {run.sid} (tmux {run.name})")
-            started.append(run)
-            launch(tmux, claude, home, run, settings, args.tours)
-            run.alive = not stop(tmux, home, run)
-    except (KeyboardInterrupt, Exception) as err:
-        # Un Ctrl-C ou toute autre erreur (tmux qui ne répond plus, transcript disparu) : les sessions
-        # lancées s'arrêtent, puis le nettoyage passe quand même.
-        interrupted = isinstance(err, KeyboardInterrupt)
-        failed = not interrupted
-        log("\nInterrompu" if interrupted else f"\nErreur ({type(err).__name__} : {err})")
-        log("Arrêt des sessions lancées, puis nettoyage.")
-        stop_all(tmux, home, started)
+        try:
+            # Le lancement : un signal lève désormais, pour sortir des attentes ; un signal déjà noté
+            # (pendant la pose des gestionnaires) n'en laisse commencer aucun.
+            signals.raising = signals.received is None
+            if signals.received:
+                raise Interrupted(signals.received)
+            for run in runs:
+                log(f"→ {run.folder} : session {run.sid} (tmux {run.name})")
+                started.append(run)
+                launch(tmux, claude, home, run, settings, tours)
+                run.alive = not stop(tmux, home, run)
+            # Le lancement fini, un signal ne fait plus que se noter (relu avant chaque suppression).
+            signals.raising = False
+        except (KeyboardInterrupt, Exception) as err:
+            signals.raising = False
+            # Un Ctrl-C ou toute autre erreur (tmux qui ne répond plus, transcript disparu) : les sessions
+            # lancées s'arrêtent, puis le nettoyage passe quand même.
+            interrupted = isinstance(err, KeyboardInterrupt)
+            failed = not interrupted
+            log("\nInterrompu" if interrupted else f"\nErreur ({type(err).__name__} : {err})")
+            log("Arrêt des sessions lancées, puis nettoyage.")
+            stop_all(tmux, home, started)
+    except Interrupted:
+        pass
+    if signals.received:
+        return stopped_by_signal(tmux, home, started, signals.received)
     try:
         for run in started:
             print_usage(run.folder, run.transcript or find_transcript(home, run))
@@ -541,9 +716,11 @@ def main():
     except (KeyboardInterrupt, OSError) as err:
         interrupted = interrupted or isinstance(err, KeyboardInterrupt)
         log("\nAffichage interrompu : nettoyage quand même.")
-    log("\nNettoyage" + (" (--garder : rien n'est effacé)" if args.garder else ""))
+    if signals.received:
+        return stopped_by_signal(tmux, home, started, signals.received)
+    log("\nNettoyage" + (" (--garder : rien n'est effacé)" if keep else ""))
     try:
-        for run, report in clean_runs(home, started, args.garder):
+        for run, report in clean_runs(home, started, keep, halt=signals.reason):
             log(f"{run.folder} · {run.sid}")
             for line in report.lines():
                 log(f"  {line}")
@@ -552,7 +729,15 @@ def main():
     except KeyboardInterrupt:
         interrupted = True
         log("\nNettoyage interrompu (Ctrl-C) : les dossiers suivants ne sont pas nettoyés.")
-    sys.exit(130 if interrupted else 1 if failed else 0)
+    if signals.received:
+        # Une session dont l'arrêt n'avait pas été constaté : un nouvel essai, comme à toute autre étape.
+        alive = [run for run in started if run.alive]
+        if alive:
+            stop_all(tmux, home, alive)
+            for run in alive:
+                log(f"{run.folder} · {run.sid} : " + ("la session tourne encore" if run.alive else "session arrêtée"))
+        return 128 + signals.received
+    return 130 if interrupted else 1 if failed else 0
 
 
 if __name__ == "__main__":

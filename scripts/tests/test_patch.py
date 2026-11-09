@@ -1,5 +1,6 @@
 """Tests de scripts/patch.py : python3 -m unittest discover -s scripts/tests."""
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -9,8 +10,8 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent.parent / "patch.py"
 
 
-def run(*args):
-    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8")
+def run(*args, cwd=None):
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8", cwd=cwd)
 
 
 class PatchTest(unittest.TestCase):
@@ -226,6 +227,29 @@ class AppendTest(unittest.TestCase):
         self.assertEqual(run("--append", str(self.file), "deux").returncode, 0)
         self.assertEqual(self.file.read_bytes().decode("utf-8"), "un\ndeux\n")
 
+    def test_un_texte_qui_finit_par_une_fin_de_ligne_n_ajoute_pas_de_ligne_vide(self):
+        (self.root / "texte").write_bytes(b"abc\n")
+        for start in ("un\n", "un\r\n"):
+            results = []
+            for text in ("abc", "abc\n", "abc\r\n", f"@{self.root / 'texte'}"):
+                with self.subTest(start=start, text=text):
+                    self.file.write_bytes(start.encode("utf-8"))
+                    out = run("--append", str(self.file), text)
+                    self.assertEqual(out.returncode, 0, out.stderr)
+                    results.append(self.file.read_bytes())
+            newline = start[2:]
+            self.assertEqual(results, [f"un{newline}abc{newline}".encode("utf-8")] * 4)
+
+    def test_un_texte_qui_finit_par_deux_fins_de_ligne_garde_sa_ligne_vide(self):
+        self.file.write_bytes(b"un\n")
+        self.assertEqual(run("--append", str(self.file), "abc\n\n").returncode, 0)
+        self.assertEqual(self.file.read_bytes(), b"un\nabc\n\n")
+
+    def test_un_texte_fait_d_une_seule_fin_de_ligne_ajoute_deux_fins_de_ligne_comme_avant(self):
+        self.file.write_bytes(b"un\n")
+        self.assertEqual(run("--append", str(self.file), "\n").returncode, 0)
+        self.assertEqual(self.file.read_bytes(), b"un\n\n\n")
+
     def test_le_marqueur_u_et_l_arobase_valent_comme_pour_un_remplacement(self):
         self.file.write_bytes(b"")
         self.assertEqual(run("--append", str(self.file), "const s = '{{" + "u}}2028'").returncode, 0)
@@ -412,6 +436,190 @@ class MoveTest(unittest.TestCase):
         out = self.move(str(self.source), "a")
         self.assertEqual(out.returncode, 2)
         self.assertIn("--deplace [--essai] <source> <début> <fin> <cible> <ancre>", out.stderr)
+
+
+class RefusalTest(unittest.TestCase):
+    """Chaque mode qui écrit refuse un chemin de `.git/` et une cible qui est un lien symbolique (ou, pour
+    un chemin relatif, dont un dossier sous le dossier courant est un lien), sans rien écrire."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.real = self.root / "vrai.md"
+        self.real.write_bytes(b"un\ndeux\n")
+        self.other = self.root / "autre.md"
+        self.other.write_bytes(b"autre\n")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def modes(self, path):
+        """Les appels de chaque mode qui écrit, sur `path` (un remplacement de « un » par « UN »)."""
+        lot = self.root / "paires.txt"
+        lot.write_text(f"::: fichier {path}\n::: ancien\nun\n::: nouveau\nUN\n::: fin\n", encoding="utf-8")
+        return {
+            "simple": [str(path), "un", "UN"],
+            "lot": ["--lot", str(lot)],
+            "append": ["--append", str(path), "trois"],
+            "plage": ["--plage", str(path), "1", "1", "UN", "--debut", "un", "--fin", "un"],
+            "deplace-source": ["--deplace", str(path), "un", "un", str(self.other), "autre"],
+            "deplace-cible": ["--deplace", str(self.other), "autre", "autre", str(path), "un"],
+        }
+
+    def assertRefusedEverywhere(self, path, reason, cwd=None, watched=()):
+        for mode, args in self.modes(path).items():
+            with self.subTest(mode=mode):
+                before = {p: p.read_bytes() for p in (self.real, self.other, *watched)}
+                out = run(*args, cwd=cwd)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(reason, out.stderr)
+                self.assertIn(str(path), out.stderr)
+                self.assertEqual({p: p.read_bytes() for p in before}, before)
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques")
+    def test_une_cible_qui_est_un_lien_est_refusee_dans_chaque_mode(self):
+        link = self.root / "lien.md"
+        link.symlink_to(self.real)
+        self.assertRefusedEverywhere(link, "lien symbolique")
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques")
+    def test_un_dossier_lien_sous_le_dossier_courant_est_refuse_en_relatif(self):
+        (self.root / "vrai").mkdir()
+        inner = self.root / "vrai" / "x.md"
+        inner.write_bytes(b"un\n")
+        (self.root / "sous").symlink_to(self.root / "vrai")
+        self.assertRefusedEverywhere(Path("sous") / "x.md", "lien symbolique", cwd=self.root, watched=(inner,))
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques")
+    def test_un_lien_au_dessus_du_dossier_courant_atteint_par_deux_points_n_est_pas_verifie(self):
+        (self.root / "vrai").mkdir()
+        (self.root / "ici").mkdir()
+        inner = self.root / "vrai" / "x.md"
+        inner.write_bytes(b"un\n")
+        (self.root / "lien").symlink_to(self.root / "vrai")
+        out = run(str(Path("..") / "lien" / "x.md"), "un", "UN", cwd=self.root / "ici")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(inner.read_bytes(), b"UN\n")
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques")
+    def test_un_lien_du_dossier_courant_atteint_en_ressortant_par_deux_points_est_refuse(self):
+        (self.root / "ici").mkdir()
+        (self.root / "vrai").mkdir()
+        inner = self.root / "vrai" / "x.md"
+        inner.write_bytes(b"un\n")
+        (self.root / "ici" / "lien").symlink_to(self.root / "vrai")
+        path = Path("..") / "ici" / "lien" / "x.md"
+        self.assertRefusedEverywhere(path, "lien symbolique", cwd=self.root / "ici", watched=(inner,))
+
+    def test_une_ecriture_coupee_de_la_cible_d_un_deplacement_est_remise(self):
+        sys.path.insert(0, str(SCRIPT.parent))
+        try:
+            import patch
+        finally:
+            sys.path.pop(0)
+        self.other.write_bytes(b"autre\n")
+        real_fdopen, calls = patch.os.fdopen, []
+
+        def cut_once(fd, *args, **kwargs):
+            calls.append(fd)
+            if len(calls) == 1:  # la première écriture (la cible) est coupée après l'ouverture, qui l'a vidée
+                os.close(fd)
+                raise OSError(28, "No space left on device")
+            return real_fdopen(fd, *args, **kwargs)
+
+        patch.os.fdopen = cut_once
+        try:
+            with self.assertRaises(patch.PatchError) as raised:
+                patch.move(str(self.real), "un", "un", str(self.other), "autre")
+        finally:
+            patch.os.fdopen = real_fdopen
+        self.assertIn("écriture coupée", str(raised.exception))
+        self.assertIn("remis tels qu'avant", str(raised.exception))
+        self.assertEqual(self.other.read_bytes(), b"autre\n")
+        self.assertEqual(self.real.read_bytes(), b"un\ndeux\n")
+
+    def test_une_ecriture_coupee_d_un_remplacement_remet_le_texte_d_avant(self):
+        sys.path.insert(0, str(SCRIPT.parent))
+        try:
+            import patch
+        finally:
+            sys.path.pop(0)
+        real_fdopen, calls = patch.os.fdopen, []
+
+        def cut_once(fd, *args, **kwargs):
+            calls.append(fd)
+            if len(calls) == 1:
+                os.close(fd)
+                raise OSError(28, "No space left on device")
+            return real_fdopen(fd, *args, **kwargs)
+
+        for call in (lambda: patch.patch(str(self.real), "un", "UN"), lambda: patch.append(str(self.real), "trois")):
+            calls.clear()
+            patch.os.fdopen = cut_once
+            try:
+                with self.assertRaises(patch.CutWrite) as raised:
+                    call()
+            finally:
+                patch.os.fdopen = real_fdopen
+            self.assertIn("remis tel qu'avant", str(raised.exception))
+            self.assertEqual(self.real.read_bytes(), b"un\ndeux\n")
+
+    def test_un_fichier_ordinaire_hors_du_depot_s_ecrit_en_absolu_et_en_relatif(self):
+        # Le dossier jetable est sous /var/folders/… sur macOS, où /var est un lien : les dossiers au-dessus
+        # du dossier courant, et ceux d'un chemin absolu, ne sont pas vérifiés.
+        self.assertEqual(run(str(self.real), "un", "UN").returncode, 0)
+        self.assertEqual(run("vrai.md", "deux", "DEUX", cwd=self.root).returncode, 0)
+        self.assertEqual(self.real.read_bytes(), b"UN\nDEUX\n")
+
+    def test_un_chemin_de_git_est_refuse_dans_chaque_mode(self):
+        for rel in (Path(".git") / "config", Path("sous") / ".git" / "x", Path(".GIT") / "config"):
+            with self.subTest(rel=rel):
+                path = self.root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"un\n")
+                self.assertRefusedEverywhere(path, "chemin d'un dossier .git", watched=(path,))
+                self.assertRefusedEverywhere(rel, "chemin d'un dossier .git", cwd=self.root, watched=(path,))
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques")
+    def test_un_chemin_absolu_dont_un_dossier_est_un_lien_vers_git_est_refuse(self):
+        (self.root / ".git").mkdir()
+        config = self.root / ".git" / "config"
+        config.write_bytes(b"un\n")
+        (self.root / "dossier").symlink_to(self.root / ".git")
+        self.assertRefusedEverywhere(self.root / "dossier" / "config", "chemin d'un dossier .git", watched=(config,))
+
+    @unittest.skipIf(os.name == "nt", "arguments en octets (surrogateescape)")
+    def test_un_texte_non_encodable_ne_vide_pas_le_fichier(self):
+        # Un octet invalide d'un argument arrive en substitut (surrogateescape), que l'UTF-8 refuse.
+        out = subprocess.run([sys.executable, str(SCRIPT), str(self.real), "un", "\udcff"], capture_output=True)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("encodable".encode("utf-8"), out.stderr)
+        self.assertEqual(self.real.read_bytes(), b"un\ndeux\n")
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques")
+    def test_un_lot_dont_une_seule_paire_vise_un_lien_n_ecrit_rien(self):
+        link = self.root / "lien.md"
+        link.symlink_to(self.other)
+        lot = self.root / "paires.txt"
+        lot.write_text(f"::: fichier {self.real}\n::: ancien\nun\n::: nouveau\nUN\n::: fin\n"
+                       f"::: fichier {link}\n::: ancien\nautre\n::: nouveau\nAUTRE\n::: fin\n", encoding="utf-8")
+        out = run("--lot", str(lot))
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("paire 2", out.stderr)
+        self.assertEqual(self.real.read_bytes(), b"un\ndeux\n")
+        self.assertEqual(self.other.read_bytes(), b"autre\n")
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques")
+    def test_un_lot_qui_nomme_le_meme_fichier_par_un_lien_est_refuse(self):
+        link = self.root / "lien.md"
+        link.symlink_to(self.real)
+        lot = self.root / "paires.txt"
+        lot.write_text(f"::: fichier {self.real}\n::: ancien\nun\n::: nouveau\nUN\n::: fin\n"
+                       f"::: fichier {link}\n::: ancien\ndeux\n::: nouveau\nDEUX\n::: fin\n", encoding="utf-8")
+        out = run("--lot", str(lot))
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("lien symbolique", out.stderr)
+        self.assertEqual(self.real.read_bytes(), b"un\ndeux\n")
 
 
 if __name__ == "__main__":

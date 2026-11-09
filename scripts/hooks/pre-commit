@@ -6,7 +6,8 @@
 # liste « État » d'un plugin dont le CHANGELOG ou le plugin.json est indexé ; hors documentation seule,
 # validate du dépôt, puis validate, tsc et tests des plugins dont un fichier est indexé, sur une copie de l'index, avec le Claude
 # Code du terminal, sauf pour un plugin dont l'index est exactement celui que scripts/check.sh vient de
-# passer (scripts/check.py --staged).
+# passer ; enfin la suite Python du dépôt (scripts/tests), sur la même copie, quand un fichier indexé est sous
+# scripts/ ou est plugins/flow-board/hooks/register.tsx (scripts/check.py --staged).
 # Git for Windows lance aussi ce script, par son sh.
 root=$(git rev-parse --show-toplevel) || exit 1
 exec sh "$root/scripts/check.sh" --staged

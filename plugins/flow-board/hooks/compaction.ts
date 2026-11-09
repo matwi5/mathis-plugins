@@ -246,22 +246,42 @@ export const ORIGIN_FILE_RULE =
   'If the transcript starts with a compaction (no conversation message before its first "compact_boundary" entry, only settings entries such as title, mode or permissions), it continues another file: look in the other .jsonl files of the same project folder (not this one, which copies that entry too) for the entry whose "uuid" is the "logicalParentUuid" of that boundary, read that file up to that entry, and apply the same rule again if that file too starts with a compaction.'
 
 /**
+ * Un texte relu qui ouvrirait une ligne ou retournerait l'affichage là où il est recopié (une demande mise
+ * dans le prompt, une commande) : une fin de ligne ou un séparateur de ligne, un contrôle, une
+ * incorporation, un forçage ou un isolat bidirectionnel. Les autres caractères (émojis et leurs
+ * sélecteurs, marques LRM et RLM) restent ordinaires : un nom de dossier en porte.
+ */
+export const breaksLine = (text: string): boolean => /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E\u2066-\u2069]/.test(text)
+
+/**
  * La consigne ajoutée à `/retro` : un spécialiste en lecture seule relit le transcript jusqu'à la
  * dernière compaction ; la discussion fait la suite, puis fusionne. Affirmative quand le mod a vu
  * une compaction (`isSeen`) ; sinon une vérification par grep d'abord, car une discussion reprise
  * dans un nouveau fichier après une compaction n'a pas de repère ici. Dans les deux cas, les rapports
  * de ses spécialistes se lisent par le script `scripts/rapports-specialistes.mjs` (`reports` : son
  * chemin à lancer, puis, quand le projet contient la source du mod, son chemin installé en repli), au
- * lieu de relire chaque transcript.
+ * lieu de relire chaque transcript. Un id de session relu hors forme, ou un chemin relu qui
+ * ouvrirait une ligne (`breaksLine`), laisse place au gabarit, que la note dit de remplir en tête.
  */
 export const retroTranscriptNote = (transcript: string | undefined, session: string | undefined, isSeen: boolean, reports: { script: string; fallback?: string }): string => {
-  const where = transcript ?? `~/.claude/projects/<project folder>/${session ?? '<session id>'}.jsonl`
+  // Valeurs relues (registre, tableau de bord) : un id hors forme ne nomme aucun fichier, et un chemin qui
+  // ouvrirait une ligne (`breaksLine`) n'entre ni dans la note ni dans une commande ;
+  // chacun laisse place au gabarit, à remplir.
+  const id = isSafeId(session) ? session : undefined
+  const known = transcript !== undefined && !breaksLine(transcript) ? transcript : undefined
+  const rest = `.claude/projects/<project folder>/${id ?? '<session id>'}.jsonl`
+  const where = known ?? `~/${rest}`
+  // Le chemin connu se cite en entier, entre apostrophes (jamais entre guillemets, où `$` et l'accent grave
+  // s'interprètent) ; le gabarit garde son `~/` hors des apostrophes, pour que le shell le développe une
+  // fois rempli.
+  const cited = known === undefined ? `~/${shellQuote(rest)}` : shellQuote(known)
+  // En tête de la note, avant le premier usage du gabarit (le grep, le chemin donné au spécialiste).
+  const fill = known === undefined ? ` In the transcript path of this note, replace <project folder> with the folder of this discussion under ~/.claude/projects/${id === undefined ? ', and <session id> with its session id' : ''}, before running any command or handing the path on.` : ''
   const reading = `have a read-only subagent (general-purpose, not Haiku) read the transcript ${where} from its start to its last "compact_boundary" entry and do the retro of that part along the steps and categories of this skill, which you pass to it as you read them here; do the part after that entry yourself, from your context, then merge both.`
   const head = isSeen
-    ? `Transcript (flow-board): this discussion was compacted, so what came before its last compaction is no longer in your context. So ${reading}`
-    : `Transcript (flow-board): first check whether this discussion was compacted, here or before it was resumed, by counting the real compaction entries of its transcript (a mere mention of the word, such as this text, does not count): grep -c '"subtype":"compact_boundary"' ${shellQuote(where)}. If it does hold such an entry, what came before the last one is no longer in your context: ${reading}`
-  // Le chemin du transcript est relu (registre, tableau de bord) : cité entre apostrophes, jamais entre guillemets où `$` et l'accent grave s'interprètent.
-  const run = (script: string): string => `node ${shellQuote(script)} ${shellQuote(where)}`
+    ? `Transcript (flow-board):${fill} ${fill ? 'This' : 'this'} discussion was compacted, so what came before its last compaction is no longer in your context. So ${reading}`
+    : `Transcript (flow-board):${fill} ${fill ? 'First' : 'first'} check whether this discussion was compacted, here or before it was resumed, by counting the real compaction entries of its transcript (a mere mention of the word, such as this text, does not count): grep -c '"subtype":"compact_boundary"' ${cited}. If it does hold such an entry, what came before the last one is no longer in your context: ${reading}`
+  const run = (script: string): string => `node ${shellQuote(script)} ${cited}`
   const fallback = reports.fallback === undefined ? '' : ` (from the root of the working folder: the repository's source, which prevails; else ${run(reports.fallback)})`
   const subagents = `In every case, compacted or not, the reports of its subagents (name, type, model, effort, finished, final report: the last SubagentHandback, else the last text) come from one command, rather than rereading each subagent transcript: ${run(reports.script)}${fallback}, and the same command on each origin file the rule above leads to (the subagents launched before a resumption live beside that file); add --prefixe "<start of the name>" to keep some (« Spec · », « Sécurité · »); with many subagents, write its output to a file named after this session's id in your own temporary folder (never a generic /tmp name another session could overwrite) and read it in parts.`
   return ['', '', '---', `${head} ${ORIGIN_FILE_RULE} ${subagents}`].join('\n')

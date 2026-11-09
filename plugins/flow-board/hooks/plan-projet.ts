@@ -22,6 +22,11 @@ export type PlanUnit = {
   isBusy: boolean
   /** Les groupes de la même mission qu'il attend (ses bloqueurs encore ouverts). */
   after: readonly string[]
+  /**
+   * Sa mission est close (livrée, ou close sans livraison) : l'unité reste dans les vagues, où elle retient encore,
+   * mais la mission n'est pas dans la livraison du plan (la carte « ▶ Livrer » ne livre pas une mission close).
+   */
+  isClosed?: boolean
 }
 
 /** Une unité nommée dans le plan. */
@@ -30,8 +35,12 @@ export type PlanRef = { run: string; title: string; group: string }
 /** Une attente du plan : l'unité retenue (sa mission, son groupe) et l'unité d'une autre mission qu'elle attend. */
 export type PlanWait = { run: string; group: string; awaited: { run: string; group: string } }
 
-/** Le plan du projet : les vagues (unités qui partent ensemble ; livraisons des missions qui finissent après elle), et les attentes entre missions. */
-export type ProjectPlan = { waves: { units: PlanRef[]; deliveries: { run: string; title: string }[] }[]; waits: PlanWait[] }
+/**
+ * Le plan du projet : les vagues (unités qui partent ensemble), les attentes entre missions, et une seule
+ * livraison, après la dernière vague, qui nomme toutes les missions du plan qui ne sont pas closes (dans l'ordre de leur dernière vague).
+ * Affichage seul : recalculée à chaque relevé, elle ne se garde pas et ne lance rien.
+ */
+export type ProjectPlan = { waves: { units: PlanRef[] }[]; waits: PlanWait[]; delivery: { run: string; title: string }[] }
 
 const keyOf = (u: { run: string; group: string }): string => `${u.run}\u0000${u.group}`
 
@@ -81,15 +90,14 @@ export const projectPlan = <U extends PlanUnit>(units: readonly U[], overlaps: (
     }
   }
   const lastWave = new Map<string, { at: number; title: string }>()
-  for (const u of all) lastWave.set(u.run, { at: Math.max(lastWave.get(u.run)?.at ?? -1, waveOf.get(keyOf(u)) ?? 0), title: u.title })
+  for (const u of all) if (!u.isClosed) lastWave.set(u.run, { at: Math.max(lastWave.get(u.run)?.at ?? -1, waveOf.get(keyOf(u)) ?? 0), title: u.title })
   const compact = waves.filter(x => x !== undefined && x.length > 0)
   return {
-    waves: compact.map((list, i) => ({
-      units: list,
-      // Une mission dont la dernière unité est dans cette vague se livre après elle (la livraison suit la vague).
-      deliveries: [...lastWave].filter(([, x]) => compact.indexOf(waves[x.at]!) === i).map(([run, x]) => ({ run, title: x.title })),
-    })),
+    waves: compact.map(list => ({ units: list })),
     waits,
+    // Une seule livraison pour tout le plan, après la dernière vague : les missions dans l'ordre de leur dernière vague
+    // (à vague égale, dans l'ordre où elles paraissent ; le tri est stable).
+    delivery: [...lastWave].sort(([, a], [, b]) => a.at - b.at).map(([run, x]) => ({ run, title: x.title })),
   }
 }
 

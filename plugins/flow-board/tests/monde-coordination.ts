@@ -47,7 +47,7 @@ export const world = (on: any) => {
   /** Les toasts du mod. */
   const toasts: string[] = []
   /** Joué à chaque relecture du fichier de coordination (pour une écriture croisée d'une autre discussion à ce moment-là). */
-  const probe: { onCoordRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean } = {}
+  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean } = {}
   on('session.end', () => ({ sessionId: ids.now }))
   on('classic.SessionStart', () => ({}))
   on('prompt.submit', (_$: unknown, e: { text: string; context?: readonly string[] }) => {
@@ -59,10 +59,14 @@ export const world = (on: any) => {
     toasts.push(e.text)
     return { value: undefined }
   })
-  on('prompt.fill', (_$: unknown, e: { text: string }) => {
+  /** Le brouillon du prompt, tel que les remplissages du mod le laissent (`replace`, `append`, `insert` à la fin) ; un envoi ne le vide pas. */
+  const box = { text: '' }
+  on('prompt.fill', (_$: unknown, e: { text: string; mode?: string }) => {
     fills.push(e.text)
-    return { isFilled: true }
+    box.text = e.mode === 'append' || e.mode === 'insert' ? `${box.text}${e.text}` : e.text
+    return { isFilled: true, text: box.text }
   })
+  on('prompt.read', () => ({ value: { text: box.text, cursor: box.text.length } }))
   on('turn.start', (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
   on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
   on('ui.notify', (_$: unknown, e: { text: string }) => {
@@ -83,6 +87,7 @@ export const world = (on: any) => {
       if (coord.unread) return { value: 'pas un fichier' }
       return { value: coord.text === undefined ? undefined : JSON.parse(coord.text) }
     }
+    if (e.key === KEY) probe.onBoardRead?.()
     if (e.key === KEY && disk.unreadable) throw new Error('EIO')
     return { value: mem[e.key] }
   })
@@ -114,6 +119,7 @@ export const world = (on: any) => {
   on('fs.read', (_$: unknown, e: { path: string }) => {
     if (isBoardFile(e.path)) {
       disk.isUsed = true
+      probe.onBoardRead?.()
       if (disk.unreadable || disk.board === undefined) throw new Error(`ENOENT ${e.path}`)
       return { value: disk.board } as any
     }
@@ -150,7 +156,7 @@ export const world = (on: any) => {
     else runs.push(e.command)
     return { text: '' }
   })
-  return { mem, disk, coord, asides, files, ids, sends, deliver, probe, prompts, runs, fills, notices, submit, toasts }
+  return { mem, disk, coord, asides, files, ids, sends, deliver, probe, prompts, runs, fills, box, notices, submit, toasts }
 }
 export type World = ReturnType<typeof world>
 

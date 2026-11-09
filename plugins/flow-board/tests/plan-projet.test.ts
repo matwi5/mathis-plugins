@@ -26,9 +26,40 @@ test('l’exemple du ticket : la mission 1 propose A ∥ B ∥ C, et C touche le
     { run: 'm1', group: 'C', awaited: { run: 'm2', group: 'D' } },
     { run: 'm1', group: 'C', awaited: { run: 'm2', group: 'E' } },
   ])
-  // La mission 2 finit à la première vague : sa livraison suit cette vague ; la mission 1 se livre après la seconde.
-  expect(plan.waves[0]!.deliveries.map(d => d.run)).toEqual(['m2'])
-  expect(plan.waves[1]!.deliveries.map(d => d.run)).toEqual(['m1'])
+  // Une seule livraison, après la dernière vague : la mission 2 (finie à la première) puis la mission 1.
+  expect(plan.delivery.map(d => d.run)).toEqual(['m2', 'm1'])
+  expect(plan.waves.every(w => !('deliveries' in w))).toBe(true)
+})
+
+test('trois missions qui finissent à des vagues différentes : une seule livraison, à la fin, avec les trois dans l’ordre de leur dernière vague', () => {
+  // m3/X d'abord (aucun conflit), m1/A attend m3/X… : m3 finit à la vague 1, m2 à la 2, m1 à la 3.
+  const plan = projectPlan(
+    [unit('m1', 'A', { after: ['B'] }), unit('m1', 'B', { after: ['C'] }), unit('m1', 'C'), unit('m2', 'D', { after: ['E'] }), unit('m2', 'E'), unit('m3', 'X')],
+    () => false,
+  )
+  expect(waveNames(plan)).toEqual(['m1/C ∥ m2/E ∥ m3/X', 'm1/B ∥ m2/D', 'm1/A'])
+  expect(plan.delivery).toEqual([
+    { run: 'm3', title: 'Mission m3' },
+    { run: 'm2', title: 'Mission m2' },
+    { run: 'm1', title: 'Mission m1' },
+  ])
+})
+
+test('une mission close (livrée, un groupe encore chez un worker) garde ses unités dans les vagues, mais n’est pas dans la livraison', () => {
+  const plan = projectPlan([unit('m1', 'A', { isBusy: true, isClosed: true }), unit('m2', 'D')], () => false)
+  expect(waveNames(plan)).toEqual(['m1/A ∥ m2/D'])
+  expect(plan.delivery.map(d => d.run)).toEqual(['m2'])
+  // Sur les missions du projet : une mission close ne donne que des unités marquées closes.
+  const m = mission('Mission close', T0, { A: 'a.ts', B: 'b.ts' })
+  const closed: Run = { ...m, status: 'done', groups: m.groups!.map(g => (g.id === 'A' ? { ...g, linked: { at: T0 } } : g)) }
+  const units = projectUnits({ ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [closed] })
+  expect(units.map(u => [u.group, u.isClosed])).toEqual([['A', true]])
+  expect(projectPlan(units, unitsOverlap).delivery).toEqual([])
+})
+
+test('un plan d’une vague a sa livraison après elle ; un plan vide n’en a pas', () => {
+  expect(projectPlan([unit('m1', 'A'), unit('m2', 'D')], () => false).delivery.map(d => d.run)).toEqual(['m1', 'm2'])
+  expect(projectPlan([], () => false).delivery).toEqual([])
 })
 
 test('sans conflit, tout part ensemble et rien n’attend ; un conflit de ressource compte comme un fichier', () => {
@@ -216,9 +247,13 @@ test('chez le COO : le plan proposé se montre vague par vague, « ✓ Valider l
   const opening = await openCoo($, clock)
   expect(opening).toMatch(/Plan of the project PROPOSED/)
   expect(opening).toMatch(/wave 1: « Mission 1 » : A, B · « Mission 2 » : D, E/)
-  expect(opening).toMatch(/wave 2: « Mission 1 » : C; then deliver « Mission 1 »/)
+  expect(opening).toMatch(/wave 2: « Mission 1 » : C\.\n/)
+  expect(opening).toMatch(/then one delivery for the whole plan, after the last wave: « Mission 2 », « Mission 1 »/)
+  expect(opening).not.toMatch(/then deliver/)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(pane)).toMatch(/Plan du projet proposé · 2 vagues/)
+  expect(await texts(pane)).toMatch(/→ \| une livraison : « Mission 2 », « Mission 1 »/)
+  expect(await texts(pane)).not.toMatch(/livrer «/)
   await pane.press({ key: 'coo-plan-validate' })
   await pane.unmount()
   await settle(clock, 2)
@@ -294,7 +329,8 @@ test('le titre relu d’une mission, dans le plan du relevé du COO, ne coupe ni
     const board: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [m1, m2], activeId: m1.id }
     const computed = projectPlan(projectUnits(board), unitsOverlap)
     const text = statementText(cooStatement(board, { now: T0, plan: { computed, key: waitsKey(computed.waits), isValidated: false } }))
-    const line = text.split('\n').find(l => l.startsWith('- wave 2:')) ?? ''
+    // Le titre relu paraît dans la ligne de la livraison unique, à côté de « Mission 2 » : deux citations.
+    const line = text.split('\n').find(l => l.startsWith('- then one delivery')) ?? ''
     return { lines: text.split('\n').length, line }
   }
   const base = lineCount('Mission 1')

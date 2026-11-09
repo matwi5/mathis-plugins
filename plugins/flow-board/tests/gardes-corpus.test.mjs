@@ -30,6 +30,7 @@ const NOT_FORM_GUARDS = {
       'isSensitiveGroup', 'isLotReviewEnough', 'isLotToReview', 'isLotAdviceCurrent', 'isLotAdvicePrevious', 'isLotSecuritySettled',
       'isLotSecurityDue', 'isClosedTurnedOff', 'isBugPass', 'isWaitingTicket', 'isDelegable', 'isCloseCandidate', 'isStoredPause', 'isAutoOn',
       'isAutoLitBy', 'isAutoPauseStored', 'isGroupLotStuck', 'isBlocked', 'isPickable', 'isLotUnderway', 'isKeptForReport',
+      'isDeliveredRun', 'isAwaitingArchive', 'isCloseDone', 'isDeliveryOver', 'isReportShipped',
     ].map(name => [name, ON_MISSION]),
   ),
 }

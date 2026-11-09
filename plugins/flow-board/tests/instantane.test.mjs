@@ -3,7 +3,7 @@
 // lancent pour de vrai, dans un dépôt git temporaire.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -254,11 +254,15 @@ test('--remplace indexe le seul correctif sur la version indexée, et le reporte
     assert.match(out.stdout, /a\.txt : remplacement indexé \(ligne 2\) ; arbre de travail : remplacé/)
     assert.equal(git(dir, 'show', ':a.txt'), 'un\nDEUX\ntrois')
     assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'un\nDEUX\ntrois\nquatre du ticket suivant\n')
+    // Un chemin écrit ./a.txt désigne le même fichier, pour les contrôles comme pour git.
+    const dotted = snap(dir, '--remplace', './a.txt', 'un', 'UN')
+    assert.equal(dotted.status, 0, dotted.stderr)
+    assert.equal(git(dir, 'show', ':a.txt'), 'UN\nDEUX\ntrois')
     // Un second remplacement part de la version indexée, qui garde le premier ; un @fichier perd sa fin de ligne finale.
     writeFileSync(join(dir, 'ancien'), 'trois\n')
     const second = snap(dir, '--remplace', 'a.txt', `@${join(dir, 'ancien')}`, 'TROIS')
     assert.equal(second.status, 0, second.stderr)
-    assert.equal(git(dir, 'show', ':a.txt'), 'un\nDEUX\nTROIS')
+    assert.equal(git(dir, 'show', ':a.txt'), 'UN\nDEUX\nTROIS')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -305,6 +309,122 @@ test('--remplace d’un texte sur plusieurs lignes : l’index en LF, l’arbre 
     assert.equal(out.status, 0, out.stderr)
     assert.equal(git(dir, 'show', ':a.txt'), 'un\nDEUX\nTROIS')
     assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'un\r\nDEUX\r\nTROIS\r\nquatre\r\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--remplace refuse un fichier suivi comme lien symbolique, sans toucher ni l’index ni sa cible', () => {
+  const dir = repo()
+  try {
+    symlinkSync('b.txt', join(dir, 'lien'))
+    git(dir, 'add', 'lien')
+    git(dir, 'commit', '-q', '-m', 'lien')
+    const out = snap(dir, '--remplace', 'lien', 'b', 'B')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /^ÉCHEC : lien : suivi comme lien symbolique dans l'index/)
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    assert.equal(git(dir, 'ls-files', '-s', 'lien').split(' ')[0], '120000')
+    assert.equal(readFileSync(join(dir, 'b.txt'), 'utf8'), 'b\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--remplace refuse un fichier ordinaire de l’index remplacé dans l’arbre par un lien vers un fichier hors du dépôt', () => {
+  const dir = repo()
+  const outside = mkdtempSync(join(tmpdir(), 'instantane-dehors-'))
+  try {
+    writeFileSync(join(outside, 'cible.txt'), 'a\n')
+    unlinkSync(join(dir, 'a.txt'))
+    symlinkSync(join(outside, 'cible.txt'), join(dir, 'a.txt'))
+    const out = snap(dir, '--remplace', 'a.txt', 'a', 'A')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /^ÉCHEC : a\.txt : lien symbolique dans l'arbre de travail \(a\.txt\)/)
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    assert.equal(git(dir, 'show', ':a.txt'), 'a')
+    assert.equal(readFileSync(join(outside, 'cible.txt'), 'utf8'), 'a\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('--remplace refuse un fichier sous un dossier qui est un lien, sans toucher la cible', () => {
+  const dir = repo()
+  const outside = mkdtempSync(join(tmpdir(), 'instantane-dehors-'))
+  try {
+    mkdirSync(join(dir, 'd'))
+    writeFileSync(join(dir, 'd', 'c.txt'), 'c\n')
+    git(dir, 'add', 'd/c.txt')
+    git(dir, 'commit', '-q', '-m', 'd')
+    writeFileSync(join(outside, 'c.txt'), 'c\n')
+    rmSync(join(dir, 'd'), { recursive: true })
+    symlinkSync(outside, join(dir, 'd'))
+    const out = snap(dir, '--remplace', 'd/c.txt', 'c', 'C')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /^ÉCHEC : d\/c\.txt : lien symbolique dans l'arbre de travail \(d\)/)
+    // Un chemin qui sort du dossier courant ne se vérifie pas : il est refusé.
+    const up = snap(dir, '--remplace', '../c.txt', 'c', 'C')
+    assert.equal(up.status, 1)
+    assert.match(up.stderr, /^ÉCHEC : \.\.\/c\.txt : hors du dossier courant/)
+    // Un chemin absolu non plus, même dans le dépôt.
+    const abs = snap(dir, '--remplace', join(dir, 'a.txt'), 'a', 'A')
+    assert.equal(abs.status, 1)
+    assert.match(abs.stderr, /hors du dossier courant/)
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'a\n')
+    assert.equal(readFileSync(join(outside, 'c.txt'), 'utf8'), 'c\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('--remplace d’un fichier dont le dossier est devenu un fichier, ou qui est un tube nommé : absent de l’arbre, rien n’est écrit', () => {
+  const dir = repo()
+  try {
+    mkdirSync(join(dir, 'd'))
+    writeFileSync(join(dir, 'd', 'c.txt'), 'c\n')
+    git(dir, 'add', 'd/c.txt')
+    git(dir, 'commit', '-q', '-m', 'd')
+    rmSync(join(dir, 'd'), { recursive: true })
+    writeFileSync(join(dir, 'd'), 'un fichier\n')
+    const out = snap(dir, '--remplace', 'd/c.txt', 'c', 'C')
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /^ÉCHEC : d\/c\.txt : absent de l'arbre de travail/)
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    if (process.platform !== 'win32') {
+      unlinkSync(join(dir, 'a.txt'))
+      execFileSync('mkfifo', [join(dir, 'a.txt')])
+      const fifo = spawnSync(process.execPath, [SCRIPT, '--remplace', 'a.txt', 'a', 'A'], { cwd: dir, encoding: 'utf8', timeout: 20_000 })
+      assert.equal(fifo.status, 1, 'la commande a bloqué sur le tube')
+      assert.match(fifo.stderr, /^ÉCHEC : a\.txt : absent de l'arbre de travail/)
+      assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--remplace refuse un chemin dont un dossier est illisible, sans rien écrire', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, () => {
+  const dir = repo()
+  try {
+    mkdirSync(join(dir, 'd'))
+    writeFileSync(join(dir, 'd', 'c.txt'), 'c\n')
+    git(dir, 'add', 'd/c.txt')
+    git(dir, 'commit', '-q', '-m', 'd')
+    chmodSync(join(dir, 'd'), 0o000)
+    let out
+    try {
+      out = snap(dir, '--remplace', 'd/c.txt', 'c', 'C')
+    } finally {
+      chmodSync(join(dir, 'd'), 0o755)
+    }
+    assert.equal(out.status, 1)
+    assert.match(out.stderr, /^ÉCHEC : d\/c\.txt : chemin illisible dans l'arbre de travail/)
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '')
+    assert.equal(readFileSync(join(dir, 'd', 'c.txt'), 'utf8'), 'c\n')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

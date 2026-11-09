@@ -2,7 +2,7 @@
 
 Dans l'app Claude Desktop, Claude lance, archive et renomme les sessions par des outils de l'app (`start_session`, `archive_session`, `set_session_title`). Leurs règles ne sont écrites que dans le code de l'app (`app.asar`), et deux bugs de flow-board venaient d'un texte qui les contredisait : un lancement de groupe envoyé par le mode auto, refusé par l'app ; une procédure de fermeture qui faisait archiver une session sans l'accord de la personne.
 
-Ce document relie chaque règle au code de flow-board qui en dépend. Les textes cités ont été lus dans l'app 4.4212.0, le 02/11/2026, par :
+Ce document relie chaque règle au code de flow-board qui en dépend. Les textes cités ont été lus dans l'app 4.4212.0, le 02/11/2026, puis relus dans l'app 4.23118.0, le 08/11/2026 (ce qui diffère des textes de 4.4212.0, ou n'y avait pas été relevé, est daté à sa place), par :
 
 ```bash
 python3 -I scripts/regles-app.py                  # sur le Mac : /Applications/Claude.app/Contents/Resources/app.asar
@@ -21,11 +21,11 @@ Ce qui en dépend, dans `plugins/flow-board/hooks/register.tsx` :
 - `refusedLaunch` et `refusedLaunchContext` : un refus de `start_session` dans le tour de cette demande remet la demande dans la saisie (la personne la lance d'un Entrée) et dit à Claude de ne rien relancer ; appelés par le hook `tool.call` de `register` ;
 - test : `plugins/flow-board/tests/lancement-refuse.test.ts`.
 
-Le reste de la description touche le texte de lancement : `initiation` « user_asked » lance tout de suite, et demande un `prompt` (le brief) ; `context` « fresh » demande aussi un `background`, d'une longueur minimale (`${dS}` caractères dans le code de l'app, une valeur que le script ne résout pas). Ce qui en dépend : `missionLaunchText` (le lancement d'une mission depuis une carte de lancement du COO) et `launchHow` (le lancement des groupes), dans `register.tsx`.
+Le reste de la description touche le texte de lancement : `initiation` « user_asked » lance tout de suite, et demande un `prompt` (le brief) ; `context` « fresh » demande aussi un `background`, d'une longueur minimale (`${dS}` caractères dans le code de l'app 4.4212.0, `${Ox}` dans 4.23118.0, une valeur que le script ne résout pas). Dans 4.23118.0 (lu le 08/11/2026), la description ajoute une troisième `initiation`, « offer » : appelée avec un titre seul, pour une tâche que la personne vient de nommer, elle montre une carte « New session » / « Do it here » et attend sa réponse (« so it must be the only call in that message ») ; « user_asked » et « own_initiative » demandent toutes deux un `prompt` (« the call is refused without it; `background` does not stand in for it »). Dans cette version, l'outil n'est plus déclaré à côté de son alias : le script suit le nom sous lequel le fichier de l'alias l'exporte jusqu'au fichier qui le déclare. Ce qui en dépend : `missionLaunchText` (le lancement d'une mission depuis une carte de lancement du COO) et `launchHow` (le lancement des groupes), dans `register.tsx`.
 
 ## `start_session` : `model`, un modèle de la même famille ou moins cher
 
-Paramètre `model`, lu dans l'app 4.23118.0 le 06/11/2026 (texte cherché directement dans `app.asar` : le script ci-dessus y dit « introuvable » pour la description de `start_session`) : « "fresh" only, optional: a cheaper model id for mechanical or read-only pieces (e.g. a Sonnet or Haiku id). Same family or cheaper than yours; anything higher is ignored. Omit to inherit yours. » Les groupes partent déjà en `context` « fresh » ; Sonnet est moins cher qu'Opus, donc accepté depuis une discussion sur Opus. Dans le CLI, `claude --bg` prend `--model` (« Provide an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name », Claude Code 2.1.319).
+Paramètre `model`, lu dans l'app 4.23118.0 le 06/11/2026 et relu le 08/11/2026 (texte cherché directement dans `app.asar` : il est dans le schéma des paramètres de l'outil, que le script n'imprime pas) : « "fresh" only, optional: a cheaper model id for mechanical or read-only pieces (e.g. a Sonnet or Haiku id). Same family or cheaper than yours; anything higher is ignored. Omit to inherit yours. » Les groupes partent déjà en `context` « fresh » ; Sonnet est moins cher qu'Opus, donc accepté depuis une discussion sur Opus. Dans le CLI, `claude --bg` prend `--model` (« Provide an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name », Claude Code 2.1.319).
 
 Ce qui en dépend : l'option fusion, qui lance un groupe sans logique en worker Sonnet high.
 
@@ -37,18 +37,21 @@ Une discussion sur un modèle moins cher que Sonnet (Haiku) verrait ce `model` i
 
 ## `archive_session` : un accord explicite, pour une session précise
 
-Description : « Only call it after the user has explicitly agreed to archive a specific session — never speculatively. » Refus (« Session … was not archived: … ») : une session n'est pas archivée quand elle travaille encore (un tour en cours), qu'elle a du travail vivant (un agent, un client Remote Control, un message en file ou une tâche de fond), qu'elle garde l'ordinateur éveillé, ou que l'app la garde pour la personne (épinglée ou ouverte).
+Description (phrase identique dans 4.23118.0) : « Only call it after the user has explicitly agreed to archive a specific session — never speculatively. » Refus (« Session … was not archived: … ») : une session n'est pas archivée quand elle travaille encore (un tour en cours, ou laissé en cours sur son hôte SSH), qu'elle a du travail vivant (un agent, un client Remote Control, un message en file ou une tâche de fond), qu'elle garde l'ordinateur éveillé (« has "Keep computer awake" turned on », un refus à part), ou que l'app la garde pour la personne (« pinned or in use »).
+
+Le reste de la description, lu dans 4.23118.0 le 08/11/2026 (la sortie de 4.4212.0 n'a pas été gardée : ce qui est nouveau n'est pas établi) : l'app demande l'accord de la personne à chaque appel, sauf en mode auto (« it may approve without asking ») et en mode bypass permissions (« it does not ask »), où l'appel peut prendre effet aussitôt ; archiver une session archive aussi ses sessions annexes qui partagent son worktree ou ont fini ; une session épinglée, ou ouverte à l'écran, n'est pas archivée, « unless the user allowed this call on the desktop app's own card or runs bypass permissions mode » ; et, sous condition, « Archiving is the reversible verb » : `unarchive_session` rend une session, `delete_session` (qui demande toujours l'accord) la supprime sans retour. En mode auto, l'accord de la personne n'est donc plus forcément redemandé par l'app : la règle « accord explicite, pour une session précise » reste à flow-board.
 
 Ce qui en dépend, dans `plugins/flow-board/hooks/closing.ts` :
 
 - `archiveConsent` : l'accord donné d'avance par `/flow archive on`, venu d'un geste de la personne ;
 - `appArchive` : cite cet accord en nommant la session, ou demande l'accord en une ligne ;
 - `closingProcedure` : la procédure de fermeture d'un groupe rendu, qui l'emploie pour une session de l'app ;
+- `missionSessionsArchiveText` et `missionSessionId` : la demande d'archiver la discussion d'une mission livrée et archivée, l'accord toujours demandé en une ligne (test : `plugins/flow-board/tests/discussion-archivee.test.ts`) ;
 - test : `plugins/flow-board/tests/archivage-d-office.test.ts`.
 
 ## `set_session_title` : un titre posé par la personne se fait approuver
 
-Description : « If the user set the current title themselves, the app first asks them to approve the new one (not in bypass permissions mode, which does not ask; and in unattended sessions, where nobody can approve, it declines); titles the app generated are replaced without asking. » Ses refus, définis à côté de sa description dans le code de l'app, portent sur la forme du titre : de 1 à 200 caractères, sans caractère de contrôle ni invisible (« The title was left unchanged; resend it without them. »).
+Description (phrase identique dans 4.23118.0) : « If the user set the current title themselves, the app first asks them to approve the new one (not in bypass permissions mode, which does not ask; and in unattended sessions, where nobody can approve, it declines); titles the app generated are replaced without asking. » Ses refus, définis à côté de sa description dans le code de l'app, portent sur la forme du titre : de 1 à 200 caractères, sans caractère de contrôle ni invisible (« The title was left unchanged; resend it without them. »).
 
 Ce qui en dépend :
 

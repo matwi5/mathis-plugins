@@ -20,7 +20,14 @@
 // HEAD si rien n'y est indexé) avec ce seul remplacement (l'ancien texte doit y paraître une fois),
 // et le reporte dans l'arbre de travail s'il y porte l'ancien texte une fois (s'il porte déjà le
 // nouveau, l'arbre ne change pas ; sinon rien n'est écrit), pour qu'un `git add` suivant du fichier
-// ne défasse pas le correctif ; chaque côté reçoit les textes à ses fins de ligne (LF ou CRLF). Ses textes suivent `scripts/patch.py` du dépôt : `@<fichier>` lu
+// ne défasse pas le correctif. Il refuse, sans rien écrire, un fichier suivi comme lien (mode 120000
+// dans l'index), un fichier ou un de ses dossiers qui est un lien dans l'arbre (seuls les dossiers sous
+// le dossier courant, la racine du worktree, se vérifient : `/var` et `/tmp` sont des liens sur macOS),
+// et un chemin absolu ou qui sort du dossier courant (seul un chemin relatif à la racine du worktree
+// est accepté) ; l'arbre se réécrit sans suivre de lien. Tout refus arrive avant l'index, sauf une
+// écriture de l'arbre coupée après coup : l'arbre est remis, et le message dit que l'index porte déjà
+// le remplacement. Chaque côté reçoit les textes à ses fins de ligne (LF ou CRLF). Ses textes suivent
+// `scripts/patch.py` du dépôt : `@<fichier>` lu
 // dans ce fichier sans sa fin de ligne finale, `@@` pour un `@` littéral, `{{u}}` pour un
 // échappement « barre oblique inverse et u », `{{uu}}` pour `{{u}}`.
 // `--dossier` crée et imprime le dossier du relecteur, `git rev-parse --git-path flow-board/revue-<id>` :
@@ -45,8 +52,8 @@
 // sans commit ni référence. Sans dépendance hors de Node.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** Un id de ticket qui nomme une référence git : lettres, chiffres, _ et -, sans « - » en tête. */
@@ -257,27 +264,122 @@ const endings = (target, text) => {
 }
 
 /**
+ * Refuse `file` (relatif à `cwd`) quand lui-même ou un de ses dossiers sous `cwd` est un lien
+ * symbolique : l'écriture suivrait le lien, peut-être hors du dépôt. Les dossiers au-dessus de `cwd`
+ * ne comptent pas (`/var` et `/tmp` sont des liens sur macOS). Un préfixe absent arrête la vérification
+ * (l'absence se dit plus loin) ; une autre erreur de lecture est un refus.
+ */
+const refuseLinks = (file, rel, cwd) => {
+  const parts = rel.split(sep)
+  for (let i = 1; i <= parts.length; i++) {
+    const prefix = parts.slice(0, i).join(sep)
+    let info
+    try {
+      info = lstatSync(join(cwd, prefix))
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return
+      throw new SnapshotError(`${file} : chemin illisible dans l'arbre de travail (${prefix} : ${err.code || err.message}) ; rien n'est écrit`)
+    }
+    if (info.isSymbolicLink()) throw new SnapshotError(`${file} : lien symbolique dans l'arbre de travail (${prefix.split(sep).join('/')}) ; --remplace n'écrit jamais à travers un lien, rien n'est écrit`)
+  }
+}
+
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0
+
+/**
+ * Ouvre `path` (`flags` : lecture ou écriture), sans le créer ni suivre un lien (`O_NOFOLLOW` là où le
+ * système l'a), et rend son descripteur et ce qu'il désigne ; `seen` donné, refuse un fichier qui n'est
+ * plus celui lu (même appareil, même inode) : un dossier du chemin remplacé par un lien depuis la
+ * lecture, que `O_NOFOLLOW` ne voit pas, mène à un autre fichier. Absent ou pas un fichier ordinaire :
+ * le refus « absent de l'arbre de travail ».
+ */
+const openTree = (file, path, flags, seen) => {
+  let fd
+  try {
+    fd = openSync(path, flags | NOFOLLOW)
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR') throw new SnapshotError(`${file} : absent de l'arbre de travail ; rien n'est écrit`)
+    throw new SnapshotError(`${file} : arbre de travail impossible à ouvrir sans suivre de lien (${err.code || err.message}) ; rien n'est écrit`)
+  }
+  try {
+    const info = fstatSync(fd)
+    if (!info.isFile()) throw new SnapshotError(`${file} : absent de l'arbre de travail ; rien n'est écrit`)
+    if (seen && (info.dev !== seen.dev || info.ino !== seen.ino)) throw new SnapshotError(`${file} : le fichier de l'arbre de travail a changé depuis sa lecture (lien ou remplacement) ; rien n'est écrit`)
+    return { fd, info }
+  } catch (err) {
+    closeSync(fd)
+    if (err instanceof SnapshotError) throw err
+    throw new SnapshotError(`${file} : arbre de travail illisible (${err.code || err.message}) ; rien n'est écrit`)
+  }
+}
+
+/** Écrit `bytes` dans `fd` depuis le début, en entier, puis coupe le fichier à leur longueur. */
+const writeAt = (fd, bytes) => {
+  let done = 0
+  while (done < bytes.length) {
+    const wrote = writeSync(fd, bytes, done, bytes.length - done, done)
+    if (wrote <= 0) throw new Error('écriture nulle')
+    done += wrote
+  }
+  ftruncateSync(fd, bytes.length)
+}
+
+/**
+ * Réécrit le fichier ouvert `fd` avec `text` ; une écriture coupée remet ses octets d'avant
+ * (`before`), et le message dit que l'index porte déjà le remplacement.
+ */
+const rewrite = (file, fd, text, before) => {
+  try {
+    writeAt(fd, Buffer.from(text, 'utf8'))
+  } catch (err) {
+    let restored = true
+    try {
+      writeAt(fd, before)
+    } catch {
+      restored = false
+    }
+    throw new SnapshotError(`${file} : l'index porte le remplacement, mais son report dans l'arbre de travail a échoué (${err.code || err.message}) ; arbre ${restored ? 'remis tel qu\'il était' : 'NON REMIS : à vérifier'} ; reporter le remplacement dans l'arbre avant tout git add du fichier`)
+  }
+}
+
+/**
  * Écrit dans l'index la version indexée de `file` avec le seul remplacement de `oldArg` par `newArg`,
- * et le reporte dans l'arbre de travail ; tout est vérifié avant la première écriture.
+ * et le reporte dans l'arbre de travail ; tout est vérifié avant la première écriture. Un lien
+ * (dans l'index, ou dans l'arbre sous `cwd`, le fichier ou un de ses dossiers) est refusé.
  */
 export const replaceStaged = (file, oldArg, newArg, cwd = process.cwd()) => {
   if (typeof file !== 'string' || file === '' || file.startsWith('-')) throw new SnapshotError(`fichier hors forme : ${JSON.stringify(file)}`)
+  const rel = relative(cwd, resolve(cwd, file))
+  if (isAbsolute(file) || rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new SnapshotError(`${file} : hors du dossier courant (un chemin relatif à la racine du worktree est attendu) ; rien n'est écrit`)
   const oldText = textArg(oldArg, cwd)
   const newText = textArg(newArg, cwd)
   if (oldText === '') throw new SnapshotError('ancien texte vide')
-  const entry = git(cwd, ['ls-files', '-s', '--', file])
+  // git reçoit le chemin vérifié, à barres obliques : la même orthographe que les contrôles de l'arbre.
+  const gitPath = rel.split(sep).join('/')
+  const entry = git(cwd, ['ls-files', '-s', '--', gitPath])
   const m = /^(\d+) ([0-9a-f]+) (\d)\t/.exec(entry)
   if (!m || entry.includes('\n')) throw new SnapshotError(`${file} : absent de l'index (ou en conflit), rien à remplacer`)
   if (m[3] !== '0') throw new SnapshotError(`${file} : en conflit dans l'index`)
+  if (m[1] === '120000') throw new SnapshotError(`${file} : suivi comme lien symbolique dans l'index (mode 120000) ; --remplace n'écrit jamais à travers un lien, rien n'est écrit`)
+  refuseLinks(file, rel, cwd)
   const indexed = execFileSync('git', ['cat-file', 'blob', m[2]], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   // Chaque côté prend les textes à ses propres fins de ligne : l'index en LF, l'arbre en CRLF sous Windows.
   const oldIndex = endings(indexed, oldText)
   const found = count(indexed, oldIndex)
   if (found !== 1) throw new SnapshotError(`${file} : l'ancien texte paraît ${found} fois dans la version indexée, il doit paraître exactement une fois ; rien n'est écrit`)
   const line = count(indexed.slice(0, indexed.indexOf(oldIndex)), '\n') + 1
-  const path = join(cwd, file)
-  if (!existsSync(path) || !statSync(path).isFile()) throw new SnapshotError(`${file} : absent de l'arbre de travail ; rien n'est écrit`)
-  const worktree = readFileSync(path, 'utf8')
+  const path = join(cwd, rel)
+  // Lu par le descripteur vérifié : le texte vient du fichier dont l'inode se compare à l'écriture.
+  // Sans blocage : un tube nommé à ce chemin n'arrête pas la commande (il est refusé ensuite).
+  const reader = openTree(file, path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+  let bytes
+  try {
+    bytes = readFileSync(reader.fd)
+  } finally {
+    closeSync(reader.fd)
+  }
+  const seen = reader.info
+  const worktree = bytes.toString('utf8')
   const oldTree = endings(worktree, oldText)
   const newTree = endings(worktree, newText)
   // L'ancien texte présent une fois se remplace, sauf quand il n'est que la partie d'un nouveau texte
@@ -287,9 +389,18 @@ export const replaceStaged = (file, oldArg, newArg, cwd = process.cwd()) => {
   if (count(worktree, oldTree) === 1 && !(newTree.includes(oldTree) && carriesNew)) tree = 'remplacé'
   else if (carriesNew) tree = 'porte déjà le nouveau texte'
   else throw new SnapshotError(`${file} : l'arbre de travail ne porte ni l'ancien texte une fois, ni le nouveau (il paraît ${count(worktree, oldTree)} fois) ; rien n'est écrit`)
-  const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd, input: indexed.replace(oldIndex, () => endings(indexed, newText)), encoding: 'utf8' }).trim()
-  git(cwd, ['update-index', '--cacheinfo', `${m[1]},${blob},${file}`])
-  if (tree === 'remplacé') writeFileSync(path, worktree.replace(oldTree, () => newTree))
+  // Revérifié et ouvert avant la première écriture : un lien posé depuis la lecture ne reçoit rien,
+  // et un refus laisse l'index, les objets et l'arbre tels quels.
+  refuseLinks(file, rel, cwd)
+  // Sans blocage : un tube nommé posé depuis la lecture est refusé au lieu d'arrêter la commande.
+  const fd = tree === 'remplacé' ? openTree(file, path, constants.O_WRONLY | (constants.O_NONBLOCK ?? 0), seen).fd : null
+  try {
+    const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd, input: indexed.replace(oldIndex, () => endings(indexed, newText)), encoding: 'utf8' }).trim()
+    git(cwd, ['update-index', '--cacheinfo', `${m[1]},${blob},${gitPath}`])
+    if (fd !== null) rewrite(file, fd, worktree.replace(oldTree, () => newTree), bytes)
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
   return { file, line, tree }
 }
 

@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.13.2 — 2026-11-09
+
+### Corrigé
+- **README** : les fichiers de relevé ne sont jamais supprimés par le mod ; seul le nettoyage de la sonde des événements du moteur (`scripts/sonde.py` du dépôt de la marketplace) efface ceux des sessions qu'elle a lancées.
+
+---
+
 ## 0.13.1 — 2026-11-07
 
 ### Corrigé
