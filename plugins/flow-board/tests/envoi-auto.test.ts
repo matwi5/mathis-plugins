@@ -9,8 +9,11 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyReport, autoActionOf, autoDecision, autoMarksOf, clampFuture, emptyBoard, isAutoLitBy, markAutoSent, markAutoStarted, mergeBoards, newRun, openQuestions, raiseRelaunchQuestions, raiseStaleAutoSends, resendAutoMark, unmarkAutoSent } from '../hooks/model.ts'
+import { applyReport, autoActionOf, autoDecision, autoMarksOf, clampFuture, emptyBoard, isAutoLitBy, markAutoSent, markAutoStarted, mergeBoards, newRun, openQuestions, raiseRelaunchQuestions, raiseStaleAutoSends, isCutDue, resendAutoMark, stopAutoUnread, unmarkAutoSent } from '../hooks/model.ts'
+import { cooStatement } from '../hooks/coo.ts'
+import { coordinationRows } from '../hooks/coo-view.tsx'
 import type { Board, Run } from '../types'
+import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 
 const T0 = 120_000_000
 const PLUGIN = 'flow-board'
@@ -40,7 +43,7 @@ const world = (on: any) => {
   const ids = { now: 'sa' }
   const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false, refusePrompt: false, holdPrompt: false, coordUnreadable: false }
   // Le fichier de coordination du COO, quel que soit son nom ; illisible quand le test le dit (une écriture coupée).
-  const isCoord = (path: string): boolean => path.includes('/flow-board/coordination/') && !path.includes('feuille-de-route')
+  const isCoord = (path: string): boolean => path.includes('/flow-board/coordination/') && !path.includes('feuille-de-route') && !path.includes('.nuit')
   const held: (() => void)[] = []
   // Les messages que le mod soumet (la consigne de l'allumage, au repos).
   const prompts: { text: string; origin: any }[] = []
@@ -1033,4 +1036,195 @@ test('Un skill intégré à Claude Code (source « built-in », comme /code-revi
   await turnEnd($, clock, 't1')
   expect(w.runs.filter(r => r.origin?.name === PLUGIN)).toEqual([])
   expect(w.prompts.length).toBe(1)
+})
+
+// ─── Reprise d'elle-même d'une pause « plus rien ne peut avancer sans toi » ──
+//
+// Invariant : « L'auto d'une mission ne s'allume jamais sans un clic de Mathis, consommé une seule fois, par la seule
+// discussion de cette mission, dans les 10 minutes ; une lecture ou une écriture ratée laisse l'auto éteint, sauf la
+// reprise d'une pause « plus rien ne peut avancer sans toi », d'elle-même, dans la discussion qui l'avait allumé, une
+// fois toutes ses questions bloquantes répondues. »
+
+/** Une mission en auto mise en pause « plus rien ne peut avancer sans toi » par ces questions (q1, puis les autres). */
+const stuckOn = async ($: any, on: any, ids: string[] = ['q1']) => {
+  const w = await specDone($, on, { isAuto: false })
+  await $.tool.call({ tool: TOOL, waiting: ids.map(id => ({ id, phase: 'to-tickets', text: `Question ${id} ?` })) } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await turnEnd($, w.clock, 's1')
+  await turnEnd($, w.clock, 's2')
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+  const runId = w.stored()!.runs[0]!.id
+  return { ...w, runId }
+}
+
+test('pause « plus rien ne peut avancer sans toi », ses questions répondues : l’auto reprend de lui-même, une fois, et le dit', { timeoutMs: 40000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  const paused = autoOf(w)!
+  expect(w.mem[`auto-resume:${w.runId}`]).toMatchObject({ by: 'sa', onAt: paused.onAt, offAt: paused.offAt, questions: ['q1'] })
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  const lit = autoOf(w)!
+  expect(lit.onAt!).toBeGreaterThan(paused.offAt!)
+  expect(lit).toMatchObject({ onBy: 'sa', onWhy: 'resumed' })
+  expect(w.mem[`auto-confirm:${w.runId}`]).toMatchObject({ by: 'sa', onAt: lit.onAt })
+  expect(w.mem[`auto-resume:${w.runId}`]).toBeUndefined()
+  expect(await bandText($)).toMatch(/⚡\sAuto\s·\srepris\s:\squestions\srépondues/)
+  // Une seule fois : rien ne se rallume ensuite.
+  await settle(w.clock, 10)
+  expect(autoOf(w)!.onAt).toBe(lit.onAt)
+  // Repris, la suite part à la fin du tour (le contrôle positif).
+  await turnEnd($, w.clock, 's3')
+  await turnEnd($, w.clock, 's4')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('une question encore ouverte, ou une coupure pendant la pause : pas de reprise', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on, ['q1', 'q2'])
+  // Une des deux répondue : la pause reste.
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+  // Coupée pendant la pause (le clic de la mission) : sa raison change, et la seconde réponse ne la relève pas.
+  await press($, 'auto-off')
+  await settle(w.clock, 1)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'coupé par toi' })
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q2', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'coupé par toi' })
+})
+
+test('après un /clear (une autre discussion), la pause ne reprend pas ici', { timeoutMs: 40000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  await $.session.end({ reason: 'clear' } as any)
+  w.ids.now = 'sa-apres-clear'
+  await ($ as any).classic.SessionStart({ session_id: 'sa-apres-clear', transcript_path: '/t', cwd: '', hook_event_name: 'SessionStart', source: 'clear' })
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+})
+
+test('un fichier qui pose la raison « plus rien ne peut avancer » sans trace gardée ici : pas de reprise', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  // Sans la trace gardée ici (un fichier forgé ou rejoué) : rien ne reprend.
+  delete w.mem[`auto-resume:${w.runId}`]
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+})
+
+test('une lecture ratée du fichier des missions pendant la pause : la trace part, et la pause ne reprend plus d’elle-même', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  expect(w.mem[`auto-resume:${w.runId}`]).toBeDefined()
+  w.flags.unreadable = true
+  await settle(w.clock, 6)
+  w.flags.unreadable = false
+  expect(w.mem[`auto-resume:${w.runId}`]).toBeUndefined()
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'lecture du parcours ratée' })
+})
+
+test('fusionnée avec une copie plus récente qui porte un autre arrêt : la pause reste, pas de reprise', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  const copy = w.stored()!
+  const paused = copy.runs[0]!.auto!
+  // Une autre discussion a coupé l'auto plus tard (sa copie, plus récente).
+  copy.runs[0]!.auto = { ...paused, offAt: paused.offAt! + 3_000, offWhy: 'coupé par toi' }
+  copy.runs[0]!.updatedAt = paused.offAt! + 3_000
+  seed(w, copy)
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'coupé par toi' })
+})
+
+test('une lecture ratée pendant la pause en remplace la raison, gardée dans la mission : même la trace restée (effacement raté), pas de reprise', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  const key = `auto-resume:${w.runId}`
+  const trace = w.mem[key]
+  w.flags.unreadable = true
+  await settle(w.clock, 6)
+  w.flags.unreadable = false
+  // La trace remise telle quelle, comme si son effacement avait raté : la lecture ratée suffit à refuser la reprise.
+  w.mem[key] = trace
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'lecture du parcours ratée' })
+})
+
+test('une écriture ratée du fichier des missions pendant la reprise : l’auto reste éteint, sans date gardée', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  w.flags.unwritable = true
+  await settle(w.clock, 8)
+  w.flags.unwritable = false
+  await settle(w.clock, 8)
+  const auto = autoOf(w)!
+  expect(auto.offAt!).toBeGreaterThan(auto.onAt!)
+  expect(await bandText($)).toMatch(/écriture/)
+  // La reprise a bien été tentée (sa trace consommée), et rien n'est resté allumé.
+  expect(w.mem[`auto-resume:${w.runId}`]).toBeUndefined()
+  expect((w.mem[`auto-confirm:${w.runId}`] as { onAt?: number } | undefined)?.onAt).not.toBe(auto.onAt)
+  expect(await bandText($)).not.toMatch(/repris/)
+})
+
+test('une lecture ratée dans une discussion n’écrase pas la pause « plus rien ne peut avancer sans toi » posée par une autre ; la sienne, si', () => {
+  const on: Run = { ...newRun('implement', T0, 'A'), owner: 'sx', auto: { onAt: T0 + 1_000, onBy: 'sx' } } as Run
+  const stuck: Run = { ...newRun('implement', T0, 'B'), owner: 'sy', auto: { onAt: T0 + 1_000, onBy: 'sy', offAt: T0 + 2_000, offWhy: 'plus rien ne peut avancer sans toi' } } as Run
+  const board: Board = { ...emptyBoard('', 'p'), session: 'sx', deleted: [], runs: [on, stuck], activeId: on.id }
+  const out = stopAutoUnread(board, T0 + 5_000, 'sx')!
+  expect(out.runs[0]!.auto).toMatchObject({ offWhy: 'lecture du parcours ratée' })
+  expect(out.runs[1]!.auto).toEqual(stuck.auto)
+  // Vue de la discussion qui l'a posée : la pause prend la raison de la lecture ratée.
+  const own = stopAutoUnread(board, T0 + 5_000, 'sy')!
+  expect(own.runs[1]!.auto).toMatchObject({ offWhy: 'lecture du parcours ratée' })
+  expect(own.runs[1]!.auto!.offAt!).toBeGreaterThan(T0 + 2_000)
+})
+
+test('la ligne de la vue Coordination dit la reprise : « ⚡ Auto · repris : questions répondues » ; un allumage d’un clic, « ⚡ Auto » seul', () => {
+  const base = { ...newRun('implement', T0, 'Mission R'), status: 'active', owner: 'sb' } as Run
+  const rowOf = (auto: Run['auto']) => {
+    const board: Board = { ...emptyBoard('', 'p'), deleted: [], runs: [{ ...base, auto }] }
+    const row = coordinationRows(cooStatement(board, { now: T0 + 10_000 })).find(r => r.key === `coo-mission-${base.id}`)!
+    return row.parts.map(p => p.text).join(' ')
+  }
+  expect(rowOf({ onAt: T0 + 5_000, onBy: 'sb', onWhy: 'resumed', offAt: T0 + 1_000, offWhy: 'plus rien ne peut avancer sans toi' })).toMatch(/⚡\sAuto · repris : questions répondues/)
+  expect(rowOf({ onAt: T0 + 5_000, onBy: 'sb' })).not.toMatch(/repris/)
+  // Éteint ensuite : la reprise ne se dit plus.
+  expect(rowOf({ onAt: T0 + 5_000, onBy: 'sb', onWhy: 'resumed', offAt: T0 + 6_000, offWhy: 'coupé par toi' })).not.toMatch(/repris/)
+})
+
+test('une coupure du COO datée pendant la pause coupe encore l’auto qui en a repris de lui-même ; un rallumage d’un clic, non', () => {
+  const run = (auto: Run['auto']): Run => ({ ...newRun('implement', T0, 'R'), owner: 'sb', auto }) as Run
+  const resumed = { onAt: T0 + 5_000, onBy: 'sb', onWhy: 'resumed' as const, offAt: T0 + 1_000, offWhy: 'plus rien ne peut avancer sans toi' }
+  expect(isCutDue(run(resumed), 'coupé par le COO', T0 + 3_000)).toBe(true)
+  expect(isCutDue(run({ onAt: T0 + 5_000, onBy: 'sb', offAt: T0 + 1_000, offWhy: 'plus rien ne peut avancer sans toi' }), 'coupé par le COO', T0 + 3_000)).toBe(false)
+  // Datée avant la pause : déjà vue avant la reprise, elle ne coupe pas la reprise.
+  expect(isCutDue(run(resumed), 'coupé par le COO', T0 + 500)).toBe(false)
+})
+
+test('Le repli « Fable indisponible » en cadrage, mode auto allumé : la pause « quota atteint » joue comme avant, et le cadrage repart sur Opus en high au moins', { timeoutMs: 30000 }, async ($, on) => {
+  const steps: { model: string; effort?: string }[] = []
+  const answer = stoppedStep(stepUsage('claude-opus-5-5'))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('turn.step', async function* (_$: unknown, e: any) {
+    steps.push({ model: e.model, effort: e.effort })
+    return yield* answer(_$, e)
+  })
+  const { clock, ...w } = await specDone($, on, { isDone: false })
+  // La spec en cours : la requête part sur Fable, en medium.
+  await $.turn.start({ text: 'x', turnId: 't9' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium', turnId: 't9' })
+  await ($ as any).classic.StopFailure({ session_id: 'sa', transcript_path: '/t', cwd: '', hook_event_name: 'StopFailure', error: 'rate_limit' })
+  await settle(clock, 1)
+  expect(autoOf(w)).toMatchObject({ offWhy: 'quota atteint' })
+  await $.turn.complete({ answer: '', durationMs: 10, isAborted: false, turnId: 't9', reason: 'error' })
+  await settle(clock, 1)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  expect(steps).toEqual([
+    { model: 'fable', effort: 'medium' },
+    { model: 'claude-opus-5-5', effort: 'high' },
+  ])
+  // Un cadrage n'est jamais relancé : aucun message de reprise.
+  expect(w.prompts.filter(p => p.text.startsWith('Fable indisponible'))).toEqual([])
 })

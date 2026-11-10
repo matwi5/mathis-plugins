@@ -122,7 +122,7 @@ const CONSIGNES = [
   },
   {
     name: "l'effort d'une session de groupe",
-    keywords: ['medium par défaut', 'xhigh (Recommandé) / high', 'tâche de jugement', "tâche d'exécution", 'worker autonome'],
+    keywords: ['medium par défaut', 'Fable 5.2 high (Recommandé) / Opus high', 'Opus xhigh (Recommandé) / Opus high', 'tâche de jugement', "tâche d'exécution", 'worker autonome'],
     // Le brief d'un worker la tient de hooks/effort.ts ; la règle des lots la renvoie à la section 11 de la procédure,
     // qui s'adresse au manager : elle n'est plus chargée dans chaque session.
     surfaces: ['reference/effort-workers.md', 'README.md', 'hooks/effort.ts'],
@@ -141,11 +141,20 @@ const CONSIGNES = [
   },
   { name: "l'option fusion, dans la demande de lancement", keywords: ['Sonnet high, sans logique', 'Un groupe annoncé « Sonnet high » part sur Sonnet'], surfaces: ['hooks/effort.ts'] },
   {
-    // Un worker sur Sonnet garde le moment (c) de l'advisor : l'advisor (Opus) relit un modèle moins fort que lui.
+    // Un worker sur Sonnet garde le moment (c) de l'advisor : l'advisor (Fable) relit un modèle moins fort que lui.
     name: "le moment (c) de l'advisor pour un worker sur Sonnet",
     keywords: ['worker sur Sonnet', 'moment (c)'],
     surfaces: ['config/rules/general.md', 'reference/procedure-groupe*.md', 'README.md'],
+    // La raison d'avant, l'advisor étant désormais sur Fable.
+    old: ["l'advisor (Opus) relit un modèle moins fort que lui", "l'advisor relit un modèle moins fort que lui"],
   },
+  {
+    // Un worker Fable (son mod réécrit ses requêtes sur Fable 5.2) confie toutes ses revues à un relecteur Opus, sans moment (c).
+    name: 'les revues du worker Fable sur un relecteur Opus',
+    keywords: ['worker Fable', 'relecteur'],
+    surfaces: ['reference/procedure-groupe.md', 'reference/procedure-groupe-fin.md', 'reference/procedure-groupe-autonome.md', 'config/reference/revues.md', 'README.md'],
+  },
+  { name: 'les revues du worker Fable, en Opus explicite', keywords: ['worker Fable', 'modèle opus passé explicitement', 'moment (c)'], surfaces: ['reference/procedure-groupe.md', 'README.md'] },
   {
     // Le mod impose l'effort du COO (medium) et du manager selon sa phase (medium pendant le suivi des groupes).
     name: "l'effort du COO et du manager selon la phase",
@@ -358,13 +367,13 @@ const CONSIGNES = [
   {
     // L'accord du mode auto et le tour d'intention recueilli par le COO : la règle des lots et le README.
     name: 'l’accord du mode auto et le tour d’intention du COO',
-    keywords: ['« Lancer en auto »', 'à la seule discussion lancée pour lui, dans les 10 minutes', 'une fusion, une reconstruction ou une lecture ratée laisse l\'auto éteint ou l\'éteint, jamais l\'inverse', 'travail/<sujet>/demande.md'],
+    keywords: ['« Lancer en auto »', 'ne sert qu\'une fois, à la seule discussion', 'une fusion, une reconstruction ou une lecture ratée laisse l\'auto éteint ou l\'éteint, jamais l\'inverse', 'travail/<sujet>/demande.md'],
     surfaces: ['config/rules/flow-board.md', 'README.md'],
   },
   {
-    // Le worker autonome et l'effort en mode auto : à tout effort, jamais xhigh proposé ; les groupes suivants lancés par le mod.
+    // Le worker autonome et l'effort en mode auto : à tout effort, ni Fable ni xhigh proposés ; les groupes suivants lancés par le mod.
     name: 'le worker autonome et l’effort en mode auto',
-    keywords: ['quel que soit son effort', 'ne propose jamais xhigh', 'le mod lance lui-même les groupes suivants', 'jamais par une question à boutons'],
+    keywords: ['quel que soit son effort', 'ne propose jamais ni Fable ni xhigh', 'le mod lance lui-même les groupes suivants', 'jamais par une question à boutons'],
     surfaces: ['config/rules/flow-board.md'],
   },
   {
@@ -534,6 +543,44 @@ const CONSIGNES = [
     name: 'la question de grilling lisible seule',
     keywords: ['Each question reads on its own: it restates in one or two sentences the fact or the finding it rests on'],
     surfaces: ['grilling/SKILL.md'],
+  },
+  {
+    // Le cadrage d'une mission passe sur Fable 5.2 medium par le mod, jusqu'à la fin du découpage ; un `/model` tapé l'arrête.
+    name: 'le cadrage sur Fable 5.2 medium',
+    keywords: ['Fable 5.2 medium', 'fin du découpage', '`/model`'],
+    surfaces: ['reference/effort-workers.md', 'skills/coo/SKILL.md', 'config/rules/agents.md'],
+  },
+  {
+    // Deux chemins de jugement : Fable 5.2 high pour le code, Opus xhigh pour la sécurité, un document ou le design ;
+    // la question unique d'avant est refusée partout.
+    name: 'les deux questions d’effort d’un groupe de jugement',
+    keywords: ['« Fable 5.2 high (Recommandé) / Opus high »', '« Opus xhigh (Recommandé) / Opus high »'],
+    surfaces: ['config/rules/flow-board.md', 'reference/effort-workers.md', 'README.md', 'hooks/effort.ts'],
+    old: ['« xhigh (Recommandé) / high »'],
+  },
+  {
+    // Le bouton « ↗ Fable » et le worker Fable qu'il lance, dits partout où l'on choisit le chemin.
+    name: 'le bouton « ↗ Fable » et le worker Fable',
+    keywords: ['↗ Fable', 'worker Fable'],
+    surfaces: ['config/rules/flow-board.md', 'reference/effort-workers.md', 'README.md', 'GLOSSARY.md'],
+  },
+  {
+    // Le worker de jugement de code sur Fable 5.2 high, tout le reste du code et les revues sur Opus.
+    name: 'le worker de jugement de code sur Fable 5.2 high',
+    keywords: ['jugement de code', 'Fable 5.2 high', 'Opus'],
+    surfaces: ['config/rules/agents.md', 'config/rules/flow-board.md', 'reference/effort-workers.md', 'GLOSSARY.md'],
+  },
+  {
+    // En auto, ni Fable ni xhigh : chaque copie de la règle nomme les deux.
+    name: 'ni Fable ni xhigh en mode auto',
+    keywords: ['Fable', 'xhigh', 'auto'],
+    surfaces: ['config/rules/flow-board.md', 'reference/effort-workers.md', 'reference/procedure-groupe-autonome.md', 'skills/coo/SKILL.md', 'hooks/effort.ts'],
+  },
+  {
+    // Le détour de cadrage garde le modèle de la phase du curseur : Opus pendant le suivi des groupes.
+    name: 'le détour de cadrage sur le modèle de la phase',
+    keywords: ['détour', 'suivi des groupes', 'Opus'],
+    surfaces: ['reference/effort-workers.md', 'skills/coo/SKILL.md'],
   },
 ]
 

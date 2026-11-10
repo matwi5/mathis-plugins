@@ -4,6 +4,16 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.9 — 2026-11-10
+
+### Modifié
+- **README** : la liste des écarts avec l'amont nomme tous les ajouts locaux, et la copie se met à jour par une fusion à trois (amont d'avant, amont nouveau, copie locale).
+
+### Corrigé
+- **CHANGELOG** : l'entrée 1.3.1-mathis.7 décrit le changement de mots tel qu'il a été fait.
+
+---
+
 ## 1.3.1-mathis.8 — 2026-11-08
 
 ### Modifié
@@ -17,7 +27,7 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 ## 1.3.1-mathis.7 — 2026-11-03
 
 ### Modifié
-- **`retro` et `tdd`** disent « worker » là où ils parlaient de flow-board ; README au vocabulaire des missions. Le texte de Matt Pocock ne change pas.
+- **`retro` et `tdd`** disent « worker » là où ils disaient « linked session » ; README au vocabulaire des missions. Le texte de Matt Pocock ne change pas.
 
 ---
 

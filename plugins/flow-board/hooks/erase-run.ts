@@ -14,8 +14,9 @@ import { type Trace, agentTraces, applyTraces, cleanTrace, eraseWith, isClosedSe
 import { carriedRunAt, runFileId, runWindow, runsCarriedBy } from './history.ts'
 import { isSameProject, isSureLink, linkedSessions } from './linked.ts'
 import { EMPTY_UI, dropRun } from './model.ts'
+import { autoOnKey } from './launch.ts'
 import { relayFileSlug } from './relay.ts'
-import { type HistoryShown, appliedKey, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, missionReportKey, missionReportPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
+import { type HistoryShown, appliedKey, resumeKey, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, missionReportKey, missionReportPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
 import { commitRegistry, readRegistry, registryDir, registryKey, registryPath, writeRegistry } from './registry-file.ts'
 
 /** Les atomes lus ou mis à jour ici : le moteur veut leur déclaration dans le fichier qui les lit. */
@@ -370,7 +371,7 @@ async function missedAgentsOf($: any, run: Run, runs: readonly Run[], carriers: 
  * (`tests/familles-effacees.test.mjs`). Des `switch` plutôt qu'une table de fonctions : le moteur refuse
  * `$` passé à une fonction lue dans une table.
  */
-export const MISSION_FAMILIES = ['fichier à part de la mission', 'référence du manager', 'relais', 'choix déclarés', 'rapport du compte rendu', 'consignes du COO appliquées'] as const
+export const MISSION_FAMILIES = ['fichier à part de la mission', 'référence du manager', 'relais', 'choix déclarés', 'rapport du compte rendu', 'consignes du COO appliquées', 'allumage demandé chez le COO', 'reprise d’une pause sans issue'] as const
 type MissionFamily = (typeof MISSION_FAMILIES)[number]
 
 /** Les familles de chaque worker de la mission, à côté du relais. */
@@ -390,6 +391,10 @@ export const missionFamilyKey = (family: MissionFamily, runId: string): string |
       return missionReportKey(runId)
     case 'consignes du COO appliquées':
       return appliedKey(runId)
+    case 'allumage demandé chez le COO':
+      return autoOnKey(runId)
+    case 'reprise d’une pause sans issue':
+      return resumeKey(runId)
     case 'choix déclarés':
       return null
   }
@@ -409,6 +414,8 @@ export function missionFamilyPath($: any, family: MissionFamily, runId: string):
     case 'rapport du compte rendu':
       return missionReportPath($, runId)
     case 'consignes du COO appliquées':
+    case 'allumage demandé chez le COO':
+    case 'reprise d’une pause sans issue':
       return null
   }
 }
@@ -535,7 +542,7 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
   for (const path of await relayEntryFilesOf($, run.id)) await eraseFile($, path)
   for (const key of await relayEntryKeysOf($, run.id)) await eraseKey($, key)
   // Ce que la mission garde elle-même : son fichier à part, la référence du manager, son relais, ses
-  // choix, le rapport de son compte rendu gardé pour le COO, les consignes du COO appliquées.
+  // choix, le rapport de son compte rendu gardé pour le COO, les consignes du COO appliquées, l'allumage demandé chez le COO, la trace d'une pause qui peut reprendre.
   for (const f of MISSION_FAMILIES) {
     await eraseFile($, missionFamilyPath($, f, run.id))
     const key = missionFamilyKey(f, run.id)

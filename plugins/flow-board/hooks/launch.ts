@@ -15,6 +15,7 @@
 import type { Run, RunLaunch } from '../types'
 import { clip, isTime } from './basics.ts'
 import { isSafeId } from './closing.ts'
+import { isEntryId } from './coordination.ts'
 import { isRoadmapId } from './roadmap.ts'
 
 export type { RunLaunch }
@@ -120,6 +121,29 @@ export const isCardId = (v: unknown): v is string => typeof v === 'string' && /^
 /** Le sujet du dossier d'une mission : lettres, chiffres et tirets (jamais `..` ni `/`), 60 au plus. */
 export const isFolderName = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(v) && v.length <= 60
 
+/**
+ * La carte « Pistes de rétro », posée par le mod du COO au clic « ✂ Découper la sélection » des pistes en attente :
+ * départ `to-tickets`, son dossier tiré de son id (`pistes-de-retro-<id sans k>`), sans champ de plus (R39) ; une
+ * carte de Claude ne prend jamais un dossier de cette forme. Ses pistes portent son id dans la liste d'attente.
+ */
+const PISTES_CARD_PREFIX = 'pistes-de-retro-'
+export const pistesCardFolder = (id: string): string => `${PISTES_CARD_PREFIX}${id.slice(1)}`
+export const isPistesCard = (card: Pick<LaunchCard, 'id' | 'start' | 'folder' | 'of'>): boolean => card.of === undefined && card.start === 'to-tickets' && sameFolder(card.folder, pistesCardFolder(card.id))
+export const pistesCard = (id: string, now: number): LaunchCard => ({
+  id,
+  // L'heure du clic la distingue d'une autre carte « Pistes de rétro » (la vue nomme la carte de chaque piste).
+  title: `Pistes de rétro · ${new Date(now).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`,
+  start: 'to-tickets',
+  askMatt: 'pistes cochées dans « Pistes en attente » : leur découpage en tickets puis en groupes',
+  alts: [],
+  mode: 'manual',
+  modeWhy: 'tu suis le découpage',
+  effort: 'high',
+  effortWhy: 'découpage en tickets',
+  folder: pistesCardFolder(id),
+  at: now,
+})
+
 /** Un texte de la carte : sur une ligne, coupé. */
 const line = (v: unknown, max: number): string => (typeof v === 'string' ? clip(v.replace(/\s+/g, ' ').trim(), max) : '')
 
@@ -141,6 +165,7 @@ export const parseCard = (raw: unknown, now: number, id: string, isMod = false):
   if (!EFFORTS.includes(x.effort as LaunchEffort)) return { refused: '"effort" must be "medium", "high" or "xhigh"' }
   if (x.mode === 'auto' && x.effort === 'xhigh') return { refused: 'xhigh is never proposed for a mission in auto: high at most' }
   if (!isFolderName(x.folder)) return { refused: `"folder" must be the subject of travail/<subject>/: letters, digits and dashes only (no "/", no ".."); ask the user for one` }
+  if (!isMod && x.folder.toLowerCase().startsWith(PISTES_CARD_PREFIX)) return { refused: `a folder that starts with "${PISTES_CARD_PREFIX}" is the dashboard's own (« Pistes de rétro » cards): choose another` }
   if (x.idea !== undefined && !isRoadmapId(x.idea)) return { refused: '"idea" must be the id of an idea of the roadmap, as the COO statement gives it' }
   const alts = (Array.isArray(x.alts) ? x.alts : []).filter(isStart).filter((s, i, all) => s !== x.start && all.indexOf(s) === i).slice(0, 4)
   return {
@@ -285,3 +310,64 @@ export const askMattCandidates = (raw: unknown, home: string): string[] => {
 
 /** La carte, dite à Claude dans le relevé du COO (textes de Claude, neutralisés par l'appelant). */
 export const cardStatus = (s: CardState): string => (s.kind === 'launched' ? 'launched' : s.kind === 'launching' ? `launching (${s.mode})` : 'ready')
+
+// ─── Allumage depuis la vue Coordination ──────────────────────────────────
+//
+// « ⚡ Auto » puis « Confirmer » sur la ligne d'une mission, chez le titulaire du siège, écrit un
+// enregistrement d'allumage dans le stockage du mod, une clé par mission : sur le modèle de
+// l'enregistrement de lancement, pris au nom de la discussion de la mission (celle qui la porte au clic,
+// `owner`), relu 1,5 s plus tard, effacé avant d'allumer, consommé une fois, dans les 10 minutes.
+// Invariant (validé par Mathis) : « L'auto d'une mission ne s'allume jamais sans un clic de Mathis,
+// consommé une seule fois, par la seule discussion de cette mission, dans les 10 minutes ; une lecture ou
+// une écriture ratée laisse l'auto éteint, sauf la reprise d'une pause « plus rien ne peut avancer sans toi », d'elle-même,
+// dans la discussion qui l'avait allumé, une fois toutes ses questions bloquantes répondues. » Un id consommé se note
+// dans les entrées appliquées de la mission (`coo-applied:<mission>`), avant l'effacement : une copie rejouée du même
+// clic n'allume plus rien, même quand l'allumage a raté. Le COO n'écrit jamais l'état auto ni la date gardée d'un
+// clic : la discussion de la mission les pose elle-même, comme pour « Confirmer » dans la mission.
+
+/** L'enregistrement d'allumage d'une mission, écrit par le clic chez le COO, consommé une fois par la discussion de la mission. */
+export type AutoOnRecord = {
+  v: 1
+  id: string
+  /** La mission visée. */
+  run: string
+  root: string
+  /** La date du clic. */
+  at: number
+  /** La discussion du clic (le COO). */
+  by: string
+  /** La discussion qui portait la mission au clic : la seule qui peut le prendre. */
+  owner: string
+  /** La discussion qui l'a pris à son nom, en train de le consommer. */
+  claim?: { by: string; at: number }
+}
+
+/** La clé de l'enregistrement d'allumage d'une mission dans le stockage du mod. */
+export const autoOnKey = (runId: string): string => `${AUTO_ON_KEY_PREFIX}${runId}`
+export const AUTO_ON_KEY_PREFIX = 'coo-auto-on:'
+
+/** Un enregistrement d'allumage relu : seulement en forme ; null sinon (il ne se consomme pas). */
+export const soundAutoOnRecord = (raw: unknown): AutoOnRecord | null => {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const x = raw as Record<string, unknown>
+  if (x.v !== 1 || !isEntryId(x.id) || !isSafeId(x.run) || typeof x.root !== 'string' || !isTime(x.at) || !isSafeId(x.by) || !isSafeId(x.owner)) return null
+  const c = x.claim as Record<string, unknown> | undefined
+  const claim = c && isSafeId(c.by) && isTime(c.at) ? { by: c.by, at: c.at } : undefined
+  if (x.claim !== undefined && !claim) return null
+  return { v: 1, id: x.id, run: x.run, root: x.root, at: x.at, by: x.by, owner: x.owner, ...(claim ? { claim } : {}) }
+}
+
+/**
+ * Pourquoi la discussion `session` (son id qui pose `owner`) ne consomme pas `record` pour la mission
+ * `run` (null : elle le peut). Contrôlés : la même mission et le même projet ; la mission active ici et
+ * portée par cette discussion, celle du clic ; pas périmé (10 minutes, horloge future comprise) ; aucune
+ * date de l'auto (allumé ou éteint, `dates`) d'après le clic : un rejeu après un allumage ou une coupure
+ * meurt par la mission elle-même ; pas pris par une autre discussion.
+ */
+export const autoOnRefusal = (record: AutoOnRecord, run: Run, isActiveHere: boolean, session: string, here: string, root: string, dates: { onAt?: number; offAt?: number }, now: number): 'other' | 'stale' | 'later' | 'taken' | null => {
+  if (record.run !== run.id || record.root !== root || !isActiveHere || run.owner !== session || record.owner !== session) return 'other'
+  if (isRecordStale(record, now)) return 'stale'
+  if ((dates.onAt !== undefined && dates.onAt >= record.at) || (dates.offAt !== undefined && dates.offAt >= record.at)) return 'later'
+  if (record.claim !== undefined && record.claim.by !== here) return 'taken'
+  return null
+}

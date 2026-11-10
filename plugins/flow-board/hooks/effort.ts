@@ -1,13 +1,14 @@
 // La règle d'effort des workers, en un seul endroit : le mod calcule l'effort de chaque groupe et
-// l'écrit sur sa ligne de la demande de lancement (Claude n'y juge que le choix de conception restant, et propose xhigh hors auto),
+// l'écrit sur sa ligne de la demande de lancement (Claude n'y juge que le choix de conception restant, et propose Fable 5.2 high ou Opus xhigh hors auto),
 // et il l'applique lui-même à un manager qui fait le travail d'un worker (un lot
 // sans groupes, un départ `/implement` ou `/tdd`, un diagnostic de bug), requête par requête. Un
 // changement de la règle vaut ainsi pour les deux. Un ticket sensible ne compte pas au lancement : le
 // mod d'un worker passe en high au moins chaque requête faite pendant un ticket sensible en cours
 // (`workerTicketEffort`), et un lot sans groupes de même. Hors de ce travail, l'effort d'une requête suit le
 // rôle et la phase (`leadEffort`) : le COO en medium ; le manager d'une mission à groupes en medium de
-// la fin du découpage au début du compte rendu ; high au moins dans toute autre phase d'un manager.
-// xhigh n'est jamais choisi par le mod : il se propose, jamais en auto.
+// la fin du découpage au début du compte rendu ; un manager en cadrage sur Fable 5.2 medium, quand le mod
+// peut réécrire le modèle (sinon high au moins) ; high au moins dans toute autre phase d'un manager.
+// Ni xhigh ni le worker Fable ne sont jamais choisis par le mod : ils se proposent, jamais en auto.
 //
 // Module pur.
 
@@ -70,11 +71,12 @@ const ticketsEffort = (tickets: readonly Ticket[], files: readonly string[] = []
 
 /**
  * Ce qu'ajoute la ligne d'un groupe dans la demande de lancement : l'effort imposé par un bouton, qui
- * l'emporte (et garde Opus : xhigh vaut pour une tâche de jugement) ; Sonnet high pour un groupe sans
+ * l'emporte (Opus xhigh, ou Fable 5.2 high pour « ↗ Fable » : jamais Sonnet, une tâche de jugement) ; Sonnet high pour un groupe sans
  * logique (`isNoLogic`, l'option fusion) ; sinon l'effort calculé (`ticketsEffort` de ses tickets ouverts et
  * des fichiers qu'il déclare) et ses raisons. Des textes fixes seulement : aucun nom ni chemin de ticket n'y entre.
  */
 export const groupLaunchNote = (open: readonly Ticket[], files: readonly string[], imposed: ImposedEffort | undefined, isNoLogic: boolean): string => {
+  if (imposed === 'fable') return ' — Fable 5.2 high, imposé'
   if (imposed) return ` — effort : ${imposed}, imposé`
   if (isNoLogic) return ' — Sonnet high, sans logique'
   const x = ticketsEffort(open, files)
@@ -142,21 +144,55 @@ export const workerTicketEffort = (doing: readonly string[] | null, mission: Run
  * celle du COO, le suivi des groupes d'une mission à groupes, la phase d'un manager (cadrage,
  * compte rendu, rétrospective, toute autre phase), ou un ticket sensible en cours chez un worker.
  */
-export type LeadRule = 'group' | 'diagnosis' | 'coo' | 'groups' | 'framing' | 'report' | 'retro' | 'other' | 'sensitive'
+export type LeadRule = 'group' | 'diagnosis' | 'coo' | 'groups' | 'framing' | 'report' | 'retro' | 'other' | 'sensitive' | 'fable' | 'fableOff'
 
 /**
  * Comment l'effort se pose : `exact`, l'effort de la règle quel que soit celui de la discussion (un lot,
  * jamais xhigh) ; `floor`, high au moins, un effort plus haut restant ; `medium`, medium imposé (low et
  * high ramenés à medium), xhigh et max laissés, un choix délibéré de la personne. `ticket` et `isUnknown` :
- * pour la règle `sensitive`, le ticket en cours qui l'impose et si sa sensibilité ne se lit pas.
+ * pour la règle `sensitive`, le ticket en cours qui l'impose et si sa sensibilité ne se lit pas. `model` :
+ * le modèle imposé à la requête (Fable 5.2, `FABLE_MODEL`), toujours avec un effort `exact` ; absent, la
+ * requête garde le sien. `level` xhigh : seulement le repli d'un worker Fable quand Fable est indisponible
+ * (`FABLE_OFF_WORKER_EFFORT`), le remplaçant d'Opus xhigh que Mathis a choisi ; jamais autrement.
  */
-export type LeadEffort = { level: WorkerEffort; rule: LeadRule; how: 'exact' | 'floor' | 'medium'; ticket?: string; isUnknown?: true }
+export type LeadEffort = { level: WorkerEffort | 'xhigh'; rule: LeadRule; how: 'exact' | 'floor' | 'medium'; ticket?: string; isUnknown?: true; model?: typeof FABLE_MODEL }
+
+/**
+ * Le modèle que le mod impose à une requête du fil principal : l'alias `fable`, Fable 5.2 depuis Claude Code
+ * 2.1.321 (celui que la sonde de `docs/evenements-moteur.md`, « Modèle réécrit par `turn.step` », a essayé).
+ */
+export const FABLE_MODEL = 'fable'
 
 /** La discussion qui tient le siège du COO : medium à chaque requête, xhigh et max laissés. */
 export const COO_EFFORT: LeadEffort = { level: 'medium', rule: 'coo', how: 'medium' }
 
+/**
+ * La règle d'un worker Fable (sa délégation porte la marque « worker Fable »), quand le mod peut réécrire le
+ * modèle : chaque requête de son fil principal sur Fable 5.2 en high, exact, ticket sensible en cours ou non.
+ */
+export const FABLE_WORKER_EFFORT: LeadEffort = { level: 'high', rule: 'fable', how: 'exact', model: FABLE_MODEL }
+
+/**
+ * Le repli d'un worker Fable quand Fable est indisponible (limite atteinte, usage supplémentaire coupé) : le
+ * modèle de la session, en xhigh exact, jusqu'à la fin de la session, choix de Mathis du 09/11/2026.
+ */
+export const FABLE_OFF_WORKER_EFFORT: LeadEffort = { level: 'xhigh', rule: 'fableOff', how: 'exact' }
+
 /** Les phases de cadrage d'un manager (grilling et ses variantes, spec, découpage). */
 const FRAMING = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-questionnaire', 'to-spec', 'to-tickets', 'domain-modeling'])
+
+/**
+ * La fenêtre du cadrage sur Fable : la phase du curseur est une phase de cadrage, active ou faite tant que la
+ * suivante n'a pas commencé, sauf le découpage fini (le retour sur Opus se fait à sa fin), et la mission
+ * n'est pas en suivi des groupes. Un détour ne la change pas : le modèle ne change que deux fois, chaque
+ * changement faisant relire tout le contexte sans cache.
+ */
+const isFramingWindow = (run: Run): boolean => {
+  const phase = currentPhase(run)
+  if (!FRAMING.has(phase.skill) || (phase.status !== 'active' && phase.status !== 'done')) return false
+  if (phase.skill === 'to-tickets' && phase.status === 'done') return false
+  return !isGroupsFollowUp(run)
+}
 
 /** Les phases qui closent le suivi des groupes : le compte rendu, la rétrospective, la livraison (`project:*`). */
 const endsFollowUp = (skill: string): boolean => skill === 'compte-rendu' || skill === 'retro' || skill.startsWith('project:')
@@ -178,14 +214,18 @@ const isGroupsFollowUp = (run: Run): boolean => {
 
 /**
  * L'effort qu'impose le mod à une requête du fil principal d'un manager, mission active ici : la règle
- * d'un worker quand il en fait le travail (`managerWorkEffort`, inchangée) ; medium pendant le suivi
- * des groupes d'une mission à groupes ; sinon high au moins, avec la raison de la phase. Rien sans
- * mission active (`null`). Le COO, qui n'a pas de mission, a `COO_EFFORT`.
+ * d'un worker quand il en fait le travail (`managerWorkEffort`, inchangée, sur le modèle de la session) ;
+ * Fable 5.2 en medium exact pendant la fenêtre du cadrage (`isFramingWindow`), quand `isFableOn` dit que
+ * le mod peut réécrire le modèle (pas de `/model` tapé, Fable pas éteint, la requête sur le modèle de la
+ * session) ; medium pendant le suivi des groupes d'une mission à groupes ; sinon high au moins, avec la
+ * raison de la phase. Rien sans mission active (`null`). Le COO, qui n'a pas de mission, a `COO_EFFORT`.
+ * Sans `isFableOn`, jamais de modèle : dans le doute, la requête garde le sien.
  */
-export const leadEffort = (run: Run | null): LeadEffort | null => {
+export const leadEffort = (run: Run | null, isFableOn = false): LeadEffort | null => {
   if (!run || run.status !== 'active') return null
   const work = managerWorkEffort(run)
   if (work) return { level: work.level, rule: work.rule, how: work.rule === 'group' ? 'exact' : 'floor' }
+  if (isFableOn && isFramingWindow(run)) return { level: 'medium', rule: 'framing', how: 'exact', model: FABLE_MODEL }
   // Un cadrage en cours, en détour (/grilling sur une question remontée) ou en phase active, passe avant le suivi des groupes.
   const phase = currentPhase(run)
   const framing = activeDetour(phase)?.skill ?? (phase.status === 'active' ? phase.skill : null)
@@ -204,7 +244,7 @@ const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
  * effort numérique (un budget) ; les autres règles laissent tel quel un effort hors de `EFFORT_LEVELS`,
  * nombre ou texte (le registre et le relevé du COO gardent un budget en texte : « 32000 »).
  */
-export const effortSent = <E extends string | number>(x: LeadEffort, current: E): E | WorkerEffort =>
+export const effortSent = <E extends string | number>(x: LeadEffort, current: E): E | WorkerEffort | 'xhigh' =>
   x.how === 'exact'
     ? x.level
     : typeof current !== 'string' || !EFFORT_LEVELS.has(current)
@@ -227,6 +267,8 @@ const LEAD_REASON: Record<LeadRule, string> = {
   retro: 'rétrospective',
   other: 'règle du manager',
   sensitive: 'ticket sensible en cours',
+  fable: 'worker Fable',
+  fableOff: 'repli sur Opus',
 }
 
 /**
@@ -242,9 +284,14 @@ const sensitiveReason = (x: LeadEffort): string =>
       ? `ticket ${x.ticket} en cours, sensibilité inconnue`
       : `ticket sensible ${x.ticket} en cours`
 
-/** Le texte du bandeau : l'effort imposé et sa raison (« effort : medium, suivi des groupes »), espaces comprises. */
+/**
+ * Le texte du bandeau : l'effort imposé et sa raison (« effort : medium, suivi des groupes »), espaces comprises ;
+ * avec un modèle imposé, le modèle d'abord (« modèle : Fable 5.2 medium, cadrage »).
+ */
 const leadEffortText = (x: LeadEffort): string =>
-  `effort${x.rule === 'group' ? ' du lot' : x.rule === 'diagnosis' ? ' du diagnostic' : ''} : ${x.level}, ${x.rule === 'sensitive' ? sensitiveReason(x) : LEAD_REASON[x.rule]}`
+  x.model
+    ? `modèle : Fable 5.2 ${x.level}, ${LEAD_REASON[x.rule]}`
+    : `effort${x.rule === 'group' ? ' du lot' : x.rule === 'diagnosis' ? ' du diagnostic' : ''} : ${x.level}, ${x.rule === 'sensitive' ? sensitiveReason(x) : LEAD_REASON[x.rule]}`
 
 /**
  * Le texte du bandeau quand la règle joue : un lot et un diagnostic se disent toujours, comme avant ;
@@ -253,7 +300,7 @@ const leadEffortText = (x: LeadEffort): string =>
  * max laissés.
  */
 export const leadEffortPill = (x: LeadEffort, current: string | undefined): string | null => {
-  if (x.how === 'exact' || x.rule === 'diagnosis') return leadEffortText(x)
+  if (x.model || x.how === 'exact' || x.rule === 'diagnosis') return leadEffortText(x)
   return current !== undefined && effortSent(x, current) !== current ? leadEffortText(x) : null
 }
 
@@ -303,8 +350,11 @@ const QUOTA_NOTE = (quota: string): string =>
 
 // ─── Les textes de la règle, donnés à Claude dans le brief d'un worker de groupe ──────────────
 
-/** L'effort qu'un bouton du tableau de bord impose à la session d'un groupe ; sans lui, Claude le choisit. */
-export type ImposedEffort = 'xhigh'
+/**
+ * Le chemin qu'un bouton du tableau de bord impose à la session d'un groupe : `xhigh` (« ↗ xhigh », Opus
+ * xhigh) ou `fable` (« ↗ Fable », le worker Fable : Fable 5.2 high par son mod) ; sans lui, Claude le choisit.
+ */
+export type ImposedEffort = 'xhigh' | 'fable'
 
 /**
  * Ce qu'ajoute un effort xhigh retenu : la session est autonome, et l'app la plafonne à l'effort
@@ -315,6 +365,19 @@ export const XHIGH_LAUNCH = (many: boolean, current: string | undefined): string
   `${many ? 'Une session lancée en xhigh' : 'Lancée en xhigh, la session'} est un worker autonome : son prompt le dit (point 3 ci-dessous). ` +
   `Dans l'app Desktop, start_session ne donne jamais à une session un effort plus haut que celui de cette discussion${current ? ` (son effort relevé à l'écriture de cette demande : ${current} ; je l'ai peut-être monté depuis, avant Entrée)` : ''} : si le tien est sous xhigh, arrête-toi avant de lancer et demande-moi de passer cette discussion en xhigh, puis seulement lance ; claude --bg --effort xhigh, dans le CLI, n'a pas ce plafond. ` +
   `Une fois ${many ? 'une session xhigh lancée' : 'la session lancée'}, rappelle-moi en une ligne que je peux redescendre l'effort de cette discussion : sinon tu ferais le reste de la mission en xhigh.`
+
+/**
+ * Ce qu'ajoute le chemin Fable retenu : la session est un worker Fable et un worker autonome ; elle part
+ * sur Opus avec son brief Fable (son appel `delegate` porte `"model": "fable"`), et son mod envoie chaque
+ * requête de son fil principal sur Fable 5.2 high. Aucun modèle au lancement, et aucun effort à monter dans
+ * cette discussion : le mod impose l'effort par requête, et l'app ne plafonne pas ce qu'il impose.
+ */
+export const FABLE_LAUNCH = (many: boolean): string =>
+  `${many ? 'Une session lancée sur Fable' : 'Lancée sur Fable, la session'} est un worker Fable et un worker autonome : son brief Fable, effort high, aucun model dans start_session ni dans claude --bg (son mod la passe sur Fable 5.2 high) ; rien à monter ici.`
+
+/** Les deux questions à boutons d'un groupe de jugement, telles que la personne les lit. */
+export const FABLE_QUESTION = '« Fable 5.2 high (Recommandé) / Opus high »'
+export const XHIGH_QUESTION = '« Opus xhigh (Recommandé) / Opus high »'
 
 /**
  * Le modèle Sonnet d'un worker de groupe sans logique (option fusion), écrit une seule fois : l'id que prend
@@ -331,7 +394,7 @@ export const SONNET_CLI_ALIAS = 'sonnet'
  * passer en xhigh par la question à boutons. Dit seulement quand la demande en porte un, et jamais sous un effort imposé.
  */
 export const SONNET_LAUNCH_FR =
-  `Un groupe annoncé « Sonnet high » part sur Sonnet : model "${SONNET_APP_ID}" et effort "high" dans start_session, --model ${SONNET_CLI_ALIAS} --effort high dans claude --bg ; aucun modèle pour les autres groupes, ni pour un groupe que je fais passer en xhigh (ils prennent celui de cette discussion : xhigh vaut pour une tâche de jugement). `
+  `Un groupe annoncé « Sonnet high » part sur Sonnet : model "${SONNET_APP_ID}" et effort "high" dans start_session, --model ${SONNET_CLI_ALIAS} --effort high dans claude --bg ; aucun modèle pour les autres groupes, ni pour un groupe que je fais passer en Opus xhigh (ils partent sur celui de cette discussion : une tâche de jugement ne va jamais à Sonnet). `
 
 /**
  * Ce que dit la consigne d'effort, hors effort imposé : l'effort se lit sur la ligne du groupe
@@ -348,21 +411,28 @@ const CALCULATED_EFFORT = (many: boolean, effortFile: string): string =>
 
 /**
  * L'effort d'une session de groupe : celui que calcule le mod (medium par défaut, high pour un groupe
- * délicat), high pour un choix de conception restant ; xhigh proposé pour une tâche de jugement, jamais
- * choisi par Claude seul. Imposé par le bouton, sans question. `quota` (`quotaText`) : cité dans la question
- * xhigh, ou avant un lancement en xhigh imposé ; null, rien n'en est dit.
+ * délicat), high pour un choix de conception restant ; pour une tâche de jugement, l'un des deux chemins
+ * proposé par une question à boutons, jamais choisi par Claude seul : Fable 5.2 high pour un jugement de
+ * code (`FABLE_QUESTION`), Opus xhigh pour un jugement sur la sécurité, un document lu par d'autres ou du
+ * design (`XHIGH_QUESTION`). Imposé par un bouton (« ↗ xhigh », « ↗ Fable »), sans question. `quota`
+ * (`quotaText`, les fenêtres du compte, pas la part de Fable) : cité dans la question xhigh, ou avant un
+ * lancement en xhigh imposé ; null, rien n'en est dit.
  */
 export const GROUP_EFFORT = (many: boolean, imposed: ImposedEffort | undefined, current: string | undefined, effortFile: string, quota: string | null = null): string =>
-  imposed
-    ? `Effort de ${many ? 'chaque session (<effort>)' : 'la session (<effort>)'} : ${imposed}, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort${quota ? ` ; en lançant, cite-moi en une ligne, sans attendre de réponse, ${QUOTA_NOTE(quota)}` : ''}. ${XHIGH_LAUNCH(many, current)}`
-    : CALCULATED_EFFORT(many, effortFile) +
-      `Tu ne choisis jamais xhigh toi-même : quand un ticket ${many ? 'de son' : 'du'} groupe est une tâche de jugement (jamais pour une tâche d'exécution), avant de lancer, pose-moi une question à boutons « xhigh (Recommandé) / high »${many ? ' par groupe concerné, quatre au plus par encadré, chacune' : ''} avec une ligne qui nomme le ticket et la sorte de jugement${quota ? `, et une ligne qui cite ${QUOTA_NOTE(quota)}` : ''} ; cette question est permise, le bouton cliqué n'ayant pas fixé l'effort. ` +
-      `Si je réponds xhigh : ${XHIGH_LAUNCH(many, current)}`
+  imposed === 'fable'
+    ? `Effort de ${many ? 'chaque session (<effort>)' : 'la session (<effort>)'} : high, pour le worker Fable (Fable 5.2 high, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort). ${FABLE_LAUNCH(many)}`
+    : imposed
+      ? `Effort de ${many ? 'chaque session (<effort>)' : 'la session (<effort>)'} : ${imposed}, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort${quota ? ` ; en lançant, cite-moi en une ligne, sans attendre de réponse, ${QUOTA_NOTE(quota)}` : ''}. ${XHIGH_LAUNCH(many, current)}`
+      : CALCULATED_EFFORT(many, effortFile) +
+        `Tu ne choisis jamais toi-même ni Fable ni xhigh : quand un ticket ${many ? 'de son' : 'du'} groupe est une tâche de jugement (jamais pour une tâche d'exécution), avant de lancer, pose-moi une question à boutons${many ? ' par groupe concerné, quatre au plus par encadré, chacune' : ''} avec une ligne qui nomme le ticket et la sorte de jugement : ` +
+        `${FABLE_QUESTION} pour un jugement de code ; ${XHIGH_QUESTION} pour un jugement sur la sécurité, un document lu par d'autres ou du design${quota ? `, avec une ligne qui cite ${QUOTA_NOTE(quota)}` : ''} ; cette question est permise, le bouton cliqué n'ayant pas fixé l'effort. ` +
+        `Si je réponds Fable 5.2 high : ${FABLE_LAUNCH(many)} ` +
+        `Si je réponds Opus xhigh : ${XHIGH_LAUNCH(many, current)}`
 
 /**
- * L'effort d'une session de groupe lancée par le mode auto : la même règle sans xhigh ni sa question,
- * l'absence de proposition déclarée.
+ * L'effort d'une session de groupe lancée par le mode auto : la même règle sans Fable ni xhigh ni leurs
+ * questions, l'absence de proposition déclarée.
  */
 export const AUTO_GROUP_EFFORT = (many: boolean, effortFile: string): string =>
   CALCULATED_EFFORT(many, effortFile) +
-  "La mission est en mode auto : jamais xhigh ; ne me pose pas la question « xhigh (Recommandé) / high » ; quand un ticket relèverait de xhigh (une tâche de jugement), lance en high et déclare dans decided que xhigh n’a pas été proposé. "
+  `La mission est en mode auto : jamais Fable ni xhigh ; ne me pose aucune des deux questions d'effort (${FABLE_QUESTION}, ${XHIGH_QUESTION}) ; quand un ticket relèverait de l'un des deux chemins (une tâche de jugement), lance-le sur Opus en high et déclare dans decided que ni Fable ni xhigh n’ont été proposés. `

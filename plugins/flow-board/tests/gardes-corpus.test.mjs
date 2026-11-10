@@ -29,8 +29,8 @@ const NOT_FORM_GUARDS = {
       'isCooDiscussion', 'isRunComplete', 'isPhaseOptional', 'isRetroRun', 'isNoLogicGroup', 'isTicketReviewEnough', 'isGroupReviewed',
       'isSensitiveGroup', 'isLotReviewEnough', 'isLotToReview', 'isLotAdviceCurrent', 'isLotAdvicePrevious', 'isLotSecuritySettled',
       'isLotSecurityDue', 'isClosedTurnedOff', 'isBugPass', 'isWaitingTicket', 'isDelegable', 'isCloseCandidate', 'isStoredPause', 'isAutoOn',
-      'isAutoLitBy', 'isAutoPauseStored', 'isGroupLotStuck', 'isBlocked', 'isPickable', 'isLotUnderway', 'isKeptForReport',
-      'isDeliveredRun', 'isAwaitingArchive', 'isCloseDone', 'isDeliveryOver', 'isReportShipped',
+      'isAutoLitBy', 'isAutoPauseStored', 'isRelaunchPause', 'isGroupDone', 'isCutDue', 'isAutoResumed', 'isGroupLotStuck', 'isBlocked', 'isPickable', 'isLotUnderway', 'isKeptForReport',
+      'isDeliveredRun', 'isAwaitingArchive', 'isCloseDone', 'isDeliveryOver', 'isReportShipped', 'isOtherDiscussions', 'isWaitlistRetro',
     ].map(name => [name, ON_MISSION]),
   ),
 }

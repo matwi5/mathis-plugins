@@ -1,7 +1,8 @@
 // La rétro d'une mission livrée, proposée par le COO : une mission à part, lancée par une carte du mod, qui
 // garde l'id de la mission close et lit ses transcripts ; ses pistes se cochent chez le COO.
 // Invariant : « Une piste de la rétro n'est découpée que si l'utilisateur l'a cochée ; une piste non cochée
-// part dans À reprendre, jamais nulle part. »
+// part dans À reprendre, jamais nulle part. » Depuis la liste d'attente (R11 de coo-autonome) : ou reste dans
+// la liste, « pas encore validée », relue là (rétro qui relit la liste) ; jamais nulle part.
 
 import type { FlowItem, Run } from '../types'
 import { clip } from './basics.ts'

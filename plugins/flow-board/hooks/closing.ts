@@ -342,11 +342,12 @@ export const tempDirForm = (value: unknown): string | null => {
  * Le nom du fichier d'un brief de worker, un par lancement et par groupe :
  * `flow-board-brief-<mission>-<groupe>-<horodatage>.md`, fait des seuls ids contrôlés (`isSafeId`,
  * `isGroupId`) et de l'heure du lancement, jamais du titre ; null hors forme. Le nom entier ne garde
- * que `[A-Za-z0-9._-]`.
+ * que `[A-Za-z0-9._-]`. `isFable` : le brief Fable du même groupe, écrit à côté de son brief Opus au même
+ * lancement, suffixé d'un texte fixe (`-fable`) pour ne jamais prendre le nom de l'autre.
  */
-export const briefFileName = (runId: unknown, groupId: unknown, at: unknown): string | null => {
+export const briefFileName = (runId: unknown, groupId: unknown, at: unknown, isFable = false): string | null => {
   if (!isSafeId(runId) || !isGroupId(groupId) || typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) return null
-  const name = `flow-board-brief-${runId}-${groupId}-${at}.md`
+  const name = `flow-board-brief-${runId}-${groupId}-${at}${isFable ? '-fable' : ''}.md`
   return /^[A-Za-z0-9._-]{1,200}$/.test(name) ? name : null
 }
 

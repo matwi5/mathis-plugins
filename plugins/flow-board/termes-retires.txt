@@ -32,3 +32,11 @@
 0.82.0	Clôture et archivage demandés par le COO
 0.82.0	Clore et archiver une mission livrée
 0.82.0	retro-dismiss
+# La bascule de l'auto depuis la Coordination : un troisième clic, la vue Coordination (mission « COO plus autonome ») :
+0.83.0	sans un de ces deux clics
+# La liste d'attente des rétros et la mission « Pistes de rétro » dans la règle « Pistes d'une rétro » (mission « COO plus autonome ») :
+0.83.0	les pistes choisies se découpent en tickets
+# La raison du moment (c) d'un worker Sonnet, l'advisor étant désormais sur Fable (mission « Intégrer Fable 5.2 au workflow ») :
+0.83.0	l'advisor (Opus) relit un modèle moins fort que lui
+# La question d'effort unique, remplacée par les deux chemins de jugement, Fable 5.2 high et Opus xhigh (mission « Intégrer Fable 5.2 au workflow ») :
+0.83.0	xhigh (Recommandé) / high

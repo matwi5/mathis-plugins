@@ -17,7 +17,7 @@ export const PANE = {
 
 export const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
 /** Le fichier de coordination, quel que soit son nom (le nom de ce projet sur ce poste), hors copies mises de côté. */
-export const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-')
+export const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-') && !path.includes('.nuit')
 export const isCoordKey = (key: string): boolean => key.startsWith('coo-coordination:') && !key.includes(':illisible:')
 
 /**
@@ -47,7 +47,9 @@ export const world = (on: any) => {
   /** Les toasts du mod. */
   const toasts: string[] = []
   /** Joué à chaque relecture du fichier de coordination (pour une écriture croisée d'une autre discussion à ce moment-là). */
-  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean } = {}
+  /** `holdNight` : l'écriture de l'enregistrement de la surveillance de nuit attend cette promesse (une écriture du moteur qui tarde). */
+  /** `refuseRead` : une lecture du magasin qui lève pour cette clé (une clé illisible, comme `delegate:<session>`). */
+  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean; refuseRead?: (key: string) => boolean; holdNight?: Promise<void> } = {}
   on('session.end', () => ({ sessionId: ids.now }))
   on('classic.SessionStart', () => ({}))
   on('prompt.submit', (_$: unknown, e: { text: string; context?: readonly string[] }) => {
@@ -89,9 +91,17 @@ export const world = (on: any) => {
     }
     if (e.key === KEY) probe.onBoardRead?.()
     if (e.key === KEY && disk.unreadable) throw new Error('EIO')
+    if (probe.refuseRead?.(e.key)) throw new Error('EIO')
     return { value: mem[e.key] }
   })
   on('store.set', (_$: unknown, e: { key: string; value: unknown }) => {
+    if (probe.holdNight && e.key.startsWith('coo-night:')) {
+      const value = JSON.parse(JSON.stringify(e.value))
+      return probe.holdNight.then(() => {
+        mem[e.key] = value
+        return { value: undefined }
+      }) as any
+    }
     if (isCoordKey(e.key)) {
       coord.text = JSON.stringify(e.value)
       coord.unread = false
@@ -114,7 +124,11 @@ export const world = (on: any) => {
     if (isCoordFile(e.path)) probe.onCoordRead?.()
     // Un fichier du projet posé par son chemin relatif (« travail/… ») : le moteur le reçoit résolu depuis le dossier de travail.
     const isProjectFile = Object.keys(files).some(k => !k.startsWith('/') && e.path.endsWith(`/${k}`))
-    return { value: isBoardFile(e.path) ? disk.board !== undefined : isCoordFile(e.path) ? coord.unread || coord.text !== undefined : e.path in files || e.path in asides || isProjectFile } as any
+    // Le dossier des boîtes de pistes existe dès qu'il porte un fichier.
+    const isPistesDir =
+      (e.path.endsWith('/flow-board/pistes/boites') && Object.keys(files).some(k => k.startsWith(`${e.path}/`) || (!k.startsWith('/') && e.path.endsWith(`/${k.slice(0, k.lastIndexOf('/'))}`)))) ||
+      (e.path.endsWith('/issues') && Object.keys(files).some(k => !k.startsWith('/') && k.includes('/') && e.path.endsWith(`/${k.slice(0, k.lastIndexOf('/'))}`)))
+    return { value: isBoardFile(e.path) ? disk.board !== undefined : isCoordFile(e.path) ? coord.unread || coord.text !== undefined : e.path in files || e.path in asides || isProjectFile || isPistesDir } as any
   })
   on('fs.read', (_$: unknown, e: { path: string }) => {
     if (isBoardFile(e.path)) {
@@ -135,6 +149,12 @@ export const world = (on: any) => {
     return { value: files[key] } as any
   })
   on('fs.write', (_$: unknown, e: { path: string; text: string }) => {
+    if (probe.holdNight && e.path.endsWith('.nuit.json')) {
+      return probe.holdNight.then(() => {
+        files[e.path] = e.text
+        return { value: undefined }
+      }) as any
+    }
     if (isBoardFile(e.path)) {
       disk.isUsed = true
       if (disk.unwritable || probe.refuseBoard?.(e.text)) throw new Error(`EROFS ${e.path}`)
@@ -148,7 +168,22 @@ export const world = (on: any) => {
     else files[e.path] = e.text
     return { value: undefined } as any
   })
-  on('fs.list', () => ({ value: [] }) as any)
+  // Seuls le dossier des boîtes de pistes et les dossiers de tickets (« …/issues ») se listent ; les autres restent vides, comme avant.
+  on('fs.list', (_$: unknown, e: { path: string }) => {
+    // Un dossier de tickets du projet (« travail/<sujet>/issues ») : les fichiers posés par leur chemin relatif.
+    if (e.path.endsWith('/issues')) {
+      const rel = Object.keys(files).filter(k => !k.startsWith('/') && k.includes('/') && e.path.endsWith(`/${k.slice(0, k.lastIndexOf('/'))}`))
+      return { value: rel.map(k => ({ name: k.slice(k.lastIndexOf('/') + 1), kind: 'file', mtimeMs: 1 })) } as any
+    }
+    if (!e.path.endsWith('/flow-board/pistes/boites')) return { value: [] } as any
+    const dir = `${e.path}/`
+    // Les boîtes écrites par le mod (chemin entier), et celles posées par un test par la fin de leur chemin.
+    const names = [
+      ...Object.keys(files).filter(p => p.startsWith(dir) && !p.slice(dir.length).includes('/')).map(p => p.slice(dir.length)),
+      ...Object.keys(files).filter(k => !k.startsWith('/') && k.includes('/') && e.path.endsWith(`/${k.slice(0, k.lastIndexOf('/'))}`)).map(k => k.slice(k.lastIndexOf('/') + 1)),
+    ]
+    return { value: [...new Set(names)].map(name => ({ name, kind: 'file', mtimeMs: 1 })) } as any
+  })
   on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('command.list', () => ({ value: [] }))
   on('command.run', (_$: unknown, e: { command: string }) => {

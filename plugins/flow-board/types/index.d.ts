@@ -668,6 +668,22 @@ export type Run = {
   /** Id de la discussion où la mission est active ; absent quand elle ne l'est nulle part. */
   owner?: string
   /**
+   * La dernière prise de la mission par un processus de Claude Code (`boot`, l'id du processus ; `at`, sa date) :
+   * posée quand la mission devient active dans une discussion (création, reprise par un skill ou par « ↻ Reprendre
+   * ici », retour au chargement de la discussion relancée), effacée quand elle quitte l'état actif. La fusion garde la
+   * plus récente, quelle que soit la copie gardée (`keepRun`) ; un autre processus de la même discussion, dont la
+   * prise est plus récente, la retire à celui-ci (`mergeBoards`) : deux processus d'une même discussion ne la
+   * tiennent jamais ensemble.
+   */
+  claim?: { boot: string; at: number }
+  /**
+   * Le passage de la mission au worker de diagnostic, ouvert par « 🐞 Bug · worker » (`at` : la date du clic, `from` :
+   * la discussion qui l'ouvre) : la session de diagnostic la prend par le champ `resume` de l'outil, une fois, dans l'heure
+   * (`by`, `byAt`), puis seule `from` la reprend par `resume`, tant que `by` la tient ; ce retour, toute autre reprise,
+   * la mise en pause, la mise de côté et l'archivage le ferment (`closedAt`). Fusionné à part (`keepHandoff`).
+   */
+  handoff?: { at: number; from: string; by?: string; byAt?: number; closedAt?: number }
+  /**
    * Id de la discussion où la mission est née, posé à sa création et jamais effacé (depuis la
    * 0.60.0) : seule elle prend son titre, et seul un skill qu'elle charge reprend la mission en pause
    * d'office. Absent d'une mission d'avant, qui ne compte pas : seul « ↻ Reprendre ici » la reprend.
@@ -714,6 +730,13 @@ export type Run = {
    * Écrites par la seule discussion qui porte la mission, unies à la fusion, effacées avec elle.
    */
   forced?: ForcedHold[]
+  /**
+   * La trace des consignes reçues (`coordinate.instruct` du COO) : l'id de chaque entrée dont le message est entré
+   * chez le Claude de la mission, noté juste après. Écrite par la seule discussion qui porte la mission, unie à la
+   * fusion (rien ne se perd), bornée comme les marques « appliquée » (les plus récentes), effacée avec elle ; lue
+   * par le COO pour montrer une consigne « non reçue ».
+   */
+  instructed?: string[]
   /**
    * La mission attend la personne (signal « t'attend ») : depuis quand, et pour quoi (une question posée, une
    * validation, l'étape suivante proposée, le rapport). Écrit par la seule discussion qui la porte, à la fin
@@ -801,6 +824,12 @@ export type RunAuto = {
   offAt?: number
   /** La raison de l'arrêt, avec `offAt`. */
   offWhy?: string
+  /**
+   * Avec `onAt` : l'allumage est la reprise d'une pause « plus rien ne peut avancer sans toi », d'elle-même, une fois
+   * ses questions répondues ; un affichage seulement. Fusionné avec « allumé à », retiré par un
+   * nouvel allumage (`switchOnAuto`), borné à la lecture (`readAuto`).
+   */
+  onWhy?: 'resumed'
 }
 
 /** Trace d'une mission supprimée, pour qu'une autre discussion ne la fasse pas revenir. */
@@ -817,6 +846,8 @@ export type Board = {
   activeId: string | null
   /** Id de la discussion qui tient cette copie du board. */
   session?: string
+  /** Id du processus de Claude Code qui tient cette copie (posé au chargement, `detachOnLoad`) : signe ses prises (`Run.claim`). */
+  boot?: string
   /**
    * Cette discussion travaille pour une autre (worker d'un groupe) : propre à la
    * discussion, jamais repris du stockage. Ses skills et ses rapports ne touchent aucune mission.
@@ -835,6 +866,13 @@ export type Board = {
     main?: string
     /** Quand `main` a été connu : au `delegate`, puis à chaque nouvelle référence lue à côté du relais. */
     mainAt?: number
+    /**
+     * La marque « worker Fable » : posée seulement par le premier appel `delegate` de la session qui porte
+     * `"model": "fable"` (son brief le dit), gardée telle quelle par un appel suivant pour la même mission,
+     * jamais posée sur une délégation neuve d'une autre mission ; relue du stockage, toute autre valeur est
+     * ignorée. Le mod en tire le modèle de chaque requête du fil principal ; absente, la session reste sur Opus.
+     */
+    model?: 'fable'
   }
   /** Missions supprimées récemment (toutes discussions confondues). */
   deleted?: Tombstone[]
@@ -1008,6 +1046,8 @@ export type UiState = {
   confirmDrop?: string
   /** Mission dont l'allumage du mode auto attend son second clic (« Confirmer »). */
   confirmAuto?: string
+  /** « ↻ Reprendre ici » d'une mission d'une autre discussion, en attente de « Confirmer (secours) » : son id. */
+  confirmResume?: string
   /**
    * Frise de l'onglet Agents : la fenêtre de vue (zoom et déplacement), en temps réel ; absente,
    * tout. Propre à la discussion, jamais enregistrée, remise à « tout » à la réouverture.

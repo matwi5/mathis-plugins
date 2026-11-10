@@ -128,9 +128,9 @@ test('un groupe encore confié dont le worker a laissé son compte rendu final a
   expect(text).toMatch(/group « B » 0\/1 \(working\)/)
 })
 
-test('une mission en pause : le relevé dit qu’une discussion peut encore la tenir (muette depuis 30 minutes, en attente de ses workers ou d’une vague), et que « ↻ Reprendre ici » la rouvre', () => {
+test('une mission en pause : le relevé dit d’où vient la pause (mise de côté, ou laissée pour une autre mission), jamais du silence ni de la fin de sa discussion, et que « ↻ Reprendre ici » la rouvre', () => {
   const s = cooStatement(board(inManual('Écarts')), { now: NOW })
-  expect(statementText(s)).toMatch(/« Écarts »: paused \(set aside, or silent for more than 30 minutes, which pauses it: its discussion may still have it loaded, waiting for its workers or a wave, and « ↻ Reprendre ici » reopens it there\)/)
+  expect(statementText(s)).toMatch(/« Écarts »: paused \(set aside, or left for another mission of its discussion; neither silence nor the end of its discussion pauses a mission any more, and « ↻ Reprendre ici » reopens it\)/)
 })
 
 test('une mission qui t’attend alors que sa suite est retenue par une autre mission : le relevé dit qu’il n’y a rien à faire maintenant', () => {

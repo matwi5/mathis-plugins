@@ -10,7 +10,8 @@
 // tout de suite ou après <s> secondes. Et les essais du COO de flow-board : `/sonde-envoyer-a` (un message à
 // une autre discussion, `$.session.send`), `/sonde-compacte` (`$.session.compact`), et, réglés par
 // l'environnement, une note ajoutée au contexte de chaque message (`SONDE_CONTEXTE`) et l'effort de chaque
-// requête réécrit (`SONDE_EFFORT`).
+// requête réécrit (`SONDE_EFFORT`). `/sonde-modele <alias>` envoie les requêtes suivantes du fil principal sur
+// ce modèle, `/sonde-modele` seul les ramène sur celui de la session (essai de Fable 5.2).
 //
 // La sonde fait elle-même des `await` dans ses hooks : l'ordre qu'elle note entre deux événements
 // très proches (moins d'une milliseconde) peut différer de celui d'un plugin sans attente.
@@ -140,6 +141,16 @@ export function parseEnvoiA(args: string): { to: string | { sessionId: string };
 
 const ENVOI_A = "sonde-envoyer-a";
 const COMPACTE = "sonde-compacte";
+const MODELE = "sonde-modele";
+// Le modèle imposé aux requêtes du fil principal (`/sonde-modele <alias>`), ou null : elles gardent le leur.
+// Une variable du module : un rechargement de la sonde l'éteint.
+let modele: string | null = null;
+// Avec un nombre après le modèle, seules les étapes d'index plus petit sont réécrites : la suite du tour
+// repart sur le modèle de la session (un changement de modèle en plein tour, après un appel d'outil).
+let modelePas: number | null = null;
+// Avec « +<n> » après le modèle, seules les étapes d'index <n> ou plus sont réécrites : le début du tour part
+// sur le modèle de la session, la suite sur le modèle imposé (l'ouverture d'un cadrage, Opus puis Fable).
+let modeleDes: number | null = null;
 
 // La compaction lancée par le mod (`$.session.compact`), et ce que le moteur en a fait.
 async function compacte($: any, instructions: string) {
@@ -181,21 +192,50 @@ export const register = (on: any) => {
     await log($, "turn.step", { turnId: e.turnId, agentId: e.agentId, index: e.index, model: e.model, effort: e.effort });
     // Essai 2 : l'effort de la requête du fil principal réécrit ; la réponse dit s'il a pris (réflexion, tokens).
     const { effort } = await essaisOf($);
-    const asked = effort && e.agentId === undefined ? { ...e, effort } : e;
+    let asked = effort && e.agentId === undefined ? { ...e, effort } : e;
     if (asked !== e) await log($, "effort:réécrit", { de: e.effort, vers: effort, index: e.index });
+    // Essai 8 : le modèle de la requête du fil principal réécrit (`/sonde-modele <alias>`) ; jamais celui
+    // d'un spécialiste ou d'un fork (`agentId` posé). Le journal dit aussi ce que rend `$.session.model()`.
+    if (modele && e.agentId === undefined && (modelePas === null || e.index < modelePas) && (modeleDes === null || e.index >= modeleDes)) {
+      asked = { ...asked, model: modele };
+      let sessionModel: unknown = null;
+      try {
+        sessionModel = await $.session.model();
+      } catch (err) {
+        sessionModel = `erreur : ${String(err).slice(0, 100)}`;
+      }
+      await log($, "modele:réécrit", { de: e.model, vers: modele, index: e.index, sessionModel });
+    }
     const stream = next(asked);
     let first = false;
     let thinking = 0;
-    for await (const chunk of stream) {
-      if (!first) {
-        first = true;
-        await log($, "turn.step:first", { agentId: e.agentId, index: e.index });
+    let result: any;
+    try {
+      for await (const chunk of stream) {
+        if (!first) {
+          first = true;
+          await log($, "turn.step:first", { agentId: e.agentId, index: e.index });
+        }
+        if (chunk.kind === "thinking") thinking += String(chunk.text ?? "").length;
+        if (chunk.kind === "stop") await log($, "turn.step:stop", { agentId: e.agentId, index: e.index, out: chunk.usage?.output_tokens, model: chunk.usage?.model, thinking });
+        yield chunk;
       }
-      if (chunk.kind === "thinking") thinking += String(chunk.text ?? "").length;
-      if (chunk.kind === "stop") await log($, "turn.step:stop", { agentId: e.agentId, index: e.index, out: chunk.usage?.output_tokens, model: chunk.usage?.model, thinking });
-      yield chunk;
+      result = await stream.result;
+    } catch (err) {
+      // Une requête refusée (un 400 au changement de modèle) : notée, puis rendue telle quelle au moteur.
+      await log($, "turn.step:erreur", { agentId: e.agentId ?? null, index: e.index, model: asked.model, error: String(err).slice(0, 300) });
+      throw err;
     }
-    return await stream.result;
+    // Le modèle qui a répondu, pourquoi il s'est arrêté (null : aucune réponse, une erreur comme un 400), et
+    // les outils que l'API a lancés elle-même dans la requête (l'advisor).
+    await log($, "turn.step:result", {
+      agentId: e.agentId ?? null,
+      index: e.index,
+      model: result?.usage?.model ?? null,
+      stopReason: result?.stopReason ?? null,
+      serverTools: (result?.serverToolUses ?? []).map((u: any) => u.name),
+    });
+    return result;
   });
   on("turn.complete", async ($: any, e: any, next: any) => {
     await log($, "turn.complete", { turnId: e.turnId, agentId: e.agentId, reason: e.reason, durationMs: e.durationMs, isAborted: e.isAborted, hasUsage: !!e.usage });
@@ -224,6 +264,11 @@ export const register = (on: any) => {
     await logClassic($, "classic.Stop", e);
     return next(e);
   });
+  // L'échec d'un tour (erreur d'API : `invalid_request` pour un 400, `rate_limit`, `billing_error`…).
+  on("classic.StopFailure", async ($: any, e: any, next: any) => {
+    await log($, "classic.StopFailure", { agent_id: e.agent_id, error: e.error, details: typeof e.error_details === "string" ? e.error_details.slice(0, 300) : e.error_details });
+    return next(e);
+  });
   on("classic.SubagentStop", async ($: any, e: any, next: any) => {
     await logClassic($, "classic.SubagentStop", e);
     return next(e);
@@ -238,6 +283,7 @@ export const register = (on: any) => {
     await $.command.register({ name: ENVOI, description: "Sonde : envoie un texte par $.prompt.submit (par $.command.run avec --commande), après <s> secondes" });
     await $.command.register({ name: ENVOI_A, description: "Sonde : envoie un texte à une autre discussion par $.session.send (<id de session ou nom> <texte>)" });
     await $.command.register({ name: COMPACTE, description: "Sonde : compacte la discussion par $.session.compact après <s> secondes ([<s>] <consignes>)" });
+    await $.command.register({ name: MODELE, description: "Sonde : envoie les requêtes suivantes du fil principal sur ce modèle (<alias ou id> [<n> premières étapes de chaque tour | +<n> : à partir de l'étape n]) ; sans argument, les ramène sur celui de la session" });
     // Essai 6 : le remplissage du contexte au démarrage (avant la première réponse : absent).
     await logUsage($, "session.usage");
     return next(e);
@@ -262,6 +308,16 @@ export const register = (on: any) => {
     await log($, "compacte:programmé", { delayS, instructions: short(text) });
     timers.push($.clock.after(delayS * 1000, () => void compacte($, text)));
     return { text: `sonde : compaction par $.session.compact dans ${delayS} s` };
+  });
+  // Essai 8 : bascule la réécriture du modèle du fil principal (`turn.step`).
+  on("command.run", { command: MODELE }, async ($: any, e: any) => {
+    const [asked, pas] = String(e.args ?? "").trim().split(/\s+/);
+    modele = asked || null;
+    modelePas = modele && pas && /^\d+$/.test(pas) ? Number(pas) : null;
+    modeleDes = modele && pas && /^\+\d+$/.test(pas) ? Number(pas.slice(1)) : null;
+    await log($, "modele:réglé", { vers: modele, pas: modelePas, des: modeleDes });
+    if (!modele) return { text: "sonde : requêtes suivantes sur le modèle de la session" };
+    return { text: `sonde : requêtes suivantes du fil principal sur ${modele}${modelePas === null ? "" : `, pour les ${modelePas} premières étapes de chaque tour`}${modeleDes === null ? "" : `, à partir de l'étape ${modeleDes} de chaque tour`}` };
   });
   // `/clear` finit la session (`reason: "clear"`) : l'identifiant d'après se lit sur les lignes suivantes.
   on("session.end", async ($: any, e: any, next: any) => {

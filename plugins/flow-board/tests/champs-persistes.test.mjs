@@ -162,6 +162,7 @@ const NOT_FUSIONS = {
   isGone: 'test local d’une mission effacée par une trace, rangé avec soundTombstones',
   isShipped: 'prédicat sur la mission (livraison marquée, push compris) qui décide, avec updatedAt, si une copie close comme livrée ailleurs l’emporte sur la mission active d’ici, comme isTakenOver ; pas une fusion de champ (testé par coordination.test.ts)',
   prune: 'plafonne les listes du board fusionné après coup, sans choisir entre deux copies',
+  soundClaim: 'relit en forme la prise que keepClaim vient de fusionner, pour décider si un autre processus de la même discussion tient la mission (isOtherProcess, comme isTakenOver) ; pas une fusion de champ (testé par mission-discussion.test.ts)',
 }
 
 /** Les fonctions de fusion d'un champ, lues dans le source : les appels de `keepRun` et de `mergeBoards`, hors `NOT_FUSIONS`. */
@@ -251,6 +252,13 @@ const MERGE_MATRIX = {
     'valeur abîmée': covered('matrice-fusion.test.ts', 'matrice · forced · valeur abîmée'),
     'deux ordres': covered('retenues.test.ts', 'un forçage vaut pour la seule paire nommée'),
   },
+  keepInstructed: {
+    'date illisible': why(NO_DATE + ' (la trace des consignes reçues ne porte que des ids d’entrée)'),
+    'date future': why(NO_DATE + ' (aucune date gardée : un id seul, comparé tel quel)'),
+    'valeur absente': covered('matrice-fusion.test.ts', 'matrice · instructed · valeur absente'),
+    'valeur abîmée': covered('matrice-fusion.test.ts', 'matrice · instructed · valeur abîmée'),
+    'deux ordres': covered('matrice-fusion.test.ts', 'matrice · instructed · deux ordres'),
+  },
   keepLaunch: {
     'date illisible': covered('matrice-fusion.test.ts', 'matrice · launch · date illisible'),
     'date future': covered('matrice-fusion.test.ts', 'matrice · launch · date future'),
@@ -264,6 +272,20 @@ const MERGE_MATRIX = {
     'valeur absente': covered('matrice-fusion.test.ts', 'matrice · externals · valeur absente'),
     'valeur abîmée': covered('bloqueur-local.test.ts', 'des bloqueurs relus qui ne sont pas une liste'),
     'deux ordres': covered('bloqueur-local.test.ts', 'mergeBoards : une copie en retard ne rouvre pas un bloqueur levé'),
+  },
+  keepClaim: {
+    'date illisible': covered('mission-discussion.test.ts', 'prise · date illisible'),
+    'date future': covered('mission-discussion.test.ts', 'prise · date future'),
+    'valeur absente': covered('mission-discussion.test.ts', 'prise · valeur absente'),
+    'valeur abîmée': covered('mission-discussion.test.ts', 'prise · valeur abîmée'),
+    'deux ordres': covered('mission-discussion.test.ts', 'deux processus d’une même discussion'),
+  },
+  keepHandoff: {
+    'date illisible': covered('mission-discussion.test.ts', 'passage · date illisible'),
+    'date future': covered('mission-discussion.test.ts', 'passage · date future'),
+    'valeur absente': covered('mission-discussion.test.ts', 'passage · valeur absente'),
+    'valeur abîmée': covered('mission-discussion.test.ts', 'passage · valeur abîmée'),
+    'deux ordres': covered('mission-discussion.test.ts', 'passage · deux ordres'),
   },
   mergeSeat: {
     'date illisible': covered('matrice-fusion.test.ts', 'matrice · coo · date illisible'),

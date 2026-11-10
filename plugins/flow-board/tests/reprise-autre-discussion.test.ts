@@ -5,8 +5,8 @@ import { applyReport, applySkill, detachOnLoad, emptyBoard, newRun } from '../ho
 import type { Board, Run } from '../types'
 
 // Un skill chargé dans une discussion sans mission ne reprend d'office qu'une mission tenue ici, ou née ici et
-// tenue par personne. Le chargement peut encore mettre en pause la mission muette d'une autre discussion
-// (son owner effacé), sans jamais la prendre : l'invariant assoupli choisi par Mathis le 06/11/2026.
+// tenue par personne. Depuis le 09/11/2026 (choix de Mathis : une mission ne vit que dans sa discussion), le
+// chargement ne touche plus jamais la mission d'une autre discussion, même muette.
 // Constaté le 06/11/2026 : un /grill-with-docs lancé dans une discussion neuve avait repris une mission active dans une autre discussion mais muette depuis trois jours :
 // son propriétaire avait changé, et des points étrangers y avaient été écrits.
 
@@ -19,14 +19,16 @@ test('une mission active dans une autre discussion, muette depuis plus de 30 min
   const a = newRun('grill-with-docs', NOW - 72 * HOUR, 'Retours sur le tableau de bord')
   a.owner = 'X'
   a.bornIn = 'X'
-  // La discussion Y relit le stockage : A, muette, passe en pause au chargement.
+  // La discussion Y relit le stockage : A, muette, reste à X (une mission ne vit que dans sa discussion,
+  // choix de Mathis du 09/11/2026) ; Y n'y écrit rien, ni au chargement ni par le skill.
+  const before = JSON.stringify(a)
   const here = detachOnLoad(boardOf([a], 'X'), NOW, 'Y')
+  expect(JSON.stringify(here.runs.find(r => r.id === a.id))).toBe(before)
   const after = applySkill(here, 'mattpocock-skills:grill-with-docs', { now: NOW, isMain: true })!.board
   const kept = after.runs.find(r => r.id === a.id)!
-  // Permis par l'invariant assoupli : le chargement (detachOnLoad) met A en pause et efface son owner ;
-  // le skill, lui, ne la prend jamais.
-  expect(kept.owner).toBeUndefined()
-  expect(kept.status).toBe('paused')
+  expect(JSON.stringify(kept)).toBe(before)
+  expect(kept.owner).toBe('X')
+  expect(kept.status).toBe('active')
   // Une nouvelle mission s'ouvre ici (décision de Mathis du 06/11/2026).
   const opened = activeRun(after)!
   expect(opened.id === a.id).toBe(false)

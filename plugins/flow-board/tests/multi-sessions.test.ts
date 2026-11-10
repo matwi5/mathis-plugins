@@ -18,6 +18,19 @@ const PANE = {
  */
 const world = (on: any) => {
   const mem: Record<string, unknown> = {}
+  // Le fichier commun des missions (suite complète de check.sh) sert la même copie que `$.store` : le bouton
+  // « ↻ Reprendre » relit ce fichier avant d'écrire, et ce que B écrit doit s'y lire.
+  const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
+  on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: isBoardFile(e.path) && mem[KEY] !== undefined }) as any)
+  on('fs.read', (_$: unknown, e: { path: string }) => {
+    if (!isBoardFile(e.path) || mem[KEY] === undefined) throw new Error(`ENOENT ${e.path}`)
+    return { value: JSON.stringify(mem[KEY]) } as any
+  })
+  on('fs.write', (_$: unknown, e: { path: string; text: string }) => {
+    if (!isBoardFile(e.path)) throw new Error(`pas de disque dans ce test : ${e.path}`)
+    mem[KEY] = JSON.parse(e.text)
+    return { value: undefined } as any
+  })
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
   on('session.id', () => ({ value: 'session-A' }))
@@ -127,7 +140,7 @@ test('une mission archivée dans A le reste, même quand B réécrit son ancienn
   await again.unmount()
 })
 
-test('reprendre ici la mission de B en fait la mission active de A', async ($, on) => {
+test('reprendre ici la mission de B (en secours, confirmé) en fait la mission active de A', async ($, on) => {
   const clock = mock.clock(on, { now: 23_000_000 })
   const mem = world(on)
   await start($)
@@ -139,6 +152,10 @@ test('reprendre ici la mission de B en fait la mission active de A', async ($, o
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await ui.press({ key: 'tab-history' })
   await ui.press({ key: `resume-${b.id}` })
+  // Une mission d'une autre discussion : un premier clic demande « Confirmer (secours) », rien n'est encore repris.
+  await settle(clock, 1)
+  expect((mem[KEY] as Board).runs.find(r => r.id === b.id)?.owner).toBe('session-B')
+  await ui.press({ key: `resume-confirm-${b.id}` })
   expect(await ui.find({ type: 'Text', text: /^Mission de B$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Dans une autre discussion/ })).toBeUndefined()
   await ui.unmount()

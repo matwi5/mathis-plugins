@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board } from '../types'
+import { memoryDisk } from './disque-memoire.ts'
 
 const PLUGIN = 'flow-board'
 const KEY = 'board:'
@@ -14,6 +15,7 @@ const WELCOME = /^Aucune.mission.sélectionnée$/
 
 /** Le moteur sous le plugin, avec un stockage que le test remplit avant le démarrage de la discussion. */
 const world = (on: any, below: 'engine' | 'other' = 'engine') => {
+  memoryDisk(on)
   const mem: Record<string, unknown> = {}
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () =>

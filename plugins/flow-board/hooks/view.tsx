@@ -18,6 +18,8 @@ import {
   type OutsideHold,
   activeDetour,
   autoStateOf,
+  AUTO_RESUMED,
+  isAutoResumed,
   awaitedExternals,
   isAutoOn,
   CHOICES_LISTED,
@@ -92,7 +94,7 @@ import { forgetCount, forgetText } from './erase.ts'
 import { seatState } from './seat.ts'
 import { leadEffort, leadEffortPill, quotaText, type LeadEffort, type QuotaWindow } from './effort.ts'
 import type { CooStatement } from './coo.ts'
-import { cooBandParts, coordinationRows, securitySettingRows, type CooDo, type CooPart } from './coo-view.tsx'
+import { cooBandParts, coordinationRows, nightParts, securitySettingRows, type CooDo, type CooPart } from './coo-view.tsx'
 import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
 import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
@@ -188,6 +190,8 @@ export type View = {
   agents?: SessionRegistry | null
   /** Dans un worker : la règle d'effort que le mod a appliquée à sa dernière requête (un ticket sensible en cours), null sinon. */
   workerEffort?: LeadEffort | null
+  /** Le mod peut imposer Fable 5.2 au fil principal (aucun `/model` tapé, Fable pas éteint) ; absent : non. */
+  isFableOn?: boolean
   /** Le suivi en défaut (S11, R2) : `true`, une écriture du registre refusée ; `'lost'`, un changement perdu. */
   agentsAlert?: boolean | 'lost'
   /** Le réglage « revue de sécurité » du projet, relu à ce rendu ; absent ou `unread` : montré « activée ». Jamais lu par une décision. */
@@ -246,7 +250,10 @@ export type Actions = {
   stopAuto: () => unknown
   /** « ↻ Renvoyer » sur la question « envoi resté sans suite » d'une marque d'envoi du mode auto. */
   resendAuto: (runId: string, key: string) => unknown
+  /** « ↻ Reprendre » : une mission d'une autre discussion demande d'abord « Confirmer (secours) », un second appel. */
   resume: (id: string) => unknown
+  /** « Annuler » la reprise de secours en attente de confirmation. */
+  cancelResume: () => unknown
   drop: (id: string) => unknown
   /** Range une mission aux archives. */
   archive: (id: string) => unknown
@@ -266,6 +273,8 @@ export type Actions = {
   launchGroupLinked: (id: string) => unknown
   /** Le même worker, en xhigh imposé ; `surface` : celle de l'appui (l'app y plafonne l'effort). */
   launchGroupLinkedXhigh: (id: string, surface?: string) => unknown
+  /** Le worker Fable (Fable 5.2 high par son mod), imposé sans question, avec son seul brief Fable. */
+  launchGroupLinkedFable: (id: string) => unknown
   /** Annule l'envoi d'un groupe à un worker qui n'a pas été lancé. */
   cancelGroupLinked: (id: string) => unknown
   /** Fait faire par son worker la revue d'un groupe rendu sans revue. */
@@ -976,6 +985,7 @@ const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, ac
       ) : null,
       isDelegable(g) ? <Button key={`launch-linked-${g.group.id}`} variant="primary" label={`↗${NB}Worker`} onPress={() => act.launchGroupLinked(g.group.id)} /> : null,
       isDelegable(g) ? xhighButton(k, `launch-xhigh-${g.group.id}`, g.group.id, act) : null,
+      isDelegable(g) ? fableButton(k, `launch-fable-${g.group.id}`, g.group.id, act) : null,
     ],
     true,
   )
@@ -1005,6 +1015,15 @@ const xhighOf = (key: string, id: string, act: Actions): NextButton => ({
   onPress: press => act.launchGroupLinkedXhigh(id, press?.surface),
 })
 const xhighButton = (k: Kit, key: string, id: string, act: Actions): unknown => nextButton(k, xhighOf(key, id, act))
+
+/** « ↗ Fable », discret à côté de « ↗ xhigh » : le même groupe, sur le chemin Fable imposé (le worker Fable). */
+const fableOf = (key: string, id: string, act: Actions): NextButton => ({
+  key,
+  isQuiet: true,
+  label: `↗${NB}Fable`,
+  onPress: () => act.launchGroupLinkedFable(id),
+})
+const fableButton = (k: Kit, key: string, id: string, act: Actions): unknown => nextButton(k, fableOf(key, id, act))
 
 /** Un lot parallèle : un worker par groupe. */
 const lotRow = (k: Kit, ids: readonly string[], at: number, act: Actions): unknown => {
@@ -1262,7 +1281,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
       {plan.delegated.length > 0 &&
         T(k, `↗${NB}${plan.delegated.join(', ')} dans un worker : son avancement (tickets d'après Asana, commits, tests) s'affiche sur le groupe, marqué ↗. Claude vérifie le travail à sa note de fin, puis rend les statuts ici.`, { dim: true, wrap: 'wrap' })}
       {isNewHere &&
-        T(k, `↗${NB}« Worker » : Claude lance une session qui fait le groupe, et la mission reste ici. « ↗ xhigh » : la même session, lancée en xhigh, sans question sur l'effort, pour un groupe qui demande du jugement.`, { dim: true, wrap: 'wrap' })}
+        T(k, `↗${NB}« Worker » : Claude lance une session qui fait le groupe, et la mission reste ici. « ↗ xhigh » : la même session, lancée en xhigh, sans question sur l'effort, pour un groupe qui demande du jugement (sécurité, document, design). « ↗ Fable » : un worker Fable, sur Fable 5.2 high, sans question, pour un jugement de code.`, { dim: true, wrap: 'wrap' })}
     </Box>
   )
 }
@@ -2614,6 +2633,7 @@ const launchParts = (rec: NextLaunch, act: Actions): { buttons: NextButton[]; no
         ? [
             { key: `next-linked-${id}`, isPrimary: true, label: `↗${NB}Groupe ${id} · worker`, onPress: () => act.launchGroupLinked(id) },
             xhighOf(`next-xhigh-${id}`, id, act),
+            fableOf(`next-fable-${id}`, id, act),
           ]
         : [],
       note: 'le prochain groupe prêt',
@@ -3018,10 +3038,30 @@ const asideRow = (k: Kit, act: Actions): unknown => {
   )
 }
 
+/**
+ * Le bouton « ↻ Reprendre » d'une mission, ou, quand il attend sa confirmation (une mission d'une autre discussion :
+ * un secours, choix de Mathis du 09/11/2026), « Confirmer (secours) » et « Annuler ».
+ */
+const resumeButtons = (k: Kit, id: string, label: string, view: View, act: Actions, isPrimary: boolean): unknown => {
+  const { Box, Button } = k
+  if (view.ui.confirmResume !== id) return <Button key={`resume-${id}`} {...(isPrimary ? { variant: 'primary' as const } : {})} label={label} onPress={() => act.resume(id)} />
+  return (
+    <Box key={`resume-ask-${id}`} flexDirection="column">
+      {T(k, 'Secours : cette mission vit dans une autre discussion. Rouvre plutôt celle-ci ; ne la reprends ici que si elle est introuvable.', { color: C.amber, wrap: 'wrap' })}
+      <Box flexDirection="row" marginTop={1}>
+        <Box marginRight={1}>
+          <Button key={`resume-confirm-${id}`} variant="primary" label="Confirmer (secours)" onPress={() => act.resume(id)} />
+        </Box>
+        <Button key={`resume-cancel-${id}`} plain={true} dimColor={true} label="Annuler" onPress={() => act.cancelResume()} />
+      </Box>
+    </Box>
+  )
+}
+
 const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
   const isMine = run.id === view.board?.activeId
   if (run.status === 'active' && isMine) return [phaseCard(k, run, view, act), waitingCard(k, run, act), agentsLine(k, view, act), nextCard(k, run, view, act), autoRow(k, run, view, act), asideRow(k, act), anytimeCard(k, act, run)]
-  const { Box, Button } = k
+  const { Box } = k
   const isElsewhere = run.status === 'active'
   const isAside = run.status === 'paused' && run.asideAt !== undefined
   const head = isElsewhere
@@ -3032,7 +3072,7 @@ const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
         ? `La dernière mission, « ${run.title} », est en pause.`
         : 'Aucune mission en cours.'
   const hint = isElsewhere
-    ? 'La reprendre ici la retire de l’autre discussion.'
+    ? 'Elle vit dans cette discussion : rouvre-la là-bas. La reprendre ici (secours, à confirmer) la lui retire.'
     : isAside
       ? 'Elle reprend telle quelle avec « Reprendre » ; un skill lancé d’ici ouvre une autre mission.'
       : run.status === 'paused' && view.board?.session !== undefined && run.bornIn === view.board.session
@@ -3051,7 +3091,7 @@ const flowTab = (k: Kit, run: Run, view: View, act: Actions): unknown[] => {
       {autoLine !== '' && T(k, autoLine, { color: auto.kind === 'paused' ? C.amber : C.teal, wrap: 'wrap' })}
       {(run.status === 'paused' || isElsewhere) && (
         <Box marginTop={1}>
-          <Button key={`resume-${run.id}`} variant="primary" label="↻ Reprendre" onPress={() => act.resume(run.id)} />
+          {resumeButtons(k, run.id, '↻ Reprendre', view, act, true)}
         </Box>
       )}
     </Box>,
@@ -3204,7 +3244,7 @@ const historyTab = (k: Kit, board: Board, view: View, act: Actions): unknown[] =
           <Box flexDirection="row" marginTop={1}>
             {!isMine && (
               <Box marginRight={1}>
-                <Button key={`resume-${r.id}`} label={r.status === 'active' ? '↻ Reprendre ici' : '↻ Reprendre'} onPress={() => act.resume(r.id)} />
+                {resumeButtons(k, r.id, r.status === 'active' ? '↻ Reprendre ici' : '↻ Reprendre', view, act, false)}
               </Box>
             )}
             <Box marginRight={1}>{agentsOf(r)}</Box>
@@ -3350,6 +3390,9 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
           {line(k, [
             bandTag(k, 'Flow', C.violet),
             ...(isCoo && view.coo ? cooBandParts(view.coo, view.agents?.main?.effort).map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })) : [T(k, `◆${NB}COO`, { color: C.teal, bold: true })]),
+            isCoo && view.coo?.night && T(k, '·', { dim: true }),
+            ...(isCoo && view.coo?.night ? nightParts(view.coo.night).map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}) })) : []),
+            isCoo && view.coo?.night && <Button key="band-night-stop" plain={true} label="Arrêter" onPress={() => act.cooDo({ kind: 'night-stop' })} />,
             isCooAway && T(k, '·', { dim: true }),
             isCooAway && <Box flexShrink={1}>{T(k, seat === 'other' ? 'siège tenu par une autre discussion' : 'siège libre', { color: C.amber, wrap: 'truncate-end' })}</Box>,
             isCooAway && <Button key="band-coo-take" plain={true} label={`↻${NB}Reprendre${NB}ici`} onPress={() => act.cooTake()} />,
@@ -3379,7 +3422,7 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
           latest && def && T(k, '·', { dim: true }),
           latest && def && T(k, def.glyph, { color: def.color, bold: true }),
           latest && def && width >= 56 && <Box flexShrink={1}>{T(k, latest.title, { wrap: 'truncate-end' })}</Box>,
-          latest && def && <Button key="band-resume" plain={true} label={`↻${NB}Reprendre`} onPress={() => act.resume(latest.id)} />,
+          latest && def && <Button key="band-resume" plain={true} label={view.ui.confirmResume === latest.id ? `Confirmer${NB}(secours)` : `↻${NB}Reprendre`} onPress={() => act.resume(latest.id)} />,
         ])}
       </Box>
       <Box flexDirection="row" flexShrink={0} marginLeft={1}>
@@ -3413,7 +3456,8 @@ const relayPills = (run: Run, view: View): BandPill[] =>
     })
 
 /**
- * Dans le bandeau, le mode auto de la mission : « ⚡ Auto · en cours » quand il envoie d'ici, « ⚡ Auto ·
+ * Dans le bandeau, le mode auto de la mission : « ⚡ Auto · en cours » quand il envoie d'ici (« ⚡ Auto · repris :
+ * questions répondues » quand il a repris de lui-même, sans question ouverte depuis), « ⚡ Auto ·
  * en attente de <tâche> » quand il n'attend plus qu'une tâche externe pas faite (`awaitedExternals`), « ⚡ Auto ·
  * attend ta réponse (N) » quand des questions bloquantes l'attendent,
  * « ⚡ Auto en pause : <raison> » quand il s'est arrêté sans un geste de la personne ni la fin de la
@@ -3434,7 +3478,8 @@ const autoPill = (run: Run, view: View): BandPill | null => {
     const name = clip(neutralLine(typeof first.name === 'string' && first.name !== '' ? first.name : first.id), 48).replace(/ /g, NB)
     return { text: `⚡${NB}Auto${NB}·${NB}en${NB}attente${NB}de${NB}${name}${awaited.length > 1 ? `${NB}(+${awaited.length - 1})` : ''}`, color: C.teal, bold: true }
   }
-  if (state.kind === 'on') return { text: `⚡${NB}Auto${NB}·${NB}en${NB}cours`, color: C.teal, bold: true }
+  // Repris de lui-même après une pause « plus rien ne peut avancer sans toi » : il le dit à la place de « en cours ».
+  if (state.kind === 'on') return { text: `⚡${NB}Auto${NB}·${NB}${isAutoResumed(run) ? AUTO_RESUMED.replace(/ /g, NB) : `en${NB}cours`}`, color: C.teal, bold: true }
   if (state.kind === 'paused') return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}${state.why.replace(/ /g, NB)}`, color: C.amber, bold: true }
   return null
 }
@@ -3444,8 +3489,8 @@ const bandPills = (run: Run, view: View): BandPill[] => {
   const t = countTickets(run.tickets)
   const running = agentsAtWork(view)
   const unseen = unseenDecisions(run, view.relay)
-  // L'effort que le mod impose à chaque requête du manager, et sa raison (règle des workers, suivi des groupes, phase), quand il joue.
-  const effort = leadEffort(run)
+  // L'effort (et le modèle, en cadrage) que le mod impose à chaque requête du manager, et sa raison (règle des workers, suivi des groupes, phase), quand il joue.
+  const effort = leadEffort(run, view.isFableOn === true)
   const pill = effort ? leadEffortPill(effort, view.agents?.main?.effort) : null
   return [
     ...(pill ? [{ text: pill.replace(/ /g, NB), color: C.blue }] : []),

@@ -4,6 +4,25 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.83.0 — 2026-11-10
+
+Les missions « COO plus autonome », « Missions détachées de leur discussion » et « Intégrer Fable 5.2 au workflow » : le COO coupe ou allume l'auto d'une mission, veille la nuit, tient la liste d'attente des rétros et transmet ses consignes aux managers ; une mission reste dans sa discussion ; le cadrage et les workers de jugement de code peuvent passer sur Fable 5.2.
+
+### Ajouté
+- **Auto depuis la vue Coordination** : « ✋ Couper l'auto » sur la ligne d'une mission (ou `coordinate.cutAuto` du COO), et « ⚡ Auto » puis « Confirmer » pour l'allumer, consommé une seule fois par la discussion de la mission ; la raison d'une pause est montrée.
+- **Reprise d'une pause « plus rien ne peut avancer sans toi »** une fois ses questions répondues (« ⚡ Auto • repris : questions répondues »).
+- **Surveillance de nuit** : `/flow-board:nuit` ou son clic l'allume ; le mod réveille le COO sur un blocage, le relevé gagne une section « Nuit », les gestes de nuit passent par `coordinate.nightOn` et `coordinate.night` (dont la réouverture d'une mission en manuel), et un résumé du matin dit ce qui a été fait et ce qui attend.
+- **Liste d'attente des rétros** : les pistes des rétros vont dans une liste commune tenue par le COO (vue « Pistes en attente », mission « Pistes de rétro »), relue par chaque rétro avant de présenter ; choix de la commiter dans le projet.
+- **Consignes du COO aux managers** : `coordinate.instruct`, écrite en série du `DECISIONS.md` de la mission et relayée une fois par son mod.
+- **Fable 5.2** : champ `model: "fable"` de `delegate` (marque « worker Fable », posée au seul premier appel) ; le cadrage d'une mission tourne sur Fable 5.2 medium, un worker Fable sur Fable 5.2 high avec ses revues sur Opus ; repli sur Opus quand Fable est indisponible ; deux chemins de jugement au lancement d'un groupe (bouton « ↗ Fable »).
+
+### Modifié
+- **Une mission reste dans sa discussion** : elle ne se met plus en pause au chargement d'une autre discussion ni à la fin de la sienne ; la discussion relancée la retrouve (auto éteint) ; la reprendre ailleurs est un secours confirmé (« Confirmer (secours) ») ; le champ `resume` de l'outil ne sert plus qu'au passage de « 🐞 Bug · worker ».
+- **Réouverture de nuit** par `claude --bg --resume` de la discussion de la mission, « pour le matin » si cette discussion tient une autre mission ou n'est pas connue.
+- **Textes** : skill du COO réécrit (consignes, réponses directes, nuit, liste d'attente) ; règles « Mode auto » et « Pistes d'une rétro » ; raison de l'exception du worker Sonnet au moment (c) de l'advisor ; les anciennes formulations passent dans les termes retirés.
+
+---
+
 ## 0.82.0 — 2026-11-09
 
 Les missions « Fin de mission et livraison », « Retenues et vagues fiables » et « Durcir les scripts du dépôt » : une livraison du COO clôt ses missions sans les archiver, l'archivage et la rétro deviennent des gestes de la vue Coordination, le plan n'a plus qu'une livraison, et les retenues, les cartes de lancement et le relevé du COO ne se trompent plus sur les missions archivées, en pause ou rendues.

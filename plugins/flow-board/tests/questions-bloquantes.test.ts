@@ -407,13 +407,14 @@ test('La fin de la discussion porteuse notifie la pause de l’auto, avec sa rai
   expect(notified.map(n => n.text)).toEqual(['Mission Boutique : auto en pause (discussion fermée)'])
 })
 
-test('La mission en pause liste encore ses questions dans l’onglet, avec ce qu’elles bloquent', { timeoutMs: 20000 }, async ($, on) => {
+test('La mission qui n’est plus active ici liste encore ses questions dans l’onglet, avec ce qu’elles bloquent', { timeoutMs: 20000 }, async ($, on) => {
   await running($, on)
   await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', ticket: 't2', text: 'Faut-il effacer les anciens totaux ?' }] } as any)
+  // La fin de la discussion ne la met plus en pause (09/11/2026) : elle reste active au nom de sa discussion.
   await $.session.end({ reason: 'prompt_input_exit' } as any)
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: /est en pause/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /est en cours dans une autre discussion/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /Faut-il effacer les anciens totaux \?/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /bloque le ticket Deux/ })).toBeDefined()
     await pane.unmount()

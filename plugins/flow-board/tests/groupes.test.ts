@@ -132,8 +132,9 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   // La référence change au redémarrage de la discussion : la session la relit par l'outil flow, puis cherche par le nom de la mission.
   expect(text).toContain("la référence change quand cette discussion redémarre : l'outil flow de la session donne la référence du moment")
   expect(text).toContain('si aucune ligne ne porte la référence, la session cherche la ligne qui porte le nom de cette discussion (le prompt le donne aussi, en repli), jamais une session dont le titre commence par « Lot SC > » (ses sœurs), lui envoie son message, et le dit en tête de sa réponse finale')
-  expect(text).toContain('{"resume": "')
-  expect(text).toContain('"main": "[<ref>]"} (comme « ↻ Reprendre ici »')
+  // Au redémarrage, la mission reste à cette discussion : aucun « resume » à envoyer (une mission ne vit que dans sa discussion).
+  expect(text).not.toContain('{"resume": "')
+  expect(text).toContain('la mission reste à cette discussion et lui revient seule')
   // r9 : un projet qui versionne ses règles communes : leur copie du dépôt fait foi.
   expect(text).toContain('si le projet a un dossier config/rules (des règles communes versionnées avec lui), le background dit que leur version du dépôt fait foi sur celle installée sous ~/.claude')
   // Plus de filet notify_when_idle (rétro du 26/10/2026 : cinq réveils pour un groupe, dont quatre pour rien).
@@ -156,8 +157,8 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   expect(text).toContain("sans y reprendre le texte des règles")
   expect(text).toContain("s'y écrit AVANT d'être relayée, avec ma phrase exacte entre guillemets")
   expect(text).toContain("se confirme par moi directement dans le worker")
-  // Au redémarrage, la mission passe en pause : le reprendre ici par son id.
-  expect(text).toMatch(/le reprendre ici avant toute autre écriture, par l'appel flow \{"resume": "[^"]+", "main": "\[<ref>\]"\}/)
+  // Au redémarrage, la mission reste à cette discussion ; reprise ailleurs, elle ne se reprend pas d'ici sans le dire.
+  expect(text).toContain("si le tableau de bord la dit suivie dans une autre discussion, ne pas la reprendre : me le dire")
   expect(text).toMatch(/À la note de fin de la session \(dans le CLI : son message reçu par SendMessage\)/)
   const delegate = text.match(/\{"delegate": "([^"]+)", "group": "B", "main": "\[<ref>\]"\}/)
   expect(delegate).not.toBeNull()
@@ -176,8 +177,8 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   expect(text).toMatch(/dans son compte rendu, que la revue du groupe a tourné \(sinon, la lui demander par SendMessage avant tout ; pas de revue du groupe pour un groupe d'un seul ticket ; ni revue du groupe ni revue de sécurité sans logique ni zone sensible\)/)
   expect(text).toMatch(/\{"security": \{"group": "<id du groupe>", "advised": true\|false, "why": "<raison>"\}\}/)
   expect(text).toMatch(/\{"returned": \["<id du groupe>"\]\}/)
-  // La seule reprise demandée est celle de cette discussion après un redémarrage, jamais par le worker.
-  expect(text.match(/"resume"/g)?.length).toBe(1)
+  // Aucune reprise demandée : ni par le worker, ni par cette discussion après un redémarrage (la mission lui revient seule).
+  expect(text.match(/"resume"/g)).toBeNull()
   // B attend sa session : plus de lancement, un « Annuler » tant qu'elle n'est pas partie.
   expect(await ui.find({ key: 'launch-linked-B' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /worker.à.lancer/ })).toBeDefined()
@@ -229,7 +230,8 @@ test('« 🐞 Bug · worker » : seulement en code ou revue ; le diagnostic s’
   // L'effort : high à la première tentative, xhigh à la deuxième, pas de troisième session.
   expect(text).toContain("Effort de la session (<effort>) : high pour une première tentative ; xhigh pour une deuxième, quand une session de bug de cette mission a déjà essayé de corriger ce même bug et qu'il est toujours là")
   expect(text).toContain('Pas de troisième session après un second échec : on replanifie ensemble ici.')
-  expect(text).toContain("si le bug est toujours là, arrêter la session (ci-dessous), puis me le dire et me proposer la deuxième tentative (règle d'effort ci-dessus) ; sinon, reprendre la mission ici")
+  expect(text).toContain("dans les deux cas, reprendre d'abord la mission ici avec")
+  expect(text).toContain("si le bug est toujours là, arrêter la session (ci-dessous), puis me le dire et me proposer la deuxième tentative (règle d'effort ci-dessus), que je lance par un nouveau clic sur « 🐞 Bug · worker »")
   expect(text).toMatch(/\{"resume": "[^"]+"\}/)
   expect(text).toContain('2) puis lancer /mattpocock-skills:diagnosing-bugs avec la description du bug')
   expect(text).toContain('4) à la fin, envoyer {"complete": true} pour clore le détour.')

@@ -14,7 +14,7 @@
 //   ## Prochaines étapes
 //   - [E1] à faire · 2026-11-02 · COO · Lancer le groupe C
 //   ## Idées
-//   - [I1] à lancer · 2026-11-02 · Alex · ses mots tels quels
+//   - [I1] à lancer · 2026-11-02 · Alex · son idée, dite clairement
 //   ## À reprendre
 //   - [R1] à décider · 2026-11-02 · mission « Mode auto », compte rendu · le texte tel qu'écrit
 //
@@ -33,7 +33,7 @@ export const ROADMAP_EXAMPLE = `# Feuille de route
 ## Prochaines étapes
 - [E1] à faire · 2026-11-02 · COO · L'étape
 ## Idées
-- [I1] à lancer · 2026-11-02 · Alex · ses mots tels quels
+- [I1] à lancer · 2026-11-02 · Alex · son idée, dite clairement
 ## À reprendre
 - [R1] à décider · 2026-11-02 · mission « Titre », compte rendu · le texte tel qu'il a été écrit
 `

@@ -88,11 +88,14 @@ const launch = async ($: any, on: any, disk: Disk = {}): Promise<{ text: string;
 test('le brief s’écrit dans le dossier temporaire du système, à un nom fait des ids et de l’heure ; la demande cite son chemin et la commande qui le passe', async ($, on) => {
   const { text, written } = await launch($, on, { tmp: `${TMP}/` })
   const paths = Object.keys(written)
-  expect(paths.length).toBe(1)
+  // Un groupe avec logique (ou muet) a deux briefs, l'Opus et le Fable, écrits au même lancement sous deux noms.
+  expect(paths.length).toBe(2)
   // Cité tel que le disque le nomme : le dossier résolu (ici /var → /private/var).
   expect(paths[0]).toMatch(new RegExp(`^/private${TMP}/flow-board-brief-[A-Za-z0-9_-]+-E-${NOW}\\.md$`))
+  expect(paths[1]).toMatch(new RegExp(`^/private${TMP}/flow-board-brief-[A-Za-z0-9_-]+-E-${NOW}-fable\\.md$`))
   // Le chemin cité pour le shell, et la commande qui le passe tel quel (CLI) ou par start_session (app).
-  expect(text).toContain(`brief du groupe E : '${paths[0]}'`)
+  expect(text).toContain(`brief Opus du groupe E : '${paths[0]}'`)
+  expect(text).toContain(`brief Fable du groupe E : '${paths[1]}'`)
   expect(text).toContain(`test -s <brief> && claude --bg`)
   expect(text).toContain(`"$(cat <brief> '<ajout>')"`)
   expect(text).toContain('s\'il manque, ne lance pas cette session et dis-le-moi')
@@ -213,6 +216,8 @@ test('un fichier ou un lien déjà au nom du brief n’est jamais réécrit', as
 
 test('le nom du brief et le dossier temporaire : formes contrôlées', () => {
   expect(briefFileName('mvzwrmcd-2jce', 'D', 1_700_000_000_000)).toBe('flow-board-brief-mvzwrmcd-2jce-D-1700000000000.md')
+  expect(briefFileName('mvzwrmcd-2jce', 'D', 1_700_000_000_000, true)).toBe('flow-board-brief-mvzwrmcd-2jce-D-1700000000000-fable.md')
+  expect(briefFileName('../x', 'D', 1, true)).toBeNull()
   expect(briefFileName('../x', 'D', 1)).toBeNull()
   expect(briefFileName('abc', 'D/..', 1)).toBeNull()
   expect(briefFileName('abc', 'D', 1.5)).toBeNull()

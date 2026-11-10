@@ -239,9 +239,9 @@ test('reprise de la discussion dans le worktree : la mission du dépôt principa
   await say($, { note: 'reprise' })
   await settle(clock, 3)
   expect(runsOf(boardAt(w, MAIN), id)).toHaveLength(1)
-  // Comme à la racine : la pause de la reprise s'écrit dans le fichier du dépôt principal, sans owner resté.
-  expect(runsOf(boardAt(w, MAIN), id)[0]!.status).toBe('paused')
-  expect(runsOf(boardAt(w, MAIN), id)[0]!.owner).toBeUndefined()
+  // Comme à la racine : la discussion relancée sous son id garde la mission qu'elle tenait, dans le fichier du dépôt
+  // principal (avant le 09/11/2026, la reprise la mettait en pause : il fallait « ↻ Reprendre ici »).
+  expect(runsOf(boardAt(w, MAIN), id)[0]!).toMatchObject({ status: 'active', owner: 'session-A' })
   expect(runsOf(boardAt(w, TREE), id)).toHaveLength(0)
 })
 

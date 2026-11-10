@@ -176,6 +176,78 @@ export const TOOL_SHAPE: unknown = {
           },
           "type": "array"
         },
+        "cutAuto": {
+          "items": {
+            "properties": {
+              "mission": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "mission"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "instruct": {
+          "items": {
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "mission": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "user",
+                  "coo"
+                ],
+                "type": "string"
+              },
+              "series": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "mission",
+              "file",
+              "series",
+              "origin"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nightOn": {
+          "type": "boolean"
+        },
+        "night": {
+          "items": {
+            "properties": {
+              "act": {
+                "type": "string"
+              },
+              "group": {
+                "type": "string"
+              },
+              "mission": {
+                "type": "string"
+              },
+              "watch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "mission",
+              "watch",
+              "act"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "compatible": {
           "items": {
             "properties": {
@@ -495,6 +567,45 @@ export const TOOL_SHAPE: unknown = {
     },
     "main": {
       "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "pistes": {
+      "items": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "op": {
+            "enum": [
+              "add",
+              "edit",
+              "comment",
+              "drop"
+            ],
+            "type": "string"
+          },
+          "piste": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "piste"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     },
     "note": {
       "type": "string"

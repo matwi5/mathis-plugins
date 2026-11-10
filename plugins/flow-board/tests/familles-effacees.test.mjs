@@ -23,6 +23,8 @@ const EXCEPTIONS = {
   reportKey: "identifiant d'un compte rendu à l'intérieur du relais, ni clé de `$.store` ni fichier : il part avec le relais",
   phaseKey: "identifiant d'une phase, calculé en mémoire, jamais gardé",
   missionDecisionsPath: 'le `DECISIONS.md` du projet, écrit par la personne dans son dépôt : le mod ne l’efface jamais',
+  nightResultPath: 'résultats des gestes de nuit d’une mission, à côté du fichier de coordination : une copie de ce que le journal de la nuit garde, bornée à 200, que le moteur ne sait pas effacer (pas de suppression de fichier) ; rien ne la lit pour une mission effacée',
+  nightResultStoreKey: 'la même chose dans `$.store` à défaut du dossier de Claude : gardée comme le journal de la nuit, qu’aucun effacement de mission ne touche',
   workerCompactKey:
     "marque de compaction d'un worker (`worker-compact:<session>:<mission>:<ticket>`), antérieure à cette liste et effacée nulle part : à trancher avec la personne (durcissement), pas ajoutée d'office à l'effacement",
 }

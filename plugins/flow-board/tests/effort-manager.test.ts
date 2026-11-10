@@ -72,10 +72,16 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 160, scroll: { offset: 0, bodyRows: 12 }, view: {} },
 } as const
 
-/** Le moteur sous le plugin, et l'effort de chaque requête telle qu'elle part (fil principal ou spécialiste). */
-const world = (on: any) => {
+/**
+ * Le moteur sous le plugin, et l'effort de chaque requête telle qu'elle part (fil principal ou spécialiste) ;
+ * `sessionModel` : ce que rend `$.session.model()` (sans lui, l'appel n'a pas de réponse : le mod n'impose
+ * aucun modèle). `models` : le modèle de chaque requête telle qu'elle part.
+ */
+const world = (on: any, o: { sessionModel?: string } = {}) => {
   const mem: Record<string, unknown> = {}
   const sent: { agentId?: string; effort?: string }[] = []
+  const models: string[] = []
+  if (o.sessionModel !== undefined) on('session.model', () => ({ value: o.sessionModel }))
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
   on('session.id', () => ({ value: 'session-M' }))
@@ -89,9 +95,10 @@ const world = (on: any) => {
   const answer = stoppedStep(stepUsage('claude-opus-5-5'))
   on('turn.step', async function* ($: unknown, e: any) {
     sent.push({ agentId: e.agentId, effort: e.effort })
+    models.push(e.model)
     return yield* answer($, e)
   })
-  return { mem, sent }
+  return { mem, sent, models }
 }
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
 
@@ -204,16 +211,16 @@ test('la discussion qui tient le siège du COO : medium à chaque requête, high
   for (const texts of await bandTexts($)) expect(texts).toContain('effort : medium, règle du COO')
 })
 
-test('le manager d’une mission à groupes : high au moins pendant le découpage, medium de sa fin au compte rendu (xhigh et max laissés), high au compte rendu', { timeoutMs: 20000 }, async ($, on) => {
+test('le manager d’une mission à groupes : Fable 5.2 medium pendant le découpage, Opus en medium de sa fin au compte rendu (xhigh et max laissés), high au compte rendu', { timeoutMs: 20000 }, async ($, on) => {
   mock.clock(on, { now: NOW })
-  const w = world(on)
+  const w = world(on, { sessionModel: 'claude-opus-5-5' })
   await start($)
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
-  for (const texts of await bandTexts($)) expect(texts).toContain('effort : high, cadrage')
-  // Un effort déjà à high : la règle ne change rien, le bandeau se tait.
+  for (const texts of await bandTexts($)) expect(texts).toContain('modèle : Fable 5.2 medium, cadrage')
+  // Un effort de la discussion à high : le cadrage part quand même en medium, sur Fable.
   await playStep($, { model: 'claude-opus-5-5', effort: 'high' })
-  for (const texts of await bandTexts($)) expect(texts.some(t => t.startsWith('effort'))).toBe(false)
+  for (const texts of await bandTexts($)) expect(texts).toContain('modèle : Fable 5.2 medium, cadrage')
   await $.tool.call({
     tool: TOOL,
     tickets: [ticket('1'), ticket('2', { files: ['plugins/stats-board/hooks/register.tsx'] })],
@@ -233,7 +240,103 @@ test('le manager d’une mission à groupes : high au moins pendant le découpag
   await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'x' })
   await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
   for (const texts of await bandTexts($)) expect(texts).toContain('effort : high, compte rendu')
-  expect(w.sent.map(s => s.effort)).toEqual(['high', 'high', 'xhigh', 'max', 'medium', 'medium', 'medium', 'high', 'high'])
+  expect(w.sent.map(s => s.effort)).toEqual(['medium', 'medium', 'xhigh', 'max', 'medium', 'medium', 'medium', 'high', 'high'])
+  // Fable pendant le découpage seulement ; le spécialiste garde son modèle.
+  expect(w.models).toEqual(['fable', 'fable', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
+})
+
+// ─── Le cadrage sur Fable 5.2 medium ──────────────────────────────────────────
+
+test('le cadrage (grilling, spec, découpage) part sur Fable 5.2 en medium exact, xhigh compris ; un spécialiste n’est jamais réécrit', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const w = world(on, { sessionModel: 'claude-opus-5-5' })
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:grill-with-docs', text: 'x' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'xhigh' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'high', agentId: 'a1' })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'max' })
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'low' })
+  expect(w.models).toEqual(['fable', 'claude-opus-5-5', 'fable', 'fable'])
+  expect(w.sent).toEqual([{ agentId: undefined, effort: 'medium' }, { agentId: 'a1', effort: 'high' }, { agentId: undefined, effort: 'medium' }, { agentId: undefined, effort: 'medium' }])
+})
+
+test('une requête que le moteur a repliée sur un autre modèle part telle quelle, à l’effort d’Opus en cadrage (high au moins)', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const w = world(on, { sessionModel: 'claude-opus-5-5' })
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:grill-with-docs', text: 'x' })
+  await playStep($, { model: 'claude-opus-4-8', effort: 'medium' })
+  expect(w.models).toEqual(['claude-opus-4-8'])
+  expect(w.sent.map(s => s.effort)).toEqual(['high'])
+})
+
+test('un /model tapé arrête la réécriture du modèle jusqu’à la fin de la session ; l’effort reste réglé comme sans Fable', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const w = world(on, { sessionModel: 'claude-opus-5-5' })
+  on('classic.PostModelSwitch', () => ({}))
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:grill-with-docs', text: 'x' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  // Un changement automatique (repli du moteur) n'est pas un choix de la personne : la réécriture continue.
+  await ($ as any).classic.PostModelSwitch({ session_id: 'session-M', transcript_path: '/t', cwd: '', hook_event_name: 'PostModelSwitch', from_model: 'claude-opus-5-5', to_model: 'claude-opus-4-8', requested_model: null, source: 'auto', context_tokens: 0 })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  await ($ as any).classic.PostModelSwitch({ session_id: 'session-M', transcript_path: '/t', cwd: '', hook_event_name: 'PostModelSwitch', from_model: 'claude-opus-5-5', to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'command', context_tokens: 0 })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  for (const texts of await bandTexts($)) expect(texts).toContain('effort : high, cadrage')
+  expect(w.models).toEqual(['fable', 'fable', 'claude-opus-5-5'])
+  expect(w.sent.map(s => s.effort)).toEqual(['medium', 'medium', 'high'])
+})
+
+test('la discussion du COO ne reçoit jamais de modèle ; une discussion sans mission non plus', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  memoryDisk(on)
+  const w = world(on, { sessionModel: 'claude-opus-5-5' })
+  await start($)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  const loading = $.skill.prompt({ skill: 'flow-board:coo', text: 'consignes du COO' })
+  await settle(clock, 4)
+  await loading
+  await playStep($, { model: 'claude-opus-5-5', effort: 'high' })
+  // Le hook a bien tourné : la règle du COO ramène high à medium ; le modèle, lui, reste celui de la session.
+  expect(w.sent.map(s => s.effort)).toEqual(['medium', 'medium'])
+  expect(w.models).toEqual(['claude-opus-5-5', 'claude-opus-5-5'])
+})
+
+test('la fenêtre du cadrage : une phase de cadrage faite garde Fable tant que la suivante n’a pas commencé ; le découpage fini et le suivi des groupes, non ; un détour garde le modèle de la phase du curseur', () => {
+  const fable = { level: 'medium', rule: 'framing', how: 'exact', model: 'fable' }
+  const grilled = lot('grill-with-docs', [])
+  grilled.phases[grilled.cursor]!.status = 'done'
+  expect(leadEffort(grilled, true)).toEqual(fable)
+  // Sans Fable permis (un /model tapé, Fable éteint, une requête repliée) : la règle d'avant.
+  expect(leadEffort(grilled, false)).toEqual({ level: 'high', rule: 'framing', how: 'floor' })
+  expect(leadEffort(grilled)).toEqual({ level: 'high', rule: 'framing', how: 'floor' })
+  // Un détour de cadrage pendant une phase de cadrage : toujours Fable medium.
+  const spec = lot('to-spec', [])
+  spec.phases[spec.cursor]!.detours = [{ skill: 'grilling', status: 'active', steps: [] } as any]
+  expect(leadEffort(spec, true)).toEqual(fable)
+  // Le découpage fini, sans groupes (un lot) : retour sur Opus, l'effort d'avant.
+  const cut = lot('to-tickets', [ticket('1')])
+  cut.phases[cut.cursor]!.status = 'done'
+  cut.phases[cut.cursor]!.finishedAt = NOW
+  expect(leadEffort(cut, true)?.model).toBeUndefined()
+  // Une mission à groupes en suivi : un détour de cadrage reste sur Opus, high au moins.
+  const groups = [{ id: 'A', name: 'A', tickets: ['1'] }, { id: 'B', name: 'B', tickets: ['2'] }] as Run['groups']
+  const followed = lot('to-tickets', [ticket('1'), ticket('2')], groups)
+  const phase = followed.phases[followed.cursor]!
+  phase.status = 'done'
+  phase.finishedAt = NOW
+  expect(leadEffort(followed, true)).toEqual({ level: 'medium', rule: 'groups', how: 'medium' })
+  phase.detours = [{ skill: 'grilling', status: 'active', steps: [] } as any]
+  expect(leadEffort(followed, true)).toEqual({ level: 'high', rule: 'framing', how: 'floor' })
+  // Un détour de diagnostic pendant le cadrage : la règle d'un worker de diagnostic, sur Opus.
+  const diagnosed = lot('grill-with-docs', [])
+  diagnosed.phases[diagnosed.cursor]!.detours = [{ skill: 'diagnosing-bugs', status: 'active', steps: [] } as any]
+  expect(leadEffort(diagnosed, true)).toEqual({ level: 'high', rule: 'diagnosis', how: 'floor' })
+  // Le bandeau dit le modèle imposé, quel que soit l'effort de la discussion.
+  expect(leadEffortPill(fable as any, 'medium')).toBe('modèle : Fable 5.2 medium, cadrage')
+  expect(effortSent(fable as any, 'xhigh')).toBe('medium')
 })
 
 test('une rétrospective et une phase hors liste (recherche), rejouées : high au moins, un effort plus haut laissé', { timeoutMs: 20000 }, async ($, on) => {
@@ -302,4 +405,34 @@ test('un lot sans groupes et un diagnostic gardent la règle des workers', () =>
   expect(leadEffort(lot('implement', [ticket('1')]))).toEqual({ level: 'medium', rule: 'group', how: 'exact' })
   expect(leadEffort(lot('diagnosing-bugs', []))).toEqual({ level: 'high', rule: 'diagnosis', how: 'floor' })
   expect(effortSent({ level: 'medium', rule: 'group', how: 'exact' }, 'xhigh')).toBe('medium')
+})
+
+// ─── Le repli « Fable indisponible » en cadrage ────────────────────────────────────────────
+
+test('repli Fable en cadrage : après une limite atteinte sur une requête Fable, le cadrage repart sur Opus en high au moins, un seul toast, aucun message renvoyé', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, { sessionModel: 'claude-opus-5-5' })
+  const toasts: string[] = []
+  const prompts: string[] = []
+  on('ui.toast', (_$: unknown, e: { text: string }) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('prompt.submit', (_$: unknown, e: { text: string }) => {
+    prompts.push(e.text)
+    return { text: e.text }
+  })
+  on('classic.StopFailure', () => ({}))
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:grill-with-docs', text: 'x' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  await ($ as any).classic.StopFailure({ session_id: 'session-M', transcript_path: '/t', cwd: '', hook_event_name: 'StopFailure', error: 'rate_limit' })
+  await clock.advance(1000)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'xhigh' })
+  for (const texts of await bandTexts($)) expect(texts.some(t => t.includes('Fable'))).toBe(false)
+  expect(w.models).toEqual(['fable', 'claude-opus-5-5', 'claude-opus-5-5'])
+  expect(w.sent.map(s => s.effort)).toEqual(['medium', 'high', 'xhigh'])
+  expect(toasts.filter(t => t.startsWith('Fable indisponible'))).toEqual(['Fable indisponible : retour sur Opus jusqu’à la fin de la session'])
+  expect(prompts.filter(p => p.startsWith('Fable indisponible'))).toEqual([])
 })

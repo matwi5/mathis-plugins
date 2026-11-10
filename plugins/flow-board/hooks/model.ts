@@ -41,6 +41,7 @@ import type {
 import { CODE_SKILLS, SECURITY_OFF_REPLY, SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
 import { GROUP_ID_FORM, asciiJson, closingScript, isScriptPath, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isKeptForReport, isQuestionIdForm, isSafeId, sendNumber } from './closing.ts'
 import { maxOf, minOf } from './timeline.ts'
+import { unionInstructed } from './coordination.ts'
 import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
 import { soundRunLaunch } from './launch.ts'
 import type { SecurityReview } from './security-setting.ts'
@@ -604,7 +605,7 @@ const groupTicketIds = (run: Run, group: TicketGroup): string[] => {
  * Un groupe fini : chacun de ses tickets fait, ceux que le plan lui rattache compris (invariant : un
  * groupe n'est jamais tenu pour fini, relu, clos ni fermé tant qu'un ticket rattaché est ouvert).
  */
-const isGroupDone = (run: Run, g: TicketGroup): boolean => isAllDone(run, groupTicketIds(run, g))
+export const isGroupDone = (run: Run, g: TicketGroup): boolean => isAllDone(run, groupTicketIds(run, g))
 
 /** Les ids que le plan rattache à un groupe sans qu'il les ait enregistrés. */
 export const attachedIdsOf = (run: Run, g: TicketGroup): string[] => groupTicketIds(run, g).filter(id => !g.tickets.some(x => sameTicket(x, id)))
@@ -990,11 +991,38 @@ export const tddCycles = (run: Run): number => {
 
 // ─── Construction ─────────────────────────────────────────────────────────
 
-/** Les étapes neuves d'un skill ; `withLegacy` garde celles d'un ancien chemin (une phase qui le suit encore). */
+/**
+ * Les étapes neuves d'un skill ; `withLegacy` garde celles d'un ancien chemin (une phase qui le suit encore).
+ * Sans celles d'un projet qui a un COO : elles ne viennent qu'à la création (`addCooSteps`), puis se gardent
+ * (`keepCooSteps`).
+ */
 const stepsFor = (skill: string, now?: number, withLegacy = false): FlowStep[] =>
   (SKILLS[skill]?.steps ?? [])
-    .filter(s => withLegacy || !s.isLegacy)
+    .filter(s => (withLegacy || !s.isLegacy) && !s.isCooOnly)
     .map((s, i) => (now !== undefined && i === 0 ? { id: s.id, status: 'active', at: now } : { id: s.id, status: 'pending' }))
+
+/** Le projet a un COO : le siège relu est bien formé (tenu, libéré ou abandonné). */
+const hasCooSeat = (board: Board): boolean => soundSeat(board.coo) !== undefined
+
+/** La phase relit la liste d'attente des rétros (étape `attente`) : une rétro née dans un projet qui a un COO. */
+export const hasWaitlistStep = (phase: { skill: string; steps: readonly FlowStep[] }): boolean =>
+  phase.skill === 'retro' && phase.steps.some(s => s.id === 'attente')
+
+/** La mission a une phase de rétro qui relit la liste d'attente. */
+export const isWaitlistRetro = (run: Run): boolean => run.phases.some(hasWaitlistStep)
+
+/** La mission neuve d'un projet qui a un COO reçoit les étapes de ce projet (la rétro, `attente`). */
+const addCooSteps = (board: Board, run: Run) => {
+  if (!hasCooSeat(board)) return
+  for (const p of run.phases) for (const s of SKILLS[p.skill]?.steps ?? []) if (s.isCooOnly) addSkillStep(p, s.id, true)
+}
+
+/** Les étapes refaites d'une phase gardent celles d'un projet qui a un COO qu'elle portait (`before`), à faire. */
+const keepCooSteps = (skill: string, before: readonly FlowStep[], steps: FlowStep[]): FlowStep[] => {
+  const target = { skill, steps }
+  for (const s of SKILLS[skill]?.steps ?? []) if (s.isCooOnly && before.some(x => x.id === s.id)) addSkillStep(target, s.id, true)
+  return target.steps
+}
 
 const newPhase = (spec: PhaseSpec, now?: number): FlowPhase => ({
   skill: spec.skill,
@@ -1053,12 +1081,13 @@ const activeStepId = (target: { steps: FlowStep[] }): string | undefined => targ
 /**
  * Une étape du skill que la phase n'a pas, ouverte avant que l'étape existe (le découpage d'une
  * rétro qui finit par l'ancienne étape de worker) : elle prend sa place dans l'ordre du skill,
- * avant les étapes qui la suivent. Une étape de l'ancien chemin n'est jamais ajoutée ainsi.
+ * avant les étapes qui la suivent. Une étape de l'ancien chemin n'est jamais ajoutée ainsi, ni celle d'un
+ * projet qui a un COO sans `isCooAllowed` (seulement à la création de la mission, ou gardée par la phase).
  */
-const addSkillStep = (target: { skill: string; steps: FlowStep[] }, id: string) => {
+const addSkillStep = (target: { skill: string; steps: FlowStep[] }, id: string, isCooAllowed = false) => {
   const defs = SKILLS[target.skill]?.steps ?? []
   const at = defs.findIndex(s => s.id === id)
-  if (at < 0 || defs[at]!.isLegacy || target.steps.some(s => s.id === id)) return
+  if (at < 0 || defs[at]!.isLegacy || (defs[at]!.isCooOnly && !isCooAllowed) || target.steps.some(s => s.id === id)) return
   const rank = (stepId: string) => defs.findIndex(s => s.id === stepId)
   const after = target.steps.findIndex(s => rank(s.id) > at)
   const added: FlowStep = { id, status: 'pending' }
@@ -1095,6 +1124,26 @@ const finishPhase = (phase: FlowPhase, now: number) => {
 const findPhase = (run: Run, id: string, from: number): number =>
   run.phases.findIndex((p, i) => i >= from && (p.skill === id || p.alts.includes(id)))
 
+/** Une prise relue du fichier : seulement en forme (un id de processus, une date lisible), sinon aucune. */
+const soundClaim = (v: unknown): { boot: string; at: number } | undefined => {
+  if (v === null || typeof v !== 'object') return undefined
+  const c = v as { boot?: unknown; at?: unknown }
+  return typeof c.boot === 'string' && c.boot !== '' && c.boot.length <= 200 && isTime(c.at) ? { boot: c.boot, at: c.at as number } : undefined
+}
+
+/** La plus récente de deux prises en forme. */
+const latestClaim = (a: unknown, b: unknown): { boot: string; at: number } | undefined => {
+  const x = soundClaim(a)
+  const y = soundClaim(b)
+  return !x ? y : !y ? x : y.at > x.at ? y : x
+}
+
+/** La mission devient active ici : ce processus la prend (`Board.boot`), à cette date ; sans id de processus, aucune prise. */
+const claimHere = (b: Board, run: Run, now: number) => {
+  if (b.boot) run.claim = { boot: b.boot, at: now }
+  else delete run.claim
+}
+
 /** Met la mission de côté : terminé si ses phases requises sont faites, sinon en pause. */
 const shelve = (run: Run, now: number) => {
   closeDetours(currentPhase(run), now)
@@ -1107,6 +1156,8 @@ const shelve = (run: Run, now: number) => {
     run.status = 'paused'
   }
   run.owner = undefined
+  delete run.claim
+  closeHandoff(run, now)
   run.updatedAt = now
   // Mise en pause ou close : la mission n'attend plus la personne dans une discussion.
   delete run.waitsUser
@@ -1190,8 +1241,8 @@ const moveTo = (run: Run, at: number, id: string, now: number, fx: Effects) => {
     phase.finishedAt = undefined
     phase.startedAt = phase.startedAt ?? now
     phase.round = isAgain ? phase.round + 1 : 1
-    // Une phase qui suit encore le worker d'un ancien envoi garde son étape.
-    phase.steps = stepsFor(id, now, holdsItemsSession(phase))
+    // Une phase qui suit encore le worker d'un ancien envoi garde son étape ; une rétro, sa relecture de la liste d'attente.
+    phase.steps = keepCooSteps(id, phase.steps, stepsFor(id, now, holdsItemsSession(phase)))
     log(run, now, def.glyph, isAgain ? `${def.label} ${agree(def, 'relancé')} (tour ${phase.round})` : `${def.label} ${agree(def, 'démarré')}`, 'accent')
     fx.toasts.push(isAgain ? `${def.glyph} ${def.label} · tour ${phase.round}` : `${def.glyph} ${def.label}`)
   } else {
@@ -1207,7 +1258,7 @@ const moveTo = (run: Run, at: number, id: string, now: number, fx: Effects) => {
     phase.startedAt = now
     phase.finishedAt = undefined
     phase.round = 1
-    phase.steps = stepsFor(id, now)
+    phase.steps = keepCooSteps(id, phase.steps, stepsFor(id, now))
     run.cursor = at
     log(run, now, def.glyph, `${def.label} ${agree(def, 'démarré')}`, 'accent')
     fx.toasts.push(`${left ? `${left.glyph} ${left.label} → ` : ''}${def.glyph} ${def.label}`)
@@ -1226,7 +1277,7 @@ const resetAfter = (run: Run, at: number, now: number) => {
   for (const p of run.phases.slice(at + 1)) {
     closeDetours(p, now)
     p.status = 'pending'
-    p.steps = stepsFor(p.skill)
+    p.steps = keepCooSteps(p.skill, p.steps, stepsFor(p.skill))
     p.round = 0
     p.startedAt = undefined
     p.finishedAt = undefined
@@ -1251,7 +1302,7 @@ const reopenSkipped = (run: Run, id: string, now: number, fx: Effects): boolean 
   phase.startedAt = now
   phase.finishedAt = undefined
   phase.round = 1
-  phase.steps = stepsFor(id, now)
+  phase.steps = keepCooSteps(id, phase.steps, stepsFor(id, now))
   run.cursor = at
   // Du code s'écrit : le compte rendu qui suit n'est plus facultatif, comme dans moveTo.
   if (id === 'implement') {
@@ -1318,7 +1369,7 @@ const backToImplementation = (run: Run, id: string, args: string, now: number, f
   phase.finishedAt = undefined
   phase.startedAt = phase.startedAt ?? now
   phase.round = phase.round + 1
-  phase.steps = stepsFor(id, now)
+  phase.steps = keepCooSteps(id, phase.steps, stepsFor(id, now))
   run.cursor = at
   run.status = 'active'
   run.finishedAt = undefined
@@ -1483,6 +1534,7 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
     if (run) shelve(run, now)
     paused.status = 'active'
     paused.owner = b.session
+    claimHere(b, paused, now)
     delete paused.waitsUser
     b.activeId = paused.id
     log(paused, now, '↻', 'Mission reprise', 'accent')
@@ -1502,8 +1554,10 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
 
   if (run) shelve(run, now)
   const created = newRun(id, now, title)
+  addCooSteps(b, created)
   created.owner = b.session
   created.bornIn = b.session
+  claimHere(b, created, now)
   b.runs.unshift(created)
   b.activeId = created.id
   log(created, now, def.glyph, `Mission lancée par /${id}`, 'accent')
@@ -1823,8 +1877,10 @@ export const openRun = (board: Board, ask: { entry?: string; title?: string }, n
   if (previous) shelve(previous, now)
   const title = clip(str(ask.title), 70)
   const run = newRun(entry, now, title || undefined)
+  addCooSteps(b, run)
   run.owner = b.session
   run.bornIn = b.session
+  claimHere(b, run, now)
   b.runs.unshift(run)
   b.activeId = run.id
   log(run, now, '✚', `Mission ouverte par Claude${previous ? ` (« ${previous.title} » ${previous.status === 'done' ? 'terminée' : 'en pause'})` : ''}`, 'accent')
@@ -1880,7 +1936,7 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
       phase = run.phases[at]!
       if (id && phase.skill !== id && SKILLS[id]) phase.skill = id
       if (phase.status === 'pending' || phase.status === 'skipped') {
-        phase.steps = stepsFor(phase.skill, now)
+        phase.steps = keepCooSteps(phase.skill, phase.steps, stepsFor(phase.skill, now))
         phase.round = Math.max(1, phase.round)
         phase.startedAt = now
       }
@@ -1918,14 +1974,15 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
 }
 
 /**
- * Un appel de l'outil `flow`. `resume` reprend d'abord une mission du projet dans cette discussion,
- * comme « ↻ Reprendre ici » : un worker lancé pour un groupe n'a pas de bouton à cliquer.
+ * Un appel de l'outil `flow`. `resume` reprend d'abord une mission du projet dans cette discussion : une mission née
+ * ou laissée ici, ou celle d'une autre discussion par le seul passage du worker de diagnostic (sa prise, une fois,
+ * dans l'heure, puis le retour à la discussion qui l'a ouvert) ; toute autre est refusée, sans rien écrire.
  */
 export const applyReport = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean; security?: SecurityReview } = {},
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; fableFirst?: FableFirst; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean; security?: SecurityReview } = {},
 ): { board: Board; fx: Effects; text: string } => {
   const out = reportOnce(board, input, now, opts)
   if (board.delegate || str(input.delegate) !== '' || out.board.delegate) return out
@@ -1974,12 +2031,12 @@ const reportOnce = (
   board: Board,
   input: Readonly<Record<string, unknown>>,
   now: number,
-  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean; security?: SecurityReview },
+  opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; fableFirst?: FableFirst; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean; security?: SecurityReview },
 ): { board: Board; fx: Effects; text: string } => {
   // Un worker qui travaille pour un groupe d'une mission restée ailleurs : rien ne s'écrit ici.
   const delegateId = str(input.delegate)
   if (delegateId !== '') {
-    const out = delegateHere(board, delegateId, now, opts.delegateTitle, str(input.group) || undefined, str(input.main) || undefined)
+    const out = delegateHere(board, delegateId, now, opts.delegateTitle, str(input.group) || undefined, str(input.main) || undefined, input.model, opts.fableFirst ?? 'unknown')
     // Ce qui arrive avec "delegate" (set, decided, report…) part aussi au relais : la session du groupe C
     // renvoyait "delegate" à chaque appel, et tout le reste se perdait sans que la réponse le dise.
     const sentence = relayedSentence(input)
@@ -1998,8 +2055,28 @@ const reportOnce = (
     return { board: out.board, fx: { ...out.fx, openPane: true, toasts: [...opened.fx.toasts, ...out.fx.toasts], ...(opened.fx.discussionTitle !== undefined && out.fx.discussionTitle === undefined ? { discussionTitle: opened.fx.discussionTitle } : {}) }, text: `${opened.text}${ignored} ${out.text}` }
   }
   const resumeId = str(input.resume)
-  if (resumeId === '' || resumeId === board.activeId) return reportHere(board, input, now, opts)
-  const resumed = resumeRun(board, resumeId, now)
+  if (resumeId === '' || resumeId === board.activeId) {
+    // La discussion qui a ouvert le passage reprend sa propre mission (le diagnostic fini sans que sa session l'ait
+    // prise) : le passage se ferme, il ne sert qu'une fois.
+    const own = resumeId !== '' ? activeRun(board) : undefined
+    const h = own ? soundHandoff(own.handoff) : undefined
+    if (!own || !h || h.closedAt !== undefined || h.from !== board.session) return reportHere(board, input, now, opts)
+    const b = clone(board)
+    closeHandoff(activeRun(b)!, now)
+    return reportHere(b, input, now, opts)
+  }
+  // La mission d'une autre discussion ne se prend ici que par la personne (« ↻ Reprendre ici », confirmé), ou par le
+  // passage du worker de diagnostic : sa prise, une fois, dans l'heure, puis le retour à la discussion qui l'a ouvert.
+  const target = board.runs.find(r => r.id === resumeId)
+  const isTaking = target !== undefined && isOtherDiscussions(target, board.session) && isHandoffOpen(target, board.session, now)
+  if (target && isOtherDiscussions(target, board.session) && !isTaking && !isHandoffReturn(target, board.session)) {
+    const here = activeRun(board)
+    const rest = here ? `The mission active here, ${JSON.stringify(shownText(here.title))}, is unchanged.` : noActiveText(board)
+    return { board, fx: noFx(), text: `${JSON.stringify(shownText(target.title))} lives in another discussion: nothing was resumed nor recorded. A mission only lives in its discussion; reopen that discussion, or, only if it cannot be found, ask the user to click « ↻ Reprendre ici » then « Confirmer (secours) » in the dashboard of this one. ${rest}` }
+  }
+  const resumed0 = resumeRun(board, resumeId, now)
+  // Prise par la session de diagnostic : le passage garde son adresse de retour (la discussion qui l'a ouvert).
+  const resumed = resumed0 && isTaking ? { ...resumed0, board: withHandoffTaken(resumed0.board, resumeId, target!, now) } : resumed0
   if (!resumed) return { board, fx: noFx(), text: `No mission "${resumeId}" in this project: nothing was resumed nor recorded. ${noActiveText(board)}` }
   const out = reportHere(resumed.board, input, now, opts)
   // Le titre, relu du fichier partagé, cité neutralisé comme dans `summaryOf`.
@@ -2049,7 +2126,8 @@ export const restoreDelegate = (board: Board, kept: unknown, now?: number): Boar
   // dans le futur comprise).
   const mainAt =
     typeof d.main === 'string' && d.main !== '' && typeof d.mainAt === 'number' && parseMainRef({ run: d.run, main: d.main, at: d.mainAt }, d.run, now) !== null && d.mainAt >= d.at ? { mainAt: d.mainAt } : {}
-  return { ...board, activeId: null, delegate: { run: d.run, at: d.at, ...text('title'), ...text('group'), ...text('main'), ...mainAt } }
+  // La marque « worker Fable » revient avec sa délégation, et seulement sous sa forme valide : toute autre valeur relue la laisse sur Opus.
+  return { ...board, activeId: null, delegate: { run: d.run, at: d.at, ...text('title'), ...text('group'), ...text('main'), ...mainAt, ...(isFableMark(d.model) ? { model: FABLE_MARK } : {}) } }
 }
 
 /**
@@ -2059,7 +2137,8 @@ export const restoreDelegate = (board: Board, kept: unknown, now?: number): Boar
 export const reloadText = (board: Board): string => {
   if (board.delegate) {
     const group = board.delegate.group ? `, group ${board.delegate.group}` : ''
-    return `State found after a plugin reload: delegate mode kept for the mission ${JSON.stringify(shownText(delegatedTitle(board)))}${group}; nothing to send again.`
+    const fable = isFableMark(board.delegate.model) ? ', Fable worker mark kept' : ''
+    return `State found after a plugin reload: delegate mode kept for the mission ${JSON.stringify(shownText(delegatedTitle(board)))}${group}${fable}; nothing to send again.`
   }
   const run = activeRun(board)
   if (!run) return ''
@@ -2130,15 +2209,77 @@ const delegatedReportText = (board: Board, input: Readonly<Record<string, unknow
  * propre fichier (sa racine est celle du worktree), où la mission n'est pas. Ne rien enregistrer
  * reste le plus sûr ; `title` est alors lu dans le board du dépôt principal, s'il l'a.
  */
-const delegateHere = (board: Board, runId: string, now: number, title?: string, group?: string, main?: string): { board: Board; fx: Effects; text: string } => {
+const delegateHere = (board: Board, runId: string, now: number, title?: string, group?: string, main?: string, model?: unknown, first: FableFirst = 'unknown'): { board: Board; fx: Effects; text: string } => {
   const target = board.runs.find(r => r.id === runId)
   const b = clone(board)
   const here = activeRun(b)
   if (here && here.id !== runId) shelve(here, now)
   b.activeId = null
-  b.delegate = { run: runId, at: now, ...(!target && title ? { title } : {}), ...(group ? { group: clip(group, 20) } : {}), ...(main ? { main: clip(main, 120) } : {}) }
+  const mark = fableMarkOf(board.delegate, runId, model, first)
+  b.delegate = {
+    run: runId,
+    at: now,
+    ...(!target && title ? { title } : {}),
+    ...(group ? { group: clip(group, 20) } : {}),
+    ...(main ? { main: clip(main, 120) } : {}),
+    ...(mark.model ? { model: mark.model } : {}),
+  }
   const elsewhere = target ? '' : ' (The mission is not on this folder\'s dashboard, e.g. a worktree has its own: that changes nothing for you.)'
-  return { board: b, fx: noFx(), text: `${delegateText(b)}${elsewhere}` }
+  return { board: b, fx: noFx(), text: `${delegateText(b)}${elsewhere}${mark.text}` }
+}
+
+/** La seule valeur admise de la marque « worker Fable » (`model` de l'appel `delegate`). */
+export const FABLE_MARK = 'fable'
+
+/** Une marque « worker Fable » valide : la seule valeur `"fable"` ; toute autre forme n'en est pas une. */
+export const isFableMark = (value: unknown): value is 'fable' => value === FABLE_MARK
+
+/**
+ * Ce que la réponse à un appel `delegate` dit d'une session worker Fable ; l'outil le retire de sa réponse quand
+ * la délégation en mémoire ne porte pas la marque pour la mission de l'appel (rien d'écrit, ou écrit sans marque).
+ */
+export const FABLE_WORKER_TEXT =
+  ' This session is a Fable worker: its mod sends each request of its main thread to Fable 5.2 high (its system prompt still names Opus); its reviews stay on Opus, as your procedure says.'
+
+/**
+ * Ce que le mod sait d'un appel `delegate` sans délégation en place, pour la marque « worker Fable » : `yes`, le
+ * premier appel `delegate` de la session, sûrement (fil principal, le premier du processus, et la clé
+ * `delegate:<session>` lue vide au premier chargement) ; `subagent`, l'appel d'un spécialiste ; `unknown`, un doute
+ * (un appel `delegate` déjà vu dans ce processus, une clé illisible, une délégation lue puis écartée : ancienne,
+ * mission finie ; une délégation quittée en mémoire ; un rechargement du mod qui n'a pas relu la clé). Hors de
+ * `yes`, aucune marque.
+ */
+export type FableFirst = 'yes' | 'subagent' | 'unknown'
+
+/**
+ * La marque d'une délégation posée par un appel `delegate` (invariant fixé par Mathis le 09/11/2026 : une
+ * session ne tourne sur Fable que si sa délégation porte une marque valide, posée par son premier appel
+ * `delegate` ; tout doute la laisse sur Opus) : un appel suivant pour la même mission garde la marque de la
+ * délégation en place, telle quelle, qu'il porte `model` ou non ; un appel pour une autre mission pose une
+ * délégation sans marque ; seul le premier appel la pose, avec `"fable"` : aucune délégation en place, et le
+ * mod sûr que c'en est un (`first`, `FableFirst`), sinon une délégation perdue (clé illisible, écartée au
+ * chargement) se ferait remarquer par l'appel suivant. `text` : ce que la réponse en dit (un `model` refusé ou
+ * sans effet et pourquoi, la session worker Fable).
+ */
+const fableMarkOf = (prior: Board['delegate'], runId: string, model: unknown, first: FableFirst): { model?: 'fable'; text: string } => {
+  const isSent = model !== undefined && model !== null
+  const isSame = prior !== undefined && prior.run === runId
+  const kept: 'fable' | undefined = isSame && isFableMark(prior.model) ? FABLE_MARK : prior === undefined && first === 'yes' && isFableMark(model) ? FABLE_MARK : undefined
+  const refused =
+    isSent && !isFableMark(model)
+      ? ` "model" refused: its only accepted value is "fable"; ${kept ? 'the Fable mark set by the first "delegate" call stays as it was' : 'no Fable mark was set'}, the rest of this call applies.`
+      : ''
+  const withheld =
+    prior !== undefined
+      ? isSame
+        ? "the Fable mark is set only by this session's first \"delegate\" call"
+        : 'the Fable mark is never set on a delegation to another mission'
+      : first === 'subagent'
+        ? "a subagent's call never sets the Fable mark"
+        : 'the mod cannot be sure this call is the session\'s first "delegate" (its delegation was not read back empty at load: unreadable, dropped, already seen, or the mod reloaded since)'
+  const ignored = isSent && isFableMark(model) && kept === undefined ? ` "model" ignored: ${withheld}; this session stays on the session's model (Opus), not a Fable worker.` : ''
+  const fable = kept ? FABLE_WORKER_TEXT : ''
+  return { ...(kept ? { model: kept } : {}), text: `${refused}${ignored}${fable}` }
 }
 
 /** Un appel de l'outil `flow` sur la mission active ici : titre, étape, éléments, tickets, note, fin de phase. */
@@ -2161,6 +2302,7 @@ const reportHere = (
     run = newRun('implement', now)
     run.owner = b.session
     run.bornIn = b.session
+    claimHere(b, run, now)
     b.runs.unshift(run)
     b.activeId = run.id
     log(run, now, '⚙', 'Lot de tickets suivi', 'accent')
@@ -3202,7 +3344,15 @@ export const clampFuture = (board: Board, now: number): Board => {
   // toute prise), jamais effacées.
   const isSeatFuture = isSeatAhead(board.coo, now)
   const areMarksAhead = (r: Run) => isMarkAhead(r.security, now) || (r.groups ?? []).some(g => isMarkAhead(g.security, now))
-  if (isDeletedSound && !isSeatFuture && !board.runs.some(r => isAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || areExternalsAhead(r) || isReviewAhead(r) || areMarksAhead(r))) return board
+  // Une prise datée au-delà de la tolérance gagnerait toutes les fusions (le processus qui la porte tiendrait la mission
+  // pour toujours) : ramenée à maintenant.
+  const isClaimAhead = (r: Run) => (soundClaim(r.claim)?.at ?? 0) > now + 60_000
+  // De même un passage du worker de diagnostic daté au-delà : ses dates sont ramenées à maintenant.
+  const isHandoffAhead = (r: Run) => {
+    const h = soundHandoff(r.handoff)
+    return h !== undefined && Math.max(h.at, h.byAt ?? 0, h.closedAt ?? 0) > now + 60_000
+  }
+  if (isDeletedSound && !isSeatFuture && !board.runs.some(r => isAhead(r) || isClaimAhead(r) || isHandoffAhead(r) || isAutoAhead(r, now) || areTracesAhead(r, now) || isAdviceAhead(r) || isTicketAhead(r) || areExternalsAhead(r) || isReviewAhead(r) || areMarksAhead(r))) return board
   const b = clone(board)
   if (isSeatFuture) b.coo = soundSeat(board.coo, now)
   // Une trace de suppression datée dans le futur, ou mal formée, tombe à la lecture : jamais appliquée.
@@ -3210,6 +3360,12 @@ export const clampFuture = (board: Board, now: number): Board => {
   for (const r of b.runs) {
     if (isAhead(r)) r.updatedAt = Math.min(now, maxOf(r.log.map(e => e.at).filter(at => at <= now), r.startedAt))
     if (isAutoAhead(r, now)) r.auto = autoAtMost(r, now)
+    if (isClaimAhead(r)) r.claim = { boot: soundClaim(r.claim)!.boot, at: now }
+    if (isHandoffAhead(r)) {
+      const h = soundHandoff(r.handoff)!
+      const at = (t: number) => Math.min(t, now)
+      r.handoff = { at: at(h.at), from: h.from, ...(h.by !== undefined ? { by: h.by, byAt: at(h.byAt!) } : {}), ...(h.closedAt !== undefined ? { closedAt: at(h.closedAt) } : {}) }
+    }
     if (isAdviceAhead(r)) r.security = { ...r.security, at: 0 }
     // Une marque « revue désactivée » datée au-delà de la tolérance (horloge en avance) tombe : elle pourrait
     // dater une fermeture faite revue réactivée ; sans elle, l'avis redevient dû tant que la lecture ne dit pas « off ».
@@ -3969,7 +4125,9 @@ export const applyAgentActivity = (board: Board, now: number): Outcome => {
 // ─── Mode auto ────────────────────────────────────────────────────────────
 //
 // L'auto d'une mission tient en deux dates : « allumé à », posée seulement par un clic de la personne
-// (« Confirmer », ou « Lancer en auto » sur une carte du COO, que la discussion lancée applique), et « éteint à ». Il est actif quand la première est plus récente que la seconde. Chaque
+// (« Confirmer » dans la mission ou sur sa ligne de la vue Coordination, ou « Lancer en auto » sur une carte du COO,
+// que la discussion de la mission applique) ou par la reprise d'une pause « plus rien ne peut avancer sans toi »
+// (`resumeStuckAuto` de register.tsx, raison `onWhy`), et « éteint à ». Il est actif quand la première est plus récente que la seconde. Chaque
 // date se fusionne à la plus récente des deux copies (`keepAuto`), jamais par la copie la plus récente
 // de la mission : une copie en retard ne rallume rien. Une date hors forme le dit éteint. L'état relu
 // passe par un seul point de bornage (`readAuto`) : chaque lecture le reçoit propre.
@@ -3981,6 +4139,8 @@ export const applyAgentActivity = (board: Board, now: number): Outcome => {
  */
 export const AUTO_STOPS = {
   click: 'coupé par toi',
+  /** La coupure demandée par le Claude du COO (`coordinate.cutAuto`) : une pause montrée, jamais un allumage. */
+  coo: 'coupé par le COO',
   aside: 'parcours mis de côté',
   closed: 'parcours clos',
   finished: 'parcours terminé',
@@ -4008,6 +4168,56 @@ const STOP_LABELS: Readonly<Record<string, string>> = {
 
 /** Le libellé d'une raison d'arrêt : la raison elle-même, sauf celles que `STOP_LABELS` renomme. */
 export const stopLabel = (why: string): string => STOP_LABELS[why] ?? why
+
+/**
+ * La trace d'une pause « plus rien ne peut avancer sans toi » posée par l'auto de cette discussion, gardée à part
+ * (`$.store`) : la discussion et le processus qui l'ont posée, « allumé à » (la date de son clic gardée ici à ce
+ * moment-là), « éteint à » de la pause, et les questions ouvertes alors.
+ */
+export type StuckResume = { by: string; boot: string; onAt: number; offAt: number; questions: string[] }
+
+/** Une trace relue : bornée ici, sinon aucune (pas de reprise). */
+export const soundStuckResume = (raw: unknown): StuckResume | null => {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const x = raw as Record<string, unknown>
+  const isId = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= AUTO_ID_MAX
+  if (!isId(x.by) || !isId(x.boot) || !isTime(x.onAt) || !isTime(x.offAt) || !Array.isArray(x.questions) || x.questions.length === 0 || x.questions.length > 50 || !x.questions.every(isId)) return null
+  return { by: x.by, boot: x.boot, onAt: x.onAt, offAt: x.offAt, questions: [...(x.questions as string[])] }
+}
+
+/**
+ * Les questions ouvertes d'une pause « plus rien ne peut avancer sans toi » qui peut reprendre d'elle-même : au moins
+ * une, et aucune question du mod (« sans-suite: », « relance: »), que le mod retire parfois lui-même sans réponse de
+ * la personne ; null sinon (la pause reste, et deux clics la lèvent, comme aujourd'hui).
+ */
+export const resumableQuestions = (run: Run): string[] | null => {
+  const open = readWaiting(run)
+  if (open.length === 0 || open.some(q => q.id.startsWith(STALE_PREFIX) || q.id.startsWith(RELAUNCH_PREFIX))) return null
+  return open.map(q => q.id)
+}
+
+/**
+ * La reprise d'elle-même d'une pause « plus rien ne peut avancer sans toi », vue de la discussion `here` (son id du
+ * moment) avec la trace `rec` qu'elle a gardée : la mission active ici, son auto toujours dans cette pause-là (les
+ * mêmes « allumé à », « éteint à » et la même raison : tout autre arrêt depuis a changé la raison), allumé au nom de
+ * cette discussion, la trace posée par elle, et plus aucune question ouverte. Le processus (`boot`) se vérifie à part.
+ */
+export const canResumeStuck = (board: Board, here: string, rec: StuckResume): boolean => {
+  const run = board.delegate ? undefined : activeRun(board)
+  if (!run || run.status !== 'active' || str(here) === '' || rec.by !== here) return false
+  const auto = autoOf(run)
+  if (isAutoOnIn(auto) || auto?.offWhy !== AUTO_STOPS.stuck || auto.onAt !== rec.onAt || auto.offAt !== rec.offAt || auto.onBy !== clip(str(here), AUTO_ID_MAX)) return false
+  return readWaiting(run).length === 0
+}
+
+/** Ce que dit un auto repris de lui-même après une pause « plus rien ne peut avancer sans toi », une fois ses questions répondues. */
+export const AUTO_RESUMED = 'repris : questions répondues'
+
+/** L'auto de la mission est allumé, et cet allumage est une reprise d'elle-même (`onWhy`). */
+export const isAutoResumed = (run: Run): boolean => {
+  const auto = autoOf(run)
+  return isAutoOnIn(auto) && auto?.onWhy === 'resumed'
+}
 
 /** Les pauses déduites, sans écriture : l'auto reste allumé, mais cette discussion n'envoie pas. */
 export const AUTO_PAUSES = {
@@ -4053,10 +4263,11 @@ const readAuto = (raw: unknown): { auto?: RunAuto; isDamaged: boolean } => {
   const isDamaged = isOffDamaged || (x.onAt !== undefined && onAt === undefined)
   const offAt = isTime(x.offAt) ? x.offAt : isOffDamaged ? onAt : undefined
   const onBy = clip(str(x.onBy), AUTO_ID_MAX)
+  const onWhy = x.onWhy === 'resumed' ? ('resumed' as const) : undefined
   const why = str(x.offWhy)
   const offWhy = isOffDamaged && offAt !== undefined ? AUTO_STOPS.unreadable : why === '' ? '' : isKnownStop(why) ? why : UNKNOWN_STOP
   const auto: RunAuto = {
-    ...(onAt !== undefined ? { onAt, ...(onBy !== '' ? { onBy } : {}) } : {}),
+    ...(onAt !== undefined ? { onAt, ...(onBy !== '' ? { onBy } : {}), ...(onWhy ? { onWhy } : {}) } : {}),
     ...(offAt !== undefined ? { offAt, ...(offWhy !== '' ? { offWhy } : {}) } : {}),
   }
   return Object.keys(auto).length > 0 ? { auto, isDamaged } : { isDamaged }
@@ -4123,14 +4334,18 @@ export const nextAutoOnAt = (run: Run, now: number): number => {
 /**
  * Éteint l'auto d'une mission active : « éteint à » après « allumé à » (et après la coupure d'avant),
  * même quand l'horloge le place avant (date venue d'ailleurs), pour que l'arrêt tienne. Éteint, il
- * n'écrit rien, sauf pour remplacer la raison d'une pause par celle d'un geste de la personne. Rend
- * vrai s'il a écrit.
+ * n'écrit rien, sauf pour remplacer la raison d'une pause par celle d'un geste de la personne ou d'une coupure
+ * du COO, et la raison d'une pause « plus rien ne peut avancer sans toi » par toute autre (plus de reprise).
+ * Rend vrai s'il a écrit.
  */
 const stopAuto = (run: Run, now: number, why: string): boolean => {
   const auto = autoOf(run)
   // Déjà éteint par une pause (fin de discussion, lecture ratée) : un geste de la personne remplace sa
-  // raison, pour que le bandeau ne redise plus la pause qu'elle vient de trancher.
-  const isRelabel = isStoredPause(auto) && QUIET_STOPS.has(why)
+  // raison, pour que le bandeau ne redise plus la pause qu'elle vient de trancher ; une coupure par le COO aussi,
+  // pour qu'une pause « plus rien ne peut avancer sans toi » coupée ne reprenne plus d'elle-même.
+  // Toute autre raison posée pendant une pause « plus rien ne peut avancer sans toi » la remplace aussi (lecture ratée,
+  // fin de la discussion…) : seule cette raison-là reprend d'elle-même (`resumeStuckAuto`).
+  const isRelabel = isStoredPause(auto) && (QUIET_STOPS.has(why) || why === AUTO_STOPS.coo || (auto?.offWhy === AUTO_STOPS.stuck && why !== AUTO_STOPS.stuck))
   if (!isAutoOnIn(auto) && !isRelabel) return false
   run.auto = { ...auto, offAt: Math.max(now, (auto!.onAt ?? -1) + 1, (auto!.offAt ?? -1) + 1), offWhy: why }
   log(run, now, '⚡', `Mode auto éteint : ${stopLabel(why)}`, 'info')
@@ -4138,11 +4353,12 @@ const stopAuto = (run: Run, now: number, why: string): boolean => {
 }
 
 /**
- * Le second clic de la personne (« Confirmer ») sur la mission active ici : « allumé à » et « allumé
- * par » (`here`, l'id de la discussion du clic). « Allumé à » passe après « éteint à » et après
+ * Le second clic de la personne (« Confirmer ») sur la mission active ici, ou la reprise d'une pause
+ * « plus rien ne peut avancer sans toi » (`why` : `resumed`, gardée dans « allumé pour ») : « allumé à » et
+ * « allumé par » (`here`, l'id de la discussion du clic). « Allumé à » passe après « éteint à » et après
  * l'allumage précédent, même quand l'horloge les place avant ; l'état est réécrit borné.
  */
-export const switchOnAuto = (board: Board, here: string, now: number, confirmedAt?: number | null): Outcome => {
+export const switchOnAuto = (board: Board, here: string, now: number, confirmedAt?: number | null, why?: 'resumed'): Outcome => {
   const run0 = activeRun(board)
   // Déjà allumé d'ici, avec la date de son clic gardée ici (`confirmedAt`) : rien à faire ; sans elle, le clic rallume.
   if (!run0 || board.delegate || str(here) === '' || autoStateOf(run0, board, here, confirmedAt).kind === 'on') return null
@@ -4150,10 +4366,11 @@ export const switchOnAuto = (board: Board, here: string, now: number, confirmedA
   const run = activeRun(b)!
   const was = autoOf(run)
   const onAt = nextAutoOnAt(run, now)
-  run.auto = { onAt, onBy: clip(str(here), AUTO_ID_MAX), ...(was?.offAt !== undefined ? { offAt: was.offAt, ...(was.offWhy !== undefined ? { offWhy: was.offWhy } : {}) } : {}) }
+  run.auto = { onAt, onBy: clip(str(here), AUTO_ID_MAX), ...(why ? { onWhy: why } : {}), ...(was?.offAt !== undefined ? { offAt: was.offAt, ...(was.offWhy !== undefined ? { offWhy: was.offWhy } : {}) } : {}) }
   delete run.waitsUser
   run.updatedAt = now
-  log(run, now, '⚡', 'Mode auto allumé', 'accent')
+  log(run, now, '⚡', why ? `Mode auto ${AUTO_RESUMED}` : 'Mode auto allumé', 'accent')
+  if (why) return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto · ${AUTO_RESUMED} : ${run.title}`] } }
   return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto allumé : ${run.title}`] } }
 }
 
@@ -4162,12 +4379,16 @@ export const switchOnAuto = (board: Board, here: string, now: number, confirmedA
  * chargement, à la sauvegarde ou à la relecture périodique : la copie de cette discussion éteint l'auto
  * de chacune de ses missions, raison « lecture de la mission ratée ». Null quand aucun n'était allumé.
  */
-export const stopAutoUnread = (board: Board, now: number): Board | null => {
-  if (!board.runs.some(isAutoOn)) return null
+export const stopAutoUnread = (board: Board, now: number, here = ''): Board | null => {
+  // Une pause « plus rien ne peut avancer sans toi » posée par l'auto de cette discussion (`here`) prend la raison de la
+  // lecture ratée : elle ne reprend plus d'elle-même, état gardé dans la mission (relu après /reload-plugins, partout).
+  // Celle d'une autre discussion garde sa raison, et sa reprise.
+  const isOwnStuck = (run: Run): boolean => here !== '' && !isAutoOn(run) && autoOf(run)?.onBy === here && autoOf(run)?.offWhy === AUTO_STOPS.stuck
+  if (!board.runs.some(run => isAutoOn(run) || isOwnStuck(run))) return null
   const b = clone(board)
   // Sans toucher à `updatedAt` : la copie, peut-être périmée, ne doit pas l'emporter pour le reste de la
   // mission ; la coupure, elle, passe par la fusion date par date.
-  for (const run of b.runs) stopAuto(run, now, AUTO_STOPS.unreadable)
+  for (const run of b.runs) if (isAutoOn(run) || isOwnStuck(run)) stopAuto(run, now, AUTO_STOPS.unreadable)
   return b
 }
 
@@ -4187,8 +4408,67 @@ export const switchOffAuto = (board: Board, now: number): Outcome => {
   return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto coupé : ${run.title}`] } }
 }
 
+/** Les raisons d'une coupure venue de chez le COO. */
+export type CutWhy = typeof AUTO_STOPS.click | typeof AUTO_STOPS.coo
+
+/**
+ * Une coupure de raison `why`, datée `at`, change-t-elle l'auto de `run` ? Oui s'il est allumé, ou en pause
+ * posée par le mod sous une autre raison, et qu'il n'a pas été rallumé après elle. Une reprise d'elle-même n'est pas
+ * un rallumage : une coupure datée pendant la pause qu'elle a levée (après « éteint à ») la coupe encore.
+ */
+export const isCutDue = (run: Run, why: CutWhy, at: number): boolean => {
+  const auto = autoOf(run)
+  const isOn = isAutoOnIn(auto)
+  if (!isOn && !(isStoredPause(auto) && auto?.offWhy !== why)) return false
+  if (isOn && auto?.onWhy === 'resumed' && auto.offAt !== undefined && auto.offAt <= at) return true
+  return auto?.onAt === undefined || auto.onAt <= at
+}
+
+/**
+ * Une coupure venue de la vue Coordination ou du Claude du COO (une entrée `cutAuto`), appliquée par le mod de
+ * la mission dans sa discussion, sur la mission `runId` qu'elle soit active ici ou non : « éteint à », raison
+ * `why` (« coupé par toi » ou « coupé par le COO »). Elle ne fait qu'éteindre : sans effet sur un auto déjà
+ * éteint par un geste ou par la fin de la mission, ni sur un allumage plus récent que la coupure (`at`, la date
+ * de l'entrée : un clic d'après l'emporte). Sur une pause posée par le mod, elle remplace sa raison. Null quand
+ * rien ne change.
+ */
+export const cutAutoOf = (board: Board, runId: string, why: CutWhy, at: number, now: number): Outcome => {
+  const run0 = board.runs.find(r => r.id === runId)
+  if (!run0 || !isCutDue(run0, why, at)) return null
+  const b = clone(board)
+  const run = b.runs.find(r => r.id === runId)!
+  if (!stopAuto(run, now, why)) return null
+  run.updatedAt = Math.max(run.updatedAt, now)
+  return { board: b, fx: noFx() }
+}
+
+/** L'« allumé à » relu borné d'une mission (`readAuto`), ou undefined. */
+export const autoOnAtOf = (run: Run): number | undefined => autoOf(run)?.onAt
+
+/** Les dates relues bornées de l'auto d'une mission (`readAuto`) : « allumé à » et « éteint à », chacune absente sans date lisible. */
+export const autoDatesOf = (run: Run): { onAt?: number; offAt?: number } => {
+  const auto = autoOf(run)
+  return { ...(auto?.onAt !== undefined ? { onAt: auto.onAt } : {}), ...(auto?.offAt !== undefined ? { offAt: auto.offAt } : {}) }
+}
+
+/** Le libellé de la pause posée par le mod sur l'auto d'une mission (sa raison relue bornée), ou undefined hors d'une telle pause. */
+export const autoPauseLabel = (run: Run): string | undefined => {
+  const auto = autoOf(run)
+  return isStoredPause(auto) ? stopLabel(auto!.offWhy!) : undefined
+}
+
 /** L'auto est éteint par une pause du mod (ni un geste de la personne ni la fin de la mission) : le bandeau la montre. */
 export const isAutoPauseStored = (run: Run): boolean => isStoredPause(autoOf(run))
+
+/**
+ * L'auto en pause sur un groupe revenu trop de fois : « deuxième échec du groupe <id> », ou toute pause « plus rien
+ * ne peut avancer sans toi » (une question « relance: » ouverte y suffit ; un groupe qu'une question de la personne
+ * bloque ne se relance pas pour autant, `nightBlocks` et `applyNightOne`). La seule pause où une relance de nuit vaut.
+ */
+export const isRelaunchPause = (run: Run): boolean => {
+  const auto = autoOf(run)
+  return isStoredPause(auto) && (auto?.offWhy === AUTO_STOPS.stuck || (auto?.offWhy ?? '').startsWith(GROUP_FAIL_PREFIX))
+}
 
 /** Éteint l'auto de la mission active ici, pour une raison du mod (`AUTO_STOPS`) ; null quand il n'était pas allumé. */
 export const stopActiveAuto = (board: Board, why: string, now: number): Outcome => {
@@ -4230,11 +4510,12 @@ export const STALE_PREFIX = 'sans-suite:'
 export const OPPOSITION_PREFIX = 'opposition:'
 
 /**
- * Les pistes non cochées chez le COO d'une rétro portée ici, une fois écrites dans la boîte « À reprendre » :
- * écartées de sa phase de rétro en cours (ni découpées, ni recopiées une seconde fois à sa clôture). Seulement
- * des pistes encore à faire.
+ * Les pistes non cochées chez le COO d'une rétro portée ici, une fois écrites dans la boîte « À reprendre »
+ * (`aside`), ou relues dans la liste d'attente des rétros, où elles restent « pas encore validée »
+ * (`waitlist`) : écartées de sa phase de rétro en cours (ni découpées, ni recopiées une seconde fois).
+ * Seulement des pistes encore à faire.
  */
-export const setAsidePistes = (board: Board, runId: string, ids: readonly string[], now: number): Outcome => {
+export const setAsidePistes = (board: Board, runId: string, ids: readonly string[], now: number, where: 'aside' | 'waitlist' = 'aside'): Outcome => {
   const run0 = activeRun(board)
   if (!run0 || run0.id !== runId || currentPhase(run0).skill !== 'retro' || !currentPhase(run0).items.some(i => ids.includes(i.id) && i.status === 'todo')) return null
   const b = clone(board)
@@ -4243,7 +4524,7 @@ export const setAsidePistes = (board: Board, runId: string, ids: readonly string
   const moved = phase.items.filter(i => ids.includes(i.id) && i.status === 'todo').map(i => i.id)
   phase.items = phase.items.map(i => (moved.includes(i.id) ? { ...i, status: 'dropped' as const } : i))
   run.updatedAt = now
-  log(run, now, '↺', `Pistes non cochées chez le COO, parties dans « À reprendre » : ${moved.join(', ')}`, 'info')
+  log(run, now, '↺', where === 'aside' ? `Pistes non cochées chez le COO, parties dans « À reprendre » : ${moved.join(', ')}` : `Pistes non cochées chez le COO, restées dans la liste d'attente des rétros (pas encore validée) : ${moved.join(', ')}`, 'info')
   return { board: b, fx: noFx() }
 }
 
@@ -4961,7 +5242,7 @@ const mergeAuto = (ours: unknown, theirs: unknown): RunAuto | undefined => {
   const on = latestOf('onAt', a.auto, b.auto)
   const off = latestOf('offAt', a.auto, b.auto)
   const merged: RunAuto = {
-    ...(on ? { onAt: on.onAt!, ...(on.onBy !== undefined ? { onBy: on.onBy } : {}) } : {}),
+    ...(on ? { onAt: on.onAt!, ...(on.onBy !== undefined ? { onBy: on.onBy } : {}), ...(on.onWhy !== undefined ? { onWhy: on.onWhy } : {}) } : {}),
     ...(off ? { offAt: off.offAt!, ...(off.offWhy !== undefined ? { offWhy: off.offWhy } : {}) } : {}),
   }
   if ((a.isDamaged || b.isDamaged) && isAutoOnIn(merged)) {
@@ -5054,7 +5335,7 @@ const keepLotReview = (kept: Run, other: Run | undefined): Run => {
  */
 const keepRun = (kept: Run, other: Run | undefined, own: readonly OwnTraces[] = [], isKeptLocal = true): Run => {
   const mine = own.find(o => o.runId === kept.id)
-  return keepExternals(keepLaunch(keepForced(keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent), other), other), other)
+  return keepExternals(keepLaunch(keepInstructed(keepForced(keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent), other), other), other), other)
 }
 
 /**
@@ -5599,22 +5880,27 @@ const keepDecided = (kept: Run, other: Run | undefined): Run => {
 // ─── Chargement ───────────────────────────────────────────────────────────
 
 /**
- * Sans activité depuis plus longtemps, une mission active est tenue pour abandonnée (discussion
- * fermée sans fin propre) : au chargement elle passe en pause, même tenue par une autre discussion encore
- * ouverte (choix de Mathis du 06/11/2026, faute d'un signal de vie des discussions), et seul un skill de la
- * discussion où elle est née peut la reprendre.
+ * Une mission active depuis plus longtemps sans activité : un skill de la discussion qui la tient la reprend
+ * comme une mission en pause (`applySkill`). Le silence ne met plus jamais une mission en pause au chargement
+ * (choix de Mathis du 09/11/2026 : une mission ne vit que dans sa discussion).
  */
 const ORPHAN_MS = 30 * 60 * 1000
 
 /**
- * Le board tel qu'une discussion le charge du stockage partagé : aucune mission active ici ;
- * les actives abandonnées passent en pause ; celles qu'une autre discussion fait vivre restent
- * actives (« dans une autre discussion »).
+ * Le board tel qu'une discussion le charge du stockage partagé. Une mission active n'est tenue que par sa
+ * discussion (choix de Mathis du 09/11/2026) : celle d'une autre discussion reste active à son nom, même
+ * muette (« dans une autre discussion ») ; celle que cette discussion tenait lui revient (relancée sous son
+ * id : app redémarrée, processus arrêté pendant l'attente des workers, `claude --resume`) ; une active sans
+ * titulaire (mission d'avant) passe en pause. Dans la discussion qui tient encore le siège du COO, rien ne
+ * revient : ses actives à elle passent en pause (un COO ne porte jamais de mission). La mission qui revient garde
+ * son auto éteint, et ce processus la prend (`Run.claim`), sauf quand il revient seulement à ce fichier.
  */
-export const detachOnLoad = (board: Board, now: number, session: string): Board => {
+export const detachOnLoad = (board: Board, now: number, session: string, boot?: string): Board => {
   const b = clone(clampFuture(board, now))
   b.activeId = null
   b.session = session
+  if (boot !== undefined && boot !== '') b.boot = boot
+  else delete b.boot
   // Propres à la discussion qui les a posés : une copie lue du stockage ne les garde pas.
   delete b.delegate
   delete b.cooHere
@@ -5624,10 +5910,35 @@ export const detachOnLoad = (board: Board, now: number, session: string): Board 
   const seat = soundSeat(b.coo)
   if (seat) b.coo = seat
   b.runs = b.runs.map(upgradeRun)
+  const isCoo = seatState(seat, session, now) === 'mine'
+  // Les siennes : la plus récente revient ici ; une autre, s'il y en avait deux, passe en pause.
+  const kept = isCoo ? undefined : b.runs.filter(r => r.status === 'active' && r.owner === session).sort((x, y) => y.updatedAt - x.updatedAt)[0]
   for (const run of b.runs) {
-    if (run.status === 'active' && (!run.owner || run.owner === session || now - run.updatedAt > ORPHAN_MS)) shelve(run, now)
+    if (run.status === 'active' && run !== kept && (!run.owner || run.owner === session)) shelve(run, now)
   }
+  if (!kept) return b
+  b.activeId = kept.id
+  // Ce même processus qui revient à ce fichier (un changement de racine dans un worktree) : rien ne change.
+  if (b.boot !== undefined && soundClaim(kept.claim)?.boot === b.boot) return b
+  // Un nouveau processus : l'auto allumé par l'ancien s'éteint, comme à la fin de la discussion (un processus
+  // tué n'est pas passé par `parkActive`) ; il ne repart que sur deux clics d'ici.
+  stopAuto(kept, now, AUTO_STOPS.ended)
+  // Ce processus prend la mission : un autre processus de la même discussion qui la tenait encore (une reprise au
+  // terminal pendant que l'app la garde) la lui laisse à sa relecture (`mergeBoards`).
+  claimHere(b, kept, now)
+  kept.updatedAt = now
   return b
+}
+
+/**
+ * La fusion de la prise (`Run.claim`) : la plus récente des deux copies (une prise hors forme ne compte pas), sur la
+ * copie gardée tant qu'elle est active ; une copie qui ne l'est plus garde la sienne telle quelle (aucune, d'ordinaire).
+ */
+const keepClaim = (kept: Run, a: Run | undefined, b: Run | undefined): Run => {
+  const claim = latestClaim(a?.claim, b?.claim)
+  if (kept.status !== 'active' || claim === undefined) return kept
+  const was = soundClaim(kept.claim)
+  return was !== undefined && was.boot === claim.boot && was.at === claim.at ? kept : { ...kept, claim }
 }
 
 /**
@@ -5662,22 +5973,31 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
     if (isGone(run)) continue
     const other = byId.get(run.id)
     if (run.id === local.activeId) {
-      // Une copie en pause n'a pas d'auteur lisible (`shelve` efface `owner`) : la pause d'une discussion
-      // qui a repris la mission puis fini ne se distingue pas de celle d'un orphelin par une autre
-      // discussion. Seule une copie active d'une autre discussion l'emporte (question au porteur).
+      // Une copie en pause, sans titulaire (une mise de côté, une reprise ailleurs suivie d'une autre mission, ou la
+      // pause d'une version d'avant le 09/11/2026) ne l'emporte pas : seule une copie active d'une autre discussion,
+      // ou un autre processus de cette même discussion dont la prise est la plus récente (`Run.claim` : relancée
+      // ailleurs, au terminal pendant que l'app la garde), la lui retire : le dernier processus qui l'a prise la tient.
+      const claim = keepClaim(run, run, other).claim
+      const isOtherProcess =
+        other !== undefined && other.status === 'active' && other.owner === local.session && local.boot !== undefined && soundClaim(claim) !== undefined && soundClaim(claim)!.boot !== local.boot
       const isTakenOver =
-        other !== undefined && other.status === 'active' && other.owner !== undefined && other.owner !== local.session && other.updatedAt > run.updatedAt
-      // Close comme livrée ailleurs depuis (le mod du COO, sur la mission mise en pause par une autre discussion
-      // pendant que celle-ci se taisait) : la copie relue, plus récente, l'emporte, et Version et Push ne se
-      // proposent plus ici (invariant des missions livrées). Une livraison rouverte ici depuis reste plus récente.
+        other !== undefined &&
+        other.status === 'active' &&
+        other.owner !== undefined &&
+        ((other.owner !== local.session && other.updatedAt > run.updatedAt) || isOtherProcess)
+      // Close comme livrée ailleurs depuis (le mod du COO, sur une mission ouverte nulle part) : la copie relue, plus
+      // récente, l'emporte, et Version et Push ne se proposent plus ici (invariant des missions livrées). Une
+      // livraison rouverte ici depuis reste plus récente.
       const isDeliveredElsewhere = other !== undefined && other.status === 'done' && isShipped(other) && !isShipped(run) && other.updatedAt > run.updatedAt
       if (isTakenOver || isDeliveredElsewhere) {
         activeId = null
-        byId.set(run.id, keepRun(other, run, own, false))
-      } else byId.set(run.id, keepRun(run, other, own))
+        byId.set(run.id, keepHandoff(keepClaim(keepRun(other, run, own, false), run, other), run))
+      } else byId.set(run.id, keepHandoff(keepClaim(keepRun(run, other, own), run, other), other))
       continue
     }
-    byId.set(run.id, !other || run.updatedAt >= other.updatedAt ? keepRun(run, other, own) : keepRun(other, run, own, false))
+    const isLocalKept = !other || run.updatedAt >= other.updatedAt
+    const kept = isLocalKept ? keepRun(run, other, own) : keepRun(other, run, own, false)
+    byId.set(run.id, keepHandoff(keepClaim(kept, run, other), isLocalKept ? other : run))
   }
   if (activeId !== null && !byId.has(activeId)) activeId = null
   const merged: Board = {
@@ -5695,14 +6015,19 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
   return merged
 }
 
-/** Fin de discussion : sa mission active passe en pause ; un de ses skills la reprend dans cette discussion, « ↻ Reprendre ici » ailleurs. */
+/**
+ * Fin de discussion (son processus s'arrête : app fermée, mise à jour, arrêt pendant l'attente des workers) :
+ * son auto s'éteint, et sa mission reste active à son nom (choix de Mathis du 09/11/2026 : une mission ne vit
+ * que dans sa discussion) ; la discussion relancée sous son id la retrouve (`detachOnLoad`), une autre ne la
+ * prend que par la reprise de secours confirmée. Une mission dont toutes les phases requises sont faites se clôt.
+ */
 export const parkActive = (board: Board, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
   const run = activeRun(b)!
   // La discussion qui porte la mission se ferme : son auto s'éteint ; un /clear n'arrive pas ici.
   stopAuto(run, now, AUTO_STOPS.ended)
-  shelve(run, now)
+  if (isRunComplete(run)) shelve(run, now)
   b.activeId = null
   return { board: b, fx: noFx() }
 }
@@ -5720,6 +6045,8 @@ export const setAsideActive = (board: Board, now: number): Outcome => {
   const run = activeRun(b)!
   run.status = 'paused'
   run.owner = undefined
+  delete run.claim
+  closeHandoff(run, now)
   run.asideAt = now
   run.updatedAt = now
   delete run.waitsUser
@@ -5867,6 +6194,92 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
   return lines
 }
 
+/**
+ * La mission est à une autre discussion que `session` : active à son nom, ou, active nulle part, née ailleurs. Une
+ * mission d'avant sans discussion de naissance n'est à personne. La reprendre ici est un secours (choix de Mathis du
+ * 09/11/2026) : deux clics au panneau, et l'outil ne le fait que par le passage du worker de diagnostic.
+ */
+export const isOtherDiscussions = (run: Run, session: string | undefined): boolean =>
+  run.status === 'active' && run.owner !== undefined ? run.owner !== session : run.bornIn !== undefined && run.bornIn !== session
+
+/** Durée du passage ouvert par « 🐞 Bug · worker » : la session de diagnostic prend la mission dans l'heure, une fois. */
+const HANDOFF_MS = 60 * 60 * 1000
+
+type Handoff = NonNullable<Run['handoff']>
+
+/** Un passage relu du fichier : seulement en forme (dates lisibles, ids de discussion), sinon aucun. */
+const soundHandoff = (v: unknown): Handoff | undefined => {
+  if (v === null || typeof v !== 'object') return undefined
+  const h = v as Record<string, unknown>
+  const isId = (x: unknown): x is string => typeof x === 'string' && x !== '' && x.length <= 200
+  if (!isTime(h.at) || !isId(h.from)) return undefined
+  if (h.by !== undefined && (!isId(h.by) || !isTime(h.byAt))) return undefined
+  if (h.closedAt !== undefined && !isTime(h.closedAt)) return undefined
+  return { at: h.at, from: h.from, ...(h.by !== undefined ? { by: h.by as string, byAt: h.byAt as number } : {}), ...(h.closedAt !== undefined ? { closedAt: h.closedAt as number } : {}) }
+}
+
+/** La dernière date d'un passage : sa fermeture, sinon sa prise, sinon son ouverture. */
+const handoffStamp = (h: Handoff): number => h.closedAt ?? h.byAt ?? h.at
+
+/**
+ * Le passage de la mission au worker de diagnostic est ouvert pour cette discussion : posé par son bouton dans
+ * l'heure (pas dans le futur), ni pris ni fermé, ce n'est pas la discussion qui l'a ouvert, et celle-ci tient encore
+ * la mission, active (une reprise de secours croisée ou une clôture qui n'a pas vu le passage ne le laisse pas prendre).
+ */
+const isHandoffOpen = (run: Run, session: string | undefined, now: number): boolean => {
+  const h = soundHandoff(run.handoff)
+  return h !== undefined && h.by === undefined && h.closedAt === undefined && h.from !== session && run.status === 'active' && run.owner === h.from && h.at <= now + 60_000 && now - h.at <= HANDOFF_MS
+}
+
+/** Le retour de la mission à la discussion qui a ouvert le passage, tant que la session de diagnostic qui l'a prise la tient. */
+const isHandoffReturn = (run: Run, session: string | undefined): boolean => {
+  const h = soundHandoff(run.handoff)
+  return h !== undefined && h.by !== undefined && h.closedAt === undefined && session !== undefined && h.from === session && run.status === 'active' && run.owner === h.by
+}
+
+/** La prise du passage par cette discussion (la session de diagnostic), datée, sur la mission reprise. */
+const withHandoffTaken = (board: Board, id: string, before: Run, now: number): Board => {
+  const h = soundHandoff(before.handoff)
+  if (!h || board.session === undefined) return board
+  return { ...board, runs: board.runs.map(r => (r.id === id ? { ...r, handoff: { at: h.at, from: h.from, by: board.session!, byAt: now } } : r)) }
+}
+
+/** Ferme le passage d'une mission, s'il en a un : daté, pour qu'une copie plus ancienne ne le rouvre pas à la fusion. */
+const closeHandoff = (run: Run, now: number) => {
+  const h = soundHandoff(run.handoff)
+  if (h === undefined) delete run.handoff
+  else if (h.closedAt === undefined) run.handoff = { ...h, closedAt: Math.max(now, handoffStamp(h)) }
+}
+
+/**
+ * La fusion du passage (`Run.handoff`) : le plus récent des deux, par sa dernière date (fermeture, prise, ouverture) ;
+ * un passage hors forme ne compte pas. Une copie en retard ne rouvre ainsi ni un passage pris, ni un passage fermé.
+ */
+const keepHandoff = (kept: Run, other: Run | undefined): Run => {
+  const mine = soundHandoff(kept.handoff)
+  const theirs = soundHandoff(other?.handoff)
+  // À date égale (horloge en retard, même milliseconde), le passage le plus avancé : fermé, puis pris.
+  const rank = (h: Handoff): number => (h.closedAt !== undefined ? 2 : h.by !== undefined ? 1 : 0)
+  const isTheirs = (a: Handoff, b: Handoff) => handoffStamp(a) > handoffStamp(b) || (handoffStamp(a) === handoffStamp(b) && rank(a) > rank(b))
+  const best = !mine ? theirs : !theirs ? mine : isTheirs(theirs, mine) ? theirs : mine
+  if (best === undefined) return kept.handoff === undefined ? kept : (({ handoff: _, ...rest }) => rest as Run)(kept)
+  return JSON.stringify(best) === JSON.stringify(kept.handoff) ? kept : { ...kept, handoff: best }
+}
+
+/**
+ * « 🐞 Bug · worker » : la mission active ici ouvre son passage au worker de diagnostic, qui la prend par le champ
+ * `resume` de l'outil depuis sa discussion, une fois, dans l'heure, puis la rend à cette discussion, la seule qui la
+ * reprend alors par `resume` (choix de Mathis du 09/11/2026).
+ */
+export const openHandoff = (board: Board, now: number): Outcome => {
+  if (!activeRun(board) || board.session === undefined) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  run.handoff = { at: now, from: b.session! }
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
 export const resumeRun = (board: Board, id: string, now: number): Outcome => {
   const target0 = board.runs.find(r => r.id === id)
   // La discussion du COO ne reprend jamais une mission (bouton du panneau compris).
@@ -5881,6 +6294,9 @@ export const resumeRun = (board: Board, id: string, now: number): Outcome => {
   delete run.waitsUser
   run.status = 'active'
   run.owner = b.session
+  claimHere(b, run, now)
+  // Une reprise ferme le passage du worker de diagnostic : il ne sert qu'une fois (sa prise le rouvre en retour).
+  closeHandoff(run, now)
   run.finishedAt = undefined
   run.updatedAt = now
   b.activeId = run.id
@@ -5901,7 +6317,9 @@ export const archiveRun = (board: Board, id: string, now: number, why = 'Mission
     b.activeId = null
     if (run.status === 'active') run.status = 'paused'
     run.owner = undefined
+    delete run.claim
   }
+  closeHandoff(run, now)
   run.archivedAt = now
   run.updatedAt = now
   delete run.waitsUser
@@ -6751,6 +7169,20 @@ export const forceHold = (board: Board, pair: ForcedPair, now: number): Outcome 
   const other = board.runs.find(r => r.id === pair.run)
   log(run, now, '⇥', `${pair.on === 'plan' ? 'Plan du projet forcé' : 'Retenue forcée'} : ${pair.held === LOT_KEY ? 'le lot' : `groupe ${pair.held}`} part sans attendre ${pair.group === LOT_KEY ? 'le lot' : `le groupe ${pair.group}`} de « ${neutralLine(other?.title ?? pair.run)} »`, 'warn')
   return { board: b, fx: noFx() }
+}
+
+/**
+ * La fusion de la trace des consignes reçues de deux copies d'une mission : l'union (rien ne se perd), bornée
+ * comme les marques « appliquée » ; une trace hors forme ne fait tomber aucun id lu de l'autre copie.
+ */
+const keepInstructed = (kept: Run, other: Run | undefined): Run => {
+  const instructed = unionInstructed(kept.instructed, other?.instructed)
+  if (instructed.length === 0) {
+    if (kept.instructed === undefined) return kept
+    const { instructed: _gone, ...rest } = kept
+    return rest
+  }
+  return JSON.stringify(instructed) === JSON.stringify(kept.instructed) ? kept : { ...kept, instructed }
 }
 
 /** La fusion des forçages de deux copies d'une mission : l'union, une paire une fois (la date la plus ancienne). */

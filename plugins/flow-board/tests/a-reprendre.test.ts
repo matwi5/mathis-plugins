@@ -23,7 +23,7 @@ const PANE = {
 } as const
 const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
 const isStateFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.feuille-de-route.json')
-const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-')
+const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-') && !path.includes('.nuit')
 const isBoxFile = (path: string): boolean => path.includes('/flow-board/a-reprendre/')
 const STATE_KEY = `coo-roadmap:${ROOT}`
 const BOARD_KEY = `board:${ROOT}`

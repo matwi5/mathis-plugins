@@ -310,8 +310,8 @@ test('sans git : les lots partent dans des workers ; raisons et autres lots affi
   expect(text).toContain("Dis-moi en une ligne, pour chaque groupe, l'effort pris et, s'il s'écarte du calcul, pourquoi.")
   // xhigh proposé groupe par groupe pour une tâche de jugement, jamais choisi seul.
   expect(text).toContain("quand un ticket de son groupe est une tâche de jugement (jamais pour une tâche d'exécution)")
-  expect(text).toContain('Tu ne choisis jamais xhigh toi-même')
-  expect(text).toContain('question à boutons « xhigh (Recommandé) / high » par groupe concerné, quatre au plus par encadré')
+  expect(text).toContain('Tu ne choisis jamais toi-même ni Fable ni xhigh')
+  expect(text).toContain('question à boutons par groupe concerné, quatre au plus par encadré, chacune avec une ligne qui nomme le ticket et la sorte de jugement : « Fable 5.2 high (Recommandé) / Opus high » pour un jugement de code ; « Opus xhigh (Recommandé) / Opus high »')
   expect(text).toContain('si son effort est xhigh, qu\'elle est un worker autonome')
   expect(text).toMatch(/use_worktree false \(ce dossier n’a pas de git\)/)
   expect(text).toMatch(/, ce que font les autres sessions en même temps/)

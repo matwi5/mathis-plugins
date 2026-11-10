@@ -18,6 +18,7 @@
 import { isTime } from './basics.ts'
 import { isGroupId, isSafeId } from './closing.ts'
 import { soundPlanWait, type PlanWait } from './plan-projet.ts'
+import { NIGHT_FORCE_PAIRS_MAX, isNightId } from './night.ts'
 
 /** Le texte du réveil d'un manager : fixe, sans aucune valeur venue d'ailleurs. */
 export const WAKE_TEXT = 'Le COO a mis ta mission à jour : relis le tableau de bord.'
@@ -121,6 +122,13 @@ export type CoordValidate = { id: string; kind: 'validate'; run: string; at: num
 export type CoordRedo = { id: string; kind: 'redo'; run: string; at: number; file: string; series: number; round: string }
 
 /**
+ * Une consigne transmise par le COO à une mission (`coordinate.instruct`) : la série qu'il a écrite dans le
+ * `DECISIONS.md` de la mission, dictée par la personne (`origin: 'user'`) ou de sa propre initiative (`'coo'`).
+ * Le mod de la mission la relaie une fois à son Claude, par un message qu'il compose.
+ */
+export type CoordInstruct = { id: string; kind: 'instruct'; run: string; at: number; file: string; series: number; origin: 'user' | 'coo' }
+
+/**
  * Deux décisions opposées de deux missions, relevées par le COO : la mission qui a décidé en second (`run`), qui
  * pose la question bloquante, l'autre (`other`), chacune avec sa décision (source et texte mot pour mot), et le
  * sujet commun. Le mod de `run` pose la question une fois ; la réponse passe par le `DECISIONS.md` des deux.
@@ -137,11 +145,41 @@ export type CoordCompatible = { id: string; kind: 'compatible'; run: string; at:
  */
 export type CoordPick = { id: string; kind: 'pick'; run: string; at: number; picked: string[]; left: string[]; print: string }
 
+/**
+ * Une coupure de l'auto d'une mission demandée chez le COO : d'un clic « ✋ Couper l'auto » sur sa ligne de la vue
+ * Coordination (`by: 'click'`), ou par son Claude (`coordinate.cutAuto`, `by: 'coo'`). Le mod de la mission
+ * l'applique une fois, dans sa discussion ; elle ne fait qu'éteindre, et jamais un allumage plus récent qu'elle.
+ */
+export type CoordCutAuto = { id: string; kind: 'cutAuto'; run: string; at: number; by: 'click' | 'coo' }
+
+/** Les gestes de nuit qu'une entrée `night` porte : la coupure de l'auto passe par une entrée `cutAuto`. */
+export const NIGHT_ENTRY_ACTS = ['wave', 'resend', 'relaunch', 'force'] as const
+
+/**
+ * Un geste de nuit, écrit par le Claude du COO pendant la surveillance (`coordinate.night`), qui porte l'id de la
+ * surveillance (`watch`) : lancer un groupe de la vague qui n'est pas parti (`wave`), « ↻ Renvoyer » l'envoi resté
+ * sans suite de la question `question` (`resend`), relancer un groupe qui porte une question « relance: »
+ * (`relaunch`), ou faire partir une fois le groupe `group` sans attendre les groupes `awaited` d'autres missions qui
+ * le retiennent (`force`, `on: 'plan'` quand seul le plan le retenait). Le mod de la mission l'applique une fois, après avoir
+ * vérifié la surveillance et les conditions du geste à cet instant.
+ */
+export type CoordNight = {
+  id: string
+  kind: 'night'
+  run: string
+  at: number
+  watch: string
+  act: (typeof NIGHT_ENTRY_ACTS)[number]
+  group?: string
+  question?: string
+  awaited?: { run: string; group: string; on?: 'plan' }[]
+}
+
 /** Au plus, les pistes d'une sélection. */
 export const PICK_MAX = 60
 
 /** Une entrée bien formée du fichier de coordination. */
-export type CoordEntry = CoordClose | CoordForce | CoordCopied | CoordGleaned | CoordTaken | CoordPlan | CoordWave | CoordGesture | CoordAnswer | CoordValidate | CoordRedo | CoordContradiction | CoordCompatible | CoordPick
+export type CoordEntry = CoordClose | CoordForce | CoordCopied | CoordGleaned | CoordTaken | CoordPlan | CoordWave | CoordGesture | CoordAnswer | CoordValidate | CoordRedo | CoordInstruct | CoordContradiction | CoordCompatible | CoordPick | CoordCutAuto | CoordNight
 
 /**
  * L'empreinte d'un rapport : son texte entier réduit à un code (deux sommes de 32 bits et la longueur, séparées) ;
@@ -254,8 +292,11 @@ export const soundEntry = (raw: unknown): CoordEntry | null => {
     if (!picked || !left || picked.length + left.length === 0 || picked.some(i => left.includes(i)) || typeof e.print !== 'string' || !/^p[a-z0-9]{1,16}$/.test(e.print)) return null
     return { id: e.id, kind: 'pick', run: e.run, at: e.at, picked, left, print: e.print }
   }
+  if (e.kind === 'cutAuto') return e.by === 'click' || e.by === 'coo' ? { id: e.id, kind: 'cutAuto', run: e.run, at: e.at, by: e.by } : null
+  if (e.kind === 'night') return soundNightEntry(e as Record<string, unknown> & { id: string; run: string; at: number })
   if (e.kind === 'validate') return isReportPrint(e.print) ? { id: e.id, kind: 'validate', run: e.run, at: e.at, print: e.print } : null
   if (e.kind === 'redo') return isDecisionsPath(e.file) && isSeries(e.series) && isRound(e.round) ? { id: e.id, kind: 'redo', run: e.run, at: e.at, file: e.file, series: e.series, round: e.round } : null
+  if (e.kind === 'instruct') return isDecisionsPath(e.file) && isSeries(e.series) && (e.origin === 'user' || e.origin === 'coo') ? { id: e.id, kind: 'instruct', run: e.run, at: e.at, file: e.file, series: e.series, origin: e.origin } : null
   if (e.kind === 'close' || e.kind === CLOSE_KIND) {
     const delivered = deliveredOf(e.delivered)
     return { id: e.id, kind: 'close', run: e.run, at: e.at, ...(isTime(e.doneAt) ? { doneAt: e.doneAt } : {}), ...(delivered ? { delivered } : {}), ...(delivered && isTime(e.report) ? { report: e.report } : {}) }
@@ -275,6 +316,31 @@ export const soundEntry = (raw: unknown): CoordEntry | null => {
     return { id: e.id, kind: 'force', run: e.run, at: e.at, held: e.held, awaited: { run: w.run, group: w.group }, ...(e.on === 'plan' ? { on: 'plan' as const } : {}) }
   }
   return null
+}
+
+/**
+ * Un geste de nuit relu : l'id de la surveillance en forme, un geste de la liste fermée, et pour chacun ce qu'il
+ * vise, rien de plus (`wave` et `relaunch` : un groupe ; `resend` : une question « sans-suite: » ; `force` : le
+ * groupe retenu et la liste, 8 au plus, des groupes d'autres missions qui le retiennent). Hors forme : null, jamais appliqué.
+ */
+const soundNightEntry = (e: Record<string, unknown> & { id: string; run: string; at: number }): CoordNight | null => {
+  const act = NIGHT_ENTRY_ACTS.find(a => a === e.act)
+  if (!isNightId(e.watch) || act === undefined) return null
+  const base = { id: e.id, kind: 'night' as const, run: e.run, at: e.at, watch: e.watch, act }
+  if (act === 'wave' || act === 'relaunch') return isGroupId(e.group) && e.question === undefined && e.awaited === undefined ? { ...base, group: e.group } : null
+  if (act === 'resend') {
+    if (!isQuestionRef(e.question) || !e.question.startsWith('sans-suite:') || e.awaited !== undefined || (e.group !== undefined && !isGroupId(e.group))) return null
+    return { ...base, question: e.question, ...(e.group !== undefined ? { group: e.group as string } : {}) }
+  }
+  const list = Array.isArray(e.awaited) && e.awaited.length > 0 && e.awaited.length <= NIGHT_FORCE_PAIRS_MAX ? (e.awaited as unknown[]) : null
+  if (!isGroupId(e.group) || e.question !== undefined || list === null) return null
+  const pairs: { run: string; group: string; on?: 'plan' }[] = []
+  for (const raw of list) {
+    const w = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+    if (!isSafeId(w.run) || w.run === e.run || !isGroupId(w.group) || (w.on !== undefined && w.on !== 'plan')) return null
+    pairs.push({ run: w.run, group: w.group, ...(w.on === 'plan' ? { on: 'plan' as const } : {}) })
+  }
+  return { ...base, group: e.group, awaited: pairs }
 }
 
 /** La mission que vise une entrée relue, même d'un genre inconnu ; null sans id de mission en forme. */
@@ -318,8 +384,8 @@ export const isEntryGone = (raw: unknown, isGone: (run: string) => boolean): boo
   if (run !== null && isGone(run)) return true
   // L'autre mission qu'une entrée nomme (celle qui a pris la piste, celle qu'un forçage attendait) : partie, l'entrée part avec.
   const e = soundEntry(raw)
-  const other = e?.kind === 'taken' ? e.by.run : e?.kind === 'force' || e?.kind === 'plan' ? e.awaited.run : null
-  return other !== null && isGone(other)
+  const others = e?.kind === 'taken' ? [e.by.run] : e?.kind === 'force' || e?.kind === 'plan' ? [e.awaited.run] : e?.kind === 'night' ? (e.awaited ?? []).map(a => a.run) : []
+  return others.some(isGone)
 }
 
 /** Les entrées sans celles des missions effacées (la mission visée ou l'autre qu'elles nomment). */
@@ -408,9 +474,26 @@ export type CoordRelay = CoordGesture | CoordAnswer | CoordValidate | CoordRedo
 export const pendingRelaysFor = (entries: readonly CoordEntry[], run: string, applied: ReadonlySet<string>): CoordRelay[] =>
   entries.filter((e): e is CoordRelay => (e.kind === 'gesture' || e.kind === 'answer' || e.kind === 'validate' || e.kind === 'redo') && e.run === run && !applied.has(e.id))
 
+/**
+ * Les coupures de l'auto qui visent la mission `run`, pas encore appliquées ici, dans l'ordre du fichier (sans
+ * péremption : couper ne perd rien) ; une coupure datée à plus d'une minute dans le futur (`isCutDated`) attend.
+ */
+export const pendingCutsFor = (entries: readonly CoordEntry[], run: string, applied: ReadonlySet<string>, now: number): CoordCutAuto[] =>
+  entries.filter((e): e is CoordCutAuto => e.kind === 'cutAuto' && e.run === run && !applied.has(e.id) && isCutDated(e, now))
+
+/** La date d'une coupure vaut à cet instant : au plus une minute d'avance sur l'horloge d'ici. */
+export const isCutDated = (e: CoordCutAuto, now: number): boolean => e.at <= now + COORD_SKEW_MS
+
+/** L'avance qu'une date d'entrée peut avoir sur l'horloge d'ici (vague, coupure) ; au-delà, l'entrée attend. */
+const COORD_SKEW_MS = 60_000
+
 /** Les vagues lancées chez le COO qui visent la mission `run`, pas encore appliquées ici et encore dans leurs 10 minutes. */
 export const pendingWavesFor = (entries: readonly CoordEntry[], run: string, applied: ReadonlySet<string>, now: number): CoordWave[] =>
-  entries.filter((e): e is CoordWave => e.kind === 'wave' && e.run === run && !applied.has(e.id) && now - e.at < WAVE_TTL_MS && e.at <= now + 60_000)
+  entries.filter((e): e is CoordWave => e.kind === 'wave' && e.run === run && !applied.has(e.id) && now - e.at < WAVE_TTL_MS && e.at <= now + COORD_SKEW_MS)
+
+/** Les gestes de nuit qui visent la mission `run`, pas encore appliqués ici, dans l'ordre du fichier ; un geste daté à plus d'une minute dans le futur attend. */
+export const pendingNightFor = (entries: readonly CoordEntry[], run: string, applied: ReadonlySet<string>, now: number): CoordNight[] =>
+  entries.filter((e): e is CoordNight => e.kind === 'night' && e.run === run && !applied.has(e.id) && e.at <= now + COORD_SKEW_MS)
 
 /** Les attentes du plan validé : celles d'une mission (`run`), ou toutes. */
 export const planWaitsOf = (entries: readonly CoordEntry[], run?: string): PlanWait[] =>
@@ -452,6 +535,73 @@ export const markClosesDone = (entries: readonly unknown[], isOver: (entry: Coor
 
 /** Les ids déjà appliqués, relus du stockage de la discussion : seulement des ids en forme. */
 export const soundApplied = (v: unknown): string[] => (Array.isArray(v) ? v.filter(isEntryId).slice(-COORD_MAX) : [])
+
+/** La trace des consignes reçues d'une mission (`Run.instructed`), relue : des ids d'entrée en forme, sans doublon, les plus récents gardés. */
+export const soundInstructed = (v: unknown): string[] => (Array.isArray(v) ? [...new Set(v.filter(isEntryId))].slice(-COORD_MAX) : [])
+
+/** La trace unie de deux copies d'une mission : rien ne se perd, l'ordre de la première d'abord, bornée comme les marques « appliquée ». */
+export const unionInstructed = (ours: unknown, theirs: unknown): string[] => soundInstructed([...soundInstructed(ours), ...soundInstructed(theirs)])
+
+// ─── Consignes transmises ─────────────────────────────────────────
+
+/** Une consigne relayable depuis plus longtemps, mission ouverte, et absente de la trace de la mission : « non reçue » au relevé du COO. */
+const INSTRUCT_LATE_MS = 10 * 60_000
+
+/** Les consignes qui visent la mission `run`, pas encore appliquées ici, dans l'ordre du fichier ; une consigne datée à plus d'une minute dans le futur attend. */
+export const pendingInstructsFor = (entries: readonly CoordEntry[], run: string, applied: ReadonlySet<string>, now: number): CoordInstruct[] =>
+  entries.filter((e): e is CoordInstruct => e.kind === 'instruct' && e.run === run && !applied.has(e.id) && e.at <= now + COORD_SKEW_MS)
+
+/** Deux consignes de la même mission, au même fichier et à la même série : la même consigne (un renvoi). */
+const sameInstruct = (a: CoordInstruct, b: CoordInstruct): boolean => a.run === b.run && a.file === b.file && a.series === b.series
+
+/**
+ * Depuis quand une mission est ouverte, pour compter une consigne « non reçue » : sa prise (`claim.at`), ou 0 sans
+ * prise lisible (la date de la consigne compte seule alors) ; null quand elle n'est ouverte nulle part. La même
+ * règle pour le relevé du COO et le refus « déjà transmise ».
+ */
+export const instructOpenSince = (run: { status: string; owner?: unknown; claim?: { at?: unknown } }): number | null =>
+  run.status === 'active' && isSafeId(run.owner) ? (isTime(run.claim?.at) ? run.claim.at : 0) : null
+
+/**
+ * Un renvoi d'une consigne déjà transmise avec une autre origine : l'origine du premier envoi (bien daté), qu'un
+ * renvoi garde toujours ; null sinon. Une consigne de la personne ne redescend jamais en information du COO, ni l'inverse.
+ */
+export const instructOriginClash = (e: CoordInstruct, entries: readonly CoordEntry[], now: number): 'user' | 'coo' | null => {
+  const first = entries.find((x): x is CoordInstruct => x.kind === 'instruct' && sameInstruct(x, e) && x.at <= now + COORD_SKEW_MS)
+  return first && first.origin !== e.origin ? first.origin : null
+}
+
+/**
+ * Une consigne est reçue quand la trace de sa mission porte son id ou celui d'un renvoi de la même consigne :
+ * la mission n'en relaie jamais une seconde fois.
+ */
+export const isInstructReceived = (e: CoordInstruct, entries: readonly CoordEntry[], received: ReadonlySet<string>): boolean =>
+  entries.some(x => x.kind === 'instruct' && sameInstruct(x, e) && received.has(x.id))
+
+/**
+ * Où en est une consigne, vue du COO : reçue (dans la trace de sa mission), non reçue (relayable depuis plus de
+ * `INSTRUCT_LATE_MS`, mission ouverte depuis, et toujours absente de la trace), ou en attente de relais. `openSince` :
+ * la date depuis laquelle la mission est ouverte (sa prise), ou null quand elle n'est ouverte nulle part. Une
+ * consigne datée dans le futur au-delà de la tolérance d'horloge ne compte pas (null).
+ */
+export const instructState = (e: CoordInstruct, entries: readonly CoordEntry[], received: ReadonlySet<string>, openSince: number | null, now: number): 'received' | 'pending' | 'unreceived' | null => {
+  if (e.at > now + COORD_SKEW_MS) return null
+  if (isInstructReceived(e, entries, received)) return 'received'
+  if (openSince === null) return 'pending'
+  return now - Math.max(e.at, openSince) > INSTRUCT_LATE_MS ? 'unreceived' : 'pending'
+}
+
+/**
+ * Une consigne déjà transmise à la même mission, au même fichier et à la même série : refusée quand l'une de celles-là
+ * est reçue ou en attente de relais ; celles qui sont « non reçues », ou datées au-delà de la tolérance d'horloge
+ * (une copie forgée), ne bloquent pas (le COO renvoie alors par une nouvelle entrée).
+ */
+export const isInstructSent = (e: CoordInstruct, entries: readonly CoordEntry[], received: ReadonlySet<string>, openSince: number | null, now: number): boolean =>
+  entries.some(x => {
+    if (x.kind !== 'instruct' || !sameInstruct(x, e)) return false
+    const state = instructState(x, entries, received, openSince, now)
+    return state === 'received' || state === 'pending'
+  })
 
 /**
  * La référence « [ref] » d'une discussion, extraite d'un texte relu (le fichier de référence du manager) :

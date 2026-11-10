@@ -10,7 +10,6 @@ import {
   isCloseCandidate,
   mergeBoards,
   newRun,
-  parkActive,
   reportFacts,
   startLinkedGroups,
   upgradeRun,
@@ -589,6 +588,13 @@ const twoCopies = () => {
   return { a, taken }
 }
 
+/** La copie d'une discussion qui a mis en pause sa mission active (une version d'avant le 09/11/2026, à sa fin) : sans titulaire. */
+const pausedCopy = (board: Board, at: number): Board => ({
+  ...board,
+  activeId: null,
+  runs: board.runs.map(r => (r.id === board.activeId ? { ...r, status: 'paused' as const, owner: undefined, updatedAt: at } : r)),
+})
+
 test('Une copie active d’une autre discussion, plus récente, l’emporte (prise en main) ; une copie en pause, sans auteur lisible, non', () => {
   const { a, taken } = twoCopies()
   const sent = startLinkedGroups(taken, ['A'], T0 + 3)!.board
@@ -598,15 +604,15 @@ test('Une copie active d’une autre discussion, plus récente, l’emporte (pri
   expect(active.runs[0]!.groups!.find(g => g.id === 'A')!.linked).toMatchObject({ at: T0 + 3 })
   expect(applyReport(active, { note: 'x' }, T0 + 5).text).toContain('No mission is active in this discussion')
   // Mise en pause, la copie n'a plus d'auteur (`shelve` efface `owner`) : la pause de B après son envoi
-  // a la forme de celle d'un orphelin par une autre discussion ; A garde la mission (question au porteur).
-  const paused = parkActive(sent, T0 + 4)!.board
+  // a la forme de celle d'un orphelin par une autre discussion ; A garde la mission.
+  const paused = pausedCopy(sent, T0 + 4)
   expect(paused.runs[0]!.owner).toBeUndefined()
   expect(mergeBoards(a, paused).activeId).toBe(a.activeId)
 })
 
 test('Une copie stockée plus ancienne, ou écrite par cette discussion, ne l’emporte pas sur la mission active ici', () => {
   const { a, taken } = twoCopies()
-  const paused = parkActive(startLinkedGroups(taken, ['A'], T0 + 3)!.board, T0 + 4)!.board
+  const paused = pausedCopy(startLinkedGroups(taken, ['A'], T0 + 3)!.board, T0 + 4)
   // Cette discussion a écrit depuis : sa copie, plus récente, reste.
   const later = applyReport(a, { note: 'plus tard' }, T0 + 6).board
   const kept = mergeBoards(later, paused)
@@ -642,7 +648,7 @@ test('Un état « closed » ne recule jamais dans la fusion, dans aucun sens, pr
 test('Une mission qui n’est pas actif ici garde la règle d’avant : la copie la plus récente', () => {
   const { a, taken } = twoCopies()
   const idle: Board = { ...a, activeId: null }
-  const newer = parkActive(startLinkedGroups(taken, ['A'], T0 + 3)!.board, T0 + 4)!.board
+  const newer = pausedCopy(startLinkedGroups(taken, ['A'], T0 + 3)!.board, T0 + 4)
   expect(mergeBoards(idle, newer).runs[0]!.updatedAt).toBe(T0 + 4)
   const older = { ...newer, runs: newer.runs.map(r => ({ ...r, updatedAt: T0 })) }
   const localNewer = { ...idle, runs: idle.runs.map(r => ({ ...r, updatedAt: T0 + 7 })) }

@@ -10,7 +10,7 @@ import { shownGroupId } from './basics.ts'
 import { C, SKILLS } from './catalog.ts'
 import { COO_EFFORT, leadEffortPill } from './effort.ts'
 import { neutralLine } from './closing.ts'
-import { WAITS_FR, cooPoint, roadmapNow, waveText, type CooCard, type CooMission, REPORT_CHANGED, REPORT_PAUSED, type CooDelivery, type CooReport, type CooRoadmap, type CooStatement, type CooWait } from './coo.ts'
+import { AUTO_RESUMED, WAITS_FR, cooPoint, roadmapNow, waveText, type CooCard, type CooMission, REPORT_CHANGED, REPORT_PAUSED, type CooDelivery, type CooReport, type CooRoadmap, type CooStatement, type CooWait } from './coo.ts'
 import type { LaunchMode, LaunchStart } from './launch.ts'
 import { roadmapTextPrint } from './roadmap.ts'
 import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
@@ -46,9 +46,18 @@ export type CooDo =
   | { kind: 'retro-tick'; retro: string; item: string }
   | { kind: 'retro-tick-all'; retro: string }
   | { kind: 'retro-pick'; retro: string; print: string }
+  | { kind: 'piste-tick'; piste: string }
+  | { kind: 'pistes-cut'; print: string }
+  | { kind: 'pistes-where'; where: 'repo' | 'poste' }
   | { kind: 'archive'; ids: string[]; print: string }
   | { kind: 'card-remove'; card: string }
   | { kind: 'security'; to: 'on' | 'off' }
+  | { kind: 'cut-auto'; mission: string }
+  | { kind: 'auto-ask'; mission: string }
+  | { kind: 'auto-confirm'; mission: string }
+  | { kind: 'night-ask' }
+  | { kind: 'night-confirm' }
+  | { kind: 'night-stop' }
 /** Un bouton d'une ligne : sa clé, son libellé, son geste. */
 export type CooAction = { key: string; label: string; act: CooDo }
 /** Une ligne de la vue : un titre de section, ou une ligne de contenu, avec ses boutons. */
@@ -60,7 +69,7 @@ const hhmm = (at: number): string => new Date(at).toLocaleTimeString('fr-FR', { 
 
 const missionParts = (m: CooMission): CooPart[] => {
   const def = SKILLS[m.phase]
-  const mode: CooPart = m.mode === 'auto' ? { text: `⚡${NB}Auto`, color: C.teal, bold: true } : { text: `✋${NB}Manuel`, dim: true }
+  const mode: CooPart = m.mode === 'auto' ? { text: `⚡${NB}Auto${m.resumed ? ` · ${AUTO_RESUMED}` : ''}`, color: C.teal, bold: true } : { text: `✋${NB}Manuel${m.pause !== undefined ? ` · ${neutralLine(m.pause)}` : ''}`, dim: true }
   const status: CooPart[] = m.status === 'paused' ? [{ text: 'en pause, à reprendre', dim: true }] : m.status === 'done' ? [{ text: 'close', dim: true }] : []
   return [
     mode,
@@ -70,8 +79,45 @@ const missionParts = (m: CooMission): CooPart[] => {
     ...(m.total > 0 ? [{ text: `${m.done}/${m.total}`, bold: true }] : []),
     ...m.workers.map(w => ({ text: `↗${w.group}${NB}${w.done}/${w.total}${w.state === 'returned' || w.state === 'reported' ? `${NB}rendu` : ''}`, color: C.blue, bold: true })),
     ...(m.waiting > 0 ? [{ text: `· attend ${m.waiting} question${m.waiting > 1 ? 's' : ''}`, color: C.amber, bold: true }] : []),
+    // En manuel, ouverte nulle part : elle ne peut pas s'allumer d'ici.
+    ...(m.mode === 'manual' && m.status !== 'done' && !m.isOpen ? [{ text: 'Reprends-la pour l’allumer', dim: true }] : []),
   ]
 }
+
+/**
+ * Les boutons d'une ligne de mission qui n'est pas close : « ✋ Couper l'auto » sur une mission en auto (une mission
+ * en pause garde son auto allumé : il se coupe aussi), dont le clic écrit une entrée que le mod de la mission
+ * applique, sans jamais rien allumer ; « ⚡ Auto » sur une mission en manuel ouverte dans une discussion, puis
+ * « Confirmer » et « Annuler », dont le second clic écrit l'enregistrement que la discussion de la mission prend.
+ */
+const missionActions = (m: CooMission, ask: string | undefined): { actions?: CooAction[] } => {
+  if (m.status === 'done') return {}
+  if (m.mode === 'auto') return { actions: [{ key: `coo-cut-auto-${m.id}`, label: `✋${NB}Couper l’auto`, act: { kind: 'cut-auto', mission: m.id } }] }
+  if (!m.isOpen) return {}
+  if (ask === m.id)
+    return {
+      actions: [
+        { key: `coo-auto-confirm-${m.id}`, label: 'Confirmer', act: { kind: 'auto-confirm', mission: m.id } },
+        { key: `coo-auto-cancel-${m.id}`, label: 'Annuler', act: { kind: 'auto-ask', mission: m.id } },
+      ],
+    }
+  return { actions: [{ key: `coo-auto-on-${m.id}`, label: `⚡${NB}Auto`, act: { kind: 'auto-ask', mission: m.id } }] }
+}
+
+/** La surveillance de nuit allumée, comme la montrent la vue Coordination et le bandeau du COO (libellé validé par la personne). */
+export const nightParts = (night: { until: number }): CooPart[] => [{ text: `🌙${NB}Surveillance de nuit · jusqu’à ${hhmm(night.until)}`, color: C.violet, bold: true }]
+
+/**
+ * Le bouton d'allumage de la surveillance de nuit, sur la ligne « Le point » : « 🌙 Surveillance de nuit », puis
+ * « Confirmer » et « Annuler », dont le second clic l'allume (seulement chez le titulaire du siège).
+ */
+const nightActions = (s: CooStatement): CooAction[] =>
+  s.nightAsk
+    ? [
+        { key: 'coo-night-confirm', label: 'Confirmer', act: { kind: 'night-confirm' } },
+        { key: 'coo-night-cancel', label: 'Annuler', act: { kind: 'night-ask' } },
+      ]
+    : [{ key: 'coo-night-ask', label: `🌙${NB}Surveillance de nuit`, act: { kind: 'night-ask' } }]
 
 /** Les lignes de l'onglet Coordination, calculées sur le relevé. */
 export const coordinationRows = (s: CooStatement): CooRow[] => {
@@ -83,6 +129,10 @@ export const coordinationRows = (s: CooStatement): CooRow[] => {
   return [
     { key: 'coo-point', kind: 'heading', parts: [{ text: 'Le point', bold: true }] },
     ...point.map((text, i) => ({ key: `coo-point-${i}`, kind: 'line' as const, parts: [{ text }] })),
+    // La surveillance de nuit : allumée, son bandeau et « Arrêter » ; éteinte, le seul bouton qui l'allume.
+    s.night
+      ? { key: 'coo-night', kind: 'line' as const, parts: nightParts(s.night), actions: [{ key: 'coo-night-stop', label: 'Arrêter', act: { kind: 'night-stop' as const } }] }
+      : { key: 'coo-night', kind: 'line' as const, parts: [], actions: nightActions(s) },
     { key: 'coo-waits', kind: 'heading', parts: [{ text: `Ce qui t’attend · ${s.waits.length + s.waiting.length + (s.reports ?? []).length + deliveredCount}`, bold: true, ...(s.waits.length + s.waiting.length + (s.reports ?? []).length + deliveredCount > 0 ? { color: C.amber } : {}) }] },
     ...(s.waits.length + s.waiting.length + s.relays.length + (s.reports ?? []).length + (s.delivery ? 1 : 0) + delivered.length === 0
       ? [{ key: 'coo-waits-none', kind: 'line' as const, parts: [{ text: 'Rien pour l’instant.', dim: true }] }]
@@ -125,10 +175,12 @@ export const coordinationRows = (s: CooStatement): CooRow[] => {
           })),
         ]),
     ...retroPickRows(s),
+    ...pistesWaitingRows(s),
+    ...pistesWhereRows(s),
     { key: 'coo-missions', kind: 'heading', parts: [{ text: `Missions · ${s.missions.length}`, bold: true }] },
     ...(s.missions.length === 0
       ? [{ key: 'coo-missions-none', kind: 'line' as const, parts: [{ text: 'Aucune mission dans ce projet.', dim: true }] }]
-      : s.missions.map(m => ({ key: `coo-mission-${m.id}`, kind: 'line' as const, parts: missionParts(m) }))),
+      : s.missions.map(m => ({ key: `coo-mission-${m.id}`, kind: 'line' as const, parts: missionParts(m), ...missionActions(m, s.autoAsk) }))),
     ...cardRows(s.cards ?? [], s.quota, s.delivered),
     ...planRows(s),
     ...waveRows(s),
@@ -387,7 +439,8 @@ const deliveredRows = (s: CooStatement): CooRow[] => {
 
 /**
  * Les pistes d'une rétro lancée par le COO : une case par piste (une piste prise ailleurs n'en a pas), « Tout
- * cocher », et « ✂ Découper la sélection », qui dit combien partent dans « À reprendre ».
+ * cocher », et « ✂ Découper la sélection », qui dit combien partent dans « À reprendre » (une rétro qui relit la
+ * liste d'attente n'a pas cette section : ses pistes sont dans « Pistes en attente »).
  */
 const retroPickRows = (s: CooStatement): CooRow[] =>
   (s.retroPicks ?? []).flatMap((p): CooRow[] => {
@@ -418,6 +471,72 @@ const retroPickRows = (s: CooStatement): CooRow[] =>
       })),
     ]
   })
+
+/**
+ * La section « Pistes en attente », commune à toutes les rétros qui relisent la liste : les pistes rangées par
+ * fichier (une ligne de fichier avant chaque rang), chacune avec son état, sa rétro, ses fichiers, sa carte et son
+ * dernier commentaire ; une case sur chaque « pas encore validée » ; « ✂ Découper la sélection » en bas.
+ */
+const pistesWaitingRows = (s: CooStatement): CooRow[] => {
+  const w = s.pistesWaiting
+  if (!w) return []
+  const rows: CooRow[] = [{ key: 'coo-pistes', kind: 'heading', parts: [{ text: `Pistes en attente · ${w.rows.length + w.more}`, bold: true }] }]
+  let file: string | null = null
+  for (const r of w.rows) {
+    if (r.file !== file) {
+      file = r.file
+      rows.push({ key: `coo-pistes-file-${r.id}`, kind: 'line', parts: [{ text: r.file === '' ? 'sans fichier' : neutralLine(r.file), dim: true, bold: true }] })
+    }
+    const extra = [
+      `rétro « ${neutralLine(r.retro)} »`,
+      ...(r.files.some(f => f !== r.file) ? [`fichiers : ${r.files.map(f => neutralLine(f)).join(', ')}`] : []),
+      ...(r.card !== undefined ? [`carte « ${neutralLine(r.card)} »`] : []),
+      ...(r.last !== undefined ? [`dernier commentaire : ${neutralLine(r.last.length > 120 ? `${r.last.slice(0, 119)}…` : r.last)}`] : []),
+    ].join(' · ')
+    rows.push({
+      key: `coo-piste-${r.id}`,
+      kind: 'line',
+      parts: [
+        { text: `${neutralLine(r.id)}`, dim: true },
+        { text: neutralLine(r.text.length > 160 ? `${r.text.slice(0, 159)}…` : r.text) },
+        { text: neutralLine(r.stateText), color: r.state === 'pending' ? C.amber : C.teal },
+        { text: extra, dim: true },
+      ],
+      ...(r.isTickable ? { actions: [{ key: `coo-piste-tick-${r.id}`, label: r.isTicked ? '☑' : '☐', act: { kind: 'piste-tick' as const, piste: r.id } }] } : {}),
+    })
+  }
+  if (w.more > 0) rows.push({ key: 'coo-pistes-more', kind: 'line', parts: [{ text: `${w.more} autre(s) piste(s) ouverte(s), pas montrée(s) ici.`, dim: true }] })
+  if (w.closed > 0) rows.push({ key: 'coo-pistes-closed', kind: 'line', parts: [{ text: `${w.closed} piste(s) faite(s) ou écartée(s), pas montrée(s).`, dim: true }] })
+  if (w.rows.some(r => r.isTickable))
+    rows.push({
+      key: 'coo-pistes-cut',
+      kind: 'line',
+      parts: [{ text: `${w.ticked} cochée${w.ticked > 1 ? 's' : ''}`, dim: true }],
+      actions: [{ key: 'coo-pistes-cut-go', label: `✂${NB}Découper${NB}la${NB}sélection`, act: { kind: 'pistes-cut' as const, print: w.print } }],
+    })
+  return rows
+}
+
+/**
+ * Où garder la liste d'attente des rétros : la question et ses deux boutons, tant que la personne n'a pas choisi
+ * et que la liste existe, sur ce poste ou déjà commitée dans le projet (rien à commiter avant) ; propre à la liste.
+ */
+const pistesWhereRows = (s: CooStatement): CooRow[] => {
+  const w = s.waitlist
+  if (!w || w.where !== 'unasked' || (w.state !== 'read' && w.state !== 'missing' && !w.committed)) return []
+  return [
+    { key: 'coo-pistes-where', kind: 'heading', parts: [{ text: 'Liste d’attente des rétros : la commiter dans ce projet ?', color: C.amber, bold: true }] },
+    {
+      key: 'coo-pistes-where-ask',
+      kind: 'line',
+      parts: [{ text: 'Dans un dépôt public, les pistes seraient publiées. En attendant ton choix, elle reste sur ce poste.', dim: true }],
+      actions: [
+        { key: 'coo-pistes-where-repo', label: `Commiter${NB}dans${NB}travail/`, act: { kind: 'pistes-where', where: 'repo' } },
+        { key: 'coo-pistes-where-poste', label: `Garder${NB}sur${NB}le${NB}poste`, act: { kind: 'pistes-where', where: 'poste' } },
+      ],
+    },
+  ]
+}
 
 /** Les décisions opposées entre missions (question posée à celle qui a décidé en second) et les sujets compatibles. */
 const oppositionRows = (s: CooStatement): CooRow[] => [

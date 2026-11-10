@@ -164,11 +164,14 @@ test('« ↗ Worker » : la règle d’effort propose xhigh pour une tâche de j
   expect(text).toContain('tâche de jugement')
   expect(text).toContain("jamais pour une tâche d'exécution")
   expect(text).toMatch(/section 11 de \S*reference\/effort-workers\.md, à lire avant de lancer/)
-  // Une question à boutons, jamais xhigh choisi seul.
-  expect(text).toContain('question à boutons « xhigh (Recommandé) / high »')
-  expect(text).toContain('Tu ne choisis jamais xhigh toi-même')
+  // Deux questions à boutons selon la sorte de jugement, jamais Fable ni xhigh choisi seul.
+  expect(text).toContain('« Fable 5.2 high (Recommandé) / Opus high » pour un jugement de code')
+  expect(text).toContain('« Opus xhigh (Recommandé) / Opus high » pour un jugement sur la sécurité, un document lu par d\'autres ou du design')
+  expect(text).toContain('Tu ne choisis jamais toi-même ni Fable ni xhigh')
   // Si xhigh est retenu : worker autonome, plafond de l'app, rappel de redescendre.
-  expect(text).toMatch(/worker autonome : elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\. Ici : /)
+  expect(text).toMatch(/et, si son effort est xhigh, qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\. /)
+  // Si Fable est retenu : le prompt rédigé (pas de brief écrit ici) ajoute la marque et le dit worker Fable.
+  expect(text).toMatch(/Si je réponds Fable 5\.2 high : appel \{"delegate": "[^"]+", "group": "B", "main": "\[<ref>\]", "model": "fable"\}/)
   expect(text).toContain('start_session ne donne jamais à une session un effort plus haut que celui de cette discussion')
   expect(text).toContain("que je peux redescendre l'effort de cette discussion")
   // Le lancement passe toujours l'effort choisi.
@@ -210,13 +213,17 @@ test('« ↗ xhigh » suit « ↗ Worker » sur chaque groupe prêt, jamais sur 
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     for (const id of ['A', 'B']) {
       expect((await ui.find({ key: `launch-xhigh-${id}` }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.xhigh$/), plain: true, dimColor: true })
+      expect((await ui.find({ key: `launch-fable-${id}` }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.Fable$/), plain: true, dimColor: true })
     }
-    // C attend A : ni worker, ni xhigh.
+    // C attend A : ni worker, ni xhigh, ni Fable.
     expect(await ui.find({ key: 'launch-xhigh-C' })).toBeUndefined()
-    // « Prochaine étape » propose le lot parallèle : pas de xhigh.
+    expect(await ui.find({ key: 'launch-fable-C' })).toBeUndefined()
+    // « Prochaine étape » propose le lot parallèle : ni xhigh ni Fable.
     expect(await ui.find({ key: 'next-parallel-linked' })).toBeDefined()
     for (const id of ['A', 'B']) expect(await ui.find({ key: `next-xhigh-${id}` })).toBeUndefined()
+    for (const id of ['A', 'B']) expect(await ui.find({ key: `next-fable-${id}` })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /« ↗ xhigh » : la même session, lancée en xhigh/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /« ↗ Fable » : un worker Fable, sur Fable 5\.2 high, sans question, pour un jugement de code/ })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -241,12 +248,19 @@ test('« Prochaine étape » : « ↗ xhigh » suit le worker du groupe proposé
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await ui.find({ key: 'next-linked-A' })).toBeDefined()
     expect((await ui.find({ key: 'next-xhigh-A' }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.xhigh$/), plain: true, dimColor: true })
+    expect((await ui.find({ key: 'next-fable-A' }))?.props).toMatchObject({ label: expect.stringMatching(/^↗.Fable$/), plain: true, dimColor: true })
     await ui.unmount()
   }
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   await ui.press({ key: 'next-xhigh-A' })
   expect(filled.at(-1)).toContain('Effort de la session (<effort>) : xhigh, choisi par moi au tableau de bord')
   await ui.unmount()
+  // « Annuler » remet A à lancer, puis « ↗ Fable » de la carte impose le chemin Fable.
+  const again = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await again.press({ key: 'group-linked-cancel-A' })
+  await again.press({ key: 'next-fable-A' })
+  expect(filled.at(-1)).toContain('Effort de la session (<effort>) : high, pour le worker Fable (Fable 5.2 high, choisi par moi au tableau de bord')
+  await again.unmount()
 })
 
 test('l’appui sur « ↗ xhigh » : xhigh imposé sans suggestion, worker autonome, plafond avec l’effort relevé ; avertissement sur desktop', { timeoutMs: 15000 }, async ($, on) => {
@@ -256,7 +270,8 @@ test('l’appui sur « ↗ xhigh » : xhigh imposé sans suggestion, worker auto
   const text = filled.at(-1)!
   expect(text).toMatch(/^Confie ce groupe à un worker, pour la mission « Lot » : Groupe B \(App\)/)
   expect(text).toContain("Effort de la session (<effort>) : xhigh, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort.")
-  expect(text).not.toContain('Tu ne choisis jamais xhigh toi-même')
+  expect(text).not.toContain('Tu ne choisis jamais toi-même ni Fable ni xhigh')
+  expect(text).not.toContain('"model": "fable"')
   expect(text).not.toContain('medium par défaut')
   expect(text).toMatch(/et qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\. Ici : /)
   expect(text).toContain("start_session ne donne jamais à une session un effort plus haut que celui de cette discussion (son effort relevé à l'écriture de cette demande : high ; je l'ai peut-être monté depuis, avant Entrée)")
@@ -266,6 +281,19 @@ test('l’appui sur « ↗ xhigh » : xhigh imposé sans suggestion, worker auto
   // Même chemin que « ↗ Worker » : le groupe attend son lancement.
   expect(await ui.find({ key: 'group-linked-cancel-B' })).toBeDefined()
   expect(toasts.at(-1)).toBe(`${XHIGH_TOAST}. Avant Entrée, passe cette discussion en xhigh (elle est en high) : l'app ne donne jamais à la session un effort plus haut`)
+  await ui.unmount()
+})
+
+test('l’appui sur « ↗ Fable » (ligne du groupe et carte « Prochaine étape ») : chemin Fable imposé, toast comme « ↗ xhigh », sans avertissement d’effort sur desktop', { timeoutMs: 15000 }, async ($, on) => {
+  const { filled, toasts } = await xhighWorld($, on, 'high')
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await ui.press({ key: 'launch-fable-B' })
+  const text = filled.at(-1)!
+  expect(text).toMatch(/^Confie ce groupe à un worker, pour la mission « Lot » : Groupe B \(App\) : 1\) b1 — Deux — Fable 5\.2 high, imposé\./)
+  expect(text).toContain("Effort de la session (<effort>) : high, pour le worker Fable (Fable 5.2 high, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort).")
+  expect(text).not.toContain('start_session ne donne jamais à une session un effort plus haut')
+  // Le chemin Fable n'a pas d'arrêt pour monter l'effort de cette discussion : le toast ne le demande pas.
+  expect(toasts.at(-1)).toBe('Worker pour B sur Fable 5.2 high : la demande est dans le prompt, Entrée pour la lancer')
   await ui.unmount()
 })
 

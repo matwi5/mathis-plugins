@@ -186,17 +186,20 @@ test('La vague prête part une fois, en un seul texte au nom du mod ; la suivant
   expect(w.texts.length).toBe(2)
 })
 
-test('Le brief d’une mission en auto : workers autonomes quel que soit leur effort, jamais xhigh, sans question d’effort', { timeoutMs: 40000 }, async ($, on) => {
+test('Le brief d’une mission en auto : workers autonomes quel que soit leur effort, jamais Fable ni xhigh, sans question d’effort', { timeoutMs: 40000 }, async ($, on) => {
   const { ...w } = await implementing($, on)
   const text = w.texts[0]!.text
   expect(text).toContain('quel que soit son effort')
-  expect(text).toContain('jamais xhigh')
-  expect(text).toContain('ne me pose pas la question « xhigh (Recommandé) / high »')
-  expect(text).toContain('déclare dans decided que xhigh n’a pas été proposé')
+  expect(text).toContain('jamais en xhigh ni sur Fable')
+  expect(text).toContain('La mission est en mode auto : jamais Fable ni xhigh ; ne me pose aucune des deux questions d\'effort (« Fable 5.2 high (Recommandé) / Opus high », « Opus xhigh (Recommandé) / Opus high »)')
+  expect(text).toContain('lance-le sur Opus en high et déclare dans decided que ni Fable ni xhigh n’ont été proposés')
+  // Un seul brief, Opus : rien du worker Fable.
+  expect(text).not.toContain('"model": "fable"')
+  expect(text).not.toContain('Si je réponds Fable 5.2 high')
   // En auto aussi, la ligne de chaque groupe porte l'effort calculé par le mod (tickets muets : high).
   expect(text).toContain('1) a1 — Worker — effort calculé : medium')
   expect(text).toContain('l’effort calculé sur la ligne de son groupe')
-  expect(text).not.toContain('pose-moi une question à boutons « xhigh (Recommandé) / high »')
+  expect(text).not.toContain('pose-moi une question à boutons')
   expect(text).not.toContain('et, si son effort est xhigh,')
 })
 
@@ -208,7 +211,8 @@ test('Hors auto, rien ne part, et la demande de « ⇉ en parallèle » est cell
   const filled = w.filled.at(-1)!
   expect(filled).toContain('Confie chacun de ces groupes à son worker, en parallèle')
   expect(filled).toContain('et, si son effort est xhigh,')
-  expect(filled).toContain('pose-moi une question à boutons « xhigh (Recommandé) / high »')
+  expect(filled).toContain('pose-moi une question à boutons par groupe concerné')
+  expect(filled).toContain('« Opus xhigh (Recommandé) / Opus high »')
   expect(filled).not.toContain('quel que soit son effort')
   expect(filled).not.toContain('mode auto')
 })
@@ -303,7 +307,16 @@ test('Dans une mission en auto, « ↗ Worker » remplit la demande du mode auto
   const filled = w.filled.at(-1)!
   expect(filled).toContain('Confie ce groupe à un worker')
   expect(filled).toContain('quel que soit son effort')
-  expect(filled).not.toContain('pose-moi une question à boutons « xhigh (Recommandé) / high »')
+  expect(filled).not.toContain('pose-moi une question à boutons')
+})
+
+test('Dans une mission en auto, « ↗ Fable » cliqué par la personne impose le chemin Fable, comme « ↗ xhigh » impose xhigh', { timeoutMs: 40000 }, async ($, on) => {
+  const { ...w } = await implementing($, on, LOT, { questions: [{ id: 'qa', group: 'A', text: 'Quel format ?' }] })
+  await press($, 'launch-fable-A')
+  const filled = w.filled.at(-1)!
+  expect(filled).toContain('Fable 5.2 high, choisi par moi au tableau de bord')
+  expect(filled).toContain("qu'elle est un worker Fable")
+  expect(filled).not.toContain('jamais Fable ni xhigh')
 })
 
 test('Un groupe bloqué qui tenait seul la place : un autre groupe prêt part à sa place', { timeoutMs: 40000 }, async ($, on) => {

@@ -33,10 +33,8 @@ test('le signal se pose une fois par attente (même catégorie : sa date reste),
 
 test('la pause, la mise de côté, la clôture, l’archivage et la suppression effacent le signal', () => {
   const { board, id } = waitingBoard()
-  // Mise en pause : une autre mission ouverte ici, la discussion qui finit, le chargement qui détache, la reprise d'une autre.
+  // Mise en pause : une autre mission ouverte ici, la reprise d'une autre.
   expect(signalOf(openRun(board, { title: 'Autre' }, NOW + 1).board, id)).toBeUndefined()
-  expect(signalOf(parkActive(board, NOW + 1)!.board, id)).toBeUndefined()
-  expect(signalOf(detachOnLoad(board, NOW + 1, 's'), id)).toBeUndefined()
   const other: Run = { ...newRun('implement', NOW - 9000, 'Autre'), status: 'paused' }
   expect(signalOf(resumeRun({ ...board, runs: [...board.runs, other] }, other.id, NOW + 1)!.board, id)).toBeUndefined()
   expect(signalOf(setAsideActive(board, NOW + 1)!.board, id)).toBeUndefined()
@@ -263,4 +261,13 @@ test('à la fin d’un tour, une suite toute retenue par une autre mission ne po
   await settle(clock, 2)
   expect(here().phases.find(p => p.skill === 'to-tickets')?.status).toBe('done')
   expect(here().waitsUser).toBeUndefined()
+})
+
+test('la fin de la discussion, sa relance et le chargement d’une autre gardent le signal : la mission reste à sa discussion', () => {
+  const { board, id } = waitingBoard()
+  // Une mission ne vit que dans sa discussion (choix de Mathis du 09/11/2026) : ni la fin
+  // de la discussion ni le chargement ne la mettent en pause ; elle attend toujours la personne, et le COO le dit.
+  expect(signalOf(parkActive(board, NOW + 1)!.board, id)).toBeDefined()
+  expect(signalOf(detachOnLoad(board, NOW + 1, 's'), id)).toBeDefined()
+  expect(signalOf(detachOnLoad(board, NOW + 1, 'autre'), id)).toBeDefined()
 })

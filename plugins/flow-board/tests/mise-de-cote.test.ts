@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { applyReport, applySkill, emptyBoard, newRun, resumeRun, setAsideActive } from '../hooks/model.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board } from '../types'
+import { memoryDisk } from './disque-memoire.ts'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -13,6 +14,7 @@ const PANE = {
 } as const
 
 const world = (on: any) => {
+  memoryDisk(on)
   on('skill.prompt', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }) as const)
   on('command.run', { command: 'flow' }, async (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e))

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyReport, clampFuture, detachOnLoad, emptyBoard, mergeBoards, newRun, noActiveText, resumeRun } from '../hooks/model.ts'
+import { applyReport, clampFuture, detachOnLoad, emptyBoard, mergeBoards, newRun, noActiveText, openHandoff, resumeRun } from '../hooks/model.ts'
 import type { Board } from '../types'
 
 const TOOL = 'mcp__flow-board__flow'
@@ -43,7 +43,9 @@ test('le retrait l’emporte à la fusion avec une discussion qui avait encore l
 })
 
 test('« resume » : un worker reprend la mission et enregistre dans le même appel ; le manager le reprend ensuite', () => {
-  const stored = boardWithRun()
+  // Née dans A, qui ouvre le passage par « 🐞 Bug · worker » : la session de diagnostic (B) peut la prendre, une fois.
+  const born = boardWithRun()
+  const stored = openHandoff({ ...born, runs: born.runs.map(r => ({ ...r, bornIn: 'session-A' })) }, 2_900)!.board
   const runId = stored.runs[0]!.id
   // Le worker (B) charge le projet : la mission de A y est suivi ailleurs.
   const linked = detachOnLoad(stored, 3_000, 'session-B')

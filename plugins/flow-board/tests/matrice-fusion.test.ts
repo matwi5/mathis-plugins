@@ -97,6 +97,21 @@ test('matrice · forced · valeur abîmée : une liste ou une paire hors forme n
   for (const bad of ['x', {}, [null, 42, { held: '../x', run: 'r', group: 'B', at: T0 }]]) for (const run of bothWays({ forced: bad }, { forced: [hold(T0 + 5)] })) expect(run.forced).toEqual([hold(T0 + 5)])
 })
 
+// --- instructed (keepInstructed) ---------------------------------------------
+
+test('matrice · instructed · valeur absente : une copie sans trace des consignes reçues ne vide pas celle de l’autre, dans les deux ordres', () => {
+  for (const run of bothWays({}, { instructed: ['cabc1234'] })) expect(run.instructed).toEqual(['cabc1234'])
+  for (const run of bothWays({ instructed: ['cabc1234'] }, {})) expect(run.instructed).toEqual(['cabc1234'])
+})
+
+test('matrice · instructed · valeur abîmée : une trace qui n’est pas une liste, ou des ids hors forme, ne font tomber aucun id lu, dans les deux ordres', () => {
+  for (const bad of ['x', {}, [null, 42, '../x', 'C-PAS-UN-ID']]) for (const run of bothWays({ instructed: bad }, { instructed: ['cabc1234'] })) expect(run.instructed).toEqual(['cabc1234'])
+})
+
+test('matrice · instructed · deux ordres : les traces des deux copies s’unissent, sans doublon, quelle que soit la copie gardée', () => {
+  for (const run of bothWays({ instructed: ['cabc1234', 'cdef5678'] }, { instructed: ['cdef5678', 'cghi9012'] })) expect([...(run.instructed ?? [])].sort()).toEqual(['cabc1234', 'cdef5678', 'cghi9012'])
+})
+
 // --- launch (keepLaunch) -----------------------------------------------------
 
 const launch = (at: unknown, id = 'labcdefgh1') => ({ id, card: 'kabcdef1', at, folder: 'export-csv', start: 'grill-with-docs', mode: 'manual' })

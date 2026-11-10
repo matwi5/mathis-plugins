@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isScriptPath, isSessionId, isVersionForm, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, neutralRelayed, reopenText, shellQuote } from '../hooks/closing.ts'
-import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, isFableMark, newRun, startLinkedGroups } from '../hooks/model.ts'
 import { applyRelay, decidedFileText } from '../hooks/relay.ts'
 import { isSeat } from '../hooks/seat.ts'
 import { isEntryId, refOf, soundEntry } from '../hooks/coordination.ts'
@@ -88,6 +88,7 @@ const FORM_GUARDS: Record<string, FormGuard> = {
   isSafeBranch: { accepts: isSafeBranch, valid: 'feat/ab-cd', hostile: token => `feat/ab${token}cd` },
   isVersionForm: { accepts: isVersionForm, valid: '0.80.0-rc.1', hostile: token => `0.8${token}0.0` },
   isWorktreePath: { accepts: value => isWorktreePath(value, ROOT), valid: `${ROOT}/.claude/worktrees/groupe-ab-cd`, hostile: token => `${ROOT}/.claude/worktrees/groupe-ab${token}cd` },
+  isFableMark: { accepts: isFableMark, valid: 'fable', hostile: token => `fa${token}ble` },
   isScriptPath: { accepts: isScriptPath, valid: '/opt/poste/.claude/plugins/flow-board/scripts/fermeture.mjs', hostile: token => `/opt/po${token}ste/.claude/plugins/flow-board/scripts/fermeture.mjs` },
 }
 const NEUTRALIZERS: Record<string, (value: unknown) => string> = { neutralLine, neutralInPrompt, neutralRelayed }

@@ -131,6 +131,107 @@ test('SONDE_EFFORT réécrit l’effort des étapes du fil principal, pas celles
   expect(efforts).toEqual(['max', 'low'])
 })
 
+// Le moteur d'une étape : il note le modèle et l'effort de chaque requête, et répond par `model`.
+const stepEngine = (on: any, served = 'claude-fable-5-2') => {
+  const asked: { model: string; agentId?: string }[] = []
+  on('turn.step', async function* (_$: unknown, e: any) {
+    asked.push({ model: e.model, agentId: e.agentId })
+    const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: served }
+    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], serverToolUses: [{ id: 's1', name: 'advisor', input: {} }], stopReason: 'end_turn' as const, usage }
+  })
+  return asked
+}
+
+const step = async ($: any, index: number, agentId?: string) => {
+  for await (const _ of $.turn.step({ turnId: 't', index, model: 'claude-opus-5-5', messageCount: 1, effort: 'medium', ...(agentId ? { agentId } : {}) } as any)) {
+    // la réponse
+  }
+}
+
+test('/sonde-modele fable envoie les requêtes du fil principal sur fable, jamais celles d’un spécialiste ou d’un fork, et /sonde-modele seul les ramène', async ($, on) => {
+  const { journal } = engine(on)
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as any)
+  const asked = stepEngine(on)
+  await start($)
+  await step($, 0)
+  const r = await $.command.run({ command: 'sonde-modele', args: 'fable' } as any)
+  expect(r.text).toMatch(/fable/)
+  await step($, 1)
+  await step($, 2, 'fork-1')
+  const back = await $.command.run({ command: 'sonde-modele', args: '' } as any)
+  expect(back.text).toMatch(/modèle de la session/)
+  await step($, 3)
+  expect(asked).toEqual([
+    { model: 'claude-opus-5-5', agentId: undefined },
+    { model: 'fable', agentId: undefined },
+    { model: 'claude-opus-5-5', agentId: 'fork-1' },
+    { model: 'claude-opus-5-5', agentId: undefined },
+  ])
+  // Le journal note la réécriture, le modèle de la session pendant elle, et ce que dit la réponse
+  // (modèle qui a répondu, outils du serveur comme l'advisor).
+  const lines = journal.at(-1)!.trim().split('\n').map(l => JSON.parse(l))
+  const rewritten = lines.filter(l => l.ev === 'modele:réécrit')
+  expect(rewritten).toHaveLength(1)
+  expect(rewritten[0]).toMatchObject({ de: 'claude-opus-5-5', vers: 'fable', index: 1, sessionModel: 'claude-opus-5-5' })
+  const result = lines.find(l => l.ev === 'turn.step:result' && l.index === 1)
+  expect(result).toMatchObject({ agentId: null, model: 'claude-fable-5-2', stopReason: 'end_turn', serverTools: ['advisor'] })
+})
+
+test('/sonde-modele fable 2 ne réécrit que les deux premières étapes de chaque tour : la suite du tour repart sur le modèle de la session', async ($, on) => {
+  engine(on)
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as any)
+  const asked = stepEngine(on)
+  await start($)
+  const r = await $.command.run({ command: 'sonde-modele', args: 'fable 2' } as any)
+  expect(r.text).toMatch(/2 premières étapes/)
+  await step($, 0)
+  await step($, 1)
+  await step($, 2)
+  await step($, 0)
+  await $.command.run({ command: 'sonde-modele', args: '' } as any)
+  expect(asked.map(a => a.model)).toEqual(['fable', 'fable', 'claude-opus-5-5', 'fable'])
+})
+
+test('/sonde-modele fable +1 ne réécrit qu’à partir de la deuxième étape de chaque tour : le début du tour part sur le modèle de la session', async ($, on) => {
+  engine(on)
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as any)
+  const asked = stepEngine(on)
+  await start($)
+  const r = await $.command.run({ command: 'sonde-modele', args: 'fable +1' } as any)
+  expect(r.text).toMatch(/à partir de l'étape 1/)
+  await step($, 0)
+  await step($, 1)
+  await step($, 2)
+  await step($, 0)
+  await step($, 1, 'fork-1')
+  await $.command.run({ command: 'sonde-modele', args: '' } as any)
+  await step($, 1)
+  expect(asked.map(a => a.model)).toEqual(['claude-opus-5-5', 'fable', 'fable', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
+})
+
+test('une requête réécrite que l’API refuse est notée au journal, puis l’erreur rendue au moteur', async ($, on) => {
+  const { journal } = engine(on)
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as any)
+  on('turn.step', async function* (_$: unknown, _e: any) {
+    throw new Error('400 invalid_request_error: thinking blocks')
+  })
+  await start($)
+  await $.command.run({ command: 'sonde-modele', args: 'fable' } as any)
+  let thrown: unknown = null
+  try {
+    await step($, 0)
+  } catch (err) {
+    thrown = err
+  }
+  await $.command.run({ command: 'sonde-modele', args: '' } as any)
+  // Le faux moteur saute un hook de test qui lève : l'erreur qui remonte est celle du moteur sans réponse.
+  expect(thrown).not.toBeNull()
+  const lines = journal.at(-1)!.trim().split('\n').map(l => JSON.parse(l))
+  expect(lines.find(l => l.ev === 'turn.step:erreur')).toMatchObject({ agentId: null, index: 0, model: 'fable' })
+  expect(lines.find(l => l.ev === 'turn.step:erreur').error).toBe(String(thrown).slice(0, 300))
+})
+
 test('/sonde-envoyer-a envoie le texte par $.session.send, à un id de session ou à un nom', async ($, on) => {
   const { journal } = engine(on)
   const sent: { to: unknown; text: string }[] = []

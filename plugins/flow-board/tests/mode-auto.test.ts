@@ -185,20 +185,22 @@ test('Après un /clear (nouvel id de discussion), l’auto est en pause « discu
   expect(await bandText($, 'terminal')).toMatch(/⚡\sAuto\s·\sen\scours/)
 })
 
-test('Une mission dont la discussion porteuse a planté garde l’auto allumé, en pause ; repris ici, il ne repart pas sans deux clics, et un clic le coupe', { timeoutMs: 20000 }, async ($, on) => {
+test('Une mission dont la discussion porteuse a planté garde l’auto allumé, suivie là-bas ; reprise ici, il ne repart pas sans deux clics, et un clic le coupe', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 + 60_000 })
   const w = world(on)
   // La mission d'une discussion morte (pas d'événement de fin) : actif, vieux de plus de 30 min, allumé par elle.
+  // Elle reste active à son nom (une mission ne vit que dans sa discussion, 09/11/2026) : l'auto n'envoie pas d'ici.
   const run: Run = { ...newRun('implement', T0 - 3_600_000, 'Orphelin'), owner: 'morte', updatedAt: T0 - 3_600_000, auto: { onAt: T0 - 3_600_000, onBy: 'morte' } }
   seed(w, { ...emptyBoard('', 'p'), session: 'morte', deleted: [], runs: [run], activeId: run.id })
   await start($)
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: /⚡\sAuto en pause : mission en pause/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /⚡\sAuto allumé, la mission est suivie dans une autre discussion/ })).toBeDefined()
     await pane.unmount()
   }
-  // Repris dans cette discussion : la pause se déduit (« discussion changée ») ; les deux boutons sont là.
+  // Repris dans cette discussion, en secours (deux clics) : la pause se déduit (« discussion changée ») ; les deux boutons sont là.
   await press($, `resume-${run.id}`)
+  await press($, `resume-confirm-${run.id}`)
   for (const surface of SURFACES) expect(await bandText($, surface)).toMatch(/⚡\sAuto\sen\spause\s:\sdiscussion\schangée/)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await pane.find({ key: 'auto-on' })).toBeDefined()

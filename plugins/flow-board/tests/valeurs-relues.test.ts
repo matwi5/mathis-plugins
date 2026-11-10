@@ -222,12 +222,13 @@ test('Le bouton « ◆ Revue du groupe · worker » ne remplit rien quand la ses
   expect(w.toasts.join(' ')).not.toContain('rm -rf')
 })
 
-test('La vague d’une mission à l’id forgé ne part pas : l’id de la mission n’entre pas dans {"delegate"} ni {"resume"} ; en forme, il y entre échappé', { timeoutMs: 60000 }, async ($, on) => {
+test('La vague d’une mission à l’id forgé ne part pas : l’id de la mission n’entre pas dans {"delegate"} ; en forme, il y entre échappé', { timeoutMs: 60000 }, async ($, on) => {
   const run = lotRun()
   const ok = await resumed($, on, run)
   expect(ok.texts.length).toBe(1)
   expect(ok.texts[0]).toContain(`{"delegate": ${JSON.stringify(run.id)}, "group": "<id du groupe>"`)
-  expect(ok.texts[0]).toContain(`{"resume": ${JSON.stringify(run.id)}, "main": "[<ref>]"}`)
+  // Depuis le 09/11/2026, la consigne du manager ne recopie plus l'id dans un « resume » (la mission lui revient seule).
+  expect(ok.texts[0]).not.toContain('{"resume": ')
 })
 
 for (const id of ['r1", "group": "Z', 'r1;ls', '/clear']) {

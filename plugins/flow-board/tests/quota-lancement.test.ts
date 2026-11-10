@@ -130,7 +130,8 @@ for (const [label, limits] of [
     // La carte du lancement est bien dessinée et chaque appui a rempli le prompt : seule la ligne de quota manque.
     expect(isLaunchDrawn).toBe(true)
     expect(texts).toHaveLength(2)
-    expect(texts[0]).toContain('xhigh (Recommandé) / high')
+    expect(texts[0]).toContain('« Opus xhigh (Recommandé) / Opus high »')
+    expect(texts[0]).toContain('« Fable 5.2 high (Recommandé) / Opus high »')
     expect(texts[1]).toContain("Effort de la session (<effort>) : xhigh, choisi par moi au tableau de bord")
     expect(shown).toBe(false)
     for (const text of texts) expect(text).not.toContain('quota')
@@ -140,12 +141,13 @@ for (const [label, limits] of [
 test('la demande de lancement cite le quota dans la question d’effort xhigh, et sous un xhigh imposé', async ($, on) => {
   const { texts } = await mount($, on, QUOTA, ['launch-linked-A', 'launch-xhigh-B'])
   const [asked = '', imposed = ''] = texts
-  expect(asked).toContain(`question à boutons « xhigh (Recommandé) / high » avec une ligne qui nomme le ticket et la sorte de jugement, et une ligne qui cite le quota de cette discussion, relevé à l'écriture de cette demande (${QUOTA_TEXT})`)
+  // Le quota se cite sous la question Opus xhigh : ses fenêtres sont celles du compte, pas la part de Fable.
+  expect(asked).toContain(`« Opus xhigh (Recommandé) / Opus high » pour un jugement sur la sécurité, un document lu par d'autres ou du design, avec une ligne qui cite le quota de cette discussion, relevé à l'écriture de cette demande (${QUOTA_TEXT})`)
   expect(imposed).toContain(`ne me pose aucune question sur l'effort ; en lançant, cite-moi en une ligne, sans attendre de réponse, le quota de cette discussion, relevé à l'écriture de cette demande (${QUOTA_TEXT})`)
 })
 
 test('GROUP_EFFORT sans quota garde son texte d’avant', () => {
-  for (const imposed of [undefined, 'xhigh'] as const) {
+  for (const imposed of [undefined, 'xhigh', 'fable'] as const) {
     expect(GROUP_EFFORT(false, imposed, 'high', 'P', null)).toBe(GROUP_EFFORT(false, imposed, 'high', 'P'))
     expect(GROUP_EFFORT(false, imposed, 'high', 'P')).not.toContain('quota')
   }

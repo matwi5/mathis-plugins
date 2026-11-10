@@ -156,7 +156,7 @@ Le bouton qui propose la prochaine action à faire, le même dans le panneau d'u
 _Avoid_: bouton Ensuite, bouton suivant
 
 **Mode auto** :
-L'état d'une mission que l'utilisateur a allumé par un clic de sa part (« ⚡ Auto » puis « Confirmer » dans la mission, ou « Lancer en auto » chez le COO) : la mission avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour cette mission seulement, depuis la discussion où il a été allumé ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto »), et le mod le met en pause dans certains cas (une lecture ratée, plus rien qui puisse avancer sans l'utilisateur). Une mission qui n'est pas en auto est en manuel.
+L'état d'une mission que l'utilisateur a allumé par un clic de sa part (« ⚡ Auto » puis « Confirmer » dans la mission ou sur sa ligne de la vue Coordination du COO, ou « Lancer en auto » chez le COO) : la mission avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour cette mission seulement, depuis la discussion où il a été allumé ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto » dans la mission, « ✋ Couper l'auto » sur sa ligne de la vue Coordination), le COO peut le couper sans jamais l'allumer, et le mod le met en pause dans certains cas (une lecture ratée ; plus rien qui puisse avancer sans l'utilisateur, seule pause qui reprend alors d'elle-même, une fois ses questions répondues). Une mission qui n'est pas en auto est en manuel.
 _Avoid_: pilote automatique, mode autonome
 
 **Choix d'expérience** :
@@ -226,8 +226,12 @@ Une tâche à la consigne explicite, dont le résultat se vérifie tout de suite
 _Avoid_: tâche simple
 
 **Worker autonome** :
-Un worker de groupe qui tranche lui-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur : celui lancé à l'effort le plus haut (xhigh), pour les tâches de jugement, et, quel que soit son effort, celui d'une mission en mode auto, qui tranche aussi un choix en zone sensible quand la recommandation respecte l'invariant déjà validé (quand il y en a un) et qu'elle est la plus prudente.
+Un worker de groupe qui tranche lui-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur : celui lancé pour une tâche de jugement, sur Opus xhigh (sécurité, document lu par d'autres, design) ou en worker Fable (jugement de code), et, quel que soit son effort, celui d'une mission en mode auto, qui tranche aussi un choix en zone sensible quand la recommandation respecte l'invariant déjà validé (quand il y en a un) et qu'elle est la plus prudente.
 _Avoid_: session autonome, mode xhigh, session xhigh
+
+**Worker Fable** :
+Un worker de groupe dont le fil principal tourne sur Fable 5.2 high par son mod, d'après la marque `"model": "fable"` que son brief lui fait poser dans sa délégation ; lancé pour un jugement de code, sur la réponse « Fable 5.2 high » à la question d'effort ou par le bouton « ↗ Fable », il part sur Opus, est un worker autonome, et confie toutes ses revues à un relecteur Opus.
+_Avoid_: session Fable, worker sur Fable
 
 **Relecture du fond et de la forme** :
 La relecture d'un document par quelqu'un d'autre que son auteur, pour le lecteur visé : ce qu'il dit (exact, complet) et comment il le dit (structure, clarté, ton).
