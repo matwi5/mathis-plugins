@@ -39,7 +39,7 @@ const NOT_FORM_GUARDS = {
   ...Object.fromEntries(
     ['sameTicket', 'sameLabel', 'sameFolder', 'sameChoice', 'isSameRelayedChoice', 'isSameProject', 'isMainRefNewer', 'isSeatAhead', 'isSeatBehind', 'keepsItems', 'keepsEntries', 'keepsPistes', 'keepsOps', 'holdsWaitlist', 'unitsOverlap'].map(name => [name, COMPARE]),
   ),
-  ...Object.fromEntries(['isModQuestion', 'hasSeparator', 'wentWrong', 'answerAwaitsPerson'].map(name => [name, MEANING])),
+  ...Object.fromEntries(['isModQuestion', 'hasSeparator', 'wentWrong', 'answerAwaitsPerson', 'isFableModelId'].map(name => [name, MEANING])),
   ...Object.fromEntries(['isPersonOrigin', 'isTypedOrigin'].map(name => [name, ORIGIN])),
   ...Object.fromEntries(['seenAfter', 'setStep', 'needsRebuild', 'withoutGone', 'liveEntries', 'markClosesDone', 'stripRunAgents', 'markAutoStarted', 'projectPlan', 'closeOpen', 'parseSecuritySetting'].map(name => [name, NOT_A_PREDICATE])),
   ...Object.fromEntries(
@@ -54,7 +54,7 @@ const NOT_FORM_GUARDS = {
       'suggestsCompaction', 'isOpenMission', 'isRetroCardRemovable', 'isEntryGone', 'isReleasedMark', 'isCutDated', 'isPlanUnreadFor', 'isPlanEntry', 'isInstructReceived', 'isInstructSent',
       'isDelivered', 'isDeliveryOpen', 'isClosedSession', 'isPistesCard', 'hasIntentTurn', 'isRecordStale', 'holdsItemsSession', 'isResentInFlight', 'isSentGroup', 'isKeptGroup', 'isHoldingGroup',
       'isClosedLink', 'isRetried', 'isRetriedSince', 'isItemsCloseCandidate', 'hasLaunchedLinked', 'isSureLink', 'isSeatGap', 'isNightWakeDue', 'hasWaitCycle', 'isAdvisorUnsettled',
-      'isRepeatedReview', 'hasRetro', 'holdsPick', 'isAwaitingSession', 'isJudgmentTicket',
+      'isRepeatedReview', 'hasRetro', 'holdsPick', 'isAwaitingSession', 'isJudgmentTicket', 'isFableStuck',
     ].map(name => [name, ON_MISSION]),
   ),
 }

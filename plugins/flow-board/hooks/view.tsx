@@ -73,6 +73,7 @@ import {
 import {
   relayForGroup,
   withRelay,
+  workerStopOf,
   type GroupRelay,
   inForce,
 } from './relay.ts'
@@ -93,7 +94,7 @@ import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
 import { seatState } from './seat.ts'
-import { leadEffort, leadEffortPill, quotaText, type LeadEffort, type QuotaWindow } from './effort.ts'
+import { FABLE_STUCK_WORDS, leadEffort, leadEffortPill, quotaText, type LeadEffort, type QuotaWindow } from './effort.ts'
 import type { CooStatement } from './coo.ts'
 import { cooBandParts, coordinationRows, nightParts, securitySettingRows, type CooDo, type CooPart } from './coo-view.tsx'
 import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
@@ -195,6 +196,8 @@ export type View = {
   isFableOn?: boolean
   /** Fable éteint par le repli « Fable indisponible », sans `/model` tapé ; absent : non. */
   isFableOff?: boolean
+  /** Chez un manager, le cadrage fini et la session restée sur un modèle Fable (`isFableStuck`) : le bandeau dit « tape /model opus » ; absent : non. */
+  isFableStuck?: boolean
   /** Le suivi en défaut (S11, R2) : `true`, une écriture du registre refusée ; `'lost'`, un changement perdu. */
   agentsAlert?: boolean | 'lost'
   /** Le réglage « revue de sécurité » du projet, relu à ce rendu ; absent ou `unread` : montré « activée ». Jamais lu par une décision. */
@@ -951,16 +954,23 @@ const ticketParts = (run: Run): BarPart[] => {
 
 const GROUP_COLORS = [C.blue, C.teal, C.magenta, C.coral, C.indigo, C.sand]
 
-/** Où en est le worker d'un groupe : à lancer, au travail, ou terminé avec des tickets ouverts (ambre). */
-const linkLabel = (k: Kit, link: NonNullable<TicketGroup['linked']>, relay: GroupRelay | null, open: number, now: number): unknown =>
+/**
+ * Où en est le worker d'un groupe : à lancer, arrêté par une erreur (rouge, tant que sa note d'arrêt est son dernier
+ * signal : `workerStopOf`, un des textes fixes du mod), au travail, ou terminé avec des tickets ouverts (ambre).
+ */
+const linkLabel = (k: Kit, link: NonNullable<TicketGroup['linked']>, relay: GroupRelay | null, open: number, now: number): unknown => {
+  const stop = workerStopOf(relay?.last)
   // Un envoi marqué (`sessionClash`) : des sessions s'y sont déclarées, il n'est plus « à lancer » même sans id noté.
-  isAwaitingSession(link)
+  return isAwaitingSession(link)
     ? T(k, `↗${NB}worker à lancer`, { color: C.blue, bold: true })
+    : stop !== null
+      ? T(k, `⚠${NB}${stop.text.replace(/ /g, NB)}`, { color: C.red, bold: true })
     : relay?.endedAt !== undefined
       ? open > 0
         ? T(k, `↗${NB}worker terminé il y a ${dur(now - relay.endedAt)}`, { color: C.amber, bold: true })
         : T(k, `↗${NB}worker terminé · à rendre`, { color: C.blue, bold: true })
       : T(k, `↗${NB}en cours · worker`, { color: C.blue, bold: true })
+}
 
 /** En-tête d'un groupe : où il en est, avec qui il peut avancer, ce qu'il attend, son worker. */
 const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, act: Actions): unknown => {
@@ -2929,7 +2939,7 @@ const anytimeCard = (k: Kit, act: Actions, run?: Run): unknown => {
 
 /** Ce que vaut l'allumage du mode auto, décidé au cadrage du mode auto, montré au premier clic sur « ⚡ Auto ». */
 const AUTO_WORTH =
-  'Ton second clic vaut ton accord, pour cette mission seulement, sur ses validations à boutons (accord du cadrage, spec, découpage, plan) et sur les écritures Asana qu’elle prévoit (création des tickets, statuts) : chacune sera inscrite dans « Décidé sans toi ». Une question en zone sensible se tranche seule quand l’option recommandée respecte l’invariant déjà validé (quand il y en a un) et qu’elle est la plus prudente (elle ne perd rien, n’expose rien, ne supprime rien sans retour) : elle est inscrite dans « Décidé sans toi », son texte commençant par « Zone sensible : », et le compte rendu la range à part, pour que tu la relises. L’auto s’arrête au rapport du compte rendu ; le valider, la version et le push restent à toi. Restent aussi à toi, et n’arrêtent que ce qu’elles concernent :'
+  'Ton second clic vaut ton accord, pour cette mission seulement, sur ses validations à boutons (accord du cadrage, partage d\u2019un tri, spec, découpage, plan) et sur les écritures Asana qu’elle prévoit (création des tickets, statuts) : chacune sera inscrite dans « Décidé sans toi ». Une question en zone sensible se tranche seule quand l’option recommandée respecte l’invariant déjà validé (quand il y en a un) et qu’elle est la plus prudente (elle ne perd rien, n’expose rien, ne supprime rien sans retour) : elle est inscrite dans « Décidé sans toi », son texte commençant par « Zone sensible : », et le compte rendu la range à part, pour que tu la relises. L’auto s’arrête au rapport du compte rendu ; le valider, la version et le push restent à toi. Restent aussi à toi, et n’arrêtent que ce qu’elles concernent :'
 
 /** Les six catégories de décisions qui bloquent toujours, même en auto : seuls les choix d'expérience et les décisions qui sont vraiment à la personne. */
 const AUTO_BLOCKS: readonly string[] = [
@@ -3488,7 +3498,7 @@ const autoPill = (run: Run, view: View): BandPill | null => {
   return null
 }
 
-/** Les pastilles du bandeau après la phase : les tickets, les groupes dans des workers, les agents au travail, les choix à relire. */
+/** Les pastilles du bandeau après la phase : l'effort imposé, « tape /model opus » (resté sur Fable après le cadrage), les tickets, les groupes dans des workers, les agents au travail, les choix à relire. */
 const bandPills = (run: Run, view: View): BandPill[] => {
   const t = countTickets(run.tickets)
   const running = agentsAtWork(view)
@@ -3500,6 +3510,8 @@ const bandPills = (run: Run, view: View): BandPill[] => {
   const pill = effort ? leadEffortPill(effort, view.agents?.main?.effort) : null
   return [
     ...(pill ? [{ text: pill.replace(/ /g, NB), color: C.blue }] : []),
+    // Resté sur Fable après le cadrage : seule la personne peut retaper le modèle.
+    ...(view.isFableStuck === true ? [{ text: FABLE_STUCK_WORDS.replace(/ /g, NB), color: C.amber, bold: true }] : []),
     ...(t.total > 0 ? [{ text: `${t.done}/${t.total}`, bold: true }] : []),
     ...relayPills(run, view),
     // Retenu par une autre mission : ce qui attend, et quoi (titre neutralisé).

@@ -4,6 +4,30 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.86.0 — 2026-11-13
+
+Deux missions : la fiabilité du tri (une mission qui part en `/triage` se déroule de bout en bout comme les autres) et « Pistes de rétro · découpage » (les pistes de la rétro « Répartition des modèles et efforts »).
+
+### Ajouté
+- **Étapes du tri** : la phase Triage suit le déroulé d'un tri en lot (huit étapes, dont Sensible et Partage), avec les consignes de cadrage, son propre bloc du mode auto et le partage du tri parmi les validations à boutons.
+- **`/to-tickets` après un tri** part du seul `tri.md` de la mission, sans ticket envoyé pour une réponse pendant le tri.
+- **Compte rendu d'un tri** : une section « Entrées triées » dit ce que devient chaque entrée ; le rapport fait aussi ce que les décisions de la mission lui demandent.
+- **Feuille de route** : au lancement, les entrées « À reprendre » que nomme le premier message passent « rattachée à <mission> » ; au relevé d'une mission close et validée, le COO lit l'état « faite : » ; la vue Coordination montre les entrées rattachées, après les ouvertes, avec « Plus tard » et « Écarter ».
+- **Worker arrêté** par une erreur qu'un nouvel essai ne règle pas : une note fixe sur la ligne du groupe.
+- **Rappel du ticket en cours** : un worker qui code avant de passer son ticket « en cours » le reçoit (pas sur un fichier de ticket local).
+- **Après le cadrage** : compaction du manager avant la première vague quand l'auto s'allume après le découpage, et pastille « tape /model opus » pour un manager resté sur Fable.
+- **Consignes de revue d'un ticket** : le chemin du `SKILL.md` de code-review y est écrit (« non trouvé » quand il ne se résout pas sous `plugins/`).
+- **Lancement d'un groupe Opus** : le modèle Opus est écrit dans la demande.
+
+### Modifié
+- **README** : l'index des notions devient un titre ; la section 7 de la procédure d'un worker renvoie au gabarit de revue ; sortie git redirigée et suite lancée avant le commit des correctifs nommées.
+- **`setAside`** reste ouvert aux pistes du rapport, jamais au travail que la mission doit encore.
+
+### Corrigé
+- Un échec de tour n'attend plus derrière la file du relais ; une mission de tri dont le rapport ne se lit pas reste en attente ; correctifs des revues des groupes des deux missions.
+
+---
+
 ## 0.85.0 — 2026-11-13
 
 La mission « Répartition des modèles et efforts » : un ticket marqué « Jugement : oui » tourne en Opus xhigh le temps de ce ticket seulement ; Fable ne sert plus que par le bouton « ↗ Fable », ou sur suggestion pour un bug qu'Opus n'a pas résolu.

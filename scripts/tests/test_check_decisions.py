@@ -236,7 +236,7 @@ class DecisionsThroughHooksTest(unittest.TestCase):
     fichier de décisions dans un worktree est refusé, une fusion propre qui l'amène passe, même quand la
     version amenée n'est pas celle de la branche principale locale (le hook ne voit pas MERGE_HEAD)."""
 
-    SCRIPTS = ("check.sh", "check.py", "placeholders.py", "hooks/pre-commit", "hooks/pre-merge-commit")
+    SCRIPTS = ("check.sh", "check.py", "placeholders.py", "epingles.py", "hooks/pre-commit", "hooks/pre-merge-commit")
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

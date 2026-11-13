@@ -196,7 +196,7 @@ const CONSIGNES = [
   },
   { name: 'le filtre du groupe « durcissement », ailleurs', keywords: ['gravité moyenne ou plus, ou qui violent un invariant', 'sous « À reprendre »'], surfaces: ['README.md', 'skills/compte-rendu/SKILL.md'] },
   // Le filtre a besoin d'une gravité : la consigne des relecteurs la fait donner à chaque constat antérieur.
-  { name: 'la gravité d’un constat antérieur, dans la consigne des relecteurs', keywords: ['avec sa gravité : haute, moyenne ou basse', 'ceux de gravité moyenne ou plus me sont proposés'], surfaces: ['reference/procedure-groupe.md', 'reference/consignes-revue.md'] },
+  { name: 'la gravité d’un constat antérieur, dans la consigne des relecteurs', keywords: ['avec sa gravité : haute, moyenne ou basse', 'ceux de gravité moyenne ou plus me sont proposés'], surfaces: ['reference/consignes-revue.md'] },
   { name: 'la gravité d’un constat antérieur, en anglais', keywords: ['with its severity: high, medium or low', 'those of medium severity or more go to the user'], surfaces: ['hooks/catalog.ts'] },
   {
     // Le groupe « durcissement » proposé attend la réponse : la consigne de fin de lot et le README disent la même chose.
@@ -368,10 +368,10 @@ const CONSIGNES = [
   {
     // Ce que le second clic accorde : les validations sautées, la même liste dans la règle des lots, le glossaire et le README.
     name: 'les validations sautées du mode auto',
-    keywords: ['accord du cadrage, spec, découpage, plan, écritures Asana de la mission'],
+    keywords: ['accord du cadrage, partage d\'un tri, spec, découpage, plan, écritures Asana de la mission'],
     surfaces: ['config/rules/flow-board.md', 'GLOSSARY.md', 'README.md'],
   },
-  { name: 'les validations sautées du mode auto, en anglais', keywords: ['framing agreement, spec, ticket split, work plan', 'the tickets created, their statuses'], surfaces: ['hooks/register.tsx'] },
+  { name: 'les validations sautées du mode auto, en anglais', keywords: ['framing agreement, triage partition, spec, ticket split, work plan', 'the tickets created, their statuses'], surfaces: ['hooks/register.tsx'] },
   {
     // Les écritures Asana que le second clic accorde : la règle « Mode auto » des lots et le premier clic sur « ⚡ Auto ».
     name: 'les écritures Asana accordées en mode auto',
@@ -505,7 +505,7 @@ const CONSIGNES = [
     // compris), son prompt, sa méthode, et la consigne du mod qui le lance (catalog.ts, importée par register.tsx).
     name: "la ligne « Ne consulte pas l'advisor » des relecteurs",
     keywords: ["Ne consulte pas l'advisor : la discussion qui t'a lancé relit ton rapport."],
-    surfaces: ['reference/consignes-revue.md', 'reference/procedure-groupe.md', 'reference/prompt-relecteur.md', 'reference/revue-securite.md', 'reference/relecture-fond-forme.md', 'hooks/catalog.ts'],
+    surfaces: ['reference/consignes-revue.md', 'reference/prompt-relecteur.md', 'reference/revue-securite.md', 'reference/relecture-fond-forme.md', 'hooks/catalog.ts'],
   },
   { name: "la ligne de l'advisor, dans les consignes du mod qui lancent un relecteur", keywords: ['NO_ADVISOR_LINE'], surfaces: ['hooks/register.tsx'] },
   {
@@ -513,7 +513,7 @@ const CONSIGNES = [
     // de violer l'invariant : la régression est Important, et chaque règle des pistes l'excepte.
     name: 'la régression Important, dans la consigne des relecteurs',
     keywords: ['une régression introduite par le diff (une entrée qui passait avant lui et qui maintenant lève, change de résultat ou est refusée) est Important, que le ticket ait un invariant ou non', 'même sur une ligne que le diff n\'a pas changée (l\'appelant d\'une fonction dont il change le contrat) : elle n\'est pas Antérieure'],
-    surfaces: ['reference/consignes-revue.md', 'reference/procedure-groupe.md'],
+    surfaces: ['reference/consignes-revue.md'],
   },
   {
     name: 'la régression Important, dans la consigne des relecteurs, en anglais',
@@ -554,7 +554,7 @@ const CONSIGNES = [
     // Un « Fix » proposé pour une branche Windows, repris tel quel, avait introduit un refus des fichiers OneDrive.
     name: 'le correctif non vérifiable sur ce poste, une piste d’essai',
     keywords: ['porte la mention « non vérifiable sur ce poste » et se rend comme une piste d\'essai'],
-    surfaces: ['reference/consignes-revue.md', 'reference/procedure-groupe.md'],
+    surfaces: ['reference/consignes-revue.md'],
   },
   {
     name: 'le correctif non vérifiable sur ce poste, une piste d’essai, en anglais',

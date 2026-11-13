@@ -1,6 +1,6 @@
 ---
 name: compte-rendu
-description: "Rapport du travail d'une mission, à lire et valider par la personne avant toute livraison : ce qui est fait, décidé sans elle, mal passé, bloqué par elle, trouvé, le code antérieur au lot, les pistes, la documentation, ce que le CHANGELOG devra dire, et ce que le push enverra."
+description: "Rapport du travail d'une mission, à lire et valider par la personne avant toute livraison : ce qui est fait, ce que chaque entrée triée est devenue, décidé sans elle, mal passé, bloqué par elle, trouvé, le code antérieur au lot, les pistes, la documentation, ce que le CHANGELOG devra dire, et ce que le push enverra."
 disable-model-invocation: true
 ---
 
@@ -14,6 +14,8 @@ Avant d'écrire, vérifie chaque fait au lieu de te fier à ta mémoire de la di
 - les commits de la mission déjà sur le dépôt distant : `git fetch`, puis `git log --oneline origin/<branche>..HEAD` (ce qui reste à envoyer) face au `git log` de la mission ; ceux qui n'y sont pas sont déjà livrés, et le rapport le dit ;
 - les versions posées depuis le début de la mission, par cette discussion ou une autre : `git log` depuis cette date du `CHANGELOG.md` et du fichier de version de chaque plugin ou paquet touché ; une entrée déjà publiée ne se redemande pas dans « Ce que le CHANGELOG devra dire », et « Ce que la livraison enverra » nomme la version qu'elle porte ;
 - **tous** les fichiers de suivi de la mission, là où le `CLAUDE.md` du projet les range (par exemple `travail/<sujet>/` : spec, tickets, `DECISIONS.md` ; sinon `travail/tasks/…`), pas seulement celui de cette discussion : une mission en plusieurs groupes passe souvent par plusieurs discussions, et ce que les autres ont fait, trouvé ou décidé n'est plus que là, dans `git log`, dans le journal de `ETAT_DU_PROJET.md` et dans les commentaires des tickets ;
+- ce que les décisions de la mission demandent au compte rendu lui-même : relis son fichier de décisions (son index « Décisions en vigueur » d'abord, puis les séries en vigueur) pour y trouver chaque obligation du rapport (un chiffre à donner, un bilan, une question à poser à la personne) ; chacune se fait dans le rapport, à la section qui lui convient, ou le rapport dit pourquoi elle ne peut pas l'être ; aucune ne se met de côté (`setAside`) : une obligation ainsi mise de côté n'avait jamais été faite ;
+- le partage d'un tri, `tri.md`, quand le dossier de la mission en a un écrit par le tri de cette mission (`git log` du fichier depuis le début de la mission : sans commit depuis, il a été laissé par une mission plus ancienne du même dossier et ne se lit pas) : une ligne par entrée de la feuille de route ou par sous-ligne (`R62-a`), avec son état (« corrige », « pour l'utilisateur », « question », « écarte », « renvoie »), sa raison et sa colonne « ticket » ; pour une ligne « corrige », la colonne « ticket » et l'état de chaque ticket qu'elle nomme (fait ou non, d'après les fichiers de tickets et le tableau de bord) donnent son sort ; une entrée « corrige » dont un ticket n'est pas fait n'est pas dite « faite » ; c'est la source de la section « Entrées triées » ;
 - les tâches du tracker (Asana) du lot et celles créées en route : statut, assignation ;
 - les faits du tableau de bord, quand ils sont donnés plus bas : tickets, tâches trouvées en route, choix signalés comme faits sans la personne, plans, tests ; quand ils nomment le fichier des choix de la mission au lieu de recopier les choix, lis ce fichier en entier : il porte chaque choix en vigueur, sa raison, son origine et la marque « Zone sensible : », et « Décidé sans toi » se rédige d'après lui.
 - les tickets de jugement, quand les faits du tableau de bord les nomment (ligne « Judgement tickets », les tickets « Jugement : oui » traités en xhigh le temps du ticket, ou sur Fable 5.2 high quand leur groupe est parti par « ↗ Fable », avec leur groupe) : le chemin de chaque groupe (xhigh, ou Fable 5.2 high) se lit dans sa demande de lancement et le compte rendu de son worker ; leur coût est celui de leurs groupes, d'après le récap d'une mission de stats-board : charge le skill `stats-board:recap` (son récap d'une mission chiffre chaque worker de groupe, par son worktree). Le coût est celui du groupe, jamais d'un ticket seul : le tableau de bord ne chiffre pas un ticket. Sans le plugin stats-board (le skill absent), le rapport nomme ces tickets et dit que le coût n'est pas disponible.
@@ -41,6 +43,16 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 - Revues (une ligne par groupe) : constats Standards et Spec, ceux des passes « bogues » et ceux de la relecture du fond et de la forme, chacun à part (les revues envoyées par cette discussion, que tu relis, et les comptes rendus des workers les donnent ; les faits plus bas ne citent du journal que ses alertes), et combien sont corrigés.
 - Sécurité (une ligne par groupe) : revue faite, avec ce qu'elle a trouvé et corrigé ; ou conseillée mais pas lancée, et pourquoi elle était conseillée ; ou, quand les faits le disent (revue désactivée pour le projet par son réglage du tableau de bord), « revue de sécurité désactivée pour ce projet ; le groupe touchait : <zone> » (« le lot touchait » pour une mission sans groupes) ; ou jugée inutile, et pourquoi.
 
+## Entrées triées
+(D'après `tri.md` ; sans `tri.md` dans le dossier de la mission, ou avec un `tri.md` qu'aucun commit n'a écrit depuis le début de la mission (laissé par une mission plus ancienne du même dossier), « Rien. ». Une ligne par entrée de la feuille de route, jamais par sous-ligne, sous l'une de ces six formes, écrites telles quelles :)
+- <id> : faite, ticket <n> (commit <hash>)
+- <id> : faite, tickets <n>, <m> (commits <hash>, <hash>)
+- <id> : écartée — <raison>
+- <id> : renvoyée
+- <id> : pour toi — <ce qui t'attend>
+- <id> : question ouverte — <la question>
+(Le sort d'une entrée, qu'elle ait une seule ligne ou des sous-lignes, se lit par ces règles dans l'ordre : la première qui s'applique donne sa forme. 1. Une ligne « question » : « question ouverte — <la question> » (plusieurs : la première, les autres à la suite). 2. Une ligne « pour l'utilisateur » : « pour toi — <ce qui t'attend> » (plusieurs : la première, les autres à la suite). 3. Une ligne « corrige » dont la colonne « ticket » est vide ou dont un ticket n'est pas fait : « pour toi — ticket <n> pas fait : <pourquoi> » (ou « ligne <id> sans ticket ») ; une entrée « corrige » dont un ticket n'est pas fait n'est jamais « faite ». 4. Au moins une ligne « corrige », toutes avec leurs tickets faits : « faite », avec un ticket ou plusieurs ; les autres sous-lignes (« écarte », « renvoie ») n'y changent rien : une entrée découpée est faite quand toutes ses sous-lignes « corrige » ont leur ticket fait et qu'aucune n'attend. 5. Toutes ses lignes « écarte » : « écartée — <raison> ». 6. Sinon (des « renvoie », seules ou avec des « écarte ») : « renvoyée ». Le détail de ses sous-lignes tient à la suite, sur la même ligne, entre parenthèses : « (R62-a : ticket <n> ; R62-b : renvoyée) ».)
+
 ## Décidé sans toi
 - <le choix> : pourquoi. Comment revenir dessus si tu n'es pas d'accord.
 (Quand les faits nomment des tickets de jugement, une ligne en tête : « Tickets de jugement, traités en xhigh le temps du ticket (sur Fable 5.2 high dans un groupe parti par « ↗ Fable ») : <id> (groupe <G>, <xhigh ou Fable 5.2 high>), … ; coût des groupes qui les portent : groupe <G> <coût>, … (coût du groupe, pas du ticket) », ou « coût non disponible (stats-board absent) ».)
@@ -51,6 +63,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 
 ## Bloqué par moi
 - <décision, accès ou action qui t'attend> : pourquoi ça bloque. Tâche Asana <lien ou GID>.
+(Les entrées « pour toi » et « question ouverte » de « Entrées triées » y paraissent aussi, une ligne chacune.)
 
 ## Trouvé
 - **<thème>** : <anomalie ou travail hors périmètre> : gravité en un mot. Tâche Asana <lien ou GID>. (Les pistes des revues vont sous « Pistes ».)
@@ -81,7 +94,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 Règles d'écriture :
 
 - **Simple d'abord.** Chaque point dit d'abord ce qui change ou ce qui compte pour la personne, puis le détail technique utile. Un terme technique est expliqué la première fois en quelques mots.
-- **Court.** Une ligne par point, deux au plus. Pas de bloc de code sauf nécessité. Regroupe les petits points de même nature. Le rapport entier tient en 60 lignes au plus, titres compris : au-delà, regroupe davantage (par thème, par groupe) plutôt que de couper, car un rapport trop long se coupe à l'affichage et doit être redonné.
+- **Court.** Une ligne par point, deux au plus. Pas de bloc de code sauf nécessité. Regroupe les petits points de même nature. Le rapport entier tient en 60 lignes au plus, titres compris : au-delà, regroupe davantage (par thème, par groupe) plutôt que de couper, car un rapport trop long se coupe à l'affichage et doit être redonné. Les lignes de « Entrées triées » ne comptent pas dans ces 60 lignes : une par entrée, sans regroupement, pour que le COO les relise une à une.
 - **Complet.** Tous les choix signalés au tableau de bord vont dans « Décidé sans toi », regroupés par origine quand ils en portent une (une mission en auto en déclare beaucoup : les petits choix de même origine et de même sujet se regroupent sur une ligne), plus ceux qui manquent : ticket traité hors de la file, approche choisie parmi plusieurs, travail reporté ou abandonné, périmètre changé, correctif au-delà du ticket. « Ce qui s'est mal passé » couvre aussi les tests rouges, les retours en arrière, les revues qui ont trouvé des défauts, les interruptions et les contournements.
 - **Honnête.** Ne minimise rien. Un risque ou un doute se dit en clair.
 - **Rangé par importance** dans chaque section : ce qui demande une action de la personne en premier.

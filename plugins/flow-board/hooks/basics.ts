@@ -40,6 +40,11 @@ export type Effects = {
   /** Note à ajouter au texte du skill pour Claude : celle d'une phase, d'un détour, ou rien. */
   note: 'none' | 'phase' | 'detour'
   /**
+   * Le skill chargé comme sous-skill (`uses`) de la phase ou du détour en cours : le skill qui le porte
+   * (`owner`) et l'étape qu'il fait avancer (`step`, null quand `uses` ne le rattache à aucune étape).
+   */
+  usedBy?: { owner: string; step: string | null }
+  /**
    * Le titre que cette discussion doit prendre : le mod le garde pour elle seule, hors du board
    * partagé, et le renvoie au moteur au prochain message ou à la reprise.
    */

@@ -7,6 +7,8 @@ Interview the user relentlessly until you reach a shared understanding. Map this
 
 Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled: the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the frontier in one round: number each question and give your recommended answer. Then wait for the user's answers before the next round.
 
+When a message from the user arrives during a round without answering its questions (a remark, another request), answer it, then end your reply with the open round given again in full, in its format (the table, then each question still unanswered with your recommended answer), not with a pointer to a message above: questions already answered do not come back. That round given again stays the same round: no new question joins it, and the bound of 4 questions and about 400 words holds for it, the answer to the message not counted. The user had to ask "give me all the questions again" after such a message.
+
 A round holds **4 questions at most, and about 400 words**: rounds of 750 to 1,050 words went unread. When the frontier holds more, ask first the questions whose answers unblock the most others; the rest of the frontier waits for the next round.
 
 Format a round like so: a two-column table first, the question in a few words and your recommended answer in one line, then the detail of each question under it.

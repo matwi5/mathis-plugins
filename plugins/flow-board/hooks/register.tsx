@@ -235,6 +235,8 @@ import {
   isRepeatedReview,
   isRelay,
   relayForGroup,
+  workerStopOf,
+  workerStopText,
   reportFileName,
   mainRefFileName,
   parseMainRef,
@@ -330,7 +332,7 @@ import type { CooPlan, CooWave } from './coo.ts'
 import type { RunLaunch } from '../types'
 import { isRoadmapId, parseRoadmap, partialSeen, roadmapTextPrint, unionSeen, watchRoadmap, type Roadmap, type RoadmapSeen } from './roadmap.ts'
 import { parseSecuritySetting, securitySettingRecord, type SecurityReview, type SecuritySettingRead, type SecurityStored } from './security-setting.ts'
-import { AUTO_GROUP_EFFORT, COO_EFFORT, FABLE_MODEL, FABLE_OFF_WORKER_EFFORT, FABLE_WORKER_EFFORT, GROUP_EFFORT, SONNET_LAUNCH_FR, effortSent, groupLaunchNote, leadEffort, quotaText, workerTicketEffort, type ImposedEffort, type LeadEffort, type QuotaWindow } from './effort.ts'
+import { AUTO_GROUP_EFFORT, COO_EFFORT, FABLE_MODEL, FABLE_OFF_WORKER_EFFORT, FABLE_STUCK_WORDS, FABLE_WORKER_EFFORT, GROUP_EFFORT, OPUS_LAUNCH_FR, SONNET_LAUNCH_FR, effortSent, groupLaunchNote, isFableStuck, leadEffort, quotaText, workerTicketEffort, type ImposedEffort, type LeadEffort, type QuotaWindow } from './effort.ts'
 import { sameLabel, soundEntry, takenFor, takenLabels, unreadTakenFor, type CoordTaken } from './coordination.ts'
 import { BOX_MAX, SET_ASIDE_SOURCE_MAX, SET_ASIDE_TEXT_MAX, SET_ASIDE_UNWRITTEN, copiedIn, copiesOf, keepsItems, roadmapText, newSetAsideId, parseBox, soundSetAside, withoutCopied, type BoxRead, type SetAside } from './a-reprendre.ts'
 import { CLOSE_KIND, COORD_MAX, COORD_UNREAD, NIGHT_ENTRY_ACTS, WAKE_TEXT, copiedDecls, gleanedRuns, isReleasedMark, isEntryGone, keepsEntries, liveEntries, forcesFor, markClosesDone, newEntryId, parseCoordination, pendingFor, pendingNightFor, refOf, soundApplied, withoutGone, type CoordClose, type CoordEntry, type CoordNight, type CoordRead } from './coordination.ts'
@@ -422,7 +424,7 @@ export const TOOL_SCHEMA = {
     },
     tickets: {
       type: 'array',
-      description: 'Tickets to add or update (id = tracker id, name = short title); tickets not listed are kept. To take tickets off, use "remove"',
+      description: 'Tickets to add or update (id = tracker id, name = short title); unlisted ones are kept; to take some off, "remove"',
       items: {
         type: 'object',
         properties: {
@@ -479,7 +481,7 @@ export const TOOL_SCHEMA = {
           items: { type: 'string', description: 'Instead of "group": the phase skill whose items worker (a retro\'s improvements) was closed' },
           state: { type: 'string', enum: ['closed', 'app', 'stopped'], description: 'closed: session and worktree closed; app: user archives it in the app; stopped: closing stopped (why); only stopped for a bad id or noted worktree (form/clash)' },
           why: { type: 'string', description: "For app and stopped: the gesture or the reason, short, in the user's language" },
-          sessionId: { type: 'string', description: 'For closed, when known: the full sessionId (a UUID from claude agents --json, read before the stop) or the local_… id of an app session; else refused' },
+          sessionId: { type: 'string', description: 'For closed, when known: the full sessionId (a UUID from claude agents --json before the stop) or the local_… id of an app session; else refused' },
           branch: { type: 'string', description: 'For closed, when known: the kept branch; letters, digits, ., _, / and - only, no leading -; else refused' },
           worktree: { type: 'string', description: 'For closed, when known: the removed worktree, <repository>/.claude/worktrees/<name>, absolute, the name in ASCII [A-Za-z0-9._-]; else refused' },
         },
@@ -497,7 +499,7 @@ export const TOOL_SCHEMA = {
           origin: {
             type: 'string',
             enum: ['recommendation', 'skipped-validation', 'linked-session'],
-            description: 'In auto mode: recommendation (your recommended answer, taken without the user), skipped-validation (a skipped validation: framing agreement, spec, ticket split, plan, Asana writes; the validated text\'s path or link in "what"), linked-session (a worker\'s choice); else omit',
+            description: 'In auto mode: recommendation (your recommended answer, taken without the user), skipped-validation (framing agreement, triage partition, spec, ticket split, plan, Asana writes; the validated text\'s path or link in "what"), linked-session (a worker\'s choice); else omit',
           },
         },
         required: ['what'],
@@ -562,12 +564,12 @@ export const TOOL_SCHEMA = {
           files: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Repo paths beyond its tickets\' files; groups that share one never run in parallel; a folder covers its files: name files unless the group creates some there',
+            description: 'Repo paths beyond its tickets\' files; groups sharing one never run in parallel; a folder covers its files: name files unless the group creates some there',
           },
           resources: {
             type: 'array',
             items: { type: 'string' },
-            description: 'What it cannot share with a group working at the same time, same name in every group (an app driven on screen, a single database, device or account); groups that share one never run in parallel',
+            description: 'What it cannot share with a group working at the same time, same name in every group (an app driven on screen, a single database, device or account); groups sharing one never run in parallel',
           },
         },
         required: ['id', 'name', 'tickets'],
@@ -606,7 +608,7 @@ export const TOOL_SCHEMA = {
     },
     main: {
       type: 'string',
-      description: 'With "delegate": the manager\'s "[ref]" (or "<name> [ref]") from the brief; answers give a newer [ref] when it restarted. With "resume", in the manager: your own [ref] of the moment (ListAgents), which the workers read',
+      description: 'With "delegate": the manager\'s "[ref]" (or "<name> [ref]") from the brief; a restart gives a newer [ref]. With "resume", in the manager: your own [ref] of the moment (ListAgents), which the workers read',
     },
     resume: {
       type: 'string',
@@ -617,7 +619,7 @@ export const TOOL_SCHEMA = {
       description: "Only at the user's request: a new mission here, without a skill, pausing the active one; the rest of the call goes to it",
       properties: {
         title: { type: 'string', description: "Your title, 3 to 6 words, in the user's language, never their message" },
-        entry: { type: 'string', description: 'Starting skill that shapes its phases (implement, to-tickets, grill-with-docs, diagnosing-bugs...); default implement' },
+        entry: { type: 'string', description: 'Starting skill that shapes its phases (implement, to-tickets, grill-with-docs, diagnosing-bugs…); default implement' },
       },
       required: ['title'],
     },
@@ -625,7 +627,7 @@ export const TOOL_SCHEMA = {
       type: 'object',
       description: "Correct the active mission (the user's request or your mistake): its title, current phase (going back resets later phases), step; tickets and groups go through \"tickets\", \"set\", \"remove\", \"groups\"",
       properties: {
-        title: { type: 'string', description: 'New title; the discussion follows when the mission was born here and no worker was launched yet' },
+        title: { type: 'string', description: 'New title; the discussion follows when the mission was born here and no worker launched yet' },
         phase: { type: 'string', description: 'Skill id of a phase to make current (to-tickets, implement…)' },
         step: { type: 'string', description: 'Step id of the current (or fixed) phase to make current; later steps become pending' },
       },
@@ -757,7 +759,7 @@ export const TOOL_SCHEMA = {
     setAside: {
       type: 'array',
       description:
-        'In a manager: each thing set aside for later or another mission; the COO copies it into « À reprendre », where only the user decides its fate. Check the roadmap and « À reprendre » first: if one holds it, start with its id (« R49: … ») and say what it adds',
+        'In a manager: each thing set aside for later or another mission, never work this mission owes (report duties too); the COO copies it into « À reprendre », where only the user decides its fate. Check the roadmap and « À reprendre » first: if one holds it, start with its id (« R49: … ») and say what it adds',
       items: {
         type: 'object',
         properties: {
@@ -1680,8 +1682,10 @@ let relayQueue: Promise<unknown> = Promise.resolve()
  * l'entrée de cette session dans le relais, son fichier à elle (un fichier par worker), puis l'entrée est
  * relue. Invariant : un signal est gardé, ou l'outil répond qu'il ne l'a pas gardé et
  * pourquoi ; aucune écriture ne touche l'entrée d'une autre session, ni ne réécrit un contenu illisible.
+ * Un ticket qui passe « doing » réarme le rappel de `workerStartNotice`.
  */
 const relaySignal = ($: any, event: RelayEvent): Promise<RelayOutcome> => {
+  if (event.kind === 'tickets' && event.changes.some(c => c.status === 'doing')) workerStartReminded = null
   const done = relayQueue.then(() => relaySignalNow($, event))
   relayQueue = done.catch(() => undefined)
   return done
@@ -1738,7 +1742,9 @@ const relaySignalNow = async ($: any, event: RelayEvent): Promise<RelayOutcome> 
 
 /**
  * Dans un worker, rien ne s'écrit sur la mission : ses mises à jour Asana (tickets), ses
- * commits et ses tests partent au relais, que le manager affiche.
+ * commits et ses tests partent au relais, que le manager affiche. Au résultat de l'outil s'ajoutent
+ * l'annonce de compaction d'un ticket clos (`workerClosureNotice`) et le rappel du ticket en cours
+ * (`workerStartNotice`).
  */
 const relayTool = async ($: any, e: any, next: (e: any) => Promise<any>) => {
   const ran = await next(e)
@@ -1766,12 +1772,22 @@ const relayTool = async ($: any, e: any, next: (e: any) => Promise<any>) => {
     // Un ticket clos au-delà du seuil de compaction d'un worker : Claude le lit après le résultat de l'outil
     // (pas un spécialiste : l'annonce ne vaut que pour le fil principal du worker).
     const notice = closed.length > 0 && e.agentId === undefined ? await workerClosureNotice($, closed) : ''
-    if (notice !== '') return { ...ran, context: [...(ran.context ?? []), notice] }
+    // Un fichier du projet modifié sans ticket « en cours » au relais : le rappel de passer le suivant en cours.
+    let start = ''
+    if ((e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'MultiEdit') && isOk && typeof e.file_path === 'string' && e.agentId === undefined)
+      await quietly(async () => {
+        start = await workerStartNotice($, e.file_path)
+      })
+    const notices = [notice, start].filter(n => n !== '')
+    if (notices.length > 0) return { ...ran, context: [...(ran.context ?? []), ...notices] }
   } catch {
     // Un signal mal lu ne doit jamais gêner l'outil.
   }
   return ran
 }
+
+/** Un fichier de ticket local, `…/issues/<NN>-<nom>.md`, sous `travail/` ou ailleurs (`.scratch/`, par exemple). */
+const LOCAL_TICKET_FILE = /(?:^|[\\/])issues[\\/]\d+-[^\\/]+\.md$/
 
 /**
  * Dans un worker, un tracker en fichiers locaux (`…/issues/<NN>-<nom>.md`) n'a pas d'appel
@@ -1782,7 +1798,7 @@ const relayTool = async ($: any, e: any, next: (e: any) => Promise<any>) => {
 const relayTicketFiles = async ($: any, paths: string[], written?: string): Promise<string[]> => {
   const changes = []
   for (const path of paths) {
-    if (!/(?:^|[\\/])issues[\\/]\d+-[^\\/]+\.md$/.test(path)) continue
+    if (!LOCAL_TICKET_FILE.test(path)) continue
     const text = written ?? (await $.fs.read(path).catch(() => null))
     const change = typeof text === 'string' ? localTicketChange(path, text) : null
     if (change) changes.push(change)
@@ -1809,7 +1825,7 @@ const followMainRef = async ($: any): Promise<string | undefined> => {
   return `The manager restarted: its reference is now ${asciiJson(next.delegate!.main)} (written by it next to the relay; the one in your brief is out of date). Send your messages there.`
 }
 
-/** Dans le manager : relit le relais de la mission active quand un groupe est confié. */
+/** Dans le manager : relit le relais de la mission active quand un groupe est confié, et notifie les arrêts de worker (`notifyWorkerStops`). */
 const pullRelay = async ($: any, board: Board) => {
   const run = activeRun(board)
   const isWatching = run?.groups?.some(g => g.linked !== undefined) ?? false
@@ -1818,6 +1834,8 @@ const pullRelay = async ($: any, board: Board) => {
   const next = stored !== null && typeof stored === 'object' && (stored as Relay).run === run?.id ? (stored as Relay) : null
   if (JSON.stringify(next) === JSON.stringify(before)) return
   await update($, relayAtom, () => next)
+  // Avant le fichier des choix : une écriture qui lève ne doit pas taire un arrêt (la relecture suivante, inchangée, ne le redirait pas).
+  if (run && next) await quietly(() => notifyWorkerStops($, run, next))
   await writeDecidedFile($, board)
   $.ui.invalidate('ui.render')
 }
@@ -2582,8 +2600,8 @@ export const roadmapAsk = (d: CooDo, r: CooRoadmap | null): string | null => {
   if (d.kind === 'idea-launch') return `◆ COO : je veux lancer l'idée ${id} de la feuille de route. Relis ask-matt, puis propose-moi sa carte de lancement par le champ "card" de l'outil flow (idea "${id}") ; je lancerai la mission d'un clic sur la carte.${guard}`
   if (d.kind === 'drop') return `◆ COO : je veux écarter l'idée ${id} de la feuille de route. Demande-moi d'abord ma raison, puis donne-lui le statut « écartée : <ma raison> » (elle reste dans le fichier)${commit}.${guard}`
   // Une chose « À reprendre » : la décision de la personne, seule à la faire sortir de la liste (elle reste dans le fichier).
-  if (d.kind === 'pending-launch') return `◆ COO : je veux lancer une mission pour la chose à reprendre ${id}. Propose-moi sa carte de lancement ; une fois la mission lancée, passe l'entrée au statut « lancée »${commit}.${guard}`
-  if (d.kind === 'pending-attach') return `◆ COO : je veux rattacher la chose à reprendre ${id} à une mission. Demande-moi laquelle, puis passe l'entrée au statut « rattachée à <son titre> »${commit}.${guard}`
+  if (d.kind === 'pending-launch') return `◆ COO : je veux lancer une mission pour la chose à reprendre ${id}. Regarde d'abord son statut : à un autre statut que « à décider » ou « plus tard » (déjà « lancée », rattachée ailleurs, écartée ou faite), ne la touche pas, ne la cite pas dans une carte et dis-le-moi. Encore ouverte, propose-moi sa carte de lancement, son titre commençant par ${id} et tenant en 70 signes au plus ; au premier tour où ton relevé montre la mission lancée, et une seule fois, passe l'entrée au statut « rattachée à <titre de la mission> », chaque « · » du titre écrit « - », si elle est encore « à décider » ou « plus tard », sans changer son id ni son texte${commit}.${guard}`
+  if (d.kind === 'pending-attach') return `◆ COO : je veux rattacher la chose à reprendre ${id} à une mission. Demande-moi laquelle, puis passe l'entrée au statut « rattachée à <son titre> », chaque « · » du titre écrit « - »${commit}.${guard}`
   if (d.kind === 'pending-later') return `◆ COO : passe la chose à reprendre ${id} au statut « plus tard », sans rien changer d'autre${commit} ; elle reviendra dans ton point d'ouverture.${guard}`
   if (d.kind === 'pending-drop') return `◆ COO : je veux écarter la chose à reprendre ${id}. Demande-moi d'abord ma raison, puis donne-lui le statut « écartée : <ma raison> » (elle reste dans le fichier)${commit}.${guard}`
   const gone = r.gone.find(g => g.id === id)
@@ -5616,11 +5634,23 @@ const cooSetAsideCtx = async ($: any, board: Board): Promise<{ setAside: CooSetA
     const waitlisted = new Set(isWaitlistRetro(run) ? (cooWaitlistOf()?.pistes ?? []).filter(p => p.retro === run.id).map(p => p.id) : [])
     const untaken = run.phases.filter(p => p.skill === 'retro').flatMap(p => p.items.filter(i => i.status === 'todo' && !markedAway.has(i.id) && !waitlisted.has(run.id + '/' + i.id)).map(i => ({ id: i.id, label: i.label })))
     const own = missionReportPath($, run.id)
-    let hasOwn = false
-    if (own) await quietly(async () => {
-      hasOwn = (await $.fs.exists(own)) === true
-    })
-    toGlean.push({ id: run.id, title: run.title, reports, untaken, ...(own && hasOwn ? { report: own } : {}) })
+    // Une présence qui ne se relit pas retient la mission (`reportUnread`), comme un rapport illisible : jamais « pas de rapport ».
+    let hasOwn: boolean | 'unread' = false
+    if (own)
+      try {
+        hasOwn = (await $.fs.exists(own)) === true
+      } catch {
+        hasOwn = 'unread'
+      }
+    // La validation du compte rendu se relit ici (`isReportValidated`), et le fichier doit porter le tour validé : un
+    // rapport réécrit après la validation ne vaut pas. Seule source des états « faite : » au relevé.
+    const round = own && hasOwn === true ? validatedRoundOf(run) : null
+    const kept = round ? await readMissionReport($, run.id) : null
+    const sameTitle = (t: string) => t.replace(/·/g, '-').trim() === run.title.replace(/·/g, '-').trim()
+    const titleShared = board.runs.some(r => r.id !== run.id && sameTitle(r.title))
+    // Validé, mais le fichier ne se relit pas ou ne porte pas ce tour : dit tel quel, jamais « pas validé ».
+    const fileState = hasOwn === 'unread' || (isReportValidated(run) && kept === 'unread') ? { reportUnread: true } : !isReportValidated(run) ? {} : round === null || kept === null || kept === 'unread' || kept.round !== round ? { reportOtherRound: true } : {}
+    toGlean.push({ id: run.id, title: run.title, reports, untaken, ...(own && hasOwn ? { report: own, reportValidated: round !== null && kept !== null && kept !== 'unread' && kept.round === round, ...(round ? { reportRound: round } : {}), ...(titleShared ? { titleShared } : {}), ...fileState } : {}) })
   }
   return { setAside: boxesNow.map(d => ({ id: d.id, source: d.source, text: roadmapText(d.text), ...(d.fixEntry ? { fixEntry: d.fixEntry } : {}) })), boxesUnread: [...boxesUnread, ...boxesAside.map(p => `${p} (copy of an unreadable box, kept)`)], toGlean, existingGleaned: isRead ? state.gleanedAt !== undefined : null }
 }
@@ -6216,12 +6246,19 @@ const MISSION_REPORT_MAX = 200_000
 export const reportRoundOf = (run: Run): string | null => {
   if (isReportValidated(run)) return null
   const at = run.phases.findIndex(p => p.skill === 'compte-rendu' && p.status === 'active')
-  if (at < 0) return null
+  return at < 0 ? null : roundAt(run, at)
+}
+
+/** Le tour de la phase de compte rendu à cette place : sa place, son tour, son début ; seule source de cette forme. */
+const roundAt = (run: Run, at: number): string | null => {
   const phase = run.phases[at]!
   const round = `${at}.${phase.round}.${Math.trunc(phase.startedAt ?? 0)}`
   // Une forme que l'entrée « redo » ne relirait pas : pas de tour, rien ne se garde ni ne se valide.
   return isRound(round) ? round : null
 }
+
+/** Le tour du dernier compte rendu d'une mission, une fois validé (le même que `reportRoundOf` pendant ce tour) ; null sans validation. */
+export const validatedRoundOf = (run: Run): string | null => (isReportValidated(run) ? roundAt(run, run.phases.map(p => p.skill).lastIndexOf('compte-rendu')) : null)
 
 /** Un rapport gardé : le tour du compte rendu où il a été donné, et son texte. */
 export type KeptReport = { round: string; text: string }
@@ -10012,8 +10049,42 @@ const TICKET_RULES: readonly string[] = [
 const askMattFirst = (path: string | null): string =>
   `Before proposing a starting point (the next skill once the framing is agreed, or the start of a mission), reread ask-matt, a skill that cannot be invoked by you: ${path ? `read its SKILL.md, « ${neutralInPrompt(clip(path, 300))} » (found by flow-board among the installed plugins)` : 'flow-board did not find it among the installed plugins: say so to the user, never read a path written from memory or built from another file'}, and quote the line that justifies the start`
 
-/** Les skills de cadrage : un choix sensible y devient une question, jamais un choix déclaré. */
-const FRAMING_SKILLS = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-questionnaire', 'to-spec', 'to-tickets', 'domain-modeling'])
+/**
+ * Les skills de cadrage : un choix sensible y devient une question, jamais un choix déclaré, et une décision
+ * se recopie mot pour mot. Le tri (`triage`) en est un pour ces consignes, pas pour le modèle : `FRAMING` de
+ * `effort.ts`, qui passe le cadrage sur Fable 5.2, ne le nomme pas exprès (choix du 13/11/2026 : le
+ * tri reste sur Opus, plancher high).
+ */
+const FRAMING_SKILLS = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-questionnaire', 'to-spec', 'to-tickets', 'domain-modeling', 'triage'])
+
+/** Les deux règles de cadrage : un choix sensible posé en question, une décision recopiée mot pour mot. */
+const FRAMING_RULES = `- A choice that touches a sensitive area (${SENSITIVE_AREAS}) is never a declared choice ({"decided": …}): ask the user while framing, with options, and wait for the answer. Before a privacy question, have a read-only subagent check the real exposure (who can read the data, from where, with what access); without that check, the question says the exposure is "à confirmer". A decision entry (DECISIONS.md, an ADR) copies the question asked and the accepted answer word for word, the user's sentence in quotes, instead of summarising them.`
+
+/**
+ * Un sous-skill de cadrage : un skill de `FRAMING_SKILLS` chargé comme sous-skill (`uses`) d'une phase (ou d'un
+ * détour) dont le skill est lui-même dans cette liste, et que `uses` rattache à une étape (une valeur non nulle).
+ * Il reçoit les deux règles de cadrage, et seulement elles : ni ses étapes ni ses éléments, la phase qui le porte
+ * gardant les siens. Aujourd'hui, seul `/grilling` pendant un tri (étape `grill`) remplit ces trois conditions ;
+ * `/grilling` et `domain-modeling` d'un grilling (rattachés à aucune étape) et `/grilling` de « Santé du code »
+ * (dont le skill n'est pas un cadrage) ne reçoivent toujours rien.
+ */
+const isFramingSubSkill = (id: string, usedBy: Effects['usedBy']): boolean =>
+  usedBy !== undefined && usedBy.step !== null && FRAMING_SKILLS.has(id) && FRAMING_SKILLS.has(usedBy.owner)
+
+/**
+ * Le texte d'un sous-skill de cadrage : les deux règles, puis, en auto, le rappel que le bloc « mode auto » de
+ * la phase qui le porte l'emporte toujours (sans lui, la règle « ask the user… and wait », venue après ce bloc,
+ * contredirait sa question sensible tranchée seule).
+ */
+const framingSubSkillNote = (isAuto: boolean): string =>
+  [
+    '',
+    '',
+    '---',
+    `Dashboard (flow-board): this skill is loaded as part of the current phase, which keeps its own steps and items; it adds only the framing rules:`,
+    FRAMING_RULES,
+    ...(isAuto ? ['- Auto mode is on for this mission: the auto mode block given with the instructions of that phase still applies, and wins over the line above.'] : []),
+  ].join('\n')
 
 /** Les consignes où une revue reçoit le fichier des choix déclarés. */
 const REVIEW_NOTES = new Set(['implement', 'final-review', 'code-review', 'branch-review'])
@@ -10088,16 +10159,44 @@ const AUTO_FRAMING = `- Framing in auto mode: one round only with the user, on i
  * quand le fichier existe, et ne le réécrit jamais. Null pour une autre mission.
  */
 const launchedFraming = (run: Run): string | null => {
+  const intent = launchedIntent(run)
+  return intent === null ? null : `- Framing in auto mode, for a mission launched by the COO: ${intent} When it exists, skip the intent round: its answers are the user's intent, you never rewrite it, and from then on the decision file of the mission is the reference. When it does not exist, ask the intent round, one round only, in one go in your message, and wait for those answers (they are not blocking questions). ${AUTO_FRAMING_REST}`
+}
+
+/**
+ * Le tour d'intention qu'a recueilli le COO pour une mission qu'il a lancée en auto, dans `travail/<dossier>/demande.md`
+ * (le dossier relu du rattachement, en forme) : la phrase commune au cadrage et au tri. Null pour une autre mission.
+ */
+const launchedIntent = (run: Run): string | null => {
   const launch = liveLaunchOf(run)
   // Seulement une mission lancée en auto : le COO ne recueille ce tour que pour elle.
   if (!launch || launch.mode !== 'auto') return null
-  return `- Framing in auto mode, for a mission launched by the COO: the COO gathered the intent round (the goal, the scope, what is out of scope) with the user in travail/${launch.folder}/demande.md. Read that file first. When it exists, skip the intent round: its answers are the user's intent, you never rewrite it, and from then on the decision file of the mission is the reference. When it does not exist, ask the intent round, one round only, in one go in your message, and wait for those answers (they are not blocking questions). ${AUTO_FRAMING_REST}`
+  return `the COO gathered the intent round (the goal, the scope, what is out of scope) with the user in travail/${launch.folder}/demande.md. Read that file first.`
 }
+
+/**
+ * Le tri en auto d'une mission lancée par le COO : il lit d'abord `demande.md`, comme un cadrage ; sans ce fichier,
+ * il part des entrées que nomme le premier message, sans tour d'intention. Null pour une autre mission.
+ */
+const launchedTriage = (run: Run): string | null => {
+  const intent = launchedIntent(run)
+  return intent === null ? null : `- Triage in auto mode, for a mission launched by the COO: ${intent} When it exists, its answers are the user's intent: you never rewrite it, and from then on the decision file of the mission is the reference. When it does not exist, go on from the entries the first message names, without an intent round.`
+}
+
+/**
+ * Le bloc du tri en auto : pas d'attente après la recommandation ; le partage déclaré comme une validation sautée ;
+ * les lignes « corrige » partent au découpage ; « écarte » et « renvoie » ne changent rien avant l'accord de la
+ * personne, ni code ni entrée existante, une sous-ligne renvoyée se déclarant tout de suite mise de côté (le COO la copie en entrée
+ * neuve « à décider ») ; une ligne « question » attend sur la phase Compte rendu, qui ne retient ni le découpage ni les
+ * groupes (`blockingQuestions` de model.ts).
+ */
+const AUTO_TRIAGE =
+  '- Triage in auto mode: do not wait after your recommendation. Once every entry is verified and tri.md is written, declare the partition as a skipped validation ({"decided": [{"what": "Partage du tri : <the path of tri.md>", "origin": "skipped-validation"}]}), then {"complete": true}: flow-board itself sends /to-tickets, which starts from the « corrige » rows. Nothing the triage drops or sends back changes before the user\'s agreement: an « écarte » row or an entry in state « renvoie » changes neither code nor roadmap. Only a sub-line in state « renvoie » is declared set aside right away, once tri.md is written ({"setAside": [{"text": "<the id of the entry it comes from>: <the sub-line>", "source": "tri.md"}]}): the roadmap\'s owner (the COO) copies it as a new entry « à décider », where only the user decides; no existing entry changes state. A « question » row is a blocking question on the Report phase ({"waiting": [{"id": "<short id>", "phase": "compte-rendu", "text": "<short>"}]}): it holds back only the report, never the ticket split nor the groups. Once the user has answered: write the answer in the decision file, the question and the answer word for word; update tri.md; when the answer gives a fix while the triage is still under way, its row becomes « corrige » in tri.md and no ticket is sent (the Tickets phase splits it: a ticket sent during the triage would skip that phase); when it comes later, add a ticket to the lot ({"tickets": […]}): in a mission with groups, with its group (the whole plan again in {"groups": […]}); without groups (a plan of one group is ignored), do that ticket in this discussion, with the steps of a ticket of the lot (its checks, its review, its commit: the procedure /implement gives), before withdrawing the question; then withdraw the question ({"waiting": [{"id": "<id>", "answered": true}]}).'
 
 /** La consigne du mode auto pour le skill `id` d'une mission en auto : le bloc commun, puis celui de sa phase. */
 const autoNote = (id: string, run: Run): string[] => {
   const lines = [
-    '- Auto mode is on for this mission (« ⚡ Auto »): the user\'s click (« Confirmer » here, or « Lancer en auto » on the COO\'s launch card) is their agreement, for this mission only, to its button validations (framing agreement, spec, ticket split, work plan) and to the tracker writes it plans (the tickets created, their statuses). Do not ask for what it settles: flow-board itself sends the next step at the end of a turn, once this one is complete and nothing waits. If the auto mode is cut or paused while you work, the answer of the flow tool says so: from then on, the usual rules apply again (button validations, the user\'s agreement before a tracker write).',
+    '- Auto mode is on for this mission (« ⚡ Auto »): the user\'s click (« Confirmer » here, or « Lancer en auto » on the COO\'s launch card) is their agreement, for this mission only, to its button validations (framing agreement, triage partition, spec, ticket split, work plan) and to the tracker writes it plans (the tickets created, their statuses). Do not ask for what it settles: flow-board itself sends the next step at the end of a turn, once this one is complete and nothing waits. If the auto mode is cut or paused while you work, the answer of the flow tool says so: from then on, the usual rules apply again (button validations, the user\'s agreement before a tracker write).',
     '- Each recommendation you take without the user is a declared choice: {"decided": [{"what": "...", "why": "...", "origin": "recommendation"}]} (« reco prise »). Each validation the auto mode skips is declared instead of a button question: {"decided": [{"what": "<what was validated, with the path or link of the validated text>", "origin": "skipped-validation"}]} (« validation sautée »).',
     AUTO_SENSITIVE,
     AUTO_ADVISOR,
@@ -10105,7 +10204,8 @@ const autoNote = (id: string, run: Run): string[] => {
     `- Each time you declare blocking questions, also send one PushNotification (a deferred tool: load it with ToolSearch, select:PushNotification) with exactly this text and nothing else, neither the question nor any code: « ${autoQuestionsNotice(run.title, 'N')} », N being the open questions of the mission once yours are declared (the answer of the flow tool says « waiting: N question(s) »).`,
   ]
   if (SKILLS[id]?.isGrilling) lines.push(launchedFraming(run) ?? AUTO_FRAMING)
-  const own = id === 'implement' && (run.groups ?? []).length === 0 ? AUTO_LOT_IMPLEMENT : AUTO_PHASE_NOTES[id]
+  if (id === 'triage') lines.push(...[launchedTriage(run), AUTO_TRIAGE].filter((l): l is string => l !== null))
+  const own =id === 'implement' && (run.groups ?? []).length === 0 ? AUTO_LOT_IMPLEMENT : AUTO_PHASE_NOTES[id]
   if (own) lines.push(own)
   return lines
 }
@@ -10238,11 +10338,7 @@ const coachingNote = (id: string, run: Run, sync: SyncState, isRepo: boolean, se
   if (id === 'to-spec') lines.push(`- ${SKILL_IN_SPEC}.`, `- ${LATER_READING}.`)
   if (id === 'to-spec' || id === 'to-tickets') lines.push(`- ${VERSION_AT_END}.`, `- ${DECISIONS_INDEX}.`)
   if (SKILLS[id]?.isGrilling) lines.push(`- ${askMattFirst(askMatt)}.`)
-  if (FRAMING_SKILLS.has(id)) {
-    lines.push(
-      `- A choice that touches a sensitive area (${SENSITIVE_AREAS}) is never a declared choice ({"decided": …}): ask the user while framing, with options, and wait for the answer. Before a privacy question, have a read-only subagent check the real exposure (who can read the data, from where, with what access); without that check, the question says the exposure is "à confirmer". A decision entry (DECISIONS.md, an ADR) copies the question asked and the accepted answer word for word, the user's sentence in quotes, instead of summarising them.`,
-    )
-  }
+  if (FRAMING_SKILLS.has(id)) lines.push(FRAMING_RULES)
   if (id === 'retro') {
     lines.push(
       '- Improvements that touch another repository (shared plugins, common config, another project) are not applied from this discussion: keep them out of the items and give them in your message as a correction list ready to hand to an agent working in that repository, one point per improvement: the finding, then the expected correction, with the plugin or files it touches. Only the improvements of this repository go to the items, hence to tickets.',
@@ -10681,7 +10777,8 @@ const autoTurn = async ($: any, isGesture = false) => {
 }
 /**
  * La compaction stratégique d'un manager en auto : au moment où `/compact` se propose en manuel (le découpage
- * fini sous l'auto, aucun groupe lancé, la discussion pas compactée depuis), le mod envoie lui-même `/compact`, une seule fois, sa marque posée et écrite
+ * fini, aucun groupe lancé, la discussion pas compactée depuis), que l'auto ait été allumé avant ou après ce
+ * découpage, le mod envoie lui-même `/compact`, une seule fois, sa marque posée et écrite
  * avant l'envoi (comme toute action de l'auto) ; les consignes du rôle s'y ajoutent (hook de compaction). La
  * fin de la compaction ne fait pas de tour : l'auto reprend quand sa promesse se résout, et lance la
  * vague. Sa marque démarre dès l'envoi, sans attendre son issue : une compaction
@@ -10694,9 +10791,8 @@ const autoCompact = async ($: any, now: number): Promise<boolean> => {
   if (!board || !run || (run.groups ?? []).length === 0) return false
   const moment = compactionMoment(run)
   if (moment === null || autoMarksOf(run).some(m => m.key === moment.key)) return false
-  // Seulement un découpage fini sous l'auto : allumé après, la suggestion grisée s'est déjà proposée en manuel.
-  // Et pas une discussion déjà compactée depuis ce découpage (à la main, ou au seuil).
-  if (run.auto?.onAt === undefined || run.auto.onAt > moment.at) return false
+  // L'auto allumé avant ou après ce découpage (la suggestion grisée proposée en manuel n'a pas compacté) ; pas
+  // une discussion déjà compactée depuis ce découpage (à la main, ou au seuil).
   const compactedAt = lastCompactionAt(await read($, registryAtom))
   if (compactedAt !== null && compactedAt >= moment.at) return false
   const action: AutoAction = { kind: 'compact', key: moment.key, what: '/compact', blocks: { kind: 'phase', id: currentPhase(run).skill } }
@@ -10865,6 +10961,60 @@ const workerClosureNotice = async ($: any, ids: readonly string[]): Promise<stri
   if (mission?.groups?.some(g => g.id === delegate.group) && nextGroupTicket(mission, delegate.group, own.entry?.tickets ?? {}, closed) === undefined) return ''
   workerCompactAsk = { run: delegate.run, ticket: closed }
   return workerCompactNotice(closed, tokens)
+}
+
+/**
+ * La mission pour laquelle le rappel de `workerStartNotice` est déjà parti, en mémoire du mod : il ne repart
+ * qu'après un ticket passé « doing » (`relaySignal`), ou une fois de plus après `/reload-plugins`.
+ */
+let workerStartReminded: string | null = null
+
+/**
+ * Le chemin d'un fichier relatif au dossier de travail de la session, ou null quand il n'est pas dessous
+ * (dossier inconnu, chemin absolu ailleurs, segment « .. »). Barres obliques inverses lues comme des barres ;
+ * un chemin Windows se compare sans la casse.
+ */
+const projectRelativePath = (cwd: string, path: string): string | null => {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const base = norm(cwd)
+  const file = norm(path)
+  if (base === '' || file === '') return null
+  let rel = file.replace(/^\.\//, '')
+  if (/^(?:\/|[A-Za-z]:\/)/.test(file)) {
+    const isWindows = /^[A-Za-z]:\//.test(base)
+    const head = `${base}/`
+    if (!(isWindows ? file.toLowerCase().startsWith(head.toLowerCase()) : file.startsWith(head))) return null
+    rel = file.slice(head.length)
+  }
+  if (rel === '' || rel.split('/').some(s => s === '..')) return null
+  return rel
+}
+
+/**
+ * Le fil principal d'un worker de groupe vient de modifier un fichier du projet (Edit, Write ou MultiEdit, sous le
+ * dossier de travail de la session, hors de `travail/` et d'un fichier de ticket local, `…/issues/<NN>-<nom>.md`
+ * où qu'il soit, dont l'écriture change justement un statut) alors que son relais ne
+ * porte aucun ticket « doing » : le rappel de passer en cours le premier ticket ouvert de son groupe, une fois
+ * jusqu'au prochain ticket passé « doing ». Sans ticket en cours, ni le tableau de bord du manager ni la règle
+ * d'effort du worker (`workerEffortRule`) ne voient le ticket. Rien dans le doute : dossier de travail, relais ou
+ * mission illisibles, groupe absent du plan, plus aucun ticket ouvert. Les écritures par Bash n'y passent pas.
+ */
+const workerStartNotice = async ($: any, filePath: string): Promise<string> => {
+  const board: Board | null = await read($, boardAtom)
+  const delegate = board?.delegate
+  if (!board || !delegate?.group || !isSafeId(delegate.run) || workerStartReminded === delegate.run) return ''
+  const rel = projectRelativePath(String((await $.session.cwd()) ?? ''), filePath)
+  if (rel === null || rel === 'travail' || rel.startsWith('travail/') || LOCAL_TICKET_FILE.test(rel)) return ''
+  const own = await readOwnEntry($, delegate.run, await sessionId($))
+  if ('why' in own) return ''
+  const relayed = own.entry?.tickets ?? {}
+  if (Object.values(relayed).some(t => t.status === 'doing')) return ''
+  const mission = await workerMission($, board, delegate.run)
+  if (!mission?.groups?.some(g => g.id === delegate.group)) return ''
+  const next = nextGroupTicket(mission, delegate.group, relayed, '')
+  if (next === undefined) return ''
+  workerStartReminded = delegate.run
+  return `flow-board: you changed a project file while your relay shows no ticket of your group in progress. Set ticket ${next} in progress now (the Status line of its ticket file, or its tracker task), before going on: the manager's dashboard and your effort rule only see a ticket in progress.`
 }
 
 /**
@@ -11351,10 +11501,48 @@ const FABLE_RESUME_TEXT = 'Fable indisponible : reprends sur Opus là où tu t�
 const FABLE_RESUME_REFUSED_TOAST = 'Fable indisponible : le message de reprise n’est pas entré, le worker reste arrêté ; dis-lui de reprendre sur Opus'
 
 /**
- * Envoie au worker Fable arrêté par le repli son message de reprise, en file derrière le tour : noté envoyé
- * seulement une fois entré (un résultat sans `drop`) ; refusé, un toast le dit : la personne relance le worker.
+ * Un worker de groupe (`delegate`) dont le tour échoue sur une erreur de la liste fermée (`workerStopText`) : un toast,
+ * puis le dépôt d'une note au même texte à sa propre entrée du relais, par le signal de note existant, que le manager
+ * montre sur la ligne du groupe et notifie (`notifyWorkerStops`). Les deux sont indépendants : un dépôt refusé ou raté
+ * n'empêche pas le toast, ne lève pas et n'écrit rien d'autre. Le texte ne porte que le nom de l'erreur, jamais son
+ * détail (`error_details`). Rien hors d'un worker, ni pour une erreur hors de la liste.
  */
-const sendFableResume = async ($: any): Promise<void> => {
+const workerStopped = async ($: any, error: unknown, isResumed: boolean): Promise<void> => {
+  const text = workerStopText(error, isResumed)
+  if (text === null) return
+  const board: Board | null = await read($, boardAtom)
+  if (!board?.delegate) return
+  await quietly(() => $.ui.toast(text))
+  await quietly(() => relaySignal($, { kind: 'note', text }))
+}
+
+/** Les arrêts de worker déjà notifiés ici (mission, groupe et date de la note), en mémoire du mod. */
+const notifiedStops = new Set<string>()
+
+/**
+ * Chez le manager, à la relecture du relais : chaque groupe confié dont le dernier signal du worker est une note
+ * d'arrêt (`workerStopOf`) lève une notification du poste au texte de la note, une seule fois par date de note (après
+ * `/reload-plugins`, une note encore là peut l'être une fois de plus). Sans terminal (app desktop), la notification
+ * n'a pas de surface : la ligne du groupe reste le signal.
+ */
+const notifyWorkerStops = async ($: any, run: Run, relay: Relay): Promise<void> => {
+  for (const g of run.groups ?? []) {
+    const stop = workerStopOf(relayForGroup(relay, g, run.groups)?.last)
+    if (stop === null) continue
+    const key = [run.id, g.id, stop.at].join(':')
+    if (notifiedStops.has(key)) continue
+    notifiedStops.add(key)
+    await notifyAll($, [stop.text])
+  }
+}
+
+/**
+ * Envoie au worker Fable arrêté par le repli son message de reprise, en file derrière le tour : noté envoyé
+ * seulement une fois entré (un résultat sans `drop`) ; refusé, un toast le dit : la personne relance le worker. Un
+ * `billing_error` du fil principal (`stopError`, undefined pour celui d'un spécialiste) dont la reprise n'entre pas
+ * laisse le worker arrêté : sa note d'arrêt part alors (`workerStopped`).
+ */
+const sendFableResume = async ($: any, stopError: unknown): Promise<void> => {
   let isIn = false
   await quietly(async () => {
     const r = await modSubmit($, { text: FABLE_RESUME_TEXT })
@@ -11363,6 +11551,7 @@ const sendFableResume = async ($: any): Promise<void> => {
   if (isIn) return
   isFableResumeSent = false
   await quietly(() => $.ui.toast(FABLE_RESUME_REFUSED_TOAST))
+  await quietly(() => workerStopped($, stopError, false))
 }
 
 /** Le mod peut imposer Fable 5.2 au fil principal de cette session : aucun `/model` tapé, Fable pas éteint. */
@@ -11388,6 +11577,24 @@ const isSessionModel = async ($: any, model: string): Promise<boolean> => {
   } catch {
     return false
   }
+}
+
+/**
+ * Chez un manager (ni worker, ni le COO), le cadrage fini et la session restée sur un modèle Fable (`isFableStuck`) :
+ * le bandeau et la demande de lancement des groupes disent « tape /model opus ». Le modèle de la session se relit à
+ * chaque appel (un `/model opus` tapé l'éteint sans attendre une requête) ; illisible : non.
+ */
+const isFableStuckHere = async ($: any, board: Board | null): Promise<boolean> => {
+  if (!board || board.delegate || isCooDiscussion(board, await $.clock.now())) return false
+  const run = activeRun(board)
+  if (!run) return false
+  let model: unknown
+  try {
+    model = await $.session.model()
+  } catch {
+    return false
+  }
+  return isFableStuck(run, model)
 }
 
 /**
@@ -11718,7 +11925,9 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
       ? `Avant de lancer : ce dont ${many ? 'une session aura' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé), déclare-le en question bloquante sur son groupe ("waiting") et ne lance ce groupe qu'une fois ma réponse donnée${many ? ' ; lance les autres tout de suite' : ''}. `
       : `Avant de lancer : repère ce dont ${many ? 'les sessions auront' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé) et règle-le d'abord avec moi ici, sinon ${many ? 'elles y buteront' : 'elle y butera'}. `) +
     `Puis lance ${many ? 'une session par groupe' : 'la session'}, avec un titre qui commence par « ${prefix}Groupe <id> · » : le début dit de quelle discussion ${many ? 'elles viennent' : 'elle vient'}, et « Groupe <id> » relie la session à son groupe au tableau de bord. ` +
-    `Lance ${many ? 'chaque' : 'le'} worker seulement depuis cette demande : un lancement à part n'est pas vu. `
+    `Lance ${many ? 'chaque' : 'le'} worker seulement depuis cette demande : un lancement à part n'est pas vu. ` +
+    // Resté sur Fable après le cadrage : la personne seule retape le modèle (le mod ne le change jamais).
+    ((await isFableStuckHere($, await read($, boardAtom))) ? `Cette discussion est restée sur Fable après le cadrage : dis-moi en une ligne « ${FABLE_STUCK_WORDS} ». ` : '')
   // L'effort relevé de la discussion et le quota ne se citent que sous un xhigh imposé : rien à lire sinon.
   const effortRule =
     isAuto && !imposed
@@ -11726,8 +11935,10 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
       : imposed === 'xhigh'
         ? GROUP_EFFORT(many, imposed, await sessionEffort($), effortFile, quotaText(await quotaWindows($), await $.clock.now()))
         : GROUP_EFFORT(many, imposed, undefined, effortFile)
-  // La phrase sur Sonnet suit la consigne d'effort, séparée d'une espace (celle hors auto finit sur un point).
-  const how = { many, isRepo, ownFolder: true, trustInProcedure: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: views.some(isSonnet) ? `${effortRule.trimEnd()} ${SONNET_LAUNCH_FR}` : effortRule }
+  // Les phrases sur Sonnet et sur Opus suivent la consigne d'effort, séparées d'une espace (celle hors auto finit sur un
+  // point) : Opus pour tout groupe qui n'est ni « Sonnet high » ni lancé par « ↗ Fable » (un worker Fable part sans modèle).
+  const models = [views.some(isSonnet) ? SONNET_LAUNCH_FR : '', imposed !== 'fable' && views.some(v => !isSonnet(v)) ? OPUS_LAUNCH_FR : ''].join('')
+  const how = { many, isRepo, ownFolder: true, trustInProcedure: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: models !== '' ? `${effortRule.trimEnd()} ${models}` : effortRule }
   const resent = (isRepo ? resentWorktrees(run, views) : '') + (isAuto ? resentFindings(views) : '')
   const root = await sessionRoot($)
   // Le brief de chaque groupe, écrit par flow-board dans le dossier temporaire du système : Claude le
@@ -12879,6 +13090,7 @@ const readView = async ($: any): Promise<View> => {
     workerEffort: board?.delegate ? workerEffortNow : null,
     isFableOn: isFableStep && isFableAllowed(),
     isFableOff: isFableFallback(),
+    isFableStuck: await isFableStuckHere($, board),
     linked: (await read($, linkedAtom)).map(session => ({ session, reg: linkedRegistryOf(session.session) })),
     history: { entries: await read($, historyAtom), shown: historyShown },
     agentsAlert: await read($, registryAlertAtom),
@@ -13646,6 +13858,11 @@ export const register: Register = on => {
     if (!fx && isMain && mainUnread) return { ...result, text: `${result.text}\n\nflow-board: ${MAIN_UNREAD}${tail}` }
     // Le skill d'une phase que l'auto a envoyée se charge : sa marque passe « démarrée ».
     if (isMain) await noteAutoStart($, id)
+    // Un sous-skill de cadrage (`/grilling` pendant un tri) : les seules règles du cadrage, sans les étapes ni le bloc auto du skill.
+    if (fx && fx.note === 'none' && isFramingSubSkill(id, fx.usedBy)) {
+      const board = await read($, boardAtom)
+      return withTail({ ...result, text: `${result.text}${framingSubSkillNote(await isAutoHere($, board))}` }, tail)
+    }
     // Les revues du groupe et de sécurité ne changent pas de phase, mais leurs consignes comptent.
     if (!fx || (fx.note === 'none' && id !== 'final-review' && id !== 'security-review')) return withTail(result, tail)
     const run = activeRun(await read($, boardAtom))
@@ -14089,15 +14306,23 @@ export const register: Register = on => {
   on('classic.PostModelSwitch', async ($, e, next) => {
     const source = (e as unknown as { source?: unknown }).source
     if (source === 'command' || source === 'picker') isModelPinned = true
+    // Le bandeau relit le modèle de la session (« tape /model opus ») : redessiné tout de suite, sans attendre une requête.
+    $.ui.invalidate('ui.render')
     return next(e)
   })
 
-  // Une erreur de quota en fin de tour met l'auto en pause (« quota atteint ») ; un nouveau clic le relance.
+  // Une erreur de quota en fin de tour met l'auto en pause (« quota atteint ») ; un nouveau clic le relance. Un worker
+  // arrêté par une erreur que réessayer ne résout pas le dit, chez lui et au relais (`workerStopped`).
   on('classic.StopFailure', async ($, e, next) => {
     const error = (e as unknown as { error?: unknown }).error
+    // L'échec du tour d'un spécialiste (`agent_id`) n'arrête pas le worker : pas de note d'arrêt pour lui.
+    const isMainThread = (e as unknown as { agent_id?: unknown }).agent_id === undefined
     // Fable indisponible (limite atteinte juste après une requête partie sur Fable) : retour sur le modèle de la
     // session jusqu'à la fin de la session, dit une fois ; un worker Fable, arrêté avec son tour, reçoit une seule
     // fois un message de reprise, en file derrière le tour (un nouvel échec, sur Opus, ne relance rien).
+    // Le tour que le repli Fable va reprendre (un message de reprise programmé par cet échec) : pas encore un worker
+    // arrêté ; si ce message n'entre pas, `sendFableResume` dépose la note d'arrêt d'un `billing_error`.
+    let isResumed = false
     if ((error === 'rate_limit' || error === 'billing_error') && isLastStepFable && !isFableOff) {
       isFableOff = true
       isLastStepFable = false
@@ -14105,10 +14330,15 @@ export const register: Register = on => {
       const board: Board | null = await read($, boardAtom)
       if (board?.delegate && isFableMark(board.delegate.model) && !isFableResumeSent) {
         isFableResumeSent = true
-        $.clock.after(300, () => void sendFableResume($))
+        isResumed = true
+        // Seul l'échec du fil principal arrête le worker : celui d'un spécialiste ne dépose pas de note d'arrêt.
+        $.clock.after(300, () => void sendFableResume($, isMainThread ? error : undefined))
       }
       $.ui.invalidate('ui.render')
     }
+    // Un worker arrêté par une erreur que réessayer ne résout pas : il le dit, chez lui et au manager.
+    // Sans l'attendre : un signal du relais resté en file ne doit jamais retenir `next(e)` ni la pause de l'auto.
+    if (isMainThread) void quietly(() => workerStopped($, error, isResumed))
     if ((error === 'rate_limit' || error === 'billing_error') && (await isAutoHere($, await read($, boardAtom)))) {
       const now = await $.clock.now()
       await quietly(async () => afterAutoPause($, await commit($, board => stopActiveAuto(board, AUTO_STOPS.quota, now))))

@@ -142,6 +142,9 @@ from pathlib import Path
 # Le marqueur « 0.xx.0 » d'une version pas encore connue dans un README, et les lignes dont
 # `scripts/bump-version.py` le remplace : une seule règle pour les deux scripts.
 from placeholders import PLACEHOLDER, git_show, replaced_lines
+# La normalisation et le seuil de `scripts/epingles.py` : un test épingle une phrase qu'il recopie sur
+# 30 signes et plus, échappements retirés et blancs comptés pour un (pré-contrôle rapide, `pinned_tests`).
+from epingles import MIN as PIN_MIN, fragment as pin_fragment, normal as pin_normal
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -184,9 +187,15 @@ EXPORTED_VALUE = re.compile(r"^export\s+(?:declare\s+)?(?:default\s+)?(?:async\s
                             r"(?:function\s*\*?|const\s+enum|const|let|var|abstract\s+class|class|enum)\s+([A-Za-z_$][\w$]*)")
 EXPORT_READERS = {".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"}
 # Le début d'une déclaration de premier niveau, exportée ou non, de toute sorte : la fin de la plage
-# de la déclaration d'avant, pour le pré-contrôle rapide (`changed_exports`).
+# de la déclaration d'avant, pour le pré-contrôle rapide (`changed_declarations`, que lisent
+# `changed_exports` et `reread_list`).
 TOP_LEVEL = re.compile(r"^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:async\s+)?"
                        r"(?:function\b|const\b|let\b|var\b|abstract\s+class\b|class\b|enum\b|type\b|interface\b|namespace\b)")
+# Le nom d'une déclaration de premier niveau, exportée ou non, de toute sorte (`TOP_LEVEL` avec un
+# nom) : le relevé « à relire avant commit » du pré-contrôle rapide (`reread_list`).
+DECLARED_NAME = re.compile(r"^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:async\s+)?"
+                           r"(?:function\s*\*?|const\s+enum|const|let|var|abstract\s+class|class|enum|type|interface|namespace)"
+                           r"\s+([A-Za-z_$][\w$]*)")
 # L'en-tête d'un bloc de `git diff -U0`, côté nouveau : sa ligne de début et son nombre de lignes.
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 # L'entrée du mod, que le moteur charge sans qu'aucun fichier l'importe.
@@ -1803,32 +1812,53 @@ def touched_tests(plugin):
     return sorted(Path(p).relative_to(rel).as_posix() for p in found)
 
 
-def changed_exports(plugin):
-    """Les noms des valeurs exportées de premier niveau des modules `.ts`/`.tsx` de `hooks/` (motif
-    `EXPORTED_VALUE`) dont le corps a changé face à `HEAD` (arbre de travail ou index) : un bloc de
-    `git diff -U0 HEAD` compte pour chaque déclaration dont la plage (de sa ligne de début à la
-    déclaration de premier niveau suivante, de toute sorte, exportée ou non, dans la version de l'arbre)
-    croise la sienne côté nouveau, un bloc qui ne fait que retirer valant sa seule ligne de début ; un
-    module non suivi compte toutes ses valeurs exportées."""
-    hooks = plugin / "hooks"
-    if not hooks.is_dir():
-        return set()
-    rel = hooks.relative_to(REPO).as_posix()
+def diff_hunks(rel, created=None):
+    """Les blocs de `git diff -U0 HEAD -- <rel>` (arbre de travail ou index), côté nouveau :
+    {chemin depuis le dépôt : [(première ligne, dernière)]}, un bloc qui ne fait que retirer valant sa
+    seule ligne de début ; None quand git échoue. Avec `created` (un ensemble), y ajoute les fichiers
+    que `HEAD` n'a pas (« --- /dev/null » : nouveaux et déjà indexés)."""
     out = git(["diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", rel], 60)
-    untracked = git(["ls-files", "--others", "--exclude-standard", "--", rel], 60)
-    if out is None or untracked is None:
-        raise Failed(f"git diff ou git ls-files de {rel} : échec")
+    if out is None:
+        return None
     hunks = {}
     current = None
+    absent = False
     for line in out.splitlines():
+        if line.startswith("diff --git "):
+            absent = False
+        elif line.startswith("--- "):
+            absent = line == "--- /dev/null"
         if line.startswith("+++ "):
             current = line[6:] if line.startswith("+++ b/") else None
+            if current and absent and created is not None:
+                created.add(current)
         elif current and (m := HUNK.match(line)):
             start, count = int(m[1]), int(m[2] if m[2] is not None else 1)
             hunks.setdefault(current, []).append((start, start + max(count, 1) - 1))
-    for path in untracked.splitlines():
+    return hunks
+
+
+def changed_declarations(plugin):
+    """Les déclarations de premier niveau (motif `TOP_LEVEL`, exportées ou non) des modules
+    `.ts`/`.tsx` de `hooks/` dont la plage (de sa ligne de début à la déclaration de premier niveau
+    suivante, de toute sorte, dans la version de l'arbre) croise un bloc de `git diff -U0 HEAD` côté
+    nouveau ; un module nouveau (non suivi, ou indexé sans être dans `HEAD`) les compte toutes. Une
+    liste de (chemin depuis le dépôt, lignes du module, ligne de début, ligne de début de la suivante,
+    blocs du module, module nouveau) ; None quand git échoue. Lue par `changed_exports` (les tests à
+    lancer) et `reread_list` (le relevé à relire)."""
+    hooks = plugin / "hooks"
+    if not hooks.is_dir():
+        return []
+    rel = hooks.relative_to(REPO).as_posix()
+    created = set()
+    hunks = diff_hunks(rel, created)
+    untracked = git(["ls-files", "--others", "--exclude-standard", "--", rel], 60)
+    if hunks is None or untracked is None:
+        return None
+    news = set(untracked.splitlines()) | created
+    for path in news:
         hunks[path] = [(1, float("inf"))]
-    names = set()
+    found = []
     for path, ranges in hunks.items():
         source = REPO / path
         if source.suffix not in {".ts", ".tsx"} or ".test." in source.name or not source.is_file():
@@ -1836,10 +1866,89 @@ def changed_exports(plugin):
         lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
         starts = [n for n, text in enumerate(lines, 1) if TOP_LEVEL.match(text)] + [len(lines) + 1]
         for begin, end in zip(starts, starts[1:]):
-            m = EXPORTED_VALUE.match(lines[begin - 1])
-            if m and any(a <= end - 1 and b >= begin for a, b in ranges):
-                names.add(m[1])
-    return names
+            if any(a <= end - 1 and b >= begin for a, b in ranges):
+                found.append((path, lines, begin, end, ranges, path in news))
+    return found
+
+
+def changed_exports(plugin):
+    """Les noms des valeurs exportées de premier niveau des modules `.ts`/`.tsx` de `hooks/` (motif
+    `EXPORTED_VALUE`) dont le corps a changé face à `HEAD` (arbre de travail ou index) : un bloc de
+    `git diff -U0 HEAD` compte pour chaque déclaration dont la plage (de sa ligne de début à la
+    déclaration de premier niveau suivante, de toute sorte, exportée ou non, dans la version de l'arbre)
+    croise la sienne côté nouveau, un bloc qui ne fait que retirer valant sa seule ligne de début ; un
+    module non suivi compte toutes ses valeurs exportées (`changed_declarations`)."""
+    found = changed_declarations(plugin)
+    if found is None:
+        raise Failed(f"git diff ou git ls-files de {(plugin / 'hooks').relative_to(REPO).as_posix()} : échec")
+    return {m[1] for _, lines, begin, _, _, _ in found if (m := EXPORTED_VALUE.match(lines[begin - 1]))}
+
+
+def head_comment(lines, begin):
+    """La plage (première ligne, dernière) du commentaire de tête de la déclaration qui commence à la
+    ligne `begin` : un bloc `/** */` ou des lignes `//` collés au-dessus d'elle ; None sans commentaire."""
+    above = begin - 1
+    if above < 1:
+        return None
+    if lines[above - 1].strip().startswith("//"):
+        first = above
+        while first > 1 and lines[first - 2].strip().startswith("//"):
+            first -= 1
+        return first, above
+    if lines[above - 1].rstrip().endswith("*/"):
+        # Remonter les lignes du bloc (« * … », « */ ») jusqu'à son « /** » ; toute autre ligne (un
+        # `/* */` simple, du code fini par `*/`, la fin d'un autre bloc) : pas de commentaire de tête.
+        for first in range(above, 0, -1):
+            text = lines[first - 1].strip()
+            if text.startswith("/**"):
+                return first, above
+            if not text.startswith("*") or (first < above and text.endswith("*/")):
+                return None
+    return None
+
+
+REREAD_MAX = 40
+
+
+def reread_list(plugin):
+    """Le relevé « à relire avant commit » du pré-contrôle rapide : pour chaque déclaration de
+    `changed_declarations` d'un module suivi dont le corps a changé (le commentaire de tête de la
+    déclaration suivante, compris dans sa plage, n'y compte pas), son commentaire de tête qu'aucun bloc
+    du diff ne touche
+    (« <fichier>:<ligne> <nom> : commentaire de tête »), puis chaque ligne du README du plugin qui la
+    nomme, mot entier, et qu'aucun bloc du diff ne touche (« README.md:<ligne> : nomme <nom> »). Une
+    dizaine de constats de revue portaient sur un commentaire ou une phrase du README que le diff avait
+    rendus faux. None quand git échoue : le relevé ne fait jamais échouer le pré-contrôle."""
+    found = changed_declarations(plugin)
+    readme = plugin / "README.md"
+    readme_rel = readme.relative_to(REPO).as_posix()
+    readme_hunks = diff_hunks(readme_rel) if readme.is_file() else {}
+    if found is None or readme_hunks is None:
+        return None
+    readme_ranges = readme_hunks.get(readme_rel, [])
+    readme_lines = readme.read_text(encoding="utf-8", errors="replace").splitlines() if readme.is_file() else []
+
+    def touched(first, last, ranges):
+        return any(a <= last and b >= first for a, b in ranges)
+
+    items = []
+    for path, lines, begin, end, ranges, new in found:
+        m = DECLARED_NAME.match(lines[begin - 1])
+        if new or not m:
+            continue
+        # Le commentaire de tête de la déclaration suivante tombe dans la plage de celle-ci : un bloc
+        # du diff qui ne touche que lui ne change pas son corps, et ne la fait pas relever.
+        following = head_comment(lines, end) if end <= len(lines) else None
+        if following and not touched(begin, following[0] - 1, ranges):
+            continue
+        name = m[1]
+        comment = head_comment(lines, begin)
+        if comment and not touched(*comment, ranges):
+            items.append(f"{Path(path).relative_to(plugin.relative_to(REPO)).as_posix()}:{comment[0]} {name} : commentaire de tête")
+        word = re.compile(rf"(?<![\w$]){re.escape(name)}(?![\w$])")
+        items.extend(f"README.md:{n} : nomme {name}" for n, text in enumerate(readme_lines, 1)
+                     if word.search(text) and not touched(n, n, readme_ranges))
+    return items
 
 
 def named_tests(plugin):
@@ -1848,14 +1957,11 @@ def named_tests(plugin):
     lançait que les fichiers de test modifiés, et quatre fichiers qui appelaient une fonction changée
     n'avaient cassé qu'à la suite complète, trois fois."""
     names = sorted(changed_exports(plugin))
-    tests = plugin / "tests"
-    if not names or not tests.is_dir():
+    if not names:
         return {}
     words = {name: re.compile(rf"(?<![\w$]){re.escape(name)}(?![\w$])") for name in names}
     found = {}
-    for path in sorted(tests.rglob("*.test.ts*")):
-        if not path.is_file() or not path.name.endswith((".test.ts", ".test.tsx")):
-            continue
+    for path in engine_tests(plugin):
         text = path.read_text(encoding="utf-8", errors="replace")
         hits = [name for name in names if words[name].search(text)]
         if hits:
@@ -1863,11 +1969,66 @@ def named_tests(plugin):
     return found
 
 
+def engine_tests(plugin):
+    """Les fichiers de test du moteur du plugin (`tests/**/*.test.ts`, `*.test.tsx`), triés."""
+    tests = plugin / "tests"
+    if not tests.is_dir():
+        return []
+    return [p for p in sorted(tests.rglob("*.test.ts*"))
+            if p.is_file() and p.name.endswith((".test.ts", ".test.tsx"))]
+
+
+def pinned_tests(plugin):
+    """Les fichiers de test du moteur du plugin dont une ligne porte une suite d'au moins 30 signes
+    d'une ligne retirée de `hooks/` face à `HEAD` (arbre de travail ou index, lignes « - » de
+    `git diff -U0`), les deux côtés normalisés comme le fait `scripts/epingles.py` : {chemin depuis le
+    plugin : un fragment trouvé}. Une ligne retirée plus courte, ou qui revient à l'identique parmi les
+    lignes ajoutées (un bloc déplacé), ne compte pas. Les suites des lignes retirées sont réunies
+    d'abord : chaque fichier de test se lit une fois. Deux pré-contrôles verts avaient été suivis d'un
+    refus du pre-commit, un test épinglant une phrase de `hooks/` que le diff venait de changer."""
+    hooks = plugin / "hooks"
+    if not hooks.is_dir():
+        return {}
+    rel = hooks.relative_to(REPO).as_posix()
+    out = git(["diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", rel], 60)
+    if out is None:
+        raise Failed(f"git diff ou git ls-files de {rel} : échec")
+    removed, added, in_hunk = [], set(), False
+    for line in out.splitlines():
+        if line.startswith("diff --git "):
+            in_hunk = False
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif in_hunk and line[:1] == "-":
+            removed.append(pin_normal(line[1:]))
+        elif in_hunk and line[:1] == "+":
+            added.add(pin_normal(line[1:]))
+    phrases = sorted({p for p in removed if len(p) >= PIN_MIN and p not in added})
+    if not phrases:
+        return {}
+    owners = {}
+    for index, phrase in enumerate(phrases):
+        for i in range(len(phrase) - PIN_MIN + 1):
+            owners.setdefault(phrase[i : i + PIN_MIN], index)
+    found = {}
+    for path in engine_tests(plugin):
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = pin_normal(raw)
+            hit = next((owners[line[i : i + PIN_MIN]] for i in range(len(line) - PIN_MIN + 1)
+                        if line[i : i + PIN_MIN] in owners), None)
+            if hit is not None and (piece := pin_fragment(phrases[hit], line, owners)):
+                found[path.relative_to(plugin).as_posix()] = piece
+                break
+    return found
+
+
 def quick_check(plugin):
     """Le pré-contrôle rapide d'un plugin : ses contrôles statiques (l'arbre « Architecture » signalé
     dans `DEFERRED`, en échec à la fin), `tsc`, tous ses tests Node (`*.test.mjs`, qui relisent les
-    sources), puis, en un seul lancement (terminal), ses fichiers de test du moteur touchés et ceux qui
-    nomment une valeur exportée de `hooks/` changée (`named_tests`), sans plafond. Un module hors de la
+    sources), puis, en un seul lancement (terminal), ses fichiers de test du moteur touchés, ceux qui
+    nomment une valeur exportée de `hooks/` changée (`named_tests`) et ceux qui épinglent un texte
+    retiré de `hooks/` (`pinned_tests`), annoncés à part, sans plafond, puis le relevé « à relire
+    avant commit » (`log_reread`), qui ne fait jamais échouer. Un module hors de la
     marketplace (la sonde) passe par ses propres contrôles statiques, les termes de l'export public.
     Plus de 20 suites complètes avaient échoué sur un contrôle statique que ce pré-contrôle ne voyait pas."""
     log(f"\n=== {label_of(plugin)} (pré-contrôle rapide)")
@@ -1883,10 +2044,31 @@ def quick_check(plugin):
         log("→ tests qui nomment une fonction modifiée : "
             + ", ".join(f"{Path(t).name} ({', '.join(names)})" for t, names in chosen.items()))
         tests = sorted([*tests, *chosen])
-    if tests:
-        single_test(plugin, tests)
-    else:
-        log("→ aucun fichier de test du moteur touché face à HEAD")
+    pinned = {t: piece for t, piece in pinned_tests(plugin).items() if t not in tests}
+    if pinned:
+        log("→ tests qui épinglent un texte retiré : "
+            + ", ".join(f"{Path(t).name} (« {piece[:60]} »)" for t, piece in pinned.items()))
+        tests = sorted([*tests, *pinned])
+    try:
+        if tests:
+            single_test(plugin, tests)
+        else:
+            log("→ aucun fichier de test du moteur touché face à HEAD")
+    finally:
+        # Imprimé même quand un test échoue, avant la ligne « ÉCHEC : … » : c'est le moment où l'on corrige.
+        log_reread(plugin)
+
+
+def log_reread(plugin):
+    """Le relevé de `reread_list`, imprimé après les tests du pré-contrôle rapide seulement (même quand l'un d'eux échoue), quand il a
+    quelque chose à dire, `REREAD_MAX` éléments au plus ; jamais dans `DEFERRED`, jamais en échec."""
+    items = reread_list(plugin)
+    if not items:
+        return
+    log("→ à relire avant commit :")
+    log("\n".join(f"  {item}" for item in items[:REREAD_MAX]))
+    if len(items) > REREAD_MAX:
+        log(f"  … et {len(items) - REREAD_MAX} de plus")
 
 
 def validate(target, claude, label=None):

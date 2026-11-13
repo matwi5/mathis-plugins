@@ -284,8 +284,27 @@ const retroPistes = (runs: readonly Run[], taken?: (runId: string) => ReadonlySe
 /** Une déclaration à recopier : son id, sa source, son texte tel qu'écrit. */
 export type CooSetAside = { id: string; source: string; text: string; fixEntry?: string }
 
-/** Une mission close à relever : ses comptes rendus de workers (chemins), ses pistes de rétro non choisies. */
-export type CooGlean = { id: string; title: string; reports: string[]; untaken: { id: string; label: string }[]; report?: string }
+/**
+ * Une mission close à relever : ses comptes rendus de workers (chemins), ses pistes de rétro non choisies, son propre
+ * compte rendu (`report`). `reportValidated` : ce compte rendu est validé au sens du tableau de bord (`isReportValidated`)
+ * et son fichier porte le tour validé (`reportRound`), seule source des états « faite : » qu'il fait écrire ;
+ * `titleShared` : une autre mission du projet a le même titre, et « rattachée à <titre> » ne dit plus laquelle.
+ */
+export type CooGlean = { id: string; title: string; reports: string[]; untaken: { id: string; label: string }[]; report?: string; reportValidated?: boolean; reportRound?: string; titleShared?: boolean; reportUnread?: boolean; reportOtherRound?: boolean }
+
+/** La ligne du relevé sur la section « Entrées triées » d'une mission close qui a son propre compte rendu. */
+const sortedEntriesLine = (g: CooGlean): string => {
+  const before = ' Before sending « gleaned »:'
+  if (g.titleShared)
+    return `${before} another mission of this project has the same title, so « rattachée à » its title does not tell which one: change no state of the roadmap from its section « Entrées triées », and tell the user, naming the entries still « rattachée à » that title.`
+  if (g.reportUnread)
+    return `${before} its own report could not be read: change no state of the roadmap from it, and do not send « gleaned » for this mission yet: the next statement reads it again (what you already showed or added from this mission stays as it is: do not add it again).`
+  if (g.reportOtherRound)
+    return `${before} its own report is validated, but its file does not carry the validated round (rewritten since, or kept without it): change no state of the roadmap from it; tell the user which entries are still « rattachée à » this mission's title.`
+  if (!g.reportValidated || !g.reportRound)
+    return `${before} its own report is not validated (or was reopened after its validation): change no state of the roadmap from its section « Entrées triées », since a state « faite : » is written only from a validated report; tell the user which entries are still « rattachée à » this mission's title.`
+  return `${before} its own report is validated: also read its section « Entrées triées » (absent or « Rien. »: nothing changes; a file whose first line « <!-- flow-board report round … --> » does not carry the validated round ${neutralQuoted(g.reportRound, 40)} is not the validated version: nothing changes; write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated) and update only the « À reprendre » entries at « rattachée à » this mission's title (each « · » of it written « - »), as section « Les choses à reprendre » of your instructions says (write « faite : … » for an entry said done; propose « écartée : <raison> » or « à décider » and write them only with the user's agreement; every « · » of a title or a reason put in a state written « - »); send « gleaned » only once those states are written or refused by the user, and tell the user which entries stay « rattachée à ».`
+}
 
 /** Le fichier de coordination vu du COO. */
 export type CooCoordination = { state: 'absent' | 'read' | 'unread'; aside?: string; count: number }
@@ -685,12 +704,17 @@ const deliveryLine = (d: CooDelivery): string => {
 const entriesOf = (read: CooRoadmap['read'], section: RoadmapEntry['section'], statuses: readonly string[]): RoadmapEntry[] =>
   read !== null && read !== 'unread' && read.ok ? read.entries.filter(e => e.section === section && statuses.some(s => e.status === s || (s.endsWith(' ') && e.status.startsWith(s)))) : []
 
-/** Ce que la vue et le relevé montrent de la feuille de route : jalons en cours, prochaines étapes, idées et choses à reprendre ouvertes. */
+/**
+ * Ce que la vue et le relevé montrent de la feuille de route : jalons en cours, prochaines étapes, idées et choses à
+ * reprendre ouvertes (`pending`, que lisent aussi le relevé et le point d'ouverture du COO) ; à part, les choses à
+ * reprendre « rattachée à <mission> » (`attached`), que seule la vue montre, après les ouvertes.
+ */
 export const roadmapNow = (r: CooRoadmap) => ({
   milestones: entriesOf(r.read, 'Jalons', ['en cours']),
   steps: entriesOf(r.read, 'Prochaines étapes', ['en cours', 'à faire']),
   ideas: entriesOf(r.read, 'Idées', ['à lancer', 'plus tard']),
   pending: entriesOf(r.read, 'À reprendre', ['à décider', 'plus tard']),
+  attached: entriesOf(r.read, 'À reprendre', ['rattachée à ']),
 })
 
 const GESTURE_EN: Record<QuestionGesture['kind'], string> = { spend: 'a spending to allow or refuse', external: 'an external action to allow or refuse', flaw: 'a security finding to leave unfixed or have fixed' }
@@ -1184,7 +1208,7 @@ const setAsideLines = (s: CooStatement): string[] => {
     )
   for (const g of s.toGlean ?? []) {
     lines.push(
-      `Closed mission ${neutralQuoted(g.title, 80)} (mission id ${neutralQuoted(g.id, 40)}) is not gleaned yet: read the « Pistes » sections of its workers' reports${g.reports.length > 0 ? ` (${g.reports.map(p => neutralQuoted(p, 300)).join(', ')})` : ' (none kept)'}${g.report ? `, the sections « Trouvé » and « Bloqué par moi » of its own report (${neutralQuoted(g.report, 300)})` : ''}${g.untaken.length > 0 ? ` and its retro pistes not chosen (${g.untaken.map(u => `${neutralQuoted(u.id, 12)} ${neutralQuoted(u.label, 120)}`).join('; ')})` : ''}; show the user what was not declared yet, add it to « À reprendre » with its source, then send {"coordinate": {"gleaned": ["<mission id>"]}}.`,
+      `Closed mission ${neutralQuoted(g.title, 80)} (mission id ${neutralQuoted(g.id, 40)}) is not gleaned yet: read the « Pistes » sections of its workers' reports${g.reports.length > 0 ? ` (${g.reports.map(p => neutralQuoted(p, 300)).join(', ')})` : ' (none kept)'}${g.report ? `, the sections « Trouvé » and « Bloqué par moi » of its own report (${neutralQuoted(g.report, 300)})` : ''}${g.untaken.length > 0 ? ` and its retro pistes not chosen (${g.untaken.map(u => `${neutralQuoted(u.id, 12)} ${neutralQuoted(u.label, 120)}`).join('; ')})` : ''}; show the user what was not declared yet, add it to « À reprendre » with its source, then send {"coordinate": {"gleaned": ["<mission id>"]}}.${g.report ? sortedEntriesLine(g) : ''}`,
     )
   }
   if (s.existingGleaned === false)

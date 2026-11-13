@@ -44,6 +44,8 @@ test('la description de setAside (outil flow) fait citer l’entrée de la feuil
   const setAside = (TOOL_SCHEMA as any).properties.setAside
   expect(setAside.description).toContain('Check the roadmap and « À reprendre » first: if one holds it, start with its id (« R49: … ») and say what it adds')
   expect(setAside.description.length).toBeLessThanOrEqual(600)
+  // Une obligation du compte rendu décidée par la personne avait été mise de côté au lieu d'être faite.
+  expect(setAside.description).toContain('each thing set aside for later or another mission, never work this mission owes (report duties too)')
   expect(setAside.items.properties.text.description.length).toBeLessThanOrEqual(600)
 })
 

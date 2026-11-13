@@ -675,7 +675,8 @@ const roadmapRows = (r: CooRoadmap): CooRow[] => {
   if (now.milestones.length + now.steps.length > 0) rows.push({ key: 'coo-roadmap', kind: 'heading', parts: [{ text: 'Feuille de route', bold: true }] })
   for (const m of now.milestones) rows.push({ key: `coo-milestone-${neutralLine(m.id)}`, kind: 'line', parts: entryParts('◆', C.teal, m.id, m.text, 'jalon en cours') })
   for (const e of now.steps) rows.push({ key: `coo-step-${neutralLine(e.id)}`, kind: 'line', parts: entryParts('→', C.blue, e.id, e.text, e.status) })
-  if (now.ideas.length + now.pending.length > 0) rows.push({ key: 'coo-ideas', kind: 'heading', parts: [{ text: `Idées · À reprendre · ${now.ideas.length + now.pending.length}`, bold: true }] })
+  const ideasCount = now.ideas.length + now.pending.length + now.attached.length
+  if (ideasCount > 0) rows.push({ key: 'coo-ideas', kind: 'heading', parts: [{ text: `Idées · À reprendre · ${ideasCount}`, bold: true }] })
   for (const e of now.ideas) {
     const actions: CooAction[] = [
       ...(e.status === 'à lancer' ? [{ key: `coo-idea-launch-${neutralLine(e.id)}`, label: `▶${NB}Lancer`, act: { kind: 'idea-launch' as const, id: e.id } }] : []),
@@ -684,7 +685,7 @@ const roadmapRows = (r: CooRoadmap): CooRow[] => {
     ]
     rows.push({ key: `coo-idea-${neutralLine(e.id)}`, kind: 'line', parts: entryParts('✦', C.violet, e.id, e.text, e.status), actions })
   }
-  // Une chose à reprendre ne sort de la liste que par la décision de la personne : ses quatre boutons.
+  // Une chose à reprendre ouverte ne sort de la liste que par la décision de la personne : ses boutons (« Plus tard » sauf à « plus tard »).
   for (const e of now.pending) {
     const id = neutralLine(e.id)
     rows.push({
@@ -695,6 +696,20 @@ const roadmapRows = (r: CooRoadmap): CooRow[] => {
         { key: `coo-pending-launch-${id}`, label: 'Lancer', act: { kind: 'pending-launch', id: e.id } },
         { key: `coo-pending-attach-${id}`, label: 'Rattacher', act: { kind: 'pending-attach', id: e.id } },
         ...(e.status !== 'plus tard' ? [{ key: `coo-pending-later-${id}`, label: `Plus${NB}tard`, act: { kind: 'pending-later' as const, id: e.id } }] : []),
+        { key: `coo-pending-drop-${id}`, label: 'Écarter', act: { kind: 'pending-drop', id: e.id } },
+      ],
+    })
+  }
+  // Une chose rattachée à une mission, après les ouvertes : son état se défait par « Plus tard » ou « Écarter »,
+  // les mêmes demandes au COO que pour une chose ouverte ; ni « Lancer » ni « Rattacher ».
+  for (const e of now.attached) {
+    const id = neutralLine(e.id)
+    rows.push({
+      key: `coo-pending-${id}`,
+      kind: 'line',
+      parts: entryParts('↺', C.amber, e.id, e.text, e.status),
+      actions: [
+        { key: `coo-pending-later-${id}`, label: `Plus${NB}tard`, act: { kind: 'pending-later', id: e.id } },
         { key: `coo-pending-drop-${id}`, label: 'Écarter', act: { kind: 'pending-drop', id: e.id } },
       ],
     })

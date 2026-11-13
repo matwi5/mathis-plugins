@@ -13,13 +13,14 @@ Une exploration de documentation ou de code sur plusieurs fichiers ou plusieurs 
 
 Un spécialiste doit reconstituer le contexte, puis il faut relire son rapport : déléguer (outil `Agent`) seulement quand (a) le travail noierait le contexte principal (lecture de nombreux fichiers, analyse sur plusieurs fichiers, revue de code de plus de 500 lignes, enquête de débogage, relecture de plan) ou (b) deux tâches conséquentes et indépendantes ou plus peuvent tourner en parallèle (un seul message, plusieurs appels `Agent`). Garder le travail dans la boucle principale quand la cible est déjà connue, quand quelques lectures ou modifications suffisent, ou quand il faut itérer avec l'utilisateur en cours de tâche.
 
-Spécialistes : `agents:explorer` pour cartographier le code, `agents:researcher` pour chercher de la documentation, et `general-purpose` pour une implémentation délimitée, un débogage méthodique ou une recherche ouverte. Une question de documentation (Claude Code, une API, un outil) passe par un seul agent `agents:researcher` ou `claude-code-guide`, jamais par un workflow multi-agents.
+Spécialistes : `agents:explorer` pour cartographier le code, `agents:researcher` pour chercher de la documentation, et `general-purpose` pour une implémentation délimitée, un débogage méthodique ou une recherche ouverte. Une question de documentation (Claude Code, une API, un outil) passe par un seul agent, `agents:researcher` ou `claude-code-guide` avec `model: "sonnet"` passé à l'appel (sans lui, il tourne sur Haiku), jamais par un workflow multi-agents.
 
 Modèle et effort de chaque spécialiste (réglés dans son fichier quand il en a un, sinon passés à l'appel ; surchargés à l'appel par les paramètres `model` et `effort` de l'outil `Agent` dans les cas de montée en gamme) :
 
 - `general-purpose` pour une implémentation délimitée : Opus, effort medium, passés à l'appel ; effort high pour un bug difficile ou des tests qui échouent.
 - `agents:explorer` : Haiku, effort xhigh ; Sonnet, effort high quand il a manqué des liens entre modules.
 - `agents:researcher` : Sonnet, effort high.
+- `claude-code-guide` : Sonnet, effort high, passés à l'appel.
 - Revues de code et de sécurité : Opus, effort medium, high ou xhigh selon l'enjeu, toujours explicite (voir plus bas).
 - Cadrage d'une mission flow-board (grilling, spec, découpage) : Fable 5.2 medium, high quand l'auto de la mission envoie de cette discussion, que le mod de flow-board impose au fil principal du manager jusqu'à la fin du découpage ; un `/model` tapé l'arrête pour le reste de la session.
 - Tâche de jugement d'une mission flow-board (ticket « Jugement : oui ») : Opus xhigh le temps du ticket, imposé par le mod ; Fable 5.2 high (le worker Fable) seulement par le bouton « ↗ Fable » de l'utilisateur, jamais choisi ni proposé par Claude, sauf la relance suggérée pour un bug qu'Opus n'a pas résolu ; tout le code et toutes les revues restent sur Opus.

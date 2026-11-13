@@ -39,12 +39,16 @@
 // vient de la session, jamais du fichier de ticket, et passe la forme d'un id de `snapshot.mjs`. Le texte de chaque ligne est celui du gabarit, ses trous `<…>`
 // remplis ; le script ne choisit que les lignes entre crochets qui s'appliquent : un trou qu'il ne
 // connaît pas, ou une ligne qu'il ne sait pas classer, le fait échouer (code 1) au lieu d'écrire un
-// fichier faux. La plage et les chemins, qui entrent dans une commande `git diff` du relecteur,
+// fichier faux. La revue d'un ticket reçoit aussi la ligne « Axe Standards d'un ticket » : le chemin absolu
+// du SKILL.md du skill code-review (sa liste d'odeurs de code), résolu à chaque écriture d'après le dossier
+// du script, jamais d'un argument (`codeReviewSkill` : le skill voisin du dépôt, sinon le registre
+// `installed_plugins.json` du dossier `plugins/` au-dessus du script, gardé sous ce dossier), ou « non
+// trouvé » et où il a été cherché, sans faire échouer le script. La plage et les chemins, qui entrent dans une commande `git diff` du relecteur,
 // passent une liste blanche. Sans dépendance hors de Node.
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { reviewDir, SnapshotError } from './snapshot.mjs'
@@ -52,6 +56,8 @@ import { reviewDir, SnapshotError } from './snapshot.mjs'
 export class ConsignesError extends Error {}
 
 const TEMPLATE = fileURLToPath(new URL('../reference/consignes-revue.md', import.meta.url))
+/** Le dossier de flow-board, lu du chemin du script : jamais d'un argument. */
+const PLUGIN_DIR = fileURLToPath(new URL('..', import.meta.url))
 const OPTIONS = { '--chemins': 'many', '--faits': 'many', '--choix': 'one', '--declares': 'one', '--relecteur': 'one', '--groupe': 'one', '--securite': 'one' }
 
 /** Une révision git d'une plage : lettres, chiffres et `_ / . ^ ~ -`, sans « - » en tête ni « .. ». */
@@ -80,6 +86,123 @@ const andList = items => (items.length < 2 ? items.join('') : `${items.slice(0, 
 
 /** Un chemin que `--chemins` accepte. */
 export const isSafePath = value => typeof value === 'string' && SAFE_PATH.test(value) && !value.split('/').includes('..')
+
+/**
+ * Un chemin de SKILL.md que le fichier de consignes peut écrire entre backticks : lettres et chiffres ASCII
+ * et `_ . / : \ @ + -` (ni espace, ni contrôle, ni backtick, ni séparateur de ligne), 1 000 signes au plus,
+ * sans segment « .. ». Un autre chemin donne « non trouvé » : le corpus hostile commun le fait refuser.
+ */
+const SAFE_SKILL_PATH = /^[A-Za-z0-9_./:\\@+-]{1,1000}$/
+export const isSafeSkillPath = value => typeof value === 'string' && SAFE_SKILL_PATH.test(value) && !value.replace(/\\/g, '/').split('/').includes('..')
+
+/** Le SKILL.md du skill code-review sous le dossier d'une installation de mattpocock-skills. */
+const SKILL_TAIL = ['skills', 'engineering', 'code-review', 'SKILL.md']
+
+const isFile = path => {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+const realOrNull = path => {
+  try {
+    return realpathSync(path)
+  } catch {
+    return null
+  }
+}
+
+/** Les `installPath` du registre des plugins (relu tel quel) : ceux des clés `mattpocock-skills@…`, des textes seulement. */
+const skillInstalls = raw => {
+  const plugins = raw !== null && typeof raw === 'object' ? raw.plugins : undefined
+  if (plugins === null || typeof plugins !== 'object' || Array.isArray(plugins)) return []
+  const out = []
+  for (const [key, list] of Object.entries(plugins)) {
+    if (!key.startsWith('mattpocock-skills@') || !Array.isArray(list)) continue
+    for (const one of list) {
+      const path = one !== null && typeof one === 'object' ? one.installPath : undefined
+      if (typeof path === 'string') out.push(path)
+    }
+  }
+  return out
+}
+
+/**
+ * Le SKILL.md du skill code-review que lit l'axe Standards du relecteur d'un ticket, pour le dossier de
+ * flow-board donné : `{ path }` (absolu), ou `{ path: null, searched }` (les lieux cherchés, jamais une
+ * valeur écartée du registre). D'abord le skill voisin du dépôt (`<dossier de flow-board>/../mattpocock-skills/…`,
+ * écrit absolu et sans « .. », tel qu'il se lit à côté du plugin, sans résoudre ses liens) ; sinon le
+ * registre `installed_plugins.json` du premier dossier `plugins` au-dessus de
+ * flow-board qui en porte un (dans le dépôt, le premier `plugins` n'en a pas) : la première installation de
+ * `mattpocock-skills` dont l'`installPath` est un texte absolu sans « .. », sous ce dossier `plugins/` dès
+ * son texte (tel que vu du script, ou résolu), et dont le SKILL.md est un fichier qui, résolu, reste sous ce
+ * dossier résolu (un lien qui en sort est écarté). Aucun disque n'est lu sur un `installPath` avant ces
+ * gardes de texte : un chemin hors du dossier n'est jamais suivi. `seenAs` (le dossier de flow-board tel que
+ * la commande l'a nommé, liens non résolus) admet aussi ce texte du même dossier `plugins/` : un `~/.claude`
+ * qui est un lien garde ainsi sa version trouvée. Rien n'est écrit.
+ */
+export const codeReviewSkill = (flowBoardDir, seenAs) => {
+  const own = resolve(flowBoardDir)
+  const neighbour = join(dirname(own), 'mattpocock-skills', ...SKILL_TAIL)
+  if (isFile(neighbour) && isSafeSkillPath(neighbour)) return { path: neighbour }
+  const searched = [neighbour]
+  let plugins = null
+  for (let dir = own; ; dir = dirname(dir)) {
+    if (basename(dir) === 'plugins' && isFile(join(dir, 'installed_plugins.json'))) {
+      plugins = dir
+      break
+    }
+    if (dirname(dir) === dir) break
+  }
+  if (plugins === null) return { path: null, searched }
+  const registry = join(plugins, 'installed_plugins.json')
+  searched.push(registry)
+  let raw
+  try {
+    raw = JSON.parse(readFileSync(registry, 'utf8'))
+  } catch {
+    return { path: null, searched }
+  }
+  const root = realOrNull(plugins)
+  if (root === null) return { path: null, searched }
+  // Le même dossier `plugins/` tel que la commande a nommé le script (un `~/.claude` qui est un lien, que
+  // Node résout pour le module) : gardé seulement s'il mène au même dossier ; jamais une valeur du registre.
+  const allowed = [plugins, root]
+  if (typeof seenAs === 'string' && seenAs !== '') {
+    const up = relative(plugins, own).split(sep).filter(Boolean).length
+    const seen = resolve(seenAs, ...Array(up).fill('..'))
+    if (basename(seen) === 'plugins' && realOrNull(seen) === root) allowed.push(seen)
+  }
+  for (const install of skillInstalls(raw)) {
+    const text = install.replace(/\\/g, '/')
+    if (!isAbsolute(install) || text.split('/').includes('..')) continue
+    // Sous le dossier `plugins/` dès le texte (vu du script, résolu, ou tel que la commande l'a nommé) : rien hors de lui n'est suivi.
+    const target = resolve(install)
+    if (!allowed.some(dir => target.startsWith(`${dir}${sep}`))) continue
+    const real = realOrNull(join(install, ...SKILL_TAIL))
+    if (real === null || !real.startsWith(`${root}${sep}`) || !isFile(real) || !isSafeSkillPath(real)) continue
+    return { path: real }
+  }
+  return { path: null, searched }
+}
+
+/**
+ * Le dossier de flow-board tel que la commande a nommé le script (`process.argv[1]`, liens non résolus), quand
+ * c'est bien ce module qui tourne ; sinon undefined. Il ne sert qu'à reconnaître le texte du registre.
+ */
+const seenPluginDir = () => {
+  const typed = process.argv[1]
+  if (typeof typed !== 'string' || realOrNull(typed) !== realOrNull(fileURLToPath(import.meta.url))) return undefined
+  return dirname(dirname(resolve(typed)))
+}
+
+/** La valeur de la ligne « Axe Standards d'un ticket » : le chemin, ou « non trouvé » avec les lieux cherchés. */
+const skillText = skill =>
+  skill.path !== null
+    ? `\`${skill.path}\``
+    : `non trouvé (cherché : ${skill.searched.map(p => `\`${p}\``).join(', puis ')}) ; l'écrire dans le rapport, sans chercher le skill`
 
 /** Le texte du gabarit sous sa ligne `---`. */
 const templateBody = template => {
@@ -195,6 +318,8 @@ export const render = (template, data) => {
       keep(line, { '`<fichier de décisions du projet>`': data.decisions ? `\`${data.decisions}\`` : 'aucun fichier de décisions trouvé à côté du ticket' })
     } else if (item.startsWith('Les règles de jugement')) {
       if (data.standards) keep(line, { '<racine du dossier de travail>': dirname(data.standards) })
+    } else if (item.startsWith("Axe Standards d'un ticket")) {
+      if (mode === 'ticket' && data.skill) keep(line, { '`<SKILL.md du skill code-review>`': skillText(data.skill) })
     } else if (item.startsWith('Passe « bogues »')) {
       if (mode === 'ticket' && ticket.invariant) keep(line, { '« <invariant> »': quoted(ticket.invariant) })
     } else if (item.startsWith('Relecture du fond et de la forme')) {
@@ -331,7 +456,9 @@ export const writeConsignes = (argv, cwd = process.cwd()) => {
   const declared = options['--declares'] ? lf(readFile(cwd, options['--declares'], 'fichier des choix de la session')).split('\n').map(l => l.trim()).filter(Boolean) : []
   // Vérifié avant de créer le dossier : un gabarit ou une option fausse n'en laisse aucun.
   const template = readFileSync(TEMPLATE, 'utf8')
-  const data = { mode, group, ticket: tickets[0], tickets, range, paths: options['--chemins'], choix: options['--choix'], declared, done, decisions, standards }
+  // Le SKILL.md de code-review, pour l'axe Standards du relecteur d'un ticket : résolu à chaque écriture, jamais gardé.
+  const skill = mode === 'ticket' ? codeReviewSkill(PLUGIN_DIR, seenPluginDir()) : null
+  const data = { mode, group, ticket: tickets[0], tickets, range, paths: options['--chemins'], choix: options['--choix'], declared, done, decisions, standards, skill }
   render(template, data)
   const reviewer = mode === 'ticket' ? options['--relecteur'] : `${mode}-${group}`
   let dir = null

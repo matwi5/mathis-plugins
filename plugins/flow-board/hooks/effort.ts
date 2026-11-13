@@ -188,6 +188,15 @@ export type LeadEffort = { level: WorkerEffort | 'xhigh'; rule: LeadRule; how: '
  */
 export const FABLE_MODEL = 'fable'
 
+/** Le début de l'id complet d'un modèle Fable (`claude-fable-5-2`), sans son numéro de version. */
+const FABLE_ID_PREFIX = 'claude-fable-'
+
+/** L'id complet d'un modèle (celui de `$.session.model()`) est un Fable ; un id illisible ou un alias : non. */
+export const isFableModelId = (id: unknown): boolean => typeof id === 'string' && id.startsWith(FABLE_ID_PREFIX)
+
+/** Les mots que montre le rappel d'un manager resté sur Fable après le cadrage (bandeau et demande de lancement). */
+export const FABLE_STUCK_WORDS = 'tape /model opus'
+
 /** La discussion qui tient le siège du COO : medium à chaque requête, xhigh et max laissés. */
 export const COO_EFFORT: LeadEffort = { level: 'medium', rule: 'coo', how: 'medium' }
 
@@ -203,7 +212,11 @@ export const FABLE_WORKER_EFFORT: LeadEffort = { level: 'high', rule: 'fable', h
  */
 export const FABLE_OFF_WORKER_EFFORT: LeadEffort = { level: 'xhigh', rule: 'fableOff', how: 'exact' }
 
-/** Les phases de cadrage d'un manager (grilling et ses variantes, spec, découpage). */
+/**
+ * Les phases de cadrage d'un manager (grilling et ses variantes, spec, découpage). Le tri (`triage`) n'y est pas,
+ * exprès : il est un cadrage pour les consignes (`FRAMING_SKILLS` de `register.tsx`), pas pour le modèle ; il reste
+ * sur Opus, plancher high, règle « other » (choix du 13/11/2026 : l'élargir à Fable serait une dépense nouvelle).
+ */
 const FRAMING = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-questionnaire', 'to-spec', 'to-tickets', 'domain-modeling'])
 
 /**
@@ -236,6 +249,15 @@ const isGroupsFollowUp = (run: Run): boolean => {
   })
   return cut >= 0 && !run.phases.slice(cut + 1, run.cursor + 1).some(p => endsFollowUp(p.skill))
 }
+
+/**
+ * Le rappel « tape /model opus » est dû chez un manager : sa mission active, le découpage fini, au suivi ou au
+ * lancement de ses groupes (`isGroupsFollowUp`), hors d'un cadrage en cours (la règle du manager, `leadEffort`, n'y
+ * impose alors plus Fable), et le modèle de la session (`sessionModel`, l'id complet relu à chaque fois) un Fable.
+ * Le mod ne change jamais ce modèle lui-même : un `/model` tapé reste respecté, seule la personne le retape.
+ */
+export const isFableStuck = (run: Run | null, sessionModel: unknown): boolean =>
+  run !== null && run.status === 'active' && isGroupsFollowUp(run) && leadEffort(run)?.rule !== 'framing' && isFableModelId(sessionModel)
 
 /**
  * Ce que la règle d'un manager lit de sa discussion, en plus de la mission : `isAutoHere`, l'auto de la mission
@@ -437,12 +459,30 @@ export const SONNET_APP_ID = 'claude-sonnet-5-5'
 export const SONNET_CLI_ALIAS = 'sonnet'
 
 /**
+ * Le modèle Opus d'un worker de groupe qui ne part ni sur Sonnet ni sur Fable, écrit une seule fois, à côté de
+ * Sonnet : l'id que prend `model` de `start_session` dans l'app et l'alias de `--model` de `claude --bg`. Écrit au
+ * lancement, il fait partir le groupe sur Opus même quand Fable est devenu le modèle de la discussion ou le défaut
+ * du poste (un `/model fable` tapé au cadrage). À revoir à la sortie d'un nouvel Opus : l'alias suit seul le dernier
+ * Opus, l'id non.
+ */
+export const OPUS_APP_ID = 'claude-opus-5-5'
+export const OPUS_CLI_ALIAS = 'opus'
+
+/**
  * Comment lancer un groupe sans logique : Sonnet en high, dans l'app comme dans le CLI ; les autres groupes
- * ne reçoivent aucun modèle et héritent de celui de la discussion (Opus), comme un groupe qui porte un ticket de
- * jugement. Dit seulement quand la demande en porte un, et jamais sous un effort imposé.
+ * partent sur Opus (`OPUS_LAUNCH_FR`), comme un groupe qui porte un ticket de jugement. Dit seulement quand la
+ * demande en porte un, et jamais sous un effort imposé.
  */
 export const SONNET_LAUNCH_FR =
-  `Un groupe annoncé « Sonnet high » part sur Sonnet : model "${SONNET_APP_ID}" et effort "high" dans start_session, --model ${SONNET_CLI_ALIAS} --effort high dans claude --bg ; aucun modèle pour les autres groupes (ils partent sur celui de cette discussion : un groupe qui porte un ticket de jugement ne va jamais à Sonnet). `
+  `Un groupe annoncé « Sonnet high » part sur Sonnet : model "${SONNET_APP_ID}" et effort "high" dans start_session, --model ${SONNET_CLI_ALIAS} --effort high dans claude --bg ; les autres groupes partent sur Opus (un groupe qui porte un ticket de jugement ne va jamais à Sonnet). `
+
+/**
+ * Comment lancer un groupe Opus : tout groupe qui n'est ni annoncé « Sonnet high » ni lancé par « ↗ Fable », en
+ * mode auto comme hors auto, effort imposé (« ↗ xhigh ») compris, reçoit le modèle Opus, dans l'app comme dans le
+ * CLI. Dit quand la demande porte un tel groupe ; jamais pour un worker Fable, qui part sans modèle (`FABLE_LAUNCH`).
+ */
+export const OPUS_LAUNCH_FR =
+  `Un groupe dont la ligne ne nomme pas un autre modèle part sur Opus, quel que soit le modèle de cette discussion ou du poste : model "${OPUS_APP_ID}" dans start_session, --model ${OPUS_CLI_ALIAS} dans claude --bg. `
 
 /**
  * Ce que dit la consigne d'effort, hors effort imposé : l'effort se lit sur la ligne du groupe

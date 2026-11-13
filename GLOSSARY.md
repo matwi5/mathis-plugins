@@ -56,12 +56,20 @@ L'envoi en une fois de toutes les missions au rapport validé d'un projet : vers
 _Avoid_: livraison de la mission, release
 
 **Mission livrée** :
-Une mission terminée par une livraison, qui n'a plus rien à livrer. Elle reste visible jusqu'à ce que l'utilisateur l'archive ou lance sa rétro.
+Une mission terminée par une livraison, qui n'a plus rien à livrer. Elle reste visible jusqu'à ce que l'utilisateur l'archive ou que sa rétro finisse.
 _Avoid_: mission poussée, mission archivée
+
+**Mission close** :
+Une mission terminée, par une livraison ou sans elle.
+_Avoid_: mission finie, mission fermée
 
 **Archiver une mission** :
 La retirer des missions en cours, sur un choix de l'utilisateur ; elle se reprend plus tard si besoin.
 _Avoid_: clore, fermer
+
+**Fermer une discussion** :
+Arrêter la discussion d'un manager dont la mission est archivée et la retirer de la liste des discussions ; sa conversation est gardée et se rouvre.
+_Avoid_: archiver une discussion, supprimer une discussion
 
 **Feuille de route** :
 La suite des jalons d'un projet, du jalon en cours aux suivants, que le COO tient pour mener l'utilisateur jusqu'à la fin ; le cap vient des objectifs du projet.
@@ -76,8 +84,28 @@ Ce que l'utilisateur confie au COO sans le lancer tout de suite, écrit par le C
 _Avoid_: brouillon, suggestion, note
 
 **À reprendre** :
-Une chose qu'une mission a mise de côté (correction mineure, piste, constat, décision à prendre), gardée par le COO jusqu'à ce que l'utilisateur la lance, la rattache à une mission, la garde pour plus tard ou l'écarte ; elle ne disparaît jamais seule.
+Une chose qu'une mission a mise de côté (correction mineure, piste, constat, décision à prendre), gardée par le COO jusqu'à ce que l'utilisateur la lance, la rattache à une mission, la garde pour plus tard ou l'écarte, ou qu'une mission qui l'a corrigée la dise « faite » (l'état « faite : <mission>, ticket <n> », écrit par le COO d'après le compte rendu validé) ; elle ne disparaît jamais seule.
 _Avoid_: backlog, pour plus tard, TODO, reste à faire
+
+**Tri** :
+L'examen des entrées « À reprendre » rattachées à une mission, avant tout ticket : chacune est vérifiée, puis reçoit un état, « corrige », « pour l'utilisateur », « question », « écarte » ou « renvoie ».
+_Avoid_: triage (le nom du skill), revue, backlog grooming
+
+**Partage du tri** :
+Le résultat d'un tri, que l'utilisateur valide en une fois : quelles entrées deviennent des tickets, lesquelles lui reviennent, lesquelles sont écartées ou renvoyées. Seules les entrées « corrige » entrent dans le lot.
+_Avoid_: recommandation, bilan du tri, répartition
+
+**Titre d'une entrée** :
+Le résumé d'une ligne que le COO écrit pour une chose à reprendre, montré à la place de son texte dans la vue Coordination ; le texte complet reste tel qu'il a été écrit.
+_Avoid_: résumé, libellé, chapeau
+
+**Page de la vue Coordination** :
+Une des parties de la vue Coordination du COO, montrée seule et choisie par une pastille en tête de l'onglet : À faire, Missions, Idées, À reprendre, Pistes, Réglages.
+_Avoid_: sous-onglet, section, écran
+
+**Numéro court** :
+Le numéro unique qu'une carte de lancement (« L12 »), puis sa mission (« M12 »), portent chez le COO, et que l'utilisateur peut dire à la place du titre ; il ne sert jamais deux fois.
+_Avoid_: id, référence, matricule
 
 ### Où sont ces fichiers sur le poste
 
@@ -179,7 +207,7 @@ Une décision qui reste à l'utilisateur même en mode auto, déclarée avec ce 
 _Avoid_: question en attente, blocage
 
 **Validation sautée** :
-Une validation à boutons (accord du cadrage, spec, découpage, plan, écritures Asana de la mission) que le mode auto ne demande pas, déclarée dans « Décidé sans toi » avec le chemin ou le lien du texte validé, pour que l'utilisateur la relise au rapport.
+Une validation à boutons (accord du cadrage, partage d'un tri, spec, découpage, plan, écritures Asana de la mission) que le mode auto ne demande pas, déclarée dans « Décidé sans toi » avec le chemin ou le lien du texte validé, pour que l'utilisateur la relise au rapport.
 _Avoid_: validation automatique, accord implicite
 
 ## Lots de tickets

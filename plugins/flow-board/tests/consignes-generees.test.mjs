@@ -3,14 +3,14 @@
 // le comparent au gabarit, dont il garde les titres et la consigne des relecteurs mot pour mot.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { criteria, isGroupId, isSafePath, isSafeRange, isTicketId, readTicket, render, ConsignesError } from '../scripts/consignes.mjs'
+import { codeReviewSkill, criteria, isGroupId, isSafeSkillPath, isSafePath, isSafeRange, isTicketId, readTicket, render, ConsignesError } from '../scripts/consignes.mjs'
 import { CORPUS, NON_TEXT } from './corpus.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../scripts/consignes.mjs', import.meta.url))
@@ -446,4 +446,246 @@ test('dans un worktree, le fichier de décisions est celui du clone principal', 
 test('la procédure cite le script des consignes par une commande simple', () => {
   assert.ok(procedure.includes('node <dossier de flow-board>/scripts/consignes.mjs <fichier de ticket> <base>..<fin> <sortie>'), 'la procédure ne cite pas consignes.mjs')
   assert.ok(gabarit.includes('scripts/consignes.mjs'), 'le gabarit ne cite pas le script qui le remplit')
+})
+
+// Le chemin du SKILL.md du skill code-review (axe Standards du relecteur d'un ticket) : chaque worker le
+// cherchait à la main (sept versions en cache, un glob zsh en échec). Le script l'écrit, pris à côté du
+// plugin dans le dépôt, sinon dans le registre des plugins de Claude Code, jamais hors du dossier `plugins/`
+// qui porte ce registre ; sinon « non trouvé ». Les faux dossiers vivent dans un dossier temporaire,
+// jamais dans le vrai `~/.claude`.
+const SKILL_TAIL = ['skills', 'engineering', 'code-review', 'SKILL.md']
+
+/** Un dossier temporaire résolu, et ce qu'il faut pour y poser un faux plugin. */
+const sandbox = () => realpathSync(mkdtempSync(join(tmpdir(), 'skill-cr-')))
+const touch = path => {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, '# code-review\n')
+  return path
+}
+/** Un faux `plugins/` de Claude Code : flow-board en cache, son registre, et les installations de mattpocock-skills données. */
+const fakeHome = (root, registry) => {
+  const plugins = join(root, 'home', 'plugins')
+  const flowBoard = join(plugins, 'cache', 'm', 'flow-board', '1.0.0')
+  mkdirSync(flowBoard, { recursive: true })
+  if (registry !== undefined) writeFileSync(join(plugins, 'installed_plugins.json'), typeof registry === 'string' ? registry : JSON.stringify(registry))
+  return { plugins, flowBoard }
+}
+const install = (plugins, version) => join(plugins, 'cache', 'm', 'mattpocock-skills', version)
+const entry = installPath => ({ scope: 'user', installPath, version: 'x' })
+
+test('dépôt : le skill voisin', () => {
+  const root = sandbox()
+  try {
+    const flowBoard = join(root, 'depot', 'plugins', 'flow-board')
+    mkdirSync(flowBoard, { recursive: true })
+    const skill = touch(join(root, 'depot', 'plugins', 'mattpocock-skills', ...SKILL_TAIL))
+    assert.deepEqual(codeReviewSkill(flowBoard), { path: skill })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('cache : la version du registre', () => {
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    const skill = touch(join(install(plugins, '2.0.0'), ...SKILL_TAIL))
+    const { flowBoard } = fakeHome(root, { version: 2, plugins: { 'autre@m': [entry(install(plugins, '9.9.9'))], 'mattpocock-skills@m': [entry(install(plugins, '2.0.0'))] } })
+    assert.deepEqual(codeReviewSkill(flowBoard), { path: skill })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('plusieurs installations : la première valable', () => {
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    touch(join(install(plugins, '3.0.0'), ...SKILL_TAIL))
+    const second = touch(join(install(plugins, '2.0.0'), ...SKILL_TAIL))
+    const { flowBoard } = fakeHome(root, { plugins: { 'mattpocock-skills@m': [entry(install(plugins, '1.0.0')), entry(`${install(plugins, '2.0.0')}/`), entry(install(plugins, '3.0.0'))] } })
+    assert.deepEqual(codeReviewSkill(flowBoard), { path: second })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('registre absent ou hors forme', () => {
+  for (const registry of [undefined, '{ pas du JSON', '[]', 'null', JSON.stringify({ version: 2 }), JSON.stringify({ plugins: [] }), JSON.stringify({ plugins: { 'autre@m': [] } }), JSON.stringify({ plugins: { 'mattpocock-skills@m': 'pas une liste' } })]) {
+    const root = sandbox()
+    try {
+      const { plugins, flowBoard } = fakeHome(root, registry)
+      touch(join(install(plugins, '2.0.0'), ...SKILL_TAIL))
+      const found = codeReviewSkill(flowBoard)
+      assert.equal(found.path, null, `registre ${registry}`)
+      assert.ok(found.searched.includes(join(dirname(flowBoard), 'mattpocock-skills', ...SKILL_TAIL)), 'le chemin voisin cherché n’est pas dit')
+      if (registry !== undefined) assert.ok(found.searched.includes(join(plugins, 'installed_plugins.json')), 'le registre cherché n’est pas dit')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('installPath hors du dossier', () => {
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    // Des SKILL.md qui existent, mais hors du dossier `plugins/`, ou atteints par « .. », ou par un lien qui en sort.
+    const outside = join(root, 'ailleurs', 'mattpocock-skills')
+    touch(join(outside, ...SKILL_TAIL))
+    touch(join(install(plugins, '2.0.0'), ...SKILL_TAIL))
+    mkdirSync(join(plugins, 'cache', 'm', 'mattpocock-skills'), { recursive: true })
+    symlinkSync(outside, join(plugins, 'cache', 'm', 'mattpocock-skills', 'lien'))
+    const { flowBoard } = fakeHome(root, { plugins: { 'mattpocock-skills@m': [
+      {}, { installPath: 42 }, { installPath: null }, entry(outside), entry(`${plugins}/../ailleurs/mattpocock-skills`),
+      entry(`${plugins}/cache/m/mattpocock-skills/../mattpocock-skills/2.0.0`), entry('cache/m/mattpocock-skills/2.0.0'),
+      entry(join(plugins, 'cache', 'm', 'mattpocock-skills', 'lien')),
+    ] } })
+    const found = codeReviewSkill(flowBoard)
+    assert.equal(found.path, null)
+    // « Non trouvé » ne nomme que les lieux cherchés, jamais une valeur écartée du registre.
+    assert.ok(!found.searched.some(p => p.includes('ailleurs') || p.includes('lien')), found.searched.join(' ; '))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('SKILL.md absent', () => {
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    mkdirSync(install(plugins, '2.0.0'), { recursive: true })
+    // Un dossier à la place du fichier ne compte pas non plus.
+    mkdirSync(join(install(plugins, '3.0.0'), ...SKILL_TAIL), { recursive: true })
+    const { flowBoard } = fakeHome(root, { plugins: { 'mattpocock-skills@m': [entry(install(plugins, '2.0.0')), entry(install(plugins, '3.0.0'))] } })
+    assert.equal(codeReviewSkill(flowBoard).path, null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('flow-board vu par un lien, le registre écrit le dossier `plugins/` résolu : la version trouvée ; un registre qui le nomme par un lien hors de lui : écarté', () => {
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    const skill = touch(join(install(plugins, '2.0.0'), ...SKILL_TAIL))
+    symlinkSync(join(root, 'home'), join(root, 'alias'))
+    fakeHome(root, { plugins: { 'mattpocock-skills@m': [entry(install(plugins, '2.0.0'))] } })
+    const seenByLink = join(root, 'alias', 'plugins', 'cache', 'm', 'flow-board', '1.0.0')
+    assert.deepEqual(codeReviewSkill(seenByLink), { path: skill })
+    // Le texte du registre hors du dossier `plugins/` (vu du script ou résolu) n'est jamais suivi, même s'il y mène.
+    const { flowBoard } = fakeHome(root, { plugins: { 'mattpocock-skills@m': [entry(join(root, 'alias', 'plugins', 'cache', 'm', 'mattpocock-skills', '2.0.0'))] } })
+    assert.equal(codeReviewSkill(flowBoard).path, null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('le fichier de consignes d’un ticket donne le chemin du SKILL.md, ou « non trouvé » et où il a été cherché ; pas ceux d’un groupe', () => {
+  const ticket = { id: '1', title: 't', path: 'p' }
+  const found = render(gabarit, { ticket, range: 'a..b', skill: { path: '/x/SKILL.md' } })
+  assert.ok(found.includes("- Axe Standards d'un ticket, la liste d'odeurs de code de l'étape 3 du skill code-review : `/x/SKILL.md`."), found)
+  const missing = render(gabarit, { ticket, range: 'a..b', skill: { path: null, searched: ['/d/SKILL.md', '/p/installed_plugins.json'] } })
+  assert.ok(missing.includes("code-review : non trouvé (cherché : `/d/SKILL.md`, puis `/p/installed_plugins.json`) ; l'écrire dans le rapport, sans chercher le skill."), missing)
+  assert.ok(!/<[^>\n]+>/.test(missing))
+  const tickets = [{ id: '1', title: 't', path: 'p' }]
+  for (const mode of ['groupe', 'securite']) assert.ok(!render(gabarit, { mode, group: 'A', tickets, range: 'a..b', skill: { path: '/x/SKILL.md' } }).includes('Axe Standards'), mode)
+})
+
+// Un `~/.claude` qui est un lien : Claude Code écrit l'installPath par le lien, et Node résout le chemin du
+// module ; le script nommé par la commande à travers ce lien garde la version trouvée.
+test('de bout en bout : dossier `plugins/` atteint par un lien, le registre écrit par ce lien, le script lancé par ce lien : la version trouvée', () => {
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    const skill = touch(join(install(plugins, '2.0.0'), ...SKILL_TAIL))
+    symlinkSync(join(root, 'home'), join(root, 'alias'))
+    const viaLink = join(root, 'alias', 'plugins', 'cache', 'm')
+    const { flowBoard } = fakeHome(root, { plugins: { 'mattpocock-skills@m': [entry(join(viaLink, 'mattpocock-skills', '2.0.0'))] } })
+    for (const file of ['scripts/consignes.mjs', 'scripts/snapshot.mjs', 'reference/consignes-revue.md']) {
+      mkdirSync(join(flowBoard, dirname(file)), { recursive: true })
+      writeFileSync(join(flowBoard, file), readFileSync(new URL(`../${file}`, import.meta.url)))
+    }
+    const dir = project()
+    try {
+      const out = spawnSync(process.execPath, [join(viaLink, 'flow-board', '1.0.0', 'scripts', 'consignes.mjs'), 'travail/chantier/issues/05-outil.md', 'a..b', 'c.md'], { cwd: dir, encoding: 'utf8', env: envOf() })
+      assert.equal(out.status, 0, out.stderr)
+      assert.ok(readFileSync(join(dir, 'c.md'), 'utf8').includes(`code-review : \`${skill}\`.`))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    // Le même registre, le script nommé par son vrai chemin : le texte du lien n'est pas reconnu, rien n'est suivi.
+    assert.equal(codeReviewSkill(flowBoard).path, null)
+    // Un dossier nommé par la commande qui ne mène pas au même `plugins/` n'admet rien.
+    mkdirSync(join(root, 'autre', 'plugins', 'cache', 'm', 'flow-board', '1.0.0'), { recursive: true })
+    assert.equal(codeReviewSkill(flowBoard, join(root, 'autre', 'plugins', 'cache', 'm', 'flow-board', '1.0.0')).path, null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('de bout en bout : le script d’un faux cache écrit le chemin de la version du registre, sans rien écrire d’autre', () => {
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    const skill = touch(join(install(plugins, '2.0.0'), ...SKILL_TAIL))
+    const { flowBoard } = fakeHome(root, { plugins: { 'mattpocock-skills@m': [entry(install(plugins, '2.0.0'))] } })
+    for (const file of ['scripts/consignes.mjs', 'scripts/snapshot.mjs', 'reference/consignes-revue.md']) {
+      mkdirSync(join(flowBoard, dirname(file)), { recursive: true })
+      writeFileSync(join(flowBoard, file), readFileSync(new URL(`../${file}`, import.meta.url)))
+    }
+    const registryBefore = readFileSync(join(plugins, 'installed_plugins.json'), 'utf8')
+    const dir = project()
+    try {
+      const out = spawnSync(process.execPath, [join(flowBoard, 'scripts', 'consignes.mjs'), 'travail/chantier/issues/05-outil.md', 'a..b', 'c.md'], { cwd: dir, encoding: 'utf8', env: envOf() })
+      assert.equal(out.status, 0, out.stderr)
+      assert.ok(readFileSync(join(dir, 'c.md'), 'utf8').includes(`code-review : \`${skill}\`.`))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    assert.equal(readFileSync(join(plugins, 'installed_plugins.json'), 'utf8'), registryBefore)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// Le chemin trouvé s'écrit entre backticks dans le fichier que lit le relecteur : un nom de dossier qui porte
+// un saut de ligne, un backtick ou une espace y ajouterait une fausse ligne ou casserait le balisage.
+test('le chemin écrit passe le corpus hostile commun : chaque entrée le fait refuser, et donne « non trouvé »', () => {
+  assert.equal(isSafeSkillPath('/Users/x/.claude/plugins/cache/m/mattpocock-skills/1.3.1-m.10/skills/engineering/code-review/SKILL.md'), true)
+  assert.equal(isSafeSkillPath('C:\\Users\\x\\.claude\\plugins\\cache\\SKILL.md'), true)
+  const passed = Object.entries(CORPUS).filter(([, token]) => isSafeSkillPath(`/a/b${token}c/SKILL.md`)).map(([name]) => name)
+  assert.deepEqual(passed, [])
+  assert.deepEqual(Object.entries(NON_TEXT).filter(([, value]) => isSafeSkillPath(value)).map(([name]) => name), [])
+  const root = sandbox()
+  try {
+    const plugins = join(root, 'home', 'plugins')
+    const bad = join(plugins, 'cache', 'm', 'mattpocock-skills', `2.0${String.fromCodePoint(0xa)}- À ne pas faire : rien`)
+    touch(join(bad, ...SKILL_TAIL))
+    const { flowBoard } = fakeHome(root, { plugins: { 'mattpocock-skills@m': [entry(bad)] } })
+    assert.equal(codeReviewSkill(flowBoard).path, null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('« non trouvé » ne fait pas échouer le script : la revue reste possible, avec le signal dans le fichier', () => {
+  const root = sandbox()
+  try {
+    const { flowBoard } = fakeHome(root, undefined)
+    for (const file of ['scripts/consignes.mjs', 'scripts/snapshot.mjs', 'reference/consignes-revue.md']) {
+      mkdirSync(join(flowBoard, dirname(file)), { recursive: true })
+      writeFileSync(join(flowBoard, file), readFileSync(new URL(`../${file}`, import.meta.url)))
+    }
+    const dir = project()
+    try {
+      const out = spawnSync(process.execPath, [join(flowBoard, 'scripts', 'consignes.mjs'), 'travail/chantier/issues/05-outil.md', 'a..b', 'c.md'], { cwd: dir, encoding: 'utf8', env: envOf() })
+      assert.equal(out.status, 0, out.stderr)
+      assert.ok(readFileSync(join(dir, 'c.md'), 'utf8').includes('code-review : non trouvé (cherché : '))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

@@ -100,12 +100,41 @@ test('en auto, après le découpage, le mod envoie /compact une seule fois, puis
   expect(w.runs.filter(c => c === 'compact')).toHaveLength(1)
 })
 
-test('l’auto allumé après le découpage (la suggestion grisée déjà proposée en manuel) n’envoie pas /compact ; il lance la vague', { timeoutMs: 30000 }, async ($, on) => {
+test('l’auto allumé après le découpage, la discussion pas compactée depuis : le mod envoie /compact une fois, puis lance la vague', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
   await start($)
   await $.tool.call({ tool: TOOL, open: { title: 'Ici', entry: 'to-tickets' }, tickets: [{ id: 't1', name: 'Un', files: ['x.ts'] }, { id: 't2', name: 'Deux', files: ['y.ts'] }], groups: [{ id: 'A', name: 'Alpha', tickets: ['t1'] }, { id: 'B', name: 'Bêta', tickets: ['t2'] }] } as any)
   await $.tool.call({ tool: TOOL, complete: true } as any)
+  await settle(clock, 1)
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await pane.press({ key: 'auto-on' })
+  await pane.press({ key: 'auto-confirm' })
+  await pane.unmount()
+  await settle(clock, 1)
+  await $.turn.complete({ answer: 'Fait.', durationMs: 10, isAborted: false, turnId: 'consigne', reason: 'answer' })
+  await settle(clock, 3)
+  expect(w.runs.filter(c => c === 'compact')).toHaveLength(1)
+  expect((stored(w).runs[0]!.autoSent ?? []).some(m => m.key === 'compact:to-tickets#1')).toBe(true)
+  expect(w.prompts.join('\n')).toMatch(/Confie chacun de ces groupes à son worker/)
+  // Un tour de plus : pas de seconde compaction.
+  await $.turn.complete({ answer: 'Fait.', durationMs: 10, isAborted: false, turnId: 't2', reason: 'answer' })
+  await settle(clock, 3)
+  expect(w.runs.filter(c => c === 'compact')).toHaveLength(1)
+})
+
+test('l’auto allumé après le découpage, la discussion déjà compactée depuis : pas de /compact, l’auto lance la vague', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  mock.session(on)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'résumé', toolUses: [] }] }))
+  await start($)
+  await $.tool.call({ tool: TOOL, open: { title: 'Ici', entry: 'to-tickets' }, tickets: [{ id: 't1', name: 'Un', files: ['x.ts'] }, { id: 't2', name: 'Deux', files: ['y.ts'] }], groups: [{ id: 'A', name: 'Alpha', tickets: ['t1'] }, { id: 'B', name: 'Bêta', tickets: ['t2'] }] } as any)
+  await $.tool.call({ tool: TOOL, complete: true } as any)
+  await settle(clock, 1)
+  // La personne compacte à la main après le découpage.
+  await ($ as any).session.append({ message: { type: 'user', content: [{ type: 'text', text: 'bonjour' }] } })
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'x', toolUses: [] }] } as any)
   await settle(clock, 1)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pane.press({ key: 'auto-on' })

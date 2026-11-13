@@ -11,6 +11,8 @@ const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'
 /** Le noyau, lu par chaque worker et relu après une compaction. */
 const procedure = read('reference/procedure-groupe.md')
 const template = read('reference/consignes-revue.md')
+/** La consigne des relecteurs : la ligne de citation du gabarit, seul endroit de la procédure où elle est écrite (la section 7 du noyau y renvoie). */
+const consigne = template.split('\n').find(line => line.startsWith('> '))
 const register = read('hooks/register.tsx')
 
 /**
@@ -232,7 +234,8 @@ test('revue du groupe : lancée par la session, high --fix sur <base>..HEAD, san
     'se concentrer sur les interactions entre les tickets',
     'sans `--fix` : la session applique elle-même les seuls constats qu\'elle retient',
     'Elle ne tranche pas un conflit entre la spec et une consigne (CLAUDE.md, une demande de ma part) : elle ne corrige pas ce point et me le remonte',
-    'relire le diff de ses correctifs, relancer les contrôles et les commiter',
+    'relire le diff de ses correctifs, lancer la suite complète, une fois',
+    'puis commiter les correctifs : dans le dépôt de flow-board, le pre-commit saute alors la suite par son empreinte (quand l\'index porte exactement l\'arbre testé)',
   )
 })
 
@@ -276,7 +279,7 @@ test('compte rendu : complet au relais, une ligne au manager', () => {
 
 test('la consigne des relecteurs : tous les axes avant le rapport, tri des constats, classe du défaut, lecture seule', () => {
   has(
-    section(7),
+    consigne,
     'Si la revue a plusieurs axes (Standards et Spec), ne rendre son rapport qu\'une fois tous les axes revenus',
     'étiqueter chaque constat Important, Mineur ou Antérieur',
     'les Mineurs (style, nommage, nettoyage qui ne change aucun comportement) ne sont pas corrigés et se rendent en un compte, sans détail',
@@ -355,9 +358,10 @@ test('gabarit : le fichier de consignes se remplit d’après un gabarit, qui po
     'Réservé au porteur de la mission',
     'À ne pas faire',
   )
-  // La consigne des relecteurs : la même, mot pour mot, que la section 7.
-  const quote = text => text.split('\n').find(line => line.startsWith('> '))
-  assert.equal(quote(template), quote(section(7)))
+  // La consigne des relecteurs n'est écrite que dans le gabarit : la section 7 du noyau y renvoie, sans citation.
+  assert.ok(consigne, 'le gabarit porte la consigne des relecteurs')
+  has(section(7), 'la citation du gabarit `consignes-revue.md`', 'elle se donne telle quelle à chaque relecteur')
+  assert.ok(!section(7).split('\n').some(line => line.startsWith('> ')), 'la section 7 ne recopie plus la citation')
 })
 
 test('statut : la ligne Status: dit « fait » sans hash, jamais dans un commit de statut seul', () => {
@@ -405,7 +409,7 @@ test('après le compte rendu, un correctif suit la procédure du ticket, une que
 })
 
 test('un choix déclaré ne se défait pas par préférence, mais un défaut qu’il produit se signale ; plus de copie de l’ancienne consigne', () => {
-  has(section(7), 'ne pas défaire par préférence un choix de ce fichier, ni le resignaler comme tel, mais signaler tout cas où il produit un défaut, avec son scénario')
+  has(consigne, 'ne pas défaire par préférence un choix de ce fichier, ni le resignaler comme tel, mais signaler tout cas où il produit un défaut, avec son scénario')
   has(section(8), 'signale tout cas où l\'un d\'eux produit un défaut, avec son scénario')
   const sources = { procedure: whole, register, catalog: read('hooks/catalog.ts'), model: read('hooks/model.ts'), relay: read('hooks/relay.ts'), basics: read('hooks/basics.ts'), link: read('hooks/link.ts') }
   for (const [name, text] of Object.entries(sources)) {
@@ -569,7 +573,7 @@ test('les phrases jamais suivies sont retirées', () => {
 
 test('la consigne des relecteurs classe l’antérieur qui viole l’invariant, le texte rendu faux, les tests voisins', () => {
   has(
-    section(7),
+    consigne,
     'sauf un constat sur du code antérieur qui viole l\'invariant du ticket : il est Important et se corrige',
     'dans un groupe « durcissement », le code qu\'il vise n\'est pas antérieur au lot',
     'une description, un commentaire ou un texte de documentation que le diff rend faux est Important',
@@ -582,7 +586,7 @@ test('la consigne des relecteurs classe l’antérieur qui viole l’invariant, 
 // faute de violer l'invariant ; seule la revue du groupe l'avait rattrapée.
 test('la consigne des relecteurs rend Important une régression, et les pistes l’exceptent', () => {
   has(
-    section(7),
+    consigne,
     'une régression introduite par le diff (une entrée qui passait avant lui et qui maintenant lève, change de résultat ou est refusée) est Important, que le ticket ait un invariant ou non',
   )
   has(section(2), 'sauf une régression introduite par le diff (section 7), Important, qui se corrige', 'sous « Pistes », sauf une régression ou un critère manqué sans signal, qui se corrige')
@@ -593,7 +597,7 @@ test('la consigne des relecteurs rend Important une régression, et les pistes l
 // ne se produisait pas, sans aucun signal), faute de violer l'invariant ; le manager avait dû le renvoyer.
 test('un critère manqué sans signal est Important et se corrige, la revue du groupe comprise', () => {
   has(
-    section(7),
+    consigne,
     'un constat sur le code du lot qui fait manquer un critère du ticket sans signal (le comportement promis ne se produit pas, et rien ne le dit) est Important de même, que le ticket ait un invariant ou non',
   )
   has(
@@ -622,9 +626,12 @@ test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer 
 test('la procédure ne coûte plus d’appel refusé et dit quand lancer la suite complète', () => {
   has(section(2), 'son titre se trouve par Read de proche en proche, ou, dans un dépôt qui a `scripts/show.py`, par `python3 scripts/show.py --liste <chemin absolu> "## "`')
   assert.ok(!section(2).includes('par l\'outil Grep, motif'), 'le point 1 dépend encore de l’outil Grep')
+  // Le worker A avait commité ses correctifs (pre-commit complet) puis relancé la suite : elle avait tourné deux fois.
+  assert.ok(section(4).indexOf('lancer la suite complète, une fois') < section(4).indexOf('puis commiter les correctifs'), 'la suite complète avant le commit des correctifs')
+  assert.ok(!section(4).includes('relancer les contrôles et les commiter. La suite complète tourne alors'), 'reste l’ordre « commiter, puis la suite »')
   has(section(2), '`--chemins <c> --chemins <c>…` (une option par chemin de la mission)', '`--faits <t> --faits <t>…` (une option par ticket déjà fait du groupe')
   has(section(2), 'dans un worker, la couture de test que fixe le ticket (ses critères, les tests qu\'il nomme) vaut la confirmation que `<tdd>` demande à la personne')
-  has(section(4), 'La suite complète tourne alors, une fois', 'une fusion dont le hook `pre-merge-commit` a passé ne la fait pas relancer', '(paramètre `timeout` de l\'outil Bash, 600000)')
+  has(section(4), 'lancer la suite complète, une fois (dans le dépôt de flow-board', 'puis commiter les correctifs', 'une fusion dont le hook `pre-merge-commit` a passé ne la fait pas relancer', '(paramètre `timeout` de l\'outil Bash, 600000)')
   has(section(6), 'de son worktree ou de son dossier de job `CLAUDE_JOB_DIR`, son sous-dossier `tmp` compris (pas un autre)')
   has(section(1), 'elle est due dès que le groupe compte au moins deux tickets très sensibles')
   has(section(10), 'Une recommandation prise en partie (un filtre sur deux, par exemple) se déclare dans `{"decided": …}` avec la partie laissée et sa raison, jamais comme « plus prudente » sans dire ce qui manque')
@@ -758,7 +765,9 @@ test('section 3 : l’outil Grep peut manquer, et toutes les formes que le garde
     '`env -u`',
     'un `sed -i` sur une variable',
     '`git -C` vers un autre dossier',
-    'Le remplacement est le même pour toutes : écrire le texte, le programme ou la suite de commandes dans un fichier par l\'outil Write',
+    // Le worker A avait vu refuser `git commit … > log 2>&1` sans que la liste le nomme.
+    'une commande git dont la sortie est redirigée vers un fichier (`git commit … > log 2>&1`), qui passe sans la redirection, sa sortie se lisant dans le résultat de l\'outil',
+    'Le remplacement est le même pour toutes les autres : écrire le texte, le programme ou la suite de commandes dans un fichier par l\'outil Write',
     'puis lancer ce script par une commande simple',
   )
 })

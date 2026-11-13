@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { AUTO_GROUP_EFFORT, GROUP_EFFORT, SONNET_APP_ID, SONNET_CLI_ALIAS, SONNET_LAUNCH_FR } from '../hooks/effort.ts'
+import { AUTO_GROUP_EFFORT, GROUP_EFFORT, OPUS_APP_ID, OPUS_CLI_ALIAS, OPUS_LAUNCH_FR, SONNET_APP_ID, SONNET_CLI_ALIAS, SONNET_LAUNCH_FR } from '../hooks/effort.ts'
 
 // Le mod calcule l'effort de chaque groupe et l'écrit sur sa ligne de la demande de lancement : Claude
 // lisait lui-même la règle d'effort, parfois autrement que le mod (3 lancements plus haut, 5 plus bas).
@@ -366,4 +366,38 @@ test('sous un effort imposé, rien du ticket de jugement sur la ligne ; « ↗ x
 test('une demande pour plusieurs groupes, sans brief écrit, dit l’autonomie au conditionnel du ticket de jugement', async ($, on) => {
   const [text = ''] = await launch($, on, JUDGED, ['launch-parallel-linked'])
   expect(text).toContain("et, si son groupe porte un ticket « Jugement : oui », qu'elle est un worker autonome")
+})
+
+// Un groupe Opus part avec son modèle écrit (l'id dans l'app, l'alias dans le CLI), quel que soit le modèle de la
+// discussion ou du poste ; un groupe Sonnet garde sa ligne, un worker Fable part sans modèle.
+const OPUS_START = `model "${OPUS_APP_ID}" dans start_session`
+const OPUS_CLI = `--model ${OPUS_CLI_ALIAS} dans claude --bg`
+
+for (const isBrief of [false, true]) {
+  const form = isBrief ? 'brief écrit' : 'brief à rédiger'
+  test(`un groupe Opus porte le modèle Opus, dans l’app et dans le CLI (${form})`, async ($, on) => {
+    const [code = '', judged = '', xhigh = ''] = [
+      ...(await launch($, on, LOT, ['launch-linked-A', 'launch-linked-B', 'launch-xhigh-C'], isBrief)),
+    ]
+    for (const text of [code, judged, xhigh]) {
+      expect(text).toContain(OPUS_LAUNCH_FR)
+      expect(text).toContain(OPUS_START)
+      expect(text).toContain(OPUS_CLI)
+    }
+  })
+
+  test(`un groupe Sonnet seul garde sa ligne, sans modèle Opus ; un worker Fable n’en reçoit aucun (${form})`, async ($, on) => {
+    const [docs = '', fable = ''] = await launch($, on, FUSION, ['launch-linked-E', 'launch-fable-A'], isBrief)
+    expect(docs).toContain(SONNET_LAUNCH_FR)
+    expect(docs).not.toContain(OPUS_START)
+    expect(fable).toContain('aucun model dans start_session ni dans claude --bg')
+    expect(fable).not.toContain(OPUS_START)
+    expect(fable).not.toContain(OPUS_CLI)
+  })
+}
+
+test('une demande qui mêle Sonnet et Opus porte les deux modèles, chacun une fois', async ($, on) => {
+  const [text = ''] = await launch($, on, FUSION, ['launch-parallel-linked'])
+  expect(text.split(SONNET_LAUNCH_FR)).toHaveLength(2)
+  expect(text.split(OPUS_LAUNCH_FR)).toHaveLength(2)
 })

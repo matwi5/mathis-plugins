@@ -239,6 +239,41 @@ export const ticketFilesIn = (command: string): string[] =>
   [...new Set([...command.matchAll(/[^\s'"`]*issues[\\/]\d+-[^\s'"`\\/]+\.md/g)].map(m => m[0]))]
 
 /**
+ * Les erreurs de fin de tour (`classic.StopFailure`) que réessayer ne résout pas, liste fermée : un worker arrêté par
+ * l'une d'elles le dit (toast et note au relais). `billing_error` n'y compte que si le repli « Fable indisponible »
+ * ne reprend pas le tour (pas de reprise programmée, ou une reprise dont le message n'est pas entré) ; `rate_limit`, `overloaded`, `server_error`, `invalid_request`, `max_output_tokens` et
+ * `unknown` n'en sont pas.
+ */
+const WORKER_STOP_ERRORS = ['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'cloud_credential_error', 'model_not_found', 'billing_error'] as const
+
+/**
+ * Le texte de l'arrêt d'un worker pour cette erreur du moteur : « worker arrêté : /login » pour l'authentification,
+ * « worker arrêté : <nom de l'erreur> » pour les autres de la liste fermée (le nom tel que le moteur le donne, sans traduction à tenir à jour) ; null hors de la
+ * liste, pour une valeur qui n'est pas un texte, et pour `billing_error` repris par le repli Fable (`isResumed`). Le
+ * texte ne porte jamais le détail de l'erreur : seulement le nom, pris dans la liste.
+ */
+export const workerStopText = (error: unknown, isResumed: boolean): string | null => {
+  const known = WORKER_STOP_ERRORS.find(name => name === error)
+  if (known === undefined || (known === 'billing_error' && isResumed)) return null
+  return `worker arrêté : ${known === 'authentication_failed' ? '/login' : known}`
+}
+
+/** Les seuls textes d'arrêt qu'un manager reconnaît, un par erreur de la liste. */
+const WORKER_STOP_TEXTS: ReadonlySet<string> = new Set(WORKER_STOP_ERRORS.map(name => workerStopText(name, false) ?? ''))
+
+/**
+ * Le dernier signal relayé d'un worker dit son arrêt : une note dont le texte est exactement un texte d'arrêt de la
+ * liste fermée (`workerStopText`), avec une date lisible ; sinon null (un autre genre, une autre note, une date ou un
+ * signal hors forme). Le texte rendu est donc toujours un des textes fixes du mod, jamais un texte relu tel quel.
+ */
+export const workerStopOf = (last: unknown): { text: string; at: number } | null => {
+  if (last === null || typeof last !== 'object') return null
+  const { kind, text, at } = last as { kind?: unknown; text?: unknown; at?: unknown }
+  if (kind !== 'note' || typeof text !== 'string' || !WORKER_STOP_TEXTS.has(text) || !isTime(at)) return null
+  return { text, at }
+}
+
+/**
  * Le statut d'un ticket en fichier local, d'après sa ligne `**Status:**` (ou « Statut : »).
  * Son id est le numéro du fichier (`03-vue.md` → `03`). Null hors d'un dossier `issues`, ou
  * sans ligne de statut lisible. « en attente (porteur) » reste « en cours » : le ticket attend

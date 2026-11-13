@@ -19,6 +19,18 @@ test('le compte rendu nomme les tickets de jugement et donne le coût de leurs g
   assert.ok(decided.includes('(coût du groupe, pas du ticket)'), 'le coût n’est pas dit par groupe')
 })
 
+// Une obligation du compte rendu décidée par la personne (un coût, un bilan, une question à lui poser) avait été
+// mise de côté (`setAside`) au lieu d'être faite : le skill fait relire les décisions de la mission pour elles.
+test('le compte rendu fait ce que les décisions de la mission lui demandent, sans rien mettre de côté', () => {
+  const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
+  for (const part of [
+    '- ce que les décisions de la mission demandent au compte rendu lui-même : relis son fichier de décisions (son index « Décisions en vigueur » d\'abord, puis les séries en vigueur)',
+    '(un chiffre à donner, un bilan, une question à poser à la personne)',
+    'chacune se fait dans le rapport, à la section qui lui convient, ou le rapport dit pourquoi elle ne peut pas l\'être ; aucune ne se met de côté (`setAside`)',
+  ])
+    assert.ok(sources.includes(part), `absent : « ${part} »`)
+})
+
 test('le compte rendu a une borne chiffrée, et « Trouvé » se range par thème', () => {
   assert.ok(skill.includes('Le rapport entier tient en 60 lignes au plus, titres compris'), 'borne absente')
   assert.ok(skill.includes('plutôt que de couper'), 'la borne ne dit pas de regrouper')
@@ -99,4 +111,37 @@ test('chaque point de « Code antérieur au lot » et de « Pistes » se termine
   const part = skill.slice(skill.indexOf('## Code antérieur au lot'), skill.indexOf('## Documentation'))
   assert.equal(part.split('\n').filter(l => l.startsWith('- <') && l.endsWith(' <Où il est rangé.>')).length, 2, 'les deux rubriques ne finissent pas par leur rangement')
   for (const form of ['« feuille de route : <id> »', '« mis de côté (setAside) »', '« non rangé » avec la raison']) assert.ok(part.includes(form), form)
+})
+
+// Une mission qui commence par un tri dit au compte rendu ce que chaque entrée triée est devenue,
+// sous six formes fixes que le COO relit au relevé de la mission close.
+test('le compte rendu a une section « Entrées triées », après « Fait », avec ses six formes et la règle d’une entrée découpée', () => {
+  const template = skill.slice(skill.indexOf('```'), skill.lastIndexOf('```'))
+  const sections = [...template.matchAll(/^## (.+)$/gm)].map(m => m[1])
+  assert.equal(sections[sections.indexOf('Fait') + 1], 'Entrées triées', '« Entrées triées » ne suit pas « Fait »')
+  const sorted = template.slice(template.indexOf('## Entrées triées'), template.indexOf('## Décidé sans toi'))
+  const forms = sorted.split('\n').filter(l => l.startsWith('- <id> : '))
+  assert.deepEqual(forms, [
+    '- <id> : faite, ticket <n> (commit <hash>)',
+    '- <id> : faite, tickets <n>, <m> (commits <hash>, <hash>)',
+    '- <id> : écartée — <raison>',
+    '- <id> : renvoyée',
+    '- <id> : pour toi — <ce qui t\'attend>',
+    '- <id> : question ouverte — <la question>',
+  ])
+  for (const part of ['sans `tri.md` dans le dossier de la mission', 'laissé par une mission plus ancienne du même dossier), « Rien. »', 'Une ligne par entrée de la feuille de route, jamais par sous-ligne', 'toutes ses sous-lignes « corrige » ont leur ticket fait et qu\'aucune n\'attend', 'une entrée « corrige » dont un ticket n\'est pas fait n\'est jamais « faite »'])
+    assert.ok(sorted.includes(part), `absent : « ${part} »`)
+  // Chaque combinaison de lignes tombe sur une seule forme : des règles dans l'ordre, la première l'emporte, et un « sinon » final.
+  const rules = ['la première qui s\'applique donne sa forme', '1. Une ligne « question »', '2. Une ligne « pour l\'utilisateur »', '3. Une ligne « corrige » dont la colonne « ticket » est vide ou dont un ticket n\'est pas fait', '4. Au moins une ligne « corrige », toutes avec leurs tickets faits', '5. Toutes ses lignes « écarte »', '6. Sinon']
+  for (const rule of rules) assert.ok(sorted.includes(rule), `règle absente : « ${rule} »`)
+  assert.deepEqual(rules.map(r => sorted.indexOf(r)), rules.map(r => sorted.indexOf(r)).sort((a, b) => a - b), 'les règles ne sont pas dans l’ordre')
+  // Les copies de la règle : le README (l'exception à la borne) et la description du skill.
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8').split('\n').find(l => l.startsWith('- sections fixes : '))
+  assert.ok(readme.includes('le tout tient en 60 lignes au plus, hors des lignes de « Entrées triées »'), 'le README ne dit pas l’exception à la borne')
+  assert.ok(skill.match(/^description: "(.*)"$/m)[1].includes('ce que chaque entrée triée est devenue'), 'la description ne nomme pas les entrées triées')
+  const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
+  assert.ok(sources.includes('`tri.md`') && sources.includes('la colonne « ticket » et l\'état de chaque ticket'), 'la collecte ne lit pas tri.md')
+  const blocked = template.slice(template.indexOf('## Bloqué par moi'), template.indexOf('## Trouvé'))
+  assert.ok(blocked.includes('Les entrées « pour toi » et « question ouverte » de « Entrées triées » y paraissent aussi'), '« Bloqué par moi » ne reprend pas les entrées en attente')
+  assert.ok(skill.includes('Les lignes de « Entrées triées » ne comptent pas dans ces 60 lignes'), 'la borne compte les entrées triées')
 })

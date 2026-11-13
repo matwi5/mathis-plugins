@@ -1450,10 +1450,13 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
   if (run) {
     const phase = currentPhase(run)
     const detour = activeDetour(phase)
-    const owner = SKILLS[detour?.skill ?? phase.skill]
+    const ownerId = detour?.skill ?? phase.skill
+    const owner = SKILLS[ownerId]
     if (owner?.uses && Object.prototype.hasOwnProperty.call(owner.uses, id)) {
       const stepId = owner.uses[id]
       if (stepId) setStep(detour ?? phase, stepId, now)
+      // La note reste « none » : le mod lit `usedBy` pour donner à un sous-skill de cadrage les seules règles du cadrage.
+      fx.usedBy = { owner: ownerId, step: stepId ?? null }
       log(run, now, '↳', `${def.label} ${agree(def, 'chargé')} par ${owner.label}`, 'info')
       run.updatedAt = now
       return { board: b, fx }

@@ -391,7 +391,7 @@ export type SoloDecision = {
   relayedFrom?: string
   /**
    * D'où vient le choix, en auto : une recommandation prise sans la personne, une validation sautée
-   * (accord du cadrage, spec, découpage, plan, écritures Asana), un choix d'un worker ; absent
+   * (accord du cadrage, partage d'un tri, spec, découpage, plan, écritures Asana), un choix d'un worker ; absent
    * pour un choix d'avant l'auto ou sans origine dite.
    */
   origin?: DecisionOrigin

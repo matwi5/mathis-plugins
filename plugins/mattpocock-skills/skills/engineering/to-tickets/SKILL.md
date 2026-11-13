@@ -14,7 +14,7 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 ### 1. Gather context
 
-Work from whatever is already in the conversation context. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
+Work from whatever is already in the conversation context; when the breakdown follows a triage that wrote `tri.md` in the mission's folder (not one left there by an earlier mission of the same folder), work instead from its « corrige » lines and its verified facts, have each ticket cite the entries it handles, and once the tickets are published, write each line's ticket number in the ticket column of `tri.md`. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
 
 ### 2. Explore the codebase (optional)
 

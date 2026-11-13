@@ -74,3 +74,12 @@
 0.85.0	Claude ne le prend ni ne le propose
 0.85.0	never take nor offer it yourself
 0.85.0	Tu ne prends ni ne proposes jamais Fable
+# Le modèle des groupes Opus, écrit désormais au lancement (mission « Pistes de rétro · découpage ») :
+0.86.0	ne reçoit aucun modèle et hérite de celui de la discussion
+0.86.0	ne reçoivent aucun modèle et héritent de celui de la discussion
+0.86.0	aucun modèle pour les autres groupes
+# La liste des validations sans le partage d'un tri (mission « Parcours de triage fiable ») :
+0.86.0	accord du cadrage, spec, découpage
+0.86.0	framing agreement, spec, ticket split
+# Le trou du gabarit du relecteur que chaque worker remplissait à la main ; le fichier de consignes donne le chemin :
+0.86.0	<chemin du SKILL.md du skill code-review>

@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { ROADMAP_EXAMPLE, isRoadmapId, parseRoadmap, partialSeen, roadmapTextPrint, soundSeen, unionSeen, watchRoadmap, type RoadmapSeen } from '../hooks/roadmap.ts'
 import { roadmapAsk, roadmapMoveAsk } from '../hooks/register.tsx'
-import { cooStatement, statementText, type CooRoadmap } from '../hooks/coo.ts'
+import { cooStatement, roadmapNow, statementText, type CooRoadmap } from '../hooks/coo.ts'
 import { emptyBoard } from '../hooks/model.ts'
 import { CORPUS } from './corpus.mjs'
 
@@ -660,4 +660,71 @@ test('un état gardé mis de côté : la vue le montre sur une ligne et le relev
   await ui.unmount()
   // La copie n'est jamais effacée.
   expect([...Object.keys(w.files), ...Object.keys(w.mem)]).toContain(aside[0])
+})
+
+// Une chose à reprendre corrigée par une mission prend l'état « faite : <mission>, ticket <n> » (ou « tickets
+// <n>, <m> »), écrit par le COO au relevé de la mission close. Invariant : une feuille de route lisible avant le
+// reste ; une entrée « faite : » ne quitte jamais le fichier ni la mémoire du mod, et n'est jamais montrée ouverte.
+const DONE = `${FILE}- [R2] faite : Parcours de triage fiable, ticket 03 · 2026-11-04 · mission « Tri », compte rendu · un texte\n- [R3] faite : Titre, tickets 03, 07 · 2026-11-05 · COO · un autre texte\n- [R4] à décider · 2026-11-05 · COO · encore ouvert\n- [R5] plus tard · 2026-11-05 · COO · pour plus tard\n`
+
+test('une chose à reprendre « faite : <mission>, ticket(s) … » se lit avec son id, sa date, sa source et son texte', () => {
+  const read = parseRoadmap(DONE)
+  expect(read.ok).toBe(true)
+  if (!read.ok) return
+  const done = read.entries.filter(e => e.status.startsWith('faite : '))
+  expect(done.map(e => [e.id, e.section, e.status, e.date, e.source, e.text])).toEqual([
+    ['R2', 'À reprendre', 'faite : Parcours de triage fiable, ticket 03', '2026-11-04', 'mission « Tri », compte rendu', 'un texte'],
+    ['R3', 'À reprendre', 'faite : Titre, tickets 03, 07', '2026-11-05', 'COO', 'un autre texte'],
+  ])
+  // La feuille de route d'avant se lit toujours, avec les mêmes entrées.
+  const before = parseRoadmap(FILE)
+  expect(before.ok).toBe(true)
+  if (before.ok) expect(read.entries.slice(0, before.entries.length)).toEqual(before.entries)
+})
+
+test('« faite : » sans suite ou « faite » seul dans « À reprendre », et « faite : x » ailleurs qu’à reprendre, sont refusés ; « faite » reste une étape', () => {
+  const cases: [string, RegExp][] = [
+    [`${FILE}- [R9] faite : · 2026-11-02 · COO · x\n`, /statut « faite : » inconnu dans « À reprendre »/],
+    [`${FILE}- [R9] faite · 2026-11-02 · COO · x\n`, /statut « faite » inconnu dans « À reprendre »/],
+    [`${FILE}- [R9] faite: Titre, ticket 03 · 2026-11-02 · COO · x\n`, /statut « faite: Titre, ticket 03 » inconnu dans « À reprendre »/],
+    [FILE.replace('## Idées\n', '## Idées\n- [I9] faite : Titre, ticket 03 · 2026-11-02 · COO · x\n'), /inconnu dans « Idées »/],
+    [FILE.replace('## Jalons\n', '## Jalons\n- [J9] faite : Titre, ticket 03 · 2026-11-02 · COO · x\n'), /inconnu dans « Jalons »/],
+  ]
+  for (const [text, why] of cases) {
+    const read = parseRoadmap(text)
+    expect(read.ok).toBe(false)
+    if (!read.ok) expect(read.why).toMatch(why)
+  }
+  const step = parseRoadmap(FILE.replace('[E1] à faire', '[E1] faite'))
+  expect(step.ok && step.entries.find(e => e.id === 'E1')!.status).toBe('faite')
+})
+
+test('une chose « faite : … » n’est pas parmi les choses à reprendre ouvertes que montrent la vue et le relevé', () => {
+  const now = roadmapNow({ where: 'poste', path: '/x/feuille-de-route.md', read: parseRoadmap(DONE), gone: [] })
+  expect(now.pending.map(e => e.id)).toEqual(['R4', 'R5'])
+})
+
+// Les entrées rattachées viennent d'une liste à part ; `pending`, que lisent le relevé et le point
+// d'ouverture du COO, ne les prend jamais.
+test('une chose « rattachée à … » est dans la liste à part des entrées rattachées, jamais parmi les choses à reprendre ouvertes', () => {
+  const text = `${DONE}- [R6] lancée · 2026-11-05 · COO · déjà lancée\n- [R7] écartée : doublon · 2026-11-05 · COO · écartée\n`
+  const now = roadmapNow({ where: 'poste', path: '/x/feuille-de-route.md', read: parseRoadmap(text), gone: [] })
+  expect(now.pending.map(e => e.id)).toEqual(['R4', 'R5'])
+  expect(now.attached.map(e => [e.id, e.status])).toEqual([['R1', 'rattachée à Mode auto']])
+  const opening = statementText(cooStatement(emptyBoard('/p', 'p'), { now: 1, roadmap: { where: 'poste', path: '/x/feuille-de-route.md', read: parseRoadmap(text), gone: [] } }))
+  expect(opening).toMatch(/Set aside, to decide \(2\): .*encore ouvert/)
+  expect(opening).not.toMatch(/le README cite encore/)
+})
+
+test('une entrée qui passe de « rattachée à … » à « faite : … » n’est ni disparue ni dite changée de texte, et reste gardée', () => {
+  const first = watchRoadmap({}, parseRoadmap(FILE), 1_000)
+  const edited = FILE.replace('[R1] rattachée à Mode auto · 2026-11-02', '[R1] faite : Mode auto, ticket 03 · 2026-11-02')
+  const second = watchRoadmap(first.seen, parseRoadmap(edited), 2_000)
+  expect(second.gone).toEqual([])
+  expect(second.goneTexts).toEqual([])
+  expect(second.seen.R1!.line).toMatch(/\[R1\] faite : Mode auto, ticket 03 · /)
+  expect(second.seen.R1!.earlier).toBeUndefined()
+  // Une lecture hors format ensuite ne retire rien de ce qui est gardé.
+  const broken = watchRoadmap(second.seen, parseRoadmap(`${edited}texte libre\n`), 3_000)
+  expect(broken.seen.R1!.line).toBe(second.seen.R1!.line)
 })

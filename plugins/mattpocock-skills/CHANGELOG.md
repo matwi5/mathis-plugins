@@ -4,6 +4,16 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.11 — 2026-11-13
+
+### Ajouté
+- **`triage`, branche « fichiers locaux »** : suivie quand le premier message de la mission nomme des entrées de la feuille de route, ou quand le projet n'a que des tickets en fichiers ; un chemin cité par une entrée ne s'ouvre jamais tel quel.
+
+### Modifié
+- **`grilling`** : après un message hors du tour, le tour ouvert est redonné.
+
+---
+
 ## 1.3.1-mathis.10 — 2026-11-13
 
 ### Modifié

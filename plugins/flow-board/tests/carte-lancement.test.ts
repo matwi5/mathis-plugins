@@ -517,3 +517,28 @@ test('une demande dont la ligne de lancement a été retouchée reste dans le pr
   expect(w.box.text).toBe('◆ COO : lance maintenant la mission « Autre » dans une nouvelle discussion. Ma note à moi.')
   expect(w.toasts.at(-1)).toMatch(/^▶ Demande à taper : lance la mission « Export CSV des tickets »/)
 })
+
+// Le bouton « Lancer » d'une chose à reprendre : la mission lancée la rattache d'une seule écriture, jamais
+// « lancée » (qui ne porte aucun titre : le relevé de fin de mission ne la reconnaîtrait pas).
+test('« Lancer » une chose à reprendre demande de la passer « rattachée à <titre de la mission> » une fois la mission lancée, jamais « lancée »', () => {
+  const roadmap = { where: 'poste' as const, path: '/p/feuille.md', read: parseRoadmap('## À reprendre\n- [R1] à décider · 2026-11-02 · COO · un texte\n'), gone: [] }
+  const ask = roadmapAsk({ kind: 'pending-launch', id: 'R1' }, roadmap)!
+  expect(ask).toMatch(/je veux lancer une mission pour la chose à reprendre R1\. Regarde d'abord son statut : à un autre statut que « à décider » ou « plus tard » \(déjà « lancée », rattachée ailleurs, écartée ou faite\), ne la touche pas, ne la cite pas dans une carte et dis-le-moi\./)
+  expect(ask).toMatch(/Encore ouverte, propose-moi sa carte de lancement, son titre commençant par R1 et tenant en 70 signes au plus ; au premier tour où ton relevé montre la mission lancée, et une seule fois, passe l'entrée au statut « rattachée à <titre de la mission> », chaque « · » du titre écrit « - », si elle est encore « à décider » ou « plus tard », sans changer son id ni son texte \(elle vit sur ce poste : pas de commit\)\./)
+  // « lancée » n'est plus l'état visé : il ne paraît que parmi les statuts qu'on ne touche pas, avant la carte.
+  expect(ask.split('« lancée »').length - 1).toBe(1)
+  expect(ask.indexOf('« lancée »')).toBeLessThan(ask.indexOf('Encore ouverte'))
+  // La feuille de route dans le projet : le commit suit l'écriture du rattachement.
+  expect(roadmapAsk({ kind: 'pending-launch', id: 'R1' }, { ...roadmap, where: 'repo' as const })).toMatch(/sans changer son id ni son texte, puis commite-la par son chemin\./)
+  // Rejeu de la carte que dicte la demande : un titre qui commence par l'id, en 70 signes au plus, garde l'id entier
+  // à travers parseCard, et le texte de lancement fait nommer l'entrée et le chemin de la feuille de route.
+  const parsed = (title: string) => (parseCard({ ...CARD, title }, 1, 'kabcdef12') as { card: any }).card
+  const short = parsed('R123 · Tri des entrées du parcours')
+  expect(cardRoadmapIds(short)).toEqual(['R123'])
+  expect(launchText(short, 'labcdefgh12', 'manual', '/triage')).toMatch(/La carte cite R123 de la feuille de route : dans le premier message, écris à côté de cette entrée le chemin/)
+  // Un titre trop long garde l'id qu'il porte en tête ; un id cité à la fin d'un titre coupé se perd (d'où « commençant par »).
+  const long = `R123 ${'x'.repeat(80)}`
+  expect(cardRoadmapIds(parsed(long))).toEqual(['R123'])
+  expect(cardRoadmapIds(parsed(`${'x'.repeat(66)} R123`))).not.toContain('R123')
+  expect(roadmapAsk({ kind: 'pending-launch', id: 'R1"; rm' }, roadmap)).toBeNull()
+})
