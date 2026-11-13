@@ -7,7 +7,8 @@ import { emptyBoard } from '../hooks/model.ts'
 
 // Le quota de la discussion avant un lancement : la limite hebdomadaire était tombée 5 minutes après le
 // lancement d'un groupe en xhigh, et sa session était restée arrêtée 24 h. La carte de lancement le montre,
-// et la demande le cite dans la question d'effort xhigh ; sans quota lu, rien ne change.
+// et la demande le cite sous un xhigh imposé (plus de question d'effort au lancement depuis la ligne « Jugement »
+// des tickets) ; sans quota lu, rien ne change.
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -130,19 +131,20 @@ for (const [label, limits] of [
     // La carte du lancement est bien dessinée et chaque appui a rempli le prompt : seule la ligne de quota manque.
     expect(isLaunchDrawn).toBe(true)
     expect(texts).toHaveLength(2)
-    expect(texts[0]).toContain('« Opus xhigh (Recommandé) / Opus high »')
-    expect(texts[0]).toContain('« Fable 5.2 high (Recommandé) / Opus high »')
+    expect(texts[0]).toContain("Ne me pose aucune question sur l'effort.")
     expect(texts[1]).toContain("Effort de la session (<effort>) : xhigh, choisi par moi au tableau de bord")
     expect(shown).toBe(false)
     for (const text of texts) expect(text).not.toContain('quota')
   })
 }
 
-test('la demande de lancement cite le quota dans la question d’effort xhigh, et sous un xhigh imposé', async ($, on) => {
+test('la demande de lancement ne cite le quota que sous un xhigh imposé, sans question d’effort', async ($, on) => {
   const { texts } = await mount($, on, QUOTA, ['launch-linked-A', 'launch-xhigh-B'])
-  const [asked = '', imposed = ''] = texts
-  // Le quota se cite sous la question Opus xhigh : ses fenêtres sont celles du compte, pas la part de Fable.
-  expect(asked).toContain(`« Opus xhigh (Recommandé) / Opus high » pour un jugement sur la sécurité, un document lu par d'autres ou du design, avec une ligne qui cite le quota de cette discussion, relevé à l'écriture de cette demande (${QUOTA_TEXT})`)
+  const [calculated = '', imposed = ''] = texts
+  // À l'effort calculé, plus de question d'effort, donc plus de quota cité : le xhigh d'un ticket de jugement
+  // vient du mod de la session, le temps du ticket.
+  expect(calculated).not.toContain('quota')
+  expect(calculated).not.toContain('(Recommandé)')
   expect(imposed).toContain(`ne me pose aucune question sur l'effort ; en lançant, cite-moi en une ligne, sans attendre de réponse, le quota de cette discussion, relevé à l'écriture de cette demande (${QUOTA_TEXT})`)
 })
 

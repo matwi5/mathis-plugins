@@ -3,7 +3,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
-import { TOOL, start, world, writeBoard } from './monde-coordination.ts'
+import { TOOL, settle, start, world, writeBoard } from './monde-coordination.ts'
 
 import { leadEffortPill, workerTicketEffort } from '../hooks/effort.ts'
 import { applyReport, emptyBoard, newRun, restoreDelegate } from '../hooks/model.ts'
@@ -625,4 +625,161 @@ test('repli Fable : un message de reprise refusé (le message n’entre pas) se 
   await clock.advance(1000)
   expect(w.prompts.filter(p => p.includes(FABLE_RESUME))).toHaveLength(0)
   expect(w.toasts).toContain('Fable indisponible : le message de reprise n’est pas entré, le worker reste arrêté ; dis-lui de reprendre sur Opus')
+})
+
+// ─── Un ticket de jugement en cours chez un worker ──────────────────────
+// Invariant (décision de Mathis du 13/11/2026, celui de la ligne « Jugement ») : un ticket n'est traité en xhigh que
+// si la mission le dit « Jugement : oui » ; un drapeau absent, illisible ou hors forme, ou une mission qui ne se lit
+// pas, laisse le ticket à l'effort calculé, jamais l'inverse.
+
+/**
+ * La mission du groupe A : j1 de jugement, j2 de jugement et sensible, n1 à false, n2 sans drapeau, h1 hors forme.
+ * `missionWith` passe par l'envoi, qui ignore la valeur hors forme de h1 : un test qui l'éprouve la réécrit dans le
+ * fichier des missions (`writeBoard`).
+ */
+const JUDGED: Ticket[] = [
+  { id: 'j1', name: 'Jugement', status: 'todo', sensitive: false, judgment: true, files: ['a.ts'] },
+  { id: 'j2', name: 'Jugement sensible', status: 'todo', sensitive: true, judgment: true, files: ['b.ts'] },
+  { id: 'n1', name: 'Non', status: 'todo', sensitive: false, judgment: false, files: ['c.ts'] },
+  { id: 'n2', name: 'Muet', status: 'todo', sensitive: false, files: ['d.ts'] },
+  { id: 'h1', name: 'Hors forme', status: 'todo', sensitive: false, judgment: 'oui' as unknown as boolean, files: ['e.ts'] },
+]
+
+test('jugement : un ticket « Jugement : oui » en cours part en xhigh au moins ; sensible aussi, xhigh ; un effort plus haut reste', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { w, sent } = engine(on)
+  const mission = missionWith(w, JUDGED)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]' })
+  await say($, { set: [{ id: 'j1', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  for (const texts of await bandTexts($)) expect(texts).toContain('effort : xhigh, ticket de jugement j1 en cours')
+  await playStep($, { model: 'claude-opus-5-5', effort: 'max' })
+  await say($, { set: [{ id: 'j1', status: 'done' }, { id: 'j2', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'high' })
+  expect(sent.map(s => s.effort)).toEqual(['xhigh', 'max', 'xhigh'])
+})
+
+test('jugement : drapeau à false, absent ou hors forme : la règle d’avant (rien pour un ticket non sensible), jamais xhigh', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { w, sent } = engine(on)
+  const mission = missionWith(w, JUDGED)
+  // Une valeur hors forme déjà gardée dans la mission (l'envoi l'aurait ignorée) : écrite telle quelle.
+  writeBoard(w, b => ({ ...b, runs: b.runs.map(r => ({ ...r, tickets: r.tickets.map(t => (t.id === 'h1' ? ({ ...t, judgment: 'oui' } as unknown as Ticket) : t)) })) }))
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]' })
+  // L'effet d'abord : un ticket de jugement en cours part en xhigh dans les mêmes conditions.
+  await say($, { set: [{ id: 'j1', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  await say($, { set: [{ id: 'j1', status: 'done' }] })
+  for (const id of ['n1', 'n2', 'h1']) {
+    await say($, { set: [{ id, status: 'doing' }] })
+    await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+    await say($, { set: [{ id, status: 'done' }] })
+  }
+  expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium', 'medium', 'medium'])
+})
+
+test('jugement : plusieurs tickets passés en cours ensemble, dont un de jugement, donnent xhigh ; fait, ou revenu à faire, plus de xhigh', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { w, sent } = engine(on)
+  const mission = missionWith(w, JUDGED)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]' })
+  await say($, { set: [{ id: 'n1', status: 'doing' }, { id: 'j1', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  // Revenu « à faire » : plus de xhigh, n1 (non sensible) reste seul en cours.
+  await say($, { set: [{ id: 'j1', status: 'todo' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  // Repris puis fait : plus de xhigh non plus.
+  await say($, { set: [{ id: 'j1', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  await say($, { set: [{ id: 'j1', status: 'done' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium', 'xhigh', 'medium'])
+})
+
+test('jugement : le ticket en cours est le dernier passé « doing » ; un ticket de jugement en attente de sa revue ne donne pas son xhigh au suivant', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const { w, sent } = engine(on)
+  const mission = missionWith(w, JUDGED)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]' })
+  await say($, { set: [{ id: 'j1', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  // j1 commité, sa revue en cours : il reste « doing », et le worker commence n1 (exécution).
+  await clock.advance(1000)
+  await say($, { set: [{ id: 'n1', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  for (const texts of await bandTexts($)) expect(texts.some(t => t.includes('ticket de jugement'))).toBe(false)
+  // n1 fait : j1, encore « doing », redevient le seul ticket en cours (les correctifs de sa revue).
+  await clock.advance(1000)
+  await say($, { set: [{ id: 'n1', status: 'done' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium', 'xhigh'])
+})
+
+test('jugement : relais illisible, ticket absent de la mission, mission illisible : high (inchangé), jamais xhigh', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { w, sent } = engine(on)
+  const mission = missionWith(w, JUDGED)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]' })
+  // Un ticket absent de la mission.
+  await say($, { set: [{ id: 'j9', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  // Un ticket de jugement en cours, mais le relais de la session illisible : on ne sait pas lequel.
+  await say($, { set: [{ id: 'j9', status: 'done' }, { id: 'j1', status: 'doing' }] })
+  w.mem[`relay:${mission.id}:session-A`] = 'pas une entrée'
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  expect(sent.map(s => s.effort)).toEqual(['high', 'high'])
+})
+
+test('jugement : une mission qui ne se lit pas laisse le ticket à high, jamais xhigh ; workerTicketEffort ne donne xhigh que sur true', () => {
+  expect(workerTicketEffort(['j1'], undefined)).toEqual({ level: 'high', rule: 'sensitive', how: 'floor', ticket: 'j1', isUnknown: true })
+  const mission = { tickets: JUDGED } as unknown as Run
+  expect(workerTicketEffort(['j1'], mission)).toEqual({ level: 'xhigh', rule: 'judgment', how: 'floor', ticket: 'j1' })
+  expect(workerTicketEffort(['j2'], mission)?.level).toBe('xhigh')
+  expect(workerTicketEffort(['n1'], mission)).toBeNull()
+  expect(workerTicketEffort(['n2'], mission)).toBeNull()
+  expect(workerTicketEffort(['h1'], mission)).toBeNull()
+  expect(workerTicketEffort(['n1', 'j1'], mission)?.level).toBe('xhigh')
+  expect(workerTicketEffort(null, mission)?.level).toBe('high')
+  // Les formes relues hors forme ne donnent jamais xhigh.
+  for (const judgment of ['oui', 'true', 1, null, {}, []] as unknown[]) {
+    const odd = { tickets: [{ id: 'x1', name: 'X', status: 'todo', sensitive: false, judgment }] } as unknown as Run
+    expect(workerTicketEffort(['x1'], odd)).toBeNull()
+  }
+  // Un id hors de la forme affichable : xhigh, sans id au bandeau.
+  const long = { tickets: [{ id: 'a'.repeat(25), name: 'X', status: 'todo', judgment: true }] } as unknown as Run
+  const rule = workerTicketEffort(['a'.repeat(25)], long)!
+  expect(rule).toEqual({ level: 'xhigh', rule: 'judgment', how: 'floor' })
+  expect(leadEffortPill(rule, 'medium')).toBe('effort : xhigh, ticket de jugement en cours')
+})
+
+test('jugement : le drapeau passé à false pendant le ticket, la requête suivante revient à la règle d’avant', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const { w, sent } = engine(on)
+  const mission = missionWith(w, JUDGED)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]' })
+  await say($, { set: [{ id: 'j1', status: 'doing' }] })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  // La discussion qui tient la mission renvoie le ticket avec "judgment": false.
+  writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === mission.id ? { ...r, updatedAt: r.updatedAt + 10_000, tickets: r.tickets.map(t => (t.id === 'j1' ? { ...t, judgment: false } : t)) } : r)) }))
+  await settle(clock, 6)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  expect(sent.map(s => s.effort)).toEqual(['xhigh', 'medium'])
+})
+
+test('jugement : un worker Fable avec un ticket de jugement en cours reste sur Fable 5.2 high exact', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { w, sent, models } = engine(on, { sessionModel: OPUS })
+  const mission = missionWith(w, JUDGED)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]', model: 'fable' })
+  await say($, { set: [{ id: 'j1', status: 'doing' }] })
+  await playStep($, { model: OPUS, effort: 'medium' })
+  expect(sent.map(s => s.effort)).toEqual(['high'])
+  expect(models).toEqual(['fable'])
 })

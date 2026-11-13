@@ -131,7 +131,7 @@ test('« ⚡ Auto » : le premier clic montre ce que l’activation vaut, « Con
     expect(await pane.find({ type: 'Text', text: /Allumer le mode auto de cette mission/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /validations à boutons.*écritures Asana/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^6\.$/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /effort xhigh/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /chemin Fable/ })).toBeDefined()
     expect((await pane.find({ key: 'auto-confirm' }))?.props.label).toBe('Confirmer')
     await pane.unmount()
   }

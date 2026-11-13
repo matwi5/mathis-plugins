@@ -74,7 +74,7 @@ const opened = async ($: any, on: any, entry: string, isAuto: boolean) => {
   return { clock, ...w }
 }
 
-const COMMON = ['Auto mode is on for this mission', '"origin": "recommendation"', '"origin": "skipped-validation"', 'Six kinds of decisions stay with the user', '{"waiting": [{"id"', 'PushNotification']
+const COMMON = ['Auto mode is on for this mission', '"origin": "recommendation"', '"origin": "skipped-validation"', 'Six kinds of decisions stay with the user', '{"waiting": [{"id"', 'PushNotification', 'Before coding a decision you take alone outside the framing (a design change, a question in a sensitive area settled by you), consult the advisor (the advisor tool, when you have it), once per decision']
 // Le texte de la notification vient de la même fonction que celui du mod (`autoNotices`).
 const NOTICE = `« ${autoQuestionsNotice('Boutique', 'N')} »`
 
@@ -96,8 +96,8 @@ test('En auto, le cadrage reçoit le bloc commun et celui d’un seul tour d’i
   expect(grill).toContain('one round only with the user, on intent (the goal, the scope, what is out of scope)')
   expect(grill).toContain('« acceptée en auto (reco) »')
   expect(grill).toContain('The final agreement is not asked')
-  // Les six catégories, dans l'ordre du premier clic sur « ⚡ Auto », xhigh sans question.
-  expect(grill).toMatch(/1\) an experience choice: .*2\) setting or weakening an invariant, or a design change that contradicts DECISIONS\.md.*3\) a deletion with no way back, or an exposure of the user's data outside this machine.*4\) leaving a security finding unfixed.*5\) an xhigh effort .*stay in high and declare that xhigh was not offered.*6\) a spending or an external action outside the mission/)
+  // Les six catégories, dans l'ordre du premier clic sur « ⚡ Auto » : le chemin Fable, xhigh par la ligne « Jugement ».
+  expect(grill).toMatch(/1\) an experience choice: .*2\) setting or weakening an invariant, or a design change that contradicts DECISIONS\.md.*3\) a deletion with no way back, or an exposure of the user's data outside this machine.*4\) leaving a security finding unfixed.*5\) the Fable path for a worker: never take it yourself; suggest it only for a bug Opus did not solve; xhigh comes from a ticket's « Jugement » line, declared at the split.*6\) a spending or an external action outside the mission/)
   // Une question en zone sensible se tranche seule à sa condition, déclarée comme une reco prise marquée « Zone sensible : ».
   expect(grill).toMatch(/A question in a sensitive area .* is settled by you when its recommended option respects the invariant already validated \(when there is one\) and is the most prudent one .*« Zone sensible : ».*otherwise it stays a blocking question\. A breach of the invariant that the high pass after the bug pass's fixes still finds, fixed in the most prudent way, is written as a test and goes out as one line of information, declared as a recommendation taken beginning with « Zone sensible : », not as a question\. In auto mode, this wins over any line above that says a sensitive choice is never declared/)
   // Le bloc du mode auto vient en dernier : il l'emporte sur les demandes de validation qui précèdent.
@@ -113,6 +113,9 @@ test('En auto, la spec, le découpage, l’implémentation et le compte rendu re
     expect(text).not.toContain('Framing in auto mode')
     expect(text.indexOf('Auto mode is on for this mission')).toBeGreaterThan(text.indexOf('Dashboard (flow-board)'))
     if (name === 'to-spec') expect(text).toContain('write them in the decision file as « acceptée en auto (reco) » and declare them ("origin": "recommendation")')
+    // Les lignes « Jugement » se déclarent en un seul choix, au libellé que Mathis a choisi le 12/11/2026, ou en
+    // plusieurs au même libellé quand ce choix dépasserait 300 signes (un choix est coupé là).
+    if (name === 'to-tickets') expect(text).toContain('declare the judgement tickets in a single choice, its "what" worded « Tickets de jugement, en xhigh le temps du ticket : <id> (<critère>), … »')
     if (name === 'implement') {
       expect(text).toContain('fix every kept finding without asking the user')
       expect(text).toContain('do not propose a « durcissement » group; list them for the report')

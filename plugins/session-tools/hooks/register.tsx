@@ -512,7 +512,7 @@ async function chooseEffort($: EngineInterface, draft: string) {
   await $.ui.toast(`Effort demandé : ${capped.effort}${choice.reason ? ` (${choice.reason})` : ""}${capped.note ? ` · ${capped.note}` : ""}`);
 }
 
-// Règle « Jamais d'effort max, jamais Haiku au-dessus de high » (`config/rules/agents.md`) : max
+// Règle « Jamais d'effort max, Haiku en xhigh pour l'explorateur seulement » (`config/rules/agents.md`) : max
 // reste à la personne, qui le tape elle-même ; une session Haiku ne monte pas au-dessus de high.
 function cappedEffort(effort: string, sessionModel: unknown) {
   if (typeof sessionModel === "string" && /haiku/i.test(sessionModel) && EFFORT_LEVELS.indexOf(effort) > EFFORT_LEVELS.indexOf("high"))

@@ -308,11 +308,12 @@ test('sans git : les lots partent dans des workers ; raisons et autres lots affi
   // Plusieurs groupes : l'effort calculé se lit groupe par groupe.
   expect(text).toContain('Effort de chaque session (<effort>) : l’effort calculé sur la ligne de son groupe ; high si un choix de conception reste à faire à son groupe.')
   expect(text).toContain("Dis-moi en une ligne, pour chaque groupe, l'effort pris et, s'il s'écarte du calcul, pourquoi.")
-  // xhigh proposé groupe par groupe pour une tâche de jugement, jamais choisi seul.
-  expect(text).toContain("quand un ticket de son groupe est une tâche de jugement (jamais pour une tâche d'exécution)")
-  expect(text).toContain('Tu ne choisis jamais toi-même ni Fable ni xhigh')
-  expect(text).toContain('question à boutons par groupe concerné, quatre au plus par encadré, chacune avec une ligne qui nomme le ticket et la sorte de jugement : « Fable 5.2 high (Recommandé) / Opus high » pour un jugement de code ; « Opus xhigh (Recommandé) / Opus high »')
-  expect(text).toContain('si son effort est xhigh, qu\'elle est un worker autonome')
+  // Plus de question d'effort : xhigh vient de la ligne « Jugement » d'un ticket, Fable du seul bouton.
+  expect(text).toContain('pendant un ticket « Jugement : oui », en xhigh : ne relève pas son effort pour ces tickets')
+  expect(text).toContain("Ne me pose aucune question sur l'effort.")
+  expect(text).toContain('Tu ne prends jamais Fable seul : seul mon bouton « ↗ Fable » le donne, et tu ne le suggères que pour relancer un ticket qui bute après trois approches (section 11, « Ticket qui bute »).')
+  expect(text).not.toContain('(Recommandé)')
+  expect(text).not.toContain('si son effort est xhigh')
   expect(text).toMatch(/use_worktree false \(ce dossier n’a pas de git\)/)
   expect(text).toMatch(/, ce que font les autres sessions en même temps/)
   expect(text).toMatch(/suivre les sessions sans les attendre activement/)

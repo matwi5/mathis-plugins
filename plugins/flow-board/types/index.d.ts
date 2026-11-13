@@ -338,6 +338,12 @@ export type Ticket = {
   /** Le ticket a de la logique à relire : faux pour une ressource visuelle ou un document, dit au découpage. */
   logic?: boolean
   /**
+   * Le ticket est une tâche de jugement (sa ligne « Jugement : oui (…) »), dit au découpage par la discussion
+   * qui tient la mission, jamais par un worker : le mod de la session le traite en xhigh au moins pendant qu'il
+   * est en cours. Seul `true` vaut « oui » (`isJudgmentTicket` de basics.ts).
+   */
+  judgment?: boolean
+  /**
    * Id de la discussion qui a passé le ticket « en cours » ; effacé quand il en sort. Plusieurs
    * tickets peuvent être en cours à la fois (workers des groupes, autre discussion).
    */

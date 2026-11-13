@@ -186,13 +186,14 @@ test('La vague prête part une fois, en un seul texte au nom du mod ; la suivant
   expect(w.texts.length).toBe(2)
 })
 
-test('Le brief d’une mission en auto : workers autonomes quel que soit leur effort, jamais Fable ni xhigh, sans question d’effort', { timeoutMs: 40000 }, async ($, on) => {
+test('Le brief d’une mission en auto : workers autonomes quel que soit leur effort, jamais Fable, xhigh par la ligne « Jugement », sans question d’effort', { timeoutMs: 40000 }, async ($, on) => {
   const { ...w } = await implementing($, on)
   const text = w.texts[0]!.text
   expect(text).toContain('quel que soit son effort')
-  expect(text).toContain('jamais en xhigh ni sur Fable')
-  expect(text).toContain('La mission est en mode auto : jamais Fable ni xhigh ; ne me pose aucune des deux questions d\'effort (« Fable 5.2 high (Recommandé) / Opus high », « Opus xhigh (Recommandé) / Opus high »)')
-  expect(text).toContain('lance-le sur Opus en high et déclare dans decided que ni Fable ni xhigh n’ont été proposés')
+  expect(text).toContain('(la mission est en mode auto, jamais sur Fable)')
+  expect(text).toContain('La mission est en mode auto : jamais Fable ; xhigh vient de la ligne « Jugement » d’un ticket, que le mod de la session applique le temps du ticket.')
+  expect(text).toContain("Ne me pose aucune question sur l'effort.")
+  expect(text).not.toContain('(Recommandé)')
   // Un seul brief, Opus : rien du worker Fable.
   expect(text).not.toContain('"model": "fable"')
   expect(text).not.toContain('Si je réponds Fable 5.2 high')
@@ -210,9 +211,9 @@ test('Hors auto, rien ne part, et la demande de « ⇉ en parallèle » est cell
   await press($, 'next-parallel-linked')
   const filled = w.filled.at(-1)!
   expect(filled).toContain('Confie chacun de ces groupes à son worker, en parallèle')
-  expect(filled).toContain('et, si son effort est xhigh,')
-  expect(filled).toContain('pose-moi une question à boutons par groupe concerné')
-  expect(filled).toContain('« Opus xhigh (Recommandé) / Opus high »')
+  expect(filled).toContain('Tu ne prends jamais Fable seul : seul mon bouton « ↗ Fable » le donne, et tu ne le suggères que pour relancer un ticket qui bute après trois approches (section 11, « Ticket qui bute »).')
+  expect(filled).not.toContain('et, si son effort est xhigh,')
+  expect(filled).not.toContain('(Recommandé)')
   expect(filled).not.toContain('quel que soit son effort')
   expect(filled).not.toContain('mode auto')
 })
@@ -316,7 +317,7 @@ test('Dans une mission en auto, « ↗ Fable » cliqué par la personne impose l
   const filled = w.filled.at(-1)!
   expect(filled).toContain('Fable 5.2 high, choisi par moi au tableau de bord')
   expect(filled).toContain("qu'elle est un worker Fable")
-  expect(filled).not.toContain('jamais Fable ni xhigh')
+  expect(filled).not.toContain('La mission est en mode auto : jamais Fable')
 })
 
 test('Un groupe bloqué qui tenait seul la place : un autre groupe prêt part à sa place', { timeoutMs: 40000 }, async ($, on) => {

@@ -4,6 +4,27 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.85.0 — 2026-11-13
+
+La mission « Répartition des modèles et efforts » : un ticket marqué « Jugement : oui » tourne en Opus xhigh le temps de ce ticket seulement ; Fable ne sert plus que par le bouton « ↗ Fable », ou sur suggestion pour un bug qu'Opus n'a pas résolu.
+
+### Ajouté
+- **Ligne « Jugement : oui/non »** sur chaque ticket (champ `judgment` de l'outil `flow`), gardée à la fusion comme les autres champs.
+- **Opus xhigh le temps d'un ticket de jugement**, puis retour à l'effort calculé, avec un bandeau ; le xhigh ne vaut que pour le ticket en cours.
+- **Ticket qui bute** : après trois approches ratées, il passe « bloqué » avec ses essais ; au retour, une relance est suggérée par « ↗ Fable » ou « ↗ xhigh ».
+- **Mode auto** : l'advisor est consulté avant chaque décision prise seul.
+- **Compte rendu** : il nomme les tickets de jugement, leur chemin et le coût de leur groupe.
+
+### Modifié
+- **Lancement d'un groupe** sans question d'effort ; jamais Sonnet pour un groupe de jugement ; Fable seulement par « ↗ Fable ».
+- **Cadrage en mode auto** sur Fable 5.2 high (medium sinon).
+- **Termes retirés** : les deux questions d'effort avant le lancement d'un groupe.
+
+### Corrigé
+- Correctifs des revues des tickets et des groupes A et B ; textes de lancement alignés sur la ligne « Jugement » et sur la relance d'un ticket qui bute.
+
+---
+
 ## 0.84.0 — 2026-11-13
 
 Les missions « Missions détachées de leur discussion » et « Pistes de rétro en tickets » : une chasse au bug va jusqu'à l'implémentation, la discussion fusionne son propre travail, les revues cherchent une classe de défaut partout, et la fermeture des groupes, l'instantané d'un ticket et la mise de côté coûtent moins d'appels.

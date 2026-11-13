@@ -165,6 +165,7 @@ test('en auto, avec des groupes, la consigne d’/implement garde le bloc des va
   await clock.advance(1000)
   const text = String((await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text)
   expect(text).toContain('Implementation in auto mode: flow-board itself sends, at the end of a turn, the request to launch the next wave of groups')
-  expect(text).toContain('never Fable nor xhigh: do not ask either effort question (Fable 5.2 high, Opus xhigh), launch a judgement group on Opus high and declare instead that neither Fable nor xhigh was offered')
+  expect(text).toContain('never Fable; xhigh comes from the « Jugement » line of a ticket, which the session\'s mod applies while that ticket is in progress, so a group that carries one is launched at the effort of the rule too, with no effort question.')
+  expect(text).not.toContain('do not ask either effort question')
   expect(text).not.toContain('without groups: launch the lot review yourself')
 })

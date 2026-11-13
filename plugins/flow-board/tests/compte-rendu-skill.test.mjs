@@ -8,6 +8,17 @@ import assert from 'node:assert/strict'
 
 const skill = readFileSync(new URL('../skills/compte-rendu/SKILL.md', import.meta.url), 'utf8')
 
+// Les tickets de jugement (en xhigh le temps du ticket) : nommés au rapport avec le coût de leurs groupes, d'après
+// le récap d'une mission de stats-board ; jamais le coût d'un ticket seul ; sans stats-board, coût non disponible.
+test('le compte rendu nomme les tickets de jugement et donne le coût de leurs groupes', () => {
+  const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
+  for (const part of ['ligne « Judgement tickets »', 'charge le skill `stats-board:recap`', 'Le coût est celui du groupe, jamais d\'un ticket seul', 'Sans le plugin stats-board (le skill absent), le rapport nomme ces tickets et dit que le coût n\'est pas disponible'])
+    assert.ok(sources.includes(part), `absent : « ${part} »`)
+  const decided = skill.slice(skill.indexOf('## Décidé sans toi'), skill.indexOf('## Ce qui s\'est mal passé'))
+  assert.ok(decided.includes('Tickets de jugement, traités en xhigh le temps du ticket (sur Fable 5.2 high dans un groupe parti par « ↗ Fable ») : <id> (groupe <G>, <xhigh ou Fable 5.2 high>)'), 'la ligne des tickets de jugement manque à « Décidé sans toi »')
+  assert.ok(decided.includes('(coût du groupe, pas du ticket)'), 'le coût n’est pas dit par groupe')
+})
+
 test('le compte rendu a une borne chiffrée, et « Trouvé » se range par thème', () => {
   assert.ok(skill.includes('Le rapport entier tient en 60 lignes au plus, titres compris'), 'borne absente')
   assert.ok(skill.includes('plutôt que de couper'), 'la borne ne dit pas de regrouper')

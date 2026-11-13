@@ -67,6 +67,8 @@ test('sans groupes, la consigne d’/implement cite la procédure par son chemin
   expect(text).toContain('« au retour du groupe » reads « at the mission\'s report »')
   expect(text).toContain('the pause of the mission seen by a worker (section 3) does not concern you')
   expect(text).toContain('a visual to validate is shown and asked directly')
+  // Un ticket qui bute : pas mis de côté, la même définition d'un essai, puis l'arrêt et le rappel du worker de diagnostic.
+  expect(text).toContain('a ticket that stalls after three approaches (section 3, « Ticket qui bute », in procedure-groupe-cas.md) is not set aside: the same definition of an attempt holds, then you stop on that ticket and remind the user of « 🐞 Bug · worker » (Opus high, then xhigh)')
   expect(text).toContain('« le groupe » reads « the lot »; its <base> is the commit before the lot\'s first ticket')
   // Les cinq exceptions, et rien d'autre.
   const exceptions = text.match(/Five exceptions, and no other: (.*?)\. Section 6/)

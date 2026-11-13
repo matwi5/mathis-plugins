@@ -46,7 +46,7 @@ import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
 import { soundRunLaunch } from './launch.ts'
 import type { SecurityReview } from './security-setting.ts'
 import type { PlanUnit, PlanWait } from './plan-projet.ts'
-import { activeRun, isReportValidated, addedCount, asanaChange, asList, AUTO_CHOICES_MAX, formText, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
+import { activeRun, isReportValidated, addedCount, asanaChange, asList, AUTO_CHOICES_MAX, formText, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isJudgmentTicket, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
 import { type GroupRelay, ignoredOrigins, inForce, isRelay, parseMainRef, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, REPORT_MAX, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
 import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, isAwaitingSession, keepClosings, keepSendNames, keepSessions, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
 
@@ -1687,7 +1687,7 @@ const formItemIds = (run: Run, sent: FlowItem[]): { raw: string; id: string; can
   return renamed
 }
 
-type IncomingTicket = { id: string; name: string; status?: TicketStatus; blockedBy?: string[]; why?: string; files?: string[]; sensitive?: boolean; logic?: boolean }
+type IncomingTicket = { id: string; name: string; status?: TicketStatus; blockedBy?: string[]; why?: string; files?: string[]; sensitive?: boolean; logic?: boolean; judgment?: boolean }
 
 /** Une liste de chemins reçue de Claude : chaînes non vides, sans doublon, bornée. */
 const parsePaths = (value: unknown, max: number): string[] | undefined =>
@@ -1706,6 +1706,8 @@ const parseTickets = (value: unknown): IncomingTicket[] =>
         files: parsePaths(one.files, LIMITS.ticketFiles),
         sensitive: typeof one.sensitive === 'boolean' ? one.sensitive : undefined,
         logic: typeof one.logic === 'boolean' ? one.logic : undefined,
+        // Un booléen ou rien : une valeur hors forme (`"oui"`, `1`, `null`) laisse la valeur posée.
+        judgment: typeof one.judgment === 'boolean' ? one.judgment : undefined,
       }
     })
     .filter(t => t.id !== '' && t.name !== '')
@@ -1748,6 +1750,7 @@ const mergeTickets = (current: readonly Ticket[], incoming: IncomingTicket[], no
       ...(t.files ? { files: t.files } : {}),
       ...(t.sensitive !== undefined ? { sensitive: t.sensitive } : {}),
       ...(t.logic !== undefined ? { logic: t.logic } : {}),
+      ...(t.judgment !== undefined ? { judgment: t.judgment } : {}),
     }
     return t.status && t.status !== named.status ? withStatus(named, t.status, now, by) : keepWhy(named)
   }
@@ -6304,6 +6307,17 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
       return `${shownGroupId(g.id)} (${shownGroupName(g.name)}): ${done}/${total} done${isDone && hasGroupReview(g) ? ', reviewed by /code-review' : isDone && isNoLogicGroup(run, g) ? `, reviewed by its ticket reviews (no logic, not sensitive)${g.security === undefined ? ', no group review nor security review needed' : ''}` : isDone && isTicketReviewEnough(run, g) ? `, reviewed by its ticket review (a group of one ticket)${g.security === undefined ? ', its security advice still due' : ''}` : ''}${sec ? `, ${sec}` : ''}`
     }
     lines.push(`- Groups, each usually run in its own discussion: ${groups.map(state).join('; ')}. Report every group, not only the one of this discussion: write « Fait » group by group.`)
+  }
+  // Les tickets de jugement (traités en xhigh le temps du ticket, ou sur Fable 5.2 high quand leur groupe est parti
+  // par « ↗ Fable ») et leurs groupes : le rapport donne le coût du groupe, jamais d'un ticket seul (le mod ne le
+  // chiffre pas). Rien quand la mission n'en a aucun.
+  const judged = run.tickets.filter(t => isJudgmentTicket(t))
+  if (judged.length > 0) {
+    const where = (t: Ticket) => {
+      const g = groups.find(x => groupTicketIds(run, x).some(id => sameTicket(id, t.id)))
+      return g ? `group ${shownGroupId(g.id)}` : groups.length === 0 ? 'the lot, no groups' : 'no group'
+    }
+    lines.push(`- Judgement tickets (« Jugement : oui »: run in xhigh while in progress, or on Fable 5.2 high when their group was launched by « ↗ Fable »): ${judged.map(t => `${shownInNote(t.name)} [${shownInNote(t.id)}] (${where(t)})`).join('; ')}. Name them in the report with the path and the cost of their groups (the cost of a group, never of a ticket alone), as the report instructions say.`)
   }
   if (groups.length === 0 && run.tickets.length > 0) {
     // Le lot sans groupes se dit comme un groupe : relu, dispensé, ou à relire, puis sa sécurité.

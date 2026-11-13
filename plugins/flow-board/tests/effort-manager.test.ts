@@ -436,3 +436,105 @@ test('repli Fable en cadrage : après une limite atteinte sur une requête Fable
   expect(toasts.filter(t => t.startsWith('Fable indisponible'))).toEqual(['Fable indisponible : retour sur Opus jusqu’à la fin de la session'])
   expect(prompts.filter(p => p.startsWith('Fable indisponible'))).toEqual([])
 })
+
+// ─── Un ticket de jugement dans un lot sans groupes ──────────────────────
+// Le manager qui fait lui-même le lot passe en xhigh au moins pendant un ticket « en cours » que la mission dit
+// « Jugement : oui » ; seul un drapeau à true le fait (invariant de la ligne « Jugement », décision de Mathis du 13/11/2026).
+
+test('un lot sans groupes : xhigh au moins pendant un ticket « en cours » de jugement, la règle d’avant sinon', () => {
+  expect(managerWorkEffort(lot('implement', [ticket('1', { judgment: true, status: 'doing' })]))).toEqual({ level: 'xhigh', rule: 'judgment', ticket: '1' })
+  // Sensible et de jugement à la fois : xhigh.
+  expect(managerWorkEffort(lot('implement', [ticket('1', { judgment: true, sensitive: true, status: 'doing' })]))?.level).toBe('xhigh')
+  // Pas en cours, à false, absent ou hors forme : la règle d'avant, inchangée.
+  expect(managerWorkEffort(lot('implement', [ticket('1', { judgment: true }), ticket('2')]))).toEqual({ level: 'medium', rule: 'group' })
+  expect(managerWorkEffort(lot('implement', [ticket('1', { judgment: false, status: 'doing' })]))).toEqual({ level: 'medium', rule: 'group' })
+  expect(managerWorkEffort(lot('implement', [ticket('1', { judgment: false, sensitive: true, status: 'doing' })]))).toEqual({ level: 'high', rule: 'group' })
+  for (const judgment of ['oui', 1, null, 'true'] as unknown[]) {
+    expect(managerWorkEffort(lot('implement', [ticket('1', { judgment, status: 'doing' } as unknown as Partial<Ticket>)]))).toEqual({ level: 'medium', rule: 'group' })
+  }
+  // Fait, ou revenu à faire : plus de xhigh.
+  expect(managerWorkEffort(lot('implement', [ticket('1', { judgment: true, status: 'done' }), ticket('2')]))).toEqual({ level: 'medium', rule: 'group' })
+  // Une mission à groupes n'est pas un lot : rien ici (le worker du groupe a sa propre règle).
+  expect(managerWorkEffort(lot('implement', [ticket('1', { judgment: true, status: 'doing' })], [{ id: 'A', name: 'A', tickets: ['1'] }] as Run['groups']))).toBeNull()
+  // Un détour pris pendant le ticket suit sa propre règle (un diagnostic : high au moins ; un /grilling : le
+  // cadrage), comme pour un ticket sensible : « 🐞 Bug · worker », qui reprend la mission, garde sa règle.
+  const detoured = (skill: string) => {
+    const run = lot('implement', [ticket('1', { judgment: true, status: 'doing' })])
+    run.phases[run.cursor]!.detours = [{ skill, status: 'active', steps: [] } as any]
+    return run
+  }
+  expect(managerWorkEffort(detoured('diagnosing-bugs'))).toEqual({ level: 'high', rule: 'diagnosis' })
+  expect(managerWorkEffort(detoured('grilling'))).toBeNull()
+  expect(leadEffort(detoured('grilling'))).toMatchObject({ level: 'high', rule: 'framing', how: 'floor' })
+  // Un id que le bandeau ne peut pas écrire : xhigh quand même, sans id.
+  expect(managerWorkEffort(lot('implement', [ticket('a b', { judgment: true, status: 'doing' })]))).toEqual({ level: 'xhigh', rule: 'judgment' })
+  // Le bandeau.
+  expect(leadEffortPill(leadEffort(lot('implement', [ticket('07', { judgment: true, status: 'doing' })]))!, 'medium')).toBe('effort : xhigh, ticket de jugement 07 en cours')
+  expect(leadEffortPill(leadEffort(lot('implement', [ticket('a b', { judgment: true, status: 'doing' })]))!, 'high')).toBe('effort : xhigh, ticket de jugement en cours')
+  // Au moins : un effort plus haut de la discussion reste, et le bandeau se tait ; un budget numérique ne
+  // l'esquive pas (comme la règle du lot, le ticket de jugement impose son niveau sur un nombre).
+  expect(effortSent(leadEffort(lot('implement', [ticket('07', { judgment: true, status: 'doing' })]))!, 'max')).toBe('max')
+  expect(effortSent(leadEffort(lot('implement', [ticket('07', { judgment: true, status: 'doing' })]))!, 32000)).toBe('xhigh')
+  expect(effortSent(leadEffort(lot('implement', [ticket('07', { judgment: true, status: 'doing' })]))!, '32000')).toBe('32000')
+  // Le ticket en cours est le dernier passé « doing » : un ticket de jugement fini mais en attente de sa revue
+  // ne donne plus son xhigh au ticket d'exécution commencé après lui ; repris après, il le redonne.
+  const waiting = ticket('03', { judgment: true, status: 'doing', startedAt: NOW })
+  expect(managerWorkEffort(lot('implement', [waiting, ticket('04', { status: 'doing', startedAt: NOW + 1_000 })]))).toEqual({ level: 'medium', rule: 'group' })
+  expect(managerWorkEffort(lot('implement', [ticket('04', { status: 'doing', startedAt: NOW }), { ...waiting, startedAt: NOW + 1_000 }]))).toEqual({ level: 'xhigh', rule: 'judgment', ticket: '03' })
+  // Ex aequo (même heure, ou sans heure) : le ticket de jugement compte.
+  expect(managerWorkEffort(lot('implement', [ticket('04', { status: 'doing', startedAt: NOW }), waiting]))?.level).toBe('xhigh')
+  expect(leadEffortPill(leadEffort(lot('implement', [ticket('07', { judgment: true, status: 'doing' })]))!, 'xhigh')).toBeNull()
+})
+
+test('un manager qui fait un lot : chaque requête part en xhigh pendant le ticket de jugement en cours, puis revient à la règle du lot', { timeoutMs: 15000 }, async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const w = world(on)
+  await start($)
+  await openLot($, [ticket('1', { judgment: true }), ticket('2', { judgment: false })])
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  await $.tool.call({ tool: TOOL, set: [{ id: '1', status: 'doing' }] } as any)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await $.ui.mount({ plugin: 'flow-board', surface, ...BAND })
+    const texts = (await band.findAll({ type: 'Text' })).map((t: any) => String(t.text ?? '').replace(/ /g, ' '))
+    expect(texts).toContain('effort : xhigh, ticket de jugement 1 en cours')
+    await band.unmount()
+  }
+  await playStep($, { model: 'claude-opus-5-5', effort: 'max' })
+  // Le drapeau passé à false pendant le ticket : la requête suivante revient à la règle du lot.
+  await $.tool.call({ tool: TOOL, tickets: [{ id: '1', name: 'T1', judgment: false }] } as any)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  // Remis à true, puis le ticket fait et le suivant (non) en cours : plus de xhigh.
+  await $.tool.call({ tool: TOOL, tickets: [{ id: '1', name: 'T1', judgment: true }] } as any)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  await $.tool.call({ tool: TOOL, set: [{ id: '1', status: 'done' }, { id: '2', status: 'doing' }] } as any)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
+  expect(w.sent.map(s => s.effort)).toEqual(['medium', 'xhigh', 'max', 'medium', 'xhigh', 'medium'])
+})
+
+// ─── Le cadrage en auto : Fable 5.2 high quand l'auto envoie d'ici ─────────────
+
+test('le cadrage dont l’auto envoie d’ici part sur Fable 5.2 en high exact ; Fable éteint par le repli, en Opus xhigh au moins ; sans l’auto, la règle d’avant', () => {
+  const grilled = lot('grill-with-docs', [])
+  const auto = { level: 'high', rule: 'framingAuto', how: 'exact', model: 'fable' }
+  expect(leadEffort(grilled, true, { isAutoHere: true })).toEqual(auto)
+  expect(effortSent(auto as any, 'xhigh')).toBe('high')
+  expect(effortSent(auto as any, 'medium')).toBe('high')
+  // L'auto absent, éteint, en pause ou ailleurs (tout ce qui n'envoie pas d'ici) : Fable 5.2 medium, comme avant.
+  expect(leadEffort(grilled, true, { isAutoHere: false })).toEqual({ level: 'medium', rule: 'framing', how: 'exact', model: 'fable' })
+  expect(leadEffort(grilled, true)).toEqual({ level: 'medium', rule: 'framing', how: 'exact', model: 'fable' })
+  // Le repli « Fable indisponible » : en auto envoyé d'ici, Opus xhigh au moins ; sans lui, high au moins.
+  expect(leadEffort(grilled, false, { isAutoHere: true, isFableOff: true })).toEqual({ level: 'xhigh', rule: 'framingAuto', how: 'floor' })
+  expect(leadEffort(grilled, false, { isAutoHere: false, isFableOff: true })).toEqual({ level: 'high', rule: 'framing', how: 'floor' })
+  // Un /model tapé (Fable ni permis ni éteint par le repli) : high au moins, en auto comme en manuel.
+  expect(leadEffort(grilled, false, { isAutoHere: true })).toEqual({ level: 'high', rule: 'framing', how: 'floor' })
+  // Hors de la fenêtre du cadrage, l'auto ne change rien : le découpage fini d'un lot, le suivi des groupes.
+  const cut = lot('to-tickets', [ticket('1')])
+  cut.phases[cut.cursor]!.status = 'done'
+  cut.phases[cut.cursor]!.finishedAt = NOW
+  expect(leadEffort(cut, true, { isAutoHere: true })).toEqual(leadEffort(cut, true))
+  expect(leadEffort(cut, false, { isAutoHere: true, isFableOff: true })).toEqual(leadEffort(cut, false))
+  // Le bandeau.
+  expect(leadEffortPill(auto as any, 'medium')).toBe('modèle : Fable 5.2 high, cadrage en auto')
+  expect(leadEffortPill({ level: 'xhigh', rule: 'framingAuto', how: 'floor' }, 'high')).toBe('effort : xhigh, cadrage en auto')
+})

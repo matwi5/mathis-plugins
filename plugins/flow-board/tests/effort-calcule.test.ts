@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { AUTO_GROUP_EFFORT, FABLE_QUESTION, GROUP_EFFORT, SONNET_APP_ID, SONNET_CLI_ALIAS, SONNET_LAUNCH_FR, XHIGH_QUESTION } from '../hooks/effort.ts'
+import { AUTO_GROUP_EFFORT, GROUP_EFFORT, SONNET_APP_ID, SONNET_CLI_ALIAS, SONNET_LAUNCH_FR } from '../hooks/effort.ts'
 
 // Le mod calcule l'effort de chaque groupe et l'écrit sur sa ligne de la demande de lancement : Claude
 // lisait lui-même la règle d'effort, parfois autrement que le mod (3 lancements plus haut, 5 plus bas).
@@ -139,31 +139,20 @@ test('la consigne d’effort : lancer à l’effort calculé, high pour un choix
     expect(text).toContain('high si un choix de conception reste à faire')
     expect(text).toContain("Dis-moi en une ligne, pour chaque groupe, l'effort pris et, s'il s'écarte du calcul, pourquoi.")
     expect(text).toContain('section 11 de P/reference/effort-workers.md')
-    expect(text).toContain('Pendant un ticket sensible, le mod de la session la passe lui-même en high')
+    expect(text).toContain('Pendant un ticket sensible, le mod de la session la passe lui-même en high, et pendant un ticket « Jugement : oui », en xhigh : ne relève pas son effort pour ces tickets.')
+    expect(text).toContain("Ne me pose aucune question sur l'effort.")
     expect(text).not.toContain('medium par défaut')
+    // Plus aucune question d'effort, ni aucun des deux chemins proposés.
+    expect(text).not.toContain('question à boutons')
+    expect(text).not.toContain('Si je réponds')
+    expect(text).not.toContain('(Recommandé)')
   }
   const manual = GROUP_EFFORT(true, undefined, undefined, 'P/reference/effort-workers.md')
-  expect(manual).toContain('tâche de jugement')
+  expect(manual).toContain('Tu ne prends jamais Fable seul : seul mon bouton « ↗ Fable » le donne, et tu ne le suggères que pour relancer un ticket qui bute après trois approches (section 11, « Ticket qui bute »).')
   const auto = AUTO_GROUP_EFFORT(false, 'P/reference/effort-workers.md')
-  expect(auto).toContain('jamais Fable ni xhigh')
+  expect(auto).toContain('La mission est en mode auto : jamais Fable ; xhigh vient de la ligne « Jugement » d’un ticket')
+  expect(auto).not.toContain('ni Fable ni xhigh')
   expect(auto).not.toContain('pose-moi')
-})
-
-test('les deux questions d’effort d’un groupe de jugement, avec leurs critères ; Claude ne choisit jamais seul ni Fable ni xhigh', () => {
-  const manual = GROUP_EFFORT(false, undefined, 'high', 'P/reference/effort-workers.md')
-  expect(manual).toContain('Tu ne choisis jamais toi-même ni Fable ni xhigh')
-  expect(manual).toContain(`question à boutons avec une ligne qui nomme le ticket et la sorte de jugement : ${FABLE_QUESTION} pour un jugement de code ; ${XHIGH_QUESTION} pour un jugement sur la sécurité, un document lu par d'autres ou du design`)
-  expect(FABLE_QUESTION).toBe('« Fable 5.2 high (Recommandé) / Opus high »')
-  expect(XHIGH_QUESTION).toBe('« Opus xhigh (Recommandé) / Opus high »')
-  // Le chemin Fable : brief Fable, aucun modèle au lancement, et pas d'arrêt « monte l'effort de cette discussion ».
-  const fable = manual.slice(manual.indexOf('Si je réponds Fable 5.2 high'), manual.indexOf('Si je réponds Opus xhigh'))
-  expect(fable).toContain('son brief Fable, effort high')
-  expect(fable).toContain('aucun model dans start_session ni dans claude --bg')
-  expect(fable).not.toContain('arrête-toi avant de lancer')
-  // Le chemin Opus xhigh garde son arrêt.
-  expect(manual.slice(manual.indexOf('Si je réponds Opus xhigh'))).toContain('arrête-toi avant de lancer et demande-moi de passer cette discussion en xhigh')
-  // L'ancienne question unique a disparu.
-  expect(manual).not.toContain('« xhigh (Recommandé) / high »')
 })
 
 for (const isBrief of [false, true]) {
@@ -199,28 +188,28 @@ for (const isBrief of [false, true]) {
     }
   })
 
-  test(`« ↗ Worker » sur un groupe avec logique : deux briefs, l’Opus et le Fable, et la demande dit lequel passer (${form})`, async ($, on) => {
+  test(`« ↗ Worker » sur un groupe avec logique : un seul brief, l’Opus, sans marque Fable ni question (${form})`, async ($, on) => {
     const written: Record<string, string> = {}
     const [text = ''] = await launch($, on, LOT, ['launch-linked-A'], isBrief, written)
     if (isBrief) {
       const briefs = Object.entries(written)
-      expect(briefs).toHaveLength(2)
-      const opus = briefs.find(([p]) => !p.endsWith('-fable.md'))!
-      const fable = briefs.find(([p]) => p.endsWith('-fable.md'))!
-      expect(text).toContain(`brief Opus du groupe A : '${opus[0]}'`)
-      expect(text).toContain(`brief Fable du groupe A : '${fable[0]}'`)
-      expect(text).toContain('passe son brief Fable seulement si je réponds Fable 5.2 high à sa question d’effort, sinon son brief Opus')
-      expect(opus[1]).not.toContain('"model"')
-      expect(opus[1]).toContain('tu es le worker du groupe A')
-      expect(opus[1]).toContain("et, si son effort est xhigh, qu'elle est un worker autonome")
-      expect(fable[1]).toMatch(/"main": "\[<ref>\]", "model": "fable"\}/)
-      expect(await replayDelegate($, fable[1], true)).toContain(FABLE_WORKER)
-      expect(fable[1]).toContain('tu es le worker Fable du groupe A')
+      expect(briefs).toHaveLength(1)
+      const [path = '', brief = ''] = briefs[0]!
+      expect(path).not.toMatch(/-fable\.md$/)
+      expect(text).toContain(`brief du groupe A : '${path}'`)
+      expect(brief).not.toContain('"model"')
+      expect(brief).toContain('tu es le worker du groupe A')
+      // Sans ticket de jugement, la session n'est pas un worker autonome (mission hors auto).
+      expect(brief).toContain("et qu'elle n'est pas un worker autonome (aucun ticket « Jugement : oui » dans son groupe)")
+      expect(await replayDelegate($, brief, false)).not.toContain(FABLE_WORKER)
     } else {
-      expect(text).toMatch(/Si je réponds Fable 5\.2 high : appel \{"delegate": "[^"]+", "group": "A", "main": "\[<ref>\]", "model": "fable"\}, point 3 : worker Fable et worker autonome\./)
-      // L'appel que le repli dicte, rejoué contre l'outil, pose la marque.
-      expect(await replayDelegate($, text, true)).toContain(FABLE_WORKER)
+      expect(text).toContain("et qu'elle n'est pas un worker autonome (aucun ticket « Jugement : oui » dans son groupe)")
+      expect(await replayDelegate($, text, false)).not.toContain(FABLE_WORKER)
     }
+    expect(text).not.toContain('brief Fable')
+    expect(text).not.toContain('brief Opus')
+    expect(text).not.toContain('"model": "fable"')
+    expect(text).not.toContain('Si je réponds')
   })
 
   test(`un groupe sans logique : un seul brief, sans rien du chemin Fable (${form})`, async ($, on) => {
@@ -253,14 +242,15 @@ test('« ↗ xhigh » inchangé : le seul brief Opus, xhigh imposé, l’arrêt 
   expect(text).not.toContain("l'Opus et le Fable")
 })
 
-test('un lot mêlant un groupe Sonnet et un groupe avec logique : « brief Opus » et « brief Fable » pour le second, « brief » pour le groupe Sonnet', async ($, on) => {
+test('un lot mêlant un groupe Sonnet et un groupe avec logique : un seul brief par groupe, sans brief Fable', async ($, on) => {
   const written: Record<string, string> = {}
   const [text = ''] = await launch($, on, FUSION, ['launch-parallel-linked'], true, written)
-  expect(text).toMatch(/brief Opus du groupe A : '[^']+'/)
-  expect(text).toMatch(/brief Fable du groupe A : '[^']+-fable\.md'/)
-  expect(text).toMatch(/(^|; )brief du groupe E : '/)
-  expect(text).not.toContain('brief Opus du groupe E')
-  expect(text).toContain("un fichier par groupe, ou deux, l'Opus et le Fable")
+  expect(text).toMatch(/(: |; )brief du groupe A : '[^']+'/)
+  expect(text).toMatch(/(: |; )brief du groupe E : '/)
+  expect(text).not.toContain('brief Fable')
+  expect(text).not.toContain('brief Opus')
+  expect(Object.keys(written).some(p => p.endsWith('-fable.md'))).toBe(false)
+  expect(text).toContain('un fichier par groupe (liste ci-dessous)')
 })
 
 // Option fusion : un groupe dont chaque ticket dit « Zone sensible : non » et « Logique : non » part en
@@ -285,9 +275,8 @@ for (const isBrief of [false, true]) {
     const [docs = '', code = '', mute = ''] = await launch($, on, FUSION, ['launch-linked-E', 'launch-linked-A', 'launch-linked-M'], isBrief)
     expect(lineOf(docs, 'E')).toMatch(/ — Sonnet high, sans logique$/)
     expect(docs).toContain(SONNET_LAUNCH_FR)
-    // Un groupe passé en Opus xhigh à la question à boutons ne garde pas Sonnet : une tâche de jugement ; jamais Fable pour lui.
-    expect(docs).toContain('ni pour un groupe que je fais passer en Opus xhigh')
-    expect(docs).toContain('une tâche de jugement ne va jamais à Sonnet). ')
+    // Un groupe qui porte un ticket de jugement ne va jamais à Sonnet.
+    expect(docs).toContain('un groupe qui porte un ticket de jugement ne va jamais à Sonnet). ')
     // La phrase suit la consigne d'effort après une espace, jamais collée à son point final.
     expect(docs).toContain(`. ${SONNET_LAUNCH_FR}`)
     expect(docs).toContain(`model "${SONNET_APP_ID}"`)
@@ -311,4 +300,70 @@ test('une demande pour plusieurs groupes mêle Sonnet et Opus groupe par groupe'
   expect(lineOf(text, 'A')).toMatch(/ — effort calculé : medium$/)
   expect(lineOf(text, 'E')).toMatch(/ — Sonnet high, sans logique$/)
   expect(text).toContain(SONNET_LAUNCH_FR)
+})
+
+// Un ticket « Jugement : oui » ouvert : la ligne du groupe le dit après l'effort calculé, le groupe ne part jamais
+// sur Sonnet (même sans logique ni zone sensible) et son worker est autonome, en manuel comme en auto ; rien de tel
+// sous un effort imposé par un bouton.
+const JUDGED: Lot = {
+  tickets: [
+    { id: 'j1', name: 'Refonte', files: [FB], sensitive: false, logic: true, judgment: true },
+    { id: 'n1', name: 'Code', files: [FB], sensitive: false, logic: true, judgment: false },
+    { id: 'jd', name: 'Doc long', files: ['docs/x.md'], sensitive: false, logic: false, judgment: true },
+    { id: 'jf', name: 'Fait', files: [FB], sensitive: false, logic: true, judgment: true },
+    { id: 'f2', name: 'Suite', files: [FB], sensitive: false, logic: true, judgment: false },
+  ],
+  groups: [
+    { id: 'J', name: 'Jugement', tickets: ['j1'] },
+    { id: 'N', name: 'Exécution', tickets: ['n1'] },
+    { id: 'D', name: 'Document', tickets: ['jd'] },
+    { id: 'F', name: 'Fini', tickets: ['jf', 'f2'] },
+  ],
+}
+
+for (const isBrief of [false, true]) {
+  const form = isBrief ? 'brief écrit' : 'brief à rédiger'
+  test(`un groupe qui porte un ticket de jugement : « xhigh pendant un ticket de jugement » sur sa ligne, worker autonome, jamais Sonnet (${form})`, async ($, on) => {
+    const written: Record<string, string> = {}
+    const [judged = '', plain = '', doc = ''] = await launch($, on, JUDGED, ['launch-linked-J', 'launch-linked-N', 'launch-linked-D'], isBrief, written)
+    expect(lineOf(judged, 'J')).toMatch(/ — effort calculé : medium, xhigh pendant un ticket de jugement$/)
+    expect(lineOf(plain, 'N')).toMatch(/ — effort calculé : medium$/)
+    // Sans logique ni zone sensible, mais avec un ticket de jugement : pas de Sonnet.
+    expect(lineOf(doc, 'D')).toMatch(/ — effort calculé : medium, xhigh pendant un ticket de jugement$/)
+    expect(doc).not.toContain('Sonnet')
+    for (const text of [judged, plain, doc]) expect(text).not.toContain('question à boutons')
+    const autonomous = "qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure (procedure-groupe-autonome.md) (son groupe porte un ticket « Jugement : oui »)"
+    if (isBrief) {
+      const briefs = Object.values(written)
+      expect(briefs).toHaveLength(3)
+      expect(briefs.filter(b => b.includes(autonomous))).toHaveLength(2)
+      expect(briefs.filter(b => b.includes("et qu'elle n'est pas un worker autonome"))).toHaveLength(1)
+    } else {
+      expect(judged).toContain(autonomous)
+      expect(doc).toContain(autonomous)
+      expect(plain).toContain("et qu'elle n'est pas un worker autonome (aucun ticket « Jugement : oui » dans son groupe)")
+    }
+  })
+}
+
+test('un ticket de jugement fait ne compte plus : ni mention sur la ligne, ni autonomie', async ($, on) => {
+  const lot: Lot = { ...JUDGED, tickets: JUDGED.tickets.map(t => (t.id === 'jf' ? { ...t, status: 'done' } : t)) }
+  const [text = ''] = await launch($, on, lot, ['launch-linked-F'])
+  expect(lineOf(text, 'F')).toMatch(/ — effort calculé : medium$/)
+  expect(text).toContain("et qu'elle n'est pas un worker autonome")
+})
+
+test('sous un effort imposé, rien du ticket de jugement sur la ligne ; « ↗ xhigh » et « ↗ Fable » gardent leur chemin et leur autonomie', async ($, on) => {
+  const [xhigh = '', fable = ''] = await launch($, on, JUDGED, ['launch-xhigh-J', 'launch-fable-D'])
+  expect(lineOf(xhigh, 'J')).toMatch(/ — effort : xhigh, imposé$/)
+  expect(lineOf(fable, 'D')).toMatch(/ — Fable 5.2 high, imposé$/)
+  expect(xhigh).toContain('arrête-toi avant de lancer et demande-moi de passer cette discussion en xhigh')
+  expect(xhigh).toContain("et qu'elle est un worker autonome")
+  expect(fable).toContain("qu'elle est un worker Fable")
+  expect(fable).not.toContain('Sonnet')
+})
+
+test('une demande pour plusieurs groupes, sans brief écrit, dit l’autonomie au conditionnel du ticket de jugement', async ($, on) => {
+  const [text = ''] = await launch($, on, JUDGED, ['launch-parallel-linked'])
+  expect(text).toContain("et, si son groupe porte un ticket « Jugement : oui », qu'elle est un worker autonome")
 })

@@ -6,8 +6,9 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyReport, applySkill, autoDecision, awaitedExternals, emptyBoard, isGroupLotStuck, hereReviewMark, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, applySkill, autoDecision, awaitedExternals, emptyBoard, isBlocked, isGroupLotStuck, hereReviewMark, openQuestions, linkedReviewMark, markAutoLaunched, markAutoSent, newRun, raiseStaleAutoSends, resendAutoMark, startLinkedGroups } from '../hooks/model.ts'
 import { cancelLinkedGroup, linkGroupSession } from '../hooks/link.ts'
+import { localTicketChange } from '../hooks/relay.ts'
 import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
 
@@ -769,4 +770,93 @@ test('Une rétro découpée, sa Rétro finie : un groupe à l’id hors forme me
   // Le fichier retouché à la main : l'id du groupe B n'est plus en forme.
   const damaged: Run = { ...cut, groups: cut.groups!.map(g => (g.id === 'B' ? { ...g, id: 'B b!' } : g)) }
   expect(autoDecision(damaged, {}, false)).toEqual({ kind: 'stop', why: 'lecture du parcours ratée', relaunch: [] })
+})
+
+/**
+ * Un groupe revenu avec un ticket qui bute après trois approches : le manager le remet « à faire » et pose, dans le
+ * même appel que le retour, la question de relance sur ce groupe (procédure d'un worker de groupe, section 11).
+ */
+const STUCK = 'Le ticket a1 bute après trois approches, la dernière guidée par l’advisor. Pour le relancer : « ↗ Fable » (recommandé) ou « ↗ xhigh » sur le groupe A.'
+const stuckGroup = async ($: any, on: any, o: { isAsked?: boolean } = {}) => {
+  const run = await implementing($, on)
+  expect(run.texts.length).toBe(1)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'b0', status: 'done' }, { id: 'b1', status: 'done' }], returned: ['B'], reviewed: ['B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
+  const question = o.isAsked === false ? {} : { waiting: [{ id: 'bute-a1', group: 'A', text: STUCK }] }
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'todo' }], returned: ['A'], ...question } as any)
+  await turnEnd($, run.clock)
+  await settle(run.clock, 35)
+  return run
+}
+
+test('Le ticket mis de côté par son worker : la ligne de statut que dit la procédure part au relais « bloqué », avec sa raison', () => {
+  // procedure-groupe-cas.md, « Ticket qui bute » : ligne `Status:` « bloqué : bute après trois approches ».
+  const text = '# 05: Un ticket\n\n**Status:** bloqué : bute après trois approches\n\n## Essais\n\n1. …\n'
+  expect(localTicketChange('travail/x/issues/05-un-ticket.md', text)).toEqual({ id: '05', status: 'blocked', why: 'bute après trois approches' })
+})
+
+test('Un groupe revenu avec un ticket qui bute et sa question de relance : l’auto ne le relance pas et ne pose aucune question de relance', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckGroup($, on)
+  // L'effet d'abord : rien n'est relancé, et la seule question est celle du manager, sans « relance: » du mod.
+  expect(w.texts.length).toBe(1)
+  expect(w.commands).toEqual([])
+  expect((w.stored()!.runs[0]!.waiting ?? []).map(q => q.id)).toEqual(['bute-a1'])
+  expect(groupOf(w, 'A').linked).toBeUndefined()
+  // Plus rien ne peut avancer sans la personne : l'auto se met en pause, la question reste.
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+})
+
+test('Contrôle : le même groupe revenu sans la question de relance repart seul, une fois', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckGroup($, on, { isAsked: false })
+  // Sans question qui le bloque, l'auto relance le groupe A : c'est bien la question qui le retenait ci-dessus.
+  expect(w.texts.length).toBe(2)
+  expect(w.texts[1]).toContain('Groupe A (Worker)')
+})
+
+for (const [key, path] of [
+  ['launch-fable-A', 'Fable 5.2 high, imposé'],
+  ['launch-xhigh-A', 'xhigh, imposé'],
+] as const)
+  test(`Le même groupe : « ${key === 'launch-fable-A' ? '↗ Fable' : '↗ xhigh'} » le relance sur son chemin`, { timeoutMs: 60000 }, async ($, on) => {
+    const w = await stuckGroup($, on)
+    await press($, key)
+    await settle(w.clock, 1)
+    // La demande de lancement du groupe A, sur le chemin imposé, est dans le prompt.
+    expect(w.filled.some(t => t.includes('Groupe A (Worker)') && t.includes(path))).toBe(true)
+  })
+
+test('Relancé par « ↗ Fable », le groupe voit sa question retirée par Claude ; s’il bute encore, la question de replanification sur le ticket prend un nouvel id et retient le groupe', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckGroup($, on)
+  await press($, 'launch-fable-A')
+  await settle(w.clock, 1)
+  // Le manager retire la question en lançant : l'appel est accepté, plus rien n'attend.
+  const withdrawn = String((await $.tool.call({ tool: TOOL, waiting: [{ id: 'bute-a1', answered: true }] } as any)).result)
+  expect(withdrawn).not.toMatch(/refused|répondue le/)
+  await settle(w.clock, 2)
+  expect(w.stored()!.runs[0]!.waiting ?? []).toEqual([])
+  // Le ticket bute encore au retour : l'id déjà répondu ne se rouvre pas…
+  await $.tool.call({ tool: TOOL, set: [{ id: 'a1', status: 'todo' }], returned: ['A'] } as any)
+  const reused = String((await $.tool.call({ tool: TOOL, waiting: [{ id: 'bute-a1', group: 'A', text: STUCK }] } as any)).result)
+  expect(reused).toContain('"bute-a1" a été répondue le')
+  // …la question de replanification, sur le ticket et sous un nouvel id, est posée.
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'replanifier-a1', ticket: 'a1', text: 'Le ticket a1 bute encore après sa relance : on replanifie ?' }] } as any)
+  await turnEnd($, w.clock)
+  await settle(w.clock, 35)
+  // L'effet : aucune troisième session ; la seule question est celle de la replanification, sans « relance: » du mod.
+  const texts = w.texts.length
+  expect((w.stored()!.runs[0]!.waiting ?? []).map(q => q.id)).toEqual(['replanifier-a1'])
+  expect(isBlocked(w.stored()!.runs[0]!, { kind: 'group', id: 'A' })).toBe(true)
+  await turnEnd($, w.clock)
+  expect(w.texts.length).toBe(texts)
+  expect(groupOf(w, 'A').linked).toBeUndefined()
+})
+
+test('Lot sans groupes en auto : la question d’un ticket qui bute, posée sur le ticket, est acceptée et le retient', () => {
+  const run = newRun('implement', T0, 'Solo')
+  let b: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  b = applyReport(b, { tickets: [{ id: 'x1', name: 'Un' }, { id: 'x2', name: 'Deux' }] }, T0 + 1).board
+  b = applyReport(b, { waiting: [{ id: 'bute-x1', ticket: 'x1', text: 'Le ticket x1 bute après trois approches : relancer par « 🐞 Bug · worker » ?' }] }, T0 + 2).board
+  const r = activeRun(b)!
+  expect(openQuestions(r).map(q => q.id)).toEqual(['bute-x1'])
+  expect(isBlocked(r, { kind: 'ticket', id: 'x1' })).toBe(true)
+  expect(isBlocked(r, { kind: 'ticket', id: 'x2' })).toBe(false)
 })

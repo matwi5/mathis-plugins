@@ -74,6 +74,10 @@ test('/to-tickets fait dire à chaque ticket sa zone sensible et sa logique, et 
   expect(text).toContain('« Logique : oui/non »')
   expect(text).toContain('"sensitive": true|false')
   expect(text).toContain('"logic": true|false')
+  // La ligne « Jugement » et son drapeau, d'après les critères de la section 11 (libellés choisis par Mathis le 12/11/2026).
+  expect(text).toContain('« Jugement : oui (jugement sur un existant) », « Jugement : oui (objectif ouvert) » or « Jugement : non », by the criteria of the judgement task in section 11 of the group worker procedure')
+  expect(text).toContain('"judgment": true|false')
+  expect(text).toContain('the « Jugement » line is validated with the breakdown')
   // Un worker ne peut pas écrire CLAUDE.md : un ticket resté 19 heures en attente.
   expect(text).toContain('A write to CLAUDE.md never goes into the done criteria of a group ticket')
   expect(text).toContain('README, DECISIONS.md and the code map (carte-du-code.md, CODEMAP.md) stay out of "files"')

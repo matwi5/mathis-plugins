@@ -42,6 +42,7 @@ import {
   SECURITY_FIXES_PASS,
   securityFixesPass,
   SENSITIVE_AREAS,
+  JUDGMENT_FIELD,
   TRUST_COMMAND,
   SENSITIVE_NO_FIX,
   NO_LOGIC_GROUP,
@@ -254,6 +255,7 @@ import {
   currentPhase,
   clip,
   isBeforeImplPhase,
+  isJudgmentTicket,
   isReportValidated,
   shownGroupId,
   noFx,
@@ -432,10 +434,11 @@ export const TOOL_SCHEMA = {
           files: {
             type: 'array',
             items: { type: 'string' },
-            description: "Repo paths the ticket touches, shared files included, added to its group's files; files rather than a folder, unless the ticket creates files in it",
+            description: "Repo paths the ticket touches, shared files included, added to its group's files; files, not a folder, unless the ticket creates files in it",
           },
           sensitive: { type: 'boolean', description: `Its line "Zone sensible": true when it touches a sensitive area (${SENSITIVE_AREAS})` },
-          logic: { type: 'boolean', description: 'Its line "Logique": false for a visual asset or a document, which has no logic to review' },
+          logic: { type: 'boolean', description: 'Its line "Logique": false for a visual asset or a document' },
+          judgment: { type: 'boolean', description: JUDGMENT_FIELD },
         },
         required: ['id', 'name'],
       },
@@ -9840,7 +9843,7 @@ const lotProcedureLines = (lot: LotProcedure, isRepo: boolean): string[] => {
     ? "/code-review high --fix <lot base>..HEAD consignes : <path> (high without --fix when a ticket of the lot is sensitive or did not say; <lot base>: the commit before the lot's first ticket)"
     : "/code-review high --fix consignes : <path> (high without --fix when a ticket of the lot is sensitive or did not say; its fixed point: for each file, the oldest copy among the lot's tickets, section 9)"
   return [
-    `- This lot has no groups: you do it in this discussion and follow the procedure of a worker of a group, ${lot.procedure}, the single text of how a lot is done: its sections ${sections.slice(0, -1).join(', ')} and ${sections.at(-1)}, in order (sections 4 and 5 are in procedure-groupe-fin.md, section 9 in procedure-groupe-sans-git.md, next to it). Read it with this correspondence: « le manager » is you, and « je », « me », « moi » the user; what the procedure sends to it (SendMessage, the relay) you tell the user directly, and questions go as text in your message (options, the recommended one first; the ticket concerned waits, the rest goes on); « le groupe » reads « the lot »; its <base> is the commit before the lot's first ticket; « au retour du groupe » reads « at the mission's report »; the pause of the mission seen by a worker (section 3) does not concern you; a visual to validate is shown and asked directly; what the procedure sends with "group" (section 2, point 8, and section 5) you send without it, the security advice on its own once /code-review has loaded, the counts after the security reviewer (« The lot review » below). What the procedure expects from its prompt: <tdd>: ${lot.tdd}; <revue du ticket>: ${lot.ticketReview}; the security review method file, ${lot.securityMethod}; the content and form review method file, ${lot.readingMethod}; the declared choices and the project judgement rules: below ("Declared choices", "Project judgement rules"); ${isRepo ? 'this folder is a git repository' : 'this folder has no git (section 9, and "Without git" below)'}.`,
+    `- This lot has no groups: you do it in this discussion and follow the procedure of a worker of a group, ${lot.procedure}, the single text of how a lot is done: its sections ${sections.slice(0, -1).join(', ')} and ${sections.at(-1)}, in order (sections 4 and 5 are in procedure-groupe-fin.md, section 9 in procedure-groupe-sans-git.md, next to it). Read it with this correspondence: « le manager » is you, and « je », « me », « moi » the user; what the procedure sends to it (SendMessage, the relay) you tell the user directly, and questions go as text in your message (options, the recommended one first; the ticket concerned waits, the rest goes on); « le groupe » reads « the lot »; its <base> is the commit before the lot's first ticket; « au retour du groupe » reads « at the mission's report »; a ticket that stalls after three approaches (section 3, « Ticket qui bute », in procedure-groupe-cas.md) is not set aside: the same definition of an attempt holds, then you stop on that ticket and remind the user of « 🐞 Bug · worker » (Opus high, then xhigh); the pause of the mission seen by a worker (section 3) does not concern you; a visual to validate is shown and asked directly; what the procedure sends with "group" (section 2, point 8, and section 5) you send without it, the security advice on its own once /code-review has loaded, the counts after the security reviewer (« The lot review » below). What the procedure expects from its prompt: <tdd>: ${lot.tdd}; <revue du ticket>: ${lot.ticketReview}; the security review method file, ${lot.securityMethod}; the content and form review method file, ${lot.readingMethod}; the declared choices and the project judgement rules: below ("Declared choices", "Project judgement rules"); ${isRepo ? 'this folder is a git repository' : 'this folder has no git (section 9, and "Without git" below)'}.`,
     `- Five exceptions, and no other: ${LOT_EXCEPTIONS.join('; ')}. Section 6 (« Compte rendu ») is replaced by /flow-board:compte-rendu, which takes its content (what the CHANGELOG must say, the findings on code older than the lot, the tracks): no report of the lot apart.`,
     `- The lot review: launch the lot review yourself (section 4), in this discussion, once the last ticket is committed and reviewed (its review fixes committed) and every ticket of the lot is done on the dashboard (a /code-review loaded while one is not done is not the lot review: it counts for no pass): ${review}, with its security advice in the same message (section 5), sent without "group" (send the advice only once /code-review has loaded, never before it: an advice dated before the lot review counts for no pass; ${LOT_DISMISSED_HINT}); the dashboard's « ◆ Revue » button stays for a relaunch by hand. Otherwise, /code-review (Claude Code) runs here only as the bug pass of a ticket that touches a sensitive area. A lot whose every ticket was sent with "sensitive": false and "logic": false is dispensed (section 4): neither a lot review nor a security review, and no security advice is sent for it.`,
   ]
@@ -9953,10 +9956,11 @@ const LATER_READING =
 
 /**
  * « Logique : oui » pour un texte qui fait agir Claude : un ticket de règles ou de skill découpé sans
- * logique perdait la revue du groupe et l'avis de sécurité, alors qu'il fait lancer des commandes.
+ * logique perdait la revue du groupe et l'avis de sécurité, alors qu'il fait lancer des commandes. La ligne
+ * « Jugement » décide l'effort xhigh le temps du ticket (`isJudgmentTicket`) : le lancement la lit au lieu de juger à nouveau.
  */
 const TICKET_FLAGS =
-  'Each ticket says, on lines of its own, « Zone sensible : oui/non (pourquoi) » and « Logique : oui/non » (no logic: a visual asset, a document; logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path), and you send both: {"tickets": [{"id": "...", "sensitive": true|false, "logic": true|false}]}. For « Zone sensible », its « pourquoi » answers three questions: does it build a command or a path from a value read elsewhere? does it write kept data that other discussions or sessions also write? does it delete data? A single yes makes the ticket sensitive at least; a yes to the second or the third makes it very sensitive, and its invariant is fixed at framing. A group whose every ticket says no to both has neither a group review nor a security review: its ticket reviews are its only reviews'
+  'Each ticket says, on lines of its own, « Zone sensible : oui/non (pourquoi) », « Logique : oui/non » (no logic: a visual asset, a document; logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path) and « Jugement : oui (jugement sur un existant) », « Jugement : oui (objectif ouvert) » or « Jugement : non », by the criteria of the judgement task in section 11 of the group worker procedure (reference/effort-workers.md of flow-board: a judgement on existing code or an open goal, never an execution task), and you send all three: {"tickets": [{"id": "...", "sensitive": true|false, "logic": true|false, "judgment": true|false}]}; the session that works on a « Jugement : oui » ticket runs at xhigh at least while it is in progress, so the « Jugement » line is validated with the breakdown. For « Zone sensible », its « pourquoi » answers three questions: does it build a command or a path from a value read elsewhere? does it write kept data that other discussions or sessions also write? does it delete data? A single yes makes the ticket sensitive at least; a yes to the second or the third makes it very sensitive, and its invariant is fixed at framing. A group whose every ticket says no to both « Zone sensible » and « Logique » has neither a group review nor a security review: its ticket reviews are its only reviews'
 
 /** Un bouton retiré avait laissé des textes périmés que seules les revues avaient vus : son libellé et sa clé deviennent des termes refusés. */
 const RETIRED_TERMS =
@@ -10029,7 +10033,7 @@ export const AUTO_CATEGORIES_EN: readonly string[] = [
   'setting or weakening an invariant, or a design change that contradicts DECISIONS.md or a decision already taken with the user',
   "a deletion with no way back, or an exposure of the user's data outside this machine (a publication, for example)",
   'leaving a security finding unfixed',
-  'an xhigh effort for a worker: in auto mode, stay in high and declare that xhigh was not offered, instead of asking',
+  "the Fable path for a worker: never take it yourself; suggest it only for a bug Opus did not solve; xhigh comes from a ticket's « Jugement » line, declared at the split",
   'a spending or an external action outside the mission (installing a heavy dependency, writing to a third-party service)',
 ]
 
@@ -10038,6 +10042,13 @@ export const AUTO_CATEGORIES_EN: readonly string[] = [
  * personne, marquée dans le texte du choix pour que le compte rendu la range à part.
  */
 const AUTO_SENSITIVE = `- A question in a sensitive area (${SENSITIVE_AREAS}) is settled by you when its recommended option respects the invariant already validated (when there is one) and is the most prudent one (it loses nothing, exposes nothing, deletes nothing without a way back): code it and declare it as a recommendation taken, its "what" beginning with « Zone sensible : » ({"decided": [{"what": "Zone sensible : <the choice>", "why": "...", "origin": "recommendation"}]}), so that the report lists it apart for the user to reread; otherwise it stays a blocking question. A breach of the invariant that the high pass after the bug pass's fixes still finds, fixed in the most prudent way, is written as a test and goes out as one line of information, declared as a recommendation taken beginning with « Zone sensible : », not as a question. In auto mode, this wins over any line above that says a sensitive choice is never declared or is settled with the user.`
+
+/**
+ * L'advisor en auto : avant de coder une décision prise seul hors cadrage, une fois par décision, en plus des
+ * moments de la règle « Consulter l'advisor ». Un worker Fable ne le consulte pas (l'advisor tourne sur son modèle).
+ */
+const AUTO_ADVISOR =
+  "- Before coding a decision you take alone outside the framing (a design change, a question in a sensitive area settled by you), consult the advisor (the advisor tool, when you have it), once per decision; without it, reread your decision yourself (the options, what each one commits to) before committing to it. This adds to the moments of the rule « Consulter l'advisor »."
 
 /** Ce que Claude fait des failles et des constats sur du code antérieur, en implémentation et aux revues. */
 const AUTO_FINDINGS =
@@ -10048,8 +10059,8 @@ const AUTO_PHASE_NOTES: Record<string, string> = {
   'to-spec':
     '- Spec in auto mode: the seams are not asked: settle them by your recommended answer, write them in the decision file as « acceptée en auto (reco) » and declare them ("origin": "recommendation"); the validation of the spec is not asked either: declare it ("origin": "skipped-validation", with the path or link of the spec), then publish it; the tracker writes of the mission (the spec published) are made without asking again. A question of a sensitive area that does not meet the condition above to be settled by you, and setting or weakening an invariant, stay blocking questions on this phase ("phase": "to-spec").',
   'to-tickets':
-    '- Ticket split in auto mode: the breakdown is not approved by a button question: declare it ("origin": "skipped-validation", with the path of the tickets or the tracker link), then publish; the tracker writes of the mission (the tickets created, their statuses) are made without asking again, declared once ("origin": "skipped-validation", with their list). Setting or weakening the invariant of a sensitive ticket (except the invariant of a ticket that is only sensitive, with no shared data nor deletion: you write it and declare it with the breakdown, without a question), and a sensitive question that does not meet the condition above to be settled by you, stay blocking questions on this phase ("phase": "to-tickets").',
-  implement: `- Implementation in auto mode: flow-board itself sends, at the end of a turn, the request to launch the next wave of groups (once every group of the current wave is closed), the review of a group that came back without one and its advised security review: do not ask the user to press the dashboard buttons. Launch the workers at the effort of the rule (medium; high for a sensitive group or one that touches several code modules: documentation and travail/ or docs/ do not count), never Fable nor xhigh: do not ask either effort question (Fable 5.2 high, Opus xhigh), launch a judgement group on Opus high and declare instead that neither Fable nor xhigh was offered. A group that came back with failed checks: leave its tickets concerned not done ({"set": [{"id": "<ticket>", "status": "todo"}]}).\n${AUTO_FINDINGS}`,
+    '- Ticket split in auto mode: the breakdown is not approved by a button question: declare it ("origin": "skipped-validation", with the path of the tickets or the tracker link), then publish; the tracker writes of the mission (the tickets created, their statuses) are made without asking again, declared once ("origin": "skipped-validation", with their list). The « Jugement » lines are not validated either: declare the judgement tickets in a single choice, its "what" worded « Tickets de jugement, en xhigh le temps du ticket : <id> (<critère>), … » (<critère> being « jugement sur un existant » or « objectif ouvert »), "origin": "recommendation", or, when that choice would exceed 300 characters (a choice is cut there), in several choices with the same wording, each under 300 characters and naming other tickets; none when no ticket says « Jugement : oui ». Setting or weakening the invariant of a sensitive ticket (except the invariant of a ticket that is only sensitive, with no shared data nor deletion: you write it and declare it with the breakdown, without a question), and a sensitive question that does not meet the condition above to be settled by you, stay blocking questions on this phase ("phase": "to-tickets").',
+  implement: `- Implementation in auto mode: flow-board itself sends, at the end of a turn, the request to launch the next wave of groups (once every group of the current wave is closed), the review of a group that came back without one and its advised security review: do not ask the user to press the dashboard buttons. Launch the workers at the effort of the rule (medium; high for a group that touches several code modules: documentation and travail/ or docs/ do not count), never Fable; xhigh comes from the « Jugement » line of a ticket, which the session's mod applies while that ticket is in progress, so a group that carries one is launched at the effort of the rule too, with no effort question. A group that came back with a ticket set aside because it stalls after three approaches (its report names it, « bute après trois approches »; section 11 of the procedure, « Ticket qui bute », in effort-workers.md): in the same flow call as its return, set that ticket back to todo and ask a blocking question on that group, worded « Le ticket <id> bute après trois approches, la dernière guidée par l'advisor. Pour le relancer : « ↗ Fable » (recommandé) ou « ↗ xhigh » sur le groupe <G>. » (only « ↗ xhigh » for a ticket in an area of the security review): {"returned": ["<G>"], "set": [{"id": "<id>", "status": "todo"}], "waiting": [{"id": "bute-<id>", "group": "<G>", "text": "<that sentence>"}]}; the auto mode never launches a group a question blocks and asks no relaunch question of its own, the other groups go on, and the user's click on « ↗ Fable » or « ↗ xhigh » is the answer: withdraw the question when you launch the group. If the ticket stalls again after that relaunch, no further relaunch: a blocking question on the ticket, to replan with the user, under a new id (an answered id never reopens): {"waiting": [{"id": "replanifier-<id>", "ticket": "<id>", "text": "<short>"}]}. A group that came back with failed checks: leave its tickets concerned not done ({"set": [{"id": "<ticket>", "status": "todo"}]}).\n${AUTO_FINDINGS}`,
   'final-review': AUTO_FINDINGS,
   'code-review': AUTO_FINDINGS,
   'branch-review': AUTO_FINDINGS,
@@ -10063,7 +10074,7 @@ const AUTO_PHASE_NOTES: Record<string, string> = {
  * flow-board la relance, puis sa sécurité conseillée, quand elles n'ont pas été lancées ; le compte
  * rendu ne part qu'après le `{"complete": true}` du lot relu et tranché, ou dispensé.
  */
-const AUTO_LOT_IMPLEMENT = `- Implementation in auto mode, without groups: launch the lot review yourself, as the /implement instructions say (section 4 of the procedure, in procedure-groupe-fin.md, on <lot base>..HEAD, <lot base> being the commit before the lot's first ticket), with its security advice once the review has loaded, never before it; if it has not been launched (an interrupted discussion), flow-board itself sends it at the end of a turn, then the lot's advised security review when it was not launched: do not ask the user to press the dashboard buttons. Neither leaves while a background task runs or a question blocks this phase. Once every ticket is done, the lot reviewed and its security settled, or the lot dispensed, send {"complete": true}: the auto mode sends the report only after it. Leaving a security finding unfixed is the user's decision, a blocking question on this phase ("phase": "implement"): it holds back the lot's sends and the report.\n${AUTO_FINDINGS}`
+const AUTO_LOT_IMPLEMENT = `- Implementation in auto mode, without groups: launch the lot review yourself, as the /implement instructions say (section 4 of the procedure, in procedure-groupe-fin.md, on <lot base>..HEAD, <lot base> being the commit before the lot's first ticket), with its security advice once the review has loaded, never before it; if it has not been launched (an interrupted discussion), flow-board itself sends it at the end of a turn, then the lot's advised security review when it was not launched: do not ask the user to press the dashboard buttons. Neither leaves while a background task runs or a question blocks this phase. Once every ticket is done, the lot reviewed and its security settled, or the lot dispensed, send {"complete": true}: the auto mode sends the report only after it. Leaving a security finding unfixed is the user's decision, a blocking question on this phase ("phase": "implement"): it holds back the lot's sends and the report. A ticket that stalls after three approaches (section 3 of the procedure, « Ticket qui bute », in procedure-groupe-cas.md): stop on it and ask a blocking question on that ticket ({"waiting": [{"id": "bute-<id>", "ticket": "<id>", "text": "<short>"}]}) that reminds the user of « 🐞 Bug · worker » (Opus high, then xhigh).\n${AUTO_FINDINGS}`
 
 /** Le bloc du cadrage (un grilling) : un seul tour d'intention avec la personne, puis les recos prises. */
 const AUTO_FRAMING_REST =
@@ -10089,6 +10100,7 @@ const autoNote = (id: string, run: Run): string[] => {
     '- Auto mode is on for this mission (« ⚡ Auto »): the user\'s click (« Confirmer » here, or « Lancer en auto » on the COO\'s launch card) is their agreement, for this mission only, to its button validations (framing agreement, spec, ticket split, work plan) and to the tracker writes it plans (the tickets created, their statuses). Do not ask for what it settles: flow-board itself sends the next step at the end of a turn, once this one is complete and nothing waits. If the auto mode is cut or paused while you work, the answer of the flow tool says so: from then on, the usual rules apply again (button validations, the user\'s agreement before a tracker write).',
     '- Each recommendation you take without the user is a declared choice: {"decided": [{"what": "...", "why": "...", "origin": "recommendation"}]} (« reco prise »). Each validation the auto mode skips is declared instead of a button question: {"decided": [{"what": "<what was validated, with the path or link of the validated text>", "origin": "skipped-validation"}]} (« validation sautée »).',
     AUTO_SENSITIVE,
+    AUTO_ADVISOR,
     `- Six kinds of decisions stay with the user even in auto mode, always as blocking questions, never as declared choices: ${AUTO_CATEGORIES_EN.map((c, i) => `${i + 1}) ${c}`).join('; ')}. Ask it in your message (options, the recommended one first) and declare it: {"waiting": [{"id": "<short id>", "phase": "<skill id>" | "group": "<group id>" | "ticket": "<ticket id>", "text": "<the question, shown on the dashboard only>"}]}; for kinds 4) and 6), add the gesture the user can make with a click in the COO's dashboard, applied here by flow-board: "gesture": "spend" or "external" (the user allows or refuses it), or "gesture": "flaw" with "dismissed": <the total of kept findings left unfixed once the user agrees>, on its group (or on this phase without groups). Only what it blocks waits: go on with the rest. Once the user has answered, withdraw it: {"waiting": [{"id": "<id>", "answered": true}]}. A question whose id starts with « ${STALE_PREFIX} » is the mod's (« envoi resté sans suite »): never withdraw it; the user answers it with « ↻ Renvoyer » on the dashboard, or by launching the step. A question whose id starts with « ${RELAUNCH_PREFIX} » is the mod's too (a group back too many times from its worker): while the group still has open tickets in the plan and is not sent again, the flow tool refuses its withdrawal; the user relaunches the group (« ↗ Worker »), or answers otherwise (its open tickets set done, or removed from the lot with "remove"): then withdraw it.`,
     `- Each time you declare blocking questions, also send one PushNotification (a deferred tool: load it with ToolSearch, select:PushNotification) with exactly this text and nothing else, neither the question nor any code: « ${autoQuestionsNotice(run.title, 'N')} », N being the open questions of the mission once yours are declared (the answer of the flow tool says « waiting: N question(s) »).`,
   ]
@@ -11228,7 +11240,7 @@ const ticketList = (run: Run, ids: readonly string[]): string =>
  * cette discussion (start_session ne lui en donne jamais un plus haut). Le titre et le worktree de
  * la commande du CLI sont cités pour le shell ; le `branch_name` de l'app est un texte, pas une commande.
  */
-const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; title: string; worktree: string; effort?: string; trustInProcedure?: boolean; brief?: boolean; twins?: boolean }): string => {
+const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; title: string; worktree: string; effort?: string; trustInProcedure?: boolean; brief?: boolean }): string => {
   const each = o.many ? 'chaque session' : 'la session'
   const desktopEffort = o.effort ? ', effort "<effort>"' : ''
   const cliEffort = o.effort ? ' --effort <effort>' : ''
@@ -11253,7 +11265,7 @@ const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; titl
   if (o.brief) {
     return (
       (o.effort ? `${o.effort} ` : '') +
-      `Le brief de ${each} est déjà écrit par flow-board, un fichier par groupe${o.twins ? ", ou deux, l'Opus et le Fable" : ''} (liste ci-dessous) : ne le réécris pas et ne le modifie pas ; ajoute seulement ce qui varie, sous sa dernière rubrique « Ce qui varie » : ${briefAdditions(hasInstall)}. ` +
+      `Le brief de ${each} est déjà écrit par flow-board, un fichier par groupe (liste ci-dessous) : ne le réécris pas et ne le modifie pas ; ajoute seulement ce qui varie, sous sa dernière rubrique « Ce qui varie » : ${briefAdditions(hasInstall)}. ` +
       `Avant de lancer ${each}, vérifie que son brief est là et pas vide (test -s <brief>) : s'il manque, ne lance pas cette session et dis-le-moi (« Annuler » sur sa ligne au tableau de bord, puis un nouveau lancement écrit un nouveau brief). ` +
       `${desktop} ; background : le texte du fichier du brief, lu par cat, tel quel ; prompt : « Ce qui varie : », ce qui varie, puis « Suis le brief du background jusqu'au bout, rubrique après rubrique (son installation de worktree d'abord, s'il y en a une). ». ` +
       `${cliRef}écris ce qui varie dans un fichier temporaire à toi (<ajout>), puis lance ${each} par le shell, au premier plan : test -s <brief> && claude --bg -n ${shellQuote(o.title)}${cliEffort}${cliWhere} "$(cat <brief> '<ajout>')" (<brief> : le chemin du brief du groupe, entre apostrophes, tel qu'écrit ci-dessous ; une apostrophe du titre s'écrit '\\'') ; ` +
@@ -11281,29 +11293,33 @@ const launchHow = (o: { many: boolean; isRepo: boolean; ownFolder: boolean; titl
 
 /**
  * La règle que le mod d'un worker a appliquée à sa dernière requête (`workerEffortRule`), pour son bandeau ;
- * null sans règle (aucun ticket sensible en cours) ou hors d'un worker. Perdue au redémarrage : la requête
+ * null sans règle (aucun ticket sensible ni de jugement en cours) ou hors d'un worker. Perdue au redémarrage : la requête
  * suivante la repose.
  */
 let workerEffortNow: LeadEffort | null = null
 
 /**
  * La règle d'effort d'un worker de groupe à cette requête (`workerTicketEffort`) : ses tickets « doing »
- * d'après sa propre entrée du relais (illisible : null), puis, s'il en a, leur sensibilité dans la mission
+ * d'après sa propre entrée du relais (illisible : null) et, parmi eux, le dernier passé « doing » (son ticket en
+ * cours), puis, s'il en a, leur drapeau « Jugement » et leur sensibilité dans la mission
  * pour laquelle il travaille (`workerMission` : le board d'ici, sinon celui du dépôt principal ; une
  * lecture ratée la laisse absente). Rien n'est lu dans la mission sans ticket en cours.
  */
 const workerEffortRule = async ($: any, board: Board, run: string): Promise<LeadEffort | null> => {
   // Une lecture qui lève (l'id de session compris) vaut un relais illisible.
   const own = await (async () => readOwnEntry($, run, await sessionId($)))().catch((): { why: string } => ({ why: 'not read' }))
-  const doing = 'why' in own ? null : Object.entries(own.entry?.tickets ?? {}).filter(([, t]) => t.status === 'doing').map(([id]) => id)
-  if (doing !== null && doing.length === 0) return null
+  if ('why' in own) return workerTicketEffort(null, undefined)
+  const entries = Object.entries(own.entry?.tickets ?? {}).filter(([, t]) => t.status === 'doing')
+  if (entries.length === 0) return null
+  // Le ticket en cours : le dernier passé « doing », ex aequo compris (un ticket fini mais en attente de sa revue
+  // reste « doing » pendant le suivant).
+  const startedAt = (t: { at?: unknown }): number => (typeof t.at === 'number' ? t.at : 0)
+  const latest = entries.reduce((max, [, t]) => Math.max(max, startedAt(t)), 0)
   let mission: Run | undefined
-  if (doing !== null) {
-    await quietly(async () => {
-      mission = await workerMission($, board, run)
-    })
-  }
-  return workerTicketEffort(doing, mission)
+  await quietly(async () => {
+    mission = await workerMission($, board, run)
+  })
+  return workerTicketEffort(entries.map(([id]) => id), mission, entries.filter(([, t]) => startedAt(t) === latest).map(([id]) => id))
 }
 
 /**
@@ -11352,6 +11368,9 @@ const sendFableResume = async ($: any): Promise<void> => {
 /** Le mod peut imposer Fable 5.2 au fil principal de cette session : aucun `/model` tapé, Fable pas éteint. */
 const isFableAllowed = (): boolean => !isModelPinned && !isFableOff
 
+/** Fable éteint par le repli « Fable indisponible », sans `/model` tapé : le repli d'un cadrage en auto joue. */
+const isFableFallback = (): boolean => isFableOff && !isModelPinned
+
 /**
  * La dernière requête du fil principal pouvait partir sur Fable (Fable permis, et la requête sur le modèle de la
  * session) : le bandeau ne dit le modèle imposé que sur ce qui part vraiment ; faux avant la première requête.
@@ -11373,11 +11392,13 @@ const isSessionModel = async ($: any, model: string): Promise<boolean> => {
 
 /**
  * Ce que le mod impose à une requête du fil principal de cette discussion, selon son rôle et sa phase : son
- * effort, et le modèle quand la règle en donne un (`model`) : dans un worker, high au moins pendant un ticket
- * sensible en cours (`workerEffortRule`) ; medium pour la discussion qui tient le siège du COO (`COO_EFFORT`) ;
+ * effort, et le modèle quand la règle en donne un (`model`) : dans un worker, xhigh au moins pendant un ticket de
+ * jugement en cours, high au moins pendant un ticket sensible en cours (`workerEffortRule`) ; medium pour la discussion qui tient le siège du COO (`COO_EFFORT`) ;
  * la règle du manager de la mission active ici sinon (`leadEffort` : règle d'un worker pendant son travail,
- * Fable 5.2 medium en cadrage quand `isFableOn`, medium pendant le suivi des groupes, high au moins ailleurs) ;
- * rien sans mission active ici. Recalculé à chaque requête.
+ * Fable 5.2 en cadrage quand `isFableOn`, en high quand l'auto de la mission envoie d'ici (`isAutoHere`) et en
+ * medium sinon, xhigh au moins pour un cadrage en auto dont Fable a été éteint par le repli sans `/model` tapé,
+ * medium pendant le suivi des groupes, high au moins ailleurs) ; rien sans mission active ici. Recalculé à chaque
+ * requête.
  */
 const leadEffortHere = async <E extends string | number>($: any, current: E, isFableOn: boolean): Promise<{ effort: E | 'medium' | 'high' | 'xhigh'; model?: string } | null> => {
   const board: Board | null = await read($, boardAtom)
@@ -11390,7 +11411,7 @@ const leadEffortHere = async <E extends string | number>($: any, current: E, isF
     return workerEffortNow ? { effort: effortSent(workerEffortNow, current), ...(workerEffortNow.model ? { model: workerEffortNow.model } : {}) } : null
   }
   workerEffortNow = null
-  const rule = isCooDiscussion(board, await $.clock.now()) ? COO_EFFORT : leadEffort(activeRun(board), isFableOn)
+  const rule = isCooDiscussion(board, await $.clock.now()) ? COO_EFFORT : leadEffort(activeRun(board), isFableOn, { isAutoHere: await isAutoHere($, board), isFableOff: isFableFallback() })
   return rule ? { effort: effortSent(rule, current), ...(rule.model ? { model: rule.model } : {}) } : null
 }
 
@@ -11548,8 +11569,8 @@ const briefAdditions = (hasInstall: boolean): string =>
 
 /**
  * Ce que le brief d'un groupe reprend de la demande : ce que `delegationText` a mesuré pour elle. `variants` :
- * les briefs à écrire pour un groupe, l'Opus et (ou) le Fable (`isFable`, le worker Fable), d'après le
- * chemin que la demande laisse ouvert ou qu'un bouton impose.
+ * le brief à écrire pour un groupe, un seul : le Fable (`isFable`, le worker Fable) sous « ↗ Fable », l'Opus
+ * dans tous les autres cas.
  */
 type BriefParts = { root: string; isRepo: boolean; isAuto: boolean; decidedAt: string | null; steps: (groupId: string, isFable: boolean) => string; sourceNote: string; variants: (view: GroupView) => readonly boolean[] }
 
@@ -11605,8 +11626,8 @@ const briefText = (run: Run, view: GroupView, views: readonly GroupView[], hasRu
 }
 
 /**
- * Écrit le brief de chaque groupe lancé (`briefText`), un par variante (`o.variants` : l'Opus, le Fable, ou
- * les deux) : rend leurs chemins, ou la raison, en mots, pour laquelle l'un d'eux ne s'est pas écrit (sans
+ * Écrit le brief de chaque groupe lancé (`briefText`), un par groupe (`o.variants` : le Fable sous « ↗ Fable »,
+ * l'Opus sinon) : rend leurs chemins, ou la raison, en mots, pour laquelle l'un d'eux ne s'est pas écrit (sans
  * la valeur hors forme) ; la demande d'avant revient alors, pour tous.
  */
 const writeBriefs = async ($: any, run: Run, views: readonly GroupView[], o: BriefParts): Promise<{ paths: { group: string; path: string; isFable: boolean }[]; why?: undefined } | { paths: null; why: string }> => {
@@ -11653,12 +11674,14 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   const delegateCall = (groupId: string, isFable = false): string => `{"delegate": ${asciiJson(run.id)}, "group": ${asciiJson(groupId)}, "main": "[<ref>]"${isFable ? ', "model": "fable"' : ''}}`
   const delegate = delegateCall(many ? '<id du groupe>' : views[0]!.group.id, imposed === 'fable')
   // Chaque ligne porte l'effort calculé par le mod (ou imposé par un bouton) : Claude le lit au lieu de refaire la règle.
-  // Un groupe sans logique part sur Sonnet (option fusion), sauf sous un effort imposé, qui garde Opus (ou Fable).
-  const isSonnet = (v: GroupView): boolean => !imposed && isNoLogicGroup(run, v.group)
-  // Les briefs d'un groupe : le seul Fable sous « ↗ Fable » ; le seul Opus sous « ↗ xhigh », en auto (jamais Fable)
-  // et pour un groupe Sonnet ; sinon les deux, Claude passant celui que dit ma réponse à la question d'effort.
-  const variants = (v: GroupView): readonly boolean[] =>
-    imposed === 'fable' ? [true] : imposed || isAuto || isSonnet(v) ? [false] : [false, true]
+  // Un groupe qui porte un ticket ouvert « Jugement : oui » (`isJudgmentTicket`) : son mod le passe en xhigh le temps
+  // du ticket, sa ligne le dit, il ne part jamais sur Sonnet et son worker est autonome.
+  const hasJudgment = (v: GroupView): boolean => v.open.some(isJudgmentTicket)
+  // Un groupe sans logique part sur Sonnet (option fusion), sauf sous un effort imposé, qui garde Opus (ou Fable),
+  // et sauf un groupe qui porte un ticket de jugement.
+  const isSonnet = (v: GroupView): boolean => !imposed && isNoLogicGroup(run, v.group) && !hasJudgment(v)
+  // Un seul brief par groupe : le Fable sous « ↗ Fable », l'Opus dans tous les autres cas.
+  const variants = (_v: GroupView): readonly boolean[] => (imposed === 'fable' ? [true] : [false])
   const groups = views.map(v => `Groupe ${v.group.id} (${neutralInPrompt(v.group.name)}) : ${ticketList(run, v.open.map(t => t.id))}${groupLaunchNote(v.open, v.group.files ?? [], imposed, isSonnet(v))}`).join(' ∥ ')
   const prefix = linkedPrefix(run)
   // Dans le dépôt de flow-board, ses fichiers à jour sont ceux du dépôt, pas ceux installés ; les
@@ -11679,13 +11702,14 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   const versionsNote = isSource ? await modVersionsNote($) : ''
   // Les trois points du prompt de la session, écrits une fois : `here` désigne la discussion principale
   // (« ici », « cette discussion » dans la demande ; « la discussion principale » dans le brief).
-  const steps = (call: string, isBrief: boolean, isFable = false): string => {
+  // `judged` : le groupe porte un ticket ouvert « Jugement : oui » (null : la consigne vaut pour plusieurs groupes).
+  const steps = (call: string, isBrief: boolean, isFable = false, judged: boolean | null = null): string => {
     const here = isBrief ? 'dans la discussion principale' : 'ici'
     const back = isBrief ? 'à la discussion principale' : 'à cette discussion'
     return (
       `1) d'abord, appeler une seule fois l'outil flow de flow-board avec ${call} : la mission reste ${here}, et l'avancement de la session (statuts Asana des tickets, commits, tests) est relayé tout seul au tableau de bord ${isBrief ? 'de la discussion principale' : "d'ici"} ; ` +
       `2) puis lire la procédure d'un worker de groupe, ${procedure}, et la suivre jusqu'au bout : questions sensibles d'abord, puis chaque section dans l'ordre jusqu'au compte rendu déposé au relais puis une ligne ${back} ; chaque fichier lu à part, et de la spec les seules sections que cite le ticket ; ` +
-      `3) ce qui varie, que la procédure attend du prompt : les commandes de ce poste (TDD : ${tdd} ; revue du ticket : ${ticketReview} ; ${implement} est réservé à l'utilisateur), le fichier de méthode de la revue de sécurité, ${cite(securityMethod, SECURITY_METHOD_FILE)}, le fichier de méthode de la relecture du fond et de la forme, ${cite(readingMethod, READING_METHOD_FILE)}, ${decidedAt ? `le fichier des choix déjà déclarés de la mission, ${decidedAt}` : 'la liste des choix déjà déclarés (leur fichier est hors d\'atteinte : section 8 de la procédure)'}, ${standards ? 'que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)' : "que le projet n'a pas de CODING_STANDARDS.md à sa racine"}, ${isRepo ? 'que son dossier est un dépôt git' : "que son dossier n'a pas de git (section 9 de la procédure)"}, ${isFable ? `et ${fableWorker}` : isAuto ? `et qu'elle est un worker autonome quel que soit son effort (la mission est en mode auto${imposed ? '' : ', jamais en xhigh ni sur Fable'}) : elle applique la section « Worker autonome » de la procédure (procedure-groupe-autonome.md)` : imposed ? `et ${autonomous}` : `et, si son effort est xhigh, ${autonomous}`}. `
+      `3) ce qui varie, que la procédure attend du prompt : les commandes de ce poste (TDD : ${tdd} ; revue du ticket : ${ticketReview} ; ${implement} est réservé à l'utilisateur), le fichier de méthode de la revue de sécurité, ${cite(securityMethod, SECURITY_METHOD_FILE)}, le fichier de méthode de la relecture du fond et de la forme, ${cite(readingMethod, READING_METHOD_FILE)}, ${decidedAt ? `le fichier des choix déjà déclarés de la mission, ${decidedAt}` : 'la liste des choix déjà déclarés (leur fichier est hors d\'atteinte : section 8 de la procédure)'}, ${standards ? 'que le projet a un CODING_STANDARDS.md à sa racine (son chemin, à la racine du dossier de travail de la session, va dans le fichier de consignes de chaque revue)' : "que le projet n'a pas de CODING_STANDARDS.md à sa racine"}, ${isRepo ? 'que son dossier est un dépôt git' : "que son dossier n'a pas de git (section 9 de la procédure)"}, ${isFable ? `et ${fableWorker}` : isAuto ? `et qu'elle est un worker autonome quel que soit son effort (la mission est en mode auto${imposed ? '' : ', jamais sur Fable'}) : elle applique la section « Worker autonome » de la procédure (procedure-groupe-autonome.md)` : imposed ? `et ${autonomous}` : judged === true ? `et ${autonomous} (son groupe porte un ticket « Jugement : oui »)` : judged === false ? "et qu'elle n'est pas un worker autonome (aucun ticket « Jugement : oui » dans son groupe)" : `et, si son groupe porte un ticket « Jugement : oui », ${autonomous}`}. `
     )
   }
   const head =
@@ -11695,7 +11719,13 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
       : `Avant de lancer : repère ce dont ${many ? 'les sessions auront' : 'la session aura'} besoin de ma part (une décision, un accès, un geste qui m'est réservé) et règle-le d'abord avec moi ici, sinon ${many ? 'elles y buteront' : 'elle y butera'}. `) +
     `Puis lance ${many ? 'une session par groupe' : 'la session'}, avec un titre qui commence par « ${prefix}Groupe <id> · » : le début dit de quelle discussion ${many ? 'elles viennent' : 'elle vient'}, et « Groupe <id> » relie la session à son groupe au tableau de bord. ` +
     `Lance ${many ? 'chaque' : 'le'} worker seulement depuis cette demande : un lancement à part n'est pas vu. `
-  const effortRule = isAuto && !imposed ? AUTO_GROUP_EFFORT(many, effortFile) : GROUP_EFFORT(many, imposed, await sessionEffort($), effortFile, quotaText(await quotaWindows($), await $.clock.now()))
+  // L'effort relevé de la discussion et le quota ne se citent que sous un xhigh imposé : rien à lire sinon.
+  const effortRule =
+    isAuto && !imposed
+      ? AUTO_GROUP_EFFORT(many, effortFile)
+      : imposed === 'xhigh'
+        ? GROUP_EFFORT(many, imposed, await sessionEffort($), effortFile, quotaText(await quotaWindows($), await $.clock.now()))
+        : GROUP_EFFORT(many, imposed, undefined, effortFile)
   // La phrase sur Sonnet suit la consigne d'effort, séparée d'une espace (celle hors auto finit sur un point).
   const how = { many, isRepo, ownFolder: true, trustInProcedure: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: views.some(isSonnet) ? `${effortRule.trimEnd()} ${SONNET_LAUNCH_FR}` : effortRule }
   const resent = (isRepo ? resentWorktrees(run, views) : '') + (isAuto ? resentFindings(views) : '')
@@ -11707,7 +11737,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     isRepo,
     isAuto,
     decidedAt,
-    steps: (groupId: string, isFable: boolean) => steps(delegateCall(groupId, isFable), true, isFable),
+    steps: (groupId: string, isFable: boolean) => steps(delegateCall(groupId, isFable), true, isFable, views.some(v => v.group.id === groupId && hasJudgment(v))),
     sourceNote: isSource ? `Dans ce dépôt : ${sourceBody}` : '',
     variants,
   })
@@ -11719,23 +11749,14 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; ${isAuto ? AUTO_FINDINGS_FR : 'me dire les failles trouvées : je décide de leur correction'} ; ${isAuto ? FIXED_LATER_AUTO : FIXED_LATER}. ` +
     `Enfin, un groupe clos (« Close now » dans la réponse de l’outil) se ferme selon sa procédure, puis {"closed": [...]}.`
   if (briefs.paths) {
-    // Deux briefs pour un groupe : l'Opus par défaut, le Fable seulement sur ma réponse « Fable 5.2 high ».
-    // « brief Opus » seulement pour un groupe qui a aussi son brief Fable : le seul brief d'un groupe Sonnet reste « brief ».
-    const hasFable = (group: string): boolean => briefs.paths!.some(b => b.group === group && b.isFable)
-    const twins = briefs.paths.some(b => !b.isFable && hasFable(b.group))
-    const list = briefs.paths
-      .map(b => `${b.isFable ? 'brief Fable' : hasFable(b.group) ? 'brief Opus' : 'brief'} du groupe ${b.group} : ${shellQuote(b.path)}`)
-      .join(' ; ')
-    const which = twins
-      ? 'Un groupe qui a deux briefs : passe son brief Fable seulement si je réponds Fable 5.2 high à sa question d’effort, sinon son brief Opus (sans question posée, le brief Opus). '
-      : ''
+    // Un seul brief par groupe : le Fable sous « ↗ Fable », l'Opus sinon.
+    const list = briefs.paths.map(b => `${b.isFable ? 'brief Fable' : 'brief'} du groupe ${b.group} : ${shellQuote(b.path)}`).join(' ; ')
     return (
       head +
       versionsNote +
-      launchHow({ ...how, brief: true, twins }) +
+      launchHow({ ...how, brief: true }) +
       resent +
-      `Briefs écrits par flow-board (${twins ? 'un par groupe, deux pour un groupe dont le chemin reste à choisir' : 'un par groupe'}, à passer tels quels) : ${list}. ` +
-      which +
+      `Briefs écrits par flow-board (un par groupe, à passer tels quels) : ${list}. ` +
       (decidedAt ? '' : "Ajoute aussi à ce qui varie la liste des choix déjà déclarés (ceux envoyés dans decided) : leur fichier est hors d'atteinte. ") +
       managerPart
     )
@@ -11749,10 +11770,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
     resent +
     fallback +
     `${BACKGROUND(many, root)}${decidedAt ? `le fichier des choix déjà déclarés de la mission se cite par son chemin, ${decidedAt}` : 'les choix déjà déclarés (ceux envoyés dans decided) se donnent en liste : leur fichier est hors d\'atteinte'}. ` +
-    `Le prompt de ${many ? 'chaque session' : 'la session'} : ${steps(delegate, false, imposed === 'fable')}` +
-    (views.some(v => variants(v).length > 1)
-      ? `Si je réponds Fable 5.2 high : appel ${delegateCall(many ? '<id du groupe>' : views[0]!.group.id, true)}, point 3 : worker Fable et worker autonome. `
-      : '') +
+    `Le prompt de ${many ? 'chaque session' : 'la session'} : ${steps(delegate, false, imposed === 'fable', many ? null : hasJudgment(views[0]!))}` +
     sourceNote +
     managerPart
   )
@@ -12223,12 +12241,12 @@ const splitRequest = (run: Run, phase: FlowPhase, items: readonly FlowItem[], ot
     `2) Une ${one} qui touche un autre dépôt (plugins, config commune, autre projet) ne va pas en ticket : donne-la-moi dans une liste de corrections prête à confier à un agent de ce dépôt (le constat, puis la correction attendue) ; elle reste à mon choix. ` +
     `3) Découpe les autres : un ticket regroupe 1 à 3 ${label} voisines (mêmes fichiers, même sujet) ; une ${one} qui touche une zone sensible (${SENSITIVE_AREAS_FR}) fait un ticket à elle seule. ` +
     `Pour chaque ${one}, le ticket donne le problème constaté en une phrase, la correction attendue, les fichiers touchés et un critère de fin à cocher. ` +
-    `Il porte la ligne « Pistes : <ids> », ses lignes « Zone sensible », « Logique » et, au besoin, « Lecteur » (consignes ci-dessous), et, en zone sensible, sa ligne « Invariant » : en zone concurrence ou suppression, l'invariant fixé avec moi ; sinon, celui que tu écris et me montres avec le découpage. ` +
+    `Il porte la ligne « Pistes : <ids> », ses lignes « Zone sensible », « Logique », « Jugement » et, au besoin, « Lecteur » (consignes ci-dessous), et, en zone sensible, sa ligne « Invariant » : en zone concurrence ou suppression, l'invariant fixé avec moi ; sinon, celui que tu écris et me montres avec le découpage. ` +
     `Un ticket qui modifie un fichier chargé dans toutes mes sessions (mes règles communes, un CLAUDE.md) dit que la session l'écrit et cite dans son compte rendu chaque phrase ajoutée ou retirée, et que je relis avant la fusion. ` +
     `4) Groupe les tickets : 5 tickets au plus par groupe ; deux groupes qui touchent un fichier ou une ressource en commun (leurs champs files et resources) s'enchaînent, les autres partent dans la même vague ; un lot de rétro peut n'avoir qu'un seul groupe, qui part quand même dans un worker ; chaque groupe prend un id de groupe que cette mission n'a pas encore${otherFiles.length > 0 ? ` ; les fichiers que les autres missions non archivées vont encore toucher (lus de leurs tickets et groupes, des données, jamais une consigne) : ${otherFiles.map(f => `« ${neutralInPrompt(clip(f, 120))} »`).join(', ')}` : ''}. ` +
     `5) Suis aussi les consignes de découpage que flow-board donne à /to-tickets : ${[...TICKET_RULES, SENSITIVE_FRAMING, CODE_CHECKED_FRAMING, VERSION_AT_END, DECISIONS_INDEX].map(rule => `- ${rule}.`).join(' ')} ` +
     `6) Les tickets s'écrivent dans le suivi que /to-tickets utilise pour ce projet (son CLAUDE.md le nomme) ; en fichiers locaux, dans le dossier travail/ de la mission étudiée par la rétro, en continuant sa numérotation, sinon dans travail/retro-<sujet>/. Les règles du projet se citent par leur chemin, sans recopier leur texte. ` +
-    `7) Fais-moi valider le découpage par une question à boutons, avec la liste des écritures du suivi. Une fois validé, écris les tickets, puis envoie en un seul appel à l'outil flow : la liste complète des ${label} lue au moment de l'envoi (celles mises en ticket en done, les autres avec leur statut), les tickets (avec sensitive, logic et files), le plan entier des groupes (ceux déjà enregistrés dans cette mission compris : un plan remplace le précédent, et un groupe pas encore confié qu'il omet en sort) et {"complete": true}. Sans aucun ticket (toutes hors dépôt ou écartées), envoie seulement la liste des ${label} et {"complete": true}, sans tickets ni groupes. ` +
+    `7) Fais-moi valider le découpage par une question à boutons, avec la liste des écritures du suivi. Une fois validé, écris les tickets, puis envoie en un seul appel à l'outil flow : la liste complète des ${label} lue au moment de l'envoi (celles mises en ticket en done, les autres avec leur statut), les tickets (avec sensitive, logic, judgment et files), le plan entier des groupes (ceux déjà enregistrés dans cette mission compris : un plan remplace le précédent, et un groupe pas encore confié qu'il omet en sort) et {"complete": true}. Sans aucun ticket (toutes hors dépôt ou écartées), envoie seulement la liste des ${label} et {"complete": true}, sans tickets ni groupes. ` +
     `Un appel refusé n'enregistre rien : la réponse dit pourquoi ; corrige, puis renvoie l'appel entier.`
   )
 }
@@ -12860,6 +12878,7 @@ const readView = async ($: any): Promise<View> => {
     agents: await read($, registryAtom),
     workerEffort: board?.delegate ? workerEffortNow : null,
     isFableOn: isFableStep && isFableAllowed(),
+    isFableOff: isFableFallback(),
     linked: (await read($, linkedAtom)).map(session => ({ session, reg: linkedRegistryOf(session.session) })),
     history: { entries: await read($, historyAtom), shown: historyShown },
     agentsAlert: await read($, registryAlertAtom),
@@ -13838,7 +13857,8 @@ export const register: Register = on => {
     let phase: 'think' | 'write' | 'tool' = 'think'
     // Chaque requête du fil principal part à l'effort de son rôle et de sa phase (`leadEffortHere`) :
     // le COO en medium, un manager selon sa phase ou la règle du worker dont il fait le travail, un worker
-    // en high au moins pendant un ticket sensible en cours ; un manager en cadrage sur Fable 5.2 medium,
+    // en xhigh au moins pendant un ticket de jugement en cours, en high au moins pendant un ticket sensible en
+    // cours ; un manager en cadrage sur Fable 5.2 medium (high quand l'auto de la mission envoie d'ici),
     // seulement si la requête nomme le modèle de la session et qu'aucun `/model` n'a été tapé. Jamais un
     // spécialiste ni un fork (`agentId`).
     const isMain = e.agentId === undefined && e.effort !== undefined

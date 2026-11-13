@@ -5,15 +5,17 @@
   "model": "opus",
   "modelSettings": {
     "claude-opus-5-5": {
-      "effortLevel": "high"
+      "effortLevel": "high",
+      "autoCompactWindow": 600000
     },
     "claude-haiku-5-5": {
-      "effortLevel": "xhigh"
+      "effortLevel": "high"
     },
     "claude-sonnet-5-5": {
       "effortLevel": "high"
     }
   },
+  "advisorModel": "fable",
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/plugins/marketplaces/mathis-plugins/config/statusline.sh"

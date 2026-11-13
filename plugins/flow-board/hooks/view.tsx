@@ -189,10 +189,12 @@ export type View = {
   relay?: Relay | null
   /** Le registre des spécialistes de cette session (onglet Agents). */
   agents?: SessionRegistry | null
-  /** Dans un worker : la règle d'effort que le mod a appliquée à sa dernière requête (un ticket sensible en cours), null sinon. */
+  /** Dans un worker : la règle d'effort que le mod a appliquée à sa dernière requête (un ticket sensible ou de jugement en cours), null sinon. */
   workerEffort?: LeadEffort | null
   /** Le mod peut imposer Fable 5.2 au fil principal (aucun `/model` tapé, Fable pas éteint) ; absent : non. */
   isFableOn?: boolean
+  /** Fable éteint par le repli « Fable indisponible », sans `/model` tapé ; absent : non. */
+  isFableOff?: boolean
   /** Le suivi en défaut (S11, R2) : `true`, une écriture du registre refusée ; `'lost'`, un changement perdu. */
   agentsAlert?: boolean | 'lost'
   /** Le réglage « revue de sécurité » du projet, relu à ce rendu ; absent ou `unread` : montré « activée ». Jamais lu par une décision. */
@@ -1283,7 +1285,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
       {plan.delegated.length > 0 &&
         T(k, `↗${NB}${plan.delegated.join(', ')} dans un worker : son avancement (tickets d'après Asana, commits, tests) s'affiche sur le groupe, marqué ↗. Claude vérifie le travail à sa note de fin, puis rend les statuts ici.`, { dim: true, wrap: 'wrap' })}
       {isNewHere &&
-        T(k, `↗${NB}« Worker » : Claude lance une session qui fait le groupe, et la mission reste ici. « ↗ xhigh » : la même session, lancée en xhigh, sans question sur l'effort, pour un groupe qui demande du jugement (sécurité, document, design). « ↗ Fable » : un worker Fable, sur Fable 5.2 high, sans question, pour un jugement de code.`, { dim: true, wrap: 'wrap' })}
+        T(k, `↗${NB}« Worker » : Claude lance une session qui fait le groupe, à l'effort calculé, et la mission reste ici ; son mod la passe en xhigh le temps d'un ticket « Jugement : oui ». « ↗ xhigh » : la même session, lancée en xhigh, sans question sur l'effort, pour tout le groupe. « ↗ Fable » : un worker Fable, sur Fable 5.2 high, sans question : le seul chemin vers Fable.`, { dim: true, wrap: 'wrap' })}
     </Box>
   )
 }
@@ -2935,7 +2937,7 @@ const AUTO_BLOCKS: readonly string[] = [
   'fixer ou affaiblir un invariant, ou un changement qui contredit une décision déjà prise ;',
   'une suppression sans retour ou une exposition de tes données hors du poste (une publication) ;',
   'laisser une faille de sécurité sans correctif ;',
-  'l’effort xhigh d’un worker ;',
+  'le chemin Fable d’un worker (Claude ne le prend jamais seul : il le suggère seulement pour un bug qu’Opus n’a pas résolu ; xhigh vient de la ligne « Jugement » d’un ticket, déclarée) ;',
   'une dépense ou une action externe hors de la mission (dépendance lourde, service tiers).',
 ]
 
@@ -3383,7 +3385,7 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
   // La discussion du COO ne reprend pas de mission : pas de proposition de reprise.
   const latest = view.board && !delegated && !isCoo && !isCooAway ? [...resumable(view.board)].sort((x, y) => y.updatedAt - x.updatedAt)[0] : undefined
   const def = latest ? SKILLS[latest.entry] : undefined
-  // Dans un worker : l'effort que le mod impose pendant un ticket sensible en cours, quand il change celui de la session.
+  // Dans un worker : l'effort que le mod impose pendant un ticket sensible ou de jugement en cours, quand il change celui de la session.
   const effortPill = delegated !== undefined && view.workerEffort ? leadEffortPill(view.workerEffort, view.agents?.main?.effort) : null
   if (isCoo || isCooAway) {
     return (
@@ -3491,8 +3493,10 @@ const bandPills = (run: Run, view: View): BandPill[] => {
   const t = countTickets(run.tickets)
   const running = agentsAtWork(view)
   const unseen = unseenDecisions(run, view.relay)
-  // L'effort (et le modèle, en cadrage) que le mod impose à chaque requête du manager, et sa raison (règle des workers, suivi des groupes, phase), quand il joue.
-  const effort = leadEffort(run, view.isFableOn === true)
+  // L'effort (et le modèle, en cadrage) que le mod impose à chaque requête du manager, et sa raison (règle des workers, suivi des groupes, phase,
+  // cadrage en auto), quand il joue ; l'état de l'auto relu à chaque dessin, comme pour sa pastille.
+  const isAutoHere = view.board ? autoStateOf(run, view.board, view.here ?? view.board.session ?? '', view.autoConfirmedAt).kind === 'on' : false
+  const effort = leadEffort(run, view.isFableOn === true, { isAutoHere, isFableOff: view.isFableOff === true })
   const pill = effort ? leadEffortPill(effort, view.agents?.main?.effort) : null
   return [
     ...(pill ? [{ text: pill.replace(/ /g, NB), color: C.blue }] : []),

@@ -1,6 +1,6 @@
 # Procédure d'un worker de groupe : fin du groupe (sections 4 à 6)
 
-Annexe du noyau `procedure-groupe.md` (dans le dossier de ce fichier), à lire quand le dernier ticket du groupe est commité et relu : revue du groupe, revue de sécurité, compte rendu. Les numéros de section sont ceux de la procédure entière : les sections 1, 2, 3, 7 et 8 sont dans le noyau (deux cas de la section 3 dans `procedure-groupe-cas.md`), la 9 dans `procedure-groupe-sans-git.md`, la 10 dans `procedure-groupe-autonome.md`, la 11 dans `effort-workers.md`. « Je », « me » et « moi » désignent la personne qui porte la mission, comme dans le noyau.
+Annexe du noyau `procedure-groupe.md` (dans le dossier de ce fichier), à lire quand le dernier ticket du groupe est commité et relu : revue du groupe, revue de sécurité, compte rendu. Les numéros de section sont ceux de la procédure entière : les sections 1, 2, 3, 7 et 8 sont dans le noyau (trois cas de la section 3 dans `procedure-groupe-cas.md`), la 9 dans `procedure-groupe-sans-git.md`, la 10 dans `procedure-groupe-autonome.md`, la 11 dans `effort-workers.md`. « Je », « me » et « moi » désignent la personne qui porte la mission, comme dans le noyau.
 
 ## 4. Revue du groupe
 

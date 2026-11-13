@@ -459,8 +459,18 @@ test('du code écrit après la passe « bogues » repasse en revue, la ligne « 
 
 test('décisions lues par leur entrée, réglages du poste relevés à un essai, confiance du dossier lue sans afficher le fichier', () => {
   has(section(2), 'un fichier de décisions long se lit par la série ou l\'entrée que citent le ticket ou le prompt')
-  // Les deux cas rares de la section 3 (session hors Opus, essai) sont dans une annexe, que le noyau nomme.
-  has(section(3), 'Deux cas se lisent dans `procedure-groupe-cas.md` (dossier de ce fichier), seulement quand ils se présentent')
+  // Les trois cas rares de la section 3 (session hors Opus, essai, ticket qui bute) sont dans une annexe, que le noyau nomme.
+  has(section(3), 'Trois cas se lisent dans `procedure-groupe-cas.md` (dossier de ce fichier), seulement quand ils se présentent', 'un ticket qui bute (deux approches ratées, même erreur)')
+  // Le ticket qui bute : la définition d'un essai, l'advisor avant la troisième approche, la mise de côté.
+  has(
+    files['procedure-groupe-cas.md'],
+    'un essai est une approche de correction, pas un lancement de tests',
+    'consulter l\'advisor (moment (b) de la règle « Consulter l\'advisor ») et tenter une troisième approche qui suit son avis',
+    'sous un titre « Essais », les trois approches et ce que chacune a donné',
+    'avec pour raison « bute après trois approches »',
+    'continuer les tickets du groupe qui n\'en dépendent pas, sans reprendre celui-là',
+    'précise la règle générale « Replanifier après un échec »',
+  )
   has(
     files['procedure-groupe-cas.md'],
     'relève d\'abord les réglages du poste qui jouent (`worktree.baseRef`, la version de Claude Code, la confiance du dossier)',
@@ -501,6 +511,13 @@ test('worker autonome : l’advisor à deux moments nommés, avant le premier ch
     'avant le premier choix de conception qu\'elle déclare dans un ticket, et avant son compte rendu sauf quand les revues du groupe ont tourné (section 6)',
   )
   assert.ok(!section(10).includes('Avant chaque grand choix'), 'la section 10 garde le moment flou « avant chaque grand choix »')
+  // En mode auto, un moment de plus : avant de coder chaque décision prise seule, une fois par décision ; hors auto, rien ne change.
+  has(
+    section(10),
+    'Dans une mission en mode auto, elle le consulte en plus avant de coder chaque décision qu\'elle prend seule (un changement de conception, une question en zone sensible tranchée seule), une fois par décision',
+    'hors auto, les deux moments ci-dessus restent tels quels',
+    'un worker Fable ne le consulte toujours pas',
+  )
 })
 
 test('une deuxième question née des correctifs sur un même invariant propose une option qui traite la classe entière', () => {

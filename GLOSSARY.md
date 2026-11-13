@@ -229,7 +229,7 @@ Ce qu'un worker transmet à son manager pendant qu'il tourne : avancement, revue
 _Avoid_: retour, remontée
 
 **Tâche de jugement** :
-Une tâche dont la difficulté est de comprendre ou de définir, pas de produire le changement. Deux sortes : le *jugement sur un existant* (intervenir dans ce qui marche déjà, en tenant compte de ses contraintes implicites : ce dont d'autres dépendent, ce qui ne doit pas bouger, ce que la demande ne dit pas) et l'*objectif ouvert* (le but est donné sans le chemin, et le résultat ne se vérifie pas tout de suite).
+Une tâche dont la difficulté est de comprendre ou de définir, pas de produire le changement. Deux sortes : le *jugement sur un existant* (intervenir dans ce qui marche déjà, en tenant compte de ses contraintes implicites : ce dont d'autres dépendent, ce qui ne doit pas bouger, ce que la demande ne dit pas) et l'*objectif ouvert* (le but est donné sans le chemin, et le résultat ne se vérifie pas tout de suite). Dans une mission flow-board, le ticket le dit sur sa ligne « Jugement : oui (…) », écrite au découpage, et la session qui le fait le traite en Opus xhigh le temps du ticket, imposé par son mod.
 _Avoid_: tâche difficile, tâche large
 
 **Tâche d'exécution** :
@@ -237,11 +237,11 @@ Une tâche à la consigne explicite, dont le résultat se vérifie tout de suite
 _Avoid_: tâche simple
 
 **Worker autonome** :
-Un worker de groupe qui tranche lui-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur : celui lancé pour une tâche de jugement, sur Opus xhigh (sécurité, document lu par d'autres, design) ou en worker Fable (jugement de code), et, quel que soit son effort, celui d'une mission en mode auto, qui tranche aussi un choix en zone sensible quand la recommandation respecte l'invariant déjà validé (quand il y en a un) et qu'elle est la plus prudente.
+Un worker de groupe qui tranche lui-même ses choix de conception hors zone sensible et les déclare, au lieu d'attendre la réponse de l'utilisateur : celui dont le groupe porte un ticket de jugement (« Jugement : oui »), celui d'un groupe forcé par « ↗ xhigh » ou « ↗ Fable », et, quel que soit son effort, celui d'une mission en mode auto, qui tranche aussi un choix en zone sensible quand la recommandation respecte l'invariant déjà validé (quand il y en a un) et qu'elle est la plus prudente.
 _Avoid_: session autonome, mode xhigh, session xhigh
 
 **Worker Fable** :
-Un worker de groupe dont le fil principal tourne sur Fable 5.2 high par son mod, d'après la marque `"model": "fable"` que son brief lui fait poser dans sa délégation ; lancé pour un jugement de code, sur la réponse « Fable 5.2 high » à la question d'effort ou par le bouton « ↗ Fable », il part sur Opus, est un worker autonome, et confie toutes ses revues à un relecteur Opus.
+Un worker de groupe dont le fil principal tourne sur Fable 5.2 high par son mod, d'après la marque `"model": "fable"` que son brief lui fait poser dans sa délégation ; lancé par le seul bouton « ↗ Fable » de l'utilisateur, jamais choisi ni proposé par Claude, sauf la relance suggérée pour un bug qu'Opus n'a pas résolu, il part sur Opus, est un worker autonome, et confie toutes ses revues à un relecteur Opus.
 _Avoid_: session Fable, worker sur Fable
 
 **Relecture du fond et de la forme** :

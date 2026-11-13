@@ -765,6 +765,9 @@ export const TOOL_SHAPE: unknown = {
           "id": {
             "type": "string"
           },
+          "judgment": {
+            "type": "boolean"
+          },
           "logic": {
             "type": "boolean"
           },

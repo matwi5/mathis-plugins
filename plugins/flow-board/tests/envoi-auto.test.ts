@@ -1203,7 +1203,7 @@ test('une coupure du COO datée pendant la pause coupe encore l’auto qui en a 
   expect(isCutDue(run(resumed), 'coupé par le COO', T0 + 500)).toBe(false)
 })
 
-test('Le repli « Fable indisponible » en cadrage, mode auto allumé : la pause « quota atteint » joue comme avant, et le cadrage repart sur Opus en high au moins', { timeoutMs: 30000 }, async ($, on) => {
+test('Le repli « Fable indisponible » en cadrage, mode auto allumé : la pause « quota atteint » joue comme avant, et le cadrage, l’auto en pause, repart sur Opus en high au moins', { timeoutMs: 30000 }, async ($, on) => {
   const steps: { model: string; effort?: string }[] = []
   const answer = stoppedStep(stepUsage('claude-opus-5-5'))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -1212,7 +1212,7 @@ test('Le repli « Fable indisponible » en cadrage, mode auto allumé : la pause
     return yield* answer(_$, e)
   })
   const { clock, ...w } = await specDone($, on, { isDone: false })
-  // La spec en cours : la requête part sur Fable, en medium.
+  // La spec en cours, l'auto envoyant d'ici : la requête part sur Fable, en high.
   await $.turn.start({ text: 'x', turnId: 't9' })
   await playStep($, { model: 'claude-opus-5-5', effort: 'medium', turnId: 't9' })
   await ($ as any).classic.StopFailure({ session_id: 'sa', transcript_path: '/t', cwd: '', hook_event_name: 'StopFailure', error: 'rate_limit' })
@@ -1222,9 +1222,144 @@ test('Le repli « Fable indisponible » en cadrage, mode auto allumé : la pause
   await settle(clock, 1)
   await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
   expect(steps).toEqual([
-    { model: 'fable', effort: 'medium' },
+    { model: 'fable', effort: 'high' },
     { model: 'claude-opus-5-5', effort: 'high' },
   ])
   // Un cadrage n'est jamais relancé : aucun message de reprise.
   expect(w.prompts.filter(p => p.text.startsWith('Fable indisponible'))).toEqual([])
+})
+
+// ─── Le cadrage en auto : Fable 5.2 high quand l'auto de la mission envoie d'ici ──────────────────
+//
+// Pendant la fenêtre du cadrage, chaque requête de la discussion part sur Fable 5.2 en high exact quand l'auto
+// de la mission envoie d'ici (l'état qui met le bloc « mode auto » dans sa consigne), en medium exact sinon ;
+// Fable éteint par le repli, un cadrage dont l'auto envoie d'ici part en Opus xhigh au moins.
+
+/** Les requêtes que le mod envoie (modèle, effort), la session sur Opus. */
+const sentSteps = (on: any) => {
+  const steps: { model: string; effort?: string }[] = []
+  const answer = stoppedStep(stepUsage('claude-opus-5-5'))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('turn.step', async function* (_$: unknown, e: any) {
+    steps.push({ model: e.model, effort: e.effort })
+    return yield* answer(_$, e)
+  })
+  return steps
+}
+const opusStep = ($: any, turnId?: string) => playStep($, { model: 'claude-opus-5-5', effort: 'medium', ...(turnId ? { turnId } : {}) })
+
+/** Pose un état de l'auto dans le fichier de la mission, comme une autre discussion l'aurait écrit. */
+const forgeAuto = async ($: any, w: World & { clock: { advance: (ms: number) => Promise<void> } }, auto: unknown) => {
+  const forged = w.stored()!
+  ;(forged.runs[0] as any).auto = auto
+  forged.runs[0]!.updatedAt = T0 + 5_000
+  seed(w, forged)
+  await settle(w.clock, 5)
+}
+
+const FRAMING_STATES: [string, ($: any, on: any) => Promise<unknown>][] = [
+  ['absent', ($, on) => specDone($, on, { isAuto: false, isDone: false })],
+  ['éteint', async ($, on) => {
+    const w = await specDone($, on, { isDone: false })
+    await press($, 'auto-off')
+    await settle(w.clock, 1)
+  }],
+  ['en pause (plus rien ne peut avancer sans toi)', ($, on) => stuckOn($, on)],
+  ['en pause (quota atteint), Fable permis', async ($, on) => {
+    const w = await specDone($, on, { isAuto: false, isDone: false })
+    await forgeAuto($, w, { onAt: T0 + 1_000, onBy: 'sa', offAt: T0 + 2_000, offWhy: 'quota atteint' })
+    expect(await bandText($)).toMatch(/⚡\sAuto\sen\spause\s:\squota\satteint/)
+  }],
+  ['allumé pour une autre discussion', async ($, on) => {
+    const w = await specDone($, on, { isAuto: false, isDone: false })
+    await forgeAuto($, w, { onAt: T0 + 5_000, onBy: 'sz' })
+  }],
+  ['abîmé (« allumé à » illisible)', async ($, on) => {
+    const w = await specDone($, on, { isAuto: false, isDone: false })
+    await forgeAuto($, w, { onAt: 'hier', onBy: 'sa' })
+  }],
+  ['allumé ici sans clic gardé (illisible ici)', async ($, on) => {
+    const w = await specDone($, on, { isAuto: false, isDone: false })
+    await forgeAuto($, w, { onAt: T0 + 5_000, onBy: 'sa' })
+  }],
+]
+
+for (const [label, setup] of FRAMING_STATES) {
+  test(`Cadrage, auto ${label} : la requête part sur Fable 5.2 en medium exact`, { timeoutMs: 40000 }, async ($, on) => {
+    const steps = sentSteps(on)
+    await setup($, on)
+    await opusStep($)
+    expect(steps).toEqual([{ model: 'fable', effort: 'medium' }])
+    expect(await bandText($)).toMatch(/modèle\s:\sFable\s5\.2\smedium,\scadrage(?!\sen\sauto)/)
+  })
+}
+
+test('Cadrage, auto allumé qui envoie d’ici : la requête part sur Fable 5.2 en high exact, et le bandeau le dit', { timeoutMs: 40000 }, async ($, on) => {
+  const steps = sentSteps(on)
+  await specDone($, on, { isDone: false })
+  await playStep($, { model: 'claude-opus-5-5', effort: 'xhigh' })
+  await opusStep($)
+  expect(steps).toEqual([{ model: 'fable', effort: 'high' }, { model: 'fable', effort: 'high' }])
+  expect(await bandText($)).toMatch(/modèle\s:\sFable\s5\.2\shigh,\scadrage\sen\sauto/)
+})
+
+test('L’auto allumé en cours de cadrage fait passer les requêtes suivantes en high ; sa pause les ramène en medium, et le bandeau suit à chaque dessin', { timeoutMs: 40000 }, async ($, on) => {
+  const steps = sentSteps(on)
+  const w = await specDone($, on, { isAuto: false, isDone: false })
+  await opusStep($)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(w.clock, 1)
+  await turnEnd($, w.clock, 'consigne')
+  await opusStep($)
+  expect(await bandText($)).toMatch(/modèle\s:\sFable\s5\.2\shigh,\scadrage\sen\sauto/)
+  // /clear : la discussion change d'id, l'auto est en pause « discussion changée ».
+  await $.session.end({ reason: 'clear' } as any)
+  w.ids.now = 'sa-apres-clear'
+  await settle(w.clock, 1)
+  // Le bandeau se redessine sans requête entre-temps : la valeur d'avant n'y reste pas.
+  expect(await bandText($)).not.toMatch(/cadrage\sen\sauto/)
+  await opusStep($)
+  expect(steps).toEqual([
+    { model: 'fable', effort: 'medium' },
+    { model: 'fable', effort: 'high' },
+    { model: 'fable', effort: 'medium' },
+  ])
+})
+
+test('Le repli « Fable indisponible » d’un cadrage dont l’auto, rallumé, envoie d’ici : Opus xhigh au moins', { timeoutMs: 40000 }, async ($, on) => {
+  const steps = sentSteps(on)
+  const w = await specDone($, on, { isDone: false })
+  await $.turn.start({ text: 'x', turnId: 't9' })
+  await opusStep($, 't9')
+  await ($ as any).classic.StopFailure({ session_id: 'sa', transcript_path: '/t', cwd: '', hook_event_name: 'StopFailure', error: 'rate_limit' })
+  await settle(w.clock, 1)
+  await $.turn.complete({ answer: '', durationMs: 10, isAborted: false, turnId: 't9', reason: 'error' })
+  await settle(w.clock, 1)
+  // La pause « quota atteint » : sans l'auto, high au moins, comme avant.
+  await opusStep($)
+  // Deux clics le rallument : le cadrage repart sur Opus en xhigh au moins.
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  await settle(w.clock, 1)
+  await turnEnd($, w.clock, 'consigne')
+  await opusStep($)
+  await playStep($, { model: 'claude-opus-5-5', effort: 'max' })
+  expect(steps).toEqual([
+    { model: 'fable', effort: 'high' },
+    { model: 'claude-opus-5-5', effort: 'high' },
+    { model: 'claude-opus-5-5', effort: 'xhigh' },
+    { model: 'claude-opus-5-5', effort: 'max' },
+  ])
+  expect(await bandText($)).not.toMatch(/Fable\s5\.2/)
+})
+
+test('Un /model tapé pendant un cadrage en auto garde son effet : high au moins sur le modèle choisi, sans réécriture du modèle', { timeoutMs: 40000 }, async ($, on) => {
+  const steps = sentSteps(on)
+  on('classic.PostModelSwitch', () => ({}))
+  await specDone($, on, { isDone: false })
+  await ($ as any).classic.PostModelSwitch({ session_id: 'sa', transcript_path: '/t', cwd: '', hook_event_name: 'PostModelSwitch', from_model: 'claude-opus-5-5', to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'command', context_tokens: 0 })
+  await opusStep($)
+  expect(steps).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }])
+  expect(await bandText($)).toMatch(/effort\s:\shigh,\scadrage(?!\sen\sauto)/)
 })

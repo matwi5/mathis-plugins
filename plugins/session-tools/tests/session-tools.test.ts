@@ -382,7 +382,7 @@ describe("session-tools", () => {
     expect(calls.toasts).toEqual(["Effort demandé : low"]);
   });
 
-  // Plafonds de la règle « Jamais d'effort max, jamais Haiku au-dessus de high » : `model` est le
+  // Plafonds de la règle « Jamais d'effort max, Haiku en xhigh pour l'explorateur seulement » : `model` est le
   // modèle de la session (absent : aucune réponse du moteur, `"échec"` : la lecture lève).
   const cappedEffort = async ($: any, on: any, reply: string, model?: string) => {
     mock.clock(on, { now: 1_000_000 });

@@ -4,7 +4,7 @@ description: Lit et cartographie le code ou les fichiers d'un projet sans rien m
 tools: Read, Grep, Glob, Bash
 disallowedTools: advisor
 model: haiku
-effort: high
+effort: xhigh
 omitClaudeMd: true
 ---
 

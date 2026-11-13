@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
 import { linkSession, pickableItems } from '../hooks/link.ts'
-import { activeRun, currentPhase } from '../hooks/basics.ts'
+import { activeRun, currentPhase, isJudgmentTicket } from '../hooks/basics.ts'
 import { GROUP_ID_FORM, isGroupId } from '../hooks/closing.ts'
 import { TOOL_SCHEMA } from '../hooks/register.tsx'
 import type { Board } from '../types'
@@ -125,6 +125,9 @@ test('le bouton des pistes met la demande de découpage dans le prompt, n’enre
   expect(text).toMatch(/le problème constaté en une phrase, la correction attendue, les fichiers touchés et un critère de fin à cocher/)
   expect(text).toContain('« Pistes : <ids> »')
   expect(text).toMatch(/« Zone sensible », « Logique »/)
+  // La ligne « Jugement » et son drapeau, comme au découpage d'une mission.
+  expect(text).toContain('« Zone sensible », « Logique », « Jugement » et, au besoin, « Lecteur »')
+  expect(text).toContain('les tickets (avec sensitive, logic, judgment et files)')
   expect(text).toMatch(/l'invariant fixé avec moi/)
   // Tout ticket sensible porte sa ligne « Invariant » ; hors concurrence et suppression, la session l'écrit.
   expect(text).toContain("en zone sensible, sa ligne « Invariant » : en zone concurrence ou suppression, l'invariant fixé avec moi ; sinon, celui que tu écris et me montres avec le découpage")
@@ -269,13 +272,15 @@ test('l’appel du découpage ne touche pas un lien existant : fermé, il garde 
     {
       step: 'split',
       items: [{ ...PISTES[0], status: 'done' }, { ...PISTES[1], status: 'done' }, { ...PISTES[2], status: 'done' }],
-      tickets: [{ id: '07', name: 'Accès et outils', sensitive: false, logic: true }],
+      tickets: [{ id: '07', name: 'Accès et outils', sensitive: false, logic: true, judgment: true }],
       groups: [{ id: 'A', name: 'Accès', tickets: ['07'] }],
       complete: true,
     },
     4_000,
   )
   expect(activeRun(out.board)!.tickets.map(t => t.id)).toEqual(['07'])
+  // Le drapeau « Jugement » que la demande fait envoyer est gardé avec le ticket.
+  expect(isJudgmentTicket(activeRun(out.board)!.tickets[0])).toBe(true)
   const phase = activeRun(out.board)!.phases[0]!
   expect(phase.linked).toEqual(link)
   expect(phase.linkedSends).toBe(1)

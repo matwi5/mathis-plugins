@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.25.0 — 2026-11-13
+
+### Modifié
+- **README** : le renvoi à la règle des spécialistes suit son titre renommé. Comportement inchangé.
+
+---
+
 ## 0.24.1 — 2026-11-07
 
 ### Corrigé

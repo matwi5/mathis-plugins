@@ -195,6 +195,13 @@ export const TRUST_COMMAND = `python3 -c 'import json, os, sys; p = json.load(op
 export const SENSITIVE_AREAS = "privacy, data deletion, encryption, concurrency, a command or path built from a value read elsewhere: a shared file, another session, a report"
 
 /**
+ * La description du drapeau `judgment` d'un ticket dans le schéma de l'outil flow : il porte la ligne « Jugement »
+ * du ticket, écrite au découpage (`TICKET_FLAGS` de register.tsx, qui dit le reste). Courte : la description de
+ * l'outil et de ses clés a un plafond (`outil-flow-textes.test.ts`).
+ */
+export const JUDGMENT_FIELD = 'Line « Jugement »: true for « oui »'
+
+/**
  * Les cas du cycle de vie d'un champ persisté, à poser au cadrage d'un changement sensible (lu par
  * Claude) : une mission avait posé ces questions, prévisibles, ticket par ticket pendant
  * l'implémentation (lecture ratée, bornes, marque perdue à une annulation). Les skills /to-spec et

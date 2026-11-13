@@ -146,7 +146,7 @@ test('les textes envoyés à Claude ne citent plus « ▶ Lancer » pour le grou
   expect(answer).not.toMatch(/▶ Lancer/)
 })
 
-test('« ↗ Worker » : la règle d’effort propose xhigh pour une tâche de jugement, sans jamais le choisir seule', async ($, on) => {
+test('« ↗ Worker » : l’effort calculé, sans question d’effort ; xhigh vient de la ligne « Jugement » d’un ticket, Fable du seul bouton', async ($, on) => {
   mock.clock(on, { now: 75_000_000 })
   memoryDisk(on)
   mock.store(on)
@@ -159,21 +159,21 @@ test('« ↗ Worker » : la règle d’effort propose xhigh pour une tâche de j
   // medium et high : l'effort calculé par le mod, sur la ligne du groupe.
   expect(text).toContain('Effort de la session (<effort>) : l’effort calculé sur la ligne du groupe')
   expect(text).toContain("Dis-moi en une ligne l'effort pris et, s'il s'écarte du calcul, pourquoi.")
-  // La suggestion : une tâche de jugement, jamais une tâche d'exécution ; ses signes et exemples sont
-  // à la section 11 de la procédure (son annexe pour le manager), que la demande fait lire avant de lancer.
-  expect(text).toContain('tâche de jugement')
-  expect(text).toContain("jamais pour une tâche d'exécution")
+  // La tâche de jugement et la tâche d'exécution : leurs critères sont à la section 11 de la procédure (son
+  // annexe pour le manager), que la demande fait lire avant de lancer ; le xhigh d'un ticket « Jugement : oui »
+  // vient du mod de la session, le temps du ticket.
+  expect(text).toContain("Critères du calcul, de la tâche de jugement et de la tâche d'exécution")
   expect(text).toMatch(/section 11 de \S*reference\/effort-workers\.md, à lire avant de lancer/)
-  // Deux questions à boutons selon la sorte de jugement, jamais Fable ni xhigh choisi seul.
-  expect(text).toContain('« Fable 5.2 high (Recommandé) / Opus high » pour un jugement de code')
-  expect(text).toContain('« Opus xhigh (Recommandé) / Opus high » pour un jugement sur la sécurité, un document lu par d\'autres ou du design')
-  expect(text).toContain('Tu ne choisis jamais toi-même ni Fable ni xhigh')
-  // Si xhigh est retenu : worker autonome, plafond de l'app, rappel de redescendre.
-  expect(text).toMatch(/et, si son effort est xhigh, qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\. /)
-  // Si Fable est retenu : le prompt rédigé (pas de brief écrit ici) ajoute la marque et le dit worker Fable.
-  expect(text).toMatch(/Si je réponds Fable 5\.2 high : appel \{"delegate": "[^"]+", "group": "B", "main": "\[<ref>\]", "model": "fable"\}/)
-  expect(text).toContain('start_session ne donne jamais à une session un effort plus haut que celui de cette discussion')
-  expect(text).toContain("que je peux redescendre l'effort de cette discussion")
+  expect(text).toContain('pendant un ticket « Jugement : oui », en xhigh : ne relève pas son effort pour ces tickets')
+  // Plus aucune question d'effort ; Fable, du seul bouton.
+  expect(text).toContain("Ne me pose aucune question sur l'effort.")
+  expect(text).not.toContain('(Recommandé)')
+  expect(text).toContain('Tu ne prends jamais Fable seul : seul mon bouton « ↗ Fable » le donne, et tu ne le suggères que pour relancer un ticket qui bute après trois approches (section 11, « Ticket qui bute »).')
+  expect(text).not.toContain('"model": "fable"')
+  expect(text).not.toContain('Si je réponds')
+  // Sans ticket de jugement dans le groupe, pas de worker autonome, ni de plafond de l'app à lever.
+  expect(text).toContain("et qu'elle n'est pas un worker autonome (aucun ticket « Jugement : oui » dans son groupe)")
+  expect(text).not.toContain('start_session ne donne jamais à une session un effort plus haut que celui de cette discussion')
   // Le lancement passe toujours l'effort choisi.
   expect(text).toContain('effort "<effort>"')
   expect(text).toContain('--effort <effort>')
@@ -223,7 +223,9 @@ test('« ↗ xhigh » suit « ↗ Worker » sur chaque groupe prêt, jamais sur 
     for (const id of ['A', 'B']) expect(await ui.find({ key: `next-xhigh-${id}` })).toBeUndefined()
     for (const id of ['A', 'B']) expect(await ui.find({ key: `next-fable-${id}` })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /« ↗ xhigh » : la même session, lancée en xhigh/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /« ↗ Fable » : un worker Fable, sur Fable 5\.2 high, sans question, pour un jugement de code/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /« ↗ Fable » : un worker Fable, sur Fable 5\.2 high, sans question : le seul chemin vers Fable/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /son mod la passe en xhigh le temps d'un ticket « Jugement : oui »/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /pour un jugement de code|pour un groupe qui demande du jugement/ })).toBeUndefined()
     await ui.unmount()
   }
 })
@@ -270,7 +272,7 @@ test('l’appui sur « ↗ xhigh » : xhigh imposé sans suggestion, worker auto
   const text = filled.at(-1)!
   expect(text).toMatch(/^Confie ce groupe à un worker, pour la mission « Lot » : Groupe B \(App\)/)
   expect(text).toContain("Effort de la session (<effort>) : xhigh, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort.")
-  expect(text).not.toContain('Tu ne choisis jamais toi-même ni Fable ni xhigh')
+  expect(text).not.toContain('Tu ne prends jamais Fable seul')
   expect(text).not.toContain('"model": "fable"')
   expect(text).not.toContain('medium par défaut')
   expect(text).toMatch(/et qu'elle est un worker autonome : elle applique la section « Worker autonome » de la procédure \(procedure-groupe-autonome\.md\)\. Ici : /)

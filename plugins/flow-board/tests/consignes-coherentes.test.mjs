@@ -133,7 +133,7 @@ const CONSIGNES = [
   },
   {
     name: "l'effort d'une session de groupe",
-    keywords: ['medium par défaut', 'Fable 5.2 high (Recommandé) / Opus high', 'Opus xhigh (Recommandé) / Opus high', 'tâche de jugement', "tâche d'exécution", 'worker autonome'],
+    keywords: ['medium par défaut', 'tâche de jugement', "tâche d'exécution", 'worker autonome', 'xhigh pendant un ticket de jugement'],
     // Le brief d'un worker la tient de hooks/effort.ts ; la règle des lots la renvoie à la section 11 de la procédure,
     // qui s'adresse au manager : elle n'est plus chargée dans chaque session.
     surfaces: ['reference/effort-workers.md', 'README.md', 'hooks/effort.ts'],
@@ -278,8 +278,9 @@ const CONSIGNES = [
     // Les six catégories qui restent à la personne en auto, le choix d'expérience défini là où la liste le nomme :
     // la règle des lots, le premier clic sur « ⚡ Auto » (view.tsx), le README, la procédure d'un worker autonome.
     name: 'les six catégories qui bloquent en mode auto',
-    keywords: ['expérience', 'mise en page, maquette, libellés, boutons, notifications', 'se valent techniquement et ne diffèrent que par', 'affaiblir un invariant', 'contredit une décision déjà prise', 'suppression sans retour', 'hors du poste', 'faille de sécurité sans correctif', 'effort xhigh', 'action externe hors de la mission'],
+    keywords: ['expérience', 'mise en page, maquette, libellés, boutons, notifications', 'se valent techniquement et ne diffèrent que par', 'affaiblir un invariant', 'contredit une décision déjà prise', 'suppression sans retour', 'hors du poste', 'faille de sécurité sans correctif', 'chemin Fable', 'ne le prend jamais seul', 'le suggère seulement pour un bug', 'ligne « Jugement »', 'action externe hors de la mission'],
     surfaces: ['config/rules/flow-board.md', 'README.md', 'hooks/view.tsx', 'reference/procedure-groupe-autonome.md'],
+    old: ["l'effort xhigh d'un worker", 'l’effort xhigh d’un worker'],
   },
   {
     // Une question en zone sensible se tranche seule en auto, à une condition : les mêmes surfaces.
@@ -402,9 +403,9 @@ const CONSIGNES = [
     surfaces: ['hooks/register.tsx', 'skills/coo/SKILL.md'],
   },
   {
-    // Le worker autonome et l'effort en mode auto : à tout effort, ni Fable ni xhigh proposés ; les groupes suivants lancés par le mod.
+    // Le worker autonome et l'effort en mode auto : à tout effort, jamais Fable, xhigh par la ligne « Jugement » ; les groupes suivants lancés par le mod.
     name: 'le worker autonome et l’effort en mode auto',
-    keywords: ['quel que soit son effort', 'ne propose jamais ni Fable ni xhigh', 'le mod lance lui-même les groupes suivants', 'jamais par une question à boutons'],
+    keywords: ['quel que soit son effort', 'Claude ne le prend jamais seul : il le suggère seulement pour un bug', 'xhigh se prend par la ligne « Jugement » du ticket', 'le mod lance lui-même les groupes suivants', 'jamais par une question à boutons'],
     surfaces: ['config/rules/flow-board.md'],
   },
   {
@@ -432,7 +433,7 @@ const CONSIGNES = [
   {
     // Les mêmes, en anglais, dans la consigne du mode auto, avec ses deux origines de choix et la question sensible tranchée seule.
     name: 'les six catégories qui bloquent en mode auto, en anglais',
-    keywords: ['an experience choice', 'layout, mockup, labels, buttons, notifications', 'technically equal and differ only by', 'setting or weakening an invariant', 'contradicts DECISIONS.md', 'a deletion with no way back', 'outside this machine', 'leaving a security finding unfixed', 'declare that xhigh was not offered', 'external action outside the mission', '« reco prise »', '« validation sautée »', 'the invariant already validated', 'the most prudent one'],
+    keywords: ['an experience choice', 'layout, mockup, labels, buttons, notifications', 'technically equal and differ only by', 'setting or weakening an invariant', 'contradicts DECISIONS.md', 'a deletion with no way back', 'outside this machine', 'leaving a security finding unfixed', 'the Fable path for a worker', 'never take it yourself; suggest it only for a bug Opus did not solve', "xhigh comes from a ticket's « Jugement » line", 'external action outside the mission', '« reco prise »', '« validation sautée »', 'the invariant already validated', 'the most prudent one'],
     surfaces: ['hooks/register.tsx'],
   },
   {
@@ -652,36 +653,72 @@ const CONSIGNES = [
     surfaces: ['reference/effort-workers.md', 'skills/coo/SKILL.md', 'config/rules/agents.md'],
   },
   {
-    // Deux chemins de jugement : Fable 5.2 high pour le code, Opus xhigh pour la sécurité, un document ou le design ;
-    // la question unique d'avant est refusée partout.
-    name: 'les deux questions d’effort d’un groupe de jugement',
-    keywords: ['« Fable 5.2 high (Recommandé) / Opus high »', '« Opus xhigh (Recommandé) / Opus high »'],
+    // Plus de question d'effort au lancement d'un groupe : la ligne « Jugement » du ticket décide du xhigh ; les deux
+    // questions d'avant, et la question unique d'avant elles, sont refusées partout.
+    name: 'plus de question d’effort au lancement d’un groupe',
+    keywords: ['Jugement : oui', 'xhigh'],
     surfaces: ['config/rules/flow-board.md', 'reference/effort-workers.md', 'README.md', 'hooks/effort.ts'],
-    old: ['« xhigh (Recommandé) / high »'],
+    old: ['« xhigh (Recommandé) / high »', 'Fable 5.2 high (Recommandé) / Opus high', 'Opus xhigh (Recommandé) / Opus high'],
   },
   {
-    // Le bouton « ↗ Fable » et le worker Fable qu'il lance, dits partout où l'on choisit le chemin.
+    // Le bouton « ↗ Fable » et le worker Fable qu'il lance, dits partout où l'on choisit le chemin : par ce seul bouton.
     name: 'le bouton « ↗ Fable » et le worker Fable',
-    keywords: ['↗ Fable', 'worker Fable'],
-    surfaces: ['config/rules/flow-board.md', 'reference/effort-workers.md', 'README.md', 'GLOSSARY.md'],
+    keywords: ['↗ Fable'],
+    surfaces: ['config/rules/agents.md', 'config/rules/flow-board.md', 'reference/effort-workers.md', 'README.md', 'GLOSSARY.md'],
   },
   {
-    // Le worker de jugement de code sur Fable 5.2 high, tout le reste du code et les revues sur Opus.
-    name: 'le worker de jugement de code sur Fable 5.2 high',
-    keywords: ['jugement de code', 'Fable 5.2 high', 'Opus'],
-    surfaces: ['config/rules/agents.md', 'config/rules/flow-board.md', 'reference/effort-workers.md', 'GLOSSARY.md'],
+    // La tâche de jugement en Opus xhigh le temps du ticket, Fable seulement par le bouton ; le code et les revues sur Opus.
+    name: 'la tâche de jugement en Opus xhigh le temps du ticket',
+    keywords: ['Jugement : oui', 'xhigh', 'Opus'],
+    surfaces: ['config/rules/agents.md', 'config/rules/flow-board.md', 'reference/effort-workers.md'],
+    old: ['Worker de groupe flow-board pour un jugement de code', 'proposé à l\'utilisateur, jamais choisi seul ; tout le reste du code'],
   },
   {
-    // En auto, ni Fable ni xhigh : chaque copie de la règle nomme les deux.
-    name: 'ni Fable ni xhigh en mode auto',
-    keywords: ['Fable', 'xhigh', 'auto'],
-    surfaces: ['config/rules/flow-board.md', 'reference/effort-workers.md', 'reference/procedure-groupe-autonome.md', 'skills/coo/SKILL.md', 'hooks/effort.ts'],
+    // En auto, jamais Fable, et xhigh par la ligne « Jugement » : chaque copie de la règle nomme les deux.
+    name: 'jamais Fable en mode auto, xhigh par la ligne « Jugement »',
+    keywords: ['Fable', 'xhigh', 'auto', 'Jugement'],
+    surfaces: ['config/rules/flow-board.md', 'reference/effort-workers.md', 'reference/procedure-groupe-autonome.md', 'hooks/effort.ts'],
+    old: ['ne propose jamais ni Fable ni xhigh', 'jamais Fable ni xhigh'],
   },
   {
     // Le détour de cadrage garde le modèle de la phase du curseur : Opus pendant le suivi des groupes.
     name: 'le détour de cadrage sur le modèle de la phase',
     keywords: ['détour', 'suivi des groupes', 'Opus'],
     surfaces: ['reference/effort-workers.md', 'skills/coo/SKILL.md'],
+  },
+  {
+    // Les tickets de jugement au compte rendu : leur chemin (xhigh le temps du ticket, Fable 5.2 high dans un groupe
+    // parti par « ↗ Fable », effort.ts) dit de même par le skill du compte rendu et le README, et par les faits (model.ts).
+    name: 'le chemin des tickets de jugement au compte rendu',
+    keywords: ['traités en xhigh le temps du ticket', 'sur Fable 5.2 high dans un groupe parti par « ↗ Fable »'],
+    surfaces: ['skills/compte-rendu/SKILL.md', 'README.md'],
+  },
+  { name: 'le chemin des tickets de jugement au compte rendu, en anglais', keywords: ['run in xhigh while in progress, or on Fable 5.2 high when their group was launched by « ↗ Fable »'], surfaces: ['hooks/model.ts'] },
+  {
+    // L'advisor en auto, avant de coder une décision prise seul hors cadrage, une fois par décision : la règle « Mode auto »,
+    // la section « Worker autonome » de la procédure et le README.
+    name: 'l’advisor en auto avant une décision prise seul',
+    keywords: ['de coder', 'une fois par décision', 'changement de conception'],
+    surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe-autonome.md', 'README.md'],
+  },
+  { name: 'l’advisor en auto avant une décision prise seul, en anglais', keywords: ['Before coding a decision you take alone outside the framing', 'once per decision'], surfaces: ['hooks/register.tsx'] },
+  {
+    // Un ticket qui bute après trois approches : la définition d'un essai, dans la règle et la procédure d'un worker.
+    name: 'le ticket qui bute : la définition d’un essai',
+    keywords: ['un essai est une approche de correction, pas un lancement de tests', 'troisième approche qui suit son avis', '« bloqué »'],
+    surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe-cas.md'],
+  },
+  {
+    // Sa relance au retour du groupe, dans la section 11 et la consigne du mode auto ; dans un lot sans groupes, « 🐞 Bug · worker ».
+    name: 'le ticket qui bute : sa relance par « ↗ Fable » ou « ↗ xhigh »',
+    keywords: ["Le ticket <id> bute après trois approches, la dernière guidée par l'advisor. Pour le relancer : « ↗ Fable » (recommandé) ou « ↗ xhigh » sur le groupe <G>.", 'bute-<id>', 'replanifier-<id>', '🐞 Bug · worker'],
+    surfaces: ['reference/effort-workers.md', 'hooks/register.tsx'],
+  },
+  {
+    // Dans un lot sans groupes en auto, le manager s'arrête sur le ticket : une question bloquante sur ce ticket.
+    name: 'le ticket qui bute dans un lot sans groupes en auto',
+    keywords: ['stop on it and ask a blocking question on that ticket ({"waiting": [{"id": "bute-<id>", "ticket": "<id>"'],
+    surfaces: ['hooks/register.tsx'],
   },
 ]
 
@@ -713,7 +750,15 @@ for (const consigne of CONSIGNES) {
 // que par le renvoi au bloc de la consigne (et la définition d'un worker autonome) : une exception recopiée
 // y ajoutait des centaines de mots qui ne valent que dans la discussion d'où l'auto agit.
 const AUTO_RULES = ['config/rules/general.md', 'config/rules/asana-board.md', 'config/rules/flow-board.md']
-const AUTO_ALLOWED = ["En mode auto, le bloc « mode auto » de la consigne flow-board l'emporte", 'ou par une mission en mode auto quel que soit son effort']
+// La ligne « Jugement » se valide avec le découpage en manuel et se déclare en auto : la phrase de la règle
+// « Tâche de jugement », validée par Mathis le 13/11/2026, mot pour mot.
+const AUTO_ALLOWED = [
+  "En mode auto, le bloc « mode auto » de la consigne flow-board l'emporte",
+  'ou par une mission en mode auto quel que soit son effort',
+  'en manuel la ligne se valide avec le découpage, en auto elle se déclare',
+  // La relance d'un ticket qui bute, validée par Mathis le 13/11/2026 avec le découpage, mot pour mot.
+  'une ligne de texte en manuel, une question bloquante sur ce groupe en auto',
+]
 
 test('les règles communes ne recopient pas les exceptions du mode auto, hors de la règle « Mode auto »', () => {
   const copied = []

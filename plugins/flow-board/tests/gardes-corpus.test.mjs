@@ -54,7 +54,7 @@ const NOT_FORM_GUARDS = {
       'suggestsCompaction', 'isOpenMission', 'isRetroCardRemovable', 'isEntryGone', 'isReleasedMark', 'isCutDated', 'isPlanUnreadFor', 'isPlanEntry', 'isInstructReceived', 'isInstructSent',
       'isDelivered', 'isDeliveryOpen', 'isClosedSession', 'isPistesCard', 'hasIntentTurn', 'isRecordStale', 'holdsItemsSession', 'isResentInFlight', 'isSentGroup', 'isKeptGroup', 'isHoldingGroup',
       'isClosedLink', 'isRetried', 'isRetriedSince', 'isItemsCloseCandidate', 'hasLaunchedLinked', 'isSureLink', 'isSeatGap', 'isNightWakeDue', 'hasWaitCycle', 'isAdvisorUnsettled',
-      'isRepeatedReview', 'hasRetro', 'holdsPick', 'isAwaitingSession',
+      'isRepeatedReview', 'hasRetro', 'holdsPick', 'isAwaitingSession', 'isJudgmentTicket',
     ].map(name => [name, ON_MISSION]),
   ),
 }

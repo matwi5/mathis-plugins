@@ -207,6 +207,13 @@ export const sameTicket = (a: string, b: string): boolean => {
 }
 
 /**
+ * Un ticket « Jugement : oui » : seul un drapeau `judgment` à `true`, envoyé par la discussion qui tient la
+ * mission, le dit ; absent, `false` ou hors forme (une valeur gardée qui n'est pas un booléen), le ticket reste
+ * à l'effort calculé (invariant de la ligne « Jugement », décision de Mathis du 13/11/2026).
+ */
+export const isJudgmentTicket = (ticket: Pick<Ticket, 'judgment'> | undefined): boolean => ticket?.judgment === true
+
+/**
  * Date UTC à la minute : `2026-10-06 10:40`. Une date relue (relais, tableau de bord) peut être
  * abîmée : une date que `isTime` refuse (négative comprise) se dit « date inconnue » plutôt qu'une
  * exception ou une date d'avant 1970.

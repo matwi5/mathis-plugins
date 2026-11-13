@@ -4,7 +4,7 @@ Les deux spécialistes que le `CLAUDE.md` global fait utiliser à Claude. Un age
 
 | Agent | Rôle | Modèle | Effort | Outils |
 |---|---|---|---|---|
-| `agents:explorer` | Cartographier le code ou les fichiers d'un projet, en lecture seule, et en rendre une synthèse courte | Haiku | high | Read, Grep, Glob, Bash |
+| `agents:explorer` | Cartographier le code ou les fichiers d'un projet, en lecture seule, et en rendre une synthèse courte | Haiku | xhigh | Read, Grep, Glob, Bash |
 | `agents:researcher` | Chercher la documentation (web, docs officielles, fichiers de référence) et répondre avec les sources | Sonnet | high | Read, Grep, Glob, WebFetch, WebSearch |
 
 Ni `agents:explorer` ni `agents:researcher` n'appellent l'advisor : un explorateur Haiku l'avait appelé alors que `tools:` ne le listait pas, et l'avis du modèle Fable avait coûté 15 fois son propre travail ; aucun spécialiste ne le consulte, puisque la discussion qui le lance relit son rapport (règle « Consulter l'advisor »). Leur en-tête le retire (`disallowedTools: advisor`, sans effet documenté sur un outil serveur, à confirmer) et leur consigne le leur interdit.

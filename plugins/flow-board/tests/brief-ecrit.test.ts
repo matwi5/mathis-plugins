@@ -88,14 +88,13 @@ const launch = async ($: any, on: any, disk: Disk = {}): Promise<{ text: string;
 test('le brief s’écrit dans le dossier temporaire du système, à un nom fait des ids et de l’heure ; la demande cite son chemin et la commande qui le passe', async ($, on) => {
   const { text, written } = await launch($, on, { tmp: `${TMP}/` })
   const paths = Object.keys(written)
-  // Un groupe avec logique (ou muet) a deux briefs, l'Opus et le Fable, écrits au même lancement sous deux noms.
-  expect(paths.length).toBe(2)
+  // Un seul brief par groupe, l'Opus, hors « ↗ Fable ».
+  expect(paths.length).toBe(1)
   // Cité tel que le disque le nomme : le dossier résolu (ici /var → /private/var).
   expect(paths[0]).toMatch(new RegExp(`^/private${TMP}/flow-board-brief-[A-Za-z0-9_-]+-E-${NOW}\\.md$`))
-  expect(paths[1]).toMatch(new RegExp(`^/private${TMP}/flow-board-brief-[A-Za-z0-9_-]+-E-${NOW}-fable\\.md$`))
   // Le chemin cité pour le shell, et la commande qui le passe tel quel (CLI) ou par start_session (app).
-  expect(text).toContain(`brief Opus du groupe E : '${paths[0]}'`)
-  expect(text).toContain(`brief Fable du groupe E : '${paths[1]}'`)
+  expect(text).toContain(`brief du groupe E : '${paths[0]}'`)
+  expect(text).not.toContain('brief Fable')
   expect(text).toContain(`test -s <brief> && claude --bg`)
   expect(text).toContain(`"$(cat <brief> '<ajout>')"`)
   expect(text).toContain('s\'il manque, ne lance pas cette session et dis-le-moi')
@@ -162,7 +161,7 @@ test('le brief porte le point 3 de la demande d’avant mot pour mot', async ($,
   const point3 = (s: string): string => s.slice(s.indexOf('3) ce qui varie, que la procédure attend du prompt'), s.indexOf('. ', s.indexOf('3) ce qui varie')) + 1)
   expect(point3(brief).length).toBeGreaterThan(100)
   // La même consigne que la demande de repli (un seul constructeur pour les deux).
-  expect(point3(brief)).toContain("et, si son effort est xhigh, qu'elle est un worker autonome")
+  expect(point3(brief)).toContain("et qu'elle n'est pas un worker autonome (aucun ticket « Jugement : oui » dans son groupe)")
 })
 
 test('une écriture refusée retombe sur la demande d’avant, en le disant', async ($, on) => {

@@ -65,3 +65,12 @@
 0.84.0	son dossier temporaire `CLAUDE_JOB_DIR`
 # L'instantané d'un ticket sensible ne passe plus par l'index de la session (mission « Pistes de rétro en tickets ») :
 0.84.0	refuse un index qui porte autre chose (le sortir d'abord de l'index)
+# Plus de question d'effort au lancement d'un groupe : la ligne « Jugement » d'un ticket décide du xhigh (mission « Répartition des modèles et efforts ») :
+0.85.0	Fable 5.2 high (Recommandé) / Opus high
+0.85.0	Opus xhigh (Recommandé) / Opus high
+0.85.0	il reste sur Opus high et le déclare
+0.85.0	stay in high and declare that xhigh was not offered
+# Le chemin Fable suggéré pour un bug qu'Opus n'a pas résolu, au retour du groupe (mission « Répartition des modèles et efforts ») :
+0.85.0	Claude ne le prend ni ne le propose
+0.85.0	never take nor offer it yourself
+0.85.0	Tu ne prends ni ne proposes jamais Fable

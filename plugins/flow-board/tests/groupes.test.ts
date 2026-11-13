@@ -112,7 +112,7 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   expect(await ui.find({ key: 'launch-linked-A' })).toBeDefined()
   expect(await ui.find({ key: 'launch-linked-B' })).toBeDefined()
   expect(await ui.find({ key: 'launch-linked-C' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /« Worker » : Claude lance une session qui fait le groupe, et la mission reste ici/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /« Worker » : Claude lance une session qui fait le groupe, à l'effort calculé, et la mission reste ici/ })).toBeDefined()
   await ui.press({ key: 'launch-linked-B' })
 
   const text = filled.at(-1)!
@@ -121,7 +121,7 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   expect(text).toContain(`${N} — Nettoyages revue — effort calculé : medium.`)
   expect(text).toMatch(/Puis lance la session, avec un titre qui commence par « Lot SC > Groupe <id> · »/)
   // L'effort de la session : celui calculé, high pour un choix de conception restant, dit en une ligne avec tout écart.
-  expect(text).toContain("Effort de la session (<effort>) : l’effort calculé sur la ligne du groupe ; high si un choix de conception reste à faire au groupe. Pendant un ticket sensible, le mod de la session la passe lui-même en high : ne relève pas son effort pour ce ticket. Dis-moi en une ligne l'effort pris et, s'il s'écarte du calcul, pourquoi.")
+  expect(text).toContain("Effort de la session (<effort>) : l’effort calculé sur la ligne du groupe ; high si un choix de conception reste à faire au groupe. Pendant un ticket sensible, le mod de la session la passe lui-même en high, et pendant un ticket « Jugement : oui », en xhigh : ne relève pas son effort pour ces tickets. Ne me pose aucune question sur l'effort. Dis-moi en une ligne l'effort pris et, s'il s'écarte du calcul, pourquoi.")
   // Dans l'app Desktop : start_session ; dans le CLI : claude --bg, le compte rendu revient par SendMessage.
   expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(ce dossier n’a pas de git\)\./)
   expect(text).toMatch(/Dans le CLI \(pas de start_session\) : appelle d'abord ListAgents pour lire le nom de cette discussion et sa référence entre crochets/)
