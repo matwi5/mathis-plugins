@@ -40,6 +40,13 @@ test('la description de fixed (outil flow, review) ne compte que les constats co
   expect(review.properties.fixed.description).toBe('Fixed by a commit, not just noted or documented')
 })
 
+test('la description de setAside (outil flow) fait citer l’entrée de la feuille de route ou d’« À reprendre » qui porte déjà le sujet, en 600 caractères au plus', () => {
+  const setAside = (TOOL_SCHEMA as any).properties.setAside
+  expect(setAside.description).toContain('Check the roadmap and « À reprendre » first: if one holds it, start with its id (« R49: … ») and say what it adds')
+  expect(setAside.description.length).toBeLessThanOrEqual(600)
+  expect(setAside.items.properties.text.description.length).toBeLessThanOrEqual(600)
+})
+
 test('les descriptions de waiting et answered (outil flow) : relire DECISIONS.md avant de poser une question, answered après la réponse écrite là', () => {
   const waiting = (TOOL_SCHEMA as any).properties.waiting
   expect(waiting.description).toContain('Before asking, reread DECISIONS.md: a settled question is not asked again; an answered id never reopens (new question, new id)')

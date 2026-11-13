@@ -197,6 +197,26 @@ test('le COO voit la déclaration dans « À reprendre » : il la note recopiée
   expect(JSON.stringify(turn)).toMatch(/« À reprendre » \(1\)/)
 })
 
+// Rejeu de l'appel que dicte la description de setAside (citer l'entrée qui porte déjà le sujet) : le texte « R49: … »
+// arrive tel quel au relevé du COO, qui le recopie en une entrée qui nomme R49 ; recopiée, la boîte s'en vide.
+test('une mise de côté qui commence par l’id d’une entrée existante (« R49: … ») arrive telle quelle au COO, et sa recopie vide la boîte', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  await start($)
+  await $.tool.call({ tool: TOOL, open: { title: 'Ma mission' } } as any)
+  expect(await declare($, 'R49: couvre aussi le signal de vie des workers')).not.toMatch(/refused|Nothing set aside/)
+  const [item] = boxOf(w, 'session-A')!.items
+  expect(item.text).toBe('R49: couvre aussi le signal de vie des workers')
+  await $.tool.call({ tool: TOOL, set: [] } as any)
+  await $.command.run({ command: 'flow', args: 'pause' } as any).catch(() => undefined)
+  const opening = await openCoo($, clock)
+  expect(opening).toContain('"R49: couvre aussi le signal de vie des workers"')
+  w.files[ROADMAP] = roadmapWith([`- [R2] à décider · 2026-11-02 · boîte ${item.id}, ticket 12 · R49: couvre aussi le signal de vie des workers`])
+  await settle(clock, 5)
+  expect(coordEntries(w)).toEqual([expect.objectContaining({ kind: 'copied', decl: item.id })])
+  expect(boxOf(w, 'session-A')?.items ?? []).toEqual([])
+})
+
 test('une mission supprimée avant la recopie : la déclaration reste dans sa boîte, et dans le relevé du COO', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)

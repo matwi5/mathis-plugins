@@ -138,8 +138,11 @@ test('les consignes : seuil compté sans fichiers générés, sécurité avec la
   expect(implement).toContain('give that pass the range <first snapshot hash>..<new snapshot hash>')
   expect(implement).toContain('After the bug pass, a single further pass at high effort reads everything changed since its snapshot, its fixes and any code added after it')
   expect(implement).toContain('if that pass still finds a breach of the invariant, fix it, write the scenario as a test and ask the user, without another pass')
-  // Une classe de défaut trouvée une deuxième fois se cherche partout et se corrige d'un coup, recherche citée.
-  expect(implement).toContain('a defect class found a second time is searched everywhere: quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it')
+  // Un constat qui nomme d'autres endroits les fait tous corriger dès la première fois ; une classe qui
+  // revient une deuxième fois se cherche partout, par son motif, et se corrige d'un coup, recherche citée.
+  expect(implement).toContain('a finding that names other places ("same defect in X") gets all of them fixed the first time (a place in code older than the lot is classed Pre-existing), and a defect class that comes back a second time without that is handled the same way')
+  expect(implement).toContain("search for the class's pattern, not just the lines you just wrote, list its variants (the function's callers, the neighbouring forms), quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it")
+  expect(implement).not.toContain('a defect class found a second time is searched everywhere')
   expect(implement).not.toContain('under 100 changed lines')
   // La revue de sécurité, en lecture seule, part avec la revue du groupe ; pas de seconde passe sur ses
   // correctifs : la revue de sécurité tourne une seule fois (Mathis, 01/11/2026).

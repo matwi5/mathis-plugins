@@ -316,8 +316,8 @@ test('« closed » d’une session précédente d’un groupe valide ses champs 
   const first = groupOf(short, 'A').delegated!
   const again = startLinkedGroups(short, ['A'], 5_000)!.board
   const back = applyReport(again, { returned: ['A'] }, 5_500, REPO).board
-  expect(groupOf(back, 'A').delegated!.earlier).toEqual([{ at: first.at }])
+  expect(groupOf(back, 'A').delegated!.earlier).toEqual([{ at: first.at, worktreeName: 'groupe-lot-A' }])
   const out = applyReport(back, { closed: [{ group: 'A', link: first.at, state: 'closed', sessionId: '00000000-0000-4000-8000-0000000000d1', branch: 'a b' }] }, 6_000, REPO)
-  expect(groupOf(out.board, 'A').delegated!.earlier).toEqual([{ at: first.at, closing: { state: 'closed', at: 6_000, sessionId: '00000000-0000-4000-8000-0000000000d1' } }])
+  expect(groupOf(out.board, 'A').delegated!.earlier).toEqual([{ at: first.at, worktreeName: 'groupe-lot-A', closing: { state: 'closed', at: 6_000, sessionId: '00000000-0000-4000-8000-0000000000d1' } }])
   expect(out.text).toContain(`closed: field refused for previous session of group A (sent at ${first.at}): ${REASONS.branch}`)
 })

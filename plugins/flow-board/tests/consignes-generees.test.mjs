@@ -3,15 +3,15 @@
 // le comparent au gabarit, dont il garde les titres et la consigne des relecteurs mot pour mot.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { criteria, isSafePath, isSafeRange, isTicketId, readTicket, render, ConsignesError } from '../scripts/consignes.mjs'
-import { CORPUS } from './corpus.mjs'
+import { criteria, isGroupId, isSafePath, isSafeRange, isTicketId, readTicket, render, ConsignesError } from '../scripts/consignes.mjs'
+import { CORPUS, NON_TEXT } from './corpus.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../scripts/consignes.mjs', import.meta.url))
 const gabarit = readFileSync(new URL('../reference/consignes-revue.md', import.meta.url), 'utf8')
@@ -42,7 +42,17 @@ const project = () => {
   return dir
 }
 
-const run = (cwd, ...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8' })
+/**
+ * L'environnement d'un lancement du script : sans le dossier de job de la session qui lance les tests
+ * (`CLAUDE_JOB_DIR`, que `--relecteur` lit pour placer le dossier du relecteur), sauf `jobDir` donné.
+ */
+const envOf = jobDir => {
+  const { CLAUDE_JOB_DIR: _, ...env } = process.env
+  return jobDir === undefined ? env : { ...env, CLAUDE_JOB_DIR: jobDir }
+}
+const run = (cwd, ...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8', env: envOf() })
+/** Le script lancé par une session de fond : `CLAUDE_JOB_DIR` vaut `jobDir`. */
+const runJob = (cwd, jobDir, ...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8', env: envOf(jobDir) })
 
 test('sans invariant : un fichier conforme au gabarit, sans trou ni ligne entre crochets', () => {
   const dir = project()
@@ -60,6 +70,8 @@ test('sans invariant : un fichier conforme au gabarit, sans trou ni ligne entre 
     assert.match(text, /Cible : `abc1234\.\.def5678`/)
     assert.match(text, /Le ticket : `travail\/chantier\/issues\/05-outil\.md`/)
     assert.match(text, /Les choix déjà déclarés : `\/tmp\/choix\.md`, plus ceux de la session qui n'y sont pas encore : aucun\./)
+    // Un « comme avant » se vérifie avec la vraie base de la cible ; le chemin reste à choisir par le relecteur.
+    assert.ok(text.includes('un « comme avant » se vérifie sur la base, par `git show abc1234:chemin/du/fichier`'), 'le « comme avant » sur la base manque')
     assert.ok(text.includes(`Les décisions : \`${join(dir, 'travail', 'chantier', 'DECISIONS.md')}\``), 'le fichier de décisions du chantier manque')
     assert.ok(text.includes(`Les règles de jugement : \`${join(dir, 'CODING_STANDARDS.md')}\``), 'CODING_STANDARDS.md manque')
     assert.ok(!text.includes('Passe « bogues »'), 'une ligne d’invariant sans invariant')
@@ -106,6 +118,9 @@ test('--relecteur crée le dossier du relecteur dans le dossier git et le nomme 
     const path = join(dir, '.git', 'flow-board', 'revue-05')
     assert.ok(existsSync(path), 'dossier absent')
     assert.ok(text.includes(`- Où écrire : seulement \`${path}\``), text)
+    // Le relecteur d'un ticket n'applique jamais de correctif : sa ligne n'en garde pas l'exception.
+    assert.ok(text.includes("(des noms génériques y avaient écrasé les copies d'une autre session) ni l'arbre de travail."), text)
+    assert.ok(!text.includes('--fix` du groupe'), text)
     assert.ok(!/<[^>\n]+>/.test(text))
     // Sans --relecteur, la ligne part, et « À ne pas faire » interdit toujours /tmp.
     assert.equal(run(dir, 'travail/chantier/issues/05-outil.md', 'a..b', 'd.md').status, 0)
@@ -121,6 +136,178 @@ test('--relecteur crée le dossier du relecteur dans le dossier git et le nomme 
     assert.ok(!existsSync(join(dir, 'e.md')))
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--relecteur, variable valide : sous tmp ; variable hors forme ou dossier absent : ignorée et dite, le dossier git', () => {
+  const dir = project()
+  const job = realpathSync(mkdtempSync(join(tmpdir(), 'job-')))
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd: dir }).status, 0)
+    const out = runJob(dir, job, 'travail/chantier/issues/05-outil.md', 'a..b', 'c.md', '--relecteur', '05')
+    assert.equal(out.status, 0, out.stderr)
+    assert.equal(out.stderr, '')
+    const path = join(job, 'tmp', 'revue-05')
+    assert.ok(existsSync(path), 'dossier absent du dossier de job')
+    assert.ok(readFileSync(join(dir, 'c.md'), 'utf8').includes(`- Où écrire : seulement \`${path}\``))
+    assert.ok(!existsSync(join(dir, '.git', 'flow-board')), 'un dossier a aussi été créé dans le dossier git')
+    for (const value of ['relatif', join(job, 'absent'), `${job}\nsuite`]) {
+      const ignored = runJob(dir, value, 'travail/chantier/issues/05-outil.md', 'a..b', 'd.md', '--relecteur', '05')
+      assert.equal(ignored.status, 0, ignored.stderr)
+      assert.match(ignored.stderr, /^Avis : CLAUDE_JOB_DIR ignorée \(/)
+      assert.ok(readFileSync(join(dir, 'd.md'), 'utf8').includes(`- Où écrire : seulement \`${join(dir, '.git', 'flow-board', 'revue-05')}\``))
+      // L'avis part sur la sortie d'erreur : la ligne « Consignes écrites » reste la dernière sortie.
+      assert.match(ignored.stdout.trimEnd().split('\n').at(-1), /^Consignes écrites : .+d\.md$/)
+    }
+    assert.ok(!existsSync(join(job, 'absent')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+const SENSIBLE = "# 06: Sensible : un invariant\n\nZone sensible : oui (suppression)\nInvariant : « un fichier de totaux n'est jamais réécrit vide ».\nLecteur : Mathis\n\n- [x] Un critère du 06.\n"
+
+/** Un projet sous git avec deux tickets d'un groupe, et un dossier de job : rend les deux dossiers. */
+const groupProject = () => {
+  const dir = project()
+  assert.equal(spawnSync('git', ['init', '-q'], { cwd: dir }).status, 0)
+  writeFileSync(join(dir, 'travail', 'chantier', 'issues', '06-sensible.md'), SENSIBLE)
+  writeFileSync(join(dir, 'declares.txt'), 'motif littéral de show.py\n')
+  return { dir, job: realpathSync(mkdtempSync(join(tmpdir(), 'job-'))) }
+}
+const T05 = 'travail/chantier/issues/05-outil.md'
+const T06 = 'travail/chantier/issues/06-sensible.md'
+
+test('--groupe écrit les consignes de la revue du groupe : lignes du groupe remplies, lignes d’un ticket retirées, dossier groupe-<id>, invariants recopiés', () => {
+  const { dir, job } = groupProject()
+  try {
+    const out = runJob(dir, job, '--groupe', 'E', 'abc1234..HEAD', 'g.md', T05, T06, '--choix', '/tmp/choix.md', '--declares', 'declares.txt', '--chemins', 'scripts', '--chemins', 'plugins')
+    assert.equal(out.status, 0, out.stderr)
+    const text = readFileSync(join(dir, 'g.md'), 'utf8')
+    assert.match(text, /^# Consignes de la revue : groupe E \(tickets 05 et 06\)\n/)
+    assert.deepEqual(headings(text), headings(body))
+    assert.equal(consigne(text), consigne(body))
+    assert.ok(!/<[^>\n]+>/.test(text), `un trou <…> reste : ${text.match(/<[^>\n]+>/)}`)
+    assert.ok(!text.split('\n').some(l => l.startsWith('- [')), 'une ligne entre crochets reste')
+    // Le périmètre du groupe, comme pour un ticket.
+    assert.match(text, /Cible : `abc1234\.\.HEAD`/)
+    assert.ok(text.includes("- D'autres missions commitent sur la branche : seulement `git diff abc1234..HEAD -- scripts plugins`."))
+    assert.match(text, /Les choix déjà déclarés : `\/tmp\/choix\.md`, plus ceux de la session qui n'y sont pas encore : motif littéral de show\.py\./)
+    assert.ok(text.includes(`Les décisions : \`${join(dir, 'travail', 'chantier', 'DECISIONS.md')}\``))
+    assert.ok(text.includes(`Les règles de jugement : \`${join(dir, 'CODING_STANDARDS.md')}\``))
+    // Les lignes « Revue du groupe » : les ids tirés des fichiers de tickets, leurs chemins, leurs invariants.
+    assert.ok(text.includes(`- Revue du groupe : se concentrer sur les interactions entre les tickets 05 et 06 (\`${T05}\`, \`${T06}\`), chacun déjà relu ; vérifier que chaque recherche`), text)
+    assert.ok(text.includes('- Revue du groupe, sécurité : une valeur relue'))
+    assert.ok(text.includes("- Revue du groupe : les invariants de ses tickets, que les interactions entre eux ne doivent pas violer : 06 : « un fichier de totaux n'est jamais réécrit vide »."), text)
+    // Les lignes propres à un ticket partent.
+    for (const gone of ['- Le ticket : ', "Revue d'un ticket", 'Passe « bogues »', 'Avant le commit du ticket', 'Relecture du fond']) assert.ok(!text.includes(gone), `reste : ${gone}`)
+    // Le dossier du relecteur du groupe, celui de snapshot.mjs --dossier groupe-E, sans option --relecteur.
+    const path = join(job, 'tmp', 'revue-groupe-E')
+    assert.ok(existsSync(path), 'dossier du relecteur absent')
+    assert.ok(text.includes(`- Où écrire : seulement \`${path}\``))
+    assert.ok(text.includes("ni l'arbre de travail, hors des correctifs qu'applique une revue `--fix` du groupe (consigne ci-dessous)."), text)
+    // Une revue de groupe peut appliquer ses correctifs (--fix) : la ligne ne le lui interdit pas.
+    assert.ok(text.includes("- À ne pas faire : écrire dans l'arbre de travail hors des correctifs d'une revue `--fix`, dans l'index ou dans `/tmp`"), text)
+    assert.match(out.stdout.trimEnd().split('\n').at(-1), /^Consignes écrites : .+g\.md$/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('--securite écrit les consignes de la revue de sécurité : même périmètre, dossier securite-<id>, sans la ligne « Revue du groupe, sécurité », lancement en clair', () => {
+  const { dir, job } = groupProject()
+  try {
+    const out = runJob(dir, job, '--securite', 'E', 'abc1234..0123abcd4567', 's.md', T05, T06, '--choix', '/tmp/choix.md', '--chemins', 'scripts')
+    assert.equal(out.status, 0, out.stderr)
+    const text = readFileSync(join(dir, 's.md'), 'utf8')
+    assert.match(text, /^# Consignes de la revue : revue de sécurité du groupe E \(tickets 05 et 06\)\n/)
+    assert.deepEqual(headings(text), headings(body))
+    assert.equal(consigne(text), consigne(body))
+    assert.ok(!/<[^>\n]+>/.test(text))
+    assert.ok(!text.split('\n').some(l => l.startsWith('- [')))
+    assert.match(text, /Cible : `abc1234\.\.0123abcd4567`/)
+    assert.ok(text.includes("- D'autres missions commitent sur la branche : seulement `git diff abc1234..0123abcd4567 -- scripts`."))
+    // Les deux lignes qui s'adressent à la revue de code du groupe partent : la revue de sécurité suit sa méthode.
+    assert.ok(!text.includes('Revue du groupe, sécurité'), 'la ligne qui s’adresse à la revue du groupe reste')
+    assert.ok(!text.includes('se concentrer sur les interactions'), 'le mandat de la revue de code du groupe reste')
+    assert.ok(text.includes("- Revue du groupe : les invariants de ses tickets, que les interactions entre eux ne doivent pas violer : 06 : « un fichier de totaux n'est jamais réécrit vide »."), text)
+    for (const gone of ['- Le ticket : ', "Revue d'un ticket", 'Passe « bogues »', 'Avant le commit du ticket', 'Relecture du fond']) assert.ok(!text.includes(gone), `reste : ${gone}`)
+    const path = join(job, 'tmp', 'revue-securite-E')
+    assert.ok(existsSync(path), 'dossier du relecteur absent')
+    assert.ok(text.includes(`- Où écrire : seulement \`${path}\``))
+    assert.ok(!existsSync(join(job, 'tmp', 'revue-groupe-E')))
+    // En lecture seule : pas d'exception pour des correctifs, dans aucune des deux lignes.
+    assert.ok(text.includes("- À ne pas faire : écrire dans l'arbre de travail, dans l'index ou dans `/tmp`"), text)
+    assert.ok(text.includes("(des noms génériques y avaient écrasé les copies d'une autre session) ni l'arbre de travail."), text)
+    assert.ok(!text.includes('--fix` du groupe'), text)
+    // Figée au commit de son lancement : jamais HEAD ni une branche.
+    for (const moving of ['abc1234..HEAD', 'abc1234..main', 'abc1234..refs/heads/x']) {
+      const refused = runJob(dir, job, '--securite', 'E', moving, 't.md', T05)
+      assert.equal(refused.status, 1, moving)
+      assert.match(refused.stderr, /^ÉCHEC : cible de la revue de sécurité/)
+    }
+    assert.ok(!existsSync(join(dir, 't.md')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('--groupe et --securite : un id de groupe hors forme, aucun ticket, les deux à la fois ou une option d’un ticket sont refusés, sans fichier ni dossier', () => {
+  const { dir, job } = groupProject()
+  try {
+    assert.equal(isGroupId('E'), true)
+    assert.equal(isGroupId('Groupe12'), true)
+    assert.equal(isGroupId('abcdefghijklm'), false)
+    assert.deepEqual(Object.entries(CORPUS).filter(([, token]) => isGroupId(`a${token}1`)).map(([name]) => name), [])
+    assert.deepEqual(Object.entries(NON_TEXT).filter(([, value]) => isGroupId(value)).map(([name]) => name), [])
+    for (const mode of ['--groupe', '--securite']) {
+      const range = mode === '--groupe' ? 'a..b' : 'a..0123abc'
+      for (const id of ['../E', '-E', 'E/F', 'groupe-E', 'abcdefghijklm', 'E F']) {
+        const bad = runJob(dir, job, mode, id, range, 'x.md', T05)
+        assert.equal(bad.status, 1, `${mode} ${id}`)
+        assert.match(bad.stderr, /^ÉCHEC : id de groupe hors forme/)
+      }
+      for (const args of [
+        [mode, 'E', range, 'x.md'],
+        [mode, 'E', 'abc1234', 'x.md', T05],
+        [mode, 'E', range, 'x.md', 'travail/chantier/issues/absent.md'],
+        [mode, 'E', range, 'x.md', T05, '--faits', '05'],
+        [mode, 'E', range, 'x.md', T05, '--relecteur', '05'],
+        [mode, 'E', range, 'x.md', T05, mode === '--groupe' ? '--securite' : '--groupe', 'E'],
+        [T05, range, 'x.md', mode],
+      ]) {
+        const out = runJob(dir, job, ...args)
+        assert.equal(out.status, 1, args.join(' '))
+        assert.match(out.stderr, /^ÉCHEC : /)
+      }
+    }
+    assert.ok(!existsSync(join(dir, 'x.md')), 'un fichier a été écrit')
+    assert.deepEqual(readdirSync(job), [], 'un dossier du relecteur a été créé')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('un ticket sans invariant dans le groupe : la ligne des invariants part ; une ligne du gabarit inconnue fait échouer les deux modes', () => {
+  const tickets = [{ id: '1', title: 't', path: 'p1' }, { id: '2', title: 'u', path: 'p2' }]
+  const text = render(gabarit, { mode: 'groupe', group: 'A', tickets, range: 'a..b' })
+  assert.ok(!text.includes('les invariants de ses tickets'))
+  assert.ok(text.includes('les tickets 1 et 2 (`p1`, `p2`)'))
+  assert.ok(!text.includes('Où écrire'), 'sans dossier donné, la ligne part')
+  // Un seul ticket donné : « ticket », au singulier.
+  assert.match(render(gabarit, { mode: 'securite', group: 'A', tickets: tickets.slice(0, 1), range: 'a..b' }), /^# Consignes de la revue : revue de sécurité du groupe A \(ticket 1\)\n/)
+  for (const mode of ['groupe', 'securite']) {
+    assert.throws(() => render(`${gabarit}\n- Une ligne nouvelle : <trou>.\n`, { mode, group: 'A', tickets, range: 'a..b' }), ConsignesError)
+    assert.throws(() => render(gabarit.replace('Cible : `<base>..<fin>`', 'Cible : `<base>..<fin>` du <lot>'), { mode, group: 'A', tickets, range: 'a..b' }), ConsignesError)
+  }
+  assert.throws(() => render(gabarit.replace('entre les tickets <ids>', 'entre les tickets <ids> du <lot>'), { mode: 'groupe', group: 'A', tickets, range: 'a..b' }), ConsignesError)
+  // Une ligne « Où écrire » qui ne finit plus par l'exception des correctifs : le script ne sait plus la retirer, il échoue.
+  for (const mode of ['ticket', 'securite']) {
+    assert.throws(() => render(gabarit.replace('une revue `--fix` du groupe (consigne ci-dessous)', 'une revue du groupe'), { mode, ticket: tickets[0], group: 'A', tickets, range: 'a..b', reviewDir: '/x/revue-1' }), ConsignesError)
   }
 })
 

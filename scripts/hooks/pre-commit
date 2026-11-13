@@ -1,13 +1,19 @@
 #!/bin/sh
 # Hook pre-commit du dépôt, installé par scripts/sync.py (core.hooksPath = scripts/hooks), sur le contenu
-# de l'index (pas l'arbre de travail) : même pour un commit de documentation seule, les numéros de série des
+# de l'index (pas l'arbre de travail) : même pour un commit de documentation seule, le refus d'un fichier de
+# décisions changé hors de la branche principale (sauf une fusion), les numéros de série des
 # fichiers de décisions indexés (travail/*/DECISIONS.md), la recherche citée d'un ticket indexé « Zone
 # sensible : oui » (travail/*/issues/*.md), puis la forme du CHANGELOG, la version et la
 # liste « État » d'un plugin dont le CHANGELOG ou le plugin.json est indexé ; hors documentation seule,
 # validate du dépôt, puis validate, tsc et tests des plugins dont un fichier est indexé, sur une copie de l'index, avec le Claude
 # Code du terminal, sauf pour un plugin dont l'index est exactement celui que scripts/check.sh vient de
-# passer ; enfin la suite Python du dépôt (scripts/tests), sur la même copie, quand un fichier indexé est sous
-# scripts/ ou est plugins/flow-board/hooks/register.tsx (scripts/check.py --staged).
+# passer dans ce worktree, ou dans un autre worktree du dépôt, contexte compris ; enfin la suite Python du
+# dépôt (scripts/tests), sur la même copie, quand un fichier indexé est sous scripts/ ou est
+# plugins/flow-board/hooks/register.tsx (scripts/check.py --staged), sauf quand l'index porte
+# exactement les déclencheurs et le contexte (le dépôt hors travail/ et ETAT_DU_PROJET.md) d'un
+# scripts/check.sh scripts (ou --all) vert ; une fois tous ces contrôles passés,
+# dans un worktree et hors d'une fusion, l'avertissement d'un instantané de ticket pas reposé
+# (refs/worktree/flow-board/<id>).
 # Git for Windows lance aussi ce script, par son sh.
 root=$(git rev-parse --show-toplevel) || exit 1
 exec sh "$root/scripts/check.sh" --staged

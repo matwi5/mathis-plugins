@@ -19,7 +19,7 @@ const implementing = (): Board => {
   return play(
     base,
     b => applySkill(b, 'mattpocock-skills:implement', { now: 1_000, isMain: true }),
-    b => applyReport(b, { tickets: [{ id: 'T1', name: 'Un', status: 'doing' }, { id: 'T2', name: 'Deux' }] }, 1_100),
+    b => applyReport(b, { title: 'Lot de test', tickets: [{ id: 'T1', name: 'Un', status: 'doing' }, { id: 'T2', name: 'Deux' }] }, 1_100),
   )
 }
 
@@ -70,7 +70,7 @@ test('le premier ticket passé en cours ne remet pas à zéro des étapes encore
   const b = play(
     base,
     b => applySkill(b, 'mattpocock-skills:implement', { now: 1_000, isMain: true }),
-    b => applyReport(b, { step: 'read', tickets: [{ id: 'T1', name: 'Un' }] }, 1_100),
+    b => applyReport(b, { title: 'Lot de test', step: 'read', tickets: [{ id: 'T1', name: 'Un' }] }, 1_100),
     b => applyReport(b, { set: [{ id: 'T1', status: 'doing' }] }, 1_200),
   )
   expect(step(b, 'read')).toBe('active')

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Remplace un texte unique dans un fichier, avec assertion ; ou un lot de remplacements, tout ou rien ;
 ou ajoute un texte à la fin d'un fichier ; ou remplace une plage de lignes vérifiée ; ou déplace un bloc
-de lignes d'un fichier à un autre, l'identité prouvée.
+de lignes d'un fichier à un autre, l'identité prouvée ; ou insère un texte avant ou après une ligne
+repère ; ou coche un critère d'un ticket.
 
     python3 scripts/patch.py <fichier> <ancien> <nouveau>
     python3 scripts/patch.py <fichier> @<fichier de l'ancien texte> @<fichier du nouveau texte>
@@ -9,6 +10,8 @@ de lignes d'un fichier à un autre, l'identité prouvée.
     python3 scripts/patch.py --append <fichier> <texte>
     python3 scripts/patch.py --plage <fichier> <première ligne> <dernière ligne> <nouveau> --debut <texte> --fin <texte>
     python3 scripts/patch.py --deplace [--essai] <source> <début> <fin> <cible> <ancre>
+    python3 scripts/patch.py --insere <fichier> <ancre> <texte> [--avant]
+    python3 scripts/patch.py --coche <fichier de ticket> <début du critère> [<note>]
 
 Pour une édition que l'outil Edit ne peut pas faire et qu'aucun script jetable ne devrait refaire :
 un paragraphe trop long, ou une commande composée que le garde-fou d'un worktree refuse (un heredoc
@@ -40,7 +43,8 @@ Une ligne `::: fichier` vaut pour les paires qui la suivent, jusqu'à la suivant
 paire est fait des lignes entre ses marqueurs, sans la fin de ligne qui précède le marqueur suivant ;
 les lignes vides entre deux paires sont permises, aucun autre texte. Les paires s'appliquent dans
 l'ordre, une paire sur le texte que laissent les précédentes. Tout ou rien : si une paire échoue
-(ancien texte absent ou non unique, fichier introuvable, lot mal formé), aucun fichier n'est écrit,
+(ancien texte absent ou non unique, fichier introuvable, lot mal formé : le message montre alors
+l'exemple d'une paire ci-dessus, sur ses six lignes), aucun fichier n'est écrit,
 et le message liste chaque paire en échec, avec son numéro et le message d'un remplacement simple
 (ses numéros de ligne sont ceux du texte que laissent les paires précédentes du même fichier, et le
 message le dit quand une paire précédente l'a changé) ; une écriture refusée (droits, ou un lien apparu
@@ -80,7 +84,23 @@ conversion), et que la source n'a perdu que le bloc ; sinon il n'écrit rien, ou
 fichiers tels qu'avant. Il écrit la cible d'abord, la source ensuite, et une écriture refusée remet ce
 qui était déjà écrit. `--essai` dit ce qui serait fait, sans rien écrire.
 
-Chaque mode qui écrit (remplacement simple, `--lot`, `--append`, `--plage`, `--deplace`) refuse, avant
+`--insere` insère le texte (argument ou `@<fichier>`, marqueur `{{u}}` compris ; la fin de ligne finale
+d'un texte argument se retire comme pour `--append`), coupé à ses fins de ligne, sur ses propres lignes
+juste après l'unique ligne qui porte l'ancre (une sous-chaîne, comme le motif de `show.py`), ou juste
+avant avec `--avant` (l'option seulement en dernier argument : ailleurs, un texte), aux fins de ligne du fichier (CRLF s'il en a) : « A\\nB » donne deux lignes. Une
+ancre en dernière ligne sans fin de ligne en reçoit une, et la dernière ligne insérée reste sans fin
+de ligne, comme le fichier. Une ancre absente ou présente sur plusieurs lignes, ou un texte vide : rien
+n'est écrit, et le message donne les lignes trouvées (ou la ligne la plus proche).
+
+`--coche` passe l'unique critère ouvert « `- [ ] <début du critère>…` » (indentation permise) à
+« `- [x] …` », et lui ajoute « ` — <note>` » au bout de la ligne quand une note est donnée (sur une
+seule ligne) : pour cocher un critère d'un ticket avec le test qui le couvre. Une ligne d'un bloc de
+code (entre deux lignes ``` ou ~~~) n'est pas un critère. Un critère absent, déjà coché (`- [x]`), ou un
+début commun à plusieurs critères ouverts : rien n'est écrit, et le message donne les lignes ; sauf
+quand le texte entier d'un seul d'entre eux est ce début, qui est alors coché.
+
+Chaque mode qui écrit (remplacement simple, `--lot`, `--append`, `--plage`, `--deplace`, `--insere`,
+`--coche`) refuse, avant
 toute lecture, puis de nouveau juste avant chaque écriture : un chemin dont une composante est `.git`
 (casse ignorée, dans le chemin donné comme dans le chemin réel) ; une cible qui est un lien symbolique ;
 pour un chemin relatif, un dossier du chemin donné qui en est un, sous le dossier courant (ceux
@@ -112,6 +132,14 @@ U_LITERAL = chr(92) + "u"
 USAGE = [line.strip() for line in __doc__.splitlines() if line.strip().startswith("python3 scripts/")]
 # Le préfixe des lignes de marqueur d'un fichier de paires.
 MARK = "::: "
+# L'exemple d'une paire de la docstring, sur ses six lignes, de « ::: fichier » à « ::: fin » : montré
+# après le message d'un lot mal formé (son format avait été deviné faux plusieurs fois).
+_doc = __doc__.splitlines()
+_first = next((k for k, line in enumerate(_doc) if line.strip().startswith(MARK + "fichier")), None)
+# Sans le retrait de la docstring : `parse_batch` refuse un marqueur précédé d'espaces, et l'exemple
+# affiché doit se recopier tel quel.
+# Un exemple retiré de la docstring ne casse pas l'import : le message s'en passe (un test l'épingle).
+EXAMPLE = [] if _first is None else [line.strip() for line in _doc[_first:_first + 6]]
 
 
 class PatchError(Exception):
@@ -301,6 +329,80 @@ def append(path, text):
     return len(lines)
 
 
+def insert(path, anchor, text, before=False):
+    """Insère `text`, coupé à ses fins de ligne, sur ses propres lignes après (ou, avec `before`, avant)
+    l'unique ligne de `path` qui porte `anchor`, aux fins de ligne du fichier ; rend (lignes insérées,
+    ligne de l'ancre). Une ancre en dernière ligne sans fin de ligne en reçoit une, et la dernière ligne
+    insérée reste alors sans fin de ligne, comme le fichier."""
+    if anchor == "" or text == "":
+        raise PatchError("ancre ou texte vide ; rien n'est écrit")
+    current = read_target(path)
+    lines = split_lines(current)
+    hits, where = located(lines, anchor)
+    if len(hits) != 1:
+        raise PatchError(f"{path} : ancre « {anchor} » {where} ; elle doit être sur une seule ligne ; rien n'est écrit")
+    k = hits[0]
+    newline = newline_of(current)
+    added = [(line, newline) for line in text.replace("\r\n", "\n").split("\n")]
+    if before:
+        result = lines[:k - 1] + added + lines[k - 1:]
+    else:
+        anchor_line = lines[k - 1]
+        if anchor_line[1] == "":
+            anchor_line, added[-1] = (anchor_line[0], newline), (added[-1][0], "")
+        result = lines[:k - 1] + [anchor_line] + added + lines[k:]
+    write_target(path, join_lines(result), current)
+    return len(added), k
+
+
+# Un critère de ticket : sa case (ouverte ou cochée), après une indentation, puis son texte.
+CRITERION = re.compile(r"(\s*- \[)([ xX])(\] )(.*)")
+
+
+def check(path, start, note=None):
+    """Coche l'unique critère ouvert (« - [ ] <start>… ») de `path` et lui ajoute « — <note> » quand une
+    note est donnée ; rend sa ligne. Un critère absent, déjà coché, ou désigné par un début commun à
+    plusieurs critères ouverts est refusé, sans rien écrire."""
+    if start == "":
+        raise PatchError("début du critère vide ; rien n'est écrit")
+    if note is not None and (note == "" or "\n" in note or "\r" in note):
+        raise PatchError("note vide ou sur plusieurs lignes : elle s'ajoute au bout de la ligne du critère ; "
+                         "rien n'est écrit")
+    current = read_target(path)
+    lines = split_lines(current)
+    # Les critères hors des blocs de code (``` ou ~~~) : un exemple cité dans un bloc n'en est pas un.
+    candidates, fence = [], None
+    for n, (content, _) in enumerate(lines, 1):
+        mark = content.lstrip()[:3]
+        if mark in ("```", "~~~"):
+            fence = None if fence == mark else (fence or mark)
+            continue
+        if fence is None and (m := CRITERION.fullmatch(content)):
+            candidates.append((n, m))
+    matches = [(n, m) for n, m in candidates if m[4].startswith(start)]
+    opened = [(n, m) for n, m in matches if m[2] == " "]
+    # Un critère dont le texte entier est le début donné l'emporte : sinon un critère qui est le début d'un
+    # autre ne pourrait jamais être coché.
+    exact = [(n, m) for n, m in opened if m[4].rstrip() == start.rstrip()]
+    if len(opened) > 1 and len(exact) == 1:
+        opened = exact
+    open_ = [n for n, _ in opened]
+    if not open_:
+        done = [n for n, m in matches if m[2] != " "]
+        if done:
+            raise PatchError(f"{path} : le critère « {start}… » est déjà coché, ligne{'s' if len(done) > 1 else ''} "
+                             f"{line_list(done)} ; rien n'est écrit")
+        raise PatchError(f"{path} : aucun critère ouvert « - [ ] {start}… »"
+                         f"{nearest_text([content for content, _ in lines], start)} ; rien n'est écrit")
+    if len(open_) > 1:
+        raise PatchError(f"{path} : {len(open_)} critères commencent ainsi, lignes {line_list(open_)} ; "
+                         f"donner un début propre à un seul ; rien n'est écrit")
+    n, m = opened[0]
+    lines[n - 1] = (f"{m[1]}x{m[3]}{m[4]}" + (f" — {note}" if note is not None else ""), lines[n - 1][1])
+    write_target(path, join_lines(lines), current)
+    return n
+
+
 def pair_text(buffer):
     """Le texte d'une paire, sans la fin de ligne qui précède le marqueur suivant, `\\r\\n` compris :
     un fichier de paires en CRLF gardait sinon un `\\r` final, que `@<fichier>` retire."""
@@ -347,7 +449,11 @@ def patch_batch(lot):
     """Applique les paires du fichier `lot`, tout ou rien ; rend [(numéro, chemin, ligne)]."""
     if not Path(lot).is_file():
         raise PatchError(f"fichier de paires introuvable : {lot}")
-    pairs = parse_batch(decode(Path(lot)))
+    text = decode(Path(lot))
+    try:
+        pairs = parse_batch(text)
+    except PatchError as err:
+        raise PatchError(f"{err}\nexemple d'une paire :\n" + "\n".join(EXAMPLE))
     # Rangés par chemin résolu : un même fichier nommé deux fois (`a.md`, `./a.md`) garde chaque remplacement.
     # Chaque nom est contrôlé (`guard`), même quand un autre nom du même fichier a déjà été lu : un lien
     # vers un fichier déjà nommé passait sinon sans contrôle. Le fichier s'écrit par le premier nom
@@ -575,12 +681,51 @@ def move_main(argv):
     return 0
 
 
+def line_text(value):
+    """Un texte de lignes (`--append`, `--insere`) : l'argument, dont la fin de ligne finale se retire comme
+    celle d'un `@<fichier>` (une seule, et pas celle d'un texte fait seulement d'une fin de ligne)."""
+    text = argument(value)
+    if (value.startswith("@@") or not value.startswith("@")) and strip_final_newline(text):
+        text = strip_final_newline(text)
+    return text
+
+
+def insert_main(argv):
+    """`--insere <fichier> <ancre> <texte> [--avant]`."""
+    # `--avant` n'est l'option qu'en dernier : une ancre ou un texte « --avant » restent des textes.
+    before = len(argv) == 4 and argv[3] == "--avant"
+    rest = argv[:3] if before else argv
+    if len(rest) != 3:
+        print(USAGE[6], file=sys.stderr)
+        return 2
+    path, anchor, text = rest
+    count, line = insert(path, argument(anchor), line_text(text), before)
+    print(f"{path} : {count} ligne{'s insérées' if count > 1 else ' insérée'} {'avant' if before else 'après'} "
+          f"la ligne {line}")
+    return 0
+
+
+def check_main(argv):
+    """`--coche <fichier de ticket> <début du critère> [<note>]`."""
+    if len(argv) not in (2, 3):
+        print(USAGE[7], file=sys.stderr)
+        return 2
+    path, start = argv[0], argument(argv[1])
+    line = check(path, start, argument(argv[2]) if len(argv) == 3 else None)
+    print(f"{path} : critère coché (ligne {line})")
+    return 0
+
+
 def main(argv):
     try:
         if argv[:1] == ["--plage"]:
             return range_main(argv[1:])
         if argv[:1] == ["--deplace"]:
             return move_main(argv[1:])
+        if argv[:1] == ["--insere"]:
+            return insert_main(argv[1:])
+        if argv[:1] == ["--coche"]:
+            return check_main(argv[1:])
         if argv[:1] == ["--lot"] and len(argv) == 2:
             done = patch_batch(argv[1])
             for number, target, line in done:
@@ -589,15 +734,12 @@ def main(argv):
             print(f"{len(done)} remplacement{'s' if len(done) > 1 else ''} dans {files} fichier{'s' if files > 1 else ''}")
             return 0
         if argv[:1] == ["--append"] and len(argv) == 3:
-            text = argument(argv[2])
             # Un texte donné en argument perd sa fin de ligne finale, comme un `@<fichier>` : sinon la
             # fin de ligne qu'ajoute `--append` faisait une ligne vide de plus.
-            if (argv[2].startswith("@@") or not argv[2].startswith("@")) and strip_final_newline(text):
-                text = strip_final_newline(text)
-            count = append(argv[1], text)
+            count = append(argv[1], line_text(argv[2]))
             print(f"{argv[1]} : ajouté ({count} ligne{'s' if count > 1 else ''} à la fin)")
             return 0
-        if len(argv) != 3 or argv[0] in {"--lot", "--append", "--plage", "--deplace"}:
+        if len(argv) != 3 or argv[0] in {"--lot", "--append", "--plage", "--deplace", "--insere", "--coche"}:
             print("\n".join(USAGE), file=sys.stderr)
             return 2
         line = patch(argv[0], argument(argv[1]), argument(argv[2]))

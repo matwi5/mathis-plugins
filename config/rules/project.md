@@ -2,7 +2,7 @@
 
 ## Commits
 
-Seulement dans un dépôt git ; pas besoin d'attendre une demande. Lancer `/project:commit`, ou git directement avec les règles git communes (`~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/git.md`). Message rédigé à partir du diff réel, au format fixé par le CLAUDE.md du projet, sinon comme les derniers messages de son `git log`. Ajouter les fichiers par chemin ; ne jamais ajouter de secrets (`.env*` sauf `.env.example`, clés, identifiants) ; ne jamais contourner un hook en échec par `--no-verify`.
+Seulement dans un dépôt git ; pas besoin d'attendre une demande. Lancer `/project:commit`, ou git directement avec les règles git communes (`~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/git.md`). Message rédigé à partir du diff réel, au format fixé par le CLAUDE.md du projet, sinon comme les derniers messages de son `git log`. Ajouter les fichiers par chemin ; ne jamais ajouter de secrets (`.env*` sauf `.env.example`, clés, identifiants) ; ne jamais passer `--no-verify` (ni `-n` à `git commit`), quel que soit l'état du hook, même pour un commit de travail en cours.
 
 ## Claude ne pousse jamais
 
@@ -19,4 +19,4 @@ Les skills `/project:sync`, `/project:push`, `/project:pr`, `/project:version`, 
 
 ## Compte rendu de fin d'exécution
 
-**Fin d'une exécution longue** (plusieurs fichiers, ou plus de 30 minutes de travail) : terminer par le compte rendu décrit dans `~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/compte-rendu.md` (Résultat, À faire par toi, Décidé sans toi, Modifié, Trouvé). Un worker de groupe rend à la place le compte rendu de sa procédure.
+**Fin d'une exécution longue** (plusieurs fichiers, ou plus de 30 minutes de travail) : terminer par le compte rendu décrit dans `~/.claude/plugins/marketplaces/mathis-plugins/plugins/project/reference/compte-rendu.md` (Résultat, À faire par toi, Décidé sans toi, Modifié, Trouvé). Un worker de groupe rend à la place le compte rendu de sa procédure. À la fin d'une mission flow-board (ses tickets faits et relus), la discussion qui la porte n'écrit pas non plus ce compte rendu : son rapport est celui de `/flow-board:compte-rendu`, que l'utilisateur lance (en mode auto, le mod l'envoie lui-même) ; elle dit en une ligne de lancer le compte rendu (bouton du tableau de bord), sans compte rendu complet en doublon. Avant cette fin, elle annonce la suite que propose le tableau de bord.

@@ -9,7 +9,8 @@
 // la liste jetable, vérifié de nouveau après l'arrêt de la session ; la branche n'est jamais
 // supprimée par la fermeture ; une session qui travaille encore n'est jamais arrêtée. Le texte de la
 // fermeture ne nomme donc jamais une option qui force, ni une suppression de branche, ni une fusion.
-// La branche part plus tard, à la validation du compte rendu (`branchCleanupText`), par `git branch -d`.
+// La branche part plus tard, à la validation du compte rendu (`branchCleanupText`), par `git branch -d`, que
+// le mode --branches de scripts/fermeture.mjs vérifie et imprime quand le mod connaît ce script.
 
 import type { Closing, Run } from '../types'
 import { SKILLS } from './catalog.ts'
@@ -86,6 +87,61 @@ const groupSlug = (run: Run): string => {
  */
 export const groupWorktree = (run: Run, id: unknown, seq?: number): string | null => (isGroupId(id) ? worktreeName(run, id, seq) : null)
 
+/** Ce qu'un lien d'envoi de groupe dit de son worktree (`GroupLink`, `ClosedLink`), relu d'un fichier partagé. */
+export type SendName = { worktreeName?: unknown; worktreeClash?: unknown; sessionClash?: unknown }
+
+/**
+ * Un nom de worktree noté pour l'envoi `seq` du groupe `id` : la forme d'un nom de worktree (comme
+ * `isSafeWorktreeName` de scripts/fermeture.mjs), celle d'une branche sûre (il en devient une :
+ * `worktree-<nom>`, `--branche`) et celle que `worktreeName` donne à ce groupe et à cet envoi
+ * (`groupe-[<nom court>-]<id>[-<n>]`, le numéro seulement à partir du deuxième envoi). Un nom qui ne
+ * désigne pas ce groupe n'entre dans aucune commande.
+ */
+export const isNotedWorktree = (name: unknown, id: unknown, seq: unknown): name is string => {
+  if (typeof name !== 'string' || !isGroupId(id) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(name) || /\.\.|\.$|\.lock$/.test(name) || !isSafeBranch(name)) return false
+  const n = sendNumber(seq)
+  return new RegExp(`^groupe-(?:[a-z0-9][a-z0-9-]*-)?${id}${n !== undefined && n > 1 ? `-${n}` : ''}$`).test(name)
+}
+
+/**
+ * Le worktree d'un envoi de groupe, pour la fermeture : le nom noté dans son lien au lancement
+ * (`worktreeName`), seulement s'il est en forme (`isNotedWorktree`) ; sans nom noté (un lien d'avant
+ * la note), le nom recalculé depuis le titre, comme avant. Null, aucun nom pour aucune commande : un
+ * id hors forme, un nom noté hors forme, ou deux copies qui notaient deux noms différents pour cet
+ * envoi (`worktreeClash`, toute valeur relue) ; la fermeture s'arrête alors et le dit.
+ */
+export const sendWorktree = (run: Run, id: unknown, seq: unknown, send: SendName | undefined): string | null => {
+  if (!isGroupId(id)) return null
+  const link = send !== null && typeof send === 'object' ? send : undefined
+  if (link?.worktreeClash !== undefined) return null
+  if (link?.worktreeName === undefined) return worktreeName(run, id, sendNumber(seq))
+  return isNotedWorktree(link.worktreeName, id, seq) ? link.worktreeName : null
+}
+
+/**
+ * Un envoi de groupe peut se fermer d'ici : son id est en forme, son nom de worktree noté, s'il en a un, l'est aussi,
+ * sans conflit (alors `sendWorktree` n'est pas null), sans relire le titre ; et son id de session n'est pas marqué
+ * comme non noté sûrement (`sessionClash`), une marque que `sendWorktree` ne lit pas. Le prédicat des refus
+ * (« Do not close », `closed` limité à « stopped », branche gardée), comme `isGroupId` pour l'id.
+ */
+export const hasSendName = (id: unknown, seq: unknown, send: SendName | undefined): boolean => {
+  if (!isGroupId(id)) return false
+  const link = send !== null && typeof send === 'object' ? send : undefined
+  // Un id de session qui n'a pas pu être noté sûrement (`sessionClash`) refuse de même : la fermeture garde la session.
+  return link?.worktreeClash === undefined && link?.sessionClash === undefined && (link?.worktreeName === undefined || isNotedWorktree(link.worktreeName, id, seq))
+}
+
+/** L'envoi est marqué : son id de session n'a pas pu être noté sûrement (`sessionClash`, toute valeur relue). */
+const isSessionClash = (send: SendName | undefined): boolean => send !== null && typeof send === 'object' && send.sessionClash !== undefined
+
+/** Pourquoi rien ne se ferme d'ici pour un envoi en forme dont `hasSendName` est faux, pour la réponse de l'outil. */
+export const sendRefusalEn = (send: SendName | undefined): string =>
+  isSessionClash(send) ? 'its session id could not be noted surely (more than one candidate, an id out of form, a session already noted for another send, or two copies in disagreement)' : 'its noted worktree name is out of form or in conflict'
+
+/** La même raison, en français (journal, toasts, `why` rapporté). */
+export const sendRefusalFr = (send: SendName | undefined): string =>
+  isSessionClash(send) ? 'id de session non noté sûrement (plus d’une session candidate, un id hors forme, une session déjà notée pour un autre envoi ou deux copies en désaccord)' : 'nom de worktree noté hors forme ou en conflit'
+
 /** Le nom du worktree d'un groupe, la place de son id gardée (« <id> ») : le gabarit d'un brief, jamais une commande. */
 export const groupWorktreeTemplate = (run: Run): string => worktreeName(run, '<id>')
 
@@ -133,7 +189,10 @@ export type CloseInput = {
   target: CloseTarget
   /** Le dossier est un dépôt git : sans git, pas de worktree, la fermeture n'arrête que la session. */
   isRepo: boolean
-  /** L'id de la session, relevé à son lancement (`local_…` pour l'app Desktop, l'id court du CLI sinon). */
+  /**
+   * L'id de la session, relevé à son lancement (`local_…` pour l'app Desktop, l'id court du CLI sinon), ou, sans la
+   * sortie du lancement, l'id court tiré de son entrée de relais (`linkRelaySessions` de link.ts).
+   */
   session?: string
   /** Le numéro de l'envoi (session des éléments, ou envoi suivant d'un groupe), qui nomme son worktree. */
   seq?: number
@@ -149,6 +208,12 @@ export type CloseInput = {
   hasReport: boolean
   /** La fermeture déjà notée pour cet envoi (`closing` de son lien) : gardée faute de compte rendu, elle rend `claude rm` à la suivante. */
   noted?: Closing | null
+  /**
+   * Le lien de cet envoi d'un groupe (`delegated`, ou une entrée de `earlier`) : le nom de son worktree noté au
+   * lancement (`worktreeName`) et la marque d'un conflit, lus par `sendWorktree`. Absent : le nom se recalcule
+   * depuis le titre courant, comme pour un lien d'avant la note.
+   */
+  send?: SendName
 }
 
 /**
@@ -156,10 +221,11 @@ export type CloseInput = {
  * « stopped », avec pour worktree retiré celui de cet envoi (son nom), comme le point 10 le demande dans ce cas.
  * Dérivé de la fermeture notée, sans champ gardé de plus.
  */
-export const isKeptForReport = (run: Run, target: CloseTarget, seq: number | undefined, noted: Closing | null | undefined): boolean => {
+export const isKeptForReport = (run: Run, target: CloseTarget, seq: number | undefined, noted: Closing | null | undefined, send?: SendName): boolean => {
   if (target.kind !== 'group' || !isGroupId(target.id)) return false
   if (noted === null || typeof noted !== 'object' || noted.state !== 'stopped' || typeof noted.worktree !== 'string') return false
-  const name = describe(run, target, seq).worktree
+  // Le worktree de cet envoi : son nom noté au lancement (hors forme : aucun, rien n'est gardé pour lui).
+  const name = describe(run, target, seq, send).worktree
   const removed = noted.worktree.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() ?? ''
   return name !== '' && removed.toLowerCase() === name.toLowerCase()
 }
@@ -490,10 +556,13 @@ export const missionSessionId = (run: Run, runs: readonly Run[], here: string): 
 }
 
 /** Ce que la fermeture désigne : la cible, en clair, et ce qui reconnaît sa session. */
-const describe = (run: Run, target: CloseTarget, seq?: number) => {
+const describe = (run: Run, target: CloseTarget, seq: number | undefined, send: SendName | undefined) => {
   if (target.kind === 'group') {
-    // Un id hors forme n'a pas de nom de worktree : `closingProcedure` et `reopenText` s'arrêtent avant.
-    const wt = groupWorktree(run, target.id, seq) ?? ''
+    // Le nom noté au lancement de cet envoi, sinon recalculé (lien d'avant la note). Un id ou un nom noté hors
+    // forme (ou en conflit) n'a pas de nom de worktree, ici une chaîne vide : `closingProcedure` s'arrête avant,
+    // `reopenText` (un id hors forme l'arrête aussi) n'en lit que le titre, sans nom noté, et `isKeptForReport` prend
+    // la chaîne vide pour « aucun worktree » (rien n'est gardé pour lui).
+    const wt = sendWorktree(run, target.id, seq, send) ?? ''
     const n = sendNumber(seq)
     // Un envoi suivant : son titre et ses branches portent son numéro, sans les noms d'avant la 0.59.0.
     if (n !== undefined && n > 1) {
@@ -534,10 +603,12 @@ const describe = (run: Run, target: CloseTarget, seq?: number) => {
  * Ce que Claude rapporte après la procédure, par le champ `closed` de l'outil flow : sans cet envoi,
  * le tableau de bord la lui redemanderait. Rien quand la session travaille encore : la fermeture attend.
  */
-export const closedHint = (target: CloseTarget, link?: number): string => {
-  // Un id de groupe hors forme : rien ne se ferme d'ici, seul l'arrêt se rapporte.
-  if (target.kind === 'group' && !isGroupId(target.id))
-    return `Then send {"closed": [{"group": ${asciiJson(target.id)}${link !== undefined ? `, "link": ${link}` : ''}, "state": "stopped", "why": "id de groupe hors forme"}]}: nothing is closed from here; tell the user why, without offering to close it another way.`
+export const closedHint = (target: CloseTarget, link?: number, send?: SendName & { seq?: unknown }): string => {
+  // Un id de groupe ou un nom de worktree noté hors forme (ou en conflit), ou un id de session non noté sûrement : rien ne se ferme d'ici, seul l'arrêt se rapporte.
+  if (target.kind === 'group' && !hasSendName(target.id, send?.seq, send)) {
+    const reason = isGroupId(target.id) ? JSON.stringify(sendRefusalFr(send)) : '"id de groupe hors forme"'
+    return `Then send {"closed": [{"group": ${asciiJson(target.id)}${link !== undefined ? `, "link": ${link}` : ''}, "state": "stopped", "why": ${reason}}]}: nothing is closed from here; tell the user why, without offering to close it another way.`
+  }
   // `link` : la session précédente d'un groupe confié de nouveau, désignée par son envoi.
   const key = target.kind === 'group' ? `"group": ${JSON.stringify(target.id)}${link !== undefined ? `, "link": ${link}` : ''}` : `"items": "${target.skill}"`
   return (
@@ -606,7 +677,7 @@ export const reopenText = ({ run, target, closing, session, seq, root }: { run: 
     }
   }
   // Le worktree d'une session fermée a été retiré : le recréer d'abord (la seule chose copiée), puis la désarchiver.
-  const unarchive = `Puis désarchive dans l’app Claude Desktop la session dont le titre commence par ${describe(run, target, seq).title} : elle reprend dans ce worktree.`
+  const unarchive = `Puis désarchive dans l’app Claude Desktop la session dont le titre commence par ${describe(run, target, seq, undefined).title} : elle reprend dans ce worktree.`
   return {
     text: add,
     isApp,
@@ -622,7 +693,7 @@ export const reopenText = ({ run, target, closing, session, seq, root }: { run: 
 export const readClosing = (value: unknown): Closing | undefined => (value !== null && typeof value === 'object' ? (value as Closing) : undefined)
 
 /** Les sessions précédentes d'un groupe confié de nouveau, relues : une liste, ou une seule entrée d'avant. */
-const earlierLinks = (value: unknown): { seq?: number; closing?: Closing }[] =>
+const earlierLinks = (value: unknown): ({ seq?: number; closing?: Closing } & SendName)[] =>
   (Array.isArray(value) ? value : value ? [value] : []).filter(x => x !== null && typeof x === 'object')
 
 const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -634,14 +705,17 @@ const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g,
  * envoi d'un groupe lancé avant la 0.59.0. La session des pistes gardée à côté du lien n'a pas noté
  * son numéro d'envoi : sans lui, tout numéro de cette mission est admis, ou le libellé seul (envoi d'avant la numérotation).
  */
-export const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch: string): boolean => {
+export const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch: string, send?: SendName): boolean => {
   const n = sendNumber(seq)
   // `cli` : le worktree tel qu'en worktree-<…> et <…> ; `app` : celui avant le suffixe de claude/<…>-<suffixe>.
   let cli: string
   let app: string
   let legacy = ''
   if (target.kind === 'group') {
-    cli = app = escapeRe(groupWorktree(run, target.id, n) ?? '')
+    // Le nom noté au lancement de cet envoi (sinon recalculé) ; aucun nom sûr : aucune branche n'est la sienne.
+    const name = sendWorktree(run, target.id, n, send)
+    if (name === null) return false
+    cli = app = escapeRe(name)
     if ((n ?? 1) === 1) legacy = `|groupe-${escapeRe(target.id)}`
   } else {
     const label = SKILLS[target.skill]?.items?.label ?? 'Éléments'
@@ -656,13 +730,14 @@ export const isOwnBranch = (run: Run, target: CloseTarget, seq: unknown, branch:
 }
 
 /** Ce que devient la branche d'un worker à la validation du compte rendu : supprimée par -d si notée sur une fermeture « closed » sous un nom de la cible, gardée sinon, avec la raison. */
-export const branchFate = (run: Run, target: CloseTarget, seq: unknown, closing: Closing | undefined): { branch: string } | { kept: string } => {
+export const branchFate = (run: Run, target: CloseTarget, seq: unknown, closing: Closing | undefined, send?: SendName): { branch: string } | { kept: string } => {
   if (closing?.state === 'closed') {
     if (target.kind === 'group' && !isGroupId(target.id)) return { kept: 'fermé, id de groupe hors forme, branche gardée' }
+    if (target.kind === 'group' && !hasSendName(target.id, seq, send)) return { kept: `fermé, ${sendRefusalFr(send)}, branche gardée` }
     if (closing.branch === undefined) return { kept: 'fermé, branche inconnue, gardée' }
     // Ni un pseudo-ref (ORIG_HEAD…), ni un nom qui imite un espace de refs (tags/…) : la suppression ne vise que refs/heads.
     if (!isSafeBranch(closing.branch) || /(?:^|\/)[A-Z_]*_HEAD$|^(?:heads|tags|remotes)\//.test(closing.branch)) return { kept: 'fermé, branche notée hors forme, gardée' }
-    if (!isOwnBranch(run, target, seq, closing.branch)) return { kept: 'fermé, nom de branche inattendu (pas celui de cette session), gardée' }
+    if (!isOwnBranch(run, target, seq, closing.branch, send)) return { kept: 'fermé, nom de branche inattendu (pas celui de cette session), gardée' }
     return { branch: closing.branch }
   }
   if (closing?.state === 'app') return { kept: 'à archiver dans l’app, branche gardée' }
@@ -697,8 +772,8 @@ const cleanupPlan = ({ run, isRepo, root }: CleanupInput): { folder: string | un
   const toDelete = new Map<string, string[]>()
   const kept: string[] = []
   if (!isRepo) return { folder, toDelete, kept }
-  const note = (who: string, target: CloseTarget, seq: unknown, closing: unknown) => {
-    const fate = branchFate(run, target, seq, readClosing(closing))
+  const note = (who: string, target: CloseTarget, seq: unknown, closing: unknown, send?: SendName) => {
+    const fate = branchFate(run, target, seq, readClosing(closing), send)
     if ('kept' in fate) kept.push(`${who} : ${fate.kept}`)
     else if (folder === undefined) kept.push(`${who} : fermé, dossier de la mission hors forme, branche gardée`)
     else toDelete.set(fate.branch, [...(toDelete.get(fate.branch) ?? []), who])
@@ -715,9 +790,9 @@ const cleanupPlan = ({ run, isRepo, root }: CleanupInput): { folder: string | un
     // commandes ; deux groupes hors forme se distinguent par leur rang dans le plan.
     const who = (seq: unknown) => `groupe ${isGroupId(g.id) ? g.id : `(id hors forme, ${rank + 1}e groupe du plan)`}${sent(seq)}`
     const target = { kind: 'group', id: g.id, name: g.name } as const
-    for (const prev of earlierLinks(link?.earlier)) note(who(prev.seq), target, prev.seq, prev.closing)
-    if (link) note(who(link.seq), target, link.seq, link.closing)
-    if (isEntry(g.linked)) note(who(g.linked.seq), target, g.linked.seq, undefined)
+    for (const prev of earlierLinks(link?.earlier)) note(who(prev.seq), target, prev.seq, prev.closing, prev)
+    if (link) note(who(link.seq), target, link.seq, link.closing, link)
+    if (isEntry(g.linked)) note(who(g.linked.seq), target, g.linked.seq, undefined, g.linked)
   }
   for (const phase of (Array.isArray(run.phases) ? run.phases : []).filter(isEntry)) {
     const label = SKILLS[phase.skill]?.items?.label
@@ -734,8 +809,9 @@ const cleanupPlan = ({ run, isRepo, root }: CleanupInput): { folder: string | un
 /**
  * Ce que le message de « ✓ Valider le rapport » dit des branches. Avec une branche à supprimer, la
  * consigne : chaque branche vérifiée sortie par aucun worktree et contenue dans la branche de travail,
- * puis supprimée par `git branch -d`, jamais `-D` ni `--force`, chaque commande écrite en entier, par
- * `git -C '<dossier de la mission>'`. Sans branche à supprimer mais avec des branches gardées, leur seul
+ * puis supprimée par `git branch -d`, jamais `-D` ni `--force`, par `git -C '<dossier de la mission>'` ;
+ * le script des vérifications là (`closingScript`), en un appel de son mode `--branches`, qui imprime la
+ * seule commande à lancer ; sinon, chaque commande écrite en entier. Sans branche à supprimer mais avec des branches gardées, leur seul
  * bilan, sans commande (série 23). Rien sans git, ni sans worker. Invariant : une validation du
  * compte rendu ne supprime jamais une branche qui n'est pas entièrement contenue dans la branche de
  * travail, ni une branche qui n'est pas celle notée pour une session fermée de la mission ; une branche
@@ -752,6 +828,21 @@ export const branchCleanup = (input: CleanupInput): { text: string; branches: st
   const keptList = `${kept.join(' ; ')}.`
   if (toDelete.size === 0 || folder === undefined)
     return kept.length > 0 ? { text: `Aucune branche de worker à supprimer pour cette mission. Gardées, sans aucune commande : ${keptList} Redis-les-moi en une liste, avant la suite.`, branches: [] } : null
+  // Le script des vérifications là (le plugin installé) : son mode --branches vérifie tout en un appel, en
+  // lecture seule, et imprime la seule commande de suppression ; la session la lance telle quelle.
+  const script = closingScript.path
+  if (isScriptPath(script)) {
+    const names = [...toDelete.keys()]
+    const cmd = `node ${shellQuote(script)} --branches --dossier ${shellQuote(folder)} ${names.map(b => shellQuote(b)).join(' ')}`
+    const listed = [...toDelete].map(([branch, whos]) => `${shellQuote(branch)} (${whos.join(' ; ')})`)
+    const text =
+      `Le compte rendu validé, supprime les branches des workers fermés de cette mission, et elles seules, celles de la liste ci-dessous, jamais une autre : ${listed.join(' — ')}. ` +
+      `1) lance « ${cmd} », qui ne fait que lire (quel que soit ton dossier courant) : sa première ligne est le verdict, puis une ligne par branche (SUPPRIMABLE, ou GARDÉE et sa raison), sa dernière (« suite : ») le seul geste à faire ; ARRÊT, ÉCHEC, ou pas de verdict en première ligne (node ou le script introuvable) : ne supprime rien et dis-le-moi ; ` +
+      `2) seulement sur BRANCHES en première ligne, lance la commande qu’il imprime après « commande : », telle quelle, une seule fois, sans rien y ajouter ni retirer, aucune option de plus ; elle ne nomme que des branches de la liste : une autre, ne lance rien et dis-le-moi ; sans ligne « commande : », aucune suppression ; lis sa sortie branche par branche (git l’écrit en anglais ou dans la langue du poste) : une branche que git refuse (« error: », « erreur : ») reste, ne la force d’aucune façon, et garde son message ; dans le doute, relance la vérification du point 1 : une branche « absente » est supprimée, une autre est restée. Une commande que ton garde-fou refuse, ou qui ne tourne pas : ne la réécris pas, ne supprime rien de plus et dis-le-moi. ` +
+      (kept.length > 0 ? `Gardées, sans aucune commande : ${keptList} ` : '') +
+      `Puis dis-moi en une liste, avant la suite, ce qui est supprimé, gardé (avec sa raison, celle du script ou de la liste des gardées ci-dessus) et refusé par git (avec son message).`
+    return { text, branches: names }
+  }
   const git = `git -C ${shellQuote(folder)}`
   // Chaque commande entre « », écrite en entier, citée, par refs/heads (un tag du même nom ne répond
   // pas à sa place) : aucune ne se lit comme une suite de commandes du shell.
@@ -763,6 +854,10 @@ export const branchCleanup = (input: CleanupInput): { text: string; branches: st
     `Le compte rendu validé, supprime les branches des workers fermés de cette mission, et elles seules, celles de la liste ci-dessous, jamais une autre. ` +
     `Une commande à la fois, jamais enchaînées, toutes par ${git} (le dossier de la mission, quel que soit ton dossier courant) : 1) « ${git} branch --show-current » donne <branche de travail> ; rien (HEAD détachée), ou un nom qui n’a pas que [A-Za-z0-9._/-] ou commence par - : ne supprime rien et dis-le-moi ; ` +
     `2) « ${git} worktree list --porcelain », lue une fois : une branche de la liste qu’une ligne branch refs/heads/<branche> porte (un worktree l’a sortie, le dossier de la mission compris) est gardée, sans autre commande ; ` +
+    // Sur un disque qui ignore la casse, show-ref, merge-base et branch -d lisent refs/heads/<branche> sur le disque :
+    // une autre branche qui n'en diffère que par la casse répondrait à sa place, et -d effacerait les deux. Sur la
+    // branche de travail, sa fusion se lirait ailleurs : rien ne se supprime.
+    `puis « ${git} for-each-ref ${shellQuote('--format=%(refname)')} refs/heads/ », lue une fois : une autre ligne qui ne diffère de refs/heads/<branche de travail> que par la casse (majuscules et minuscules) : ne supprime rien et dis-le-moi ; une branche de la liste qui n’y paraît sous aucune casse est déjà supprimée, passe à la suivante ; une qui n’y paraît que sous une autre casse, ou dont une autre ligne ne diffère que par la casse, est gardée, sans autre commande ; ` +
     `3) pour chaque autre branche, ses commandes a, b, c telles qu’écrites, <branche de travail> mis à sa place, chacune seulement si la précédente a rendu 0 : a) rend 1 : elle n’existe plus, déjà supprimée, passe à la suivante ; un autre code (une erreur de git) : garde-la, inconnue ; b) rend autre chose que 0 : ses commits ne sont pas tous dans <branche de travail>, garde-la ; c) la suppression par -d, sans aucune autre option : si git refuse, la branche reste, ne la force d’aucune façon, et garde son message. Une commande que ton garde-fou refuse, ou qui ne tourne pas : ne la réécris pas (ni sans -C, ni autrement), ne supprime rien de plus et dis-le-moi. ` +
     `Branches : ${lines.join(' — ')}. ` +
     (kept.length > 0 ? `Gardées, sans aucune commande : ${keptList} ` : '') +
@@ -808,7 +903,7 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
     (isApp
       ? `2) seulement quand sa dernière ligne le demande (sur SÛR, ou sur DÉJÀ RETIRÉ) et une fois ListAgents la montrant au repos (busy : n’arrête rien, remets la fermeture à plus tard), arrêter une session de l’app, c’est l’archiver : si l’app te donne l’outil archive_session, ${appArchive(d.title)} ; sinon, demande-moi en clair de l’archiver (titre qui commence par ${d.titles}) et de te dire « archivée », sans attendre pour le reste de la mission ; puis `
       : '2) après l’arrêt fait sur SÛR, ') +
-    `la même commande avec --apres-arret : seulement sur SÛR, la commande de retrait qu’il imprime ; la branche reste : ne la supprime pas ; ` +
+    `la même commande avec --apres-arret : seulement sur SÛR, la commande de retrait qu’il imprime ; sur ATTENDRE, la relancer comme le dit sa dernière ligne ; la branche reste : ne la supprime pas ; ` +
     removal +
     `4) dis-moi ce qui a été fermé et ce qui reste, avec la ligne ${COMMITS_LINE} ; ${isApp ? APP_RESUME : RESUME}.`
   )
@@ -823,13 +918,22 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
  * par la fermeture précédente, gardée faute de compte rendu (`isKeptForReport`). Sans git : vérifier, puis arrêter
  * la session seulement.
  */
-export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport, noted }: CloseInput): string => {
+export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport, noted, send }: CloseInput): string => {
   // Un id de groupe hors forme : le titre de sa session, le nom de son worktree et de sa branche en
   // seraient tirés. Rien n'en est écrit, pas même l'id : la fermeture s'arrête, avec git comme sans
   // (invariant : aucun worktree ni branche tiré de lui).
   if (target.kind === 'group' && !isGroupId(target.id))
     return `Ne ferme pas le worker d’un groupe de la mission « ${neutralInPrompt(run.title)} » : son id n’a pas la forme d’un id de groupe (${GROUP_ID_FORM_FR}), et le titre de sa session, le nom de son worktree et celui de sa branche en seraient tirés. ${CLOSE_NOTHING}`
-  const d = describe(run, target, seq)
+  // Un id de session qui n'a pas pu être noté sûrement (plus d'une session candidate, un id hors forme, deux copies en
+  // désaccord : `sessionClash`, toute valeur relue) : la fermeture garde la session, ni claude stop ni claude rm, et
+  // ne retire pas non plus son worktree, avec git comme sans (invariant de la session notée).
+  if (target.kind === 'group' && isSessionClash(send))
+    return `Ne ferme pas le worker ${sendNumber(seq) !== undefined || seq === undefined ? `de l’envoi ${sendNumber(seq) ?? 1}` : 'd’un envoi au numéro illisible'} du groupe ${target.id} de la mission « ${neutralInPrompt(run.title)} » : son id de session n’a pas pu être noté sûrement (plus d’une session candidate ou un id hors forme au relais, une session déjà notée pour un autre envoi, ou deux copies du tableau de bord en désaccord) ; la session est gardée, ni claude stop ni claude rm, et son worktree reste. Ce refus ne vaut que pour cet envoi. ${CLOSE_NOTHING}`
+  // Un nom de worktree noté au lancement hors forme, ou deux noms notés par deux copies : aucun nom de cet envoi
+  // n'entre dans une commande ni dans ce texte, avec git comme sans (invariant du nom noté) ; la fermeture s'arrête.
+  if (target.kind === 'group' && !hasSendName(target.id, seq, send))
+    return `Ne ferme pas le worker ${sendNumber(seq) !== undefined || seq === undefined ? `de l’envoi ${sendNumber(seq) ?? 1}` : 'd’un envoi au numéro illisible'} du groupe ${target.id} de la mission « ${neutralInPrompt(run.title)} » : le nom de son worktree noté à son lancement est hors forme, ou deux copies du tableau de bord en notaient deux différents ; aucun nom n’en est tiré pour une commande. Ce refus ne vaut que pour cet envoi : un autre envoi du groupe suit sa propre consigne. ${CLOSE_NOTHING}`
+  const d = describe(run, target, seq, send)
   // Un id ou un nom de worktree hors forme n'entre dans aucune commande : la fermeture s'arrête.
   // Sans git, aucun nom de worktree n'entre dans une commande : seul l'id compte.
   const unsafe =
@@ -860,7 +964,7 @@ export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport,
   }
   // Le script des vérifications là (le plugin installé) : sa commande et les gestes, pas la procédure entière.
   const script = closingScript.path
-  if (isScriptPath(script)) return scriptProcedure(d, target, script, session, seq, isApp, !isApp && hasReport && isKeptForReport(run, target, seq, noted), hasReport)
+  if (isScriptPath(script)) return scriptProcedure(d, target, script, session, seq, isApp, !isApp && hasReport && isKeptForReport(run, target, seq, noted, send), hasReport)
   // L'entrée de la session dans claude agents --json n'est retenue que si son cwd est le worktree vérifié.
   const entry = `son entrée dans claude agents --json (${session ? `id ${session}` : `son name commence par ${d.titles}`}), retenue seulement si son cwd est <worktree> ; une autre entrée dont le cwd est dans <worktree> (une autre session au travail dedans) arrête la fermeture`
   const idle = isApp
@@ -871,7 +975,7 @@ export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport,
   // Invariant : la fermeture ne lance jamais `claude rm` sur une session dont le compte rendu n'est pas au relais.
   // Sans lui, les points 0 à 9 restent (fusion vérifiée, session arrêtée, worktree retiré) et la session est gardée ;
   // la fermeture suivante, son compte rendu arrivé, la retire du CLI malgré son worktree déjà retiré par celle-ci.
-  const isKept = !isApp && hasReport && isKeptForReport(run, target, seq, noted)
+  const isKept = !isApp && hasReport && isKeptForReport(run, target, seq, noted, send)
   const alreadyGone = isKept
     ? 'le worktree est déjà retiré, par la fermeture précédente de cette session, notée, qui l’a gardée faute de compte rendu au relais (il l’a maintenant) : fais quand même le point 3, puis passe au point 6 (une session montrée arrêtée : déjà fait) et au point 7 (déjà arrêtée : déjà fait), sans les points 8 et 9, puis le point 10 ; '
     : 'le worktree est déjà retiré : fais quand même le point 3, puis passe au point 6, sans les points 8, 9 et 10 : pas de claude rm (son worktree n’a pas été vu retiré ici) ; une session du CLI que le point 6 trouve encore dans claude agents y reste : dis-le-moi ; '

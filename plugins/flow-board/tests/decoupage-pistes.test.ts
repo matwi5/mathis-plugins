@@ -126,6 +126,8 @@ test('le bouton des pistes met la demande de découpage dans le prompt, n’enre
   expect(text).toContain('« Pistes : <ids> »')
   expect(text).toMatch(/« Zone sensible », « Logique »/)
   expect(text).toMatch(/l'invariant fixé avec moi/)
+  // Tout ticket sensible porte sa ligne « Invariant » ; hors concurrence et suppression, la session l'écrit.
+  expect(text).toContain("en zone sensible, sa ligne « Invariant » : en zone concurrence ou suppression, l'invariant fixé avec moi ; sinon, celui que tu écris et me montres avec le découpage")
   // Les consignes de /to-tickets, reprises telles quelles (dont « texte qui fait agir = logique »).
   expect(text).toContain('A group holds 5 tickets at most')
   expect(text).toContain('« Lecteur : <who> »')

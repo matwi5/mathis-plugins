@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Instantané d'un ticket sensible (point 6 de la section 2 de reference/procedure-groupe.md) : ses
 // revues relisent une référence propre au worktree, refs/worktree/flow-board/<ticket>, jamais l'arbre
-// de travail, et la branche ne bouge pas. Les cinq étapes en une commande simple, que le garde-fou
-// d'un worktree laisse passer (cinq à sept appels du shell par instantané, chaque hash recopié à la main) :
+// de travail, et la branche ne bouge pas. Une commande simple, que le garde-fou d'un worktree laisse
+// passer, au lieu de cinq à sept appels du shell par instantané, chaque hash recopié à la main :
 //
 //   node <dossier de flow-board>/scripts/snapshot.mjs <id du ticket> <fichier>…
 //   node <dossier de flow-board>/scripts/snapshot.mjs --staged <id du ticket> <fichier>…
@@ -10,9 +10,23 @@
 //   node <dossier de flow-board>/scripts/snapshot.mjs --dossier <id du ticket, ou groupe-<id>, securite-<id>>
 //   node <dossier de flow-board>/scripts/snapshot.mjs --clean <id du ticket>
 //
-// à lancer depuis la racine du worktree. La première forme indexe les fichiers du ticket
-// (suppressions comprises), vérifie que l'index ne porte rien d'autre, écrit l'arbre et un commit
-// hors branche, pose la référence, puis imprime le hash et la plage que lisent les revues.
+// à lancer depuis la racine du worktree. La première forme construit l'arbre de l'instantané dans un
+// index temporaire, sans toucher à celui de la session : parti de HEAD (`git read-tree <HEAD lu une fois>`, sous
+// `GIT_INDEX_FILE` pour les seules commandes du script), il reçoit les fichiers nommés à leur version
+// de l'arbre de travail (suppressions comprises), puis donne l'arbre (`git write-tree`) ; le script écrit
+// alors un commit hors branche, pose la référence, puis imprime le hash et la plage que lisent les
+// revues. Ce qu'un autre ticket a indexé ou modifié n'entre pas dans l'instantané et ne le fait pas
+// refuser ; rien n'est indexé pour la session, qui indexe elle-même les fichiers du ticket avant son
+// commit. HEAD se lit une fois : l'arbre, la liste des fichiers et le parent du commit hors branche
+// partent du même commit, même si une autre discussion commite pendant la commande. Reposé, l'instantané
+// garde chaque fichier du précédent qui a encore un changement non commité, lu dans l'index de la
+// session (sans y écrire) et dans l'arbre de travail, un fichier nouveau et pas encore suivi compris ; un
+// fichier nommé se juge sur l'arbre de travail seul, quoi que l'index de la session en garde.
+// L'index temporaire vit dans le dossier git du worktree (`git rev-parse --git-path`), sous un
+// nom propre au lancement, et il est supprimé à la fin, échec compris ; une commande coupée peut le
+// laisser, sans effet : un lancement suivant prend un nom neuf. L'invariant : la pose d'un instantané
+// par la première forme ne change ni l'index ni l'arbre de travail de la session ; l'instantané porte
+// exactement les fichiers nommés, à leur version de l'arbre de travail, au-dessus de HEAD.
 // `--staged` pose l'instantané de l'index tel qu'il est préparé, sans rien indexer, après avoir
 // vérifié qu'il ne porte que les fichiers nommés : pour le correctif d'un ticket quand le ticket
 // suivant a déjà touché les mêmes fichiers dans l'arbre.
@@ -30,11 +44,23 @@
 // `scripts/patch.py` du dépôt : `@<fichier>` lu
 // dans ce fichier sans sa fin de ligne finale, `@@` pour un `@` littéral, `{{u}}` pour un
 // échappement « barre oblique inverse et u », `{{uu}}` pour `{{u}}`.
-// `--dossier` crée et imprime le dossier du relecteur, `git rev-parse --git-path flow-board/revue-<id>` :
-// le seul où un relecteur écrit (copies extraites, notes), propre au worktree, hors de l'arbre suivi
-// (la fermeture d'un groupe ne le voit pas) et effacé avec lui ; dans le clone principal, il est
-// `.git/flow-board/revue-<id>`, commun à ses discussions et jamais effacé ; des noms génériques de /tmp
-// avaient écrasé les copies d'une autre session. Les deux premières formes le créent et l'impriment aussi.
+// `--dossier` crée et imprime le dossier du relecteur, le seul où un relecteur écrit (copies extraites,
+// notes, script d'essai) : `<CLAUDE_JOB_DIR>/tmp/revue-<id>`, dans le dossier temporaire de la session,
+// quand cette variable d'une session de fond désigne un dossier existant (l'outil Write d'un relecteur y
+// passe, pas dans le dossier git d'un worktree ; il part avec le dossier de job) ; sinon
+// `git rev-parse --git-path flow-board/revue-<id>`, propre au worktree et effacé avec lui (dans le clone
+// principal, `.git/flow-board/revue-<id>`, commun à ses discussions et jamais effacé). Hors de l'arbre
+// suivi dans les deux cas (la fermeture d'un groupe ne le voit pas). Une variable hors forme (la forme
+// que le mod exige d'elle : un chemin absolu, jamais un partage réseau ni la racine d'un disque, sans
+// segment `.` ou `..`, apostrophe, guillemet, accent grave, `$`, caractère de contrôle ou invisible ni
+// fin de ligne, 300 signes au plus), qui ne désigne pas un dossier existant, dont le dossier ou son `tmp` est
+// dans l'arbre de travail (ou dont rien ne montre qu'il en est hors : la racine du worktree ne se lit pas), ou
+// dont le `tmp` ou le dossier du relecteur est un lien, un fichier ou ne se laisse pas lire, est ignorée,
+// et un avis le dit sur la sortie d'erreur, sans
+// recopier sa valeur ; le chemin part du chemin réel du dossier de job, et un lien apparu pendant la
+// création fait échouer ; un dossier déjà là garde ce qu'il porte, rien n'est jamais effacé ; des noms
+// génériques de /tmp avaient écrasé les copies d'une autre session. Les deux premières formes le créent
+// et l'impriment aussi.
 // `--clean` supprime la référence du ticket nommé, et elle seule, une fois son vrai commit posé : chaque
 // fichier que l'instantané change doit être amené à sa version figée (suppressions comprises) par un
 // commit de la première lignée de HEAD depuis le parent de l'instantané qui change ce fichier face à son
@@ -46,14 +72,15 @@
 // Sinon, tant qu'un fichier de l'instantané a un changement non commité, ou sans référence, rien n'est
 // supprimé. L'invariant : une référence d'instantané n'est supprimée que si chaque fichier de
 // l'instantané, à sa version figée, se trouve dans un commit de la branche ; jamais celle d'un autre ticket.
-// Un id hors forme, un fichier qui commence par « - », un index qui porte un autre fichier ou aucun
-// changement : rien n'est posé ni écrit, le message dit pourquoi, code 1 ; un refus venu après
-// l'indexation de la première forme (instantané reposé, casse) laisse l'index tel que `git add` l'a fait,
-// sans commit ni référence. Sans dépendance hors de Node.
+// Un id hors forme, un fichier qui commence par « - », un dossier nommé, aucun changement, ou, pour
+// `--staged`, un index qui porte un autre fichier : rien n'est posé ni écrit, le message dit pourquoi,
+// code 1 ; un refus de la première forme (instantané reposé, casse) ne laisse ni commit ni référence, et
+// l'index de la session tel qu'il était. Sans dépendance hors de Node.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from 'node:fs'
+import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** Un id de ticket qui nomme une référence git : lettres, chiffres, _ et -, sans « - » en tête. */
@@ -64,38 +91,194 @@ export const isSafeTicket = value => typeof value === 'string' && SAFE_TICKET.te
 
 export class SnapshotError extends Error {}
 
+/** Apostrophes (droite et typographiques ‘ ’ ‚ ‛, par leurs points de code), guillemet, accent grave et `$` : ce qu'un shell ou une ligne de consignes citée lirait. */
+const QUOTING = new RegExp(`['"\`$${String.fromCodePoint(0x2018)}-${String.fromCodePoint(0x201b)}]`)
+
+/** Contrôles (C0, DEL, C1), caractères de format et invisibles (marques bidirectionnelles comprises), séparateurs de ligne et de paragraphe. */
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/u
+
 /**
- * Crée le dossier du relecteur de `id` (un ticket, `groupe-<id>` ou `securite-<id>`) dans le dossier git
- * du worktree, et rend son chemin absolu ; un dossier déjà là garde ce qu'il porte.
+ * Un dossier de job que le script accepte de `CLAUDE_JOB_DIR`, avant qu'il entre dans un chemin, une ligne
+ * imprimée et un fichier de consignes : la forme que le mod exige de la même variable (`tempDirForm` de
+ * `hooks/closing.ts`, recopiée ici, ce script n'important rien des hooks) : absolu (POSIX ou lettre de
+ * lecteur, jamais un partage réseau), sans apostrophe, guillemet, `$`, accent grave, caractère de contrôle
+ * ou invisible, fin de ligne, ni segment `.` ou `..` (le chemin vérifié est celui qui sert), autre que la
+ * racine d'un disque, 300 signes au plus.
  */
-export const reviewDir = (id, cwd = process.cwd()) => {
+export const isSafeJobDir = value => {
+  // Absolu pour ce système aussi : « C:/x » est relatif sur POSIX, et se résoudrait contre le dossier courant.
+  if (typeof value !== 'string' || value.length > 300 || !isAbsolute(value)) return false
+  if (QUOTING.test(value) || UNSEEN.test(value)) return false
+  const path = value.replace(/\\/g, '/')
+  if (!/^(?:\/(?!\/)|[A-Za-z]:\/)/.test(path)) return false
+  const trimmed = path.replace(/\/+$/, '')
+  if (trimmed === '' || /^[A-Za-z]:$/.test(trimmed)) return false
+  return !trimmed.split('/').some((part, i) => part === '.' || part === '..' || (i > 0 && part === ''))
+}
+
+const JOB_DIR_FORM = 'un chemin absolu (jamais un partage réseau) de 300 signes au plus, sans segment « . » ou « .. », apostrophe, guillemet, accent grave, « $ », caractère de contrôle ou invisible, ni fin de ligne, autre que la racine d\'un disque'
+
+/** Vrai si `child` est `parent` ou sous lui (deux chemins absolus). */
+const isWithin = (parent, child) => {
+  const rel = relative(parent, child)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/** Le chemin réel de `path`, à la casse du disque (macOS et Windows comparent sans elle), ou null s'il ne se lit pas. */
+const diskPath = path => {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return null
+  }
+}
+
+/** La racine du worktree de `cwd`, à la casse du disque, ou null quand git ou le disque ne la donnent pas. */
+const worktreeRoot = cwd => {
+  try {
+    return diskPath(topLevel(cwd))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Le dossier temporaire de la session, `<CLAUDE_JOB_DIR>/tmp`, quand cette variable (que Claude Code
+ * pose pour une session de fond) désigne un dossier existant, par son chemin réel (liens résolus : le
+ * chemin vérifié est celui qui sert). Rend `{ dir }`, ou `{ ignored: <raison> }` pour une variable
+ * inutilisable (la raison ne recopie jamais sa valeur, qui peut porter une fin de ligne), ou null sans
+ * variable (absente ou vide : une session interactive).
+ */
+const sessionTmp = (env, cwd) => {
+  const value = env.CLAUDE_JOB_DIR
+  if (value === undefined || value === '') return null
+  if (!isSafeJobDir(value)) return { ignored: `hors forme : ${JOB_DIR_FORM}, est attendu` }
+  let real = null
+  try {
+    if (statSync(value).isDirectory()) real = realpathSync(value)
+  } catch {
+    // Absent ou illisible : pas un dossier où écrire.
+  }
+  if (real === null) return { ignored: 'elle ne désigne pas un dossier existant' }
+  if (!isSafeJobDir(real)) return { ignored: `le chemin réel de son dossier est hors forme : ${JOB_DIR_FORM}, est attendu` }
+  // Sous le worktree, le dossier serait un fichier non suivi de l'arbre de travail, que la fermeture d'un groupe
+  // refuse ; de même quand le dossier de job est au-dessus du worktree et que son `tmp` en est la racine ou s'y
+  // trouve. Sans racine lue, rien ne montre qu'il en est hors : la variable est ignorée, pas crue.
+  const top = worktreeRoot(cwd)
+  const realOnDisk = diskPath(real)
+  if (top === null || realOnDisk === null) return { ignored: 'la racine du worktree ne se laisse pas lire : rien ne montre que son dossier est hors de l\'arbre de travail' }
+  if (isWithin(top, realOnDisk)) return { ignored: 'son dossier est dans l\'arbre de travail' }
+  const tmpOnDisk = diskPath(join(real, 'tmp'))
+  if (tmpOnDisk !== null && isWithin(top, tmpOnDisk)) return { ignored: 'son dossier tmp est dans l\'arbre de travail' }
+  return { dir: join(real, 'tmp') }
+}
+
+/** Vrai si `path` existe sans être un vrai dossier (un lien, un fichier), ou ne se laisse pas lire. */
+const blocksDir = path => {
+  try {
+    const info = lstatSync(path, { throwIfNoEntry: false })
+    return info !== undefined && !info.isDirectory()
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Crée le dossier du relecteur de `id` (un ticket, `groupe-<id>` ou `securite-<id>`) et rend son chemin
+ * absolu : `<CLAUDE_JOB_DIR>/tmp/revue-<id>`, le dossier temporaire de la session, où l'outil Write d'un
+ * relecteur passe, quand la variable désigne un dossier existant hors de l'arbre de travail ; sinon le
+ * dossier git du worktree ou du clone (`git rev-parse --git-path flow-board/revue-<id>`). Une variable
+ * inutilisable (hors forme, dossier absent ou dans l'arbre de travail, ou dont le `tmp` ou le dossier du
+ * relecteur est un lien, un fichier ou ne se laisse pas lire) est ignorée, et un avis le dit sur la sortie
+ * d'erreur. Rien n'est créé à travers un lien posé sous le dossier de job : le chemin part du chemin réel
+ * de ce dossier (que la variable peut désigner par un lien), et un lien apparu sur `tmp` ou sur le dossier
+ * du relecteur entre la vérification et la création fait échouer, le chemin créé étant relu après coup.
+ * Un dossier déjà là garde ce qu'il porte : rien n'est jamais effacé ni écrasé.
+ */
+export const reviewDir = (id, cwd = process.cwd(), env = process.env) => {
   if (!isSafeTicket(id)) throw new SnapshotError(`id hors forme : ${JSON.stringify(id)} (lettres, chiffres, _ et -, 64 au plus)`)
-  const path = resolve(cwd, git(cwd, ['rev-parse', '--git-path', `flow-board/revue-${id}`]))
+  const name = `revue-${id}`
+  const session = sessionTmp(env, cwd)
+  let ignored = session?.ignored
+  let path = null
+  if (session?.dir !== undefined) {
+    if (blocksDir(session.dir)) ignored = 'son dossier tmp est un lien, n\'est pas un dossier ou ne se laisse pas lire'
+    else if (blocksDir(join(session.dir, name))) ignored = `tmp/${name} y est un lien, n'est pas un dossier ou ne se laisse pas lire`
+    else path = join(session.dir, name)
+  }
+  if (ignored !== undefined) console.error(`Avis : CLAUDE_JOB_DIR ignorée (${ignored}) ; le dossier du relecteur va dans le dossier git (celui du worktree, ou du clone principal).`)
+  const inSession = path !== null
+  path ??= resolve(cwd, git(cwd, ['rev-parse', '--git-path', `flow-board/${name}`]))
   try {
     mkdirSync(path, { recursive: true })
   } catch (err) {
     throw new SnapshotError(`dossier du relecteur impossible à créer : ${path} (${err.code || err.message})`)
+  }
+  // Relu après coup : un lien posé sur `tmp` ou sur le dossier entre la vérification et la création mène ailleurs.
+  if (inSession) {
+    let real = null
+    try {
+      real = realpathSync(path)
+    } catch {
+      // Disparu depuis sa création : pas le dossier attendu non plus.
+    }
+    if (real !== path) throw new SnapshotError(`dossier du relecteur : ${path} n'est pas un vrai dossier sous le dossier temporaire de la session (un lien est apparu sur son chemin pendant sa création) ; le script n'y écrit rien et n'efface rien : à vérifier à la main`)
   }
   return path
 }
 
 /**
  * Le texte que rend une commande git dans `cwd`, sans fin de ligne finale. Les chemins y sont
- * littéraux (`GIT_LITERAL_PATHSPECS`) : ni joker (`*.txt`) ni magie (`:/`) ne les élargit.
+ * littéraux (`GIT_LITERAL_PATHSPECS`) : ni joker (`*.txt`) ni magie (`:/`) ne les élargit. `env` ajoute
+ * des variables à cette seule commande (`GIT_INDEX_FILE` : un autre index que celui de la session).
  */
-const git = (cwd, args) =>
-  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_LITERAL_PATHSPECS: '1' } }).replace(/\n$/, '')
+const git = (cwd, args, env = {}) =>
+  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_LITERAL_PATHSPECS: '1', ...env } }).replace(/\n$/, '')
 
 /**
- * Les chemins indexés (différence entre l'index et HEAD), restreints à `files` s'il est donné ; sans
- * détection des renommages, qui montrerait la suppression d'un autre fichier sous le nom d'un fichier du ticket.
+ * Les chemins indexés (différence entre l'index et `base`, HEAD par défaut, ou le commit lu une fois
+ * pour l'instantané), restreints à `files` s'il est donné ; sans détection des renommages, qui montrerait
+ * la suppression d'un autre fichier sous le nom d'un fichier du ticket. `env` : celui d'un index
+ * temporaire, sinon l'index de la session.
  */
-const staged = (cwd, files) => {
-  const out = git(cwd, ['diff', '--cached', '--no-renames', '--name-only', '-z', ...(files ? ['--', ...files] : [])])
+const staged = (cwd, files, env = {}, base = 'HEAD') => {
+  const out = git(cwd, ['diff', '--cached', '--no-renames', '--name-only', '-z', base, ...(files ? ['--', ...files] : [])], env)
   return out.split('\0').filter(Boolean)
 }
 
-/** Pose l'instantané du ticket ; rend son hash, sa référence et les fichiers qu'il porte. */
+/**
+ * Le commit que désigne HEAD, lu une fois par instantané : l'arbre, la liste de ses fichiers et le parent
+ * du commit hors branche partent tous de lui, même si une autre discussion commite entre deux commandes.
+ */
+const headCommit = cwd => git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'])
+
+/**
+ * Le chemin absolu d'un fichier d'index temporaire, dans le dossier git du worktree, sous un nom propre à
+ * ce lancement (le processus et un tirage) : git le crée à sa première écriture, et un lancement suivant
+ * ne reprend jamais celui qu'une commande coupée aurait laissé.
+ */
+const tempIndexPath = cwd => resolve(cwd, git(cwd, ['rev-parse', '--git-path', `flow-board-index-${process.pid}-${randomBytes(8).toString('hex')}`]))
+
+/**
+ * Vrai si `path` existe sur le disque, lien compris (un lien cassé existe) ; un chemin dont un dossier
+ * est devenu un fichier n'existe pas.
+ */
+const onDisk = path => {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false }) !== undefined
+  } catch (err) {
+    if (err.code === 'ENOTDIR') return false
+    throw new SnapshotError(`${path} : illisible dans l'arbre de travail (${err.code || err.message}) ; rien n'est posé`)
+  }
+}
+
+/**
+ * Pose l'instantané du ticket ; rend son hash, sa référence et les fichiers qu'il porte. L'arbre se
+ * construit dans un index temporaire parti de HEAD, où entrent les seuls fichiers nommés, à leur version
+ * de l'arbre de travail (suppressions comprises) : l'index de la session n'est ni lu pour l'arbre ni
+ * changé, et ce qu'un autre ticket y a indexé n'entre pas dans l'instantané. L'index temporaire est
+ * supprimé à la fin, échec compris.
+ */
 export const snapshot = (ticket, files, cwd = process.cwd()) => {
   if (!isSafeTicket(ticket)) throw new SnapshotError(`id de ticket hors forme : ${JSON.stringify(ticket)} (lettres, chiffres, _ et -, 64 au plus)`)
   if (files.length === 0) throw new SnapshotError('aucun fichier : nommer les fichiers du ticket')
@@ -104,39 +287,73 @@ export const snapshot = (ticket, files, cwd = process.cwd()) => {
   // Un dossier (« . », « src ») prendrait tout ce qu'il contient, le travail des autres compris.
   const folder = files.find(f => existsSync(join(cwd, f)) && statSync(join(cwd, f)).isDirectory())
   if (folder !== undefined) throw new SnapshotError(`un dossier, pas un fichier : ${folder} ; nommer les fichiers du ticket`)
-  git(cwd, ['add', '-A', '--', ...files])
-  const ours = staged(cwd, files)
-  const others = staged(cwd).filter(path => !ours.includes(path))
-  if (others.length > 0) throw new SnapshotError(`l'index porte d'autres fichiers que ceux du ticket : ${others.join(', ')} ; les sortir de l'index (git restore --staged <chemin>), puis relancer`)
-  if (ours.length === 0) throw new SnapshotError('aucun changement dans ces fichiers : rien à figer')
-  return pose(cwd, ticket, ours)
+  const head = headCommit(cwd)
+  const index = tempIndexPath(cwd)
+  // Sans index partagé : `core.splitIndex` ferait écrire à git un fichier `sharedindex.*` de plus par lancement.
+  const count = Number(process.env.GIT_CONFIG_COUNT) || 0
+  const env = { GIT_INDEX_FILE: index, GIT_CONFIG_COUNT: String(count + 1), [`GIT_CONFIG_KEY_${count}`]: 'core.splitIndex', [`GIT_CONFIG_VALUE_${count}`]: 'false' }
+  try {
+    git(cwd, ['read-tree', head], env)
+    git(cwd, ['add', '-A', '--', ...files], env)
+    // Parti de HEAD, l'index temporaire ne diffère de lui que par les fichiers nommés.
+    const ours = staged(cwd, undefined, env, head)
+    if (ours.length === 0) throw new SnapshotError('aucun changement dans ces fichiers : rien à figer')
+    const tree = git(cwd, ['write-tree'], env)
+    // Ce qui reste à commiter d'un fichier du précédent que cet instantané ne porte pas : un changement
+    // que la session a indexé, ou la version de l'arbre de travail, un fichier nouveau et pas encore suivi
+    // compris (la session n'indexe plus rien avant son commit : l'index ne le montrerait pas). L'arbre de
+    // travail se lit par l'index temporaire, dont l'arbre de l'instantané est déjà écrit. Un fichier nommé se
+    // juge sur sa seule version de l'arbre de travail, celle que l'instantané prend : ce que l'index de la
+    // session en garde ne le fait pas refuser (le refus demanderait de nommer un fichier déjà nommé).
+    const pendingOf = (top, candidates) => {
+      const prefix = git(cwd, ['rev-parse', '--show-prefix'])
+      const named = new Set(files.map(f => posix.normalize(`${prefix}${sep === '\\' ? f.replace(/\\/g, '/') : f}`)))
+      const present = candidates.filter(f => git(top, ['ls-files', '-z', '--', f], env) !== '' || onDisk(join(top, f)))
+      // `-f` : un fichier du précédent que .gitignore couvre depuis se juge comme les autres, au lieu d'un échec de git.
+      if (present.length > 0) git(top, ['add', '-A', '-f', '--', ...present], env)
+      const inTree = present.length > 0 ? staged(top, present, env, head) : []
+      return candidates.filter(f => inTree.includes(f) || (!named.has(f) && !sameFiles(top, ['--cached', head], [f])))
+    }
+    return pose(cwd, ticket, ours, tree, head, { named: true, pendingOf })
+  } finally {
+    // Le fichier et le verrou qu'une commande git coupée y aurait laissé : rien ne reste dans le dossier
+    // git. Un retrait raté (un fichier tenu par un autre processus, sous Windows) se dit sans masquer le
+    // résultat : l'instantané posé reste posé, le refus garde son message.
+    for (const path of [index, `${index}.lock`]) {
+      try {
+        rmSync(path, { force: true })
+      } catch (err) {
+        console.error(`Avis : index temporaire non retiré : ${path} (${err.code || err.message}) ; il ne sert plus à rien et peut être supprimé.`)
+      }
+    }
+  }
 }
 
 /**
- * Écrit l'arbre de l'index et un commit hors branche, puis pose la référence du ticket. Une référence
- * déjà posée (l'instantané de la passe « bogues ») est rendue dans `previous` : la passe qui la suit
- * relit `previous..commit`, ce qui a changé depuis, pas tout le ticket.
+ * Écrit un commit hors branche de l'arbre `tree`, de parent `head`, puis pose la référence du ticket.
+ * Une référence déjà posée (l'instantané de la passe « bogues ») est rendue dans `previous` : la passe
+ * qui la suit relit `previous..commit`, ce qui a changé depuis, pas tout le ticket. `named` : l'instantané
+ * de la première forme (des fichiers nommés, pris dans l'arbre de travail), pour le libellé du refus ;
+ * `pendingOf(racine, fichiers)` rend ceux qui ont encore un changement non commité (par défaut : dans
+ * l'index de la session ou l'arbre de travail, face à HEAD).
  */
-const pose = (cwd, ticket, files) => {
+const pose = (cwd, ticket, files, tree, head, { named = false, pendingOf = (top, candidates) => candidates.filter(f => hasPending(top, f, head)) } = {}) => {
   const ref = `refs/worktree/flow-board/${ticket}`
-  // Avant de poser quoi que ce soit (snapshot a déjà indexé les fichiers) : une référence d'un nom voisin
-  // par la casse fait refuser (pinned).
+  // Avant de poser quoi que ce soit : une référence d'un nom voisin par la casse fait refuser (pinned).
   const previous = pinned(cwd, ref)
   // Le dossier ensuite : un échec à le créer ne laisse ni commit ni référence posés.
   const dir = reviewDir(ticket, cwd)
-  const tree = git(cwd, ['write-tree'])
   if (previous !== null) {
     // Reposé, l'instantané garde chaque fichier du précédent qui porte encore un changement (dans
     // l'index ou l'arbre, face à HEAD) : --clean ne juge que le dernier, et un correctif d'un fichier
     // perdu ici ne serait plus jamais vérifié. Un fichier sans changement en attente (commité, ou
     // ramené à HEAD par un correctif) peut en sortir.
     const top = topLevel(cwd)
-    const now = names(top, ['diff', '--no-renames', '--name-only', '-z', 'HEAD', tree])
-    const lost = names(top, ['diff', '--no-renames', '--name-only', '-z', `${previous}^`, previous])
-      .filter(f => !now.includes(f) && hasPending(top, f))
-    if (lost.length > 0) throw new SnapshotError(`l'instantané précédent de ${ticket} porte aussi ${lost.join(', ')}, que celui-ci ne porte pas et qui a encore un changement non commité : le reposer avec tous les fichiers du ticket (indexés), sinon --clean ne les vérifierait plus ; si ce changement est le travail d'un ticket suivant, ne pas l'indexer : attendre son commit ; rien n'est posé`)
+    const now = names(top, ['diff', '--no-renames', '--name-only', '-z', head, tree])
+    const lost = pendingOf(top, names(top, ['diff', '--no-renames', '--name-only', '-z', `${previous}^`, previous]).filter(f => !now.includes(f)))
+    if (lost.length > 0) throw new SnapshotError(`l'instantané précédent de ${ticket} porte aussi ${lost.join(', ')}, que celui-ci ne porte pas et qui a encore un changement non commité : le reposer ${named ? 'en nommant tous les fichiers du ticket' : 'avec tous les fichiers du ticket (indexés)'}, sinon --clean ne les vérifierait plus ; si ce changement est le travail d'un ticket suivant, ne pas ${named ? 'le figer' : "l'indexer"} : attendre son commit ; rien n'est posé`)
   }
-  const commit = git(cwd, ['commit-tree', tree, '-p', 'HEAD', '-m', `flow-board snapshot ${ticket}`])
+  const commit = git(cwd, ['commit-tree', tree, '-p', head, '-m', `flow-board snapshot ${ticket}`])
   git(cwd, ['update-ref', ref, commit])
   return { commit, ref, files, previous, dir }
 }
@@ -150,11 +367,12 @@ export const snapshotStaged = (ticket, files, cwd = process.cwd()) => {
   if (files.length === 0) throw new SnapshotError('aucun fichier : nommer les fichiers du correctif')
   const option = files.find(f => f.startsWith('-'))
   if (option !== undefined) throw new SnapshotError(`fichier qui commence par « - » : ${option}`)
-  const all = staged(cwd)
+  const head = headCommit(cwd)
+  const all = staged(cwd, undefined, {}, head)
   const others = all.filter(path => !files.includes(path))
   if (others.length > 0) throw new SnapshotError(`l'index porte d'autres fichiers que ceux du correctif : ${others.join(', ')} ; les sortir de l'index (git restore --staged <chemin>), puis relancer`)
   if (all.length === 0) throw new SnapshotError("l'index ne porte aucun changement face à HEAD : rien à figer (indexer d'abord le correctif, par exemple avec --remplace)")
-  return pose(cwd, ticket, all)
+  return pose(cwd, ticket, all, git(cwd, ['write-tree']), head)
 }
 
 /** La liste que rend une commande git en `-z`. */
@@ -164,8 +382,8 @@ const names = (cwd, args) => git(cwd, args).split('\0').filter(Boolean)
 const topLevel = cwd => git(cwd, ['rev-parse', '--show-toplevel'])
 
 /**
- * Vrai si `git diff --quiet <revs> -- <files>` ne voit aucune différence (`revs` : deux commits, `HEAD`
- * seul pour l'arbre de travail, ou `--cached HEAD` pour l'index), présence comprise ; `cwd` est la racine
+ * Vrai si `git diff --quiet <revs> -- <files>` ne voit aucune différence (`revs` : deux commits, un
+ * commit seul (`HEAD`) pour l'arbre de travail, ou `--cached <commit>` pour l'index), présence comprise ; `cwd` est la racine
  * du worktree, car les chemins viennent de git ; une erreur de git se lève.
  */
 const sameFiles = (cwd, revs, files) => {
@@ -188,8 +406,14 @@ const pinned = (cwd, ref) => {
   return listed.includes(ref) ? git(cwd, ['rev-parse', '--verify', `${ref}^{commit}`]) : null
 }
 
-/** Vrai si l'index ou l'arbre de travail portent un changement de `file` face à HEAD (`cwd` : la racine). */
-const hasPending = (cwd, file) => !sameFiles(cwd, ['--cached', 'HEAD'], [file]) || !sameFiles(cwd, ['HEAD'], [file])
+/**
+ * Vrai si l'index ou l'arbre de travail portent un changement de `file` face à `base` (HEAD, ou le commit
+ * lu une fois pour l'instantané ; `cwd` : la racine).
+ * Face à l'arbre de travail, `git diff` peut réécrire l'index de la session pour y rafraîchir la date
+ * d'un fichier au contenu inchangé : la première forme de l'instantané, qui ne doit pas y toucher, ne
+ * passe pas par ici (elle lit l'arbre de travail par son index temporaire).
+ */
+const hasPending = (cwd, file, base = 'HEAD') => !sameFiles(cwd, ['--cached', base], [file]) || !sameFiles(cwd, [base], [file])
 
 /**
  * Supprime la référence d'instantané de `ticket`, seulement si chaque fichier que l'instantané change est
@@ -408,7 +632,7 @@ export const replaceStaged = (file, oldArg, newArg, cwd = process.cwd()) => {
 const SELF = `'${fileURLToPath(import.meta.url).replace(/'/g, `'\\''`)}'`
 
 /** La ligne qui donne le dossier du relecteur, à recopier dans son fichier de consignes et son prompt. */
-const dirLine = dir => `Dossier du relecteur : ${dir} (propre à ce worktree, hors de l'arbre suivi : le seul où ses relecteurs écrivent).`
+const dirLine = dir => `Dossier du relecteur : ${dir} (hors de l'arbre suivi : le seul où ses relecteurs écrivent).`
 
 const main = argv => {
   try {

@@ -63,6 +63,16 @@ export const activeRun = (board: Board | null | undefined): Run | null =>
 
 export const currentPhase = (run: Run): FlowPhase => run.phases[Math.min(run.cursor, run.phases.length - 1)]!
 
+/**
+ * Le skill `skill` est la phase en cours de la mission (pas un détour greffé sur une autre) et la phase
+ * suivante enregistrée de la mission est l'Implémentation : une Chasse au bug neuve, dont le correctif
+ * s'écrit en ticket (`beforeImplHint` des étapes) ; une chasse au bug enregistrée avant garde ses phases.
+ */
+export const isBeforeImplPhase = (run: Run, skill: string): boolean => {
+  const at = Math.min(run.cursor, run.phases.length - 1)
+  return run.phases[at]?.skill === skill && run.phases[at + 1]?.skill === 'implement'
+}
+
 export const isAllDone = (run: Run, ids: readonly string[]): boolean =>
   ids.length > 0 && ids.every(id => run.tickets.find(t => sameTicket(t.id, id))?.status === 'done')
 

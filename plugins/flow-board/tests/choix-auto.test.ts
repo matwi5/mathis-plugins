@@ -228,13 +228,79 @@ test('Au plafond, un retrait avec remplaçant laisse le choix d’origine en vig
   expect(out.text).toContain('kept in force')
 })
 
-test('Au-delà de 40 choix, les faits du compte rendu en donnent les comptes par origine, les 40 plus récents et le chemin du fichier des choix', () => {
-  const board = declare(declare(switchOnAuto(lot(), 'sa', T0 + 2)!.board, 30, 0, T0 + 3, 'recommendation'), 30, 30, T0 + 4, 'skipped-validation')
-  const facts = reportFacts(runOf(board), 0, '/h/.claude/flow-board/choix/r.md').join('\n')
-  expect(facts).toContain('60 choices reported as made without the user (30 « reco prise », 30 « validation sautée », 0 « choix de worker », 0 without origin)')
-  expect(facts).toContain('read them all in the file of declared choices, /h/.claude/flow-board/choix/r.md')
-  expect(facts).not.toContain('Choix 19 [origin')
-  expect(facts).toContain('Choix 59 [origin: validation sautée]')
+/** Les lignes des faits du compte rendu qui parlent des choix (comptes, liste, sensibles). */
+const choiceLines = (facts: string[]) => facts.filter(l => /choices reported|Choices reported|No choice was reported|Sensitive choices/.test(l))
+
+test('Avec le fichier des choix, les faits du compte rendu n’en donnent que les comptes par origine, le compte des sensibles et le chemin, sans les recopier', () => {
+  const sensitive = applyReport(switchOnAuto(lot(), 'sa', T0 + 2)!.board, { decided: [{ what: 'Zone sensible : garder la copie', why: 'la plus prudente', origin: 'recommendation' }] }, T0 + 3).board
+  const board = declare(declare(sensitive, 29, 0, T0 + 3, 'recommendation'), 30, 30, T0 + 4, 'skipped-validation')
+  const facts = reportFacts(runOf(board), 0, '/h/.claude/flow-board/choix/r.md')
+  const lines = choiceLines(facts)
+  expect(lines).toHaveLength(1)
+  expect(lines[0]).toContain('- 60 choices reported as made without the user (30 « reco prise », 30 « validation sautée », 0 « choix de worker », 0 without origin), 1 of them sensitive (their text starts with « Zone sensible : »): they are not copied here.')
+  expect(lines[0]).toContain('Read them all in the file of declared choices, /h/.claude/flow-board/choix/r.md (each with its reason and origin; it also holds the choices relayed by the workers, so it can list more than these counts: the file is the reference)')
+  expect(lines[0]).toContain('Group them by origin')
+  expect(lines[0]).toContain('The sensitive ones go first and apart, under « Zone sensible, tranché en auto », and nowhere else.')
+  // Aucun choix recopié : ni un récent, ni le sensible (hors des alertes du journal, qui en citent 8 au plus, comme avant).
+  const all = facts.filter(l => !l.startsWith('- Warnings in the dashboard log')).join('\n')
+  expect(all).not.toContain('Choix 59')
+  expect(all).not.toContain('garder la copie')
+  // Sans choix sensible ni origine : ni la consigne des sensibles, ni le regroupement.
+  const plain = choiceLines(reportFacts(runOf(declare(lot(), 3, 0, T0 + 4)), 0, '/f.md'))
+  expect(plain[0]).toContain('0 of them sensitive')
+  expect(plain[0]).not.toContain('Zone sensible, tranché en auto')
+  expect(plain[0]).not.toContain('Group them by origin')
+  // Avec le fichier mais sans choix : la ligne d'avant.
+  expect(choiceLines(reportFacts(runOf(lot()), 0, '/f.md'))).toEqual(['- No choice was reported as made without the user: check the work for any, and put them in « Décidé sans toi ».'])
+})
+
+test('Avec le fichier des choix, la partie des choix d’une mission de 60 choix dont 30 sensibles tient sous 2 000 caractères', () => {
+  const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
+  const long = (i: number) => `Choix numéro ${i}, avec une raison longue comme celles d’une vraie mission en auto, recopiée jusqu’ici`
+  const sensitive = applyReport(on, { decided: Array.from({ length: 30 }, (_, i) => ({ what: `Zone sensible : ${long(i)}`, why: long(i), origin: 'recommendation' })) }, T0 + 3).board
+  const board = applyReport(sensitive, { decided: Array.from({ length: 30 }, (_, i) => ({ what: long(100 + i), why: long(i), origin: 'skipped-validation' })) }, T0 + 4).board
+  const part = choiceLines(reportFacts(runOf(board), 0, '/h/.claude/flow-board/choix/mwaycj2c-74y5.md')).join('\n')
+  expect(part).toContain('30 of them sensitive')
+  expect(part.length).toBeLessThan(2000)
+  // Sans le fichier, la même mission recopie bien plus.
+  expect(choiceLines(reportFacts(runOf(board))).join('\n').length).toBeGreaterThan(10_000)
+})
+
+test('Sans fichier des choix, la partie des choix est celle d’avant, à l’octet près (3 choix, puis plus de 40)', () => {
+  const three = applyReport(lot(), { decided: [{ what: 'Spec validée', origin: 'skipped-validation' }, { what: 'Option A', why: 'plus simple', origin: 'recommendation' }, { what: 'Sans origine' }] }, T0 + 2).board
+  expect(choiceLines(reportFacts(runOf(three)))).toEqual([
+    '- Choices reported as made without the user: Spec validée [origin: validation sautée]; Option A (because plus simple) [origin: reco prise]; Sans origine. Put every one in « Décidé sans toi », and add the ones missing from this list. Some have an origin: group « Décidé sans toi » by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».',
+  ])
+  const first = applyReport(switchOnAuto(lot(), 'sa', T0 + 2)!.board, { decided: [{ what: 'Zone sensible : garder la copie', why: 'la plus prudente', origin: 'recommendation' }] }, T0 + 3).board
+  const many = declare(first, 41, 0, T0 + 4)
+  const lines = choiceLines(reportFacts(runOf(many)))
+  expect(lines).toHaveLength(3)
+  expect(lines[0]).toBe('- 42 choices reported as made without the user (1 « reco prise », 0 « validation sautée », 0 « choix de worker », 41 without origin): only the 40 latest are listed below; the dashboard (⚑ Décidé sans toi) shows them all.')
+  expect(lines[1]).toBe(
+    `- Choices reported as made without the user: ${Array.from({ length: 40 }, (_, i) => `Choix ${i + 1}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list. Some have an origin: group « Décidé sans toi » by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».`,
+  )
+  expect(lines[2]).toBe('- Sensitive choices settled in auto (1), to list first and apart in « Décidé sans toi », under « Zone sensible, tranché en auto », and nowhere else: Zone sensible : garder la copie (because la plus prudente).')
+})
+
+test('Le fichier des choix porte tout ce que la liste recopiée portait : chaque choix en vigueur, sa raison, son origine et la marque « Zone sensible : »', () => {
+  const board = applyReport(
+    switchOnAuto(lot(), 'sa', T0 + 2)!.board,
+    {
+      decided: [
+        { what: 'Zone sensible : garder la copie', why: 'la plus prudente', origin: 'recommendation' },
+        { what: 'Spec validée', origin: 'skipped-validation' },
+        { what: 'Retiré ensuite' },
+      ],
+    },
+    T0 + 3,
+  ).board
+  const withdrawn = applyReport(board, { withdrawn: [{ what: 'Retiré ensuite', why: 'faux' }] }, T0 + 4).board
+  const file = decidedFileText(runOf(withdrawn), null)
+  expect(file).toContain('- Zone sensible : garder la copie — la plus prudente (reco prise,')
+  expect(file).toContain('- Spec validée (validation sautée,')
+  expect(file).not.toContain('Retiré ensuite')
+  // Le retrait reste aux faits, dans sa ligne à part.
+  expect(reportFacts(runOf(withdrawn), 0, '/f.md').join('\n')).toContain('Choices withdrawn during the mission (no longer in force; say so apart in « Décidé sans toi », with why): Retiré ensuite (faux).')
 })
 
 test('Les choix en zone sensible tranchés en auto sont tous donnés à part aux faits du compte rendu, même hors des 40 plus récents', () => {

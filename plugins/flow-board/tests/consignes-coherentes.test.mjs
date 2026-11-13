@@ -25,9 +25,10 @@ const SURFACES = {
   'reference/procedure-groupe-fin.md': read('reference/procedure-groupe-fin.md'),
   'reference/procedure-groupe-sans-git.md': read('reference/procedure-groupe-sans-git.md'),
   'reference/procedure-groupe-autonome.md': read('reference/procedure-groupe-autonome.md'),
+  'reference/procedure-groupe-cas.md': read('reference/procedure-groupe-cas.md'),
   'reference/effort-workers.md': read('reference/effort-workers.md'),
   // La procédure entière (noyau et annexes), pour une consigne dont les mots-clés se partagent entre eux.
-  'reference/procedure-groupe*.md': ['procedure-groupe.md', 'procedure-groupe-fin.md', 'procedure-groupe-sans-git.md', 'procedure-groupe-autonome.md', 'effort-workers.md'].map(f => read(`reference/${f}`)).join('\n'),
+  'reference/procedure-groupe*.md': ['procedure-groupe.md', 'procedure-groupe-fin.md', 'procedure-groupe-cas.md', 'procedure-groupe-sans-git.md', 'procedure-groupe-autonome.md', 'effort-workers.md'].map(f => read(`reference/${f}`)).join('\n'),
   'reference/revue-securite.md': read('reference/revue-securite.md'),
   'reference/consignes-revue.md': read('reference/consignes-revue.md'),
   'reference/prompt-relecteur.md': read('reference/prompt-relecteur.md'),
@@ -42,6 +43,7 @@ const SURFACES = {
   'hooks/effort.ts': read('hooks/effort.ts'),
   'hooks/view.tsx': read('hooks/view.tsx'),
   'hooks/model.ts': read('hooks/model.ts'),
+  'hooks/link.ts': read('hooks/link.ts'),
   'skills/compte-rendu/SKILL.md': read('skills/compte-rendu/SKILL.md'),
   'skills/coo/SKILL.md': read('skills/coo/SKILL.md'),
   'to-spec/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-spec/SKILL.md'),
@@ -64,6 +66,14 @@ const CONSIGNES = [
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'config/rules/agents.md', 'reference/procedure-groupe.md', 'README.md'],
   },
   { name: "le relecteur de l'axe Spec seul, en anglais", keywords: ['the Spec axis alone'], surfaces: ['hooks/catalog.ts'] },
+  {
+    // Un lancement filtré par « | tail -2 » avait retiré la ligne « backgrounded », et quatre envois
+    // étaient restés sans session. La consigne de lancement du CLI et sa copie du README disent la même chose.
+    name: 'la consigne de lancement du CLI : une commande par worker, sans filtre',
+    keywords: ['une commande par worker, sans tube ni filtre sur sa sortie', 'ni redirection'],
+    surfaces: ['hooks/register.tsx', 'README.md'],
+  },
+  { name: 'la consigne de lancement du CLI, dans la réponse au tour', keywords: ['Launch one command per worker, with nothing on its output (no pipe, no filter, no redirection)'], surfaces: ['hooks/link.ts'] },
   {
     // Un groupe d'un seul ticket n'a pas de revue du groupe ; son avis de sécurité reste dû.
     name: "le groupe d'un seul ticket",
@@ -115,9 +125,10 @@ const CONSIGNES = [
   },
   { name: 'les trois questions du classement, en anglais', keywords: ['three questions'], surfaces: ['hooks/register.tsx'] },
   {
-    // Une classe de défaut trouvée une deuxième fois se corrige partout d'un coup.
+    // Un constat qui nomme d'autres endroits les fait corriger dès la première fois ; une classe de
+    // défaut qui revient se corrige partout d'un coup.
     name: 'la classe de défaut corrigée partout',
-    keywords: ['classe de défaut'],
+    keywords: ['classe de défaut', 'dès la première fois'],
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md'],
   },
   {
@@ -154,7 +165,7 @@ const CONSIGNES = [
     keywords: ['worker Fable', 'relecteur'],
     surfaces: ['reference/procedure-groupe.md', 'reference/procedure-groupe-fin.md', 'reference/procedure-groupe-autonome.md', 'config/reference/revues.md', 'README.md'],
   },
-  { name: 'les revues du worker Fable, en Opus explicite', keywords: ['worker Fable', 'modèle opus passé explicitement', 'moment (c)'], surfaces: ['reference/procedure-groupe.md', 'README.md'] },
+  { name: 'les revues du worker Fable, en Opus explicite', keywords: ['worker Fable', 'modèle opus passé explicitement', 'moment (c)'], surfaces: ['reference/procedure-groupe-cas.md', 'README.md'] },
   {
     // Le mod impose l'effort du COO (medium) et du manager selon sa phase (medium pendant le suivi des groupes).
     name: "l'effort du COO et du manager selon la phase",
@@ -296,6 +307,14 @@ const CONSIGNES = [
   },
   { name: 'le plafond de constats de la passe « bogues », en anglais', keywords: ['<level> --max-findings all', '10 findings in high and 15 in xhigh'], surfaces: ['hooks/catalog.ts'] },
   {
+    // Une /code-review lancée pendant qu'une autre tourne passe au premier plan et retient la session (essai du ticket
+    // 27 des pistes de rétro) : la règle des revues, le point 5 de la procédure et le README.
+    name: 'une /code-review à la fois',
+    keywords: ["ne se lance qu'une fois la précédente revenue (sa notification reçue)", 'passe au premier plan', 'la seconde se confie à un spécialiste relecteur', 'qui la lance lui-même'],
+    surfaces: ['config/reference/revues.md', 'reference/procedure-groupe.md', 'README.md'],
+  },
+  { name: 'une /code-review à la fois, en anglais', keywords: ['only once the previous one is back (its notification received)', 'goes to the foreground', 'which launches it itself'], surfaces: ['hooks/catalog.ts'] },
+  {
     // Un groupe dont tous les tickets sont sensibles compte 3 à 4 tickets, et un ticket sensible lourd et indépendant
     // passe en premier : la règle des lots, le README, et la consigne de découpage en anglais.
     name: 'la taille d’un groupe de tickets sensibles',
@@ -369,6 +388,18 @@ const CONSIGNES = [
     name: 'l’accord du mode auto et le tour d’intention du COO',
     keywords: ['« Lancer en auto »', 'ne sert qu\'une fois, à la seule discussion', 'une fusion, une reconstruction ou une lecture ratée laisse l\'auto éteint ou l\'éteint, jamais l\'inverse', 'travail/<sujet>/demande.md'],
     surfaces: ['config/rules/flow-board.md', 'README.md'],
+  },
+  {
+    // Au cadrage, l'étape « Arbre des décisions » fait chercher une décision déjà prise dans tous les fichiers de décisions.
+    name: 'les décisions déjà prises cherchées au cadrage',
+    keywords: ["map the design tree of decisions; before a question that touches a shared rule, a shared setting or a design decision, search its term in every decision file of the project (those its CLAUDE.md names, not only this mission's) and cite in the question the decision found, with its file and date; a recommendation against a decision found says so"],
+    surfaces: ['hooks/catalog.ts'],
+  },
+  {
+    // En auto, le COO vérifie demande.md avant de lancer : le texte du clic et le skill du COO (deux missions en auto étaient parties sans lui).
+    name: 'demande.md vérifié par le COO avant de lancer en auto',
+    keywords: ['existe et est commité', 'ne lance pas', "n'a pas de tour d'intention"],
+    surfaces: ['hooks/register.tsx', 'skills/coo/SKILL.md'],
   },
   {
     // Le worker autonome et l'effort en mode auto : à tout effort, ni Fable ni xhigh proposés ; les groupes suivants lancés par le mod.
@@ -485,14 +516,84 @@ const CONSIGNES = [
   },
   {
     name: 'la régression Important, dans la consigne des relecteurs, en anglais',
-    keywords: ['a regression the diff introduces (an input that passed before it and now throws, gives another result or is refused) is Important, whether or not the ticket has an invariant', 'even on a line the diff did not change (the caller of a function whose contract it changes): it is not Pre-existing', 'except a regression the diff introduces, which gets fixed'],
+    keywords: ['a regression the diff introduces (an input that passed before it and now throws, gives another result or is refused) is Important, whether or not the ticket has an invariant', 'even on a line the diff did not change (the caller of a function whose contract it changes): it is not Pre-existing', 'except a regression the diff introduces, or a finding on the code of the lot that makes a ticket criterion fail without a signal, which gets fixed'],
     surfaces: ['hooks/catalog.ts'],
   },
   {
     // La consigne de compaction d'un worker garde ses pistes pour le compte rendu : une régression corrigée n'en est pas une.
     name: 'la régression exceptée des pistes, en anglais',
-    keywords: ['except a regression the diff introduces, which gets fixed'],
+    keywords: ['except a regression the diff introduces, or a finding on the code of the lot that makes a ticket criterion fail without a signal, which gets fixed'],
     surfaces: ['hooks/catalog.ts', 'hooks/compaction.ts'],
+  },
+  {
+    // En auto, l'invariant d'un ticket seulement sensible est écrit et déclaré par la session qui découpe, sans
+    // question (réponse de Mathis du 12/11/2026) : la règle « Mode auto » et la consigne du découpage en auto l'exceptent.
+    name: "l'invariant d'un ticket seulement sensible, déclaré en auto",
+    keywords: ["hors de celui d'un ticket seulement sensible, que la session qui découpe écrit et déclare"],
+    surfaces: ['config/rules/flow-board.md'],
+  },
+  {
+    name: "l'invariant d'un ticket seulement sensible, déclaré en auto, en anglais",
+    keywords: ['except the invariant of a ticket that is only sensitive, with no shared data nor deletion: you write it and declare it with the breakdown, without a question'],
+    surfaces: ['hooks/register.tsx'],
+  },
+  {
+    // Un ticket qui gardait la suppression des traces, sans rien effacer lui-même, avait eu sa passe « bogues »
+    // en high ; la passe d'après les correctifs avait encore trouvé 7 constats.
+    name: 'la passe « bogues » en xhigh pour un ticket qui décide ou garde une suppression',
+    keywords: ['décide ou garde une suppression'],
+    surfaces: ['config/rules/agents.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'reference/revue-securite.md', 'README.md'],
+  },
+  {
+    name: 'la passe « bogues » en xhigh pour un ticket qui décide ou garde une suppression, en anglais',
+    keywords: ['decides or guards a deletion'],
+    surfaces: ['hooks/catalog.ts', 'hooks/register.tsx'],
+  },
+  {
+    // Un « Fix » proposé pour une branche Windows, repris tel quel, avait introduit un refus des fichiers OneDrive.
+    name: 'le correctif non vérifiable sur ce poste, une piste d’essai',
+    keywords: ['porte la mention « non vérifiable sur ce poste » et se rend comme une piste d\'essai'],
+    surfaces: ['reference/consignes-revue.md', 'reference/procedure-groupe.md'],
+  },
+  {
+    name: 'le correctif non vérifiable sur ce poste, une piste d’essai, en anglais',
+    keywords: ['carries the mention « non vérifiable sur ce poste » and is given as a trial lead'],
+    surfaces: ['hooks/catalog.ts'],
+  },
+  {
+    // L'axe Spec ne lisait que les critères cochés : le point 1 d'un « What to build » avait échappé à la revue.
+    name: 'l’axe Spec vérifie aussi « What to build » et les textes touchés',
+    keywords: ['Chaque point numéroté et chaque phrase de comportement de « What to build » se vérifient aussi', 'se confronte aux branches du code qu\'elle décrit'],
+    surfaces: ['reference/prompt-relecteur.md'],
+  },
+  {
+    // Un constat qui fait manquer un critère du ticket sans signal (le comportement promis ne se produit pas,
+    // et rien ne le dit) est Important et se corrige, même sans violer l'invariant.
+    name: 'le critère manqué sans signal, Important',
+    keywords: ['un constat sur le code du lot qui fait manquer un critère du ticket sans signal (le comportement promis ne se produit pas, et rien ne le dit'],
+    surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'reference/procedure-groupe.md', 'reference/consignes-revue.md'],
+  },
+  {
+    name: 'le critère manqué sans signal, Important, en anglais',
+    keywords: ["a finding on the code of the lot that makes a ticket criterion fail without a signal"],
+    surfaces: ['hooks/catalog.ts', 'hooks/compaction.ts'],
+  },
+  {
+    // Tout ticket sensible porte sa phrase « Invariant » : fixée avec la personne pour un très sensible,
+    // écrite par la session qui découpe et montrée avec le découpage pour un seulement sensible (réponse de Mathis du 12/11/2026).
+    name: "l'invariant de tout ticket sensible",
+    keywords: ['Tout autre ticket sensible porte aussi sa phrase « Invariant »', 'écrite par la session qui découpe et montrée avec le découpage'],
+    surfaces: ['config/rules/flow-board.md'],
+  },
+  {
+    name: "l'invariant de tout ticket sensible, en anglais",
+    keywords: ['Every other ticket in a sensitive area also carries its one-sentence « Invariant »', 'the session that splits writes it and shows it with the breakdown'],
+    surfaces: ['hooks/register.tsx'],
+  },
+  {
+    name: "l'invariant de tout ticket sensible, à la relecture du découpage",
+    keywords: ['every sensitive ticket carries one: fixed with the user for a very sensitive ticket, written by the session that splits and shown with the breakdown'],
+    surfaces: ['hooks/catalog.ts'],
   },
   {
     name: 'la régression exceptée des pistes',

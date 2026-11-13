@@ -10,4 +10,4 @@ Ce document est lu à partir de la section « Compte rendu de fin d'exécution �
 - **Modifié** : une ligne par comportement changé, fichiers en liens, vérification au bout (`commande → résultat`) ; « non vérifié », avec la raison, quand la vérification n'a pas pu se faire.
 - **Trouvé** : anomalies, « à confirmer » et pistes hors périmètre, chacune avec son lien dans le suivi des tâches.
 
-Les rubriques vides sont omises, sauf « À faire par toi ». Dans un lot de tickets, ce compte rendu ne remplace pas le rapport de `/flow-board:compte-rendu`.
+Les rubriques vides sont omises, sauf « À faire par toi ». À la fin d'une mission flow-board, la discussion qui la porte n'écrit pas ce compte rendu : son rapport est celui de `/flow-board:compte-rendu`, et elle dit en une ligne de le lancer (règle « Compte rendu de fin d'exécution » du plugin `project`).

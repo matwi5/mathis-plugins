@@ -23,7 +23,7 @@ test('Santé du code et Triage finissent comme les autres : compte rendu, versio
     'project:version?',
     'project:pr?',
   ])
-  expect(shape(boardWith('triage'))).toEqual(['triage', 'implement?', 'compte-rendu?', 'project:version?', 'project:pr?'])
+  expect(shape(boardWith('triage'))).toEqual(['triage', 'to-tickets?', 'implement?', 'compte-rendu?', 'project:version?', 'project:pr?'])
 })
 
 test('sans code, la mission se clôt au triage ; dès que l’Implémentation démarre, le compte rendu devient obligatoire', () => {

@@ -19,7 +19,8 @@ fois) : son numéro, une tabulation, et un extrait de 100 caractères au plus de
 motif, « … » marquant une coupure. Pour chercher dans un fichier aux lignes de plusieurs milliers de
 caractères (le README) sans `grep -n … | cut -c1-300`, qui coupe l'extrait avant le motif.
 
-`--decl` affiche la déclaration de premier niveau qui porte ce nom (les mots-clés que reconnaît `DECL`
+`--decl` affiche la déclaration de premier niveau qui porte ce nom (dans un fichier JavaScript ou
+TypeScript, les mots-clés que reconnaît `DECL`
 de `deplace.py`, que ce script importe : exportée ou non), numérotée comme Read, avec les lignes de
 commentaire collées au-dessus d'elle (`/** */`, `//`), jusqu'à l'instruction de premier niveau suivante
 (sans son commentaire de tête, ni les lignes vides ou de commentaire qui la précèdent). Pour lire une
@@ -32,16 +33,29 @@ une ligne d'un gabarit qui commence ainsi la couperait, et le message prévient 
 affichée porte un nombre impair d'accents graves hors de ses lignes de commentaire. Un nom absent (le
 message cite les noms déclarés les plus proches) ou déclaré plusieurs fois au premier niveau (le
 message donne ses lignes) : rien n'est affiché, code 1.
+Sur un fichier `.py`, `--decl` rend une fonction (`def`, `async def`) ou une classe (`class`) déclarée
+en colonne 0, avec ses décorateurs et les lignes de commentaire `#` en colonne 0 collées au-dessus,
+jusqu'à sa dernière ligne : la dernière qui n'est ni vide ni un commentaire `#` en colonne 0 avant
+l'instruction de premier niveau suivante (et son commentaire de tête), jamais avant la fin de son
+corps. Les instructions de premier niveau viennent de `ast` ; un fichier qui ne se lit pas en Python
+(erreur de syntaxe) se lit par lignes, toute ligne en colonne 0 qui commence par un mot ou `@` en
+ouvrant une, et le message prévient que la déclaration est peut-être coupée. Les noms proches d'un
+nom absent sont pris parmi ses `def` et `class`. Les fichiers JavaScript et TypeScript se reconnaissent
+à leur extension (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`), sans la casse, comme
+`.py` ; une autre extension est refusée (code 2), le message renvoyant à la lecture d'une plage par
+motif. Une marque d'ordre des octets en tête d'un `.py` ne l'empêche pas de se lire en Python, et un
+octet nul le fait lire par lignes, comme une erreur de syntaxe.
 Sans dépendance hors de la bibliothèque standard.
 """
 
+import ast
 import difflib
 import re
 import sys
 from pathlib import Path
 
 # `deplace.py`, à côté de ce script, donne l'expression d'une déclaration de premier niveau et son
-# lecteur : importés par `--decl` seulement (`declarations`), pour que la plage, `--liste` et les
+# lecteur : importés par `--decl` d'un fichier JavaScript ou TypeScript seulement (`declarations`), pour que la plage, `--liste` et les
 # messages que `patch.py` importe d'ici marchent même quand `deplace.py` ne se charge pas ; chemin ajouté
 # à la main (un lancement par `python3 -I` n'ajoute pas le dossier du script).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -61,6 +75,13 @@ STATEMENT = re.compile(r"[A-Za-z_$@]")
 # Le groupe de `DECL` (deplace.py) qui porte le nom déclaré.
 DECL_NAME = 4
 COMMENT = ("//", "/*", "*")
+# Les extensions que lit `--decl` : JavaScript et TypeScript par le lecteur de deplace.py, Python par `ast`.
+JS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+PY_SUFFIXES = {".py"}
+# La marque d'ordre des octets qu'un éditeur Windows met en tête d'un fichier UTF-8.
+BOM = chr(0xFEFF)
+# Une fonction ou une classe Python, à la lecture par lignes ; le groupe 1 porte son nom.
+PY_DECL = re.compile(r"(?:async\s+def|def|class)\s+([A-Za-z_]\w*)")
 # Les numéros de ligne cités au plus dans un message (« lignes 3, 8, … »), le compte restant entier.
 SHOWN_LINES = 10
 
@@ -196,11 +217,78 @@ def declarations(path, lines):
     return found
 
 
+def py_declarations(lines):
+    """Les fonctions (`def`, `async def`) et classes de premier niveau d'un fichier Python, sous la forme
+    de `declarations`, et l'avertissement à afficher (ou None). Les débuts d'instruction de premier niveau
+    viennent de `ast` (décorateurs compris, chaînes sur plusieurs lignes sautées) ; un fichier qui ne se
+    lit pas en Python se lit par lignes (toute ligne en colonne 0 qui commence par un mot ou `@`), avec un
+    avertissement. La première ligne d'une déclaration est celle des lignes `#` en colonne 0 collées
+    au-dessus d'elle (ou de son premier décorateur) ; la dernière, la dernière ligne qui n'est ni vide ni
+    un commentaire `#` en colonne 0 avant le commentaire de tête de l'instruction suivante, et jamais
+    avant la fin de son corps selon `ast` (une chaîne qui finit sur une ligne vide ou en `#`)."""
+    warning = None
+    # Le texte donné à `ast`, ligne pour ligne celui de `lines` (un `\r` seul y est déjà une fin de ligne :
+    # `read_text` lit en fins de ligne universelles, comme `ast`), sans la marque d'ordre des octets de tête,
+    # que `ast` refuse dans un texte ; les numéros de ligne restent ceux de `read_lines`.
+    source = "\n".join(lines) + "\n"
+    try:
+        body = ast.parse(source.removeprefix(BOM)).body
+        # (première ligne, ligne du mot-clé, nœud), numérotées depuis 0.
+        statements = [(min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])]) - 1,
+                       node.lineno - 1, node) for node in body]
+    except (SyntaxError, ValueError) as err:  # ValueError : un octet nul, avant Python 3.12
+        where = f"erreur de syntaxe ligne {err.lineno}" if isinstance(err, SyntaxError) else str(err)
+        warning = (f"le fichier ne se lit pas en Python ({where}) : lu par lignes, "
+                   f"la déclaration est peut-être coupée dans une chaîne sur plusieurs lignes")
+        # Une suite de décorateurs (lignes en `@`) fait une seule instruction avec la ligne qui la suit.
+        statements, first = [], None
+        for k, line in enumerate(lines):
+            if STATEMENT.match(line):
+                first = k if first is None else first
+                if not line.startswith("@"):
+                    statements.append((first, k, None))
+                    first = None
+
+    def is_comment(k):
+        return lines[k].removeprefix(BOM).startswith("#")
+
+    def head(k, floor):
+        # Jamais au-dessus de la fin de l'instruction d'avant : une ligne en `#` qui ferme sa chaîne lui reste.
+        while k > floor and is_comment(k - 1):
+            k -= 1
+        return k
+
+    # La première ligne après chaque instruction, selon `ast` (0 à la lecture par lignes) : le plancher du
+    # commentaire de tête de l'instruction qui la suit.
+    floors = [0] + [node.end_lineno if node is not None else 0 for _, _, node in statements]
+    found = []
+    for at, (s, keyword, node) in enumerate(statements):
+        if node is not None:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            name = node.name
+        else:
+            m = PY_DECL.match(lines[keyword])
+            if not m:
+                continue
+            name = m.group(1)
+        following = head(statements[at + 1][0], floors[at + 1]) if at + 1 < len(statements) else len(lines)
+        end = max(k for k in range(s, max(following, s + 1)) if k == s or (lines[k].strip() and not is_comment(k)))
+        if node is not None:
+            end = max(end, node.end_lineno - 1)
+        found.append((name, head(s, floors[at]) + 1, keyword + 1, end + 1, False))
+    return found, warning
+
+
 def declaration(path, name):
-    """Les lignes (numéro, texte) de la déclaration de premier niveau `name` ; ValueError si elle est
-    absente (avec les noms déclarés les plus proches) ou déclarée plusieurs fois au premier niveau."""
+    """Les lignes (numéro, texte) de la déclaration de premier niveau `name`, et l'avertissement à afficher
+    (ou None) ; ValueError si elle est absente (avec les noms déclarés les plus proches) ou déclarée
+    plusieurs fois au premier niveau."""
     lines = read_lines(path)
-    decls = declarations(path, lines)
+    if Path(path).suffix.lower() in PY_SUFFIXES:
+        decls, warning = py_declarations(lines)
+    else:
+        decls, warning = declarations(path, lines), None
     mine = [d for d in decls if d[0] == name]
     if not mine:
         close = difflib.get_close_matches(name, sorted({d[0] for d in decls}), n=3, cutoff=0.6)
@@ -210,7 +298,12 @@ def declaration(path, name):
         raise ValueError(f"{path} : « {name} » est déclaré {len(mine)} fois au premier niveau, "
                          f"lignes {line_list([d[2] for d in mine])}")
     _, first, _, last, is_cut = mine[0]
-    return [(n, lines[n - 1]) for n in range(first, last + 1)], is_cut
+    shown = [(n, lines[n - 1]) for n in range(first, last + 1)]
+    if is_cut:
+        warning = (f"« {name} » porte un nombre impair d'accents graves, et ce fichier se lit par lignes (un "
+                   f"littéral que le lecteur ne sait pas fermer) : la déclaration est peut-être coupée à la "
+                   f"ligne {last}, dans un gabarit")
+    return shown, warning
 
 
 def decl(argv):
@@ -222,17 +315,20 @@ def decl(argv):
     if not Path(path).is_file():
         print(f"ÉCHEC : fichier introuvable : {path}", file=sys.stderr)
         return 1
+    if Path(path).suffix.lower() not in JS_SUFFIXES | PY_SUFFIXES:
+        print(f"ÉCHEC : --decl lit les fichiers JavaScript, TypeScript et Python "
+              f"({', '.join(sorted(JS_SUFFIXES) + sorted(PY_SUFFIXES))}), pas « {Path(path).suffix or 'sans extension'} » : lire une plage par "
+              f'python3 scripts/show.py {path} "<motif>" +N', file=sys.stderr)
+        return 2
     try:
-        shown, is_cut = declaration(path, name)
+        shown, warning = declaration(path, name)
     except ValueError as err:
         print(f"ÉCHEC : {err}", file=sys.stderr)
         return 1
     for n, line in shown:
         print(f"{n}\t{line}")
-    if is_cut:
-        print(f"ATTENTION : « {name} » porte un nombre impair d'accents graves, et ce fichier se lit par lignes "
-              f"(un littéral que le lecteur ne sait pas fermer) : la déclaration est peut-être coupée à la "
-              f"ligne {shown[-1][0]}, dans un gabarit", file=sys.stderr)
+    if warning:
+        print(f"ATTENTION : {warning}", file=sys.stderr)
     return 0
 
 

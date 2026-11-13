@@ -2,12 +2,12 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { askMattCandidates, LAUNCH_STALE, LAUNCH_TTL_MS, isFolderName, launchKey, otherCarrierOf, parseCard, type LaunchRecord } from '../hooks/launch.ts'
+import { askMattCandidates, cardRoadmapIds, pistesCard, LAUNCH_STALE, LAUNCH_TTL_MS, isFolderName, launchKey, otherCarrierOf, parseCard, type LaunchRecord } from '../hooks/launch.ts'
 import { emptyBoard, loseLaunch, mergeBoards, newRun } from '../hooks/model.ts'
 import { cooStatement, statementText } from '../hooks/coo.ts'
 import { coordinationRows } from '../hooks/coo-view.tsx'
 import { parseRoadmap } from '../hooks/roadmap.ts'
-import { roadmapAsk } from '../hooks/register.tsx'
+import { launchText, roadmapAsk } from '../hooks/register.tsx'
 import { PANE, PLUGIN, TOOL, openCoo, seatOf, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
 
 // La carte de lancement du COO. Invariant : « Une carte ne lance qu'une mission ; un
@@ -75,6 +75,41 @@ test('le COO propose une carte : elle paraît dans la vue et dans son relevé ; 
   expect(await after.find({ type: 'Text', text: /lancement en cours \(manuel\)/ })).toBeDefined()
   expect(await after.find({ type: 'Button', key: `coo-card-manual-${card.id}` })).toBeUndefined()
   await after.unmount()
+})
+
+test('les entrées de la feuille de route d’une carte : son champ idea, puis les ids R ou I de son titre, sans doublon', () => {
+  expect(cardRoadmapIds({ title: 'Signal de vie (R96, R49)', idea: 'I3' })).toEqual(['I3', 'R96', 'R49'])
+  expect(cardRoadmapIds({ title: 'R96 et I3 et R96' })).toEqual(['R96', 'I3'])
+  // Ni un mot qui contient la forme, ni une autre lettre, ni une carte sans entrée.
+  for (const title of ['Export CSV des tickets', 'Format A4 et R2D2', 'Version 0.83.0', 'XR96 BR12', 'R12345']) expect(cardRoadmapIds({ title })).toEqual([])
+})
+
+test('le texte de lancement : la feuille de route demandée quand la carte cite une entrée ; en auto, demande.md vérifié avant de lancer, sauf pour une rétro ou des pistes', () => {
+  const card = (over: Record<string, unknown> = {}) => ({ ...(parseCard(CARD, 1, 'kabcdef12') as any).card, ...over })
+  const roadmap = /de la feuille de route : dans le premier message, écris à côté de cette entrée le chemin de la feuille de route que donne ton relevé/
+  // Une carte qui cite R96 dans son titre, ou une idée par son champ : le chemin est demandé.
+  expect(launchText(card({ title: 'Signal de vie R96' }), 'labcdefgh12', 'manual', '/grill')).toMatch(/La carte cite R96 de la feuille de route : dans le premier message, écris à côté de cette entrée/)
+  expect(launchText(card({ idea: 'I7' }), 'labcdefgh12', 'manual', '/grill')).toMatch(/La carte cite I7 de la feuille de route/)
+  expect(launchText(card({ title: 'R96 et R49' }), 'labcdefgh12', 'manual', '/grill')).toMatch(/La carte cite R96, R49 de la feuille de route : dans le premier message, écris à côté de ces entrées/)
+  // Sans entrée : rien.
+  const plain = launchText(card(), 'labcdefgh12', 'manual', '/grill')
+  expect(plain).not.toMatch(roadmap)
+  expect(plain).not.toContain('feuille de route')
+  // En manuel, rien sur demande.md.
+  expect(plain).not.toContain('demande.md')
+  // En auto, une carte ordinaire : demande.md vérifié (existe et est commité), sinon pas de lancement.
+  const auto = launchText(card({ mode: 'auto' }), 'labcdefgh12', 'auto', '/grill')
+  expect(auto).toContain('Avant de lancer, vérifie que travail/export-csv/demande.md existe et est commité (git log -1 -- travail/export-csv/demande.md ; dans un projet sans git, qu\'il existe), et qu\'il porte le tour d\'intention de cette carte, pas celui d\'une mission précédente du même dossier')
+  expect(auto).toContain("S'il manque, ne lance pas : dis-le-moi en une ligne")
+  // Une rétro ou une carte de pistes : pas de tour d'intention, lancée tout de suite.
+  const retro = launchText(card({ title: 'Rétrospective · Export R96', of: 'mabc', start: 'retro', folder: 'export-csv' }), 'labcdefgh12', 'auto', '/grill')
+  expect(retro).not.toContain('demande.md')
+  expect(retro).toContain("une rétro n'a pas de tour d'intention")
+  // Une rétro dont le titre (repris de la mission close) cite une entrée : son premier message n'a « rien d'autre », pas de feuille de route.
+  expect(retro).not.toContain('feuille de route')
+  const pistes = launchText(pistesCard('kabcdef12', 300_000_000), 'labcdefgh12', 'auto', '/grill')
+  expect(pistes).not.toContain('demande.md')
+  expect(pistes).toContain("un découpage de pistes de rétro n'a pas de tour d'intention")
 })
 
 test('la carte revient au-delà de 10 minutes sans mission, et se dit lancée quand une mission la porte', { timeoutMs: 20000 }, async ($, on) => {
@@ -298,7 +333,27 @@ test('un lancement encore valable pour ce dossier refuse un second clic, même s
   expect(w.fills.some(f => f.includes('"launch"'))).toBe(false)
 })
 
-test('au-delà du plafond, seules les cartes prêtes les plus anciennes partent : une carte en lancement reste', { timeoutMs: 20000 }, async ($, on) => {
+test('les lancements gardés illisibles (la liste des clés du magasin refusée) : le clic ne lance rien, ne marque pas la carte et le dit ; relue, la liste laisse lancer', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 321_500_000
+  const { w } = await openCooWith($, on, now)
+  const card = { id: cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)) }
+  w.probe.refuseKeys = () => true
+  const ui = await pane($)
+  await ui.press({ key: `coo-card-manual-${card.id}` })
+  await ui.unmount()
+  expect(w.toasts.at(-1)).toBe('◆ Rien n’est lancé : un lancement gardé ne se lit pas ; réessaie.')
+  expect(records(w)).toHaveLength(0)
+  expect(w.fills.some(f => f.includes('"launch"'))).toBe(false)
+  // La carte n'est pas « en lancement » : son bouton reste, et le même clic lance une fois la liste relue.
+  w.probe.refuseKeys = undefined
+  const again = await pane($)
+  await again.press({ key: `coo-card-manual-${card.id}` })
+  await again.unmount()
+  expect(records(w)).toHaveLength(1)
+  expect(w.fills.filter(f => f.includes('"launch"'))).toHaveLength(1)
+})
+
+test('au-delà du plafond, seules les cartes prêtes les plus anciennes partent : une carte en lancement reste',{ timeoutMs: 20000 }, async ($, on) => {
   const now = 322_000_000
   const { w } = await openCooWith($, on, now)
   const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))

@@ -38,8 +38,8 @@ import type {
   WaitsUser,
   RunLaunch,
 } from '../types'
-import { CODE_SKILLS, SECURITY_OFF_REPLY, SENSITIVE_AREAS, SKILLS, agree, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
-import { GROUP_ID_FORM, asciiJson, closingScript, isScriptPath, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, isGroupId, isKeptForReport, isQuestionIdForm, isSafeId, sendNumber } from './closing.ts'
+import { CODE_SKILLS, SECURITY_OFF_DELEGATE, SECURITY_OFF_REPLY, SENSITIVE_AREAS, SKILLS, agree, commandOf, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
+import { GROUP_ID_FORM, asciiJson, closingScript, isScriptPath, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, hasSendName, sendRefusalEn, isGroupId, isKeptForReport, isQuestionIdForm, isSafeId, sendNumber, type SendName } from './closing.ts'
 import { maxOf, minOf } from './timeline.ts'
 import { unionInstructed } from './coordination.ts'
 import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
@@ -48,7 +48,7 @@ import type { SecurityReview } from './security-setting.ts'
 import type { PlanUnit, PlanWait } from './plan-projet.ts'
 import { activeRun, isReportValidated, addedCount, asanaChange, asList, AUTO_CHOICES_MAX, formText, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
 import { type GroupRelay, ignoredOrigins, inForce, isRelay, parseMainRef, isSameRelayedChoice, keepDecisions, refusedRelayText, relayForGroup, relayedDecisions, REPORT_MAX, relayedReportsText, relayedSentence, reportedDecisions, reportedWithdrawals, sameChoice } from './relay.ts'
-import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, keepClosings, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
+import { CLOSE_STATES, closingOf, closingWhy, confidedIds, earlierOf, groupSendSeq, hasLaunchedLinked, holdsItemsSession, inFlightWhy, isClosedLink, isHoldingGroup, isItemsCloseCandidate, isKeptGroup, isResentInFlight, isRetried, isRetriedSince, isSentGroup, isAwaitingSession, keepClosings, keepSendNames, keepSessions, linkedInFlight, previousSecurityText, returnGroups, returnedLink, sendGroups, touchedLink, withCloseAsked, withClosing, withEarlierClosing, withItems, withoutLink, keptGroupFields } from './link.ts'
 
 export const emptyBoard = (root: string, name: string): Board => ({ v: 1, root, name, runs: [], activeId: null })
 
@@ -148,10 +148,12 @@ export const withoutPullRequest = (run: Run): Run => {
 
 export const suggestionsFor = (run: Run, opts: SuggestOpts = {}): Suggestions => {
   const phase = currentPhase(run)
-  const next = run.phases.slice(run.cursor + 1).find(p => p.status === 'pending')
+  // Un tri qui a déjà envoyé ses tickets : le découpage est fait, /to-tickets ne se propose plus (ni en tête ni à côté).
+  const isTriageCut = run.entry === 'triage' && run.tickets.length > 0
+  const next = run.phases.slice(run.cursor + 1).find(p => p.status === 'pending' && !(isTriageCut && p.skill === 'to-tickets'))
   const list: string[] = []
   const add = (skill: string) => {
-    if (skill in SKILLS && !list.includes(skill)) list.push(skill)
+    if (skill in SKILLS && !list.includes(skill) && !(isTriageCut && skill === 'to-tickets')) list.push(skill)
   }
   // Des éléments chez un worker pas encore fermé : quitter la phase rangerait sa note de fin
   // dans une autre, et la session ne serait plus attendue ni fermée. Aucune suite avant sa fermeture.
@@ -1526,7 +1528,7 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
     // même muette ou close, se reprend par « ↻ Reprendre ici » : un /grill-with-docs lancé dans une discussion neuve
     // avait repris la mission de cadrage d'une autre discussion, muette depuis trois jours, et y avait écrit ses points
     // (06/11/2026). Née ici mais reprise ailleurs par le bouton, elle est à l'autre discussion tant qu'elle la tient.
-    .filter(r => b.session !== undefined && (r.owner === b.session || (r.owner === undefined && r.bornIn === b.session)))
+    .filter(r => isHeldHere(r, b.session))
     .filter(r => r.status === 'paused' || (r.status === 'active' && r.id !== b.activeId && now - r.updatedAt > ORPHAN_MS))
     .sort((x, y) => y.updatedAt - x.updatedAt)
     .find(r => findPhase(r, id, r.cursor) >= 0)
@@ -1552,8 +1554,11 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
     return { board: b, fx }
   }
 
+  // Sans mission suivie ici, la suite d'une mission finie de cette discussion garde son titre : un /to-spec tapé
+  // après un cadrage fini avait ouvert une mission « De la spec au code », dont les workers avaient pris le nom (10/11/2026).
+  const inherited = title || ctx.isLaunched ? undefined : finishedTitleFor(b, id)
   if (run) shelve(run, now)
-  const created = newRun(id, now, title)
+  const created = newRun(id, now, title ?? inherited?.title)
   addCooSteps(b, created)
   created.owner = b.session
   created.bornIn = b.session
@@ -1561,12 +1566,39 @@ export const applySkill = (board: Board, name: string, ctx: SkillContext): Outco
   b.runs.unshift(created)
   b.activeId = created.id
   log(created, now, def.glyph, `Mission lancée par /${id}`, 'accent')
+  // Le titre repris se dit : un titre envoyé ensuite par l'outil ne le change plus (seuls `fix` et /flow rename le font).
+  if (inherited) log(created, now, '✎', `Titre repris de la mission finie « ${inherited.from} »`, 'info')
   fx.toasts.push(`${def.glyph} ${def.flowLabel} : mission lancée`)
   fx.openPane = true
   fx.note = 'phase'
   prune(b)
   return { board: b, fx }
 }
+
+/**
+ * Le titre que reprend une mission ouverte par `id` à la suite d'une mission finie de cette discussion :
+ * celui de la mission la plus récente de la discussion (tenue ici, ou née ici et tenue par personne ; une mission
+ * finie se date par sa fin), seulement si elle est finie, ni archivée ni mise de côté, titrée par Claude ou la
+ * personne, et que sa dernière phase faite propose `id` pour suite, sans être `id` lui-même (un second lot après un
+ * lot fini aurait repris ses noms de worktree et de branche). Une rétro prend « Rétrospective · <titre> », comme la
+ * rétro d'une mission active, pour ne pas porter le nom de la mission qu'elle étudie. Sinon rien. Lecture seule :
+ * la mission finie ne change pas (invariant validé par Mathis le 12/11/2026).
+ */
+const finishedTitleFor = (b: Board, id: string): { title: string; from: string } | undefined => {
+  if (b.session === undefined) return undefined
+  const dated = (r: Run) => (r.status === 'done' && isTime(r.finishedAt) ? (r.finishedAt as number) : r.updatedAt)
+  let last: Run | undefined
+  for (const r of b.runs) if (isHeldHere(r, b.session) && (last === undefined || dated(r) > dated(last))) last = r
+  if (!last || last.status !== 'done' || last.archivedAt !== undefined || last.asideAt !== undefined || last.isTitled !== true) return undefined
+  const title = str(last.title)
+  const lastDone = last.phases.findLast(p => p.status === 'done')
+  if (!title || !lastDone || lastDone.skill === id || !(SKILLS[lastDone.skill]?.next ?? []).includes(id)) return undefined
+  return { title: id === 'retro' ? clip(`${SKILLS[id]!.flowLabel} · ${title}`, 70) : title, from: title }
+}
+
+/** Une mission de cette discussion : tenue ici, ou née ici et tenue par personne (la reprise d'office et la reprise d'un titre). */
+const isHeldHere = (r: Run, session: string | undefined): boolean =>
+  session !== undefined && (r.owner === session || (r.owner === undefined && r.bornIn === session))
 
 // ─── Rapports de Claude (outil flow) ──────────────────────────────────────
 
@@ -1974,6 +2006,33 @@ const fixRun = (board: Board, run: Run, fix: Record<string, unknown>, now: numbe
 }
 
 /**
+ * Le refus d'un appel qui porte `step` (ou `fix.step`) sans titre, tant que la mission active ici n'a pas de titre choisi :
+ * le manager d'une mission ouverte sans titre avait envoyé ses étapes sans `title`, et les workers avaient pris le
+ * nom par défaut de la mission. Le refus juge la mission qui reçoit l'étape : celle qu'ouvre `open` (objet ou `true`,
+ * sans titre que s'il n'en porte pas), celle que reprend `resume` (une autre mission), sinon la mission active ici ;
+ * le lève un titre qui la titre (`title`, `open.title`, ou `fix.title` différent de son titre). Un worker (délégation)
+ * n'est pas concerné. Vide : pas de refus. Rien n'est enregistré de l'appel refusé (`applyReport`, et `flowCall`
+ * avant ses autres écritures).
+ */
+export const untitledStepRefusal = (board: Board | null | undefined, input: Readonly<Record<string, unknown>>): string => {
+  if (!board || board.delegate || str(input.delegate) !== '') return ''
+  // L'étape vient de `step`, ou de `fix.step`, qui la déplace aussi.
+  const fix = input.fix !== null && typeof input.fix === 'object' ? (input.fix as Record<string, unknown>) : null
+  const field = str(input.step) !== '' ? 'step' : str(fix?.step) !== '' ? 'fix.step' : ''
+  if (field === '' || str(input.title) !== '') return ''
+  const fixTitle = fix ? clip(str(fix.title), 70) : ''
+  const refusal = `Refused: the mission that would receive this "${field}" has no title yet, so it is not recorded; send this whole call again, every field of it as it was (${field} included), with "title" added: {"title": "<3 to 6 words, in the user's language>", …}. Nothing of this call was recorded.`
+  // Une ouverture (`reportOnce` : un objet ou `true`) : la mission ouverte n'a de titre que celui de `open`.
+  const open = input.open !== null && typeof input.open === 'object' ? (input.open as Record<string, unknown>) : null
+  if (open || input.open === true) return str(open?.title) !== '' || fixTitle !== '' ? '' : refusal
+  // Une reprise d'une autre mission : l'étape va à celle-ci ; sinon, à la mission active ici.
+  const resumed = str(input.resume)
+  const target = resumed !== '' && resumed !== board.activeId ? board.runs.find(r => r.id === resumed) : activeRun(board)
+  if (!target || target.isTitled) return ''
+  return fixTitle !== '' && fixTitle !== target.title ? '' : refusal
+}
+
+/**
  * Un appel de l'outil `flow`. `resume` reprend d'abord une mission du projet dans cette discussion : une mission née
  * ou laissée ici, ou celle d'une autre discussion par le seul passage du worker de diagnostic (sa prise, une fois,
  * dans l'heure, puis le retour à la discussion qui l'a ouvert) ; toute autre est refusée, sans rien écrire.
@@ -1984,6 +2043,8 @@ export const applyReport = (
   now: number,
   opts: { hasPullRequests?: boolean; isVersionSet?: boolean | null; delegateTitle?: string; fableFirst?: FableFirst; relay?: unknown; seenReports?: ReadonlySet<string>; isRepo?: boolean; security?: SecurityReview } = {},
 ): { board: Board; fx: Effects; text: string } => {
+  const untitled = untitledStepRefusal(board, input)
+  if (untitled !== '') return { board, fx: noFx(), text: untitled }
   const out = reportOnce(board, input, now, opts)
   if (board.delegate || str(input.delegate) !== '' || out.board.delegate) return out
   // Un compte rendu par SendMessage peut se perdre (discussion renommée, redémarrée) : le relais le garde.
@@ -2036,7 +2097,7 @@ const reportOnce = (
   // Un worker qui travaille pour un groupe d'une mission restée ailleurs : rien ne s'écrit ici.
   const delegateId = str(input.delegate)
   if (delegateId !== '') {
-    const out = delegateHere(board, delegateId, now, opts.delegateTitle, str(input.group) || undefined, str(input.main) || undefined, input.model, opts.fableFirst ?? 'unknown')
+    const out = delegateHere(board, delegateId, now, opts.delegateTitle, str(input.group) || undefined, str(input.main) || undefined, input.model, opts.fableFirst ?? 'unknown', opts.security)
     // Ce qui arrive avec "delegate" (set, decided, report…) part aussi au relais : la session du groupe C
     // renvoyait "delegate" à chaque appel, et tout le reste se perdait sans que la réponse le dise.
     const sentence = relayedSentence(input)
@@ -2209,7 +2270,7 @@ const delegatedReportText = (board: Board, input: Readonly<Record<string, unknow
  * propre fichier (sa racine est celle du worktree), où la mission n'est pas. Ne rien enregistrer
  * reste le plus sûr ; `title` est alors lu dans le board du dépôt principal, s'il l'a.
  */
-const delegateHere = (board: Board, runId: string, now: number, title?: string, group?: string, main?: string, model?: unknown, first: FableFirst = 'unknown'): { board: Board; fx: Effects; text: string } => {
+const delegateHere = (board: Board, runId: string, now: number, title?: string, group?: string, main?: string, model?: unknown, first: FableFirst = 'unknown', security: SecurityReview = 'on'): { board: Board; fx: Effects; text: string } => {
   const target = board.runs.find(r => r.id === runId)
   const b = clone(board)
   const here = activeRun(b)
@@ -2225,7 +2286,10 @@ const delegateHere = (board: Board, runId: string, now: number, title?: string, 
     ...(mark.model ? { model: mark.model } : {}),
   }
   const elsewhere = target ? '' : ' (The mission is not on this folder\'s dashboard, e.g. a worktree has its own: that changes nothing for you.)'
-  return { board: b, fx: noFx(), text: `${delegateText(b)}${elsewhere}${mark.text}` }
+  // Revue de sécurité désactivée (le réglage relu à l'appel) : dite au premier appel `delegate` pour cette mission, pas
+  // à chaque renvoi (des workers renvoient "delegate" à chaque appel) ; allumé, absent ou illisible, rien.
+  const securityOff = security === 'off' && board.delegate?.run !== runId ? ` ${SECURITY_OFF_DELEGATE}` : ''
+  return { board: b, fx: noFx(), text: `${delegateText(b)}${elsewhere}${mark.text}${securityOff}` }
 }
 
 /** La seule valeur admise de la marque « worker Fable » (`model` de l'appel `delegate`). */
@@ -2824,6 +2888,7 @@ const reportHere = (
   // La session des éléments, ses éléments jugés, se ferme avant la clôture : après, plus de mission active pour la noter.
   const isClosingGate = input.complete === true && !detour && (isItemsCloseCandidate(phase) || phase.linked?.closing?.state === 'app')
   const isLinkedGate = input.complete === true && (inFlight.length > 0 || backToChoice > 0 || isClosingGate)
+  let completeText = ''
   if (input.complete === true && !isReportGate && !isTicketGate && !isPushGate && !isLinkedGate) {
     if (detour) {
       finishDetour(detour, now)
@@ -2846,6 +2911,20 @@ const reportHere = (
       } else {
         const next = suggestionsFor(run, opts).primary
         fx.toasts.push(`✓ ${def.label} ${agree(def, 'terminé')}${next ? ` · suite : ${SKILLS[next]!.label}` : ''}`)
+        // La suite dite à Claude : il ne la devine pas (il avait proposé la version avant le rapport).
+        // « l'auto l'envoie » seulement si l'auto, allumé, l'enverrait vraiment (ni lot vide, ni question qui la bloque).
+        const decision = next && isAutoOn(run) ? autoDecision(run, { security: opts.security }, false) : null
+        const isSent = decision?.kind === 'send' && decision.action.kind === 'command' && decision.action.skill === next
+        // Une Implémentation proposée à une mission sans ticket ne se dit pas comme une suite à lancer (un lot vide).
+        const empty = emptyLotNext(run, next)
+        completeText = !next
+          ? ''
+          : empty?.kind === 'skip' || empty?.kind === 'close'
+            ? ` · next: no /${commandOf('implement')} (the lot has no ticket): ${empty.kind === 'skip' ? `/${commandOf(empty.skill)}${isAutoOn(run) ? ', which the auto sends' : ''}` : 'close the mission when nothing is to be coded'}`
+            : empty?.kind === 'pause'
+              ? ` · next: /${commandOf('implement')} once the lot has its tickets (send them with "tickets"), or launched by the user if they live in the tracker`
+              : ` · next: /${commandOf(next)} (${isSent ? 'the auto sends it' : 'proposed on the « Ensuite » card'})`
+        if (!isReportValidated(run)) completeText += ' · until the user validates the report, do not propose /project:version nor /project:push'
       }
     }
   }
@@ -2882,7 +2961,7 @@ const reportHere = (
     withSession.length > 0
       ? ` · with the worker until its final note, keep them "doing" in any items list: ${withSession.slice(0, 4).map(i => i.label).join('; ')}${withSession.length > 4 ? '…' : ''}`
       : ''
-  return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${itemsText}${externalText}${groupText}${returnText}${reviewedText}${reviewReply}${securityReply}${closedText}${gateText}${linkedText}${withdrawnText}${decidedText}${waitingText}` }
+  return { board: b, fx, text: `${summaryOf(run)}${namedText}${fixText}${removeText}${itemsText}${externalText}${groupText}${returnText}${reviewedText}${reviewReply}${securityReply}${closedText}${gateText}${completeText}${linkedText}${withdrawnText}${decidedText}${waitingText}` }
 }
 
 // ─── Groupes confiés à des workers ─────────────────────────────────
@@ -2984,8 +3063,9 @@ const isStillActive = (relay: Relay | null, g: TicketGroup, plan: readonly Ticke
 /**
  * La date du compte rendu de la session que la fermeture vise, s'il est au relais ; undefined sinon. Sans lui, la
  * fermeture ne lance jamais `claude rm` (invariant de `closingProcedure`). Au relais veut dire :
- * - déposé par cette session même : l'entrée qui le porte a pour id son id de session, dont l'id court de son
- *   lancement par `claude --bg` (`link.session`, 8 signes au moins) est le début ; un id inconnu, ou celui d'une
+ * - déposé par cette session même : l'entrée qui le porte a pour id son id de session, dont l'id court noté pour
+ *   l'envoi (`link.session`, 8 signes au moins : celui que `claude --bg` affiche, ou les 8 premiers signes de son
+ *   entrée de relais, `linkRelaySessions` de link.ts) est le début ; un id inconnu, ou celui d'une
  *   session de l'app (`local_…`), ne se rapproche d'aucune entrée : absent ;
  * - entier, ou coupé avec son fichier (`isWhole`) ; un texte de `REPORT_MAX` signes ou plus sans longueur notée
  *   (une entrée d'une version qui le coupait sans le dire) compte comme coupé sans fichier : absent ;
@@ -3009,8 +3089,8 @@ export const relayedReportAt = (relay: Relay | null, g: TicketGroup, plan: reado
  * d'elle-même, et la suivante lance `claude rm`. Sans comparer les dates : un compte rendu déposé entre la demande du
  * point 10 et le rapport « stopped » de cette fermeture la repropose aussi.
  */
-const isReportedSinceKept = (run: Run, g: TicketGroup, link: { at: number; seq?: number; closing?: Closing }, reportAt: number | undefined): boolean =>
-  reportAt !== undefined && isKeptForReport(run, { kind: 'group', id: g.id, name: g.name }, link.seq, link.closing)
+const isReportedSinceKept = (run: Run, g: TicketGroup, link: { at: number; seq?: number; closing?: Closing } & SendName, reportAt: number | undefined): boolean =>
+  reportAt !== undefined && isKeptForReport(run, { kind: 'group', id: g.id, name: g.name }, link.seq, link.closing, link)
 
 /** Un groupe rendu, relu, à la sécurité tranchée, sans fermeture en cours : candidat à la fermeture. */
 export const isCloseCandidate = (run: Run, g: TicketGroup, relay: Relay | null = null, review: SecurityReview = 'on'): boolean => {
@@ -3049,11 +3129,12 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
       const target = { kind: 'group', id: g.id, name: g.name } as const
       // Le compte rendu de cette session précédente, dans la fenêtre de son envoi : sans lui, pas de claude rm.
       const prevReportAt = relayedReportAt(relay, g, run.groups, prev, nextSend(prev.at))
-      const procedure = closingProcedure({ run, target, isRepo, ...(prev.session ? { session: prev.session } : {}), ...(prev.seq !== undefined ? { seq: prev.seq } : {}), hasReport: prevReportAt !== undefined, noted: prev.closing })
-      // Un id hors forme : la procédure se réduit à son refus, sans consigne autour qui retirerait un worktree.
-      if (!isGroupId(g.id) && (prev.closing === undefined || prev.closing?.state === 'app' || retried)) {
+      const procedure = closingProcedure({ run, target, isRepo, ...(prev.session ? { session: prev.session } : {}), ...(prev.seq !== undefined ? { seq: prev.seq } : {}), hasReport: prevReportAt !== undefined, noted: prev.closing, send: prev })
+      // Un id ou un nom de worktree noté hors forme (ou en conflit), ou un id de session non noté sûrement : la procédure se réduit à son refus, sans
+      // consigne autour qui retirerait un worktree.
+      if (!hasSendName(g.id, prev.seq, prev) && (prev.closing === undefined || prev.closing?.state === 'app' || retried)) {
         // Comme pour un id en forme : une session qui travaille encore n'a rien à rapporter, elle attend.
-        if (!isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) parts.push(` · Do not close: ${procedure} ${closedHint(target, key)}`)
+        if (!isStillActive(relay, g, run.groups, prev, nextSend(prev.at))) parts.push(` · Do not close: ${procedure} ${closedHint(target, key, prev)}`)
         continue
       }
       const name = `the previous worker of group ${shownGroupId(g.id)} (${shownGroupName(g.name)}), replaced by a new send (sent at ${isoMinute(prev.at)} UTC)`
@@ -3067,9 +3148,9 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
     }
     // Confié de nouveau : sa nouvelle session travaille, rien d'autre à fermer ni à réclamer.
     if (!link || g.linked !== undefined || link.closing?.state === 'closed') continue
-    if (!isGroupId(g.id) && (link.closing?.state === 'app' || isCloseCandidate(run, g, relay, review))) {
+    if (!hasSendName(g.id, link.seq, link) && (link.closing?.state === 'app' || isCloseCandidate(run, g, relay, review))) {
       const target = { kind: 'group', id: g.id, name: g.name } as const
-      parts.push(` · Do not close: ${closingProcedure({ run, target, isRepo, hasReport: false })} ${closedHint(target)}`)
+      parts.push(` · Do not close: ${closingProcedure({ run, target, isRepo, hasReport: false, ...(link.seq !== undefined ? { seq: link.seq } : {}), send: link })} ${closedHint(target, undefined, link)}`)
       continue
     }
     const name = `group ${shownGroupId(g.id)} (${shownGroupName(g.name)})`
@@ -3079,7 +3160,7 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
     if (attachedOpen.length > 0) {
       if (!(link.closing?.state === 'stopped' && !isRetried(link))) {
         const missing = closeMissing(run, g, review)
-        const after = isGroupId(g.id) ? '' : '; then nothing is closed from here either (its id is out of form)'
+        const after = !isGroupId(g.id) ? '; then nothing is closed from here either (its id is out of form)' : !hasSendName(g.id, link.seq, link) ? `; then nothing is closed from here either (${sendRefusalEn(link)})` : ''
         parts.push(` · Not closed yet: ${name} — still open, attached to it by the plan: ${attachedOpen.join(', ')}; closing waits for it${after}${missing.length > 0 ? `; it also lacks: ${missing.join('; ')}` : ''}.`)
       }
       continue
@@ -3087,12 +3168,12 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
     // Le compte rendu de sa session au relais : sans lui, la procédure ne lance pas claude rm (session gardée).
     const hasReport = relayedReportAt(relay, g, run.groups) !== undefined
     if (link.closing?.state === 'app') {
-      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}), hasReport, noted: link.closing })
+      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}), hasReport, noted: link.closing, send: link })
       parts.push(` · To archive in the app: ${name}${closingWhy(link.closing.why)}; ${archived(procedure)} Then send {"closed": [{"group": ${asciiJson(g.id)}, "state": "closed", "sessionId": "<full sessionId>", "branch": "<kept branch>", "worktree": "<removed worktree path>"}]} (the last three when known).`)
       continue
     }
     if (isCloseCandidate(run, g, relay, review)) {
-      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}), hasReport, noted: link.closing })
+      const procedure = closingProcedure({ run, target: { kind: 'group', id: g.id, name: g.name }, isRepo, ...(link.session ? { session: link.session } : {}), ...(link.seq !== undefined ? { seq: link.seq } : {}), hasReport, noted: link.closing, send: link })
       parts.push(
         ` · Close now: ${name} is closed (returned, reviewed, security settled). Only in the discussion that leads the mission, never in a worker (a bug-diagnosis session that resumed the mission included: there, ignore this section). ${procedure} ${closedHint({ kind: 'group', id: g.id, name: g.name })}`,
       )
@@ -3101,8 +3182,13 @@ export const closingText = (run: Run, relay: Relay | null, isRepo: boolean, revi
     // Une fermeture arrêtée ne se repropose pas à chaque appel ; relancée, elle dit ce qui manque encore.
     if (link.closing?.state === 'stopped' && !isRetried(link)) continue
     if (isStillActive(relay, g, run.groups) && closeMissing(run, g, review).length === 0) {
+      const nextCall = !isGroupId(g.id)
+        ? 'the next call then gives its refusal to report (its id is out of form: nothing is closed from here)'
+        : !hasSendName(g.id, link.seq, link)
+          ? `the next call then gives its refusal to report (${sendRefusalEn(link)}: nothing is closed from here)`
+          : 'the next call then closes it'
       parts.push(
-        ` · Not closed yet: ${name} — its worker is still active (relayed activity after its final report): closing waits. Once its work is done and checked, ask it by SendMessage to leave its final report in the relay again, updated with that work (its procedure says so after any later fix; the same text again is ignored): ${isGroupId(g.id) ? 'the next call then closes it' : 'the next call then gives its refusal to report (its id is out of form: nothing is closed from here)'}.`,
+        ` · Not closed yet: ${name} — its worker is still active (relayed activity after its final report): closing waits. Once its work is done and checked, ask it by SendMessage to leave its final report in the relay again, updated with that work (its procedure says so after any later fix; the same text again is ignored): ${nextCall}.`,
       )
       continue
     }
@@ -3176,6 +3262,8 @@ const applyClosed = (run: Run, value: unknown, now: number, root: string, review
       else if (prev.closing?.state === 'closed' && state !== 'closed') refused.push(`${shown} (sent at ${linkAt}: already closed: a closed session never goes back)`)
       // Un id hors forme : rien ne se ferme d'ici, pour une session précédente non plus (décision de Mathis du 31/10/2026).
       else if (!isGroupId(g.id) && state !== 'stopped') refused.push(`${shown} (sent at ${linkAt}: its id is out of form: nothing is closed from here, only "stopped" is noted)`)
+      // Un nom de worktree noté hors forme ou en conflit, ou un id de session non noté sûrement : de même, seul l'arrêt se note.
+      else if (!hasSendName(g.id, prev.seq, prev) && state !== 'stopped') refused.push(`${shown} (sent at ${linkAt}: ${sendRefusalEn(prev)}: nothing is closed from here, only "stopped" is noted)`)
       else {
         const closing = closingFor(e, state, prev.closing, `previous session of group ${shown} (sent at ${linkAt})`)
         g.delegated = withEarlierClosing(g.delegated, list, at, closing)
@@ -3190,6 +3278,8 @@ const applyClosed = (run: Run, value: unknown, now: number, root: string, review
     else if (g.delegated.closing?.state === 'closed' && state !== 'closed') refused.push(`${shownGroupId(g.id)} (already closed: a closed group never goes back)`)
     // Un id hors forme : rien ne se ferme d'ici, seul l'arrêt se note (décision de Mathis du 31/10/2026).
     else if (!isGroupId(g.id) && state !== 'stopped') refused.push(`${shownGroupId(g.id)} (its id is out of form: nothing is closed from here, only "stopped" is noted)`)
+    // Un nom de worktree noté hors forme ou en conflit, ou un id de session non noté sûrement : de même, seul l'arrêt se note (invariants du nom et de la session notés).
+    else if (!hasSendName(g.id, g.delegated.seq, g.delegated) && state !== 'stopped') refused.push(`${shownGroupId(g.id)} (${sendRefusalEn(g.delegated)}: nothing is closed from here, only "stopped" is noted)`)
     // Un ticket que le plan lui rattache est encore ouvert : le groupe n'est pas fini, rien ne se note fermé ni à archiver.
     else if (state !== 'stopped' && g.delegated.closing?.state !== 'closed' && openAttachedOf(run, g).length > 0)
       refused.push(`${shownGroupId(g.id)} (still open, attached to it by the plan: ${openAttachedOf(run, g).join(', ')}; a group is closed only once they are done)`)
@@ -3609,10 +3699,18 @@ const BG_OUT = /^\s*backgrounded\s+\S+\s+([0-9a-f]{6,})\s+\S+\s+(.+?)\s*$/gim
  * le titre que la commande affiche, pour relier chaque worker à son groupe.
  */
 export const backgroundLaunches = (command: string, out: string): { id: string; title: string }[] => {
-  const heads = withVariables(splitCommand(command)).map(seg => head(seg.text))
-  if (!heads.some(h => BG_START.test(h))) return []
+  if (!isBackgroundLaunch(command)) return []
   return [...out.matchAll(BG_OUT)].map(m => ({ id: m[1]!, title: m[2]! }))
 }
+
+/**
+ * La commande lance une session de fond (`claude --bg`), quelle que soit sa sortie : sans ligne « backgrounded »
+ * dans celle-ci (filtrée, redirigée, lancement raté), le mod le dit (`unnotedLaunchNotice` de link.ts).
+ */
+export const isBackgroundLaunch = (command: string): boolean => backgroundLaunchCount(command) > 0
+
+/** Le nombre de lancements `claude --bg` d'une commande : une sortie qui porte moins de lignes « backgrounded » en a perdu. */
+export const backgroundLaunchCount = (command: string): number => withVariables(splitCommand(command)).filter(seg => BG_START.test(head(seg.text))).length
 
 /**
  * Ce qu'une commande dit pour le relais d'un worker : un commit (son message, vide sans
@@ -4244,8 +4342,18 @@ const UNKNOWN_STOP = 'raison inconnue'
 const GROUP_FAIL_PREFIX = 'deuxième échec du groupe '
 export const groupFailStop = (id: string): string => `${GROUP_FAIL_PREFIX}${id}`
 
-/** Une raison d'arrêt connue : une de `AUTO_STOPS`, ou le deuxième échec d'un groupe à l'id en forme. */
-const isKnownStop = (why: string): boolean => KNOWN_STOPS.has(why) || (why.startsWith(GROUP_FAIL_PREFIX) && isGroupId(why.slice(GROUP_FAIL_PREFIX.length)))
+/**
+ * La pause « plus rien ne peut avancer sans toi » qui nomme la suite que l'auto ne lance pas (une « Revue »
+ * facultative après un /tdd ou une chasse au bug d'avant) : sans question ouverte, elle ne reprend pas d'elle-même.
+ */
+const NEXT_STOP_PREFIX = `${AUTO_STOPS.stuck} · suite : /`
+export const nextStop = (skill: string): string => `${NEXT_STOP_PREFIX}${commandOf(skill)}`
+
+/** Une raison d'arrêt connue : une de `AUTO_STOPS`, le deuxième échec d'un groupe à l'id en forme, ou la pause qui nomme un skill connu. */
+const isKnownStop = (why: string): boolean =>
+  KNOWN_STOPS.has(why) ||
+  (why.startsWith(GROUP_FAIL_PREFIX) && isGroupId(why.slice(GROUP_FAIL_PREFIX.length))) ||
+  (why.startsWith(NEXT_STOP_PREFIX) && skillIdOf(why.slice(NEXT_STOP_PREFIX.length)) !== null)
 
 /**
  * L'état auto relu d'une mission, borné ici et nulle part ailleurs : des dates lisibles, l'id de la
@@ -4461,8 +4569,8 @@ export const autoPauseLabel = (run: Run): string | undefined => {
 export const isAutoPauseStored = (run: Run): boolean => isStoredPause(autoOf(run))
 
 /**
- * L'auto en pause sur un groupe revenu trop de fois : « deuxième échec du groupe <id> », ou toute pause « plus rien
- * ne peut avancer sans toi » (une question « relance: » ouverte y suffit ; un groupe qu'une question de la personne
+ * L'auto en pause sur un groupe revenu trop de fois : « deuxième échec du groupe <id> », ou la pause « plus rien ne
+ * peut avancer sans toi » exacte, jamais celle qui nomme une suite (`nextStop`) (une question « relance: » ouverte y suffit ; un groupe qu'une question de la personne
  * bloque ne se relance pas pour autant, `nightBlocks` et `applyNightOne`). La seule pause où une relance de nuit vaut.
  */
 export const isRelaunchPause = (run: Run): boolean => {
@@ -4623,16 +4731,38 @@ const phaseKey = (run: Run, at: number): string => {
 /**
  * L'action que l'auto enverrait maintenant, la suite du bouton de l'étape suivante : la phase qui suit,
  * une fois la phase en cours finie (ou un lot de groupes clos, `isGroupLotOver`), quand c'est une des phases que l'auto lance. Null sinon (pas finie,
- * une suite qui n'est pas une commande, la livraison, la rétro, la clôture).
+ * une suite qui n'est pas une commande, la livraison, la rétro, la clôture, une Implémentation sans aucun ticket).
  */
 export const autoActionOf = (run: Run, opts: SuggestOpts = {}, outside?: ReadonlyMap<string, readonly OutsideHold[]>): AutoAction | null => {
   const phase = currentPhase(run)
   if ((phase.status !== 'done' && !isGroupLotOver(run, opts.security)) || run.status !== 'active') return null
   const skill = nextCommandSkill(run, opts, outside)
   if (skill === null || !AUTO_PHASES.has(skill)) return null
-  const at = run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending' && (p.skill === skill || p.alts.includes(skill)))
-  const key = at >= 0 ? phaseKey(run, at) : `phase:${skill}#next-${run.cursor}`
-  return { kind: 'command', key, skill, what: `/${skill}`, blocks: { kind: 'phase', id: skill } }
+  // Jamais /implement à un lot vide : après un tri sans ticket, l'auto l'avait envoyé, et le lot n'avait rien à faire.
+  // Une Implémentation facultative suivie d'une phase due que l'auto lance (le compte rendu d'une chasse au bug sans
+  // correctif) : l'auto envoie celle-ci, comme il y arrivait avant par un lot vide.
+  const empty = emptyLotNext(run, skill)
+  if (empty !== null && empty.kind !== 'skip') return null
+  const sent = empty?.kind === 'skip' ? empty.skill : skill
+  const at = run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending' && (p.skill === sent || p.alts.includes(sent)))
+  const key = at >= 0 ? phaseKey(run, at) : `phase:${sent}#next-${run.cursor}`
+  return { kind: 'command', key, skill: sent, what: `/${sent}`, blocks: { kind: 'phase', id: sent } }
+}
+
+/**
+ * Ce que devient une Implémentation proposée à une mission sans aucun ticket (`next`, la suite de la carte) : `skip`,
+ * la phase due qui la suit et que l'auto lance (le compte rendu d'une chasse au bug sans correctif), quand elle est
+ * facultative ; `close`, rien à envoyer et la mission peut se clore (un tri sans correction : plus rien de dû) ;
+ * `pause`, une Implémentation due (un départ /to-tickets ou /to-spec dont les tickets vivent ailleurs), que la pause
+ * nomme. Null : pas ce cas (un ticket existe, ou la suite n'est pas l'Implémentation).
+ */
+const emptyLotNext = (run: Run, next: string | null): { kind: 'skip'; skill: string } | { kind: 'close' } | { kind: 'pause' } | null => {
+  if (next !== 'implement' || run.tickets.length > 0) return null
+  const at = run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending' && p.skill === 'implement')
+  const impl = at >= 0 ? run.phases[at]! : undefined
+  if (!impl || !isPhaseOptional(run, impl)) return { kind: 'pause' }
+  const after = run.phases.slice(at + 1).find(p => p.status === 'pending' && !isPhaseOptional(run, p))
+  return after && AUTO_PHASES.has(after.skill) ? { kind: 'skip', skill: after.skill } : after ? { kind: 'pause' } : { kind: 'close' }
 }
 
 /**
@@ -5012,7 +5142,7 @@ const isGroupLotOver = (run: Run, review: SecurityReview = 'on'): boolean => {
 }
 
 /** Ce que l'auto fait à la fin d'un tour : envoyer une action, se mettre en pause, ou rien ; `relaunch` : les questions d'un renvoi de trop à poser d'abord. */
-export type AutoDecision = ({ kind: 'send'; action: AutoAction } | { kind: 'stop'; why: string } | { kind: 'none' }) & { relaunch: string[] }
+export type AutoDecision = ({ kind: 'send'; action: AutoAction } | { kind: 'stop'; why: string } | { kind: 'none'; note?: string }) & { relaunch: string[] }
 
 /**
  * La décision de l'auto à la fin d'un tour, sur la mission relue : rien tant qu'une marque attend son
@@ -5020,7 +5150,8 @@ export type AutoDecision = ({ kind: 'send'; action: AutoAction } | { kind: 'stop
  * sinon celle de la phase, si elle n'est ni marquée ni bloquée par une
  * question ; sinon, quand des questions attendent et que rien n'est en vol (`inFlight` : une tâche de
  * fond ; un worker au travail compte aussi), la pause « plus rien ne peut avancer sans toi », ou
- * « deuxième échec du groupe <id> » quand c'est la question d'un renvoi de trop qui retient. Une liste
+ * « deuxième échec du groupe <id> » quand c'est la question d'un renvoi de trop qui retient ; sans question, quand la suite
+ * est une phase que l'auto ne lance pas (hors livraison), la même pause, qui la nomme (`nextStop`). Une liste
  * de marques abîmée : la pause « lecture de la mission ratée », rien ne part.
  */
 export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean, outside?: ReadonlyMap<string, readonly OutsideHold[]>): AutoDecision => {
@@ -5042,6 +5173,10 @@ export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean, out
   const isLotHeld = action !== null && action.kind === 'command' && CODE_SKILLS.has(action.skill) && outside?.has(LOT_KEY) === true
   const isHeld = action !== null && (isLotHeld || isBlocked(run, action.blocks) || isBlocked(run, { kind: 'phase', id: phase.skill }))
   if (action && !isHeld && !isMarked(run, action.key)) return { kind: 'send', action, relaunch: grouped.relaunch }
+  // L'Implémentation que l'auto n'envoie pas sans ticket : rien ne part, et la fin du tour le dit au journal.
+  const isOver = (phase.status === 'done' || isGroupLotOver(run, opts.security)) && run.status === 'active'
+  const isEmptyLot = action === null && isOver && emptyLotNext(run, nextCommandSkill(run, opts, outside))?.kind === 'close'
+  const held = isEmptyLot ? { note: AUTO_EMPTY_LOT_NOTE } : {}
   const isAway = inFlight || isHeldElsewhere || (run.groups ?? []).some(g => g.linked !== undefined)
   const open = readWaiting(run)
   if (!isAway && open.length > 0) {
@@ -5049,7 +5184,39 @@ export const autoDecision = (run: Run, opts: SuggestOpts, inFlight: boolean, out
     const why = relaunched?.blocks?.kind === 'group' && isGroupId(relaunched.blocks.id) ? groupFailStop(relaunched.blocks.id) : AUTO_STOPS.stuck
     return { kind: 'stop', why, relaunch: grouped.relaunch }
   }
-  return { kind: 'none', relaunch: grouped.relaunch }
+  // La suite est une phase de la mission que l'auto ne lance pas (hors livraison) : la pause la nomme, au lieu de se taire.
+  const beyond = !isAway && action === null ? nextOutsideAuto(run, opts, outside) : null
+  if (beyond !== null) return { kind: 'stop', why: nextStop(beyond), relaunch: grouped.relaunch }
+  return { kind: 'none', relaunch: grouped.relaunch, ...held }
+}
+
+/**
+ * La suite d'une phase finie quand l'auto ne la lance pas : la commande de la carte « Ensuite », si c'est une phase en
+ * attente de la mission hors de `AUTO_PHASES`, de la livraison et de la rétro. Null sinon (pas finie, une suite que
+ * l'auto lance, la livraison, pas de suite).
+ */
+const nextOutsideAuto = (run: Run, opts: SuggestOpts, held?: ReadonlyMap<string, readonly OutsideHold[]>): string | null => {
+  if ((currentPhase(run).status !== 'done' && !isGroupLotOver(run, opts.security)) || run.status !== 'active') return null
+  const skill = nextCommandSkill(run, opts, held)
+  // Une Implémentation due sans aucun ticket : l'auto ne l'envoie pas, la pause la nomme.
+  if (emptyLotNext(run, skill)?.kind === 'pause') return skill
+  if (skill === null || AUTO_PHASES.has(skill) || DELIVERY.has(skill) || skill === 'retro') return null
+  return run.phases.slice(run.cursor + 1).some(p => p.status === 'pending' && (p.skill === skill || p.alts.includes(skill))) ? skill : null
+}
+
+/** Ce que le journal dit quand l'auto retient une Implémentation faute de ticket. */
+export const AUTO_EMPTY_LOT_NOTE = 'Auto : l’Implémentation ne part pas, la mission n’a aucun ticket au tableau de bord (sans correction à faire, clos-la ; si tes tickets vivent ailleurs, lance /implement toi-même)'
+
+/** La ligne de journal d'une retenue de l'auto, sur la mission active ici, une fois : rien si la dernière ligne la dit déjà. */
+export const noteAutoHold = (board: Board, text: string, now: number): Outcome => {
+  const run0 = activeRun(board)
+  // Le journal va du plus récent au plus ancien (`log` ajoute en tête).
+  if (!run0 || board.delegate || run0.log[0]?.text === text) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  log(run, now, '⚡', text, 'info')
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
 }
 /** La marque « envoyée » d'une action, posée sur la mission active ici avant l'envoi. Null quand elle y est déjà. */
 export const markAutoSent = (board: Board, action: AutoAction, now: number): Outcome => {
@@ -5169,7 +5336,7 @@ export const resendAutoMark = (board: Board, runId: string, key: string, now: nu
   // Seulement le lien de cet envoi même (son numéro), jamais un lien posé après par un bouton.
   if (key.startsWith('groups:')) {
     const units = key.slice('groups:'.length).split('+')
-    run.groups = (run.groups ?? []).map(g => (g.linked !== undefined && g.linked.session === undefined && units.includes(`${g.id}#${sendNumber(g.linked.seq) ?? 1}`) ? withoutLink(g) : g))
+    run.groups = (run.groups ?? []).map(g => (isAwaitingSession(g.linked) && units.includes(`${g.id}#${sendNumber(g.linked!.seq) ?? 1}`) ? withoutLink(g) : g))
   }
   withdrawQuestion(run, `${STALE_PREFIX}${key}`, now)
   log(run, now, '↻', `Envoi auto à refaire : ${key}`, 'info')
@@ -5335,7 +5502,7 @@ const keepLotReview = (kept: Run, other: Run | undefined): Run => {
  */
 const keepRun = (kept: Run, other: Run | undefined, own: readonly OwnTraces[] = [], isKeptLocal = true): Run => {
   const mine = own.find(o => o.runId === kept.id)
-  return keepExternals(keepLaunch(keepInstructed(keepForced(keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepClosings(kept, other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent), other), other), other), other)
+  return keepExternals(keepLaunch(keepInstructed(keepForced(keepAutoSent(keepDecided(keepWaiting(keepAuto(keepLotReview(keepReportMark(keepSendNames(keepClosings(keepSessions(kept, other), other), other), other), other), other), other, mine?.answered, isKeptLocal), other), other, mine?.resent), other), other), other), other)
 }
 
 /**
@@ -6166,23 +6333,15 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
   const found = run.found ?? []
   if (found.length > 0) lines.push(`- Found on the way (tracker tasks created during the mission, outside the lot): ${found.map(f => `${shownInNote(f.name)} [${shownInNote(f.id)}]: ${shownInNote(f.status)}${f.why ? ` (${shownInNote(f.why)})` : ''}${f.isForUser ? ', assigned to the user' : ''}`).join('; ')}.`)
   const all = inForce(run.decided ?? [])
-  // Une mission en auto en déclare des centaines : les 40 plus récents ici, tous dans le fichier des choix.
-  const decided = all.slice(-CHOICES_LISTED)
   const withdrawn = (run.decided ?? []).filter(d => d.withdrawnAt !== undefined)
-  if (all.length > decided.length) {
-    const counts = Object.entries(ORIGIN_LABELS).map(([key, label]) => `${all.filter(d => originOf(d.origin) === key).length} « ${label} »`)
-    lines.push(
-      `- ${all.length} choices reported as made without the user (${counts.join(', ')}, ${all.filter(d => !originOf(d.origin)).length} without origin): only the ${decided.length} latest are listed below; ${decidedFile ? `read them all in the file of declared choices, ${decidedFile}` : 'the dashboard (⚑ Décidé sans toi) shows them all'}.`,
-    )
-  }
-  lines.push(
-    decided.length > 0
-      ? `- Choices reported as made without the user: ${decided.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}${originOf(d.origin) ? ` [origin: ${ORIGIN_LABELS[originOf(d.origin)!]}]` : ''}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list.${all.some(d => originOf(d.origin)) ? ' Some have an origin: group « Décidé sans toi » by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».' : ''}`
-      : '- No choice was reported as made without the user: check the work for any, and put them in « Décidé sans toi ».',
-  )
-  // Les choix en zone sensible tranchés en auto, marqués par leur texte : tous, à part, pour que la personne les relise d'un coup.
   const sensitive = all.filter(d => d.what.startsWith(SENSITIVE_CHOICE_MARK))
-  if (sensitive.length > 0) lines.push(`- Sensitive choices settled in auto (${sensitive.length}), to list first and apart in « Décidé sans toi », under « Zone sensible, tranché en auto », and nowhere else: ${sensitive.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}`).join('; ')}.`)
+  if (decidedFile && all.length > 0) {
+    // Le fichier des choix les porte tous (texte, raison, origine, marque) : les faits n'en donnent que les comptes
+    // et le chemin, au lieu d'en recopier des dizaines de Ko dans la discussion.
+    lines.push(choicesByCount(all, sensitive.length, decidedFile))
+  } else {
+    lines.push(...choicesListed(all, sensitive))
+  }
   if (withdrawn.length > 0) lines.push(`- Choices withdrawn during the mission (no longer in force; say so apart in « Décidé sans toi », with why): ${withdrawn.map(d => `${shownInNote(d.what)}${d.withdrawnWhy ? ` (${shownInNote(d.withdrawnWhy)})` : ''}`).join('; ')}.`)
   const plans = run.artifacts.filter(a => a.kind === 'plan')
   if (plans.length > 0) lines.push(`- Plans written: ${plans.map(a => `${shownInNote(a.path)}${a.detail ? ` (${shownInNote(a.detail)})` : ''}`).join('; ')}.`)
@@ -6191,6 +6350,37 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
   if (failedAgents > 0) lines.push(`- Subagents that failed: ${failedAgents}.`)
   const warnings = run.log.filter(l => l.tone === 'warn' || l.tone === 'error').slice(0, 8)
   if (warnings.length > 0) lines.push(`- Warnings in the dashboard log: ${warnings.map(l => shownInNote(l.text)).join('; ')}.`)
+  return lines
+}
+
+/** Les comptes des choix en vigueur par origine (« 3 « reco prise », … »), sans origine compris. */
+const originCounts = (all: readonly SoloDecision[]): string =>
+  `${Object.entries(ORIGIN_LABELS)
+    .map(([key, label]) => `${all.filter(d => originOf(d.origin) === key).length} « ${label} »`)
+    .join(', ')}, ${all.filter(d => !originOf(d.origin)).length} without origin`
+
+/**
+ * Les choix aux faits du compte rendu quand le fichier des choix existe : leurs comptes et ce chemin, jamais leur liste
+ * (une mission en auto en recopiait près de 30 Ko). La consigne de rangement est celle de la liste qu'elle remplace.
+ */
+const choicesByCount = (all: readonly SoloDecision[], sensitive: number, decidedFile: string): string =>
+  `- ${all.length} choices reported as made without the user (${originCounts(all)}), ${sensitive} of them sensitive (their text starts with « ${SENSITIVE_CHOICE_MARK} »): they are not copied here. Read them all in the file of declared choices, ${decidedFile} (each with its reason and origin; it also holds the choices relayed by the workers, so it can list more than these counts: the file is the reference), and put every one in « Décidé sans toi », adding any the file misses.${all.some(d => originOf(d.origin)) ? ' Group them by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».' : ''}${sensitive > 0 ? ' The sensitive ones go first and apart, under « Zone sensible, tranché en auto », and nowhere else.' : ''}`
+
+/** Les choix aux faits du compte rendu sans fichier des choix : les 40 plus récents recopiés, puis tous les sensibles. */
+const choicesListed = (all: readonly SoloDecision[], sensitive: readonly SoloDecision[]): string[] => {
+  const lines: string[] = []
+  // Une mission en auto en déclare des centaines : les 40 plus récents ici, tous au tableau de bord.
+  const decided = all.slice(-CHOICES_LISTED)
+  if (all.length > decided.length) {
+    lines.push(`- ${all.length} choices reported as made without the user (${originCounts(all)}): only the ${decided.length} latest are listed below; the dashboard (⚑ Décidé sans toi) shows them all.`)
+  }
+  lines.push(
+    decided.length > 0
+      ? `- Choices reported as made without the user: ${decided.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}${originOf(d.origin) ? ` [origin: ${ORIGIN_LABELS[originOf(d.origin)!]}]` : ''}`).join('; ')}. Put every one in « Décidé sans toi », and add the ones missing from this list.${all.some(d => originOf(d.origin)) ? ' Some have an origin: group « Décidé sans toi » by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».' : ''}`
+      : '- No choice was reported as made without the user: check the work for any, and put them in « Décidé sans toi ».',
+  )
+  // Les choix en zone sensible tranchés en auto, marqués par leur texte : tous, à part, pour que la personne les relise d'un coup.
+  if (sensitive.length > 0) lines.push(`- Sensitive choices settled in auto (${sensitive.length}), to list first and apart in « Décidé sans toi », under « Zone sensible, tranché en auto », and nowhere else: ${sensitive.map(d => `${shownInNote(d.what)}${d.why ? ` (because ${shownInNote(d.why)})` : ''}`).join('; ')}.`)
   return lines
 }
 

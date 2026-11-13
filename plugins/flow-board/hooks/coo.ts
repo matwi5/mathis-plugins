@@ -342,7 +342,7 @@ export const watchedGroups = (board: Board): WatchedGroup[] =>
         const raw: unknown[] = [...(Array.isArray(g.files) ? g.files : []), ...groupIds(run, g).flatMap(id => run.tickets.find(t => t.id === id)?.files ?? [])]
         const paths = crossZones(raw.filter((p): p is string => typeof p === 'string')).map(z => z.key)
         const target = { kind: 'group' as const, id: g.id, name: g.name }
-        return paths.length === 0 ? [] : [{ missionId: run.id, mission: run.title, group: g.id, since: link.at, paths, isBranch: (name: string) => isOwnBranch(run, target, link.seq, name) }]
+        return paths.length === 0 ? [] : [{ missionId: run.id, mission: run.title, group: g.id, since: link.at, paths, isBranch: (name: string) => isOwnBranch(run, target, link.seq, name, link) }]
       }),
     )
 

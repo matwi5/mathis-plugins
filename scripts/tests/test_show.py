@@ -1,5 +1,6 @@
 """Tests de scripts/show.py : python3 -m unittest discover -s scripts/tests."""
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -211,6 +212,163 @@ class DeclTest(unittest.TestCase):
         self.assertEqual(run("--decl", str(self.file)).returncode, 2)
         self.assertIn("--decl <fichier> <nom>", run("--decl", str(self.file)).stderr)
         self.assertEqual(run("--decl", str(Path(self.dir.name) / "absent.ts"), "alpha").returncode, 1)
+
+
+PY_MODULE = '''"""Docstring du module."""
+
+import os
+
+# Le commentaire de tête de la sauvegarde,
+# sur deux lignes.
+def backup(path):
+    """Copie le fichier.
+"""
+    # un commentaire en fin de corps
+    return path
+
+
+# Un commentaire détaché, séparé par une ligne vide.
+
+@decorateur
+@autre(
+    1,
+)
+async def main_clone(a):
+    texte = """
+# pas un commentaire de tête
+def pas_une_declaration():
+"""
+    return texte
+
+class Sauvegarde:
+    def methode(self):
+        pass
+
+LIMITE = 3
+
+def doublon():
+    pass
+
+def doublon():
+    pass
+'''
+
+
+class PyDeclTest(unittest.TestCase):
+    """`show.py --decl <fichier>.py <nom>` : une fonction ou une classe de premier niveau, décorateurs et
+    commentaire `#` collé au-dessus compris, jusqu'à sa dernière ligne."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.file = Path(self.dir.name) / "module.py"
+        self.file.write_text(PY_MODULE, encoding="utf-8")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def decl(self, name, path=None):
+        out = run("--decl", str(path or self.file), name)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout.splitlines()
+
+    def test_une_fonction_avec_son_commentaire_de_tete_et_son_commentaire_de_fin_de_corps(self):
+        self.assertEqual(self.decl("backup"), [
+            "5\t# Le commentaire de tête de la sauvegarde,", "6\t# sur deux lignes.", "7\tdef backup(path):",
+            '8\t    """Copie le fichier.', '9\t"""', "10\t    # un commentaire en fin de corps", "11\t    return path"])
+
+    def test_une_fonction_decoree_et_asynchrone_garde_ses_decorateurs_et_sa_chaine_entiere(self):
+        rows = self.decl("main_clone")
+        self.assertEqual(rows[0], "16\t@decorateur")
+        self.assertEqual(rows[4], "20\tasync def main_clone(a):")
+        self.assertEqual(rows[-1], "25\t    return texte")
+        self.assertEqual(len(rows), 10)
+
+    def test_une_classe_jusqu_a_l_instruction_suivante(self):
+        self.assertEqual(self.decl("Sauvegarde"), ["27\tclass Sauvegarde:", "28\t    def methode(self):",
+                                                   "29\t        pass"])
+
+    def test_une_declaration_imbriquee_ou_dans_une_chaine_n_est_pas_de_premier_niveau(self):
+        for name in ("methode", "pas_une_declaration", "LIMITE"):
+            with self.subTest(name=name):
+                self.assertEqual(run("--decl", str(self.file), name).returncode, 1)
+
+    def test_un_nom_absent_cite_les_def_et_class_proches(self):
+        out = run("--decl", str(self.file), "bakup")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("aucune déclaration de premier niveau « bakup » ; noms proches : backup", out.stderr)
+        self.assertEqual(out.stdout, "")
+
+    def test_un_nom_declare_deux_fois_donne_ses_lignes(self):
+        out = run("--decl", str(self.file), "doublon")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("déclaré 2 fois au premier niveau, lignes 33, 36", out.stderr)
+
+    def test_un_fichier_qui_ne_se_lit_pas_en_python_se_lit_par_lignes_et_le_dit(self):
+        broken = self.file.with_name("casse.py")
+        broken.write_text("def debut(:\n    pass\n\ndef suite():\n    return 1\n", encoding="utf-8")
+        out = run("--decl", str(broken), "suite")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines(), ["4\tdef suite():", "5\t    return 1"])
+        self.assertIn("erreur de syntaxe ligne 1", out.stderr)
+
+    def test_une_extension_ni_js_ts_ni_py_est_refusee_et_renvoie_a_la_plage(self):
+        other = self.file.with_name("notes.md")
+        other.write_text("def backup():\n    pass\n", encoding="utf-8")
+        out = run("--decl", str(other), "backup")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn(f'python3 scripts/show.py {other} "<motif>" +N', out.stderr)
+        self.assertEqual(out.stdout, "")
+        self.assertIn(".mts, .ts, .tsx, .py)", out.stderr)
+        for suffix in (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"):
+            with self.subTest(suffix=suffix):
+                js = self.file.with_name("m" + suffix)
+                js.write_text("export function f() {}\n", encoding="utf-8")
+                self.assertEqual(self.decl("f", js), ["1\texport function f() {}"])
+
+    def test_un_retour_chariot_seul_une_marque_d_ordre_ou_un_octet_nul_gardent_les_lignes_de_read(self):
+        odd = self.file.with_name("bizarre.py")
+        odd.write_text("X = 1" + chr(13) + "Y = 2\n# a" + chr(13) + "b\ndef f():\n    pass\ndef g():\n    return 2\n",
+                       encoding="utf-8")
+        # `read_lines` lit un `\r` seul comme une fin de ligne, comme `ast` : les numéros s'accordent.
+        self.assertEqual(self.decl("g", odd), ["7\tdef g():", "8\t    return 2"])
+        bom = self.file.with_name("bom.py")
+        bom.write_text(chr(0xFEFF) + "# tête\ndef f():\n    s = '''\ndef pas_une():\n'''\n", encoding="utf-8")
+        out = run("--decl", str(bom), "f")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(len(out.stdout.splitlines()), 5)
+        self.assertNotIn("ATTENTION", out.stderr)
+        nul = self.file.with_name("nul.py")
+        nul.write_text("def f():\n    pass\n# " + chr(0) + "\ndef g():\n    return 1\n", encoding="utf-8")
+        out = run("--decl", str(nul), "g")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines(), ["3\t# " + chr(0), "4\tdef g():", "5\t    return 1"])
+        self.assertIn("lu par lignes", out.stderr)
+
+    def test_une_ligne_en_diese_qui_ferme_la_chaine_d_avant_reste_a_la_declaration_d_avant(self):
+        closing = self.file.with_name("chaine.py")
+        closing.write_text('def f():\n    s = """\n#a"""\ndef g():\n    pass\n', encoding="utf-8")
+        self.assertEqual(self.decl("g", closing), ["4\tdef g():", "5\t    pass"])
+        self.assertEqual(self.decl("f", closing)[-1], '3\t#a"""')
+
+    def test_l_extension_se_lit_sans_la_casse(self):
+        upper = self.file.with_name("M.PY")
+        upper.write_text("def f():\n    pass\n", encoding="utf-8")
+        self.assertEqual(self.decl("f", upper), ["1\tdef f():", "2\t    pass"])
+        ts = self.file.with_name("m.TS")
+        ts.write_text("export function f() {}\n", encoding="utf-8")
+        self.assertEqual(self.decl("f", ts), ["1\texport function f() {}"])
+
+    def test_l_en_tete_cite_les_extensions_que_lit_le_script(self):
+        sys.path.insert(0, str(SCRIPT.parent))
+        try:
+            import show
+        finally:
+            sys.path.pop(0)
+        doc = " ".join(show.__doc__.split())
+        sentence = doc[doc.index("se reconnaissent à leur extension ("):].split(")", 1)[0]
+        self.assertEqual(set(re.findall(r"`(\.\w+)`", sentence)), show.JS_SUFFIXES)
+        self.assertIn("Sur un fichier `.py`", doc)
+        self.assertEqual(show.PY_SUFFIXES, {".py"})
 
 
 if __name__ == "__main__":

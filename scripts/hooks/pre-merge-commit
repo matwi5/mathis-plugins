@@ -3,7 +3,8 @@
 # d'une branche (celle d'un groupe dans la branche de travail) passe par les mêmes contrôles que le
 # pre-commit, sur le contenu de l'index que la fusion va enregistrer (scripts/check.py --staged). Git ne le
 # lance que pour une fusion qui crée son commit d'elle-même : ni pour une avance rapide (aucun commit), ni
-# pour --squash ou --no-commit, ni après un conflit, dont le commit passe par le pre-commit.
+# pour --squash ou --no-commit, ni après un conflit, dont le commit passe par le pre-commit. --merge dit à
+# check.py que le commit est une fusion : ce hook ne voit pas MERGE_HEAD (constaté avec git 2.54).
 # Git for Windows lance aussi ce script, par son sh.
 root=$(git rev-parse --show-toplevel) || exit 1
-exec sh "$root/scripts/check.sh" --staged
+exec sh "$root/scripts/check.sh" --staged --merge

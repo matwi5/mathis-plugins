@@ -79,6 +79,17 @@ _Avoid_: brouillon, suggestion, note
 Une chose qu'une mission a mise de côté (correction mineure, piste, constat, décision à prendre), gardée par le COO jusqu'à ce que l'utilisateur la lance, la rattache à une mission, la garde pour plus tard ou l'écarte ; elle ne disparaît jamais seule.
 _Avoid_: backlog, pour plus tard, TODO, reste à faire
 
+### Où sont ces fichiers sur le poste
+
+| Fichier | Chemin |
+|---|---|
+| Fichier des missions | `~/.claude/flow-board/parcours/<racine du projet>.json`, un par projet |
+| Relais des workers | `~/.claude/flow-board/relais/<id de la mission>.<id de la session>.entry.json`, un par worker |
+| Feuille de route | `travail/feuille-de-route.md` du projet, ou `~/.claude/flow-board/coordination/<projet>.feuille-de-route.md` quand elle reste sur le poste |
+| Boîte « À reprendre » | `~/.claude/flow-board/a-reprendre/<projet>.<discussion>.json`, une par discussion |
+
+Dans ces chemins, `<racine du projet>` est le chemin de la racine du projet mis en forme de nom de fichier, `<projet>` ce même nom (raccourci) suivi d'une empreinte de la racine, et `<discussion>` l'id de la discussion. La règle exacte de ces noms, les autres fichiers de flow-board et ce qui se passe quand le mod ne trouve pas `~/.claude` sont dans la section « Données et stockage » du README de flow-board (`plugins/flow-board/README.md`).
+
 ## Suivi des agents
 
 **COO** :
@@ -259,5 +270,5 @@ La vérification qu'un ticket respecte les règles de code écrites du projet.
 _Avoid_: revue de style, relecture du code
 
 **Classe de défaut** :
-Une sorte de défaut qui peut se répéter à plusieurs endroits du code (par exemple une date relue sans borne) ; trouvée une deuxième fois, elle se corrige partout d'un coup.
+Une sorte de défaut qui peut se répéter à plusieurs endroits du code (par exemple une date relue sans borne) ; dès qu'un constat nomme d'autres endroits (« même défaut dans X »), ou quand elle revient une deuxième fois, elle se cherche par son motif et ses variantes et se corrige partout d'un coup.
 _Avoid_: bogue récurrent, famille de bogues

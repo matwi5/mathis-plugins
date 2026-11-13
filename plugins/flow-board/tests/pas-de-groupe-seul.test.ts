@@ -76,7 +76,7 @@ test('un plan en place dont un groupe est lancé n’est ni remplacé ni vidé p
   board = startLinkedGroups(board, ['A'], 2_500)!.board
   const out = applyReport(board, { groups: [{ id: 'T', name: 'Tout', tickets: ['a1', 'a2', 'b1'] }] }, 3_000)
   expect(groupsOf(out.board).map(g => g.id)).toEqual(['A', 'B'])
-  expect(groupsOf(out.board).find(g => g.id === 'A')!.linked).toEqual({ at: 2_500 })
+  expect(groupsOf(out.board).find(g => g.id === 'A')!.linked).toEqual({ at: 2_500, worktreeName: 'groupe-lot-A' })
   expect(out.text).toContain(ONE_LINE)
 })
 

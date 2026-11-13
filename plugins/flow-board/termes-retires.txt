@@ -40,3 +40,28 @@
 0.83.0	l'advisor (Opus) relit un modèle moins fort que lui
 # La question d'effort unique, remplacée par les deux chemins de jugement, Fable 5.2 high et Opus xhigh (mission « Intégrer Fable 5.2 au workflow ») :
 0.83.0	xhigh (Recommandé) / high
+# Une classe de défaut se corrige partout dès qu'un constat nomme d'autres endroits (mission « Pistes de rétro en tickets ») :
+0.84.0	trouvée deux fois se cherche
+0.84.0	classe de défaut trouvée une deuxième fois
+0.84.0	found a second time is searched
+# Un critère manqué sans signal se corrige, et tout ticket sensible a son invariant (mission « Pistes de rétro en tickets ») :
+0.84.0	against its invariant, when it has one
+0.84.0	ou une régression, se corrige ou devient
+0.84.0	sauf une régression, qui se corrige
+0.84.0	hors régressions, corrigées
+0.84.0	sauf une régression introduite par le diff, Important et corrigée
+0.84.0	except a regression the diff introduces, which gets fixed
+0.84.0	hors régression introduite par le diff, corrigée
+0.84.0	contre son invariant, s'il en a un
+# La passe « bogues » est en xhigh aussi pour un ticket qui décide ou garde une suppression (mission « Pistes de rétro en tickets ») :
+0.84.0	being xhigh when the ticket deletes data or touches concurrency
+0.84.0	it deletes data or touches concurrency)
+0.84.0	valant xhigh si le ticket supprime des données ou touche la concurrence
+0.84.0	ne supprime pas de données et ne touche pas la concurrence
+# La procédure d'un worker ne coûte plus d'appel refusé (mission « Pistes de rétro en tickets ») :
+0.84.0	son titre se trouve par l'outil Grep
+0.84.0	--chemins <chemins de la mission>
+0.84.0	elle tourne une fois en fin de groupe
+0.84.0	son dossier temporaire `CLAUDE_JOB_DIR`
+# L'instantané d'un ticket sensible ne passe plus par l'index de la session (mission « Pistes de rétro en tickets ») :
+0.84.0	refuse un index qui porte autre chose (le sortir d'abord de l'index)

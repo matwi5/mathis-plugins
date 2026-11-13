@@ -187,6 +187,7 @@ class CleanTest(Essai):
         self.clean()
         self.assertTrue(self.transcript.exists())
 
+    @unittest.skipIf(os.name == "nt", "liens symboliques : mode développeur requis sous Windows")
     def test_un_lien_symbolique_n_est_jamais_suivi_ni_efface(self):
         target = self.folder / "precieux"
         target.mkdir()

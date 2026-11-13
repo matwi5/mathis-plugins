@@ -88,6 +88,11 @@ export type TicketGroup = {
 /** Un groupe confié à un worker : quand, et l'id `local_…` de la session une fois lancée. */
 export type GroupLink = {
   at: number
+  /**
+   * L'id court de la session (celui de `claude --bg`, ou `local_…` de l'app), noté une fois : par la sortie du
+   * lancement, sinon par l'entrée de relais que l'appel `delegate` de la session de ce groupe a déposée pendant cet
+   * envoi (`linkRelaySessions`) ; jamais réécrit, repris de l'autre copie à la fusion s'il manque (`keepSessions`).
+   */
   session?: string
   /** Groupe rendu : quand la personne a demandé de fermer sa session et son worktree (« ✕ Fermer… », puis « ↻ Relancer la fermeture »). */
   closeAskedAt?: number
@@ -108,10 +113,34 @@ export type GroupLink = {
    * fermée ne se refait pas, une autre reste à fermer (aucune session oubliée).
    */
   earlier?: ClosedLink[]
+  /**
+   * Le nom du worktree de cet envoi (`groupe-[<nom court>-]<id>[-<n>]`, sans nom court pour un titre sans lettre ASCII), noté une fois, à la création du lien
+   * (`sendGroups`), d'après le titre de la mission à cet instant, seulement en forme (`isNotedWorktree`) ;
+   * jamais réécrit ; recopié avec le lien quand il devient `delegated` puis une entrée de `earlier` ; effacé
+   * seulement avec le lien ou la mission. La fermeture, le script de vérification, le nettoyage des branches et
+   * sa marque le lisent (`sendWorktree`) ; absent (lien d'avant la note), le nom se recalcule depuis le titre.
+   * Une fusion ne le change jamais : un nom absent d'une copie prend celui de l'autre (même envoi : même `at`).
+   */
+  worktreeName?: string
+  /**
+   * Deux copies notaient deux noms différents pour cet envoi : posé par la fusion (`keepSendNames`), jamais
+   * retiré, recopié avec le lien comme `worktreeName`. Toute valeur relue compte : aucun nom de cet envoi
+   * n'entre alors dans une commande, la fermeture s'arrête et le dit, et sa branche est gardée.
+   */
+  worktreeClash?: true
+  /**
+   * L'id de session de cet envoi n'a pas pu être noté sûrement : plus d'une session candidate (une autre que celle déjà
+   * notée comprise), un id hors forme ou une session déjà notée pour un autre envoi, au relais (`linkRelaySessions`), ou
+   * deux copies qui notaient deux ids différents (`keepSessions`). Un envoi marqué n'attend plus de session
+   * (`linkGroupSession`) et ne s'annule pas (`cancelLinkedGroup`). Posé une fois,
+   * jamais retiré, recopié avec le lien comme `worktreeName` ; effacé seulement avec le lien ou la mission. Toute
+   * valeur relue compte : la fermeture de cet envoi ne ferme rien (ni `claude stop` ni `claude rm`) et le dit.
+   */
+  sessionClash?: true
 }
 
-/** Un worker dont un nouvel envoi a pris la place : son lien (envoi, id) et sa fermeture, si elle en a une. */
-export type ClosedLink = { at: number; session?: string; seq?: number; closing?: Closing }
+/** Un worker dont un nouvel envoi a pris la place : son lien (envoi, id, nom de son worktree) et sa fermeture, si elle en a une. */
+export type ClosedLink = { at: number; session?: string; seq?: number; closing?: Closing; worktreeName?: string; worktreeClash?: true; sessionClash?: true }
 
 /** La fermeture d'un worker rendu (un groupe, ou la session des pistes d'une phase). */
 export type Closing = {

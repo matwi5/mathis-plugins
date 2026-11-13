@@ -35,7 +35,7 @@ test('avec le script, la fermeture tient en quelques lignes : la commande, puis 
   // commande après l'arrêt, la branche gardée.
   expect(text).toContain('sa première ligne est le verdict, sa dernière (« suite : ») le seul geste à faire')
   expect(text).toContain('sans verdict en première ligne (node ou le script introuvable) : rien n’est sûr, envoie "state": "stopped" avec sa sortie')
-  expect(text).toContain('2) après l’arrêt fait sur SÛR, la même commande avec --apres-arret : seulement sur SÛR, la commande de retrait qu’il imprime ; la branche reste : ne la supprime pas')
+  expect(text).toContain('2) après l’arrêt fait sur SÛR, la même commande avec --apres-arret : seulement sur SÛR, la commande de retrait qu’il imprime ; sur ATTENDRE, la relancer comme le dit sa dernière ligne ; la branche reste : ne la supprime pas')
   expect(text).toContain("3) seulement une fois le retrait constaté (la même commande relancée rend DÉJÀ RETIRÉ) : claude rm 'abc12345', sans aucune option")
   // Le chemin normal : un DÉJÀ RETIRÉ au premier lancement (rien vu retiré ici) ne mène pas à claude rm ; celui du
   // lancement d'après le retrait, si : les deux cas sont nommés, sans contradiction.

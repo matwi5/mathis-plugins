@@ -4,6 +4,35 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.84.0 — 2026-11-13
+
+Les missions « Missions détachées de leur discussion » et « Pistes de rétro en tickets » : une chasse au bug va jusqu'à l'implémentation, la discussion fusionne son propre travail, les revues cherchent une classe de défaut partout, et la fermeture des groupes, l'instantané d'un ticket et la mise de côté coûtent moins d'appels.
+
+### Ajouté
+- **Chasse au bug** : après le diagnostic, la mission passe en Implémentation, son correctif écrit comme un ticket (zone sensible, invariant, étapes de revue d'un ticket) ; sans correctif, elle va au compte rendu.
+- **La discussion fusionne elle-même son travail** de worktree, y compris un worktree dont `ExitWorktree` ne peut pas sortir.
+- **`consignes.mjs --groupe` et `--securite`** écrivent les consignes de la revue d'un groupe et de la revue de sécurité.
+- **`fermeture.mjs`** attend une session encore en train de s'arrêter et vérifie d'un appel les branches à supprimer (`--branches`, qui imprime la commande sans rien supprimer) ; le nom du worktree de chaque envoi est noté au lancement.
+- **Mode auto** : une phase suivante que l'auto n'envoie jamais le met en pause en la nommant ; un tri est suivi de la phase Tickets, jamais d'un `/implement` sur un lot vide.
+- **Lancement par le COO** : le texte de lancement donne le chemin de la feuille de route et vérifie `demande.md` en auto.
+- **Cadrage** : avant de recommander, il cherche dans tous les fichiers de décisions du dépôt.
+
+### Modifié
+- **Revues** : une classe de défaut trouvée une deuxième fois se cherche et se corrige partout ; un critère manqué sans signal se corrige ; tout ticket sensible porte un invariant ; le relecteur d'un ticket vérifie aussi « What to build », les textes touchés et les choix déclarés ; passe « bogues » en xhigh pour un ticket qui décide ou garde une suppression ; une seule `/code-review` à la fois.
+- **Relecteur** : son dossier d'essai va dans `$CLAUDE_JOB_DIR/tmp`, où l'outil Write passe.
+- **Instantané d'un ticket sensible** construit dans un index temporaire, sans toucher l'index de la session.
+- **Compte rendu** : les choix déclarés y sont comptés par origine au lieu d'être recopiés quand leur fichier existe.
+- **Mise de côté** (`setAside`) : elle cite l'entrée existante de la feuille de route au lieu d'en créer un doublon.
+- **Une mission qui suit une mission finie** reprend son titre.
+- **Revue de sécurité désactivée** : le worker l'apprend dès le lancement.
+- **Procédure du worker** : textes qui coûtaient un appel refusé corrigés ; deux cas rares de la section 3 passent dans l'annexe `procedure-groupe-cas.md`.
+- **Session d'un groupe** notée même quand la sortie du lancement est filtrée.
+
+### Corrigé
+- Correctifs de revue des groupes et des tickets des deux missions ; tests chronométrés insensibles à la charge ; tout prédicat exporté de `hooks/` passe le corpus hostile.
+
+---
+
 ## 0.83.0 — 2026-11-10
 
 Les missions « COO plus autonome », « Missions détachées de leur discussion » et « Intégrer Fable 5.2 au workflow » : le COO coupe ou allume l'auto d'une mission, veille la nuit, tient la liste d'attente des rétros et transmet ses consignes aux managers ; une mission reste dans sa discussion ; le cadrage et les workers de jugement de code peuvent passer sur Fable 5.2.

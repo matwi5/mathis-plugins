@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, emptyBoard, groupPlan, newRun } from '../hooks/model.ts'
 import { activeRun } from '../hooks/basics.ts'
+import { SKILLS } from '../hooks/catalog.ts'
 import type { Board } from '../types'
 
 /** Une mission active après un appel de l'outil `flow`. */
@@ -186,5 +187,15 @@ test('la consigne de cadrage d’un ticket sensible donne l’exemple d’un com
   for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
     const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
     expect(text).toContain('for a count (a value added up from one send to the next), the invariant also says « never counted twice »')
+  }
+})
+
+// Une recommandation de cadrage avait contredit une décision prise dans un autre fichier de décisions du dépôt.
+test('l’étape « Arbre des décisions » des deux cadrages fait chercher une décision déjà prise dans tous les fichiers de décisions du projet', () => {
+  for (const id of ['grill-with-docs', 'grill-me']) {
+    const hint = SKILLS[id]!.steps.find(s => s.id === 'tree')!.hint
+    expect(hint.startsWith('map the design tree of decisions; ')).toBe(true)
+    expect(hint).toContain('search its term in every decision file of the project (those its CLAUDE.md names, not only this mission\'s)')
+    expect(hint).toContain('cite in the question the decision found, with its file and date; a recommendation against a decision found says so')
   }
 })

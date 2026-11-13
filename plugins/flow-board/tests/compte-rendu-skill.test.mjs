@@ -82,3 +82,10 @@ test('le compte rendu cite à part les constats de la relecture du fond et de la
   const done = skill.slice(skill.indexOf('## Fait'), skill.indexOf('## Décidé sans toi'))
   assert.ok(done.includes('ceux de la relecture du fond et de la forme, chacun à part'), 'les constats de forme ne sont pas cités à part')
 })
+
+// Une mise de côté avait créé un doublon d'une entrée de la feuille de route : chaque point des deux rubriques dit où il est rangé.
+test('chaque point de « Code antérieur au lot » et de « Pistes » se termine par l’endroit où il est rangé', () => {
+  const part = skill.slice(skill.indexOf('## Code antérieur au lot'), skill.indexOf('## Documentation'))
+  assert.equal(part.split('\n').filter(l => l.startsWith('- <') && l.endsWith(' <Où il est rangé.>')).length, 2, 'les deux rubriques ne finissent pas par leur rangement')
+  for (const form of ['« feuille de route : <id> »', '« mis de côté (setAside) »', '« non rangé » avec la raison']) assert.ok(part.includes(form), form)
+})

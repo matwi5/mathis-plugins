@@ -215,13 +215,13 @@ test('un groupe re-confié dont la session précédente n’est pas fermée : l�
   expect(applyReport(again, { note: 'point' }, 5_100, { ...REPO, relay: busy }).text).not.toContain('Close now: the previous worker of group A (Alpha)')
   // Rendue de nouveau : l'ancien lien passe dans « earlier », toujours à fermer.
   const back = applyReport(again, { set: [{ id: 'a0', status: 'done' }, { id: 'a1', status: 'done' }], returned: ['A'], reviewed: ['A'], security: { group: 'A', advised: false } }, 6_000, REPO)
-  expect(groupOf(back.board, 'A').delegated!.earlier).toEqual([{ at: first.at }])
+  expect(groupOf(back.board, 'A').delegated!.earlier).toEqual([{ at: first.at, worktreeName: 'groupe-lot-A' }])
   expect(back.text).toContain('Close now: the previous worker of group A (Alpha)')
   expect(back.text).toContain('Close now: group A (Alpha) is closed')
   // Fermée par son lien : notée sur l'ancien, le nouveau reste à fermer.
   const closedOld = applyReport(back.board, { closed: [{ group: 'A', link: first.at, state: 'closed', sessionId: '00000000-0000-4000-8000-0000000000aa' }] }, 6_100, REPO)
   expect(closedOld.text).toContain(`closed: previous session of group A (sent at ${first.at}) noted closed`)
-  expect(groupOf(closedOld.board, 'A').delegated!.earlier).toEqual([{ at: first.at, closing: { state: 'closed', at: 6_100, sessionId: '00000000-0000-4000-8000-0000000000aa' } }])
+  expect(groupOf(closedOld.board, 'A').delegated!.earlier).toEqual([{ at: first.at, worktreeName: 'groupe-lot-A', closing: { state: 'closed', at: 6_100, sessionId: '00000000-0000-4000-8000-0000000000aa' } }])
   expect(groupOf(closedOld.board, 'A').delegated!.closing).toBeUndefined()
   const after = applyReport(closedOld.board, { note: 'point' }, 6_200, REPO).text
   expect(after).not.toContain('previous worker of group A')
@@ -375,10 +375,10 @@ test('la ligne d’un groupe rendu et relu : rien tant que rien n’est tenté, 
 test('les envois d’un groupe sont numérotés : le premier garde son nom, les suivants -2, -3 ; la procédure reconnaît le nom de chaque envoi', () => {
   // Premier envoi : pas de numéro.
   const sent = startLinkedGroups(boardWith(LOT), ['A'], 3_000)!.board
-  expect(groupOf(sent, 'A').linked).toEqual({ at: 3_000 })
+  expect(groupOf(sent, 'A').linked).toEqual({ at: 3_000, worktreeName: 'groupe-lot-A' })
   const short = applyReport(sent, { returned: ['A'] }, 4_000, REPO).board
   const again = startLinkedGroups(applyReport(short, { set: [{ id: 'a1', status: 'todo' }] }, 4_100, REPO).board, ['A'], 5_000)!.board
-  expect(groupOf(again, 'A').linked).toEqual({ at: 5_000, seq: 2 })
+  expect(groupOf(again, 'A').linked).toEqual({ at: 5_000, seq: 2, worktreeName: 'groupe-lot-A-2' })
   // La précédente se ferme sous son nom à elle ; la nouvelle, rendue, sous le sien.
   const during = applyReport(again, { note: 'point' }, 5_100, REPO).text
   expect(during).toContain('worktree-groupe-lot-A (lancée par le CLI), groupe-lot-A ou claude/groupe-lot-A-<suffixe>')
@@ -389,7 +389,7 @@ test('les envois d’un groupe sont numérotés : le premier garde son nom, les 
   const closed = applyReport(back.board, { closed: [{ group: 'A', state: 'closed' }] }, 6_100, REPO).board
   const third = startLinkedGroups(applyReport(closed, { set: [{ id: 'a1', status: 'todo' }] }, 6_200, REPO).board, ['A'], 7_000)!.board
   // Le deuxième envoi rendu relu : sa revue et son avis remis à zéro, le groupe le dit jusqu'au retour.
-  expect(groupOf(third, 'A').linked).toEqual({ at: 7_000, seq: 3 })
+  expect(groupOf(third, 'A').linked).toEqual({ at: 7_000, seq: 3, worktreeName: 'groupe-lot-A-3' })
   expect(groupOf(third, 'A').isReset).toBe(true)
   // Pendant le troisième, la deuxième (arrêtée, relancée) se ferme sous son nom et son titre à elle.
   const stopped2 = applyReport(back.board, { closed: [{ group: 'A', state: 'stopped', why: 'x' }] }, 6_100, REPO).board
@@ -406,10 +406,10 @@ test('le numéro d’envoi d’un groupe ne recule jamais : un envoi annulé le 
   // Annulé avant le lancement : le numéro 1 est pris ; le suivant prend 2.
   const cancelled = cancelLinkedGroup(first, 'A', 3_100)!.board
   const again = startLinkedGroups(cancelled, ['A'], 3_200)!.board
-  expect(groupOf(again, 'A').linked).toEqual({ at: 3_200, seq: 2 })
+  expect(groupOf(again, 'A').linked).toEqual({ at: 3_200, seq: 2, worktreeName: 'groupe-lot-A-2' })
   // Le plan renvoyé garde le compteur.
   const resent = applyReport(cancelLinkedGroup(again, 'A', 3_300)!.board, { groups: LOT.groups }, 3_400, REPO).board
-  expect(groupOf(startLinkedGroups(resent, ['A'], 3_500)!.board, 'A').linked).toEqual({ at: 3_500, seq: 3 })
+  expect(groupOf(startLinkedGroups(resent, ['A'], 3_500)!.board, 'A').linked).toEqual({ at: 3_500, seq: 3, worktreeName: 'groupe-lot-A-3' })
   // Un numéro illisible (fichier partagé) ne nomme rien.
   expect(groupWorktree(activeRun(first)!, 'A', Number.NaN)).toBe('groupe-lot-A')
   expect(groupWorktree(activeRun(first)!, 'A', 2.5)).toBe('groupe-lot-A')

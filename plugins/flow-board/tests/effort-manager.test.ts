@@ -155,7 +155,7 @@ test('après le lot, l’effort suit la phase : le compte rendu d’une mission 
   await start($)
   await openLot($, [ticket('1')])
   await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
-  await $.tool.call({ tool: TOOL, set: [{ id: '1', status: 'done' }], step: 'review' } as any)
+  await $.tool.call({ tool: TOOL, title: 'Lot de test', set: [{ id: '1', status: 'done' }], step: 'review' } as any)
   await $.skill.prompt({ skill: 'flow-board:compte-rendu', text: 'x' })
   await playStep($, { model: 'claude-opus-5-5', effort: 'medium' })
   expect(w.sent.map(s => s.effort)).toEqual(['medium', 'high'])

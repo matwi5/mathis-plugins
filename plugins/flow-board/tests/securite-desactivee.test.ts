@@ -119,6 +119,25 @@ test('clos « désactivée » seulement par une lecture « off » à sa premièr
   expect(groupD(late).delegated?.closing?.securityOff).toBeUndefined()
 })
 
+test('la réponse au premier appel delegate d’un worker : revue désactivée, elle le dit (avis à envoyer, aucun relecteur préparé, zones à la passe « bogues ») ; activée ou illisible, rien de plus', () => {
+  const b = reviewedGroup()
+  const id = runOf(b).id
+  // Le worker a son propre tableau de bord (un worktree) : la mission n'y est pas.
+  const worker: Board = { ...emptyBoard('/w/p-wt', 'p'), session: 'w', deleted: [], runs: [], activeId: null }
+  const call = (review: Review) => applyReport(worker, { delegate: id, group: 'D', main: '[abc123]' }, 7_000, { security: review }).text
+  const off = call('off')
+  expect(off).toContain('The security review is turned off for this project (its dashboard setting, read now): at the end of the group, when it owes a security advice (section 5 of the procedure: not a group without logic nor sensitive ticket), still judge it and send it, but prepare and launch no security reviewer (no security instructions file, and of its method only the zones of section 1)')
+  expect(off).toContain('« revue de sécurité désactivée pour ce projet ; le groupe touchait : <zone> »')
+  expect(off).toContain('the instructions file of the « bogues » pass of each sensitive ticket gets the zones of section 1 of revue-securite.md')
+  expect(off).toContain('reports a defect in one of them as Important: no extra reviewer, no question')
+  for (const review of ['on', 'unread'] as const) expect(call(review), review).not.toContain('turned off')
+  // Sans réglage passé (lecture absente) : rien non plus.
+  expect(applyReport(worker, { delegate: id, group: 'D' }, 7_000).text).not.toContain('turned off')
+  // Un renvoi de "delegate" pour la même mission (des workers le renvoient à chaque appel) ne le redit pas.
+  const first = applyReport(worker, { delegate: id, group: 'D' }, 7_000, { security: 'off' }).board
+  expect(applyReport(first, { delegate: id, group: 'D', note: 'x' }, 8_000, { security: 'off' }).text).not.toContain('turned off')
+})
+
 test('la réponse au manager : un avis « conseillée » reçu revue désactivée dit de ne lancer aucun relecteur', () => {
   const b = reviewedGroup()
   const off = applyReport(b, { security: { group: 'D', advised: true, why: 'touche les jetons' } }, 6_000, { security: 'off' })
@@ -387,10 +406,26 @@ test('le mod : désactivée, la consigne d’avis dit de juger et d’envoyer l�
   const off = await groupedImplement($)
   expect(off).toContain('The security review is turned off for this project (its dashboard setting, read now): still judge the advice and send it as above, but launch no security reviewer')
   expect(off).toContain('« revue de sécurité désactivée pour ce projet ; le groupe touchait : <zone> »')
+  // Un manager à groupes ne fait pas les passes « bogues » : la consigne des zones va aux workers (réponse à delegate).
+  expect(off).not.toContain('« bogues » pass of each sensitive ticket gets the zones')
   w.review = 'on'
   const on2 = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
   expect(on2).toContain('- Security review:')
   expect(on2).not.toContain('The security review is turned off for this project')
+  expect(on2).not.toContain('« bogues » pass of each sensitive ticket gets the zones')
+})
+
+test('le mod : un lot sans groupes, revue désactivée, reçoit à l’Implémentation la consigne des zones pour ses passes « bogues » ; activée, non', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const w = world(on)
+  w.review = 'off'
+  await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'A1', name: 'Un', blockedBy: [] }] } as any)
+  const off = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
+  expect(off).toContain('- The security review is turned off for this project (its dashboard setting, read now). While it is turned off, the instructions file of the « bogues » pass of each sensitive ticket gets the zones of section 1 of revue-securite.md')
+  w.review = 'on'
+  const on2 = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
+  expect(on2).not.toContain('« bogues » pass of each sensitive ticket gets the zones')
 })
 
 test('le mod : un avis « conseillée » reçu revue désactivée est marqué ; la ligne dit « désactivée », le bouton reste ; réactivée, elle redevient conseillée', { timeoutMs: 20000 }, async ($, on) => {

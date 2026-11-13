@@ -22,6 +22,8 @@ SCRIPT = Path(__file__).resolve().parent.parent / "decision.py"
 sys.path.insert(0, str(SCRIPT.parent))
 import decision  # noqa: E402
 PATH = "travail/essai/DECISIONS.md"
+# Un chantier que le clone principal n'a pas encore : le script le crée.
+NEW = "travail/nouveau/DECISIONS.md"
 BASE = "# Décisions — essai\n\n## Série 1 — La demande (01/11/2026)\n\nTexte de la série 1.\n"
 LOCK_HOLDER = ("import fcntl, os, sys, time\n"
                "f = open(sys.argv[1], 'a+')\n"
@@ -423,18 +425,366 @@ class DecisionTest(unittest.TestCase):
         self.assertEqual(git(linked, "status", "--porcelain"), "")
         self.assertFalse(self.lock_path().exists())
 
-    def test_un_chantier_absent_du_clone_principal_est_refuse_sans_renvoyer_a_un_fichier_absent(self):
+    def test_un_chantier_absent_du_clone_principal_et_commite_dans_le_worktree_est_refuse_sans_rien_creer(self):
+        # Le fichier commité sur la branche du worktree : le créer aussi dans le clone principal en ferait deux.
         linked, _ = self.linked_worktree()
-        neuf = linked / "travail" / "neuf" / "DECISIONS.md"
+        neuf = linked / NEW
         neuf.parent.mkdir()
         neuf.write_text(BASE, encoding="utf-8")
-        git(linked, "add", "travail/neuf/DECISIONS.md")
+        git(linked, "add", NEW)
         git(linked, "commit", "-q", "-m", "chantier neuf")
         out = self.run_script(neuf, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=linked)
         self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
-        self.assertIn("n'a pas encore ce fichier", out.stderr)
+        self.assertIn("il existe déjà ailleurs dans le dépôt", out.stderr)
+        self.assertIn("l'amener d'abord dans le clone principal", out.stderr)
         self.assertNotIn("relancer avec", out.stderr)
         self.assertEqual(neuf.read_text(encoding="utf-8"), BASE)
+        self.assertFalse((self.repo / NEW).parent.exists())
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+        self.assertFalse(self.lock_path().exists())
+
+    def new_text(self, title="Titre", body="Corps."):
+        return (f"# Décisions — nouveau\n\n## Série 1 — {title} ({time.strftime('%d/%m/%Y')})\n\n{body}\n")
+
+    def assert_nothing_created(self, head=None):
+        self.assertFalse(os.path.lexists(self.repo / NEW))
+        self.assertFalse((self.repo / NEW).parent.exists())
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head or self.base_head)
+
+    def test_un_fichier_absent_du_clone_principal_y_est_cree_avec_la_serie_1_et_seul_commite(self):
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "docs: new")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), f"Série 1 : commit {git(self.repo, 'rev-parse', '--short', 'HEAD')} "
+                                             f"(fichier créé : {self.repo.resolve() / NEW})")
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), self.new_text())
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", self.new_text())
+        self.assertEqual(git(self.repo, "diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD"), f"A\t{NEW}")
+        self.assertEqual(git(self.repo, "ls-tree", "HEAD", NEW).split()[0], "100644")
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD^"), self.base_head)
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%s"), "docs: new")
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+        if POSIX:
+            mask = os.umask(0)
+            os.umask(mask)
+            self.assertEqual((self.repo / NEW).stat().st_mode & 0o777, 0o666 & ~mask)
+        # Le fichier créé reçoit ensuite les séries suivantes comme tout autre.
+        second = self.run_script(self.repo / NEW, self.series("t.md", "Suite", "Corps 2."), "-m", "docs: 2")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(second.stdout.strip(), f"Série 2 : commit {git(self.repo, 'rev-parse', '--short', 'HEAD')}")
+
+    def test_depuis_un_worktree_lie_le_fichier_absent_est_cree_dans_le_clone_principal_jamais_dans_le_worktree(self):
+        linked, linked_head = self.linked_worktree()
+        out = self.run_script(linked / NEW, self.series("s.md", "Titre", "Corps."), "-m", "docs: new", cwd=linked)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn(f"(fichier créé : {self.repo.resolve() / NEW})", out.stdout)
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), self.new_text())
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", self.new_text())
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+        self.assertFalse((linked / NEW).parent.exists())
+        self.assertEqual(git(linked, "rev-parse", "HEAD"), linked_head)
+        self.assertEqual(git(linked, "status", "--porcelain"), "")
+
+    def test_un_worktree_qui_porte_le_fichier_absent_du_clone_principal_fait_refuser_sans_rien_ecrire(self):
+        # Dans son arbre (non suivi), dans son index seul, ou commité sur sa branche ; lancé depuis ce worktree ou
+        # depuis le clone principal : un fichier de décisions n'existe qu'à un seul endroit.
+        cases = {
+            "son arbre": lambda wt: (wt / NEW).write_text(BASE, encoding="utf-8"),
+            "son index": lambda wt: ((wt / NEW).write_text(BASE, encoding="utf-8"), git(wt, "add", NEW),
+                                     (wt / NEW).unlink()),
+            "son HEAD": lambda wt: ((wt / NEW).write_text(BASE, encoding="utf-8"), git(wt, "add", NEW),
+                                    git(wt, "commit", "-q", "-m", "neuf"), git(wt, "rm", "-q", NEW)),
+        }
+        for k, (where, carry) in enumerate(cases.items()):
+            linked = Path(self.dir.name) / f"porte-{k}"
+            git(self.repo, "worktree", "add", "-q", "-b", f"porte-{k}", str(linked))
+            (linked / NEW).parent.mkdir()
+            carry(linked)
+            for caller, cwd in ((linked / NEW, linked), (self.repo / NEW, self.repo)):
+                with self.subTest(where=where, caller=str(caller)):
+                    out = self.run_script(caller, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=cwd)
+                    self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                    held = f"la branche porte-{k} ({NEW})" if where == "son HEAD" else f"{linked.resolve()} ({where})"
+                    self.assertIn(held, out.stderr)
+                    self.assertIn("l'amener d'abord dans le clone principal", out.stderr)
+                    self.assertIn("rien n'est écrit", out.stderr)
+                    self.assert_nothing_created()
+                    self.assertFalse(self.lock_path().exists())
+            git(self.repo, "worktree", "remove", "--force", str(linked))
+
+    def test_deux_lancements_simultanes_sur_un_fichier_absent_le_creent_une_fois_puis_ajoutent_la_serie_2(self):
+        self.hook("sleep 1")
+        runs = [subprocess.Popen([sys.executable, str(SCRIPT), str(self.repo / NEW),
+                                  str(self.series(f"s{k}.md", f"Titre {k}", f"Corps {k}.")), "-m", f"docs: run {k}"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                                 env=clean_env(DECISION_ATTENTE="20"), cwd=self.dir.name)
+                for k in (1, 2)]
+        outs = [r.communicate(timeout=60) for r in runs]
+        for r, (stdout, stderr) in zip(runs, outs):
+            self.assertEqual(r.returncode, 0, stderr)
+        numbers = sorted(int(re.search(r"Série (\d+) : commit", stdout)[1]) for stdout, _ in outs)
+        self.assertEqual(numbers, [1, 2])
+        self.assertEqual(sum("fichier créé" in stdout for stdout, _ in outs), 1)
+        committed = git(self.repo, "show", f"HEAD:{NEW}") + "\n"
+        self.assertEqual(committed, (self.repo / NEW).read_text(encoding="utf-8"))
+        self.assertEqual(len(re.findall(r"^# Décisions — nouveau$", committed, re.M)), 1)
+        self.assertEqual(re.findall(r"^## Série (\d+)", committed, re.M), ["1", "2"])
+        self.assertIn("Corps 1.", committed)
+        self.assertIn("Corps 2.", committed)
+        shas = git(self.repo, "rev-list", f"{self.base_head}..HEAD").split()
+        self.assertEqual(len(shas), 2)
+        for sha in shas:
+            self.assertEqual(git(self.repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha), NEW)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_les_refus_valent_aussi_pour_un_fichier_absent_et_ne_creent_rien(self):
+        series = self.series("s.md", "Titre", "Corps.")
+        # Un chemin hors de `DECISIONS_FILE`.
+        for wrong in ("travail/nouveau/AUTRE.md", "travail/nouveau/sous/DECISIONS.md", "ailleurs/nouveau/DECISIONS.md"):
+            out = self.run_script(self.repo / wrong, series, "-m", "x")
+            self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+            self.assertIn("travail/<sujet>/DECISIONS.md", out.stderr)
+            self.assertFalse((self.repo / wrong).parent.exists())
+        # Un sujet hors de la liste blanche, d'après le corpus hostile (règle « Un garde de forme passe le corpus
+        # hostile commun ») : contrôles C0 et C1, séparateurs de ligne, espaces, accents, sosies, signe Kelvin,
+        # chiffres pleine chasse, invisibles, apostrophe typographique, chaîne trop longue. Les caractères
+        # invisibles s'écrivent par leur point de code (`chr`), jamais bruts dans la source.
+        hostile = ["a\n## Série 9", "a\tb", "a" + chr(0x85) + "b", "a" + chr(0x2028) + "b", "deux mots", "été",
+                   chr(0x212A) + "elvin", "nouv" + chr(0x435) + "au", chr(0xFF11) + chr(0xFF12), "a" + chr(0x200B) + "b",
+                   chr(0xFEFF) + "a", "l" + chr(0x2019) + "essai", "-tiret", "x" * 101, "x.", "a\x0bb", "a\x0cb",
+                   "a\rb", "a\x7fb", "a" + chr(0x2029) + "b", chr(0xFB01) + "n", "a" + chr(0xA0) + "b",
+                   chr(0x202E) + "a", chr(0xFF21), "l" + chr(0x2018) + "a", "l" + chr(0x2BC) + "a", "$(x)", "a;b",
+                   "a*b"]
+        for subject in hostile:
+            with self.subTest(subject=subject):
+                out = self.run_script(self.repo / "travail" / subject / "DECISIONS.md", series, "-m", "x")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn("n'est pas créé", out.stderr)
+                self.assertFalse((self.repo / "travail" / subject).exists())
+        # Un index non vide.
+        (self.repo / "autre.txt").write_text("changé\n", encoding="utf-8")
+        git(self.repo, "add", "autre.txt")
+        out = self.run_script(self.repo / NEW, series, "-m", "x")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("l'index porte déjà", out.stderr)
+        self.assert_nothing_created()
+        git(self.repo, "reset", "-q")
+        git(self.repo, "checkout", "-q", "--", "autre.txt")
+        # Une fusion en cours.
+        merge_head = Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"))
+        merge_head.write_text(self.base_head + "\n", encoding="utf-8")
+        out = self.run_script(self.repo / NEW, series, "-m", "x")
+        merge_head.unlink()
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("MERGE_HEAD", out.stderr)
+        self.assert_nothing_created()
+        # Un fichier suivi dans HEAD mais retiré de l'arbre : jamais recréé par-dessus ses séries.
+        self.file.unlink()
+        out = self.run_script(self.file, series, "-m", "x")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("retiré de l'arbre", out.stderr)
+        self.assertFalse(self.file.exists())
+        git(self.repo, "checkout", "-q", "--", PATH)
+        if POSIX:
+            # Un dossier de chantier qui est un lien symbolique vers un autre chantier.
+            (self.repo / "travail" / "nouveau").symlink_to(self.repo / "travail" / "vise")
+            (self.repo / "travail" / "vise").mkdir()
+            out = self.run_script(self.repo / NEW, series, "-m", "x")
+            self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+            self.assertIn("lien symbolique", out.stderr)
+            self.assertFalse((self.repo / "travail" / "vise" / "DECISIONS.md").exists())
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+
+    def test_une_creation_refusee_par_le_hook_est_defaite_sans_fichier_ni_dossier_laisse(self):
+        self.hook("echo refusé par le hook >&2\nexit 1")
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 4, out.stdout + out.stderr)
+        self.assertIn("refusé par le hook", out.stderr)
+        self.assertIn(f"création défaite : {NEW} n'est pas laissé", out.stderr)
+        self.assertNotIn("Série", out.stdout)
+        self.assert_nothing_created()
+        self.assertEqual(git(self.repo, "status", "--porcelain", "--ignored"), "")
+
+    def test_une_creation_dont_le_fichier_a_change_pendant_le_hook_le_laisse_et_le_dit(self):
+        # Une autre discussion écrit dans le fichier créé pendant le hook : il ne porte plus les seuls octets de ce
+        # lancement, et il n'est pas retiré.
+        self.hook(f'echo "Ligne d\'autrui." >> "{self.repo / NEW}"\nexit 1')
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
+        self.assertIn("porte autre chose", out.stderr)
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), self.new_text() + "Ligne d'autrui.\n")
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+        self.assertEqual([p.name for p in (self.repo / NEW).parent.iterdir()], ["DECISIONS.md"])
+
+    @unittest.skipUnless(POSIX and os.geteuid() != 0, "droits des dossiers : POSIX, hors root")
+    def test_une_creation_qui_ne_peut_pas_ecrire_est_defaite_sans_dossier_laisse(self):
+        # `travail/` en lecture seule : le dossier du chantier ne se crée pas. Puis le dossier se crée mais le fichier
+        # ne s'y écrit pas (disque plein) : le dossier créé est retiré.
+        travail = self.repo / "travail"
+        travail.chmod(0o555)
+        try:
+            out = self.run_script(self.repo / "travail" / "nouveau" / "DECISIONS.md",
+                                  self.series("s.md", "Titre", "Corps."), "-m", "x")
+        finally:
+            travail.chmod(0o755)
+        self.assertEqual(out.returncode, 4, out.stdout + out.stderr)
+        self.assertIn("écriture impossible", out.stderr)
+        self.assert_nothing_created()
+        with mock.patch.object(decision, "link_new", side_effect=OSError(28, "No space left on device")):
+            with self.assertRaises(decision.DecisionError) as raised:
+                decision.add_series(self.repo / NEW, self.series("t.md", "Titre", "Corps."), ["-m", "x"], "x", 1)
+        self.assertEqual(raised.exception.code, 4)
+        self.assertIn("création défaite", str(raised.exception))
+        self.assert_nothing_created()
+
+    def test_une_branche_sans_worktree_qui_porte_le_fichier_fait_refuser_la_creation(self):
+        # Le cas d'origine : le fichier commité sur la branche d'un groupe dont le worktree est fermé, branche gardée.
+        linked, _ = self.linked_worktree()
+        (linked / NEW).parent.mkdir()
+        (linked / NEW).write_text(BASE, encoding="utf-8")
+        git(linked, "add", NEW)
+        git(linked, "commit", "-q", "-m", "chantier du groupe")
+        git(self.repo, "worktree", "remove", str(linked))
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("la branche lie", out.stderr)
+        self.assertIn("l'amener d'abord dans le clone principal", out.stderr)
+        self.assert_nothing_created()
+
+    def test_un_chantier_du_meme_nom_a_la_casse_pres_fait_refuser_la_creation(self):
+        (self.repo / "travail" / "Nouveau").mkdir()
+        (self.repo / "travail" / "Nouveau" / "spec.md").write_text("spec\n", encoding="utf-8")
+        git(self.repo, "add", "travail/Nouveau/spec.md")
+        git(self.repo, "commit", "-q", "-m", "spec")
+        head = git(self.repo, "rev-parse", "HEAD")
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("à la casse près existe déjà (travail/Nouveau)", out.stderr)
+        self.assertFalse((self.repo / "travail" / "Nouveau" / "DECISIONS.md").exists())
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
+
+    @unittest.skipUnless(POSIX, "liens symboliques : POSIX")
+    def test_un_lien_vers_le_chantier_d_un_autre_depot_ne_cree_rien_dans_l_autre_depot(self):
+        other = Path(self.dir.name) / "autre-depot"
+        other.mkdir()
+        git(other, "init", "-q", "-b", "main")
+        git(other, "config", "user.name", "essai")
+        git(other, "config", "user.email", "essai@localhost")
+        (other / "README").write_text("x\n", encoding="utf-8")
+        git(other, "add", "README")
+        git(other, "commit", "-q", "-m", "base")
+        (other / "travail" / "nouveau").mkdir(parents=True)
+        (self.repo / "travail" / "nouveau").symlink_to(other / "travail" / "nouveau")
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("lien symbolique", out.stderr)
+        self.assertFalse((other / "travail" / "nouveau" / "DECISIONS.md").exists())
+        self.assertEqual(git(other, "rev-list", "--count", "HEAD"), "1")
+
+    def test_head_qui_avance_sans_le_fichier_pendant_une_creation_fait_recommencer_sur_le_nouveau(self):
+        marker = Path(self.dir.name) / "deja-fait"
+        self.hook(f'[ -e "{marker}" ] && exit 0\ntouch "{marker}"\nunset GIT_INDEX_FILE\ncd "{self.repo}"\n'
+                  f'echo change >> autre.txt && git commit -q --no-verify -m autre -- autre.txt')
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "docs: new")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("fichier créé", out.stdout)
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%s", "HEAD^"), "autre")
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", self.new_text())
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_un_commit_d_autrui_qui_prend_la_serie_1_creee_dit_qu_elle_est_commitee_et_la_laisse(self):
+        # Une autre discussion commite `travail/` par l'index partagé pendant le hook, et prend le fichier non suivi.
+        marker = Path(self.dir.name) / "deja-fait"
+        self.hook(f'[ -e "{marker}" ] && exit 0\ntouch "{marker}"\nunset GIT_INDEX_FILE\ncd "{self.repo}"\n'
+                  f'git add travail && git commit -q --no-verify -m prise')
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "docs: new")
+        self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
+        self.assertIn("avec la série 1 de ce lancement, prise par le commit d'une autre discussion", out.stderr)
+        self.assertIn("ne pas relancer", out.stderr)
+        self.assertNotIn("non commitée", out.stderr)
+        self.assertNotIn("à vérifier avant toute relance", out.stderr)
+        self.assertEqual(out.stdout.strip(), f"Série 1 : commit {git(self.repo, 'rev-parse', 'HEAD')[:12]} (reste à "
+                                             f"vérifier : voir le message d'échec)")
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%s"), "prise")
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), self.new_text())
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", self.new_text())
+
+    def test_une_interruption_ou_une_erreur_inattendue_pendant_le_commit_defait_la_creation_et_le_dit(self):
+        for raised in (KeyboardInterrupt, SystemExit(143), TypeError("inattendue")):
+            with self.subTest(raised=repr(raised)):
+                with mock.patch.object(decision, "commit_series", side_effect=raised):
+                    with self.assertRaises(decision.DecisionError) as caught:
+                        decision.add_series(self.repo / NEW, self.series("s.md", "Titre", "Corps."), ["-m", "x"], "x", 1)
+                self.assertEqual(caught.exception.code, 4)
+                self.assertIn("création défaite", str(caught.exception))
+                self.assert_nothing_created()
+                self.assertEqual(git(self.repo, "status", "--porcelain", "--ignored"), "")
+
+    def test_une_interruption_pendant_le_commit_d_un_ajout_dit_que_la_serie_est_ecrite(self):
+        # Sans ce code 3, une relance ajouterait la série une seconde fois.
+        for raised in (KeyboardInterrupt, SystemExit(143)):
+            with self.subTest(raised=repr(raised)):
+                self.file.write_text(BASE, encoding="utf-8")
+                with mock.patch.object(decision, "commit_series", side_effect=raised):
+                    with self.assertRaises(decision.DecisionError) as caught:
+                        decision.add_series(self.file, self.series("s.md", "Titre", "Corps."), ["-m", "x"], "x", 1)
+                self.assertEqual(caught.exception.code, 3)
+                self.assertIn("interrompu", str(caught.exception))
+                self.assertIn("la série 2 reste écrite", str(caught.exception))
+                self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+        self.file.write_text(BASE, encoding="utf-8")
+
+    def test_un_worktree_dont_le_dossier_a_perdu_son_point_git_fait_refuser_la_creation(self):
+        # Sans son fichier `.git`, git remonterait vers un autre dépôt : dans le doute, rien n'est créé.
+        linked, _ = self.linked_worktree()
+        (linked / ".git").unlink()
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("son index, illisible", out.stderr)
+        self.assert_nothing_created()
+
+    @unittest.skipUnless(POSIX, "signaux : POSIX")
+    def test_un_sigterm_pendant_le_hook_d_une_creation_la_defait(self):
+        started = Path(self.dir.name) / "hook-lance"
+        self.hook(f'touch "{started}"\nsleep 30')
+        run = subprocess.Popen([sys.executable, str(SCRIPT), str(self.repo / NEW), str(self.series("s.md", "T", "C.")),
+                                "-m", "x"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                               env=clean_env(DECISION_ATTENTE="10"), cwd=self.dir.name)
+        deadline = time.monotonic() + 30
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        run.send_signal(signal.SIGTERM)
+        _, stderr = run.communicate(timeout=60)
+        self.assertEqual(run.returncode, 4, stderr)
+        self.assertIn("interrompu (SystemExit)", stderr)
+        self.assert_nothing_created()
+
+    def test_une_branche_distante_ou_une_branche_a_la_casse_pres_fait_refuser_la_creation(self):
+        # Une branche poussée d'un autre poste et relevée sans fusion (`refs/remotes`), puis une branche locale
+        # sans worktree qui porte le même fichier à la casse près.
+        for ref, path in (("refs/remotes/origin/autre-poste", NEW), ("refs/heads/casse", "travail/Nouveau/DECISIONS.md")):
+            with self.subTest(ref=ref):
+                linked = Path(self.dir.name) / "porteur"
+                git(self.repo, "worktree", "add", "-q", "--detach", str(linked))
+                (linked / path).parent.mkdir(parents=True)
+                (linked / path).write_text(BASE, encoding="utf-8")
+                git(linked, "add", path)
+                git(linked, "commit", "-q", "-m", "ailleurs")
+                git(self.repo, "update-ref", ref, git(linked, "rev-parse", "HEAD"))
+                git(self.repo, "worktree", "remove", "--force", str(linked))
+                out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(f"({path})", out.stderr)
+                self.assertIn("il existe déjà ailleurs dans le dépôt", out.stderr)
+                self.assert_nothing_created()
+                git(self.repo, "update-ref", "-d", ref)
+
+    @unittest.skipUnless(POSIX, "liens symboliques : POSIX")
+    def test_un_raccourci_vers_la_racine_du_depot_cree_dans_le_depot(self):
+        shortcut = Path(self.dir.name) / "raccourci"
+        shortcut.symlink_to(self.repo)
+        out = self.run_script(shortcut / NEW, self.series("s.md", "Titre", "Corps."), "-m", "docs: new")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", self.new_text())
 
     def test_avec_un_dossier_git_separe_le_refus_ne_donne_aucune_relance(self):
         # Le parent du dossier git commun (`sep.git`) n'est alors pas la racine de travail : le clone principal est

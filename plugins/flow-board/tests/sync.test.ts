@@ -360,7 +360,7 @@ const TOOL = 'mcp__flow-board__flow'
 const delivered = async ($: any, clock: { advance: (ms: number) => Promise<void> }) => {
   await start($, clock)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, complete: true })
+  await $.tool.call({ tool: TOOL, title: 'Lot de test', complete: true })
   await $.skill.prompt({ skill: 'project:version', text: 'v' })
   // Version puis push : la phase combinée ne se clôt qu'une fois poussée.
   await $.tool.call({ tool: TOOL, step: 'pushed' })

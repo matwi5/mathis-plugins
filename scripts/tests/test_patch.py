@@ -195,6 +195,154 @@ class BatchTest(unittest.TestCase):
             self.assertIn("ÉCHEC", out.stderr)
         self.assertEqual(self.a.read_bytes(), before)
 
+    def test_un_lot_mal_forme_montre_une_paire_complete_sur_ses_six_lignes(self):
+        example = ("::: fichier <chemin>\n::: ancien\n<ancien texte, sur autant de lignes qu'il faut>\n"
+                   "::: nouveau\n<nouveau texte>\n::: fin\n")
+        for text in [
+            f"::: fichier {self.a}\n<<< titre\n=== Titre\n>>>\n",  # marqueur inconnu
+            f"::: fichier {self.a}\n::: ancien\ntitre\n::: nouveau\nTitre\n",  # « ::: fin » manquant
+            "::: ancien\nx\n::: nouveau\ny\n::: fin\n",  # paire sans fichier
+        ]:
+            with self.subTest(text=text):
+                out = self.batch(text)
+                self.assertEqual(out.returncode, 1)
+                self.assertIn("lot", out.stderr.splitlines()[0])
+                self.assertIn("exemple d'une paire :\n" + example, out.stderr)
+        # L'exemple affiché, recopié tel quel, est un lot bien formé : seul son chemin manque.
+        out = self.batch(example)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("fichier introuvable : <chemin>", out.stderr)
+        self.assertNotIn("exemple d'une paire", out.stderr)
+
+    def test_une_paire_en_echec_sur_un_texte_absent_ne_montre_pas_l_exemple(self):
+        out = self.batch(f"::: fichier {self.a}\n::: ancien\nabsent\n::: nouveau\nx\n::: fin\n")
+        self.assertEqual(out.returncode, 1)
+        self.assertNotIn("exemple d'une paire", out.stderr)
+
+
+class InsertTest(unittest.TestCase):
+    """`patch.py --insere <fichier> <ancre> <texte> [--avant]` : un texte inséré sur ses propres lignes après
+    (ou avant) l'unique ligne qui porte l'ancre."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.file = self.root / "doc.md"
+        self.file.write_bytes("un\r\ndeux « git »\r\ntrois\r\n".encode("utf-8"))
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_insere_apres_la_ligne_de_l_ancre_aux_fins_de_ligne_du_fichier(self):
+        out = run("--insere", str(self.file), "deux", "A\nB")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("2 lignes insérées après la ligne 2", out.stdout)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"), "un\r\ndeux « git »\r\nA\r\nB\r\ntrois\r\n")
+
+    def test_insere_avant_la_ligne_de_l_ancre(self):
+        out = run("--insere", str(self.file), "deux", "avant", "--avant")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("1 ligne insérée avant la ligne 2", out.stdout)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"), "un\r\navant\r\ndeux « git »\r\ntrois\r\n")
+
+    def test_un_texte_argument_perd_sa_fin_de_ligne_finale_et_les_marqueurs_valent(self):
+        (self.root / "texte").write_text("lu {{u}}2028\n", encoding="utf-8")
+        self.assertEqual(run("--insere", str(self.file), "trois", "x\n").returncode, 0)
+        self.assertEqual(run("--insere", str(self.file), "un", f"@{self.root / 'texte'}").returncode, 0)
+        self.assertEqual(self.file.read_bytes().decode("utf-8"),
+                         "un\r\nlu " + chr(92) + "u2028\r\ndeux « git »\r\ntrois\r\nx\r\n")
+
+    def test_apres_une_derniere_ligne_sans_fin_de_ligne_le_fichier_reste_sans_fin_de_ligne(self):
+        self.file.write_bytes(b"un\ndeux")
+        self.assertEqual(run("--insere", str(self.file), "deux", "trois").returncode, 0)
+        self.assertEqual(self.file.read_bytes(), b"un\ndeux\ntrois")
+
+    def test_avant_n_est_l_option_qu_en_dernier(self):
+        self.file.write_text("option --avant ici\nfin\n", encoding="utf-8")
+        out = run("--insere", str(self.file), "--avant", "--avant", "--avant")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "--avant\noption --avant ici\nfin\n")
+
+    def test_une_ancre_absente_ou_sur_plusieurs_lignes_n_ecrit_rien_et_donne_les_lignes(self):
+        before = self.file.read_bytes()
+        out = run("--insere", str(self.file), "quatre", "x")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("sur aucune ligne", out.stderr)
+        out = run("--insere", str(self.file), "u", "x")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("présent sur 2 lignes (1, 2)", out.stderr)
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_arguments_invalides(self):
+        before = self.file.read_bytes()
+        for args in (["--insere", str(self.file), "deux"], ["--insere", str(self.file), "", "x"],
+                     ["--insere", str(self.file), "deux", ""], ["--insere", str(self.file), "deux", "x", "--avant", "--avant"]):
+            with self.subTest(args=args):
+                self.assertNotEqual(run(*args).returncode, 0)
+        self.assertIn("--insere <fichier> <ancre> <texte> [--avant]", run("--insere", str(self.file), "deux").stderr)
+        self.assertEqual(self.file.read_bytes(), before)
+        self.assertEqual(run("--insere", str(self.root / "absent.md"), "un", "x").returncode, 1)
+
+
+class CheckTest(unittest.TestCase):
+    """`patch.py --coche <fichier de ticket> <début du critère> [<note>]` : un critère coché, sa note ajoutée."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.file = self.root / "ticket.md"
+        self.file.write_bytes("# Ticket\r\n\r\n- [ ] `--decl` lit le Python.\r\n- [ ] Tests dans test_show.py.\r\n"
+                              "- [x] Déjà fait.\r\n  - [ ] Tests dans test_patch.py.\r\n".encode("utf-8"))
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_coche_le_critere_et_ajoute_la_note(self):
+        out = run("--coche", str(self.file), "`--decl`", "test_show.py, PyDeclTest")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("coché (ligne 3)", out.stdout)
+        self.assertIn("- [x] `--decl` lit le Python. — test_show.py, PyDeclTest\r\n- [ ] Tests dans test_show",
+                      self.file.read_bytes().decode("utf-8"))
+
+    def test_sans_note_la_ligne_est_seulement_cochee_et_une_ligne_indentee_compte(self):
+        self.assertEqual(run("--coche", str(self.file), "Tests dans test_patch").returncode, 0)
+        self.assertTrue(self.file.read_bytes().decode("utf-8").endswith("  - [x] Tests dans test_patch.py.\r\n"))
+
+    def test_un_critere_absent_deja_coche_ou_ambigu_n_ecrit_rien(self):
+        before = self.file.read_bytes()
+        for start, reason in (("Absent", "aucun critère"), ("Déjà", "déjà coché, ligne 5"),
+                              ("Tests dans", "2 critères commencent ainsi, lignes 4, 6")):
+            with self.subTest(start=start):
+                out = run("--coche", str(self.file), start, "note")
+                self.assertEqual(out.returncode, 1)
+                self.assertIn(reason, out.stderr)
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_un_critere_qui_est_le_debut_d_un_autre_se_coche_par_son_texte_entier(self):
+        self.file.write_text("- [ ] Tests\n- [ ] Tests de X\n", encoding="utf-8")
+        out = run("--coche", str(self.file), "Tests", "note")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "- [x] Tests — note\n- [ ] Tests de X\n")
+
+    def test_un_critere_cite_dans_un_bloc_de_code_n_est_pas_un_critere(self):
+        self.file.write_text("```\n- [ ] foo\n```\n- [x] foo fait\n~~~md\n- [ ] foo encore\n~~~\n- [ ] foo vrai\n",
+                             encoding="utf-8")
+        out = run("--coche", str(self.file), "foo")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ligne 8", out.stdout)
+        self.assertTrue(self.file.read_text(encoding="utf-8").startswith("```\n- [ ] foo\n```\n"))
+        self.assertIn("~~~md\n- [ ] foo encore\n~~~\n- [x] foo vrai\n", self.file.read_text(encoding="utf-8"))
+
+    def test_arguments_invalides(self):
+        before = self.file.read_bytes()
+        for args in (["--coche", str(self.file)], ["--coche", str(self.file), ""],
+                     ["--coche", str(self.file), "`--decl`", "deux\nlignes"], ["--coche", str(self.file), "a", "b", "c"]):
+            with self.subTest(args=args):
+                self.assertNotEqual(run(*args).returncode, 0)
+        self.assertIn("--coche <fichier de ticket> <début du critère> [<note>]", run("--coche", str(self.file)).stderr)
+        self.assertEqual(self.file.read_bytes(), before)
+        self.assertEqual(run("--coche", str(self.root / "absent.md"), "x").returncode, 1)
+
 
 class AppendTest(unittest.TestCase):
     """`patch.py --append <fichier> <texte>` : un texte ajouté à la fin du fichier, comme un heredoc
@@ -464,6 +612,8 @@ class RefusalTest(unittest.TestCase):
             "plage": ["--plage", str(path), "1", "1", "UN", "--debut", "un", "--fin", "un"],
             "deplace-source": ["--deplace", str(path), "un", "un", str(self.other), "autre"],
             "deplace-cible": ["--deplace", str(self.other), "autre", "autre", str(path), "un"],
+            "insere": ["--insere", str(path), "un", "zéro", "--avant"],
+            "coche": ["--coche", str(path), "un", "note"],
         }
 
     def assertRefusedEverywhere(self, path, reason, cwd=None, watched=()):
@@ -553,7 +703,12 @@ class RefusalTest(unittest.TestCase):
                 raise OSError(28, "No space left on device")
             return real_fdopen(fd, *args, **kwargs)
 
-        for call in (lambda: patch.patch(str(self.real), "un", "UN"), lambda: patch.append(str(self.real), "trois")):
+        self.other.write_bytes(b"- [ ] critere\n")
+        for path, call in ((self.real, lambda: patch.patch(str(self.real), "un", "UN")),
+                           (self.real, lambda: patch.append(str(self.real), "trois")),
+                           (self.real, lambda: patch.insert(str(self.real), "un", "zéro", before=True)),
+                           (self.other, lambda: patch.check(str(self.other), "critere", "note"))):
+            before = path.read_bytes()
             calls.clear()
             patch.os.fdopen = cut_once
             try:
@@ -562,7 +717,7 @@ class RefusalTest(unittest.TestCase):
             finally:
                 patch.os.fdopen = real_fdopen
             self.assertIn("remis tel qu'avant", str(raised.exception))
-            self.assertEqual(self.real.read_bytes(), b"un\ndeux\n")
+            self.assertEqual(path.read_bytes(), before)
 
     def test_un_fichier_ordinaire_hors_du_depot_s_ecrit_en_absolu_et_en_relatif(self):
         # Le dossier jetable est sous /var/folders/… sur macOS, où /var est un lien : les dossiers au-dessus

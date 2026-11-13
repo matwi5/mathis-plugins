@@ -55,10 +55,15 @@ export type RoadmapEntry = { id: string; section: RoadmapSection; status: string
 export type Roadmap = { ok: true; entries: RoadmapEntry[] } | { ok: false; lineNo: number; why: string }
 
 /** La forme d'un id d'entrée : une lettre majuscule, puis un à quatre chiffres. Seule source de cette forme. */
-const ID_FORM = '[A-Z][0-9]{1,4}'
+const ID_DIGITS = '[0-9]{1,4}'
+const ID_FORM = `[A-Z]${ID_DIGITS}`
 const ID = new RegExp(`^${ID_FORM}$`)
 /** Un id d'entrée en forme : il entre seul dans une demande au Claude du COO, jamais un texte relu. */
 export const isRoadmapId = (v: unknown): v is string => typeof v === 'string' && ID.test(v)
+
+/** Les ids d'entrée de la forme ci-dessus, aux seules lettres données (`RI`), cités comme mots entiers dans un texte, dans l'ordre. */
+export const roadmapIdsIn = (text: string, letters: string): string[] =>
+  /^[A-Z]+$/.test(letters) ? (text.match(new RegExp(`(?<![\\p{L}\\p{N}])[${letters}]${ID_DIGITS}(?![\\p{L}\\p{N}])`, 'gu')) ?? []) : []
 
 const ENTRY = new RegExp(`^- \\[(${ID_FORM})\\] ([^·]+?) · (\\d{4}-\\d{2}-\\d{2}) · ([^·]+?) · (.+)$`)
 const SECTION = /^## (.+)$/

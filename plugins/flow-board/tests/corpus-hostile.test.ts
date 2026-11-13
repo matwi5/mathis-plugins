@@ -1,14 +1,22 @@
 import { expect, test } from 'claude-code/testing'
 
-import { closingProcedure, isGroupId, isQuestionIdForm, isSafeBranch, isSafeId, isScriptPath, isSessionId, isVersionForm, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, neutralRelayed, reopenText, shellQuote } from '../hooks/closing.ts'
+import { closingProcedure, isGroupId, isNotedWorktree, isQuestionIdForm, isSafeBranch, isSafeId, isScriptPath, isSessionId, isVersionForm, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, neutralRelayed, reopenText, shellQuote } from '../hooks/closing.ts'
 import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, isFableMark, newRun, startLinkedGroups } from '../hooks/model.ts'
 import { applyRelay, decidedFileText } from '../hooks/relay.ts'
 import { isSeat } from '../hooks/seat.ts'
-import { isEntryId, refOf, soundEntry } from '../hooks/coordination.ts'
+import { isDecisionsPath, isEntryId, isOneLine, isPrint, isQuestionRef, isReportPrint, isRound, isTicketRef, refOf, soundEntry } from '../hooks/coordination.ts'
+import { isSetAsideId } from '../hooks/a-reprendre.ts'
+import { breaksLine } from '../hooks/compaction.ts'
+import { isSha } from '../hooks/coo.ts'
+import { isNightId } from '../hooks/night.ts'
+import { isPisteId } from '../hooks/pistes.ts'
+import { isPlanUnit } from '../hooks/plan-projet.ts'
+import { isRoadmapId } from '../hooks/roadmap.ts'
 import { isCardId, isFolderName, isLaunchId } from '../hooks/launch.ts'
 import { activeRun } from '../hooks/basics.ts'
+import { relayShortId } from '../hooks/link.ts'
 import type { Board, Closing } from '../types'
-import { CORPUS, NON_TEXT, ch } from './corpus.mjs'
+import { CORPUS, LINE_BREAKERS, NON_TEXT, QUOTE_LOOKALIKES, ch } from './corpus.mjs'
 
 // Un même corpus hostile passe par chaque garde de forme : la même classe de défaut (Unicode,
 // sosies, caractères de contrôle, signe Kelvin) était revenue à cinq tours de revue, dans cinq
@@ -37,6 +45,12 @@ test('les valeurs de référence passent chaque garde : un refus vient bien de l
 
 test('isSafeId refuse chaque entrée du corpus', () => {
   expect(passing(token => isSafeId(`ab${token}cd`))).toEqual([])
+})
+
+test('l’id de session relu au relais : relayShortId rend son id court, et rien hors forme, où que l’entrée du corpus soit glissée', () => {
+  expect(relayShortId(UUID)).toBe('178bd61c')
+  expect(passing(token => relayShortId(`178b${token}d61c-0416-4d88-8317-cc583d9f0d47`) !== null)).toEqual([])
+  expect(passing(token => relayShortId(`${UUID}${token}`) !== null)).toEqual([])
 })
 
 test('la carte de lancement : l’id du lancement, celui de la carte et le dossier refusent chaque entrée du corpus', () => {
@@ -72,12 +86,14 @@ test('isSessionId refuse chaque entrée du corpus, dans un UUID comme dans un id
 })
 
 /**
- * Les gardes de forme exportés par closing.ts et model.ts, et les neutralisations : chacun a sa clé
- * dans une de ces deux tables, que `gardes-corpus.test.mjs` relit (tout export `is…` ou `neutral…`
- * de ces modules y est, ou dans sa liste des prédicats sur la mission). Chaque garde de la table
- * accepte sa valeur valide et refuse chaque entrée du corpus glissée dedans, et toute valeur qui
- * n'est pas du texte ; chaque neutralisation rend, de chaque entrée du corpus comme d'une valeur qui
- * n'est pas du texte, un texte sans fin de ligne.
+ * Les gardes de forme exportés par les modules de `hooks/`, rangés par classe : chacun a sa clé dans
+ * une de ces trois tables, que `gardes-corpus.test.mjs` relit (tout prédicat exporté y est, ou dans sa
+ * liste des prédicats nommés, avec leur raison). Un garde d'identifiant, de nom ou de chemin
+ * (`FORM_GUARDS`) accepte sa valeur valide et refuse chaque entrée du corpus glissée dedans, et toute
+ * valeur qui n'est pas du texte ; une neutralisation (`NEUTRALIZERS`) rend, de chaque entrée du corpus
+ * comme d'une valeur qui n'est pas du texte, un texte sans fin de ligne ; un garde de ligne sûre
+ * (`LINE_SAFE`, plus bas) laisse passer un texte d'une ligne, sosies de guillemets compris, et refuse
+ * les fins de ligne, les contrôles C0 et C1 et les marques bidirectionnelles qui retournent l'affichage.
  */
 type FormGuard = { accepts: (value: unknown) => boolean; valid: string; hostile: (token: string) => string }
 const FORM_GUARDS: Record<string, FormGuard> = {
@@ -85,13 +101,54 @@ const FORM_GUARDS: Record<string, FormGuard> = {
   isSafeId: { accepts: isSafeId, valid: 'ab-cd', hostile: token => `ab${token}cd` },
   isQuestionIdForm: { accepts: isQuestionIdForm, valid: 'relance:A#2', hostile: token => `relance:A${token}#2` },
   isSessionId: { accepts: isSessionId, valid: UUID, hostile: token => `178bd61c${token}-0416-4d88-8317-cc583d9f0d47` },
+  // L'id complet relu au relais, dont l'id court entre dans claude stop et claude rm (la session notée sans la sortie du lancement).
+  relayShortId: { accepts: value => relayShortId(value) !== null, valid: UUID, hostile: token => `178bd61c-04${token}16-4d88-8317-cc583d9f0d47` },
   isSafeBranch: { accepts: isSafeBranch, valid: 'feat/ab-cd', hostile: token => `feat/ab${token}cd` },
+  isNotedWorktree: { accepts: value => isNotedWorktree(value, 'A', 2), valid: 'groupe-ab-cd-A-2', hostile: token => `groupe-ab${token}cd-A-2` },
   isVersionForm: { accepts: isVersionForm, valid: '0.80.0-rc.1', hostile: token => `0.8${token}0.0` },
   isWorktreePath: { accepts: value => isWorktreePath(value, ROOT), valid: `${ROOT}/.claude/worktrees/groupe-ab-cd`, hostile: token => `${ROOT}/.claude/worktrees/groupe-ab${token}cd` },
   isFableMark: { accepts: isFableMark, valid: 'fable', hostile: token => `fa${token}ble` },
   isScriptPath: { accepts: isScriptPath, valid: '/opt/poste/.claude/plugins/flow-board/scripts/fermeture.mjs', hostile: token => `/opt/po${token}ste/.claude/plugins/flow-board/scripts/fermeture.mjs` },
+  isLaunchId: { accepts: isLaunchId, valid: 'lab12cd34', hostile: token => `lab${token}12cd34` },
+  isCardId: { accepts: isCardId, valid: 'kab12cd', hostile: token => `kab${token}12cd` },
+  isFolderName: { accepts: isFolderName, valid: 'ab-cd', hostile: token => `ab${token}cd` },
+  isEntryId: { accepts: isEntryId, valid: 'cab12cd', hostile: token => `cab${token}12cd` },
+  isSeat: { accepts: value => isSeat({ by: value, at: 1, seenAt: 1 }), valid: 'ab-cd', hostile: token => `ab${token}cd` },
+  isSetAsideId: { accepts: isSetAsideId, valid: 'aab12cd', hostile: token => `aab${token}12cd` },
+  isSha: { accepts: isSha, valid: '0123456789abcdef0123456789abcdef01234567', hostile: token => `0123456789abcdef0123${token}456789abcdef01234567` },
+  isReportPrint: { accepts: isReportPrint, valid: 'rab1-cd2-ef3', hostile: token => `rab${token}1-cd2-ef3` },
+  isRound: { accepts: isRound, valid: '1.2.3', hostile: token => `1.2${token}.3` },
+  isPrint: { accepts: isPrint, valid: 'qab12', hostile: token => `qab${token}12` },
+  isDecisionsPath: { accepts: isDecisionsPath, valid: 'travail/ab-cd/DECISIONS.md', hostile: token => `travail/ab${token}cd/DECISIONS.md` },
+  isTicketRef: { accepts: isTicketRef, valid: 'A-12', hostile: token => `A${token}-12` },
+  isNightId: { accepts: isNightId, valid: 'nab12cd34', hostile: token => `nab${token}12cd34` },
+  isPisteId: { accepts: isPisteId, valid: 'ab-cd/A1', hostile: token => `ab${token}cd/A1` },
+  isPlanUnit: { accepts: isPlanUnit, valid: 'A1', hostile: token => `A${token}1` },
+  isRoadmapId: { accepts: isRoadmapId, valid: 'I12', hostile: token => `I1${token}2` },
 }
 const NEUTRALIZERS: Record<string, (value: unknown) => string> = { neutralLine, neutralInPrompt, neutralRelayed }
+
+/**
+ * Les gardes de ligne sûre : vrai pour un texte qui tient sur une ligne et s'affiche dans son ordre.
+ * La classe juge un texte déjà reçu comme tel (`breaksLine` prend un `string`, et sur `null` rendrait « ligne sûre ») :
+ * elle ne leur demande rien des valeurs non texte, même à `isOneLine` et `isQuestionRef`, qui les refusent.
+ */
+const LINE_SAFE: Record<string, (text: string) => boolean> = {
+  breaksLine: text => !breaksLine(text),
+  isOneLine: text => isOneLine(text, 200),
+  isQuestionRef,
+}
+
+test('chaque garde de ligne sûre accepte une ligne et ses sosies de guillemets, et refuse chaque fin de ligne, contrôle C0 ou C1 et marque bidirectionnelle', () => {
+  for (const [name, isSafe] of Object.entries(LINE_SAFE)) {
+    expect({ name, valid: isSafe('avant après') }).toEqual({ name, valid: true })
+    expect({ name, quotes: QUOTE_LOOKALIKES.filter(q => !isSafe(`avant ${q}x${q} après`)) }).toEqual({ name, quotes: [] })
+    for (const [family, codes] of Object.entries(LINE_BREAKERS)) {
+      const leaks = codes.filter(code => isSafe(`avant${ch(code)}après`)).map(code => `U+${code.toString(16).toUpperCase().padStart(4, '0')}`)
+      expect({ name, family, leaks }).toEqual({ name, family, leaks: [] })
+    }
+  }
+})
 
 /** Ce qu'une neutralisation ne rend jamais : une fin de ligne, un contrôle, un caractère de format ou un invisible. */
 const opensALine = (c: string): boolean => /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/u.test(c)

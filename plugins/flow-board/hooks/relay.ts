@@ -839,6 +839,12 @@ export type GroupRelay = {
 }
 
 /**
+ * Le groupe qu'une entrée de relais déclare (son `group`, posé par l'appel `delegate` de sa session) : « E »,
+ * « Groupe E », « E · Enquêtes » nomment le même groupe ; '' sans groupe ou pour une valeur qui n'est pas un texte.
+ */
+export const declaredGroup = (group: unknown): string => (typeof group !== 'string' ? '' : (/^(?:groupe\s+)?([^\s·:,()]+)/i.exec(group.trim())?.[1] ?? ''))
+
+/**
  * L'avancement relayé pour un groupe confié : l'entrée de session la plus récente qui le nomme, ou,
  * pour une session dont le nom ne désigne aucun groupe du plan, qui a touché un de ses tickets ; une
  * session nommée pour un autre groupe n'y compte pour rien, même pour un ticket de celui-ci qu'elle a
@@ -859,8 +865,7 @@ export const relayForGroup = (
   if (!relay || !link) return null
   const since = link.at
   const ids = group.tickets
-  // « E », « Groupe E », « E · Enquêtes » nomment le même groupe.
-  const named = (e: RelayEntry) => (e.group === undefined ? '' : (/^(?:groupe\s+)?([^\s·:,()]+)/i.exec(e.group.trim())?.[1] ?? ''))
+  const named = (e: RelayEntry) => declaredGroup(e.group)
   const touches = (e: RelayEntry) => Object.keys(e.tickets).some(id => ids.some(t => sameTicket(t, id)))
   // Les ids des groupes du plan, sans la casse (relus du tableau de bord : un id vide ou qui n'est pas un texte n'en est pas un).
   const planIds = plan === undefined ? undefined : new Set(plan.map(g => g?.id).filter((id): id is string => typeof id === 'string' && id !== '').map(id => id.toLowerCase()))

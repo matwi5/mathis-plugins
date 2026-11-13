@@ -259,6 +259,7 @@ const world = (on: any, seed: Record<string, unknown> = {}, opts: { files?: Reco
   const mem: Record<string, unknown> = { ...seed }
   const files: Record<string, string> = { ...opts.files }
   const reads: string[] = []
+  const writes: string[] = []
   const runs: string[][] = []
   const toasts: string[] = []
   // `tracesAccepted` : le stockage accepte tant de traces, puis refuse (disque plein).
@@ -291,6 +292,7 @@ const world = (on: any, seed: Record<string, unknown> = {}, opts: { files?: Reco
   })
   on('fs.write', (_$: unknown, e: { path: string; text: string }) => {
     if (isRefused(e.path)) throw new Error('EACCES')
+    writes.push(e.path)
     files[e.path] = e.text
     return { value: undefined } as any
   })
@@ -310,7 +312,7 @@ const world = (on: any, seed: Record<string, unknown> = {}, opts: { files?: Reco
   })
   on('ui.status', () => ({ value: undefined }))
   on('classic.UserPromptSubmit', () => ({}))
-  return { mem, files, reads, runs, toasts, refused: () => traces }
+  return { mem, files, reads, writes, runs, toasts, refused: () => traces }
 }
 
 const prompt = ($: any, transcript: string) =>
@@ -318,16 +320,37 @@ const prompt = ($: any, transcript: string) =>
 
 test('le test instable : les écritures du registre sous l’horloge simulée ne coûtent pas une seconde de temps réel chacune', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
-  world(on)
+  const w = world(on, {}, { isRegistryOnDisk: true })
   let n = 0
   on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: `a${++n}` } }))
-  const started = Date.now()
-  for (let i = 0; i < 4; i++) {
+  // Sans seuil fixe de temps réel (sous une charge de 45, le test entier avait pris plus de 2 s et
+  // refusé des commits sans rapport) : chaque tour mesure l'avance de l'horloge qui porte une écriture
+  // du registre, puis une avance qui n'en porte aucune, la référence, prise au même moment, sous la
+  // même charge. Une attente réelle d'une seconde par écriture rend chaque avance qui écrit plus
+  // longue d'une seconde que la référence ; la charge, elle, ralentit les deux. Les médianes se
+  // comparent avec une marge de la moitié de cette seconde : une référence lente ou une écriture
+  // rapide isolée ne masque pas l'attente.
+  const registryWrites = () => w.writes.filter(path => path.includes('/flow-board/')).length
+  const withWrite: number[] = []
+  const reference: number[] = []
+  // Trois tours : avec une seconde réelle par écriture, ils restent sous le délai d'un test (5 s), et c'est
+  // la comparaison à la référence qui échoue, pas le délai.
+  for (let i = 0; i < 3; i++) {
     await $.tool.call({ tool: 'Agent', description: `Agent ${i}`, prompt: 'p', run_in_background: true, tool_use_id: `c${i}` } as any)
+    const before = registryWrites()
+    const started = Date.now()
     // Au-delà des 600 ms d'attente : une écriture à chaque tour.
     await clock.advance(1_000)
+    withWrite.push(Date.now() - started)
+    expect(registryWrites()).toBeGreaterThan(before)
+    const after = registryWrites()
+    const referenceStarted = Date.now()
+    await clock.advance(1_000)
+    reference.push(Date.now() - referenceStarted)
+    expect(registryWrites()).toBe(after)
   }
-  expect(Date.now() - started).toBeLessThan(2_000)
+  const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!
+  expect(median(withWrite) - median(reference)).toBeLessThan(500)
 })
 
 test('F4 par le mod : un transcript hors de <dossier Claude>/projects/ n’est jamais lu', async ($, on) => {

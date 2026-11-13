@@ -1,6 +1,8 @@
 // Le faux moteur des tests du fichier de coordination et des retenues entre missions : le fichier commun
 // des missions (ou `$.store`), le fichier de coordination (au fichier comme dans `$.store`), ses copies
-// mises de côté, et les envois à une autre discussion. Un module d'aide, pas un fichier de test.
+// mises de côté, et les envois à une autre discussion. Ses sondes (`probe`) font échouer une lecture ou une
+// écriture : d'une clé du magasin (`refuseRead`, `refuseStore`), de sa liste de clés (`refuseKeys`), du board (`refuseBoard`).
+// Un module d'aide, pas un fichier de test.
 
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, CooSeat, Run } from '../types'
@@ -49,7 +51,8 @@ export const world = (on: any) => {
   /** Joué à chaque relecture du fichier de coordination (pour une écriture croisée d'une autre discussion à ce moment-là). */
   /** `holdNight` : l'écriture de l'enregistrement de la surveillance de nuit attend cette promesse (une écriture du moteur qui tarde). */
   /** `refuseRead` : une lecture du magasin qui lève pour cette clé (une clé illisible, comme `delegate:<session>`). */
-  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean; refuseRead?: (key: string) => boolean; holdNight?: Promise<void> } = {}
+  /** `refuseKeys` : la lecture de la liste des clés du magasin (`store.keys`) lève tant qu'il rend vrai, comme `refuseRead` pour une clé (des lancements gardés qui ne se relisent pas). */
+  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean; refuseRead?: (key: string) => boolean; refuseKeys?: () => boolean; holdNight?: Promise<void> } = {}
   on('session.end', () => ({ sessionId: ids.now }))
   on('classic.SessionStart', () => ({}))
   on('prompt.submit', (_$: unknown, e: { text: string; context?: readonly string[] }) => {
@@ -115,7 +118,10 @@ export const world = (on: any) => {
     }
     return { value: undefined }
   })
-  on('store.keys', () => ({ value: Object.keys(mem) }))
+  on('store.keys', () => {
+    if (probe.refuseKeys?.()) throw new Error('EIO')
+    return { value: Object.keys(mem) }
+  })
   on('store.delete', (_$: unknown, e: { key: string }) => {
     delete mem[e.key]
     return { value: undefined }

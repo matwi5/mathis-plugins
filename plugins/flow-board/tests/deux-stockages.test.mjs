@@ -1,8 +1,9 @@
 // Un fichier de test dont le faux moteur sert le board dans les deux modes de stockage (fichier commun
 // ou `$.store`, selon l'emplacement de la copie du plugin : tests/stockage.ts) porte la ligne
 // « Stockage : les deux modes », que scripts/check.py lit pour le relancer dans le mode qu'il n'a pas
-// eu. Sans elle, un test vert sous `check.sh --test` (copie hors de `.claude/`) échouait dans un
-// worktree (sous `.claude/`), et l'inverse.
+// eu (`$.store`, la première passe se faisant partout en mode fichier). Sans elle, un test vert dans
+// un mode échouait dans l'autre (constaté entre `check.sh --test`, alors en `$.store`, et la suite
+// complète d'un worktree, sous `.claude/`).
 //
 // Un test Node (node --test, lancé par scripts/check.sh) : il lit les sources des tests. Un faux
 // moteur « des deux modes » se reconnaît à son drapeau `isUsed` (le board lu ou écrit au fichier
@@ -48,5 +49,7 @@ test('tests/stockage.ts et scripts/check.py reprennent la règle de claudeHome (
   assert.match(helper, /root\.replace\(\/\\\\\/g, '\/'\)\.toLowerCase\(\)\.includes\('\/\.claude\/'\)/)
   // Et scripts/check.py, qui pose la copie de l'autre mode par la même règle.
   const check = readFileSync(new URL('../../../scripts/check.py', import.meta.url), 'utf8')
+  // Sa première passe tourne partout dans le mode de l'usage réel, le fichier commun ; la relance, en $.store.
+  assert.match(check, /^FIRST_STORAGE = "fichier"$/m)
   assert.match(check, /def storage_mode\(folder\):\n {4}"""[^\n]*claudeHome[^\n]*"""\n {4}return "fichier" if "\/\.claude\/" in Path\(folder\)\.resolve\(\)\.as_posix\(\)\.lower\(\) else "\$\.store"\n/)
 })

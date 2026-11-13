@@ -50,6 +50,12 @@ export type StepDef = {
   hint: string
   /** Le même hint quand le projet n'est pas un dépôt git (point fixe par copies), s'il diffère. */
   noGitHint?: string
+  /**
+   * Le hint quand la phase de l'étape est celle de la mission et que la phase suivante enregistrée
+   * de la mission est l'Implémentation, s'il diffère : une Chasse au bug y écrit son correctif comme un
+   * ticket. En détour, ou dans une mission enregistrée avant ce changement, `hint` (lu par `coachingNote`).
+   */
+  beforeImplHint?: string
   /** L'étape part dans le même message que la précédente (affichée « ∥ ») : la sécurité avec la revue du groupe. */
   isWithPrevious?: boolean
   /** Étape d'un ancien chemin : connue d'une phase qui la porte déjà, jamais donnée à une phase neuve. */
@@ -147,6 +153,21 @@ export const SECURITY_AREAS =
 export const SECURITY_CRITERIA = `${SECURITY_AREAS}; unless the security review is turned off for the project: the advice is still given and noted in the report, and no reviewer is launched`
 
 /**
+ * Revue de sécurité désactivée pour le projet, et un groupe en zone de secrets ou de droits : la passe « bogues »
+ * des tickets sensibles prend les zones de la méthode de sécurité, sans relecteur de plus ni question (réponse de
+ * Mathis du 12/11/2026, option (a) de la question « p11 »). Au worker (réponse à `delegate`) et au manager.
+ */
+export const SECURITY_OFF_BUGS_PASS =
+  "While it is turned off, the instructions file of the « bogues » pass of each sensitive ticket gets the zones of section 1 of revue-securite.md (copied, or that file's path and section), and its reviewer reports a defect in one of them as Important: no extra reviewer, no question."
+
+/**
+ * La phrase ajoutée à la réponse de l'appel `delegate` d'un worker quand le réglage, relu à l'appel, dit la revue de
+ * sécurité désactivée : il le sait avant de préparer un relecteur (trois workers l'avaient préparé pour rien), et sa
+ * passe « bogues » prend les zones de la méthode de sécurité à la place.
+ */
+export const SECURITY_OFF_DELEGATE = `The security review is turned off for this project (its dashboard setting, read now): at the end of the group, when it owes a security advice (section 5 of the procedure: not a group without logic nor sensitive ticket), still judge it and send it, but prepare and launch no security reviewer (no security instructions file, and of its method only the zones of section 1), and note in the report « revue de sécurité désactivée pour ce projet ; le groupe touchait : <zone> ». ${SECURITY_OFF_BUGS_PASS}`
+
+/**
  * La réponse de l'outil flow à un avis « conseillée » reçu revue de sécurité désactivée pour le projet (réglage
  * relu à l'appel), au manager comme à un worker ; `<unit>` : « le groupe » ou « le lot ».
  */
@@ -201,7 +222,7 @@ const SENSITIVE_LIFECYCLE = `for a change in a sensitive area, its lifecycle que
  * /to-tickets et au découpage des pistes d'une rétro, qui ne passe pas par /to-tickets.
  */
 const INVARIANT_REREAD =
-  'before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant, when it has one: a criterion that breaks it is rewritten, or becomes a question for the user now; reread also each clause of the invariant of any ticket that carries one against the current code, field by field: a clause the code already breaks by design becomes a question for the user now, and the ticket quotes the search that checked it, naming those fields and the function the ticket changes; a criterion about the existing tests, in any ticket, quotes the search for the tests that read the function the ticket changes: the command and its result'
+  'before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant (every sensitive ticket carries one: fixed with the user for a very sensitive ticket, written by the session that splits and shown with the breakdown for one that is only sensitive): a criterion that breaks it is rewritten, or becomes a question for the user now; reread also each clause of the invariant of any ticket that carries one against the current code, field by field: a clause the code already breaks by design becomes a question for the user now, and the ticket quotes the search that checked it, naming those fields and the function the ticket changes; a criterion about the existing tests, in any ticket, quotes the search for the tests that read the function the ticket changes: the command and its result'
 
 /**
  * Une API du moteur se vérifie avant d'entrer dans une spec ou un ticket (lu par Claude) : une spec
@@ -253,7 +274,7 @@ export const DECIDED_HINT = 'the path of the file of the choices already declare
  * de l'équipe Claude Code : pour un auteur agent, une remarque mineure coûte un commit et un tour de revue.
  */
 export const REVIEWER_BRIEF =
-  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, those of medium severity or more go to the user as a « durcissement » group proposed at the end of the lot, except a finding on older code that breaks the invariant of the ticket: it is Important and gets fixed (in a « durcissement » group, the code it targets is not older than the lot); tag every finding Important, Nit or Pre-existing (the code older than the lot just above, with its severity: high, medium or low): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; a description, a comment or a documentation text that the diff makes wrong is Important; a regression the diff introduces (an input that passed before it and now throws, gives another result or is refused) is Important, whether or not the ticket has an invariant, even on a line the diff did not change (the caller of a function whose contract it changes): it is not Pre-existing; a choice made in session and missing from the decisions file is not a finding; the review of a ticket also looks for the neighbouring tests that read the same observable (a test that pins the old behaviour elsewhere); for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review. ' +
+  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, those of medium severity or more go to the user as a « durcissement » group proposed at the end of the lot, except a finding on older code that breaks the invariant of the ticket: it is Important and gets fixed (in a « durcissement » group, the code it targets is not older than the lot); tag every finding Important, Nit or Pre-existing (the code older than the lot just above, with its severity: high, medium or low): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; a description, a comment or a documentation text that the diff makes wrong is Important; a regression the diff introduces (an input that passed before it and now throws, gives another result or is refused) is Important, whether or not the ticket has an invariant, even on a line the diff did not change (the caller of a function whose contract it changes): it is not Pre-existing; a finding on the code of the lot that makes a ticket criterion fail without a signal (the promised behaviour does not happen, and nothing says so) is Important too, whether or not the ticket has an invariant; a choice made in session and missing from the decisions file is not a finding; the review of a ticket also looks for the neighbouring tests that read the same observable (a test that pins the old behaviour elsewhere); for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; a proposed fix for a branch specific to a platform the reviewer cannot try (Windows from a Mac, for example) carries the mention « non vérifiable sur ce poste » and is given as a trial lead, not as the most cautious fix; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review. ' +
   NO_ADVISOR_LINE.replace(/\.$/, '')
 
 /**
@@ -333,11 +354,11 @@ export const NO_LOGIC_GROUP =
  * y refuse git, et un HEAD détaché perdait ses commits au retrait du dossier (passe « bogues » du lot).
  */
 export const TICKET_SNAPSHOT =
-  'Before the bug pass of a sensitive ticket (its review runs before its commit), pin what both reviews read on a ref of this worktree, without touching the branch, each command alone and the printed hash copied into the next one: git add <the ticket\'s files, by path>, then git diff --cached --name-only must list the ticket\'s files and nothing else (unstage anything else first), git write-tree (prints <tree>), git commit-tree <tree> -p HEAD -m "flow-board snapshot <ticket id>" (prints <snapshot>), git update-ref refs/worktree/flow-board/<ticket id> <snapshot>. Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id> (the bug pass takes it as its target; the instructions file of the two axes gives that diff command) and files at that ref (git show refs/worktree/flow-board/<ticket id>:<path>), never the working tree. While they run, move on with work that touches none of the ticket\'s files (a next ticket that shares no file, the report, the delivery); a next ticket that touches the same files waits. The ticket\'s real commit still comes after its review: when a file of the ticket changed after the last snapshot (a fix, its Status: line), first pin the snapshot again with all the ticket\'s files, right before the git add of the fixes; then git add each of its files again (its fixes included), commit, then node <the installed flow-board plugin folder, the one that holds its scripts/ folder>/scripts/snapshot.mjs --clean <ticket id>, which deletes that ticket\'s ref only, and only once every file of the snapshot is brought to its pinned version by a commit of the branch that changes that file (merges excluded, not necessarily the same one for all, even if a later commit, the next ticket, changed it since; without Node, git update-ref -d refs/worktree/flow-board/<ticket id> <snapshot> once checked by hand that a commit of the ticket, on the branch\'s first lineage, changes each file to its pinned version; a version only inherited from a merge does not count)'
+  'Before the bug pass of a sensitive ticket (its review runs before its commit), pin what both reviews read on a ref of this worktree, without touching the branch, by a single command run from the root of the working folder: node <the installed flow-board plugin folder, the one that holds its scripts/ folder>/scripts/snapshot.mjs <ticket id> <the ticket\'s files, by path>; it builds the tree in a temporary index started from HEAD, without touching the session\'s index (what another ticket staged there stays out of the snapshot), writes an off-branch commit, sets the ref refs/worktree/flow-board/<ticket id> and prints its hash and the range of the reviews (without Node, by hand in the session\'s index, each command alone and the printed hash copied into the next one: git add <the ticket\'s files, by path>, then git diff --cached --name-only must list the ticket\'s files and nothing else (unstage anything else first), git write-tree (prints <tree>), git commit-tree <tree> -p HEAD -m "flow-board snapshot <ticket id>" (prints <snapshot>), git update-ref refs/worktree/flow-board/<ticket id> <snapshot>). Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id> (the bug pass takes it as its target; the instructions file of the two axes gives that diff command) and files at that ref (git show refs/worktree/flow-board/<ticket id>:<path>), never the working tree. While they run, move on with work that touches none of the ticket\'s files (a next ticket that shares no file, the report, the delivery); a next ticket that touches the same files waits. The ticket\'s real commit still comes after its review: when a file of the ticket changed after the last snapshot (a fix, its Status: line), first pin the snapshot again with all the ticket\'s files, right before the git add of the fixes; then git add each of its files (its fixes included: the snapshot stages nothing), commit, then node <the installed flow-board plugin folder, the one that holds its scripts/ folder>/scripts/snapshot.mjs --clean <ticket id>, which deletes that ticket\'s ref only, and only once every file of the snapshot is brought to its pinned version by a commit of the branch that changes that file (merges excluded, not necessarily the same one for all, even if a later commit, the next ticket, changed it since; without Node, git update-ref -d refs/worktree/flow-board/<ticket id> <snapshot> once checked by hand that a commit of the ticket, on the branch\'s first lineage, changes each file to its pinned version; a version only inherited from a merge does not count)'
 
 /** La consigne de la revue d'un ticket, pour un point fixe donné ; sans git, la passe « bogues » n'a pas de plage. */
 const ticketReviewHint = (fixedPoint: string, isRepo: boolean): string =>
-  `/mattpocock-skills:code-review on this ticket's changes only (not loaded through the Skill tool: its skill launches its own axes, which the single reviewer then contradicted; the reviewer follows the reviewer template, which gives it that skill's SKILL.md for its code smells list only; ${fixedPoint}): ${TICKET_REVIEWER}; for a ticket with a « Lecteur » line, the content and form review too ("Content and form review" below). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), or the ticket did not say, unless the change has no effect on behaviour (comments, documentation, displayed labels or tests only, never a text Claude reads such as a prompt, a rule, a reference or a skill: the « Changement sans effet sur le comportement » exemption of the review rules), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> --max-findings all ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"; without --max-findings all it stops, with the default recipe table, at 10 findings in high and 15 in xhigh, whatever the size of the diff), <level> being xhigh when the ticket deletes data or touches concurrency, otherwise high or xhigh as the bug pass effort criterion of the security review method file decides (its section 1: the stakes, the size; high when in doubt), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. After the bug pass, a single further pass at high effort reads everything changed since its snapshot, its fixes and any code added after it (${isRepo ? "note the hash the bug pass's snapshot printed, pin a new snapshot once the fixes are in and both reviews of the ticket are back (the same command, which moves the ref and prints its new hash), and give that pass the range <first snapshot hash>..<new snapshot hash>" : "copy the ticket's files once more when its bug pass is launched; that pass reads the difference between that copy and the current files"}), skipped when nothing changed since the snapshot or all of it has no effect on behaviour (the same exemption); what it finds without breaking the invariant goes to the report under « Pistes », except a regression the diff introduces, which gets fixed; if that pass still finds a breach of the invariant, fix it, write the scenario as a test and ask the user, without another pass. Whatever the review, a defect class found a second time is searched everywhere: quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
+  `/mattpocock-skills:code-review on this ticket's changes only (not loaded through the Skill tool: its skill launches its own axes, which the single reviewer then contradicted; the reviewer follows the reviewer template, which gives it that skill's SKILL.md for its code smells list only; ${fixedPoint}): ${TICKET_REVIEWER}; for a ticket with a « Lecteur » line, the content and form review too ("Content and form review" below). Those axes do not hunt bugs: when the diff touches a sensitive area (${SENSITIVE_AREAS}), or the ticket did not say, unless the change has no effect on behaviour (comments, documentation, displayed labels or tests only, never a text Claude reads such as a prompt, a rule, a reference or a skill: the « Changement sans effet sur le comportement » exemption of the review rules), launch in the same message the bug pass, /code-review <level> of Claude Code (Skill tool "code-review", arguments "<level> --max-findings all ${isRepo ? '<the snapshot range> ' : ''}consignes : <path>"; without --max-findings all it stops, with the default recipe table, at 10 findings in high and 15 in xhigh, whatever the size of the diff), <level> being xhigh when the ticket deletes data (or decides or guards a deletion: what gets erased depends on its code, even if it erases nothing itself) or touches concurrency, otherwise high or xhigh as the bug pass effort criterion of the security review method file decides (its section 1: the stakes, the size; high when in doubt), on the same scope (${fixedPoint}), giving it ${DECIDED_HINT}, and in its instructions file the ticket's invariant when it has one (the sentence of what its persisted data must never become, fixed at framing): the reviewer looks first for what breaks it. Launch a /code-review only once the previous one is back (its notification received): launched while another one runs, it goes to the foreground and holds the session until it ends; when two passes must run at the same time, hand the second one to a reviewer subagent (Agent tool, model opus, effort passed explicitly), which launches it itself. After the bug pass, a single further pass at high effort reads everything changed since its snapshot, its fixes and any code added after it (${isRepo ? "note the hash the bug pass's snapshot printed, pin a new snapshot once the fixes are in and both reviews of the ticket are back (the same command, which moves the ref and prints its new hash), and give that pass the range <first snapshot hash>..<new snapshot hash>" : "copy the ticket's files once more when its bug pass is launched; that pass reads the difference between that copy and the current files"}), skipped when nothing changed since the snapshot or all of it has no effect on behaviour (the same exemption); what it finds without breaking the invariant goes to the report under « Pistes », except a regression the diff introduces, or a finding on the code of the lot that makes a ticket criterion fail without a signal, which gets fixed; if that pass still finds a breach of the invariant, fix it, write the scenario as a test and ask the user, without another pass. Whatever the review, a finding that names other places ("same defect in X") gets all of them fixed the first time (a place in code older than the lot is classed Pre-existing), and a defect class that comes back a second time without that is handled the same way: search for the class's pattern, not just the lines you just wrote, list its variants (the function's callers, the neighbouring forms), quote the search (the command and its result) in the report and fix every occurrence at once, without a further pass for it. The instructions file of the two axes also quotes the done criteria of the group's tickets already done that touch the same files (a rule of one ticket left unapplied in another made 3 of the 7 findings of a group review)${isRepo ? `. ${TICKET_SNAPSHOT}` : ''}`
 
 /** Le point fixe d'une revue de ticket. */
 export const TICKET_FIXED_POINT = 'fixed point: the commit before the ticket'
@@ -364,7 +385,7 @@ export const NO_GIT_LOT_FIXED_POINT = "fixed point: for each file, the oldest co
  * revues relisaient des fichiers entiers ; elles comparent la copie d'avant le ticket au fichier actuel.
  */
 export const NO_GIT_COPIES =
-  "Without git: this project is not a git repository, so no commit marks where a ticket starts. Before touching the first file of a ticket, copy the files it will change into the session's temporary folder (its absolute path, as for the shell rule: printenv CLAUDE_JOB_DIR, or else the temporary or scratchpad folder your instructions give), one subfolder per ticket keeping the path in the project (<temporary folder>/<ticket id>/<path in the project>). A ticket's fixed point is its copy; a group's fixed point is, file by file, the oldest copy among its tickets (a file only a later ticket touched has no copy from the first one). The reviews read a unified diff of the copy against the current file (git diff --no-index <copy> <file> works outside a repository), not the whole files; a file the ticket creates has no copy: it is new and is read whole. Give the reviews the list of copies and files to compare"
+  "Without git: this project is not a git repository, so no commit marks where a ticket starts. Before touching the first file of a ticket, copy the files it will change into the session's temporary folder (its absolute path, as for the shell rule: printenv CLAUDE_JOB_DIR followed by /tmp, since the Write tool is refused at the root of CLAUDE_JOB_DIR, or else the temporary or scratchpad folder your instructions give), one subfolder per ticket keeping the path in the project (<temporary folder>/<ticket id>/<path in the project>). A ticket's fixed point is its copy; a group's fixed point is, file by file, the oldest copy among its tickets (a file only a later ticket touched has no copy from the first one). The reviews read a unified diff of the copy against the current file (git diff --no-index <copy> <file> works outside a repository), not the whole files; a file the ticket creates has no copy: it is new and is read whole. Give the reviews the list of copies and files to compare"
 
 /**
  * Les étapes d'un ticket dans un lot, dans l'ordre : contrôles, puis la revue du ticket (deux axes hors
@@ -373,7 +394,7 @@ export const NO_GIT_COPIES =
 const TICKET_STEPS = [
   step('read', 'Lire spec et ticket', 'read the spec or the ticket'),
   step('tdd', 'Boucle TDD', 'test-first at the agreed seams'),
-  step('checks', 'Contrôles', 'the project checks: lint, typecheck, the full suite'),
+  step('checks', 'Contrôles', "the project checks: lint, typecheck, the ticket's targeted tests (the full suite runs once, at the end of the group)"),
   {
     ...step('review', 'Revue du ticket', ticketReviewHint(TICKET_FIXED_POINT, true)),
     noGitHint: ticketReviewHint(NO_GIT_TICKET_FIXED_POINT, false),
@@ -436,7 +457,7 @@ export const GROUP_REVIEWER =
 
 /** La consigne de la revue d'un groupe ; le point fixe ne se précise que sans git. */
 const groupReviewHint = (fixedPoint: string): string =>
-  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a worker, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review); ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
+  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a worker, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review), and checking that each defect-class search the session quotes (notes, report, commit messages) covers the class's pattern and its variants, not just the changed lines: a search too narrow is a finding; ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
 
 /** Ce qui suit, par groupe, une fois ses tickets commités : revue du groupe, revue de sécurité, rendu. */
 const GROUP_STEPS = [
@@ -474,14 +495,34 @@ const SENSITIVE_STEP = step(
 const BUTTON_QUESTION =
   'a button question (AskUserQuestion): one sentence on what is validated and where to read it, then « Valider (Recommandé) » and « À reprendre » (none in a worker: there the validation goes up to the manager)'
 
+/**
+ * Une décision déjà prise dans un autre chantier se cherche avant de recommander : au cadrage de « Intégrer Fable 5.2
+ * au workflow », une question a recommandé l'advisor sur Fable sans voir la décision contraire, prise trois jours
+ * avant dans un autre fichier de décisions du dépôt.
+ */
+const TREE_HINT =
+  "map the design tree of decisions; before a question that touches a shared rule, a shared setting or a design decision, search its term in every decision file of the project (those its CLAUDE.md names, not only this mission's) and cite in the question the decision found, with its file and date; a recommendation against a decision found says so"
+
 const GRILL_STEPS = [
-  step('tree', 'Arbre des décisions', 'map the design tree of decisions', 'Arbre'),
+  step('tree', 'Arbre des décisions', TREE_HINT, 'Arbre'),
   step('rounds', 'Tours de questions', 'ask the frontier, round after round', 'Questions'),
   SENSITIVE_STEP,
   step('agree', 'Accord partagé', `confirm the shared understanding with ${BUTTON_QUESTION}; the rounds before it stay in text`, 'Accord'),
 ]
 
 const DECISIONS = { label: 'Décisions', hint: 'the decisions of the design tree (done = settled, dropped = out of scope)' }
+
+/**
+ * L'étape « Correctif et test » d'une Chasse au bug suivie d'une Implémentation (lu par Claude) : le
+ * correctif s'écrit comme un ticket local, fait ensuite avec les étapes d'un ticket ; ses critères de fin
+ * reprennent ce que la phase 6 du skill demandait d'un correctif appliqué.
+ */
+const BUG_FIX_TICKET =
+  'phase 5: write the regression test and see it red, then write the fix as a local ticket of the mission instead of coding it: a file in travail/<subject>/issues/ in the /to-tickets format (the problem, the confirmed cause, the red regression test, or, when no correct seam exists, that finding instead of a test, the expected fix, the lines « Zone sensible » and « Logique », an invariant when it touches a sensitive area), whose done criteria include what phase 6 of the skill asks of an applied fix: the phase 1 loop rerun on the original scenario, the regression test green (or the absence of a seam documented), the confirmed hypothesis stated in the commit message; send it to the flow tool, {"tickets": [{"id": "<its id>", "name": "<short title>", "blockedBy": [], "sensitive": true|false, "logic": true|false}]} ("sensitive" and "logic" as its lines « Zone sensible » and « Logique » say: an unsaid one counts as sensitive); the Implementation phase then does it with the steps of a ticket (checks, review, commit and tracking). When the diagnosis ends with no fix to make (not a bug, or not reproduced), say so and send no ticket: the Implementation stays optional and the mission goes on to its report'
+
+/** L'étape « Nettoyage » de la même Chasse au bug : le correctif et ses vérifications sont au ticket. */
+const BUG_CLEANUP_BEFORE_IMPL =
+  "phase 6: only remove the [DEBUG-…] markers and the throwaway prototypes; the fix and its checks (the loop rerun, the regression test green) are the Implementation ticket's"
 
 const IMPL = phase('implement')
 const IMPL_OPT = phase('implement', true)
@@ -594,7 +635,7 @@ export const SKILLS: Record<string, SkillDef> = {
     isUserOnly: true,
     hasTickets: true,
     steps: [
-      step('context', 'Contexte', 'gather the spec or conversation'),
+      step('context', 'Contexte', 'gather the spec or conversation; when this phase follows a Triage in the same mission and the triage found no code fix to make, send {"complete": true} without any ticket: the mission can then be closed like a triage without code (in a mission of its own, the Implementation stays due)'),
       step('explore', 'Explorer le code', `look for prefactoring; ${SENSITIVE_CODE_READ}; ${SENSITIVE_LIFECYCLE}; ${ENGINE_API_CHECK}`),
       step('slice', 'Tranches verticales', `draft tracer-bullet slices with blocking edges; ${RULE_LOGIC}; ${MERGE_QUESTION}`),
       step('approve', 'Découpage validé', `${INVARIANT_REREAD}; ${BREAKDOWN_ADVISOR}; iterate until the user approves the breakdown with ${BUTTON_QUESTION}`),
@@ -622,8 +663,9 @@ export const SKILLS: Record<string, SkillDef> = {
     ],
     items: { label: 'Issues', hint: 'the issues being triaged (label = "#n title", done = triaged)' },
     uses: { grilling: 'grill', 'domain-modeling': null },
-    flow: [phase('triage'), IMPL_OPT, REPORT_IF_CODE, phase('project:version', true), phase('project:pr', true)],
-    next: ['implement'],
+    // Un tri sort des corrections, pas des tickets : la phase Tickets, facultative, les découpe avant l'Implémentation.
+    flow: [phase('triage'), phase('to-tickets', true), IMPL_OPT, REPORT_IF_CODE, phase('project:version', true), phase('project:pr', true)],
+    next: ['to-tickets', 'implement'],
   },
 
   // ─── Construction ───────────────────────────────────────────────────────
@@ -703,15 +745,19 @@ export const SKILLS: Record<string, SkillDef> = {
       step('reproduce', 'Reproduire et réduire', 'phase 2: reproduce and minimise'),
       step('hypotheses', 'Hypothèses', 'phase 3: ranked falsifiable hypotheses'),
       step('instrument', 'Instrumenter', 'phase 4: test them one variable at a time'),
-      step('fix', 'Correctif et test', 'phase 5: regression test, then the fix'),
-      step('cleanup', 'Nettoyage', 'phase 6: remove debug logs and leftovers'),
+      { ...step('fix', 'Correctif et test', 'phase 5: regression test, then the fix'), beforeImplHint: BUG_FIX_TICKET },
+      { ...step('cleanup', 'Nettoyage', 'phase 6: remove debug logs and leftovers'), beforeImplHint: BUG_CLEANUP_BEFORE_IMPL },
     ],
     items: { label: 'Hypothèses', hint: 'the hypotheses (doing = being tested, done = confirmed, dropped = refuted)' },
-    flow: [phase('diagnosing-bugs'), phase('code-review', true), REPORT, phase('project:version', true), phase('project:pr', true)],
+    // Comme une mission classique : le correctif est un ticket, fait en Implémentation avec les étapes d'un
+    // ticket (ses revues comprises), d'où plus de phase « Revue » facultative après le diagnostic.
+    // L'Implémentation, facultative tant que le lot n'a aucun ticket à faire, est due dès que le correctif
+    // en est un : un diagnostic sans correctif (pas un bug, pas reproduit) va au compte rendu.
+    flow: [phase('diagnosing-bugs'), IMPL_OPT, REPORT, phase('project:version', true), phase('project:pr', true)],
     // Un bug trouvé en codant ou en relisant reste dans le lot qui l'a fait apparaître ; ailleurs
     // (cadrage, spec…), il ouvre sa « Chasse au bug ». Le bouton « 🐞 Bug · worker » suit cette liste.
     detourIn: ['implement', 'tdd', 'code-review', 'compte-rendu'],
-    next: ['code-review', 'compte-rendu', 'improve-codebase-architecture'],
+    next: ['implement', 'compte-rendu', 'improve-codebase-architecture'],
   },
   wizard: {
     id: 'wizard',
@@ -1196,6 +1242,13 @@ export const skillIdOf = (name: string): string | null => {
   if (at < 0) return DISTINCT.has(id) ? id : null
   return name.slice(0, at) === PLUGIN ? id : null
 }
+
+/**
+ * La commande qu'on tape pour un skill, sans la barre, quand le texte la dit à Claude ou à la personne (une pause,
+ * une réponse de l'outil) : la sienne, un nom complet (`project:version`), sinon celle du plugin mattpocock
+ * (`mattpocock-skills:code-review`, pas `/code-review`, la revue de Claude Code).
+ */
+export const commandOf = (skill: string): string => SKILLS[skill]?.command ?? (skill.includes(':') ? skill : `${PLUGIN}:${skill}`)
 
 /** La commande slash d'un skill, sans la barre : la sienne, ou son id. */
 export const slashOf = (skill: string): string => SKILLS[skill]?.command ?? skill

@@ -48,6 +48,10 @@ test('un groupe confié et pas rendu d’une autre mission : la consigne de code
   expect(line).toContain('« Là-bas »')
   expect(line).toMatch(/worktree/)
   expect(line).toMatch(/before you merge/)
+  // La discussion fusionne elle-même son travail fini et relu, jamais la personne.
+  expect(line).toContain(
+    'Once it is finished and reviewed, merge it yourself, never leaving the merge to the user: leave the worktree (ExitWorktree, action keep: this instruction is the user\'s standing request for it), then run git merge <your worktree\'s branch> in the main clone; if ExitWorktree has no effect (a worktree entered in a previous session), give the user the exact command to type in the main clone (git merge <your worktree\'s branch>).',
+  )
   // Un groupe pas encore parti n'y est pas.
   expect(line).not.toContain('e.ts')
 })

@@ -126,7 +126,7 @@ test('chez le COO : « Lancer en auto » en tête quand l’auto est recommandé
   expect(labels(card('manual', 'xhigh'))).toEqual(['▶ Lancer en manuel'])
 })
 
-test('le clic « Lancer en auto » écrit un enregistrement en auto et dit au COO de lancer tout de suite (le tour d’intention se recueille avant le clic)', { timeoutMs: 20000 }, async ($, on) => {
+test('le clic « Lancer en auto » écrit un enregistrement en auto et fait vérifier demande.md au COO avant de lancer tout de suite (le tour d’intention se recueille avant le clic)', { timeoutMs: 20000 }, async ($, on) => {
   const now = 405_000_000
   const clock = mock.clock(on, { now })
   const w = world(on)
@@ -144,5 +144,6 @@ test('le clic « Lancer en auto » écrit un enregistrement en auto et dit au CO
   expect(kept[0]!.mode).toBe('auto')
   const fill = w.fills.at(-1) ?? ''
   expect(fill).toMatch(/je viens de cliquer « Lancer en auto »/)
-  expect(fill).toMatch(/Lance-la tout de suite, sans me poser d'autre question d'abord \(le lancement ne vaut que 10 minutes\) : le tour d'intention se recueille avant le clic, dans travail\/export-csv\/demande\.md/)
+  expect(fill).toContain("Avant de lancer, vérifie que travail/export-csv/demande.md existe et est commité (git log -1 -- travail/export-csv/demande.md ; dans un projet sans git, qu'il existe), et qu'il porte le tour d'intention de cette carte, pas celui d'une mission précédente du même dossier : le tour d'intention se recueille avant le clic. S'il manque, ne lance pas")
+  expect(fill).toContain("S'il y est, lance-la tout de suite, sans me poser d'autre question d'abord (le lancement ne vaut que 10 minutes).")
 })

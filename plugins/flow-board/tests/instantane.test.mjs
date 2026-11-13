@@ -3,15 +3,15 @@
 // lancent pour de vrai, dans un dépôt git temporaire.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { isSafeTicket } from '../scripts/snapshot.mjs'
-import { CORPUS } from './corpus.mjs'
+import { isSafeJobDir, isSafeTicket } from '../scripts/snapshot.mjs'
+import { ch, CORPUS, LINE_BREAKERS, NON_TEXT } from './corpus.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../scripts/snapshot.mjs', import.meta.url))
 const procedure = readFileSync(new URL('../reference/procedure-groupe.md', import.meta.url), 'utf8')
@@ -32,8 +32,20 @@ const repo = () => {
   return dir
 }
 
-const snap = (cwd, ...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8' })
+/**
+ * L'environnement d'un lancement du script : sans le dossier de job de la session qui lance les tests
+ * (`CLAUDE_JOB_DIR`, que le script lit pour placer le dossier du relecteur), sauf `jobDir` donné.
+ */
+const envOf = jobDir => {
+  const { CLAUDE_JOB_DIR: _, ...env } = process.env
+  return jobDir === undefined ? env : { ...env, CLAUDE_JOB_DIR: jobDir }
+}
+const snap = (cwd, ...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8', env: envOf() })
+/** Le script lancé par une session de fond : `CLAUDE_JOB_DIR` vaut `jobDir`. */
+const snapJob = (cwd, jobDir, ...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8', env: envOf(jobDir) })
 const hasRef = (cwd, ref) => spawnSync('git', ['rev-parse', '--verify', '--quiet', ref], { cwd }).status === 0
+/** Le dossier git de `cwd` : celui du worktree quand c'en est un. */
+const gitDirOf = cwd => git(cwd, 'rev-parse', '--absolute-git-dir')
 
 test('l’instantané fige les seuls fichiers du ticket sur sa référence, sans bouger la branche', () => {
   const dir = repo()
@@ -92,17 +104,52 @@ test('une suppression du ticket entre dans l’instantané', () => {
   }
 })
 
-test('rien n’est posé quand l’index porte un autre fichier, sans changement, ou pour un id ou un fichier hors forme', () => {
+// L'invariant de la première forme : « la pose d'un instantané ne change ni l'index ni l'arbre de travail
+// de la session ; l'instantané porte exactement les fichiers nommés, à leur version de l'arbre de
+// travail, au-dessus de HEAD ».
+const indexBytes = cwd => readFileSync(join(gitDirOf(cwd), 'index'))
+/** Les index temporaires que le script aurait laissés dans le dossier git. */
+const strayIndexes = cwd => readdirSync(gitDirOf(cwd)).filter(name => name.startsWith('flow-board-index-'))
+
+test('l’instantané ne lit ni ne change l’index de la session : ce qu’un autre ticket y a indexé n’y entre pas, et ne le fait plus refuser', () => {
   const dir = repo()
   try {
+    const head = git(dir, 'rev-parse', 'HEAD')
     writeFileSync(join(dir, 'a.txt'), 'a modifié\n')
+    // Un autre ticket : b.txt indexé puis encore modifié dans l'arbre, c.txt pas encore suivi.
     writeFileSync(join(dir, 'b.txt'), 'b indexé par un autre\n')
     git(dir, 'add', 'b.txt')
-    const other = snap(dir, 'T09', 'a.txt')
-    assert.equal(other.status, 1)
-    assert.match(other.stderr, /ÉCHEC : l'index porte d'autres fichiers que ceux du ticket : b\.txt/)
-    assert.equal(hasRef(dir, 'refs/worktree/flow-board/T09'), false)
-    git(dir, 'reset', '-q', '--hard')
+    writeFileSync(join(dir, 'b.txt'), 'b indexé par un autre, puis modifié\n')
+    writeFileSync(join(dir, 'c.txt'), 'c d’un autre ticket\n')
+    const before = indexBytes(dir)
+    const out = snap(dir, 'T09', 'a.txt')
+    assert.equal(out.status, 0, out.stderr)
+    // L'index de la session : les mêmes octets, et toujours le seul fichier de l'autre ticket.
+    assert.ok(indexBytes(dir).equals(before), 'le fichier d’index a changé')
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), 'b.txt')
+    assert.equal(git(dir, 'show', ':b.txt'), 'b indexé par un autre')
+    // L'arbre de travail : tel quel.
+    assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'a modifié\n')
+    assert.equal(readFileSync(join(dir, 'b.txt'), 'utf8'), 'b indexé par un autre, puis modifié\n')
+    assert.equal(readFileSync(join(dir, 'c.txt'), 'utf8'), 'c d’un autre ticket\n')
+    // L'instantané : le seul fichier nommé, à sa version de l'arbre, au-dessus de HEAD.
+    const ref = 'refs/worktree/flow-board/T09'
+    assert.match(out.stdout, /\(1 fichier : a\.txt\)/)
+    assert.equal(git(dir, 'rev-parse', `${ref}^`), head)
+    assert.equal(git(dir, 'diff', '--name-status', `${ref}^..${ref}`), 'M\ta.txt')
+    assert.equal(git(dir, 'show', `${ref}:a.txt`), 'a modifié')
+    assert.equal(git(dir, 'show', `${ref}:b.txt`), 'b')
+    assert.notEqual(spawnSync('git', ['cat-file', '-e', `${ref}:c.txt`], { cwd: dir }).status, 0, 'c.txt est entré dans l’instantané')
+    assert.deepEqual(strayIndexes(dir), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rien n’est posé sans changement, ou pour un id ou un fichier hors forme, et aucun index temporaire ne reste', () => {
+  const dir = repo()
+  try {
+    const before = indexBytes(dir)
     const none = snap(dir, 'T10', 'a.txt')
     assert.equal(none.status, 1)
     assert.match(none.stderr, /aucun changement dans ces fichiers/)
@@ -111,7 +158,14 @@ test('rien n’est posé quand l’index porte un autre fichier, sans changement
       assert.equal(bad.status, 1, `${ticket} ${file}`)
       assert.match(bad.stderr, /^ÉCHEC : /)
     }
+    assert.equal(snap(dir, 'T12').status, 1)
+    // Un fichier que git ne connaît pas et qui n'existe pas : git add échoue, l'index temporaire part quand même.
+    const missing = snap(dir, 'T13', 'absent.txt')
+    assert.equal(missing.status, 1)
+    assert.match(missing.stderr, /^ÉCHEC : /)
     assert.equal(git(dir, 'for-each-ref', 'refs/worktree/'), '')
+    assert.deepEqual(strayIndexes(dir), [])
+    assert.ok(indexBytes(dir).equals(before), 'le fichier d’index a changé')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -134,7 +188,7 @@ test('un joker, une magie de chemin ou un dossier ne prennent jamais le travail 
   }
 })
 
-test('une suppression indexée par un autre ne se cache pas derrière un renommage vers un fichier du ticket', () => {
+test('une suppression indexée par un autre n’entre pas dans l’instantané, même là où git verrait un renommage vers un fichier du ticket', () => {
   const dir = repo()
   try {
     const long = 'une ligne assez longue pour que git y voie un renommage\n'.repeat(20)
@@ -144,9 +198,13 @@ test('une suppression indexée par un autre ne se cache pas derrière un renomma
     git(dir, 'rm', '-q', 'o.txt')
     writeFileSync(join(dir, 'n.txt'), long)
     const out = snap(dir, 'T13', 'n.txt')
-    assert.equal(out.status, 1)
-    assert.match(out.stderr, /l'index porte d'autres fichiers que ceux du ticket : o\.txt/)
-    assert.equal(hasRef(dir, 'refs/worktree/flow-board/T13'), false)
+    assert.equal(out.status, 0, out.stderr)
+    // Le seul fichier nommé : o.txt, supprimé dans l'index par un autre, reste dans l'instantané.
+    const ref = 'refs/worktree/flow-board/T13'
+    assert.equal(git(dir, 'diff', '--no-renames', '--name-status', `${ref}^..${ref}`), 'A\tn.txt')
+    assert.equal(spawnSync('git', ['cat-file', '-e', `${ref}:o.txt`], { cwd: dir }).status, 0, 'o.txt a quitté l’instantané')
+    // Et la suppression reste indexée, telle quelle.
+    assert.equal(git(dir, 'diff', '--cached', '--name-status'), 'D\to.txt')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -179,7 +237,7 @@ test('lancé par un lien symbolique, le script tourne quand même (il ne sort pa
     const link = join(dir, 'lien-snapshot.mjs')
     symlinkSync(SCRIPT, link)
     writeFileSync(join(dir, 'a.txt'), 'a modifié\n')
-    const out = spawnSync(process.execPath, [link, 'T14', 'a.txt'], { cwd: dir, encoding: 'utf8' })
+    const out = spawnSync(process.execPath, [link, 'T14', 'a.txt'], { cwd: dir, encoding: 'utf8', env: envOf() })
     assert.equal(out.status, 0, out.stderr)
     assert.match(out.stdout, /Instantané [0-9a-f]+ posé sur refs\/worktree\/flow-board\/T14/)
   } finally {
@@ -483,6 +541,252 @@ test('--dossier refuse un id hors forme, ou un nombre d’arguments faux, sans r
     assert.ok(!existsSync(join(gitDir, 'flow-board')), 'un dossier a été créé')
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Le dossier du relecteur suit `CLAUDE_JOB_DIR`, le dossier de job d'une session de fond : l'outil Write
+// d'un relecteur y passe, pas dans le dossier git d'un worktree. Son invariant : « le dossier d'un relecteur
+// n'est jamais créé hors du dossier temporaire de la session, du worktree de la session ou de son dossier
+// git ; le script n'efface ni n'écrase jamais un dossier de relecteur existant ».
+/** Un dossier de job neuf, à son vrai chemin (/private/var sur Mac). */
+const jobDir = () => realpathSync(mkdtempSync(join(tmpdir(), 'job-')))
+const printedDir = out => (/Dossier du relecteur : (.+?) \(/.exec(out.stdout) || [])[1]
+
+test('--dossier, variable valide : sous tmp, et un dossier déjà là garde ce qu’il porte', () => {
+  const { dir, wt } = worktree()
+  const job = jobDir()
+  try {
+    const out = snapJob(wt, job, '--dossier', 'T07')
+    assert.equal(out.status, 0, out.stderr)
+    const path = join(job, 'tmp', 'revue-T07')
+    assert.ok(statSync(path).isDirectory(), 'dossier absent')
+    assert.equal(printedDir(out), path)
+    assert.equal(out.stderr, '')
+    assert.ok(!existsSync(join(gitDirOf(wt), 'flow-board')), 'un dossier a aussi été créé dans le dossier git')
+    // Relancé, il garde ce qui y est.
+    writeFileSync(join(path, 'copie.txt'), 'copie extraite\n')
+    assert.equal(snapJob(wt, job, '--dossier', 'T07').status, 0)
+    assert.equal(readFileSync(join(path, 'copie.txt'), 'utf8'), 'copie extraite\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('--dossier, sans variable : le dossier git, sans avis (variable absente ou vide)', () => {
+  const { dir, wt } = worktree()
+  try {
+    const absent = snap(wt, '--dossier', 'T07')
+    assert.equal(absent.status, 0, absent.stderr)
+    assert.equal(realpathSync(printedDir(absent)), realpathSync(join(gitDirOf(wt), 'flow-board', 'revue-T07')))
+    assert.equal(absent.stderr, '')
+    const empty = snapJob(wt, '', '--dossier', 'T08')
+    assert.equal(empty.status, 0, empty.stderr)
+    assert.equal(realpathSync(printedDir(empty)), realpathSync(join(gitDirOf(wt), 'flow-board', 'revue-T08')))
+    assert.equal(empty.stderr, '')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/** Le lancement a ignoré la variable : le dossier git du worktree, et un avis qui ne recopie pas la valeur. */
+const assertIgnored = (out, wt, id, reason, value) => {
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(realpathSync(printedDir(out)), realpathSync(join(gitDirOf(wt), 'flow-board', `revue-${id}`)))
+  assert.match(out.stderr, /^Avis : CLAUDE_JOB_DIR ignorée \(/)
+  assert.ok(out.stderr.includes(reason), out.stderr)
+  assert.equal(out.stderr.trimEnd().split('\n').length, 1, 'l’avis tient sur une ligne')
+  if (value !== undefined) assert.ok(!out.stderr.includes(value), 'l’avis recopie la valeur')
+}
+
+test('--dossier, variable hors forme : ignorée et dite (relative, segment « .. », apostrophe, caractère de contrôle, fin de ligne)', () => {
+  const { dir, wt } = worktree()
+  const job = jobDir()
+  try {
+    const hostile = ['job/relatif', 'tmp', `${job}\nsuite`, `${job}${ch(0x07)}`, `${job}${ch(0x85)}x`, `${job}${ch(0x2028)}x`, `${job}${ch(0x202e)}x`, `${job}${ch(0x200b)}x`,
+      `${job}/../${job.split('/').at(-1)}`, `${job}/.`, `${job}'x`, `${job}$x`, `${job}\`x\``, '/']
+    hostile.forEach((value, i) => assertIgnored(snapJob(wt, value, '--dossier', `T${i}`), wt, `T${i}`, 'hors forme', value))
+    // Rien n'a été créé sous le dossier de job, ni par un chemin relatif sous le worktree.
+    assert.deepEqual(readdirSync(job), [])
+    assert.ok(!existsSync(join(wt, 'job')) && !existsSync(join(wt, 'tmp')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('--dossier : le chemin vérifié est celui qui sert (un « .. » après un lien est refusé, un dossier de job désigné par un lien sert par son chemin réel)', () => {
+  const { dir, wt } = worktree()
+  const base = jobDir()
+  try {
+    // job/lien mène à ailleurs/d1/d2 : « job/lien/../neuf » existe pour le système (ailleurs/d1/neuf), pas pour le texte (job/neuf).
+    mkdirSync(join(base, 'job'))
+    mkdirSync(join(base, 'ailleurs', 'd1', 'd2'), { recursive: true })
+    mkdirSync(join(base, 'ailleurs', 'd1', 'neuf'))
+    symlinkSync(join(base, 'ailleurs', 'd1', 'd2'), join(base, 'job', 'lien'))
+    assertIgnored(snapJob(wt, `${base}/job/lien/../neuf`, '--dossier', 'T1'), wt, 'T1', 'hors forme')
+    assert.ok(!existsSync(join(base, 'job', 'neuf')), 'un dossier que la variable ne désigne pas a été créé')
+    assert.deepEqual(readdirSync(join(base, 'ailleurs', 'd1', 'neuf')), [])
+    // Désigné par un lien, le dossier de job sert par son chemin réel, et le dossier créé y est bien.
+    const out = snapJob(wt, join(base, 'job', 'lien'), '--dossier', 'T2')
+    assert.equal(out.status, 0, out.stderr)
+    assert.equal(out.stderr, '')
+    assert.equal(printedDir(out), join(base, 'ailleurs', 'd1', 'd2', 'tmp', 'revue-T2'))
+    assert.ok(statSync(join(base, 'ailleurs', 'd1', 'd2', 'tmp', 'revue-T2')).isDirectory())
+    // Un lien de bonne forme vers un dossier dont le chemin réel est hors forme (une apostrophe) : ignoré et dit.
+    mkdirSync(join(base, "l'autre"))
+    symlinkSync(join(base, "l'autre"), join(base, 'job', 'apostrophe'))
+    assertIgnored(snapJob(wt, join(base, 'job', 'apostrophe'), '--dossier', 'T3'), wt, 'T3', 'le chemin réel de son dossier est hors forme')
+    assert.deepEqual(readdirSync(join(base, "l'autre")), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('--dossier, dossier de job dans l’arbre de travail : ignoré et dit, rien n’y est créé', () => {
+  const { dir, wt } = worktree()
+  try {
+    // Un dossier non suivi du worktree ferait refuser la fermeture du groupe, et ne serait plus « hors de l'arbre suivi ».
+    mkdirSync(join(wt, 'job'))
+    assertIgnored(snapJob(wt, join(realpathSync(wt), 'job'), '--dossier', 'T1'), wt, 'T1', 'son dossier est dans l\'arbre de travail')
+    assertIgnored(snapJob(wt, realpathSync(wt), '--dossier', 'T2'), wt, 'T2', 'son dossier est dans l\'arbre de travail')
+    assert.deepEqual(readdirSync(join(wt, 'job')), [])
+    assert.ok(!existsSync(join(wt, 'tmp')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('--dossier, dossier de job au-dessus du worktree, dont le tmp est sa racine : ignoré et dit, rien n’est créé dans l’arbre', () => {
+  const job = jobDir()
+  const wt = join(job, 'tmp')
+  try {
+    // Le dossier de job n'est pas dans l'arbre de travail, mais le dossier du relecteur, lui, y tomberait.
+    mkdirSync(wt)
+    git(wt, 'init', '-q')
+    assertIgnored(snapJob(wt, job, '--dossier', 'T1'), wt, 'T1', 'son dossier tmp est dans l\'arbre de travail')
+    assert.ok(!existsSync(join(wt, 'revue-T1')))
+    // Un worktree sous le tmp du dossier de job n'est pas concerné : le dossier du relecteur est à côté de lui.
+    const under = join(wt, 'depot')
+    mkdirSync(under)
+    git(under, 'init', '-q')
+    const out = snapJob(under, job, '--dossier', 'T2')
+    assert.equal(out.status, 0, out.stderr)
+    assert.equal(printedDir(out), join(job, 'tmp', 'revue-T2'))
+  } finally {
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('le dossier de job a la forme que le mod exige de la même variable, passe la classe « ligne sûre » du corpus hostile commun, et refuse ce qui n’est pas un texte', () => {
+  for (const good of ['/var/jobs/b17e04df', '/var/folders/x/T/']) assert.equal(isSafeJobDir(good), true, good)
+  // Une lettre de lecteur n'est un chemin absolu que sous Windows : ailleurs, « C:/x » se résoudrait contre le dossier courant.
+  for (const drive of ['C:\\jobs\\b17e04df', 'C:/jobs/b17e04df']) assert.equal(isSafeJobDir(drive), process.platform === 'win32', drive)
+  // Les cas du test de `tempDirForm` (hooks/closing.ts), la forme que le mod applique à CLAUDE_JOB_DIR.
+  for (const bad of ['tmp', './tmp', 'jobs/b17e04df', '/tmp/../etc', '/tmp/./x', "/tmp/it's", '/tmp/$(x)', '/tmp/`x`', '/tmp/"x"', `/tmp/${ch(0x2019)}x`, '//server/share', '\\\\server\\share', '/', 'C:\\', '/tmp/a\nb', '/tmp//x', `/${'a'.repeat(300)}`]) {
+    assert.equal(isSafeJobDir(bad), false, bad)
+  }
+  const passing = Object.entries(LINE_BREAKERS).flatMap(([family, codes]) => codes.filter(code => isSafeJobDir(`/jobs/a${ch(code)}b`)).map(code => `${family} : U+${code.toString(16)}`))
+  assert.deepEqual(passing, [])
+  assert.deepEqual(Object.entries(NON_TEXT).filter(([, value]) => isSafeJobDir(value)).map(([name]) => name), [])
+})
+
+// Le dossier de job est un chemin du poste, pas un identifiant : le nom d'un dossier personnel peut porter
+// un espace, une lettre accentuée ou d'une autre écriture, et le mod accepte les mêmes signes de la même
+// variable. Le corpus commun fixe donc ce qui passe, entrée par entrée : ce qui cite pour un shell
+// (apostrophes, guillemet, `$`, accent grave), ce qui ouvre une ligne, ce qui ne se voit pas et une
+// remontée sont refusés ; le reste ne passe que parce que le script ne met jamais ce chemin dans une
+// commande (il crée le dossier par Node, puis l'imprime). Une entrée ajoutée au corpus et qui passerait
+// fait échouer ce test : elle se range ici, avec sa raison, ou le garde se resserre.
+test('le dossier de job passe le corpus hostile commun : seuls passent les signes qu’un chemin du poste peut porter', () => {
+  const passing = Object.entries(CORPUS).filter(([, token]) => isSafeJobDir(`/jobs/a${token}b`)).map(([name]) => name)
+  assert.deepEqual(passing, [
+    // Des points, des lettres et des crochets d'autres écritures : visibles, sans effet dans un chemin.
+    'point médian U+00B7', 'point grec U+0387', 'point de césure U+2027', 'opérateur puce U+2219', 'opérateur point U+22C5', 'point katakana U+30FB', 'point katakana demi-chasse U+FF65',
+    'lettre apostrophe U+02BC', 'signe Kelvin U+212A', 'ligature fi U+FB01', 'chiffre pleine chasse U+FF11', 'lettre pleine chasse U+FF21', 'e accent aigu U+00E9',
+    'espace insécable U+00A0',
+    'chevrons mathématiques U+27E8 U+27E9', 'chevrons doubles U+27EA U+27EB', 'crochets lenticulaires U+3010 U+3011', 'crochets en écaille U+3014 U+3015', 'parenthèses blanches U+2985 U+2986',
+    // Un espace et des signes du shell qu'un nom de dossier peut porter (« Jean Dupont », « R&D ») : jamais dans une commande du script.
+    'espace', 'point-virgule', 'esperluette', 'barre', 'joker',
+  ])
+})
+
+test('--dossier, dossier absent : ignoré et dit', () => {
+  const { dir, wt } = worktree()
+  const job = jobDir()
+  try {
+    const missing = join(job, 'absent')
+    assertIgnored(snapJob(wt, missing, '--dossier', 'T07'), wt, 'T07', 'ne désigne pas un dossier existant')
+    assert.ok(!existsSync(missing), 'le dossier absent a été créé')
+    // Un fichier à ce chemin n'est pas un dossier non plus.
+    writeFileSync(join(job, 'fichier'), 'pas un dossier\n')
+    assertIgnored(snapJob(wt, join(job, 'fichier'), '--dossier', 'T08'), wt, 'T08', 'ne désigne pas un dossier existant')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('--dossier ne crée rien à travers un lien : un tmp ou un dossier du relecteur qui est un lien ou un fichier fait ignorer la variable', () => {
+  const { dir, wt } = worktree()
+  const job = jobDir()
+  const outside = jobDir()
+  try {
+    // tmp est un lien vers un dossier hors du dossier de job.
+    symlinkSync(outside, join(job, 'tmp'))
+    assertIgnored(snapJob(wt, job, '--dossier', 'T07'), wt, 'T07', 'son dossier tmp est un lien')
+    assert.deepEqual(readdirSync(outside), [], 'un dossier a été créé à travers le lien')
+    // tmp est un vrai dossier, mais le dossier du relecteur y est un lien.
+    unlinkSync(join(job, 'tmp'))
+    mkdirSync(join(job, 'tmp'))
+    symlinkSync(outside, join(job, 'tmp', 'revue-T08'))
+    assertIgnored(snapJob(wt, job, '--dossier', 'T08'), wt, 'T08', 'tmp/revue-T08 y est un lien')
+    assert.deepEqual(readdirSync(outside), [])
+    // tmp est un fichier.
+    rmSync(join(job, 'tmp'), { recursive: true })
+    writeFileSync(join(job, 'tmp'), 'pas un dossier\n')
+    assertIgnored(snapJob(wt, job, '--dossier', 'T09'), wt, 'T09', 'son dossier tmp est un lien')
+    assert.equal(readFileSync(join(job, 'tmp'), 'utf8'), 'pas un dossier\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('--dossier, variable valide et id hors forme : refusé, rien n’est créé sous le dossier de job', () => {
+  const { dir, wt } = worktree()
+  const job = jobDir()
+  try {
+    for (const id of ['../T07', '-T07', 'a/b', '']) {
+      const out = snapJob(wt, job, '--dossier', id)
+      assert.equal(out.status, 1, `accepté : ${JSON.stringify(id)}`)
+      assert.match(out.stderr, /^ÉCHEC : id hors forme/)
+    }
+    assert.deepEqual(readdirSync(job), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
+  }
+})
+
+test('l’instantané pose aussi le dossier du relecteur sous le dossier de job, sans rien perdre de ce qu’il porte', () => {
+  const { dir, wt } = worktree()
+  const job = jobDir()
+  try {
+    const path = join(job, 'tmp', 'revue-T08')
+    mkdirSync(path, { recursive: true })
+    writeFileSync(join(path, 'notes.md'), 'notes de la première passe\n')
+    writeFileSync(join(wt, 'a.txt'), 'a modifié\n')
+    const out = snapJob(wt, job, 'T08', 'a.txt')
+    assert.equal(out.status, 0, out.stderr)
+    assert.equal(printedDir(out), path)
+    assert.equal(readFileSync(join(path, 'notes.md'), 'utf8'), 'notes de la première passe\n')
+    assert.ok(!existsSync(join(gitDirOf(wt), 'flow-board')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(job, { recursive: true, force: true })
   }
 })
 
@@ -829,6 +1133,8 @@ test('--clean refuse quand l’index ou l’arbre portent encore un changement d
   try {
     writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
     assert.equal(snap(dir, 'T28', 'a.txt').status, 0)
+    // L'instantané n'indexe rien : la session indexe le ticket à sa version figée.
+    git(dir, 'add', 'a.txt')
     // Un correctif fait après l'instantané, sans le reposer ; le commit prend l'index tel quel (la version figée).
     writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé après l’instantané\n')
     git(dir, 'commit', '-q', '-m', 'ticket sans son correctif')
@@ -854,6 +1160,8 @@ test('un instantané reposé sur une partie des fichiers du précédent est refu
     assert.equal(out.status, 1)
     assert.match(out.stderr, /a\.txt/)
     assert.equal(git(dir, 'rev-parse', T('T29')), first, 'la référence a bougé')
+    // Refusé après la construction de l'arbre : l'index temporaire est parti quand même.
+    assert.deepEqual(strayIndexes(dir), [])
     // Un fichier du précédent déjà commité à sa version figée ne bloque pas.
     git(dir, 'add', 'a.txt')
     git(dir, 'restore', '--staged', 'b.txt')
@@ -871,6 +1179,8 @@ test('un instantané reposé sans un fichier déjà commité mais corrigé depui
     writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
     assert.equal(snap(dir, 'T31', 'a.txt', 'b.txt').status, 0)
     const first = git(dir, 'rev-parse', T('T31'))
+    // L'instantané n'indexe rien : la session indexe le ticket, puis le commite.
+    git(dir, 'add', 'a.txt', 'b.txt')
     git(dir, 'commit', '-q', '-m', 'ticket T31')
     // Deux correctifs après le commit ; l'instantané reposé sur b.txt seul laisserait celui de a.txt hors de --clean.
     writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé\n')
@@ -897,6 +1207,165 @@ test('un correctif qui ramène un fichier du ticket à HEAD n’empêche pas de 
     commitAll(dir, 'ticket T32', 'a.txt', 'b.txt')
     assert.equal(snap(dir, '--clean', 'T32').status, 0)
     assert.ok(!hasRef(dir, T('T32')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('un instantané reposé ne réécrit pas l’index de la session, même pour y rafraîchir la date d’un fichier du précédent au contenu inchangé', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T35', 'a.txt', 'b.txt').status, 0)
+    commitAll(dir, 'ticket T35', 'a.txt', 'b.txt')
+    // a.txt réécrit au même contenu, à une autre date : l'index le croit changé tant que rien ne l'y rafraîchit.
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    const later = new Date(Date.now() + 5000)
+    utimesSync(join(dir, 'a.txt'), later, later)
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket, corrigé\n')
+    const before = indexBytes(dir)
+    // Reposé sur b.txt seul : la garde relit a.txt (du précédent, non nommé) face à HEAD, sans écrire dans l'index.
+    const out = snap(dir, 'T35', 'b.txt')
+    assert.equal(out.status, 0, out.stderr)
+    assert.ok(indexBytes(dir).equals(before), 'le fichier d’index a été réécrit')
+    assert.deepEqual(strayIndexes(dir), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('un instantané reposé sans un fichier nouveau du précédent, pas encore suivi ni indexé, est refusé : la session n’indexe plus rien avant son commit', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'n.txt'), 'nouveau fichier du ticket\n')
+    assert.equal(snap(dir, 'T37', 'a.txt', 'n.txt').status, 0)
+    const first = git(dir, 'rev-parse', T('T37'))
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé\n')
+    const before = indexBytes(dir)
+    // n.txt n'est ni dans HEAD ni dans l'index de la session : seul l'arbre de travail le porte.
+    const out = snap(dir, 'T37', 'a.txt')
+    assert.equal(out.status, 1, out.stdout)
+    assert.match(out.stderr, /porte aussi n\.txt, que celui-ci ne porte pas et qui a encore un changement non commité : le reposer en nommant tous les fichiers du ticket/)
+    assert.equal(git(dir, 'rev-parse', T('T37')), first, 'la référence a bougé')
+    assert.ok(indexBytes(dir).equals(before), 'le fichier d’index a changé')
+    assert.deepEqual(strayIndexes(dir), [])
+    // Nommé, il y entre ; retiré du disque (le ticket n'en veut plus), il n'a plus rien à commiter.
+    assert.equal(snap(dir, 'T37', 'a.txt', 'n.txt').status, 0)
+    unlinkSync(join(dir, 'n.txt'))
+    assert.equal(snap(dir, 'T37', 'a.txt').status, 0)
+    assert.equal(git(dir, 'diff', '--name-only', `${T('T37')}^..${T('T37')}`), 'a.txt')
+    // Refusée ou réussie, la repose n'a pas touché à l'index de la session.
+    assert.ok(indexBytes(dir).equals(before), 'le fichier d’index a changé après les reposes réussies')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('un instantané reposé passe quand un fichier nouveau du précédent a disparu avec son dossier, devenu un fichier, ou qu’il est désormais ignoré', () => {
+  const dir = repo()
+  try {
+    mkdirSync(join(dir, 'd'))
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'd', 'f.txt'), 'nouveau fichier du ticket\n')
+    assert.equal(snap(dir, 'T39', 'a.txt', 'd/f.txt').status, 0)
+    // d/f.txt n'existe plus : son dossier est devenu un fichier, il n'a plus rien à commiter.
+    rmSync(join(dir, 'd'), { recursive: true })
+    writeFileSync(join(dir, 'd'), 'un fichier à la place du dossier\n')
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé\n')
+    const before = indexBytes(dir)
+    const gone = snap(dir, 'T39', 'a.txt')
+    assert.equal(gone.status, 0, gone.stderr)
+    assert.ok(indexBytes(dir).equals(before), 'le fichier d’index a changé')
+    // Un fichier nouveau du précédent que .gitignore couvre maintenant : la garde le nomme, au lieu d'un échec de git.
+    writeFileSync(join(dir, 'n.txt'), 'nouveau\n')
+    assert.equal(snap(dir, 'T40', 'a.txt', 'n.txt').status, 0)
+    writeFileSync(join(dir, '.gitignore'), 'n.txt\n')
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé encore\n')
+    const ignored = snap(dir, 'T40', 'a.txt')
+    assert.equal(ignored.status, 1)
+    assert.match(ignored.stderr, /porte aussi n\.txt, que celui-ci ne porte pas et qui a encore un changement non commité/)
+    assert.deepEqual(strayIndexes(dir), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('avec un index partagé (core.splitIndex), l’index temporaire ne laisse rien dans le dossier git', () => {
+  const dir = repo()
+  try {
+    git(dir, 'config', 'core.splitIndex', 'true')
+    git(dir, 'update-index', '--split-index')
+    const left = () => readdirSync(gitDirOf(dir)).filter(name => name.startsWith('sharedindex.') || name.startsWith('flow-board-index-')).sort()
+    const before = left()
+    writeFileSync(join(dir, 'a.txt'), 'a modifié\n')
+    const out = snap(dir, 'T41', 'a.txt')
+    assert.equal(out.status, 0, out.stderr)
+    assert.deepEqual(left(), before)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('un instantané reposé sans un fichier du précédent que la session a indexé, même ramené à HEAD dans l’arbre, est refusé', () => {
+  const dir = repo()
+  try {
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+    writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+    assert.equal(snap(dir, 'T38', 'a.txt', 'b.txt').status, 0)
+    // b.txt indexé à sa version du ticket, puis l'arbre ramené à HEAD : l'index porte encore le changement.
+    git(dir, 'add', 'b.txt')
+    writeFileSync(join(dir, 'b.txt'), 'b\n')
+    writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé\n')
+    const out = snap(dir, 'T38', 'a.txt')
+    assert.equal(out.status, 1, out.stdout)
+    assert.match(out.stderr, /porte aussi b\.txt/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Le refus demandait de « reposer en nommant tous les fichiers du ticket » alors que le fichier était nommé.
+test('un instantané reposé en nommant un fichier du précédent ramené à HEAD dans l’arbre passe, même indexé à une autre version, sans toucher à l’index', () => {
+  for (const named of ['b.txt', './b.txt', 'sous/../b.txt']) {
+    const dir = repo()
+    try {
+      mkdirSync(join(dir, 'sous'))
+      writeFileSync(join(dir, 'a.txt'), 'a du ticket\n')
+      writeFileSync(join(dir, 'b.txt'), 'b du ticket\n')
+      assert.equal(snap(dir, 'T39', 'a.txt', 'b.txt').status, 0)
+      git(dir, 'add', 'b.txt')
+      writeFileSync(join(dir, 'b.txt'), 'b\n')
+      writeFileSync(join(dir, 'a.txt'), 'a du ticket, corrigé\n')
+      const before = indexBytes(dir)
+      // Nommé, b.txt se juge sur sa version de l'arbre de travail, celle de HEAD : l'instantané ne le porte plus.
+      const out = snap(dir, 'T39', 'a.txt', named)
+      assert.equal(out.status, 0, `${named} : ${out.stderr}`)
+      assert.equal(git(dir, 'diff', '--name-only', `${T('T39')}^`, T('T39')), 'a.txt')
+      assert.deepEqual(indexBytes(dir), before)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+})
+
+test('dans un worktree, l’instantané prend la version de l’arbre de travail d’un fichier nommé, même indexé à une autre version, et laisse l’index tel quel', () => {
+  const { dir, wt } = worktree()
+  try {
+    writeFileSync(join(wt, 'a.txt'), 'a indexé\n')
+    git(wt, 'add', 'a.txt')
+    writeFileSync(join(wt, 'a.txt'), 'a de l’arbre\n')
+    const before = indexBytes(wt)
+    const out = snap(wt, 'T36', 'a.txt')
+    assert.equal(out.status, 0, out.stderr)
+    assert.equal(git(wt, 'show', 'refs/worktree/flow-board/T36:a.txt'), 'a de l’arbre')
+    assert.ok(indexBytes(wt).equals(before), 'le fichier d’index a changé')
+    assert.equal(git(wt, 'show', ':a.txt'), 'a indexé')
+    assert.equal(readFileSync(join(wt, 'a.txt'), 'utf8'), 'a de l’arbre\n')
+    // L'index temporaire vivait dans le dossier git du worktree : il n'en reste rien, ni là ni dans le clone.
+    assert.deepEqual(strayIndexes(wt), [])
+    assert.deepEqual(strayIndexes(dir), [])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -989,8 +1458,19 @@ test('les trois gabarits nomment le dossier du relecteur comme seul lieu d’éc
   const securite = ref('revue-securite.md')
   assert.ok(securite.includes('Tes seules écritures (copies extraites, notes) vont dans le dossier du relecteur que donne ton fichier de consignes'), 'revue-securite.md')
   assert.ok(securite.includes('`snapshot.mjs --dossier securite-<id du groupe>`'))
+  // Les trois disent où est le dossier (le dossier temporaire de la session, où l'outil Write passe, sinon
+  // le dossier git du worktree) et comment y faire un essai.
+  const essai = 'se fait par un script écrit dans ce dossier par l\'outil Write, puis lancé par une commande simple, jamais par un heredoc ni une commande composée, et n\'écrit que dans ce dossier'
+  assert.ok(consignes.includes(`un essai (un scénario à rejouer, une commande git d'essai) ${essai} ; si l'outil Write y est refusé, rendre le scénario d'essai en texte`), 'consignes-revue.md : l’essai')
+  assert.ok(consignes.includes('dans le dossier temporaire de la session quand elle en a un (`CLAUDE_JOB_DIR`, une session de fond), où l\'outil Write passe, sinon dans le dossier git du worktree'), 'consignes-revue.md : l’endroit')
+  assert.equal(prompt.split(`Un essai (un scénario à rejouer, une commande git d'essai) ${essai}. Sans dossier où écrire (ou si l'outil Write y est refusé), n'écris rien : lis par \`git show\` et \`git diff\`, et rends ton scénario d'essai en texte.`).length - 1, 2, 'prompt-relecteur.md : l’essai, dans les deux variantes')
+  assert.equal(prompt.split('(dans le dossier temporaire de la session quand elle en a un, sinon dans le dossier git du worktree ; hors de l\'arbre suivi)').length - 1, 2, 'prompt-relecteur.md : l’endroit')
+  assert.ok(securite.includes(`Un essai (un scénario à rejouer, une commande git d'essai) ${essai} ; sans dossier où écrire (ou si l'outil Write y est refusé), rends ton scénario d'essai en texte.`), 'revue-securite.md : l’essai')
+  assert.ok(securite.includes('dans le dossier temporaire de la session quand elle en a un (`CLAUDE_JOB_DIR`, une session de fond), où l\'outil Write passe, sinon dans le dossier git du worktree (`git rev-parse --git-path flow-board/revue-securite-<id du groupe>`)'), 'revue-securite.md : l’endroit')
+  for (const [name, text] of [['consignes-revue.md', consignes], ['prompt-relecteur.md', prompt], ['revue-securite.md', securite]]) assert.ok(!text.includes('propre à ce worktree'), `${name} dit encore « propre à ce worktree »`)
   assert.ok(procedure.includes('`--relecteur <id du ticket>`, qui crée le dossier du relecteur'), 'la procédure ne cite pas --relecteur')
-  assert.ok(procedure.includes('`node <dossier de flow-board>/scripts/snapshot.mjs --dossier groupe-<id du groupe>`'), 'la procédure ne cite pas --dossier')
+  assert.ok(procedure.includes('`node <dossier de flow-board>/scripts/snapshot.mjs --dossier <id>`'), 'la procédure ne cite pas --dossier')
+  assert.ok(securite.includes('que celui qui te lance crée en écrivant tes consignes (`consignes.mjs --securite <id du groupe>`, ou `snapshot.mjs --dossier securite-<id du groupe>`)'), 'revue-securite.md ne cite pas consignes.mjs --securite')
 })
 
 test('l’instantané crée aussi le dossier du relecteur du ticket et imprime son chemin', () => {

@@ -8,3 +8,7 @@ export declare const CORPUS: Record<string, string>
 
 /** Les valeurs qui ne sont pas du texte, passées entières : refusées par chaque garde, acceptées par chaque neutralisation. */
 export declare const NON_TEXT: Record<string, unknown>
+
+/** La classe « ligne sûre » : les familles refusées, par leurs points de code, et les sosies de guillemets gardés. */
+export declare const LINE_BREAKERS: Record<string, number[]>
+export declare const QUOTE_LOOKALIKES: string[]

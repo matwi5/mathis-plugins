@@ -20,9 +20,11 @@ class StorageModeTest(unittest.TestCase):
         self.assertEqual(check.storage_mode("/Users/x/claude/plugins/flow-board"), "$.store")
 
 
-class OtherStorageTest(unittest.TestCase):
+class PluginFixture(unittest.TestCase):
+    """Un faux plugin flow-board hors de `.claude/` : deux fichiers marqués, un non marqué, une aide."""
+
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="test-stockage-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="test-stockage-")).resolve()
         self.plugin = self.tmp / "flow-board"
         (self.plugin / "tests").mkdir(parents=True)
         (self.plugin / "hooks").mkdir()
@@ -36,6 +38,8 @@ class OtherStorageTest(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+
+class OtherStorageTest(PluginFixture):
     def test_fichiers_marques_seuls_parmi_les_cibles(self):
         self.assertEqual(check.both_storage_tests(self.plugin, None), [Path("tests/a.test.ts"), Path("tests/c.test.tsx")])
         self.assertEqual(check.both_storage_tests(self.plugin, {Path("tests/a.test.ts"), Path("tests/b.test.ts")}), [Path("tests/a.test.ts")])
@@ -65,6 +69,58 @@ class OtherStorageTest(unittest.TestCase):
 
     def test_rien_sans_fichier_marque(self):
         self.assertEqual(self._run(self.plugin, {Path("tests/b.test.ts")}), [])
+
+
+class FirstPassTest(PluginFixture):
+    """La première passe de `claude plugin test` (suite complète, `--test`, pre-commit) tourne en mode
+    fichier partout, même depuis un dossier hors de `.claude/` ; la relance des fichiers marqués, en `$.store`."""
+
+    def _steps(self, call):
+        seen = []
+
+        def fake_step(label, argv, *_):
+            copy = Path(argv[-1])
+            seen.append((label, check.storage_mode(copy), sorted(p.name for p in copy.rglob("*.test.*"))))
+
+        def fake_run(argv, *_):
+            return 0, "9.9.9 (Claude Code)\n"
+        with mock.patch.object(check, "step", fake_step), mock.patch.object(check, "run", fake_run), \
+                mock.patch.object(check, "shown_dir", lambda p: "plugins/flow-board"), \
+                mock.patch.object(check, "tool", lambda name: name):
+            call()
+        return seen
+
+    def test_suite_complete_hors_de_claude(self):
+        # Le clone principal ou la copie de l'index du pre-commit : hors de .claude/.
+        self.assertEqual(check.storage_mode(self.plugin), "$.store")
+        [(first, mode, tests), (again, other, marked)] = self._steps(lambda: check.plugin_tests(self.plugin, "claude", "terminal 9"))
+        self.assertEqual(mode, "fichier")
+        self.assertEqual(tests, ["a.test.ts", "b.test.ts", "c.test.tsx"])
+        self.assertIn("stockage fichier", first)
+        self.assertEqual(other, "$.store")
+        self.assertEqual(marked, ["a.test.ts", "c.test.tsx"])
+        self.assertIn("stockage $.store", again)
+        # Les copies temporaires sont parties, le plugin reste intact.
+        self.assertTrue((self.plugin / "tests" / "b.test.ts").is_file())
+
+    def test_suite_complete_deja_en_mode_fichier(self):
+        # Un worktree, sous .claude/ : la première passe tourne en place.
+        plugin = self.tmp / ".claude" / "worktrees" / "w" / "plugins" / "flow-board"
+        import shutil
+        shutil.copytree(self.plugin, plugin)
+        steps = self._steps(lambda: check.plugin_tests(plugin, "claude", "terminal 9"))
+        self.assertIn("stockage fichier", steps[0][0])
+        self.assertEqual([s[1] for s in steps], ["fichier", "$.store"])
+
+    def test_test_d_un_fichier(self):
+        names = [str(self.plugin / "tests" / "a.test.ts"), str(self.plugin / "tests" / "b.test.ts")]
+        with mock.patch.object(check, "REPO", self.tmp):
+            [(first, mode, tests), (again, other, marked)] = self._steps(lambda: check.single_test(self.plugin, names))
+        self.assertEqual(mode, "fichier")
+        self.assertEqual(tests, ["a.test.ts", "b.test.ts"])
+        self.assertIn("stockage fichier", first)
+        self.assertEqual((other, marked), ("$.store", ["a.test.ts"]))
+        self.assertIn("stockage $.store", again)
 
 
 if __name__ == "__main__":

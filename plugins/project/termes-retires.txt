@@ -20,3 +20,5 @@
 1.5.0	session autonome
 1.5.0	linked session
 1.5.0	main discussion
+1.8.0	contourner un hook en échec
+1.8.0	never bypass with

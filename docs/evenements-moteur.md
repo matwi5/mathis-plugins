@@ -170,6 +170,10 @@ Relevé le 27/10/2026 et revérifié le 28/10/2026 (noms de champs seulement, ja
 
 Les mêmes blocs paraissent aussi dans des lignes `api-request-blob`. Le rattrapage de flow-board (`plugins/flow-board/hooks/transcript.ts`) apparie les blocs `server_tool_use` aux entrées `advisor_message`, dans l'ordre, et date la fin d'un appel par son `advisor_tool_result`.
 
+## Arrêts et reprises d'une discussion dans son transcript
+
+Relevé le 10/11/2026 sur les transcripts du Mac (types et dates seulement, jamais le contenu). Le transcript ne porte pas la `source` d'un `SessionStart` (« startup », « resume ») : aucun transcript du poste ne contient `"source":"resume"`. Un processus qui quitte écrit une ligne `cost-state`, sans date ; plusieurs de suite sans entrée datée entre elles, aux totaux (`totalDuration`, `totalCostUSD`) différents, sont autant de réouvertures refermées sans rien écrire de daté (393 paires sur le Mac, dont 100 à plus d'une minute d'écart). La première entrée datée qui suit une fin date la reprise (souvent le premier message, qui peut suivre de longtemps la réouverture), sauf une entrée `continued-in` (`continuedInSessionId`, `timestamp`), écrite après la fin quand la discussion continue sous un autre id de session, souvent suivie d'une nouvelle `cost-state` (27 transcripts du Mac le 10/11/2026) : ce n'est pas une reprise sur place. Une compaction est une ligne `system` de `subtype` `compact_boundary`, avec `compactMetadata.trigger` (`manual` ou `auto`). Un processus tué n'écrit pas de `cost-state` : sa reprise ne se voit pas ainsi. `scripts/journal-mission.py <titre ou id>` sort dans l'ordre du temps le journal d'une mission (fichier des missions, `~/.claude/flow-board/parcours/`) et ces événements des discussions qui l'ont tenue ou où elle est née (`owner`, `bornIn`), en lecture seule.
+
 ## Filiation d'une requête
 
 Les règles que le chrono de `session-tools` et le suivi des requêtes de `stats-board` appliquent tous les deux. Chacun des deux modules nomme l'autre en tête : une règle changée dans l'un se change dans l'autre, puis ici.

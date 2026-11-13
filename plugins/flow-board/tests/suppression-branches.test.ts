@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { memoryDisk } from './disque-memoire.ts'
 
-import { branchCleanupText, readClosing, reopenText } from '../hooks/closing.ts'
+import { branchCleanup, branchCleanupText, closingScript, readClosing, reopenText } from '../hooks/closing.ts'
 import { emptyBoard, mergeBoards, newRun } from '../hooks/model.ts'
 import { markCleanupSent } from '../hooks/link.ts'
 import type { Board, Closing, Run } from '../types'
@@ -103,6 +103,9 @@ test('dans l’ordre, toutes par git -C sur le dossier de la mission : branche d
   for (const step of [
     `« ${git} branch --show-current »`,
     `« ${git} worktree list --porcelain », lue une fois`,
+    // Un disque qui ignore la casse : la branche de travail en collision arrête tout ; une branche absente sous toute
+    // casse est déjà supprimée ; présente sous une autre casse, ou en collision, gardée.
+    `« ${git} for-each-ref '--format=%(refname)' refs/heads/ », lue une fois : une autre ligne qui ne diffère de refs/heads/<branche de travail> que par la casse (majuscules et minuscules) : ne supprime rien et dis-le-moi ; une branche de la liste qui n’y paraît sous aucune casse est déjà supprimée, passe à la suivante ; une qui n’y paraît que sous une autre casse, ou dont une autre ligne ne diffère que par la casse, est gardée`,
     `'worktree-groupe-boutique-A' (groupe A) : a) « ${git} show-ref --verify --quiet 'refs/heads/worktree-groupe-boutique-A' », puis b) « ${git} merge-base --is-ancestor 'refs/heads/worktree-groupe-boutique-A' 'refs/heads/<branche de travail>' », puis c) « ${git} branch -d 'worktree-groupe-boutique-A' »`,
     `'worktree-groupe-boutique-B' (groupe B) : a) « ${git} show-ref --verify --quiet 'refs/heads/worktree-groupe-boutique-B' », puis b) « ${git} merge-base --is-ancestor 'refs/heads/worktree-groupe-boutique-B' 'refs/heads/<branche de travail>' », puis c) « ${git} branch -d 'worktree-groupe-boutique-B' »`,
   ]) {
@@ -127,6 +130,66 @@ test('un pseudo-ref ou un nom qui imite un espace de refs est gardé : un tag du
   }
 })
 
+
+// ─── Le script des vérifications là : son mode --branches en un appel ─────────────────
+
+const SCRIPT_PATH = '/opt/poste/.claude/plugins/flow-board/scripts/fermeture.mjs'
+
+/** Le texte de la consigne avec ce chemin de script posé, comme le mod chargé ; l'ancien remis ensuite. */
+const withScript = <T,>(path: string | null, fn: () => T): T => {
+  const before = closingScript.path
+  closingScript.path = path
+  try {
+    return fn()
+  } finally {
+    closingScript.path = before
+  }
+}
+
+test('le script là : la consigne lance son mode --branches avec les branches du plan, puis la seule commande qu’il imprime ; le plan et la marque ne changent pas', () => {
+  const run = runWith({
+    A: closed('worktree-groupe-boutique-A'),
+    B: { state: 'stopped', at: 5_000, why: '.env', branch: 'worktree-groupe-boutique-B' },
+    C: closed('worktree-groupe-boutique-C'),
+    D: closed('a;b'),
+  })
+  const before = branchCleanup({ run, isRepo: true, root: ROOT })!
+  const after = withScript(SCRIPT_PATH, () => branchCleanup({ run, isRepo: true, root: ROOT })!)
+  // Les mêmes branches visées (la marque des fermetures visées) que la consigne commande par commande.
+  expect(after.branches).toEqual(before.branches)
+  expect(after.branches).toEqual(['worktree-groupe-boutique-A', 'worktree-groupe-boutique-C'])
+  const text = after.text
+  expect(text).toContain(`« node '${SCRIPT_PATH}' --branches --dossier '${ROOT}' 'worktree-groupe-boutique-A' 'worktree-groupe-boutique-C' »`)
+  expect(text).toContain("'worktree-groupe-boutique-A' (groupe A) — 'worktree-groupe-boutique-C' (groupe C)")
+  expect(text).toContain('seulement sur BRANCHES en première ligne, lance la commande qu’il imprime après « commande : », telle quelle, une seule fois')
+  expect(text).toContain('ARRÊT, ÉCHEC, ou pas de verdict en première ligne (node ou le script introuvable) : ne supprime rien et dis-le-moi')
+  expect(text).toContain('elle ne nomme que des branches de la liste : une autre, ne lance rien et dis-le-moi')
+  // git écrit en anglais ou dans la langue du poste : les deux marques, et la vérification relancée dans le doute.
+  expect(text).toContain('une branche que git refuse (« error: », « erreur : ») reste, ne la force d’aucune façon, et garde son message ; dans le doute, relance la vérification du point 1')
+  expect(text).toContain('Une commande que ton garde-fou refuse, ou qui ne tourne pas : ne la réécris pas')
+  // Les gardées, dites avec leur raison ; un nom hors forme jamais cité.
+  expect(text).toMatch(/Gardées, sans aucune commande : groupe B : fermeture arrêtée, branche gardée ; groupe D : fermé, branche notée hors forme, gardée\./)
+  expect(text).not.toContain('a;b')
+  expect(text).not.toContain('worktree-groupe-boutique-B')
+  // Ni la suite de commandes une à une, ni rien qui force.
+  for (const old of ['show-ref', 'merge-base', 'Une commande à la fois', 'branch -d']) expect(text).not.toContain(old)
+  for (const forced of ['-D', '--force', ' -f ']) expect(text).not.toContain(forced)
+})
+
+test('le script là, sans branche à supprimer ou le dossier hors forme : le seul bilan des gardées, sans commande ; un chemin de script hors forme : la consigne commande par commande', () => {
+  withScript(SCRIPT_PATH, () => {
+    const none = branchCleanupText({ run: runWith({ B: { state: 'stopped', at: 1, branch: 'worktree-groupe-boutique-B' } }), isRepo: true, root: ROOT })!
+    expect(none).toBe('Aucune branche de worker à supprimer pour cette mission. Gardées, sans aucune commande : groupe B : fermeture arrêtée, branche gardée. Redis-les-moi en une liste, avant la suite.')
+    const badRoot = branchCleanupText({ run: runWith({ A: closed('worktree-groupe-boutique-A') }), isRepo: true, root: "/Users/m/l'autre" })!
+    expect(badRoot).toContain('groupe A : fermé, dossier de la mission hors forme, branche gardée')
+    expect(badRoot).not.toContain('--branches')
+  })
+  for (const path of ["/opt/l'autre/fermeture.mjs", 'scripts/fermeture.mjs', '/opt/a b/fermeture.mjs', null]) {
+    const text = withScript(path, () => branchCleanupText({ run: runWith({ A: closed('worktree-groupe-boutique-A') }), isRepo: true, root: ROOT })!)
+    expect(text).not.toContain('--branches')
+    expect(text).toContain(`« git -C '${ROOT}' branch -d 'worktree-groupe-boutique-A' »`)
+  }
+})
 // ─── Par le tableau de bord : « ✓ Valider le rapport » ─────────────────────
 
 const PLUGIN = 'flow-board'
@@ -228,7 +291,8 @@ test('dans un dépôt git, « ✓ Valider le rapport » envoie la consigne de su
   expect(text).toMatch(/^J'ai validé le compte rendu depuis le tableau de bord \(✓ Valider le rapport\)\. Ne me le redemande pas\. Le compte rendu validé, supprime /)
   expect(text).not.toContain('Boutique »')
   expect(text).toMatch(/Puis dis-moi la suite en une ligne, d'après la réponse de l'outil flow\.$/)
-  expect(text).toContain("branch -d 'worktree-groupe-boutique-A'")
+  // Le mod chargé connaît son script de fermeture (`closingScript`) : la consigne lance son mode --branches.
+  expect(text).toContain(`/scripts/fermeture.mjs' --branches --dossier '${ROOT}' 'worktree-groupe-boutique-A' »`)
   expect(text).toMatch(/groupe B : fermeture arrêtée, branche gardée/)
   for (const forced of ['-D', '--force']) expect(text).not.toContain(forced)
   for (let i = 0; i < 6; i++) await clock.advance(1000)
@@ -268,7 +332,7 @@ test('un message refusé (`{ drop }`) ne marque rien : « ↺ Rouvrir » reste, 
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   // L'envoi a bien été tenté (effet positif d'abord), puis le bouton reste.
   expect(w.submitted).toHaveLength(1)
-  expect(w.submitted[0]).toContain("branch -d 'worktree-groupe-boutique-A'")
+  expect(w.submitted[0]).toContain(`--branches --dossier '${ROOT}' 'worktree-groupe-boutique-A' »`)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await after.find({ key: 'report-ok' })).toBeUndefined()
   expect(await after.find({ key: 'reopen-A' })).toBeDefined()
@@ -286,7 +350,7 @@ test('un message entré qui porte `drop: undefined` compte comme entré : « ↺
   await ui.unmount()
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   expect(w.submitted).toHaveLength(1)
-  expect(w.submitted[0]).toContain("branch -d 'worktree-groupe-boutique-A'")
+  expect(w.submitted[0]).toContain(`--branches --dossier '${ROOT}' 'worktree-groupe-boutique-A' »`)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await after.find({ type: 'Text', text: /session et worktree fermés/ })).toBeDefined()
   expect(await after.find({ key: 'reopen-A' })).toBeUndefined()

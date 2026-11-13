@@ -41,6 +41,23 @@ NEEDS_GIT = (
 )
 
 
+# Un test qui lit `HEAD` du dépôt autour de lui : vert tant que `HEAD` porte la base de `valeur.py`.
+READS_HEAD = (
+    "import subprocess\nimport unittest\nfrom pathlib import Path\n\n\n"
+    "class Head(unittest.TestCase):\n    def test_head_vaut_la_base(self):\n"
+    "        here = Path(__file__).resolve().parent.parent.parent\n"
+    "        out = subprocess.run(['git', 'show', 'HEAD:scripts/valeur.py'], cwd=here, capture_output=True, text=True)\n"
+    "        self.assertEqual(out.stdout, 'VALEUR = 1\\n')\n"
+)
+# Un test qui lit le README du dépôt : rouge dès qu'il change.
+READS_README = (
+    "import unittest\nfrom pathlib import Path\n\n\n"
+    "class Readme(unittest.TestCase):\n    def test_readme_inchange(self):\n"
+    "        here = Path(__file__).resolve().parent.parent.parent\n"
+    "        self.assertEqual((here / 'README.md').read_text(), '# Essai\\n')\n"
+)
+
+
 def git(cwd, *args, env=None):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True, env=env).stdout.strip()
 
@@ -88,6 +105,14 @@ class RemoveTreeTest(unittest.TestCase):
 class CibleScriptsTest(unittest.TestCase):
     """`check.sh scripts` lance la suite du dépôt, sans l'app desktop ni les contrôles d'un plugin."""
 
+    def setUp(self):
+        # La suite est simulée ici, sur le vrai dépôt : son empreinte ne doit jamais s'écrire, sans quoi le
+        # pre-commit sauterait ensuite la suite pour un contenu qu'elle n'a jamais vu passer. La suite et
+        # son empreinte passent par `suite_and_remember` (SuiteMemoryTest la lance, sur un dépôt jetable).
+        patcher = mock.patch.object(check, "suite_and_remember")
+        self.suite = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def run_main(self, *argv):
         with mock.patch.object(sys, "argv", ["check.py", *argv]), redirect_stdout(io.StringIO()) as out:
             try:
@@ -98,22 +123,22 @@ class CibleScriptsTest(unittest.TestCase):
         return code, out.getvalue()
 
     def test_la_cible_lance_la_suite_sans_l_app(self):
-        with mock.patch.object(check, "python_tests") as suite, \
-                mock.patch.object(check, "desktop_claude", side_effect=AssertionError("app demandée")), \
+        with mock.patch.object(check, "desktop_claude", side_effect=AssertionError("app demandée")), \
                 mock.patch.object(check, "validate", side_effect=AssertionError("validate lancé")):
             code, _ = self.run_main("scripts")
         self.assertEqual(code, 0)
-        suite.assert_called_once_with(check.REPO)
+        self.suite.assert_called_once_with()
 
     def test_un_echec_de_la_suite_rend_un_code_non_nul(self):
-        with mock.patch.object(check, "python_tests", side_effect=check.Failed("suite : échec")):
-            code, out = self.run_main("scripts")
+        self.suite.side_effect = check.Failed("suite : échec")
+        code, out = self.run_main("scripts")
         self.assertEqual(code, 1)
         self.assertIn("suite : échec", out)
 
     def test_all_avec_une_option_rapide_laisse_la_suite_sans_refuser(self):
+        suite = self.suite
         for option, called in (("--quick", "quick_check"), ("--tsc", "typecheck")):
-            with self.subTest(option=option), mock.patch.object(check, "python_tests") as suite, \
+            with self.subTest(option=option), \
                     mock.patch.object(check, called) as ran, \
                     mock.patch.object(check, "check_repo_rules"), mock.patch.object(check, "fail_deferred"):
                 code, out = self.run_main("--all", option)
@@ -233,6 +258,212 @@ class StagedSuiteTest(unittest.TestCase):
         self.assertEqual(git(self.repo, "ls-files", "-s"), index)
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
         self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "HEAD"), "main")
+
+
+class SuiteMemoryTest(unittest.TestCase):
+    """L'empreinte du dernier passage vert de la suite (`suite_and_remember`, `suite_passed_already`) : le
+    pre-commit saute la suite quand l'index porte exactement les déclencheurs et le contexte de ce passage
+    (le dépôt hors `travail/` et `ETAT_DU_PROJET.md`, la version de Python), et seulement alors. Invariant : la suite n'est jamais sautée pour un contenu des déclencheurs différent de celui de
+    son dernier passage vert ; un worktree n'écrit que sa propre empreinte."""
+
+    setUp = StagedSuiteTest.setUp
+    tearDown = StagedSuiteTest.tearDown
+    staged = StagedSuiteTest.staged
+    counted_suites = StagedSuiteTest.counted_suites
+
+    def at(self, repo):
+        check.REPO = repo
+        check.run.__defaults__ = (repo, None)
+
+    def passed(self):
+        """`check.sh scripts` vert sur l'arbre de travail : rend le fichier de son empreinte."""
+        with redirect_stdout(io.StringIO()):
+            check.suite_and_remember()
+        return check.suite_passed_path()
+
+    def staged_runs(self):
+        runs, patch = self.counted_suites()
+        with patch:
+            out = self.staged()
+        return runs, out
+
+    def test_le_contenu_d_un_passage_vert_saute_la_suite_et_le_dit(self):
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        self.assertTrue(self.passed().is_file())
+        git(self.repo, "add", "scripts/valeur.py")
+        runs, out = self.staged_runs()
+        self.assertEqual(runs, [])
+        self.assertIn("identique au dernier passage vert", out)
+        self.assertIn("suite sautée", out)
+
+    def test_un_seul_fichier_different_sous_les_declencheurs_relance_la_suite(self):
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        self.passed()
+        for rel, text in (("scripts/valeur.py", "VALEUR = 1  # relu encore\n"),
+                          ("scripts/LISEZ-MOI.md", "# Scripts\n"),
+                          ("plugins/flow-board/hooks/register.tsx", "export const register = 2\n")):
+            with self.subTest(rel=rel):
+                # Chaque cas part du contenu du passage vert : un seul fichier diffère à la fois.
+                write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+                write(self.repo, "plugins/flow-board/hooks/register.tsx", "export const register = 1\n")
+                (self.repo / "scripts" / "LISEZ-MOI.md").unlink(missing_ok=True)
+                git(self.repo, "reset", "-q")
+                git(self.repo, "add", "scripts/valeur.py")
+                self.assertEqual(self.staged_runs()[0], [])
+                write(self.repo, rel, text)
+                git(self.repo, "add", rel)
+                runs, _ = self.staged_runs()
+                self.assertEqual(len(runs), 1)
+
+    def test_un_fichier_non_suivi_du_passage_vert_ne_fait_pas_sauter_un_index_sans_lui(self):
+        # L'arbre testé portait un fichier de plus que l'index : ce n'est pas le même contenu.
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        write(self.repo, "scripts/neuf.py", "NEUF = 1\n")
+        self.passed()
+        git(self.repo, "add", "scripts/valeur.py")
+        runs, _ = self.staged_runs()
+        self.assertEqual(len(runs), 1)
+
+    def test_un_echec_de_la_suite_n_ecrit_jamais_d_empreinte(self):
+        write(self.repo, "scripts/valeur.py", "VALEUR = 2\n")
+        with self.assertRaises(check.Failed):
+            self.passed()
+        self.assertFalse(check.suite_passed_path().exists())
+
+    def test_une_empreinte_absente_illisible_vide_ou_hors_forme_fait_tourner_la_suite(self):
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        git(self.repo, "add", "scripts/valeur.py")
+        path = check.suite_passed_path()
+        for damage in ("absente", "", "\n\n", "pas-une-empreinte\n", "x" * 1000, b"\xff\xfe", "dossier"):
+            with self.subTest(damage=damage):
+                if path.is_dir():
+                    path.rmdir()
+                elif path.exists():
+                    path.unlink()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if damage == "dossier":
+                    path.mkdir()
+                elif isinstance(damage, bytes):
+                    path.write_bytes(damage)
+                elif damage != "absente":
+                    path.write_text(damage, encoding="utf-8")
+                runs, _ = self.staged_runs()
+                self.assertEqual(len(runs), 1)
+
+    def test_le_passage_vert_d_un_autre_worktree_compte_lu_seulement_et_contexte_compris(self):
+        write(self.repo, ".gitignore", ".claude/\n")
+        git(self.repo, "add", ".gitignore")
+        git(self.repo, "commit", "-q", "-m", "ignore")
+        wt = self.repo / ".claude" / "worktrees" / "groupe-x"
+        git(self.repo, "worktree", "add", "-q", "-b", "worktree-groupe-x", str(wt))
+        write(wt, "scripts/valeur.py", "VALEUR = 1  # du worktree\n")
+        git(wt, "commit", "-q", "-am", "ticket")
+        self.at(wt)
+        mark = self.passed()
+        before = mark.read_text(encoding="utf-8")
+        self.assertEqual(len(before.split()), 2)
+        self.at(self.repo)
+        git(self.repo, "merge", "-q", "--no-ff", "--no-commit", "worktree-groupe-x")
+        self.assertTrue(check.suite_passed_already())
+        # Lue seulement : le clone principal n'a rien écrit, l'empreinte du worktree n'a pas bougé.
+        self.assertFalse(Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path",
+                                  f"check-ok/{check.SUITE_MARK}")).exists())
+        self.assertEqual(mark.read_text(encoding="utf-8"), before)
+        # Un fichier hors des déclencheurs changé dans la fusion : le contexte n'est plus celui du passage.
+        write(self.repo, "README.md", "# Essai changé\n")
+        git(self.repo, "add", "README.md")
+        self.assertFalse(check.suite_passed_already())
+
+    def test_une_empreinte_sans_contexte_ou_avec_une_ligne_de_plus_ne_compte_nulle_part(self):
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        mark = self.passed()
+        git(self.repo, "add", "scripts/valeur.py")
+        self.assertTrue(check.suite_passed_already())
+        lines = mark.read_text(encoding="utf-8").split()
+        for text in (lines[0] + "\n", "\n".join(lines + ["autre"]) + "\n"):
+            with self.subTest(text=text):
+                mark.write_text(text, encoding="utf-8")
+                self.assertFalse(check.suite_passed_already())
+
+    def test_la_suite_tourne_sur_une_copie_commitee_comme_au_pre_commit(self):
+        # Un test qui lit HEAD : vert sur l'arbre (HEAD est le dernier commit), rouge sur la copie de
+        # l'index, où HEAD porte le contenu à commiter. Le passage de check.sh scripts doit voir ce rouge.
+        write(self.repo, "scripts/tests/test_head.py", READS_HEAD)
+        git(self.repo, "add", "scripts/tests/test_head.py")
+        git(self.repo, "commit", "-q", "-m", "test de HEAD")
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        with self.assertRaises(check.Failed) as caught:
+            self.passed()
+        self.assertIn("test_head_vaut_la_base", str(caught.exception))
+        self.assertFalse(check.suite_passed_path().exists())
+        git(self.repo, "add", "scripts/valeur.py")
+        with self.assertRaises(check.Failed):
+            self.staged_runs()
+
+    def test_un_passage_rouge_retire_l_empreinte_du_vert_d_avant(self):
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        self.passed()
+        write(self.repo, "README.md", "# Essai, lu par un test qui casse\n")
+        write(self.repo, "scripts/tests/test_lit_readme.py", READS_README)
+        with self.assertRaises(check.Failed):
+            self.passed()
+        self.assertFalse(check.suite_passed_path().exists())
+        git(self.repo, "add", "scripts/valeur.py")
+        runs, _ = self.staged_runs()
+        self.assertEqual(len(runs), 1)
+
+    def test_un_commit_partiel_hors_des_declencheurs_relance_la_suite(self):
+        # L'arbre testé vert portait un README changé ; le commit ne prend que le script : la copie de
+        # l'index (ancien README, nouveau script) n'a jamais été testée.
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        write(self.repo, "README.md", "# Essai changé\n")
+        self.passed()
+        git(self.repo, "add", "scripts/valeur.py")
+        runs, out = self.staged_runs()
+        self.assertEqual(len(runs), 1)
+        self.assertIn("un passage vert a ces déclencheurs, mais pas le reste du dépôt", out)
+        git(self.repo, "add", "README.md")
+        runs, _ = self.staged_runs()
+        self.assertEqual(runs, [])
+
+    def test_un_arbre_change_pendant_la_suite_n_entre_pas_dans_l_empreinte(self):
+        # La suite tourne sur la copie figée avant elle : l'empreinte est celle de cette copie, pas de ce
+        # que l'arbre devient pendant qu'elle tourne (une autre discussion du clone principal).
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        original = check.index_suite
+
+        def changes_tree(tree):
+            write(self.repo, "scripts/valeur.py", "VALEUR = 1  # changé pendant la suite\n")
+            return original(tree)
+        with mock.patch.object(check, "index_suite", changes_tree):
+            self.passed()
+        git(self.repo, "add", "scripts/valeur.py")
+        runs, _ = self.staged_runs()
+        self.assertEqual(len(runs), 1)
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        git(self.repo, "add", "scripts/valeur.py")
+        runs, _ = self.staged_runs()
+        self.assertEqual(runs, [])
+
+    def test_sans_filemode_un_script_executable_garde_son_mode_et_la_suite_se_saute(self):
+        # Sous Windows, core.filemode vaut faux : un index temporaire neuf noterait 100644 un script suivi
+        # en 100755, et l'empreinte ne serait jamais égale à celle de l'index.
+        write(self.repo, "scripts/outil.py", "print(1)\n")
+        git(self.repo, "add", "--chmod=+x", "scripts/outil.py")
+        git(self.repo, "commit", "-q", "-m", "outil")
+        (self.repo / "scripts" / "outil.py").chmod(0o644)
+        git(self.repo, "config", "core.filemode", "false")
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        self.passed()
+        git(self.repo, "add", "scripts/valeur.py")
+        self.assertTrue(check.suite_passed_already())
+
+    def test_une_autre_version_de_python_relance_la_suite(self):
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        self.passed()
+        git(self.repo, "add", "scripts/valeur.py")
+        with mock.patch.object(check.sys, "version", "2.7.0 (autre)"):
+            self.assertFalse(check.suite_passed_already())
 
 
 if __name__ == "__main__":

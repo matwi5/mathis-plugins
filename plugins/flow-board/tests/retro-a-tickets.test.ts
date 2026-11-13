@@ -140,7 +140,7 @@ const boardOf = (skill: string): Board => applySkill({ ...emptyBoard('', 'p'), s
 test('un Triage terminé avec des tickets pas lancés n’est pas clos à la fin de la discussion, son Implémentation due', () => {
   const out = applyReport(boardOf('mattpocock-skills:triage'), { tickets: TICKETS, complete: true }, 2_000)
   const run = activeRun(out.board)!
-  expect(phases(run)).toEqual(['triage:done', 'implement:pending', 'compte-rendu?:pending', 'project:version?:pending', 'project:pr?:pending'])
+  expect(phases(run)).toEqual(['triage:done', 'to-tickets?:pending', 'implement:pending', 'compte-rendu?:pending', 'project:version?:pending', 'project:pr?:pending'])
   const later = parkActive(out.board, 2_000 + 31 * 60_000)!.board
   expect(later.runs.find(r => r.id === run.id)!.status).not.toBe('done')
 })

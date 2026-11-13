@@ -133,7 +133,7 @@ test('la passe « bogues » d’un ticket en cours n’est pas la revue d’un g
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)
+  await $.tool.call({ tool: TOOL, title: 'Lot de test', tickets: LOT, groups: GROUPS } as any)
   // A fini mais pas encore relu ; B1 en cours ici, encore en TDD : /code-review est la revue de A, lancée depuis sa ligne.
   await $.tool.call({ tool: TOOL, set: [{ id: 'A1', status: 'done' }, { id: 'A2', status: 'done' }, { id: 'B1', status: 'doing' }] } as any)
   await $.tool.call({ tool: TOOL, step: 'tdd' } as any)
@@ -166,7 +166,7 @@ const reviewNotes = async ($: any, on: any, repo: boolean) => {
   world(on)
   on('session.repo', () => ({ value: repo ? { root: 'C:/proj', remote: null, internal: false, name: null } : null }))
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, tickets: LOT, groups: GROUPS } as any)
+  await $.tool.call({ tool: TOOL, title: 'Lot de test', tickets: LOT, groups: GROUPS } as any)
   // La consigne d'une mission à groupes : sans groupes, elle suit la procédure d'un worker.
   const implement = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text as string
   await $.tool.call({ tool: TOOL, set: [{ id: 'A1', status: 'doing' }] } as any)

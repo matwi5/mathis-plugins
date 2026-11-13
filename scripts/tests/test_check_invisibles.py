@@ -4,8 +4,10 @@ python3 -m unittest discover -s scripts/tests.
 Les caractères s'écrivent ici par `chr` : l'outil Write change un échappement à quatre chiffres
 en caractère brut, le défaut même que ce contrôle refuse."""
 
+import io
 import sys
 import tempfile
+from contextlib import redirect_stdout
 import unittest
 from pathlib import Path
 
@@ -48,6 +50,22 @@ class InvisiblesTest(unittest.TestCase):
         self.assertTrue(any("essai/hooks/a.ts:9" in p and "U+FEFF" in p for p in problems))
         self.assertTrue(any("essai/hooks/b.tsx:1" in p and "U+200D" in p for p in problems))
         self.assertTrue(any("essai/tests/c.test.mjs:1" in p for p in problems))
+
+    def test_check_test_refuse_avant_de_lancer_un_test_qui_porte_un_separateur_brut(self):
+        self.write("hooks/model.ts", "export const a = 1\n")
+        self.write("tests/jetable.test.ts", "import { a } from '../hooks/model'\nconst s = 'x" + chr(0x2028) + "y'\n")
+        launched = []
+        saved = check.run
+        check.run = lambda args, *rest, **kw: launched.append(args) or (0, "")
+        try:
+            with redirect_stdout(io.StringIO()), self.assertRaises(check.Failed) as caught:
+                check.single_test(self.plugin, ["tests/jetable.test.ts"])
+        finally:
+            check.run = saved
+        self.assertEqual(launched, [])
+        self.assertIn("essai/tests/jetable.test.ts:2", str(caught.exception))
+        self.assertIn("U+2028", str(caught.exception))
+        self.assertIn("tests non lancés", str(caught.exception))
 
     def test_l_echappement_et_les_autres_fichiers_passent(self):
         self.write("hooks/model.ts", "const s = '" + BACKSLASH + "u2028'\nconst e = 'é « » — '\n")

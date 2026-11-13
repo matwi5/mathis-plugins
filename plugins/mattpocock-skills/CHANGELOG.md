@@ -4,6 +4,16 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.10 — 2026-11-13
+
+### Modifié
+- **`grilling`** : un tour se borne à un tableau et à quatre questions courtes, le reste de la frontière gardé pour les tours suivants.
+- **`to-tickets`** : chaque ticket sensible porte une ligne d'invariant, et les critères sont écrits pour ne pas tromper la session qui les code.
+- **`research`** : quand Chrome est autorisé, la discussion choisit le navigateur avant de lancer l'agent, et la consigne sans Chrome est dans le prompt de l'agent.
+- **`diagnosing-bugs`** : cède aux consignes de flow-board, la chasse au bug passant en Implémentation.
+
+---
+
 ## 1.3.1-mathis.9 — 2026-11-10
 
 ### Modifié

@@ -51,7 +51,7 @@ test('les revues se cumulent d’après Claude : nombre, constats, corrigés', {
   mock.store(on)
   engine(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, step: 'review', review: { standards: 3, spec: 1, fixed: 2 } } as any)
+  await $.tool.call({ tool: TOOL, title: 'Lot de test', step: 'review', review: { standards: 3, spec: 1, fixed: 2 } } as any)
   await $.tool.call({ tool: TOOL, review: { standards: 0, spec: 1, fixed: 1 } } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ type: 'Text', text: /^Revues.·.2$/ })).toBeDefined()

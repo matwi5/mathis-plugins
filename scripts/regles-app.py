@@ -1,12 +1,29 @@
 """Imprime les règles des outils de l'app Claude Desktop dont dépendent des textes de flow-board.
 
-    python3 -I scripts/regles-app.py [--asar <chemin de app.asar>]
+    python3 -I scripts/regles-app.py [--asar <chemin de app.asar>] [--garder <dossier>]
 
 Lit `app.asar` de l'app installée (sur le Mac, /Applications/Claude.app/Contents/Resources/app.asar
 seul ; ailleurs, le chemin se donne par --asar) et imprime la version de l'app, puis, pour
 `start_session`, `archive_session` et `set_session_title`, leur description et leurs messages de refus.
-Lecture seule. À relancer après une mise à jour de l'app : docs/regles-app-desktop.md relie chaque
-règle au texte de flow-board qui en dépend.
+Sans --garder, lecture seule. À relancer après une mise à jour de l'app : docs/regles-app-desktop.md
+relie chaque règle au texte de flow-board qui en dépend.
+
+`--garder <dossier>` garde aussi la sortie imprimée, telle quelle (en UTF-8, fins de ligne `\\n`), dans
+`<dossier>/<version>.txt`, pour comparer une version à la précédente ; ses messages vont sur la sortie
+d'erreur, la sortie standard restant le rapport seul. La version n'entre dans le nom que si elle est
+faite de 2 à 4 nombres ASCII séparés par des points ; sinon rien n'est écrit. Le dossier donné est
+créé s'il manque (lui seul, pas ses parents, par son chemin), et refusé s'il est un lien ou autre chose
+qu'un dossier (ses parents ne sont pas vérifiés : ils font partie du chemin donné) ; il est ensuite
+ouvert sans suivre de lien, et toutes les écritures dans le dossier se font par rapport à lui (`dir_fd`),
+jamais par un chemin rebâti. Là où le système ne le permet pas (Windows), --garder est refusé, sans
+rien écrire. La première sortie d'une version s'écrit dans un temporaire du dossier, puis prend
+son nom par un lien dur, qui échoue si le nom existe déjà : un fichier gardé n'est jamais écrasé.
+Déjà gardée à l'identique (octet pour octet) : rien n'est réécrit. Gardée avec un autre contenu : le
+fichier reste tel quel, la nouvelle sortie va dans `<version>.nouveau.txt` (réécrit à chaque fois, par
+un renommage, jamais par une écriture dans l'ancien fichier), et le script sort en erreur. Un fichier
+`<version>.txt` qui est un lien ou pas un fichier ordinaire : refusé, rien n'est écrit ; de même pour
+`<version>.nouveau.txt` quand il faudrait l'écrire (sortie identique : il est seulement signalé, s'il
+est là). Les temporaires de la session sont retirés à toute sortie, et le message dit celui qui reste. Toute erreur de --garder sort en code 1 ; la lecture de l'archive garde ses codes.
 
 Le code de l'app est minifié et ses noms changent d'une version à l'autre : la description d'un outil
 se retrouve par son alias (`X="start_session"`, puis `{name:X,description:…,inputSchema:`), ou, quand
@@ -19,7 +36,10 @@ standard seule.
 
 import argparse
 import json
+import os
 import re
+import shlex
+import stat
 import struct
 import sys
 import textwrap
@@ -34,6 +54,14 @@ except Exception:
 
 DEFAULT_ASAR = Path("/Applications/Claude.app/Contents/Resources/app.asar")
 TOOLS = ("start_session", "archive_session", "set_session_title")
+# La seule forme de version qui entre dans un nom de fichier de `--garder` : 2 à 4 nombres ASCII séparés
+# par des points (ni `\d`, qui prend les chiffres Unicode, ni `$`, qui laisse passer un saut de ligne final).
+VERSION = re.compile(r"[0-9]{1,10}(?:\.[0-9]{1,10}){1,3}")
+# Les écritures de `--garder` se font par rapport au dossier ouvert (`dir_fd`) ; sans lui, --garder est refusé.
+# Chaque fonction appelée par rapport au dossier est vérifiée ici (`Folder` renomme par `os.rename`).
+USE_DIR_FD = (hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW")
+              and {os.open, os.stat, os.link, os.rename, os.unlink} <= os.supports_dir_fd
+              and os.link in os.supports_follow_symlinks)
 # Les phrases repères des messages de refus, par outil. Ceux de `set_session_title` portent sur la
 # forme du titre ; sa règle d'approbation est dans sa description.
 REFUSAL_MARKERS = {
@@ -227,7 +255,7 @@ def app_rules(files):
     sous condition), ses messages de refus et les repères de refus introuvables."""
     try:
         version = json.loads(files.get("/package.json", b"{}")).get("version")
-    except ValueError:
+    except (ValueError, AttributeError):  # pas du JSON, ou pas un objet
         version = None
     named = [(path, data.decode("utf-8", "replace")) for path, data in sorted(files.items()) if path.endswith(".js")]
     scripts = [text for _, text in named]
@@ -283,9 +311,194 @@ def report(rules, asar):
     return "\n".join(out)
 
 
+class KeepError(Exception):
+    """Une sortie qui ne peut pas être gardée : le message dit pourquoi et ce qui a été écrit."""
+
+
+class Folder:
+    """Le dossier donné à `--garder`, où se font toutes les écritures : ouvert une fois sans suivre un lien
+    (`O_DIRECTORY | O_NOFOLLOW`), chaque nom résolu ensuite par rapport à lui (`dir_fd`), jamais par un
+    chemin rebâti : un dossier remplacé par un lien après son contrôle ne déplace aucune écriture."""
+
+    def __init__(self, path):
+        self.path = path
+        self.fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+    def close(self):
+        os.close(self.fd)
+
+    def shown(self, name):
+        """Le chemin d'un nom du dossier, pour un message."""
+        return os.path.join(self.path, name)
+
+    def lstat(self, name):
+        """Le `lstat` d'un nom du dossier, ou None s'il est absent."""
+        try:
+            return os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+
+    def read(self, name):
+        """Les octets d'un fichier ordinaire du dossier, ouvert sans suivre un lien ni bloquer (une FIFO)."""
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0), dir_fd=self.fd)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise KeepError(f"{self.shown(name)} n'est pas un fichier ordinaire ; rien n'est gardé")
+            chunks = []
+            while chunk := os.read(fd, 1 << 16):
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
+
+    def temporary(self, data, version, temps):
+        """Un fichier neuf du dossier qui porte `data`, créé exclusif (`O_EXCL`, sans suivre un lien) et
+        écrit sur le disque (`fsync`) ; son nom, qui ne peut pas avoir la forme `<version>.txt`, noté dans
+        `temps` dès sa création, pour que `keep` le retire même si l'écriture échoue."""
+        name = f".{version}.tmp-{os.getpid()}-{os.urandom(4).hex()}"
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=self.fd)
+        temps.append(name)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return name
+
+    def discard(self, name):
+        """Retire un temporaire de la session ; rend la fin de message à dire s'il reste (son retrait refusé),
+        sans lever : le retrait raté d'un temporaire ne change pas ce qui a été gardé."""
+        try:
+            os.unlink(name, dir_fd=self.fd)
+        except FileNotFoundError:
+            pass
+        except OSError as err:
+            return f" (temporaire {self.shown(name)} laissé : {err.strerror})"
+        return ""
+
+    def link(self, src, dst):
+        """Un second nom `dst` pour `src`, refusé (`FileExistsError`) si `dst` existe déjà : jamais d'écrasement."""
+        os.link(src, dst, src_dir_fd=self.fd, dst_dir_fd=self.fd, follow_symlinks=False)
+
+    def rename(self, src, dst):
+        """`dst` remplacé par `src` en un renommage : l'ancien fichier de `dst` n'est jamais écrit."""
+        os.rename(src, dst, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+
+
+def open_folder(value):
+    """Le dossier donné à `--garder`, ouvert (`Folder`) : refusé s'il est vide, un lien, autre chose qu'un
+    dossier, ou absent sous un parent absent ; un dossier absent est créé, seul (pas ses parents), par son
+    chemin, avant d'être ouvert ; refusé aussi là où le système n'écrit pas par rapport à un dossier ouvert."""
+    if value == "":
+        raise KeepError("dossier de --garder vide ; rien n'est gardé")
+    if not USE_DIR_FD:
+        raise KeepError("ce système ne permet pas d'écrire par rapport au dossier ouvert (dir_fd, Windows) : "
+                        "--garder écrirait par des chemins, qu'un dossier remplacé par un lien déplacerait ; "
+                        "rien n'est gardé")
+    path = str(Path(value))  # sans barre finale : « lien/ » se lit comme le lien, pas comme sa cible
+    try:
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            parent = os.path.dirname(os.path.abspath(path))
+            if not os.path.isdir(parent):
+                raise KeepError(f"{path} : son dossier parent {parent} n'existe pas ; rien n'est gardé")
+            try:
+                os.mkdir(path)
+            except FileExistsError:
+                pass
+            st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
+            raise KeepError(f"{path} : refusé, le dossier donné est un lien ; rien n'est gardé")
+        if not stat.S_ISDIR(st.st_mode):
+            raise KeepError(f"{path} : pas un dossier ; rien n'est gardé")
+        return Folder(path)
+    except OSError as err:
+        raise KeepError(f"{path} : dossier refusé ({err.strerror}) ; rien n'est gardé")
+
+
+def keep(data, value, version):
+    """Garde `data` (la sortie imprimée, en octets) dans `<dossier>/<version>.txt` ; rend le message à dire
+    (écrit, ou déjà là à l'identique) ; KeepError si rien n'est gardé, ou si un contenu différent est déjà
+    gardé (la nouvelle sortie écrite alors à côté, sous `<version>.nouveau.txt`). Les temporaires de la
+    session sont retirés à toute sortie, interruption comprise, et le message dit celui qui reste."""
+    if not (isinstance(version, str) and VERSION.fullmatch(version)):
+        raise KeepError(f"version de l'app hors forme ({version!r}, attendu des nombres séparés par des points) : "
+                        f"rien n'est gardé")
+    folder = open_folder(value)
+    temps = []
+
+    def discard_all():
+        notes = "".join(folder.discard(name) for name in temps)
+        temps.clear()
+        return notes
+
+    try:
+        try:
+            message = keep_in(folder, data, version, temps)
+        except OSError as err:
+            raise KeepError(f"--garder a échoué dans {folder.path} ({err.strerror}) ; "
+                            f"{folder.shown(version + '.txt')} n'est pas modifié, rien de neuf n'est gardé")
+    except KeepError as err:
+        raise KeepError(f"{err}{discard_all()}") from None
+    except BaseException:
+        discard_all()
+        raise
+    else:
+        return f"{message}{discard_all()}"
+    finally:
+        folder.close()
+
+
+def keep_in(folder, data, version, temps):
+    """Le travail de `keep` dans le dossier ouvert ; chaque temporaire créé est noté dans `temps`, que
+    `keep` retire ensuite."""
+    target, fresh = f"{version}.txt", f"{version}.nouveau.txt"
+    shown, shown_fresh = folder.shown(target), folder.shown(fresh)
+    st = folder.lstat(target)
+    temp = None
+    if st is None:
+        temp = folder.temporary(data, version, temps)
+        try:
+            folder.link(temp, target)
+        except FileExistsError:
+            st = folder.lstat(target)  # gardée entre-temps par un autre lancement : comparée ci-dessous
+        except OSError as err:
+            raise KeepError(f"{shown} : lien dur refusé ({err.strerror}) ; rien n'est gardé")
+        else:
+            return f"sortie gardée : {shown}"
+        if st is None:
+            raise KeepError(f"{shown} : déjà pris puis disparu pendant l'écriture (un autre lancement ?) ; "
+                            f"rien n'est gardé, relancer")
+    if stat.S_ISLNK(st.st_mode):
+        raise KeepError(f"{shown} : refusé, c'est un lien ; rien n'est gardé")
+    if not stat.S_ISREG(st.st_mode):
+        raise KeepError(f"{shown} n'est pas un fichier ordinaire ; rien n'est gardé")
+    other = folder.lstat(fresh)
+    if folder.read(target) == data:
+        stale = f" ; {shown_fresh} existe aussi (une sortie différente d'un lancement précédent ?)" if other else ""
+        return f"sortie identique à celle déjà gardée, rien n'est réécrit : {shown}{stale}"
+    if other is not None and (stat.S_ISLNK(other.st_mode) or not stat.S_ISREG(other.st_mode)):
+        raise KeepError(f"{shown} diffère de cette sortie, et {shown_fresh} est un lien ou pas un fichier "
+                        f"ordinaire : refusé, rien n'est gardé")
+    if temp is None:
+        temp = folder.temporary(data, version, temps)
+    try:
+        folder.rename(temp, fresh)
+    except OSError as err:
+        raise KeepError(f"{shown_fresh} : écriture refusée ({err.strerror}) ; {shown} reste tel quel")
+    temps.remove(temp)
+    raise KeepError(f"{shown} est déjà gardé avec un autre contenu : il n'est pas écrasé ; la nouvelle sortie "
+                    f"est dans {shown_fresh} ; comparer : diff {shlex.quote(shown)} {shlex.quote(shown_fresh)}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--asar", metavar="CHEMIN", help="le fichier app.asar de l'app (sur le Mac, trouvé seul)")
+    parser.add_argument("--garder", metavar="DOSSIER",
+                        help="garde aussi la sortie dans DOSSIER/<version>.txt (un dossier hors de la version publique)")
     args = parser.parse_args(argv)
     if args.asar:
         asar = Path(args.asar)
@@ -303,7 +516,16 @@ def main(argv=None):
     except (AsarError, OSError) as err:
         print(f"{asar} : pas une archive asar lisible ({err})", file=sys.stderr)
         return 2
-    print(report(rules, asar))
+    text = report(rules, asar)
+    print(text)
+    if args.garder is None:
+        return 0
+    sys.stdout.flush()
+    try:
+        print(keep((text + "\n").encode("utf-8"), args.garder, rules["version"]), file=sys.stderr)
+    except KeepError as err:
+        print(err, file=sys.stderr)
+        return 1
     return 0
 
 

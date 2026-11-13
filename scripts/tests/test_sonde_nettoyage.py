@@ -11,6 +11,7 @@ import tempfile
 import time
 import types
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -123,6 +124,7 @@ class CleanTest(Essai):
         self.assertTrue(self.project.is_dir())
         self.assertTrue(any(str(self.project) in line for line in report.remaining()))
 
+    @unittest.skipIf(os.name == "nt", "liens symboliques : mode développeur requis sous Windows")
     def test_un_dossier_de_projet_en_lien_symbolique_reste(self):
         real = self.home / "ailleurs"
         self.project.rename(real)
@@ -130,6 +132,7 @@ class CleanTest(Essai):
         sonde.clean(self.folder, self.home)
         self.assertTrue(real.is_dir() and (real / f"{SESSION}.jsonl").is_file())
 
+    @unittest.skipIf(os.name == "nt", "liens symboliques : mode développeur requis sous Windows")
     def test_un_registre_en_lien_symbolique_reste(self):
         target = self.write(self.home / "precieux.json", json.dumps({"session": SESSION, "root": str(self.folder)}))
         (self.agents / f"{SESSION}.json").unlink()
@@ -204,7 +207,8 @@ class FinishTest(Essai):
                 return mock.Mock(returncode=code, stdout=panes, stderr=stderr)
             return mock.Mock(returncode=0, stdout="2.1.317 (Claude Code)\n")
         with mock.patch.object(sonde.subprocess, "run", side_effect=fake), \
-                mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}):
+                mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}), redirect_stdout(io.StringIO()):
+            # La liste « supprimé : … » de l'étape de fin noyait la fin de la sortie d'unittest.
             return sonde.finish(args, "tmux", home=self.home, tmp=self.tmp)
 
     def log(self):
@@ -294,6 +298,7 @@ class LaunchFolderTest(Essai):
                 with self.assertRaises(sonde.SondeError):
                     sonde.launch_folder(name, self.tmp)
 
+    @unittest.skipIf(os.name == "nt", "liens symboliques : mode développeur requis sous Windows")
     def test_un_dossier_jetable_en_lien_symbolique_est_refuse(self):
         link = self.tmp / "sonde-zzzz1234"
         link.symlink_to(self.folder, target_is_directory=True)

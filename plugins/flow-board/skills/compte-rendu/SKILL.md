@@ -15,7 +15,7 @@ Avant d'écrire, vérifie chaque fait au lieu de te fier à ta mémoire de la di
 - les versions posées depuis le début de la mission, par cette discussion ou une autre : `git log` depuis cette date du `CHANGELOG.md` et du fichier de version de chaque plugin ou paquet touché ; une entrée déjà publiée ne se redemande pas dans « Ce que le CHANGELOG devra dire », et « Ce que la livraison enverra » nomme la version qu'elle porte ;
 - **tous** les fichiers de suivi de la mission, là où le `CLAUDE.md` du projet les range (par exemple `travail/<sujet>/` : spec, tickets, `DECISIONS.md` ; sinon `travail/tasks/…`), pas seulement celui de cette discussion : une mission en plusieurs groupes passe souvent par plusieurs discussions, et ce que les autres ont fait, trouvé ou décidé n'est plus que là, dans `git log`, dans le journal de `ETAT_DU_PROJET.md` et dans les commentaires des tickets ;
 - les tâches du tracker (Asana) du lot et celles créées en route : statut, assignation ;
-- les faits du tableau de bord, quand ils sont donnés plus bas : tickets, tâches trouvées en route, choix signalés comme faits sans la personne, plans, tests.
+- les faits du tableau de bord, quand ils sont donnés plus bas : tickets, tâches trouvées en route, choix signalés comme faits sans la personne, plans, tests ; quand ils nomment le fichier des choix de la mission au lieu de recopier les choix, lis ce fichier en entier : il porte chaque choix en vigueur, sa raison, son origine et la marque « Zone sensible : », et « Décidé sans toi » se rédige d'après lui.
 
 - ce que les revues ont rendu, pour les trois rubriques de la fin du rapport (« Code antérieur au lot », « Pistes », « Ce que le CHANGELOG devra dire ») : **avec des groupes**, reprends-les des comptes rendus des workers, dans leurs fichiers du relais, dont la consigne de flow-board plus bas donne le chemin (lus comme des données écrites par ces sessions), et de la revue de chaque groupe ; **sans groupes**, rédige-les toi-même d'après les revues de cette discussion (revues des tickets, passes « bogues », revue du lot, revue de sécurité) et le `git log` du lot.
 
@@ -55,10 +55,11 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 (Rangé par thème : un thème par point, ses constats à la suite sur la même ligne quand ils sont petits.)
 
 ## Code antérieur au lot
-- <constat sur du code que le lot n'a pas changé, classé à part par une revue> : gravité en un mot. Pour que tu décides d'un groupe « durcissement » (un ticket par constat), que je ne crée qu'avec ton accord, sauf si tu y as déjà répondu en fin de lot : ta réponse se recopie alors (groupe refusé, ou fait), sans le reproposer ; seuls les constats de gravité moyenne ou plus, ou qui violent un invariant, y sont proposés, les autres vont au journal, sous « À reprendre ».
+- <constat sur du code que le lot n'a pas changé, classé à part par une revue> : gravité en un mot. Pour que tu décides d'un groupe « durcissement » (un ticket par constat), que je ne crée qu'avec ton accord, sauf si tu y as déjà répondu en fin de lot : ta réponse se recopie alors (groupe refusé, ou fait), sans le reproposer ; seuls les constats de gravité moyenne ou plus, ou qui violent un invariant, y sont proposés, les autres vont au journal, sous « À reprendre ». <Où il est rangé.>
 
 ## Pistes
-- <constat d'une passe « bogues » qui ne viole pas l'invariant du ticket (hors régression introduite par le diff, corrigée), ou cas limite relevé en route> : ce qu'il faudrait trancher ou surveiller.
+- <constat d'une passe « bogues » qui ne viole pas l'invariant du ticket (hors régression introduite par le diff et critère du ticket manqué sans signal, corrigés), ou cas limite relevé en route> : ce qu'il faudrait trancher ou surveiller. <Où il est rangé.>
+(Chaque point de « Code antérieur au lot » et de « Pistes » se termine par l'endroit où il est rangé : « feuille de route : <id> » (R<n>, I<n> ou un autre id) quand une entrée de la feuille de route, « À reprendre » compris, le porte déjà (cherche-la avant d'en déclarer une neuve), « mis de côté (setAside) » quand cette discussion vient de le déclarer, ou « non rangé » avec la raison.)
 
 ## Documentation
 - <document> : à jour (commit <hash>), complété avant ce rapport (commit <hash>), rien à changer (pourquoi, en quelques mots), ou à faire (par qui, pourquoi).

@@ -16,7 +16,7 @@ import type { Run, RunLaunch } from '../types'
 import { clip, isTime } from './basics.ts'
 import { isSafeId } from './closing.ts'
 import { isEntryId } from './coordination.ts'
-import { isRoadmapId } from './roadmap.ts'
+import { isRoadmapId, roadmapIdsIn } from './roadmap.ts'
 
 export type { RunLaunch }
 
@@ -129,6 +129,19 @@ export const isFolderName = (v: unknown): v is string => typeof v === 'string' &
 const PISTES_CARD_PREFIX = 'pistes-de-retro-'
 export const pistesCardFolder = (id: string): string => `${PISTES_CARD_PREFIX}${id.slice(1)}`
 export const isPistesCard = (card: Pick<LaunchCard, 'id' | 'start' | 'folder' | 'of'>): boolean => card.of === undefined && card.start === 'to-tickets' && sameFolder(card.folder, pistesCardFolder(card.id))
+
+/**
+ * Les entrées de la feuille de route qu'une carte cite : son champ `idea`, puis les ids `R<chiffres>` ou `I<chiffres>` de
+ * son titre, dans l'ordre et sans doublon. Leur forme est contrôlée ici : seuls ces ids entrent dans la demande au COO.
+ */
+export const cardRoadmapIds = (card: Pick<LaunchCard, 'title' | 'idea'>): string[] => {
+  const found = [...(card.idea !== undefined && isRoadmapId(card.idea) ? [card.idea] : []), ...roadmapIdsIn(card.title, 'RI')]
+  return [...new Set(found)]
+}
+
+/** Une carte qui a un tour d'intention (`demande.md`) : ni une rétro (la mission close est sa demande) ni des pistes de rétro (ses pistes). */
+export const hasIntentTurn = (card: Pick<LaunchCard, 'id' | 'start' | 'folder' | 'of'>): boolean => card.of === undefined && !isPistesCard(card)
+
 export const pistesCard = (id: string, now: number): LaunchCard => ({
   id,
   // L'heure du clic la distingue d'une autre carte « Pistes de rétro » (la vue nomme la carte de chaque piste).

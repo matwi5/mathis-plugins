@@ -65,6 +65,7 @@ import {
 } from './model.ts'
 import {
   closingReason,
+  isAwaitingSession,
   linkedInFlight,
   offRequestLaunches,
   pickableItems,
@@ -599,7 +600,7 @@ const livePill = (k: Kit, run: Run, view: View): unknown => {
   const { live, now } = view
   // Des éléments chez un worker lancé : c'est lui qui travaille, pas la personne.
   const phase = currentPhase(run)
-  const isGroupBusy = (run.groups ?? []).some(g => g.linked?.session !== undefined && relayForGroup(view.relay, g, run.groups)?.endedAt === undefined)
+  const isGroupBusy = (run.groups ?? []).some(g => g.linked !== undefined && !isAwaitingSession(g.linked) && relayForGroup(view.relay, g, run.groups)?.endedAt === undefined)
   const isLinkedBusy = (phase.linked?.session !== undefined && linkedInFlight(phase).length > 0) || isGroupBusy
   const mode = live.mode === 'waiting' && running > 0 ? 'agents' : isLinkedBusy && live.mode !== 'working' ? 'linked' : live.mode
   const look =
@@ -950,7 +951,8 @@ const GROUP_COLORS = [C.blue, C.teal, C.magenta, C.coral, C.indigo, C.sand]
 
 /** Où en est le worker d'un groupe : à lancer, au travail, ou terminé avec des tickets ouverts (ambre). */
 const linkLabel = (k: Kit, link: NonNullable<TicketGroup['linked']>, relay: GroupRelay | null, open: number, now: number): unknown =>
-  link.session === undefined
+  // Un envoi marqué (`sessionClash`) : des sessions s'y sont déclarées, il n'est plus « à lancer » même sans id noté.
+  isAwaitingSession(link)
     ? T(k, `↗${NB}worker à lancer`, { color: C.blue, bold: true })
     : relay?.endedAt !== undefined
       ? open > 0
@@ -980,7 +982,7 @@ const groupHead = (k: Kit, run: Run, g: GroupView, color: string, view: View, ac
       )),
       g.isCyclic ? T(k, `⚠${NB}ordre à revoir`, { color: C.red }) : null,
       g.isDelegated && link ? linkLabel(k, link, relayForGroup(view.relay, g.group, run.groups), g.open.length, view.now) : null,
-      g.isDelegated && link?.session === undefined ? (
+      g.isDelegated && (link === undefined || isAwaitingSession(link)) ? (
         <Button key={`group-linked-cancel-${g.group.id}`} plain={true} dimColor={true} label="Annuler" onPress={() => act.cancelGroupLinked(g.group.id)} />
       ) : null,
       isDelegable(g) ? <Button key={`launch-linked-${g.group.id}`} variant="primary" label={`↗${NB}Worker`} onPress={() => act.launchGroupLinked(g.group.id)} /> : null,
@@ -1259,7 +1261,7 @@ const groupsSection = (k: Kit, run: Run, plan: GroupPlan, view: View, act: Actio
             () => act.closeLinkedGroup(g.group.id),
             reopenText({ run, target: { kind: 'group', id: g.group.id, name: g.group.name }, closing: g.group.delegated.closing, session: g.group.delegated.session, seq: g.group.delegated.seq, root: view.board?.root ?? '' }),
             act,
-            isKeptForReport(run, { kind: 'group', id: g.group.id, name: g.group.name }, g.group.delegated.seq, g.group.delegated.closing),
+            isKeptForReport(run, { kind: 'group', id: g.group.id, name: g.group.name }, g.group.delegated.seq, g.group.delegated.closing, g.group.delegated),
           )}
         {!g.isFallback && securityRow(k, g.group.security, g.group.id, act, view.security ?? 'unread', isClosedTurnedOff(g.group))}
         {/* « tout voir » déplie aussi les groupes finis : leurs tickets restent consultables. */}
@@ -3448,7 +3450,7 @@ const relayPills = (run: Run, view: View): BandPill[] =>
   (run.groups ?? [])
     .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g, run.groups, g.linked, Infinity, attachedIdsOf(run, g)) : null }))
     // En cours dès que l'id de sa session est relevé, avant le premier signal relayé.
-    .filter(x => x.relay !== null || x.g.linked?.session !== undefined)
+    .filter(x => x.relay !== null || (x.g.linked !== undefined && !isAwaitingSession(x.g.linked)))
     .map(({ g, relay }) => {
       // Les tickets que le plan lui rattache comptent aussi : la mission les tient, pas sa session.
       const { done, total } = groupProgress(run, g, relay)

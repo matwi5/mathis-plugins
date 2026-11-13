@@ -127,9 +127,11 @@ If a correct seam exists:
 4. Watch it pass.
 5. Re-run the Phase 1 feedback loop against the original (un-minimised) scenario.
 
+When a flow-board dashboard tracks this skill as its own mission (not as a detour of another phase), its instructions say where the fix and its checks are done (for instance, written as a ticket that a later phase implements); they take precedence over steps 3 to 5.
+
 ## Phase 6: Cleanup
 
-Required before declaring done:
+Required before declaring done (when a flow-board dashboard tracks this skill as its own mission, its instructions say which of these checks belong to the fix, done later, and they take precedence):
 
 - [ ] Original repro no longer reproduces (re-run the Phase 1 loop)
 - [ ] Regression test passes (or absence of seam is documented)

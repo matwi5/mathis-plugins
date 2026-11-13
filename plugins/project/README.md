@@ -24,7 +24,7 @@ claude plugin install project@mathis-plugins
 
 Toutes les commandes se lancent à la main (`disable-model-invocation`), car elles écrivent des fichiers ou agissent sur git, sauf `/project:commit`, que Claude peut aussi lancer de lui-même : un commit local se défait, le push reste au porteur.
 
-`/project:push`, `/project:audit`, `/project:new` et `/project:version` commencent par une liste de tâches de Claude Code, une entrée par étape du skill, tenue à jour au fil du travail : le déroulé s'affiche toujours de la même façon, dans le terminal comme dans l'app desktop.
+`/project:push`, `/project:audit`, `/project:new` et `/project:version` commencent par une liste de tâches de Claude Code, une entrée par étape du skill, tenue à jour au fil du travail : le déroulé s'affiche toujours de la même façon, dans le terminal comme dans l'app desktop. Seule exception : `/project:push` sur une branche qui n'a rien à pousser (à jour avec son amont, arbre propre, aucune étiquette en attente) le dit en une ligne et s'arrête, sans liste de tâches (il suit encore la CI du dernier commit quand le dépôt en a une).
 
 ## Convention
 

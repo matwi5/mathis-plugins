@@ -1,6 +1,7 @@
 """Tests des contrôles des règles du dépôt (scripts/check.py) : le prénom dans une règle ou une référence
 commune exportée, l'en-tête `paths:` d'une règle de projet (`.claude/rules/*.md`) et les exceptions de
-`.gitignore` qui gardent `.claude/settings.json` et `.claude/rules/`. Lancés par check.sh (`--quick`
+`.gitignore` qui gardent `.claude/settings.json` et `.claude/rules/`, le saut Windows d'un test de
+`scripts/tests` qui crée un lien symbolique. Lancés par check.sh (`--quick`
 compris) et par le hook pre-commit, même en documentation seule. python3 -m unittest discover -s scripts/tests."""
 
 import io
@@ -28,7 +29,7 @@ def git(cwd, *args):
 
 
 class RulesRepo(unittest.TestCase):
-    """Un dépôt d'essai qui passe les trois contrôles, et le hook pointé dessus ; sans test à lui."""
+    """Un dépôt d'essai qui passe les contrôles des règles, et le hook pointé dessus ; sans test à lui."""
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -96,6 +97,80 @@ class FirstNameTest(RulesRepo):
         self.assertIsNone(self.staged_failure())
 
 
+SCRIPT_TEST = "scripts/tests/test_essai.py"
+HEAD_OF_TEST = "import os\nimport sys\nimport unittest\nfrom pathlib import Path\n\n"
+SKIP = '@unittest.skipIf(os.name == "nt", "liens symboliques : mode développeur requis sous Windows")'
+
+
+def symlinks(body):
+    """Les problèmes de la règle des liens symboliques sur un test d'essai (texte seul, aucun lien créé)."""
+    return check.rules_problems([(SCRIPT_TEST, HEAD_OF_TEST + body)])
+
+
+class SymlinkSkipTest(RulesRepo):
+    def test_un_lien_sans_saut_indexe_est_refuse_avec_fichier_ligne_et_saut_a_ecrire(self):
+        self.stage(SCRIPT_TEST, HEAD_OF_TEST + "class T(unittest.TestCase):\n    def test_a(self):\n"
+                   "        Path('a').symlink_to('b')\n")
+        failure = self.staged_failure()
+        self.assertIsNotNone(failure)
+        self.assertIn(f"{SCRIPT_TEST}:8", failure)
+        self.assertIn("lien symbolique sans saut Windows", failure)
+        self.assertIn(SKIP, failure)
+
+    def test_os_symlink_sans_saut_est_refuse(self):
+        problems = symlinks("class T(unittest.TestCase):\n    def test_a(self):\n        os.symlink('a', 'b')\n")
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"{SCRIPT_TEST}:8", problems[0])
+
+    def test_un_lien_sous_un_saut_de_classe_est_accepte(self):
+        self.assertEqual(symlinks(f"{SKIP}\nclass T(unittest.TestCase):\n    def test_a(self):\n"
+                                  "        Path('a').symlink_to('b')\n"), [])
+
+    def test_un_lien_sous_un_saut_de_methode_ou_une_constante_du_fichier_est_accepte(self):
+        for decorator in (SKIP, '@unittest.skipUnless(sys.platform != "win32", "liens")',
+                          '@unittest.skipUnless(POSIX and os.geteuid() != 0, "liens")',
+                          '@unittest.skipIf(WINDOWS, "liens")'):
+            with self.subTest(decorator=decorator):
+                self.assertEqual(symlinks('POSIX = os.name == "posix"\nWINDOWS = not POSIX\n\n'
+                                          f"class T(unittest.TestCase):\n    {decorator}\n    def test_a(self):\n"
+                                          "        Path('a').symlink_to('b')\n"), [])
+
+    def test_un_lien_dans_un_if_qui_ecarte_windows_est_accepte(self):
+        self.assertEqual(symlinks('POSIX = os.name == "posix"\n\nclass T(unittest.TestCase):\n    def test_a(self):\n'
+                                  "        if POSIX:\n            Path('a').symlink_to('b')\n"), [])
+
+    def test_un_saut_qui_n_ecarte_pas_windows_est_refuse(self):
+        for decorator in ('@unittest.skipUnless(HAS_EXPORT, "export")',
+                          '@unittest.skipUnless(hasattr(os, "getuid"), "droits POSIX")'):
+            with self.subTest(decorator=decorator):
+                problems = symlinks("HAS_EXPORT = Path('x').exists()\n\nclass T(unittest.TestCase):\n"
+                                    f"    {decorator}\n    def test_a(self):\n        Path('a').symlink_to('b')\n")
+                self.assertEqual(len(problems), 1, problems)
+
+    def test_un_saut_dans_le_mauvais_sens_est_refuse(self):
+        # Ces conditions nomment bien la plateforme, mais créent le lien justement sous Windows.
+        for body in ("    @unittest.skipIf(POSIX, 'liens')\n    def test_a(self):\n        Path('a').symlink_to('b')\n",
+                     "    @unittest.skipUnless(os.name == 'nt', 'liens')\n    def test_a(self):\n        Path('a').symlink_to('b')\n",
+                     "    def test_a(self):\n        if os.name == 'nt':\n            Path('a').symlink_to('b')\n",
+                     "    def test_a(self):\n        if POSIX:\n            pass\n        else:\n            os.symlink('a', 'b')\n"):
+            with self.subTest(body=body):
+                problems = symlinks('POSIX = os.name == "posix"\n\nclass T(unittest.TestCase):\n' + body)
+                self.assertEqual(len(problems), 1, problems)
+
+    def test_un_else_ou_un_startswith_qui_ecartent_windows_sont_acceptes(self):
+        for body in ("    def test_a(self):\n        if os.name == 'nt':\n            pass\n        else:\n"
+                     "            Path('a').symlink_to('b')\n",
+                     "    @unittest.skipIf(sys.platform.startswith('win'), 'liens')\n    def test_a(self):\n"
+                     "        Path('a').symlink_to('b')\n"):
+            with self.subTest(body=body):
+                self.assertEqual(symlinks("class T(unittest.TestCase):\n" + body), [])
+
+    def test_un_test_que_ast_ne_lit_pas_est_un_probleme(self):
+        problems = symlinks("def test_a(:\n")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("illisible par ast", problems[0])
+
+
 class ProjectRuleTest(RulesRepo):
     def test_une_regle_de_projet_sans_paths_est_refusee(self):
         self.stage(PROJECT_RULE, "# Essai\n\nSans en-tête.\n")
@@ -159,7 +234,7 @@ class GitignoreTest(RulesRepo):
 
 
 class RepoTest(unittest.TestCase):
-    def test_le_depot_d_aujourd_hui_passe_les_trois_controles(self):
+    def test_le_depot_d_aujourd_hui_passe_les_controles_des_regles(self):
         self.assertEqual(check.repo_rules_problems(), [])
 
     def test_check_sh_les_lance_sur_le_depot(self):

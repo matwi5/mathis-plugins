@@ -19,7 +19,7 @@ Shared by `commit`, `sync`, `push`, `pr` and `version`. The commands are plain g
 - No `--force`, `--force-with-lease`, `reset --hard`, `clean -fd` or history rewrite on a pushed branch unless the owner asks for that exact command: they discard work that may exist nowhere else.
 - Stage files by path. Never stage secrets: `.env*` (except `.env.example`), `*.pem`, `*.key`, `*.p12`, credentials or service-account JSON, `*.tfvars`. If one shows up as changed and is not git-ignored, point it out and suggest adding it to `.gitignore`.
 - On a conflict, stop and list the conflicted files with a short description of each side. Resolve only with the owner's go-ahead, then continue the operation (`git rebase --continue` or a merge commit).
-- A hook that fails (pre-commit, pre-push) reports a real problem: fix the cause, never bypass with `--no-verify`.
+- A hook that fails (pre-commit, pre-push) reports a real problem: fix the cause. Never pass `--no-verify` (nor `-n` to `git commit`), whatever the state of the hook, even for a work-in-progress commit.
 
 ## Bringing in the remote
 

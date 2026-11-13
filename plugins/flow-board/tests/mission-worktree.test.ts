@@ -281,7 +281,11 @@ test('dans un worktree au board du worktree, la consigne de code lit les groupes
   expect(line).toContain('« a.ts »')
   expect(line).toContain('« Là-bas »')
   expect(line).toMatch(/already runs in a worktree/)
-  expect(line).not.toMatch(/EnterWorktree/)
+  expect(line).not.toMatch(/do it in a worktree \(EnterWorktree\)/)
+  // La fusion revient à la discussion, selon la façon dont elle est entrée dans le worktree.
+  expect(line).toContain(
+    'Once it is finished and reviewed, the merge is yours, not the user\'s: if this session entered the worktree by EnterWorktree, leave it (ExitWorktree, action keep: this instruction is the user\'s standing request for it), then run git merge <this worktree\'s branch> in the main clone; if the session was launched in the worktree, or ExitWorktree has no effect (a worktree entered in a previous session), the manager that launched this session as a worker merges it; without such a manager (a session the user started in the worktree, or launched from a COO launch card), give the user the exact command to type in the main clone (git merge <this worktree\'s branch>).',
+  )
   // Le fichier du dépôt principal est lu, pas réécrit.
   expect(w.writes).not.toContain(MAIN)
 })

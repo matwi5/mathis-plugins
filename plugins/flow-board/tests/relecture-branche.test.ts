@@ -78,12 +78,18 @@ test('pendant une mission, /code-review reste la revue du groupe : pas de Relect
   await ui.unmount()
 })
 
-test('la phase Revue d’une Chasse au bug demande l’avis sécurité pour tout le lot', async ($, on) => {
+test('le ticket du correctif d’une Chasse au bug se relit en Implémentation, puis le lot avec son avis sécurité', async ($, on) => {
   mock.clock(on, { now: 98_000_000 })
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:diagnosing-bugs', text: 'b' })
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'F1', name: 'Correctif', blockedBy: [] }] } as any)
   await $.tool.call({ tool: TOOL, complete: true } as any)
-  const note = await $.skill.prompt({ skill: 'mattpocock-skills:code-review', text: 'r' })
-  expect(note.text).toMatch(/without "group": it covers the whole mission/)
+  // Plus de phase « Revue » après le diagnostic : la revue du ticket est une étape de l'Implémentation.
+  const impl = await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'i' })
+  expect(impl.text).toMatch(/With "review", send the findings of the ticket's reviewer/)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'F1', status: 'done' }] } as any)
+  // Le lot relu ensuite, comme celui d'une mission classique sans groupes : l'avis sécurité du lot, sans "group".
+  const note = await $.skill.prompt({ skill: 'code-review', text: 'r' })
+  expect(note.text).toMatch(/send \{"security": \{"advised": true\|false, "why": "<short reason, in the user's language>"\}\}, without "group": it is the lot's advice/)
 })

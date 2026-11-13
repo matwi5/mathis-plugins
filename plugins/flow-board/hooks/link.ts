@@ -10,12 +10,12 @@
 // `openLinkedWork`) attend un clone, jamais le tableau de bord enregistré. Il n'importe que basics, relay et des modules sans lien avec le modèle, jamais le
 // modèle (un test le vérifie).
 
-import type { Board, ClosedLink, Closing, FlowItem, FlowPhase, GroupLink, LinkedLaunch, LinkedWork, Run, SecurityCheck, TicketGroup } from '../types'
+import type { Board, ClosedLink, Closing, FlowItem, FlowPhase, GroupLink, LinkedLaunch, LinkedWork, Relay, Run, SecurityCheck, TicketGroup } from '../types'
 import { SKILLS } from './catalog.ts'
 import { activeRun, addedCount, clip, clone, currentPhase, formText, hasGroupReview, hasUnreadableCounts, isoMinute, isTime, log, noFx, type Outcome, reviewTimeOf, sentGroupOf, setStep, shownGroupId, str, bugsText } from './basics.ts'
 import { hasSeparator, type LinkedSession, ownPart } from './linked.ts'
-import { branchFate, type CloseTarget, isSafeBranch, isSessionId, isWorktreePath, linkedPrefix, neutralRelayed, readClosing, sendNumber } from './closing.ts'
-import { isRelay, keepDecisions, relayedDecisions, relayForGroup, UNREADABLE_COUNT } from './relay.ts'
+import { branchFate, type CloseTarget, groupWorktree, isNotedWorktree, isSafeBranch, isSafeId, isSessionId, isWorktreePath, linkedPrefix, neutralRelayed, readClosing, type SendName, sendNumber } from './closing.ts'
+import { declaredGroup, isRelay, keepDecisions, relayedDecisions, relayForGroup, UNREADABLE_COUNT } from './relay.ts'
 import { maxOf } from './timeline.ts'
 
 /**
@@ -201,7 +201,11 @@ export const sendGroups = (run: Run, picked: readonly string[], now: number): vo
     if (!picked.includes(g.id)) return g
     // Un envoi suivant du groupe a son numéro : son worktree ne bute pas sur la branche gardée d'un précédent.
     const seq = groupSendSeq(g)
-    const sent: TicketGroup = { ...g, sends: seq, linked: { at: now, ...(seq > 1 ? { seq } : {}) } }
+    // Le nom de son worktree, noté une fois, tel que le lancement le donne maintenant : la fermeture le
+    // relit, même si le titre de la mission change ensuite. Seulement en forme : sinon, aucun nom noté.
+    const name = groupWorktree(run, g.id, seq > 1 ? seq : undefined)
+    const worktreeName = isNotedWorktree(name, g.id, seq) ? { worktreeName: name } : {}
+    const sent: TicketGroup = { ...g, sends: seq, linked: { at: now, ...(seq > 1 ? { seq } : {}), ...worktreeName } }
     // Tout envoi d'un groupe déjà relu, ici ou par un envoi précédent (même un lien rendu relu d'un autre
     // type) : sa revue et son avis de sécurité ne valent pas pour ce nouvel envoi, qui demande les siens.
     if (g.reviewedAt === undefined && g.security === undefined) return sent
@@ -269,7 +273,8 @@ export const previousSecurityText = (sec: SecurityCheck | undefined): string => 
 export const linkGroupSession = (board: Board, title: string, session: string, now: number): Outcome => {
   const run0 = activeRun(board)
   if (!run0) return null
-  const pending = (run0.groups ?? []).filter(g => g.linked !== undefined && g.linked.session === undefined)
+  // Un envoi marqué (`sessionClash`) n'attend plus de session : plus d'une candidate, aucun id n'y est noté.
+  const pending = (run0.groups ?? []).filter(g => isAwaitingSession(g.linked))
   if (pending.length === 0) return null
   // Après le dernier séparateur : le titre de la mission, devant, ne nomme pas le groupe de la session.
   const own = ownPart(title)
@@ -288,6 +293,126 @@ export const linkGroupSession = (board: Board, title: string, session: string, n
   log(run, now, '↗', `Worker lancé pour le groupe ${target.id}`, 'info')
   run.updatedAt = now
   return { board: b, fx: noFx() }
+}
+
+/**
+ * Un envoi de groupe attend encore sa session (« à lancer ») : lié, sans id noté ni marque `sessionClash`. Un envoi
+ * marqué a des sessions qui tournent : il n'est ni à lancer, ni à annuler, ni à renvoyer, et aucun id ne s'y note
+ * plus. Le seul prédicat de « en attente de session » pour les envois de groupe.
+ */
+export const isAwaitingSession = (link: GroupLink | null | undefined): boolean =>
+  link !== null && typeof link === 'object' && link.session === undefined && link.sessionClash === undefined
+
+/** L'id complet d'une session du CLI tel que le relais le donne (son sessionId, un UUID en minuscules). */
+const RELAY_SESSION_FORM = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * L'id court d'une session, d'après son id complet relu au relais : ses 8 premiers signes, ceux que `claude --bg`
+ * affiche et que `claude stop`, `claude rm` et `claude logs` reçoivent (le CLI refuse l'id complet : « No session
+ * name matches »). Null pour tout ce qui n'est pas un UUID en minuscules : un id hors forme n'est jamais noté.
+ */
+export const relayShortId = (value: unknown): string | null => (typeof value === 'string' ? (RELAY_SESSION_FORM.exec(value)?.[1] ?? null) : null)
+
+/** Toutes les sessions notées sur les liens de la mission (envois en cours, rendus et précédents), sans la casse. */
+const notedSessions = (run: Run): string[] => {
+  const isLink = (x: unknown): x is ClosedLink => x !== null && typeof x === 'object'
+  const links = (run.groups ?? []).filter(isLink).flatMap(g => [(g as TicketGroup).linked, (g as TicketGroup).delegated, ...earlierOf((g as TicketGroup).delegated)]).filter(isLink)
+  return links.map(l => l.session).filter((s): s is string => typeof s === 'string').map(s => s.toLowerCase())
+}
+
+/** Deux ids de la même session : l'un est le début de l'autre (l'id court de `claude --bg` fait 6 signes ou plus), comme pour `relayedReportAt`. */
+const isSameSession = (a: string, b: string): boolean => a.startsWith(b) || b.startsWith(a)
+
+/**
+ * La session d'un envoi de groupe dont la sortie du lancement n'a pas été lue (filtrée par un tube, ou lancée en
+ * arrière-plan) : dans le manager, à chaque relecture du relais. Pour chaque envoi en cours (`linked`) sans marque, les
+ * candidates sont les entrées du relais de cette mission dont l'appel `delegate` a déclaré ce groupe (`group`) et qui
+ * ont commencé pendant cet envoi (`startedAt >= link.at`), comptées par leur id complet. Sans session notée : une seule
+ * candidate, à l'id complet en forme, et que la mission n'a noté pour aucun autre envoi : son id court est noté. Plus
+ * d'une, un id hors forme, ou une session déjà notée ailleurs : rien n'est noté, l'envoi est marqué `sessionClash` (la
+ * fermeture garde alors la session) et le journal le dit, une fois, sans recopier l'id. Avec une session déjà notée
+ * (par la sortie du lancement ou par le relais) : une candidate qui n'est pas elle, ou hors forme, marque l'envoi de
+ * même, sans toucher à l'id noté, qui ne change jamais (invariant de la session notée).
+ */
+export const linkRelaySessions = (board: Board, relay: Relay | null | undefined, now: number): Outcome => {
+  const run0 = activeRun(board)
+  if (!run0 || relay === null || typeof relay !== 'object' || relay.run !== run0.id) return null
+  const entries = relay.sessions !== null && typeof relay.sessions === 'object' && !Array.isArray(relay.sessions) ? Object.entries(relay.sessions) : []
+  const noted = notedSessions(run0)
+  const outcomes = new Map<string, { session: string } | { reason: string }>()
+  for (const g of run0.groups ?? []) {
+    // Relu du tableau de bord : un groupe sans id texte n'a pas d'envoi à compléter.
+    if (g === null || typeof g !== 'object' || typeof g.id !== 'string') continue
+    const link = g.linked
+    if (link === null || typeof link !== 'object' || link.sessionClash !== undefined || !isTime(link.at)) continue
+    const ids = entries
+      .filter(([, e]) => e !== null && typeof e === 'object' && isTime(e.startedAt) && e.startedAt >= link.at && declaredGroup(e.group).toLowerCase() === g.id.toLowerCase())
+      .map(([id]) => id)
+    if (ids.length === 0) continue
+    // Comptées par leur id complet (la clé d'une entrée) : deux sessions aux mêmes 8 premiers signes sont deux candidates.
+    const shorts = ids.map(relayShortId)
+    const isOdd = shorts.some(s => s === null)
+    // Une session de l'app (`local_…`) ne se compare pas à l'id de son entrée de relais (celui de sa transcription) :
+    // rien n'est relu pour elle, sinon chaque envoi lancé depuis l'app serait marqué.
+    if (typeof link.session === 'string' && link.session.startsWith('local_')) continue
+    if (typeof link.session === 'string') {
+      // Déjà notée : une autre session (ou un id hors forme) s'est déclarée pour cet envoi, l'envoi a plus d'une candidate.
+      const own = link.session.toLowerCase()
+      if (isOdd) outcomes.set(g.id, { reason: 'id de session hors forme au relais, à côté de la session notée' })
+      // Comptées par leur id complet ici aussi : deux entrées aux 8 premiers signes de l'id noté sont deux sessions.
+      else if (ids.length > 1 || shorts.some(s => !isSameSession(s!, own))) outcomes.set(g.id, { reason: 'une autre session candidate au relais, à côté de la session notée' })
+      continue
+    }
+    if (link.session !== undefined) continue
+    const short = shorts[0]
+    const reason =
+      isOdd || typeof short !== 'string'
+        ? 'id de session hors forme au relais'
+        : ids.length > 1
+          ? `${ids.length} sessions candidates au relais`
+          : noted.some(n => isSameSession(n, short))
+            ? 'session déjà notée pour un autre envoi'
+            : null
+    if (reason !== null || typeof short !== 'string') outcomes.set(g.id, { reason: reason ?? 'id de session hors forme au relais' })
+    else {
+      outcomes.set(g.id, { session: short })
+      noted.push(short)
+    }
+  }
+  if (outcomes.size === 0) return null
+  const b = clone(board)
+  const run = activeRun(b)!
+  run.groups = run.groups!.map(g => {
+    const o = g !== null && typeof g === 'object' && typeof g.id === 'string' ? outcomes.get(g.id) : undefined
+    if (!o || !g.linked) return g
+    if ('session' in o) {
+      log(run, now, '↗', `Session du groupe ${shownGroupId(g.id)} notée d'après son entrée de relais (${o.session})`, 'info')
+      return { ...g, linked: { ...g.linked, session: o.session } }
+    }
+    log(run, now, '⚠', `Session du groupe ${shownGroupId(g.id)} non notée sûrement (${o.reason}) : sa fermeture gardera la session, ni claude stop ni claude rm`, 'warn')
+    return { ...g, linked: { ...g.linked, sessionClash: true as const } }
+  })
+  run.linkedAt ??= now
+  run.updatedAt = now
+  return { board: b, fx: noFx() }
+}
+
+/**
+ * Ce que la réponse au tour dit d'une commande `claude --bg` dont la sortie porte moins de lignes « backgrounded »
+ * que la commande n'a de lancements (`filtered` : un tube, un filtre, une redirection, ou un lancement raté) ou n'est
+ * pas lue (`background` : la commande tourne en arrière-plan), quand des envois de groupe attendent encore leur
+ * session après les notes de ce lancement ; '' sinon.
+ */
+export const unnotedLaunchNotice = (run: Run | null | undefined, why: 'filtered' | 'background'): string => {
+  const pending = (run?.groups ?? [])
+    .filter(g => g !== null && typeof g === 'object' && isAwaitingSession(g.linked))
+    .map(g => shownGroupId(g.id))
+  if (pending.length === 0) return ''
+  const cause =
+    why === 'background'
+      ? 'this claude --bg command was run in the background, so its output is not read'
+      : 'the output of this claude --bg command has fewer « backgrounded · <id> · <title> » lines than it has launches (filtered by a pipe such as | tail, | head or | grep, or redirected to a file; or a launch failed)'
+  return `flow-board: ${cause}: the session of ${pending.length > 1 ? `groups ${pending.join(', ')} is` : `group ${pending[0]} is`} still not noted. Check with claude agents --json that each worker runs; its first flow call ("delegate") then ties its session through the relay. Launch one command per worker, with nothing on its output (no pipe, no filter, no redirection).`
 }
 
 /** Un groupe lancé hors de la demande du mod : le groupe et l'id du lancement. */
@@ -317,7 +442,7 @@ export const offRequestLaunches = (run: Run, launches: readonly LinkedLaunch[], 
       const head = titleKey(l.title.slice(0, l.title.length - ownPart(l.title).length))
       if (head === '' || prefix === '' || !(head.startsWith(prefix) || prefix.startsWith(head))) continue
     }
-    if (group.linked !== undefined && group.linked.session === undefined) continue
+    if (isAwaitingSession(group.linked)) continue
     const links = [group.linked, group.delegated].filter((x): x is GroupLink => x !== undefined && x !== null && typeof x === 'object')
     const known = links.flatMap(x => [x.session, ...(Array.isArray(x.earlier) ? x.earlier.map(e => e?.session) : [])])
     if (known.includes(l.id)) continue
@@ -347,7 +472,8 @@ export const askCloseLinkedItems = (board: Board, now: number): Outcome => {
 export const cancelLinkedGroup = (board: Board, id: string, now: number): Outcome => {
   const run0 = activeRun(board)
   const was = run0?.groups?.find(g => g.id === id)
-  if (!run0 || !was?.linked || was.linked.session !== undefined) return null
+  // Un envoi marqué (`sessionClash`) a des sessions qui tournent : l'annuler effacerait leur lien et leur fermeture.
+  if (!run0 || !was?.linked || !isAwaitingSession(was.linked)) return null
   const b = clone(board)
   const run = activeRun(b)!
   run.groups = run.groups!.map(g => (g.id === id ? withoutLink(g) : g))
@@ -427,6 +553,10 @@ export const returnGroups = (run: Run, value: unknown, now: number, stored?: unk
       // Le retour d'un envoi efface la marque de la remise à zéro : la revue et l'avis de cet envoi arrivent avec lui.
       const { isReset: _reset, ...kept } = g
       const sentLink = g.linked!
+      // Rendu sans session notée ni marque : ni la sortie de son lancement ni son entrée de relais ne l'ont donnée ; le
+      // journal le dit, la fermeture partira sans id (ni --session ni claude rm).
+      if (sentLink.session === undefined && sentLink.sessionClash === undefined)
+        log(run, now, '⚠', `Groupe ${shownGroupId(g.id)} rendu sans session notée : ni la sortie de son lancement ni une entrée de relais de son appel delegate ne l'ont donnée ; sa fermeture se fera sans id, ni --session ni claude rm`, 'warn')
       return withoutLink({
         ...kept,
         // Confié de nouveau puis rendu : une autre session, à fermer à son tour ; la précédente reste
@@ -441,6 +571,11 @@ export const returnGroups = (run: Run, value: unknown, now: number, stored?: unk
                   ...(g.delegated.session ? { session: g.delegated.session } : {}),
                   ...(g.delegated.seq !== undefined ? { seq: g.delegated.seq } : {}),
                   ...(g.delegated.closing ? { closing: g.delegated.closing } : {}),
+                  // Le nom de son worktree, noté à son lancement, et la marque d'un conflit : ils ne changent plus.
+                  ...(g.delegated.worktreeName !== undefined ? { worktreeName: g.delegated.worktreeName } : {}),
+                  ...(g.delegated.worktreeClash !== undefined ? { worktreeClash: g.delegated.worktreeClash } : {}),
+                  // De même la marque d'un id de session qui n'a pas pu être noté sûrement : la fermeture garde la session.
+                  ...(g.delegated.sessionClash !== undefined ? { sessionClash: g.delegated.sessionClash } : {}),
                 },
               ].filter((x, i, all) => x.closing?.state !== 'closed' || all.length - i <= EARLIER_MAX),
             }
@@ -619,6 +754,90 @@ export const keepClosings = (kept: Run, other: Run | undefined): Run => {
 }
 
 /**
+ * La fusion de deux copies d'une même mission garde la plus récente ; le nom du worktree noté pour chaque envoi de
+ * groupe ne change jamais (invariant du nom noté). Le même envoi se retrouve dans l'autre copie par sa date d'envoi
+ * (`at`), où qu'il soit (`linked`, `delegated`, `earlier`) : les deux copies peuvent être à deux étapes. Un nom absent
+ * de la copie gardée prend celui de l'autre (une session sur une version d'avant la note reconstruisait `earlier`
+ * sans lui) ; pour deux noms différents, la copie gardée garde le sien (celui de l'autre n'est pas recopié), et l'envoi est marqué `worktreeClash` (aucun des deux n'entre
+ * alors dans une commande) ; une marque de l'une des copies reste après la fusion.
+ */
+export const keepSendNames = (kept: Run, other: Run | undefined): Run => {
+  if (!other || !Array.isArray(kept.groups)) return kept
+  const isLink = (x: unknown): x is ClosedLink => x !== null && typeof x === 'object'
+  let changed = false
+  const groups = kept.groups.map(g => {
+    if (!isLink(g)) return g
+    const was = other.groups?.find(x => isLink(x) && x.id === g.id)
+    if (!was) return g
+    const theirs = [was.linked, was.delegated, ...earlierOf(was.delegated)].filter(isLink)
+    const named = <L extends ClosedLink>(link: L): L => {
+      const same = theirs.filter(x => x.at === link.at)
+      let next = link
+      for (const t of same) {
+        if (next.worktreeName === undefined && t.worktreeName !== undefined) next = { ...next, worktreeName: t.worktreeName as string }
+        else if (t.worktreeName !== undefined && t.worktreeName !== next.worktreeName && next.worktreeClash === undefined) next = { ...next, worktreeClash: true }
+        if (t.worktreeClash !== undefined && next.worktreeClash === undefined) next = { ...next, worktreeClash: true }
+      }
+      return next
+    }
+    const linked = isLink(g.linked) ? named(g.linked) : g.linked
+    let delegated = isLink(g.delegated) ? named(g.delegated) : g.delegated
+    if (isLink(delegated) && Array.isArray(delegated.earlier)) {
+      const earlier = delegated.earlier.map(e => (isLink(e) ? named(e) : e))
+      if (earlier.some((e, i) => e !== delegated!.earlier![i])) delegated = { ...delegated, earlier }
+    }
+    if (linked === g.linked && delegated === g.delegated) return g
+    changed = true
+    return { ...g, ...(linked !== undefined ? { linked } : {}), ...(delegated !== undefined ? { delegated } : {}) }
+  })
+  return changed ? { ...kept, groups } : kept
+}
+
+/**
+ * La fusion de deux copies d'une même mission garde la plus récente ; l'id de session noté pour chaque envoi de
+ * groupe ne change jamais (invariant de la session notée). Le même envoi se retrouve dans l'autre copie par sa date d'envoi
+ * (`at`), où qu'il soit (`linked`, `delegated`, `earlier`). Un id absent de la copie gardée prend celui de l'autre,
+ * seulement en forme (`isSafeId`) ; un id de l'autre hors forme, ou deux ids différents, ne sont pas repris : la copie
+ * gardée garde le sien, et l'envoi est marqué `sessionClash` (la fermeture garde alors la session) ; une marque de
+ * l'une des copies reste après la fusion.
+ */
+export const keepSessions = (kept: Run, other: Run | undefined): Run => {
+  if (!other || !Array.isArray(kept.groups)) return kept
+  const isLink = (x: unknown): x is ClosedLink => x !== null && typeof x === 'object'
+  let changed = false
+  const groups = kept.groups.map(g => {
+    if (!isLink(g)) return g
+    const was = other.groups?.find(x => isLink(x) && x.id === g.id)
+    if (!was) return g
+    const theirs = [was.linked, was.delegated, ...earlierOf(was.delegated)].filter(isLink)
+    const noted = <L extends ClosedLink>(link: L): L => {
+      let next = link
+      for (const t of theirs.filter(x => x.at === link.at)) {
+        const clash = () => (next.sessionClash === undefined ? { ...next, sessionClash: true as const } : next)
+        if (t.sessionClash !== undefined) next = clash()
+        if (t.session === undefined) continue
+        if (!isSafeId(t.session)) next = clash()
+        // Un envoi marqué ne prend aucun id de l'autre copie : plus d'une candidate, rien n'est noté.
+        else if (next.session === undefined && next.sessionClash === undefined) next = { ...next, session: t.session }
+        // La même session notée sous deux longueurs (6 signes et plus par la ligne « backgrounded », 8 par le relais) n'est pas un désaccord.
+        else if (next.session !== undefined && !isSameSession(t.session.toLowerCase(), next.session.toLowerCase())) next = clash()
+      }
+      return next
+    }
+    const linked = isLink(g.linked) ? noted(g.linked) : g.linked
+    let delegated = isLink(g.delegated) ? noted(g.delegated) : g.delegated
+    if (isLink(delegated) && Array.isArray(delegated.earlier)) {
+      const earlier = delegated.earlier.map(e => (isLink(e) ? noted(e) : e))
+      if (earlier.some((e, i) => e !== delegated!.earlier![i])) delegated = { ...delegated, earlier }
+    }
+    if (linked === g.linked && delegated === g.delegated) return g
+    changed = true
+    return { ...g, ...(linked !== undefined ? { linked } : {}), ...(delegated !== undefined ? { delegated } : {}) }
+  })
+  return changed ? { ...kept, groups } : kept
+}
+
+/**
  * La consigne de suppression des branches est partie : chaque fermeture « closed » de la mission dont la
  * branche notée est l'une de celles qu'elle visait, et qu'une consigne écrite maintenant viserait
  * encore, reçoit sa marque (`cleanupAt`) ; une fermeture déjà marquée la garde.
@@ -629,9 +848,10 @@ export const markCleanupSent = (board: Board, runId: string, branches: readonly 
   if (!run) return null
   const sent = new Set(branches)
   let changed = false
-  const mark = (target: CloseTarget, seq: unknown, closing: Closing | undefined) => {
+  const mark = (target: CloseTarget, seq: unknown, closing: Closing | undefined, send?: SendName) => {
     if (!closing || closing.state !== 'closed' || closing.cleanupAt !== undefined || !sent.has(closing.branch ?? '')) return
-    const fate = branchFate(run, target, seq, closing)
+    // Le verdict du plan, sur le même lien (le nom de son worktree noté au lancement compris).
+    const fate = branchFate(run, target, seq, closing, send)
     if ('branch' in fate && fate.branch === closing.branch) {
       closing.cleanupAt = now
       changed = true
@@ -643,8 +863,8 @@ export const markCleanupSent = (board: Board, runId: string, branches: readonly 
   for (const g of (Array.isArray(run.groups) ? run.groups : []).filter(isEntry)) {
     const target = { kind: 'group', id: g.id, name: g.name } as const
     const link = isEntry(g.delegated) ? g.delegated : undefined
-    for (const prev of earlierOf(link)) mark(target, prev.seq, readClosing(prev.closing))
-    if (link) mark(target, link.seq, readClosing(link.closing))
+    for (const prev of earlierOf(link)) mark(target, prev.seq, readClosing(prev.closing), prev)
+    if (link) mark(target, link.seq, readClosing(link.closing), link)
   }
   for (const phase of (Array.isArray(run.phases) ? run.phases : []).filter(isEntry)) {
     if (!SKILLS[phase.skill]?.items) continue

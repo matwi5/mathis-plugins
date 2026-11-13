@@ -22,7 +22,7 @@ const FILE_OF = {
   4: 'procedure-groupe-fin.md', 5: 'procedure-groupe-fin.md', 6: 'procedure-groupe-fin.md',
   9: 'procedure-groupe-sans-git.md', 10: 'procedure-groupe-autonome.md', 11: 'effort-workers.md',
 }
-const ANNEXES = ['procedure-groupe-fin.md', 'procedure-groupe-sans-git.md', 'procedure-groupe-autonome.md', 'effort-workers.md']
+const ANNEXES = ['procedure-groupe-fin.md', 'procedure-groupe-cas.md', 'procedure-groupe-sans-git.md', 'procedure-groupe-autonome.md', 'effort-workers.md']
 const files = Object.fromEntries(['procedure-groupe.md', ...ANNEXES].map(f => [f, read(`reference/${f}`)]))
 /** La procédure entière, noyau et annexes : une phrase retirée ne reste dans aucun d'eux. */
 const whole = Object.values(files).join('\n')
@@ -177,14 +177,16 @@ test('chaque ticket : décisions relues, statut, TDD, revue à deux axes en un r
     'Pour un ticket sensible ou très sensible (un ticket muet compte comme sensible), l\'axe Spec seul, sans l\'axe Standards que sa passe « bogues » refait, dans un seul spécialiste relecteur (outil Agent, modèle opus, effort high, passés explicitement), nommé « Spec · <ticket> », d\'après la variante « axe Spec seul » du gabarit `prompt-relecteur.md`',
     'il ne juge pas le code sur `CODING_STANDARDS.md`, et ses constats partent avec `"standards": 0` (point 8)',
     'arguments « <niveau> --max-findings all <plage de l\'instantané> consignes : <chemin> »',
-    '<niveau> valant xhigh si le ticket supprime des données ou touche la concurrence',
+    '<niveau> valant xhigh si le ticket supprime des données (ou décide ou garde une suppression : ce qui est effacé dépend de son code, même s\'il n\'efface rien lui-même) ou touche la concurrence',
     'l\'invariant du ticket quand il en a un',
     'Après la passe « bogues », une seule passe high relit tout ce qui a changé depuis son instantané : ses correctifs, et le code ajouté après elle',
     'si cette passe trouve encore une violation de l\'invariant, la session la corrige, écrit le scénario en test et me pose la question, sans nouvelle passe',
     'sur la plage `<hash du premier instantané>..<hash d\'un nouvel instantané>`',
-    'Une classe de défaut trouvée une deuxième fois',
-    'la session cherche toutes ses occurrences, cite sa recherche (la commande et son résultat) au compte rendu et les corrige d\'un coup, sans passe de plus pour elle',
-    '`git update-ref refs/worktree/flow-board/<id du ticket> <instantané>`',
+    'Un constat qui nomme d\'autres endroits (« même défaut dans X ») les fait tous corriger dès la première fois (hors du code antérieur au lot : section 7), et une classe de défaut qui revient une deuxième fois sans cela (par la revue du ticket, celle d\'un autre ticket du groupe ou cette passe) se traite de même',
+    'la session cherche le motif de la classe et ses variantes (appelants, formes voisines), pas les seules lignes écrites, cite sa recherche (la commande et son résultat) au compte rendu et corrige toutes les occurrences d\'un coup, sans passe de plus pour elle',
+    'il construit l\'arbre dans un index temporaire parti de `HEAD`, sans toucher à l\'index de la session (ce qu\'un autre ticket y a indexé n\'entre pas dans l\'instantané)',
+    '(sans Node : les étapes à la main, dans `procedure-groupe-cas.md`)',
+    'puis `git add` de chacun de ses fichiers (correctifs compris ; l\'instantané n\'indexe rien), le commit',
     'les deux revues lisent alors la plage `refs/worktree/flow-board/<id du ticket>^..refs/worktree/flow-board/<id du ticket>`',
     'le vrai commit du ticket vient toujours après sa revue',
     '`/code-review <niveau> <base>..HEAD consignes : <chemin>`',
@@ -202,7 +204,8 @@ test('règles de travail : spécialistes en lecture seule, dossier temporaire, a
     section(3),
     'sans spécialistes qui écrivent',
     'seule exception, une session qui ne tourne pas sur Opus et confie sa revue du groupe à un relecteur Opus',
-    '`printenv CLAUDE_JOB_DIR`, seule dans sa commande',
+    '`printenv CLAUDE_JOB_DIR`, seule dans sa commande, suivi de `/tmp`',
+    'Le dossier temporaire de la session, `$CLAUDE_JOB_DIR/tmp` (l\'outil Write est refusé à la racine de `CLAUDE_JOB_DIR`)',
     'Ne jamais attendre par `sleep`',
     'pas de Monitor pour un spécialiste',
     'avancer ce qui ne dépend pas d\'elle',
@@ -248,6 +251,17 @@ test('revue de sécurité : relecteur en lecture seule sur le diff du groupe, ja
     'chaque faille gardée arrive numérotée (F1, F2…) avec un correctif prêt',
     'pas de seconde passe sur le diff de ses correctifs, la revue de sécurité tourne une seule fois',
   )
+})
+
+test('revue de sécurité désactivée : l’avis d’abord, en tête de la section 5, et la passe « bogues » prend les zones de la méthode', () => {
+  const s5 = section(5)
+  assert.ok(
+    s5.split('\n').find(l => l.trim() !== '' && !l.startsWith('#'))?.startsWith("D'abord, envoyer l'avis à l'outil `flow`, et ne lire la méthode en entier et n'écrire les consignes de sécurité que si sa réponse ne dit pas la revue désactivée"),
+    'la consigne de l’avis d’abord n’ouvre pas la section 5',
+  )
+  // Le noyau (point 5 de la section 2) y renvoie ; le détail est dans l'annexe, en tête de la section 5.
+  has(section(2), 'Revue de sécurité désactivée (dite par la réponse à `delegate`) : ses zones y entrent, tête de la section 5.')
+  has(s5, 'À la place, et dès le premier ticket : le fichier de consignes de la passe « bogues » de chaque ticket sensible du groupe reçoit aussi la liste des zones de la section 1 du fichier de méthode de la revue de sécurité', 'et le relecteur signale comme Important un défaut dans l\'une d\'elles ; pas de relecteur de plus ni de question')
 })
 
 test('compte rendu : complet au relais, une ligne au manager', () => {
@@ -322,6 +336,13 @@ test('point 7 : le fichier de consignes s’écrit dans un appel à part et sa l
 
 test('gabarit : le fichier de consignes se remplit d’après un gabarit, qui porte la consigne des relecteurs telle quelle', () => {
   has(section(2), 'qui remplit le gabarit `consignes-revue.md` (dans le dossier de ce fichier) d\'après le ticket', 'pour une autre revue, copier ce gabarit dans son dossier temporaire et en remplir les trous')
+  // La revue du groupe et sa revue de sécurité ont leurs consignes écrites par le même script, plus par une copie à la main.
+  has(
+    section(2),
+    'pour la revue du groupe et sa revue de sécurité, le même script, `--groupe <id du groupe> <base>..HEAD <sortie> <les fichiers de ses tickets>` ou `--securite <id du groupe> <base>..<lancement> <sortie> <les fichiers de ses tickets>`',
+    'qui crée aussi le dossier du relecteur, `groupe-<id>` ou `securite-<id>`',
+  )
+  has(files['procedure-groupe-fin.md'], 'écrit par `node <dossier de flow-board>/scripts/consignes.mjs --groupe <id du groupe> <base>..HEAD <sortie> <les fichiers de ses tickets>`', 'écrit par `node <dossier de flow-board>/scripts/consignes.mjs --securite <id du groupe> <base>..<lancement> <sortie> <les fichiers de ses tickets>`')
   // Le point 7 renvoie au gabarit au lieu d'en décrire le contenu.
   assert.ok(!section(2).includes('les points qui me sont réservés, ce qu\'elle ne doit pas faire'), 'le point 7 décrit encore le contenu')
   has(
@@ -400,10 +421,10 @@ test('un constat de passe « bogues » qui ne viole pas l’invariant va aux pis
   has(
     section(2),
     'un constat de la passe « bogues » qui ne le viole pas n\'ouvre pas de question : il va au compte rendu, sous « Pistes » (section 6)',
-    'seul ce qui viole l\'invariant, ou une régression, se corrige ou devient une question',
+    'seul ce qui viole l\'invariant, une régression ou un critère manqué sans signal se corrige ou devient une question',
   )
   has(section(6), 'les pistes (les constats des passes « bogues » qui ne violent pas l\'invariant')
-  has(template, 'un constat qui ne le viole pas se range sous « Pistes », sans question ni correctif, sauf une régression introduite par le diff, Important et corrigée')
+  has(template, 'un constat qui ne le viole pas se range sous « Pistes », sans question ni correctif, sauf une régression introduite par le diff, ou un constat sur le code du lot qui fait manquer un critère du ticket sans signal (le comportement promis ne se produit pas, et rien ne le dit), Important et corrigé')
 })
 
 test('une question sensible née en cours de ticket part tout de suite, la recommandation codée ; le commit n’attend que les cas bloquants', () => {
@@ -438,16 +459,27 @@ test('du code écrit après la passe « bogues » repasse en revue, la ligne « 
 
 test('décisions lues par leur entrée, réglages du poste relevés à un essai, confiance du dossier lue sans afficher le fichier', () => {
   has(section(2), 'un fichier de décisions long se lit par la série ou l\'entrée que citent le ticket ou le prompt')
+  // Les deux cas rares de la section 3 (session hors Opus, essai) sont dans une annexe, que le noyau nomme.
+  has(section(3), 'Deux cas se lisent dans `procedure-groupe-cas.md` (dossier de ce fichier), seulement quand ils se présentent')
   has(
-    section(3),
+    files['procedure-groupe-cas.md'],
     'relève d\'abord les réglages du poste qui jouent (`worktree.baseRef`, la version de Claude Code, la confiance du dossier)',
     'Un essai qui lance `claude --bg` se fait de préférence dans un dépôt déjà de confiance',
     'jamais le reste de `~/.claude.json` (ni Read, ni `cat`), qui peut porter des jetons',
   )
+  // L'instantané à la main, sans Node, y est aussi : le noyau ne garde que le script, qui ne touche pas à l'index.
+  has(
+    files['procedure-groupe-cas.md'],
+    'Seulement sur un poste sans Node : l\'instantané d\'un ticket sensible se pose à la main, dans l\'index de la session',
+    '`git diff --cached --name-only` doit lister les fichiers du ticket et rien d\'autre (sortir d\'abord de l\'index ce qui n\'en est pas)',
+    '`git update-ref refs/worktree/flow-board/<id du ticket> <instantané>`',
+    '`git update-ref -d refs/worktree/flow-board/<id du ticket> <instantané>`, une fois vérifié à la main que chaque fichier de l\'instantané est amené à cette version par un commit du ticket',
+  )
+  assert.ok(!procedure.includes('git write-tree'), 'le noyau porte encore les étapes à la main de l’instantané')
   // La commande est celle du texte de lancement (TRUST_COMMAND de catalog.ts), mot pour mot.
   const command = read('hooks/catalog.ts').match(/export const TRUST_COMMAND = `([^`]*)`/)
   assert.ok(command, 'TRUST_COMMAND absent de catalog.ts')
-  has(section(3), `par cette commande qui n'affiche que sa valeur (\`python\` sous Windows) : \`${command[1]}\``)
+  has(files['procedure-groupe-cas.md'], `par cette commande qui n'affiche que sa valeur (\`python\` sous Windows) : \`${command[1]}\``)
 })
 
 test('pas d’appel final à l’advisor quand les revues du groupe ont tourné', () => {
@@ -536,8 +568,22 @@ test('la consigne des relecteurs rend Important une régression, et les pistes l
     section(7),
     'une régression introduite par le diff (une entrée qui passait avant lui et qui maintenant lève, change de résultat ou est refusée) est Important, que le ticket ait un invariant ou non',
   )
-  has(section(2), 'sauf une régression introduite par le diff (section 7), Important, qui se corrige', 'sous « Pistes », sauf une régression, qui se corrige')
-  has(section(6), 'hors régressions, corrigées')
+  has(section(2), 'sauf une régression introduite par le diff (section 7), Important, qui se corrige', 'sous « Pistes », sauf une régression ou un critère manqué sans signal, qui se corrige')
+  has(section(6), 'hors régressions et critères manqués sans signal, corrigés')
+})
+
+// Un groupe avait rangé sous « Pistes » un constat qui rendait une fonction muette (le comportement promis
+// ne se produisait pas, sans aucun signal), faute de violer l'invariant ; le manager avait dû le renvoyer.
+test('un critère manqué sans signal est Important et se corrige, la revue du groupe comprise', () => {
+  has(
+    section(7),
+    'un constat sur le code du lot qui fait manquer un critère du ticket sans signal (le comportement promis ne se produit pas, et rien ne le dit) est Important de même, que le ticket ait un invariant ou non',
+  )
+  has(
+    section(2),
+    'ou un constat sur le code du lot qui fait manquer un critère du ticket sans signal (le comportement promis ne se produit pas, et rien ne le dit), Important, qui se corrige',
+  )
+  has(section(4), 'la revue du groupe le corrige dans le groupe, même s\'il ne viole aucun invariant, au lieu de le ranger sous les pistes')
 })
 
 test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer le skill', () => {
@@ -551,6 +597,31 @@ test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer 
     'les Mineurs en un compte par axe, sans détail',
   )
   has(read('README.md'), '├── reference/prompt-relecteur.md')
+})
+
+// Des phrases de la procédure faisaient échouer un appel à chaque worker (Write à la racine de CLAUDE_JOB_DIR,
+// l'outil Grep absent, --chemins en une chaîne à espaces, la confirmation que /tdd demande) ou relancer la
+// suite complète à chaque commit et après une fusion dont le hook avait passé.
+test('la procédure ne coûte plus d’appel refusé et dit quand lancer la suite complète', () => {
+  has(section(2), 'son titre se trouve par Read de proche en proche, ou, dans un dépôt qui a `scripts/show.py`, par `python3 scripts/show.py --liste <chemin absolu> "## "`')
+  assert.ok(!section(2).includes('par l\'outil Grep, motif'), 'le point 1 dépend encore de l’outil Grep')
+  has(section(2), '`--chemins <c> --chemins <c>…` (une option par chemin de la mission)', '`--faits <t> --faits <t>…` (une option par ticket déjà fait du groupe')
+  has(section(2), 'dans un worker, la couture de test que fixe le ticket (ses critères, les tests qu\'il nomme) vaut la confirmation que `<tdd>` demande à la personne')
+  has(section(4), 'La suite complète tourne alors, une fois', 'une fusion dont le hook `pre-merge-commit` a passé ne la fait pas relancer', '(paramètre `timeout` de l\'outil Bash, 600000)')
+  has(section(6), 'de son worktree ou de son dossier de job `CLAUDE_JOB_DIR`, son sous-dossier `tmp` compris (pas un autre)')
+  has(section(1), 'elle est due dès que le groupe compte au moins deux tickets très sensibles')
+  has(section(10), 'Une recommandation prise en partie (un filtre sur deux, par exemple) se déclare dans `{"decided": …}` avec la partie laissée et sa raison, jamais comme « plus prudente » sans dire ce qui manque')
+})
+
+// L'axe Spec ne lisait que les critères cochés, et une docstring fausse avait été jugée conforme : les deux
+// variantes du gabarit (deux axes, axe Spec seul) portent chacune ces vérifications.
+test('l’axe Spec des deux variantes vérifie « What to build » et confronte les textes touchés au code', () => {
+  const prompt = read('reference/prompt-relecteur.md')
+  for (const part of [
+    'Chaque point numéroté et chaque phrase de comportement de « What to build » se vérifient aussi, pas seulement les critères cochés.',
+    'Chaque phrase de docstring, de commentaire ou de message que le diff touche se confronte aux branches du code qu\'elle décrit',
+    'Pour un défaut, nomme aussi les autres endroits où tu vois le même motif (« même défaut dans X »)',
+  ]) assert.equal(prompt.split(part).length - 1, 2, `pas dans les deux variantes : « ${part} »`)
 })
 
 test('un worker ne demande jamais d’envoyer "sensitive" lui-même : il corrige la ligne et prévient', () => {
@@ -579,6 +650,13 @@ test('la passe « bogues » passe --max-findings all, avec ou sans git', () => {
   has(template, 'lancée avec `--max-findings all`, elle range ses constats par gravité, les bogues d\'abord')
 })
 
+// Une /code-review lancée pendant qu'une autre tournait avait retenu le fil d'un worker 11 minutes et demie ; un essai
+// (deux fois sur deux) a montré que la seconde passe au premier plan.
+test('une /code-review ne se lance qu’une fois la précédente revenue', () => {
+  has(section(2), 'Une `/code-review` ne se lance qu\'une fois la précédente revenue (sa notification reçue) : lancée pendant qu\'une autre tourne, elle passe au premier plan et retient la session jusqu\'à sa fin')
+  has(section(2), 'quand deux passes doivent tourner en même temps, la seconde se confie à un spécialiste relecteur (outil Agent, modèle opus, effort passé explicitement), qui la lance lui-même')
+})
+
 // Un tour de revue était parti sur un instantané déjà périmé, que les contrôles avaient fait reprendre ;
 // un correctif de relecteur avait été appliqué en partie, sans le dire.
 test('la revue et l’instantané partent sur des contrôles verts ; un correctif proposé s’applique en entier, ou l’écart se dit', () => {
@@ -586,7 +664,7 @@ test('la revue et l’instantané partent sur des contrôles verts ; un correcti
     section(2),
     'La revue du ticket (point 4) et l\'instantané d\'un ticket sensible (point 6) ne partent qu\'une fois verts les contrôles du ticket',
     '`scripts/check.sh --quick` ou `--test` sur ses fichiers de test) et, pour un ticket commité avant sa revue, le pre-commit',
-    'la suite complète n\'est pas demandée à chaque ticket : elle tourne une fois en fin de groupe',
+    'avant le commit d\'un ticket, ses seuls tests ciblés, sans relancer à la main ce que le pre-commit lance déjà ; la suite complète tourne une fois, à la fin du groupe : après les correctifs de la revue du groupe quand elle tourne (section 4), sinon après le dernier ticket',
     'Un correctif fait après l\'instantané (un contrôle devenu rouge) repose l\'instantané avant la revue',
   )
   has(

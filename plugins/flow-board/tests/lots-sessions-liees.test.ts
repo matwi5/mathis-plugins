@@ -165,7 +165,7 @@ test('un groupe confié à un worker : hors des lots, il retient ceux qui touche
   const both = startLinkedGroups(sent, ['Q'], 3_200)!.board
   expect(linkGroupSession(both, 'Revue', 'local_x', 3_300)).toBeNull()
   const linked = linkGroupSession(both, 'Groupe Q · Qu', 'local_q', 3_300)!.board
-  expect(activeRun(linked)!.groups!.find(g => g.id === 'Q')!.linked).toEqual({ at: 3_200, session: 'local_q' })
+  expect(activeRun(linked)!.groups!.find(g => g.id === 'Q')!.linked).toEqual({ at: 3_200, worktreeName: 'groupe-lot-Q', session: 'local_q' })
   // Le titre de la mission en tête peut nommer un autre groupe : seule compte la partie après « › ».
   const prefixed = linkGroupSession(both, 'Revue du groupe P › Groupe Q · Qu', 'local_q2', 3_300)!.board
   expect(activeRun(prefixed)!.groups!.find(g => g.id === 'Q')!.linked?.session).toBe('local_q2')
@@ -778,7 +778,7 @@ test('un groupe rendu par son worker garde les revues qu’elle a relayées ; sa
   const done = applyReport(sent, back, 7_000, { relay }).board
   const group = activeRun(done)!.groups!.find(g => g.id === 'E')!
   expect(group.linked).toBeUndefined()
-  expect(group.delegated).toEqual({ at: 5_000 })
+  expect(group.delegated).toEqual({ at: 5_000, worktreeName: 'groupe-lot-E' })
   expect(group.reviewedAt).toBe(6_000)
   expect(group.security?.ranAt).toBe(6_500)
   expect(activeRun(done)!.log.some(l => /Revue du groupe faite dans son worker : E/.test(l.text))).toBe(true)

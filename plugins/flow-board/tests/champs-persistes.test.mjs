@@ -195,6 +195,20 @@ const NO_DATE = 'sans objet : la fusion de ce champ ne lit aucune date'
 
 /** Pour chaque fonction de fusion, chacun des cinq cas : son test, ou sa raison. */
 const MERGE_MATRIX = {
+  keepSendNames: {
+    'date illisible': why(NO_DATE + ' (le même envoi se retrouve par l’égalité de sa date d’envoi, at, jamais comparée en ordre)'),
+    'date future': why(NO_DATE + ' (aucune date ramenée par clampFuture : at n’y sert qu’à apparier un envoi)'),
+    'valeur absente': covered('nom-du-worktree-note.test.mjs', 'fusion de deux copies : un nom absent de la copie gardée revient de l’autre'),
+    'valeur abîmée': covered('nom-du-worktree-note.test.mjs', 'fusion de deux copies, une valeur abîmée'),
+    'deux ordres': covered('nom-du-worktree-note.test.mjs', 'fusion de deux copies, dans les deux ordres'),
+  },
+  keepSessions: {
+    'date illisible': why(NO_DATE + ' (le même envoi se retrouve par l’égalité de sa date d’envoi, at, jamais comparée en ordre)'),
+    'date future': why(NO_DATE + ' (aucune date ramenée par clampFuture : at n’y sert qu’à apparier un envoi)'),
+    'valeur absente': covered('session-par-le-relais.test.ts', 'la fusion garde l’id noté, le reprend de l’autre copie s’il manque, et marque deux ids différents'),
+    'valeur abîmée': covered('session-par-le-relais.test.ts', 'la fusion garde l’id noté, le reprend de l’autre copie s’il manque, et marque deux ids différents'),
+    'deux ordres': covered('session-par-le-relais.test.ts', 'la fusion garde l’id noté, le reprend de l’autre copie s’il manque, et marque deux ids différents'),
+  },
   keepClosings: {
     'date illisible': why(NO_DATE + ' (isAhead compare l’état et les marques securityOff, cleanupAt)'),
     'date future': why(NO_DATE + ' (aucune date de fermeture comparée, ni ramenée par clampFuture)'),

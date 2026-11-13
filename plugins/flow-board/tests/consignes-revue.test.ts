@@ -75,7 +75,12 @@ test('dans la discussion, chaque revue reçoit ses consignes par un fichier, sur
   expect(implement).toContain('Both reviews then read the range refs/worktree/flow-board/<ticket id>^..refs/worktree/flow-board/<ticket id>')
   expect(implement).toContain('a next ticket that touches the same files waits')
   expect(implement).not.toContain('git worktree add')
-  expect(implement).toContain("The ticket's real commit still comes after its review: when a file of the ticket changed after the last snapshot (a fix, its Status: line), first pin the snapshot again with all the ticket\'s files, right before the git add of the fixes; then git add each of its files again")
+  expect(implement).toContain("The ticket's real commit still comes after its review: when a file of the ticket changed after the last snapshot (a fix, its Status: line), first pin the snapshot again with all the ticket\'s files, right before the git add of the fixes; then git add each of its files (its fixes included: the snapshot stages nothing), commit")
+  // L'instantané passe par le script, qui ne touche pas à l'index de la session ; les étapes à la main restent pour un poste sans Node.
+  expect(implement).toContain("by a single command run from the root of the working folder: node <the installed flow-board plugin folder, the one that holds its scripts/ folder>/scripts/snapshot.mjs <ticket id> <the ticket's files, by path>; it builds the tree in a temporary index started from HEAD, without touching the session's index (what another ticket staged there stays out of the snapshot)")
+  expect(implement).toContain("(without Node, by hand in the session's index, each command alone and the printed hash copied into the next one: git add <the ticket's files, by path>")
+  // Une /code-review lancée pendant qu'une autre tourne passe au premier plan et retient la session.
+  expect(implement).toContain('Launch a /code-review only once the previous one is back (its notification received): launched while another one runs, it goes to the foreground and holds the session until it ends; when two passes must run at the same time, hand the second one to a reviewer subagent (Agent tool, model opus, effort passed explicitly), which launches it itself.')
   expect(implement).not.toMatch(/\$\(/)
 })
 
@@ -89,7 +94,7 @@ test('le découpage borne les groupes à 5 tickets, range le ticket sensible, et
   const tickets = (await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })).text as string
   expect(tickets).toContain('A group holds 5 tickets at most: its tickets share the same area of the code, so the worker reuses the context loaded by one ticket for the next, and an extra group (a new worker that rereads the area, its group reviews, the follow-up by the manager) costs far more than a compaction; the first ticket brings the context of the worker to 200 to 400k tokens depending on the project, each next one adds 20 to 150k, and past about 600k the automatic compaction is the safety net')
   expect(tickets).toContain('keep a sensitive ticket with other tickets rather than alone')
-  expect(tickets).toContain('In a group, a sensitive ticket goes first when it blocks the next one, or when it is heavy and independent (its bug pass runs in xhigh: it deletes data or touches concurrency), before the context fills up')
+  expect(tickets).toContain('In a group, a sensitive ticket goes first when it blocks the next one, or when it is heavy and independent (its bug pass runs in xhigh: it deletes data, decides or guards a deletion, or touches concurrency), before the context fills up')
   expect(tickets).not.toContain('goes first only when it blocks the next one')
   // Rétro de la mission « Coordinateur de parcours » : groupes de 5 tickets sensibles compactés vers le 4e, ticket
   // posé sur un moment que la procédure ne donne presque jamais, cycle de vie posé après les revues, liste recopiée périmée.

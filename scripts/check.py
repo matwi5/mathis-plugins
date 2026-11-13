@@ -4,11 +4,14 @@
     scripts/check.sh <plugin>...           tous les contrôles des plugins nommés (scripts\\check.cmd sous Windows)
     scripts/check.sh --all                 tous les plugins (et la sonde, et la suite Python du dépôt)
     scripts/check.sh sonde                 la sonde des événements du moteur (scripts/sonde/) : export, API, tsc, tests
-    scripts/check.sh scripts               la suite Python du dépôt (scripts/tests, unittest), sans l'app desktop
+    scripts/check.sh scripts               la suite Python du dépôt (scripts/tests, unittest), sans l'app desktop,
+                                           sur une copie de l'arbre commitée ; verte, son empreinte (le pre-commit la saute)
     scripts/check.sh <plugin> --no-desktop sans le Claude Code de l'app desktop (poste sans l'app)
     scripts/check.sh --staged              le hook pre-commit : les plugins dont un fichier est indexé
     scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README et retire les blocs /** */ détachés, sans rien contrôler
-    scripts/check.sh --test <fichier>... <plugin>  ces seuls fichiers de test (nom nu ou chemin), terminal seulement
+    scripts/check.sh --test <fichier>... <plugin>  ces seuls fichiers de test (nom nu ou chemin), terminal seulement,
+                                           après la règle des caractères invisibles sur le plugin et ces fichiers
+    scripts/check.sh --test <fichier>... --contre <ref> <plugin>  ces tests contre hooks/ du plugin à <ref>, sans toucher à l'arbre
     scripts/check.sh --quick <plugin>...   pré-contrôle rapide : contrôles statiques, tsc, tests Node et fichiers de test touchés face à HEAD
     scripts/check.sh --tsc <plugin>...     le seul `tsc` des plugins (types du moteur copiés dans un worktree)
 
@@ -57,24 +60,33 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    ceux qui lisent les sources, ce que `claude plugin test` ne permet pas) ;
 5. `claude plugin test` avec le Claude Code du terminal, puis avec le binaire le plus récent de
    l'app desktop, trouvé ici (Mac et Windows) ; chacun (et celui de --test, --quick et du hook)
-   relance ensuite, sur une copie posée dans l'autre mode de stockage de flow-board, les fichiers
-   de test qui portent « Stockage : les deux modes » (`other_storage_tests`) ;
+   tourne d'abord dans le mode de stockage de flow-board de l'usage réel, le fichier commun des
+   missions (en place dans un worktree, sinon sur une copie posée sous un dossier `.claude/`), puis
+   relance en `$.store`, sur une copie posée hors de `.claude/`, les fichiers de test qui portent
+   « Stockage : les deux modes » (`other_storage_tests`) ;
 6. `claude plugin validate` du plugin, puis du dépôt ;
 7. les versions des plugins contrôlés citées dans la liste « État » d'ETAT_DU_PROJET.md (fichier
    personnel, lu seulement ; contrôle sans objet sans lui) égales à celles de leur `plugin.json` ;
 8. les règles du dépôt, que --quick relit aussi : pas de prénom (« Mathis » seul) dans `config/rules/*.md` ni
    `config/reference/*.md`, un en-tête `paths:` non vide dans chaque `.claude/rules/*.md`, les exceptions
-   `!/.claude/settings.json` et `!/.claude/rules/` dans `.gitignore`.
+   `!/.claude/settings.json` et `!/.claude/rules/` dans `.gitignore`, un saut Windows sur chaque test de
+   `scripts/tests/*.py` qui crée un lien symbolique.
 
---staged (hook pre-commit, décision « Hook »), tout sur une copie de l'index : d'abord les numéros de série de chaque
-fichier de décisions indexé (`travail/<sujet>/DECISIONS.md`), même pour un commit de documentation seule : un titre
+--staged (hook pre-commit, décision « Hook »), tout sur une copie de l'index : d'abord, même pour un commit de
+documentation seule, dans un worktree et hors d'une fusion, un avertissement (sans refus, affiché une fois tous
+les contrôles passés) pour un fichier indexé qu'un instantané de ticket (`refs/worktree/flow-board/<id>`) porte à
+une autre version, avec la commande de repose ; un fichier de décisions indexé (`travail/<sujet>/DECISIONS.md`) changé hors de la branche
+principale est refusé (il ne s'écrit que dans le clone principal, par `scripts/decision.py`), sauf une fusion ou une
+version égale à celle de la branche principale ; puis les numéros de série de chaque
+fichier de décisions indexé, même pour un commit de documentation seule : un titre
 « ## Série N » ajouté (face à `HEAD`) avec un numéro déjà pris dans le fichier est refusé, les doublons déjà commités
 passent ; puis chaque ticket indexé (`travail/<sujet>/issues/*.md`) qui dit « Zone sensible : oui » porte une
 ligne « Recherche » avec une commande et son résultat (sur la ligne, ou dans le bloc de code qui la suit),
 sauf un ticket que `HEAD` portait déjà sensible sans elle, et n'a aucune case mal formée hors bloc de code
 (seules `- [ ] ` et `- [x] ` sont des cases : `- [x ]`, `- [ x]`, `- []` sont refusées) ;
 puis, même pour un commit de documentation seule, la version indexée d'une règle ou d'une référence commune,
-d'une règle de projet (`.claude/rules/*.md`) ou de `.gitignore` passe les contrôles des règles du dépôt (point 8) ;
+d'une règle de projet (`.claude/rules/*.md`), de `.gitignore` ou d'un test de `scripts/tests` passe les contrôles
+des règles du dépôt (point 8) ;
 puis, même pour un commit de documentation seule, une liste d'admis indexée (`scripts/renvois-admis.json`,
 `scripts/interpolations-admises.json`, `scripts/termes-retires-admis.json`, `scripts/exports-admis.json`) qui augmente un compte face à `HEAD` (une clé nouvelle comprise) est
 refusée, et chaque plugin dont la règle (`config/rules/<plugin>.md`) est indexée, ou dont une liste d'admis
@@ -93,23 +105,32 @@ contenu qui part, pas l'arbre de travail), `validate` du dépôt, puis `validate
 groupes quand le hook ne lançait que `validate` et les tests. Enfin, quand un fichier indexé est sous
 `scripts/` (documentation comprise) ou est `plugins/flow-board/hooks/register.tsx`, et seulement alors,
 la suite Python du dépôt (`scripts/tests`) tourne sur la copie de l'index, devenue un dépôt git jetable
-commité tel quel, sans les variables `GIT_*` du hook ; un test en échec refuse le commit et se nomme. Le test avec l'app desktop reste à
+commité tel quel, sans les variables `GIT_*` du hook ; un test en échec refuse le commit et se nomme ; elle se
+saute quand l'index porte exactement les déclencheurs et le contexte d'un passage vert (`check.sh scripts`
+ou `--all`, qui tourne sur une copie de l'arbre commitée de même ; empreinte `check-ok/suite-python` :
+`suite_passed_already`). Le test avec l'app desktop reste à
 `check.sh <plugin>`, avant le push. Un plugin dont tous les contrôles viennent de passer garde
-l'empreinte de son dossier (arbre de travail, fichiers ignorés exclus) ; le hook saute ses contrôles
-quand l'index à commiter porte exactement cette empreinte (un commit juste après `check.sh`). Le hook
-pre-merge-commit lance le même `--staged` à la fusion d'une branche qui crée son commit.
+l'empreinte de son dossier (arbre de travail, fichiers ignorés exclus), et celle de son contexte (le
+dépôt hors `travail/` et `ETAT_DU_PROJET.md`, les versions de Claude Code et des types du moteur),
+chacune seulement si elle n'a pas changé pendant les contrôles ; le hook saute ses contrôles quand
+l'index à commiter porte exactement la première (un commit juste après `check.sh`), ou les deux d'un
+autre worktree présent du dépôt, lues sans jamais les écrire (la fusion d'un worktree déjà testé vert).
+Le hook pre-merge-commit lance `--staged --merge` à la fusion d'une branche qui crée son commit.
 
 Une commande en échec affiche ses lignes d'échec (tests, erreurs de types) avec un peu de contexte,
-puis sa fin ; sa sortie entière est écrite dans un fichier temporaire dont le chemin s'affiche.
+puis sa fin ; sa sortie entière est écrite dans un fichier temporaire dont le chemin s'affiche. La
+ligne « ÉCHEC : … » nomme les tests en échec, et la dernière ligne de la sortie, juste après, ce fichier.
 
 Sans dépendance hors de la bibliothèque standard ; Python 3.9 ou plus récent.
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -189,6 +210,11 @@ RECEIVED_FIRST = 5
 # Les lignes de journal d'un mod, retirées de l'extrait.
 LOG_LINE = re.compile(r"^\s*\[flow-board\]")
 FAIL_MAX = 40
+# La dernière ligne d'un échec nomme au plus tant de tests en échec, chacun coupé à tant de signes : elle
+# doit survivre à un `| tail`, qui avait coupé l'extrait d'échec et fait relire le journal cinq fois.
+FAILING_NAMED = 5
+FAIL_SUMMARY = re.compile(r"^\s*✖ failing tests:")
+FAILING_WIDTH = 160
 TAIL = 60
 # La liste des termes retirés d'un plugin, à sa racine.
 RETIRED_FILE = "termes-retires.txt"
@@ -219,6 +245,14 @@ FRONT_MATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
 GITIGNORE_FILE = ".gitignore"
 # Un fichier que `.gitignore` doit laisser suivre, et l'exception qui le garde.
 GITIGNORE_KEPT = {".claude/settings.json": "!/.claude/settings.json", ".claude/rules/regle.md": "!/.claude/rules/"}
+# Un test de la suite Python qui crée un lien symbolique échoue sous Windows sans le mode développeur,
+# et la suite tourne au pre-commit : six tests sans saut auraient fait refuser sur le PC chaque commit
+# qui touche `scripts/`. Un appel `symlink_to(` ou `os.symlink(` y doit être sous un saut qui écarte
+# Windows : un décorateur `skipIf`/`skipUnless` de sa méthode ou de sa classe, ou un `if` qui l'englobe,
+# dont la condition, évaluée comme sous Windows (`os.name`, `sys.platform`, constantes du fichier tirées
+# d'eux), écarte l'appel.
+SCRIPT_TEST_FILE = re.compile(r"scripts/tests/[^/]+\.py")
+SYMLINK_SKIP = '@unittest.skipIf(os.name == "nt", "liens symboliques : mode développeur requis sous Windows")'
 # La liste privée des termes que la version publique refuse (absente de celle-ci, comme le script
 # d'export : le contrôle ne garde alors que les adresses et les dossiers personnels, ou se saute).
 EXPORT_DENYLIST = REPO / "config" / "personal" / "public-denylist.txt"
@@ -372,6 +406,29 @@ def keep_log(title, out):
         return None
 
 
+def failing_tests(out):
+    """Les tests en échec d'une sortie (les lignes que `FAIL_LINE` reconnaît, sans doublon, bornées à
+    `FAILING_NAMED`), pour la dernière ligne d'un échec : « ; tests en échec : … », ou rien ; l'en-tête
+    du résumé de `node --test` (« ✖ failing tests: ») n'est pas un test."""
+    return named_failures(line.strip() for line in out.splitlines()
+                          if FAIL_LINE.search(line) and not LOG_LINE.match(line) and not FAIL_SUMMARY.match(line))
+
+
+def named_failures(found):
+    """« ; tests en échec : … » pour ces tests (sans doublon, chacun coupé à `FAILING_WIDTH` signes, les
+    `FAILING_NAMED` premiers puis le nombre des autres), ou rien."""
+    names = list(dict.fromkeys(name[:FAILING_WIDTH] for name in found))
+    if not names:
+        return ""
+    more = len(names) - FAILING_NAMED
+    return " ; tests en échec : " + ", ".join(names[:FAILING_NAMED]) + (f" et {more} autre(s)" if more > 0 else "")
+
+
+def kept_log(path):
+    """La suite de la dernière ligne d'un échec : le journal gardé, sur la ligne suivante, ou rien."""
+    return f"\nsortie entière : {path}" if path else ""
+
+
 def step(title, args, timeout, summary=None):
     log(f"→ {title}")
     code, out = run(args, timeout)
@@ -380,7 +437,7 @@ def step(title, args, timeout, summary=None):
         path = keep_log(title, out)
         if path:
             log(f"  sortie entière : {path}")
-        raise Failed(f"{title} : échec (code {code})")
+        raise Failed(f"{title} : échec (code {code})" + failing_tests(out) + kept_log(path))
     found = re.findall(summary, out) if summary else []
     log(f"  ok{' (' + found[-1] + ')' if found else ''}")
 
@@ -822,16 +879,36 @@ def invisible_chars(plugin):
     """Les caractères invisibles ou séparateurs bruts des sources `.ts`, `.tsx` et `.mjs` du plugin
     (tests compris), avec le fichier, la ligne et l'échappement à écrire. Les lignes se coupent au
     seul `\\n` : `splitlines` couperait aussi à U+2028, U+2029 et U+0085, et les cacherait."""
+    return [p for path, rel in files_of(plugin) if path.suffix in INVISIBLE_SUFFIXES
+            for p in invisible_in(path, f"{plugin.name}/{rel}")]
+
+
+def invisible_in(path, label):
+    """Les caractères invisibles ou séparateurs bruts d'un fichier, nommé `label` dans les messages."""
     problems = []
-    for path, rel in files_of(plugin):
-        if path.suffix not in INVISIBLE_SUFFIXES:
-            continue
-        for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").split("\n"), 1):
-            for m in INVISIBLE.finditer(line):
-                code = ord(m.group(0))
-                problems.append(f"{plugin.name}/{rel}:{n} : caractère invisible brut U+{code:04X}, "
-                                f"écrire l'échappement \\u{code:04x} à la place")
+    for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").split("\n"), 1):
+        for m in INVISIBLE.finditer(line):
+            code = ord(m.group(0))
+            problems.append(f"{label}:{n} : caractère invisible brut U+{code:04X}, "
+                            f"écrire l'échappement \\u{code:04x} à la place")
     return problems
+
+
+def check_invisibles_before_tests(plugin, paths, hooks_at=None):
+    """`--test` : la règle des caractères invisibles sur les sources du plugin (tests compris) et sur les
+    fichiers de test nommés hors du plugin, avant de lancer les tests ; un U+2028 brut ne donnait sinon
+    que « (fail) the file did not load ». Avec `hooks_at` (`--contre`), `hooks/` est relu à ce commit,
+    le code que la copie chargera, au lieu de celui de l'arbre."""
+    log("→ caractères invisibles bruts (sources du plugin et tests nommés)")
+    root = plugin.resolve()
+    outside = [p for p in paths if root not in p.parents]
+    problems = [] if hooks_at is None else invisibles_at(plugin, hooks_at)
+    problems += [p for p in invisible_chars(plugin) if hooks_at is None or not p.startswith(f"{plugin.name}/hooks/")]
+    problems += [q for p in outside for q in invisible_in(p, p.as_posix())]
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} caractère(s) invisible(s) brut(s), tests non lancés : " + " ; ".join(problems))
+    log("  ok")
 
 
 def is_run_value(chain):
@@ -1208,7 +1285,8 @@ def rules_problems(files):
     """Ce que refusent les contrôles des règles du dépôt dans les fichiers donnés, (chemin depuis la
     racine, texte ou None pour un fichier absent) : le prénom dans une règle ou une référence commune
     (avec la ligne), une règle de projet sans `paths:` non vide, un `.gitignore` (absent : vide) qui fait
-    ignorer `.claude/settings.json` ou les règles de `.claude/rules/`."""
+    ignorer `.claude/settings.json` ou les règles de `.claude/rules/`, un test de `scripts/tests` qui crée un
+    lien symbolique sans saut Windows (`symlink_problems`)."""
     problems = []
     for rel, text in files:
         if rel == GITIGNORE_FILE:
@@ -1221,21 +1299,122 @@ def rules_problems(files):
                          for n, line in enumerate(text.split("\n"), 1) if FIRST_NAME.search(line)]
         elif PROJECT_RULE_FILE.fullmatch(rel) and not has_paths(text):
             problems.append(f"{rel} : pas d'en-tête `paths:` non vide ; une règle de projet ne se charge que par lui")
+        elif SCRIPT_TEST_FILE.fullmatch(rel):
+            problems += symlink_problems(rel, text)
     return problems
+
+
+def symlink_problems(rel, text):
+    """Les appels `symlink_to(` et `os.symlink(` d'un test de la suite Python (`rel`, son texte) que
+    rien n'écarte sous Windows (`SCRIPT_TEST_FILE`) : chacun avec sa ligne et le saut à écrire. Un saut
+    compte quand sa condition, évaluée comme sous Windows (`on_windows`), l'écarte : un `skipIf` vrai, un
+    `skipUnless` faux sur la méthode ou la classe, un `if` faux autour de l'appel (ou vrai autour de son
+    `else`) ; une condition que l'évaluation ne tranche pas ne compte pas. Un fichier que `ast` ne lit
+    pas est un problème, pas un fichier sauté."""
+    try:
+        tree = ast.parse(text, filename=rel)
+    except (SyntaxError, ValueError) as err:
+        return [f"{rel}:{getattr(err, 'lineno', None) or 1} : illisible par ast ({err.__class__.__name__}) ; "
+                "la règle des liens symboliques ne peut pas le relire"]
+    # Les constantes du module, dans l'ordre de leurs affectations, évaluées comme sous Windows
+    # (`POSIX = os.name == "posix"` vaut faux, `WINDOWS = not POSIX` vrai) ; une affectation que
+    # l'évaluation ne tranche pas laisse la constante inconnue.
+    consts = {}
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            value = on_windows(node.value, consts)
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                if isinstance(target, ast.Name):
+                    consts[target.id] = value
+
+    def skips_windows(decorator):
+        if not isinstance(decorator, ast.Call) or not decorator.args:
+            return False
+        func = decorator.func
+        name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+        value = on_windows(decorator.args[0], consts)
+        return (name == "skipIf" and value is True) or (name == "skipUnless" and value is False)
+
+    problems = []
+
+    def visit(node, guarded):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            guarded = guarded or any(skips_windows(d) for d in node.decorator_list)
+        if isinstance(node, ast.If):
+            value = on_windows(node.test, consts)
+            visit(node.test, guarded)
+            for child in node.body:
+                visit(child, guarded or value is False)
+            for child in node.orelse:
+                visit(child, guarded or value is True)
+            return
+        if isinstance(node, ast.Call) and is_symlink_call(node.func) and not guarded:
+            problems.append(f"{rel}:{node.lineno} : lien symbolique sans saut Windows (mode développeur requis) ; "
+                            f"écrire {SYMLINK_SKIP} sur sa méthode ou sa classe")
+        for child in ast.iter_child_nodes(node):
+            visit(child, guarded)
+
+    visit(tree, False)
+    return problems
+
+
+def on_windows(expr, consts):
+    """La valeur d'une condition sous Windows (`os.name` vaut "nt", `sys.platform` "win32"), les
+    constantes du module prises dans `consts` : True, False, une chaîne, ou None quand l'évaluation ne la
+    tranche pas (un appel, un nom inconnu). `and` et `or` coupent comme Python : `POSIX and os.geteuid()`
+    vaut faux."""
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, (str, bool)):
+        return expr.value
+    if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+        return {("os", "name"): "nt", ("sys", "platform"): "win32"}.get((expr.value.id, expr.attr))
+    if isinstance(expr, ast.Name):
+        return consts.get(expr.id)
+    if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.Not):
+        value = on_windows(expr.operand, consts)
+        return None if value is None else not value
+    if isinstance(expr, ast.BoolOp):
+        stop = isinstance(expr.op, ast.Or)
+        unknown = False
+        for operand in expr.values:
+            value = on_windows(operand, consts)
+            if value is None:
+                unknown = True
+            elif bool(value) is stop:
+                return stop
+        return None if unknown else not stop
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "startswith" \
+            and len(expr.args) == 1 and not expr.keywords:
+        subject, prefix = on_windows(expr.func.value, consts), on_windows(expr.args[0], consts)
+        return subject.startswith(prefix) if isinstance(subject, str) and isinstance(prefix, str) else None
+    if isinstance(expr, ast.Compare) and len(expr.ops) == 1:
+        left, right = on_windows(expr.left, consts), on_windows(expr.comparators[0], consts)
+        if not isinstance(left, str) or not isinstance(right, str):
+            return None
+        op = expr.ops[0]
+        if isinstance(op, (ast.Eq, ast.NotEq)):
+            return (left == right) is isinstance(op, ast.Eq)
+    return None
+
+
+def is_symlink_call(func):
+    """Vrai pour `<chemin>.symlink_to` et `os.symlink`."""
+    return isinstance(func, ast.Attribute) and (
+        func.attr == "symlink_to" or (func.attr == "symlink" and isinstance(func.value, ast.Name) and func.value.id == "os"))
 
 
 def repo_rules_problems(root=REPO):
     """Les contrôles des règles du dépôt sur ses fichiers (`root`) : règles et références communes,
-    règles de projet, `.gitignore`."""
-    rels = sorted(p.relative_to(root).as_posix() for home in (*SECTION_HOMES, ".claude/rules")
-                  for p in (root / home).glob("*.md"))
+    règles de projet, `.gitignore`, liens symboliques des tests de la suite Python."""
+    rels = sorted([*(p.relative_to(root).as_posix() for home in (*SECTION_HOMES, ".claude/rules")
+                     for p in (root / home).glob("*.md")),
+                   *(p.relative_to(root).as_posix() for p in (root / "scripts" / "tests").glob("*.py"))])
     paths = [root / rel for rel in [*rels, GITIGNORE_FILE]]
     return rules_problems((path.relative_to(root).as_posix(), path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None)
                           for path in paths)
 
 
 def check_repo_rules(problems):
-    log("→ règles du dépôt (prénom dans les règles communes, `paths:` des règles de projet, exceptions de .gitignore)")
+    log("→ règles du dépôt (prénom dans les règles communes, `paths:` des règles de projet, exceptions de .gitignore, saut Windows des liens symboliques des tests de scripts/tests)")
     if problems:
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} entorse(s) aux règles du dépôt : " + " ; ".join(problems))
@@ -1408,17 +1587,39 @@ def node_tests(plugin):
 
 
 def plugin_tests(plugin, claude, label):
-    if (plugin / "tests").is_dir():
-        step(f"claude plugin test {shown_dir(plugin)} ({label})", [claude, "plugin", "test", plugin], 900, r"\d+ pass")
+    """Les tests du moteur d'un plugin, d'abord en mode fichier (`FIRST_STORAGE`) : en place quand son
+    dossier y est déjà (un worktree, sous `.claude/`), sinon sur une copie posée sous un dossier
+    `.claude/` (le clone principal, la copie de l'index du pre-commit) ; puis la relance en `$.store`
+    des fichiers marqués `BOTH_STORAGES`."""
+    if not (plugin / "tests").is_dir():
+        return
+    if storage_mode(plugin) == FIRST_STORAGE:
+        step(f"claude plugin test {shown_dir(plugin)} ({label}, stockage {FIRST_STORAGE})",
+             [claude, "plugin", "test", plugin], 900, r"\d+ pass")
         other_storage_tests(plugin, plugin, claude, label, None)
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="check-fichier-"))
+    try:
+        copy = mode_copy(plugin, tmp, FIRST_STORAGE, None)
+        step(f"claude plugin test {shown_dir(plugin)} ({label}, stockage {FIRST_STORAGE})",
+             [claude, "plugin", "test", copy], 900, r"\d+ pass")
+        other_storage_tests(plugin, copy, claude, label, None)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # Un fichier de test qui porte cette ligne dépend du mode de stockage de flow-board, que le mod tire de
 # l'emplacement de son dossier (`claudeHome` de hooks/register.tsx : sous un dossier `.claude/`, le
 # fichier commun des missions ; ailleurs, `$.store`) et qu'un test ne peut pas fixer lui-même. Chaque
 # lancement de `claude plugin test` le relance donc sur une copie posée dans l'autre mode : un test
-# vert sous `--test` (copie hors de `.claude/`) et rouge dans un worktree (sous `.claude/`) s'y voit.
+# vert dans un mode et rouge dans l'autre s'y voit.
 BOTH_STORAGES = "Stockage : les deux modes"
+
+# Le mode de la première passe de `claude plugin test`, partout (suite complète du clone principal ou
+# d'un worktree, `--test`, `--quick`, pre-commit) : celui de l'usage réel, le fichier commun des
+# missions. Trois tests qui ne servaient pas ce fichier étaient verts au pre-commit et à `--test`
+# (copies hors de `.claude/`) et rouges seulement à la suite complète d'un worktree.
+FIRST_STORAGE = "fichier"
 
 
 def storage_mode(folder):
@@ -1437,28 +1638,93 @@ def both_storage_tests(plugin, targets):
 def plugin_copy(plugin, copy, keep):
     """Une copie du plugin dans `copy`, sans ses types du moteur (`.claude-plugin/types/`, qui ne
     servent qu'à `tsc` ; le `types/` du plugin reste) ni `node_modules`, avec les seuls fichiers de
-    test `keep` (chemins depuis le plugin ; les aides de `tests/` sans `.test.` restent)."""
+    test `keep` (chemins depuis le plugin ; tous quand None ; les aides de `tests/` sans `.test.` restent)."""
     engine_types = (plugin / ".claude-plugin").resolve()
     shutil.copytree(plugin, copy, ignore=lambda folder, names: [
         n for n in names if n == "node_modules" or (n == "types" and Path(folder).resolve() == engine_types)])
+    if keep is None:
+        return
     for other in copy.rglob("*.test.*"):
         if other.relative_to(copy) not in keep:
             other.unlink()
 
 
-def other_storage_tests(plugin, ran_at, claude, label, targets):
+def mode_copy(plugin, tmp, want, keep, hooks_at=None):
+    """La copie du plugin (`plugin_copy`, fichiers de test `keep`) posée dans `tmp` pour que le mod y
+    prenne le mode de stockage `want` : sous `tmp/.claude/plugins/` pour le mode fichier, `tmp/` pour
+    `$.store` ; refusée quand `tmp` lui-même donne l'autre mode. Avec `hooks_at` (un commit résolu par
+    `resolve_ref`), son dossier `hooks/` est celui de ce commit (`hooks_from`)."""
+    copy = (tmp / plugin.name) if want == "$.store" else (tmp / ".claude" / "plugins" / plugin.name)
+    if storage_mode(copy.parent) != want:
+        raise Failed(f"copie pour le mode {want} impossible : {copy} donne le mode {storage_mode(copy.parent)}")
+    plugin_copy(plugin, copy, keep)
+    if hooks_at:
+        hooks_from(plugin, copy, hooks_at)
+    return copy
+
+
+def invisibles_at(plugin, sha):
+    """La règle des caractères invisibles sur `hooks/` du plugin au commit `sha` (`--contre`), relu dans
+    une copie temporaire par `hooks_from`, les messages nommant `<plugin>/hooks/…@<commit court>`."""
+    tmp = Path(tempfile.mkdtemp(prefix="check-invisibles-"))
+    try:
+        hooks_from(plugin, tmp, sha)
+        hooks = tmp / "hooks"
+        return [p for path in sorted(hooks.rglob("*")) if path.is_file() and path.suffix in INVISIBLE_SUFFIXES
+                for p in invisible_in(path, f"{plugin.name}/hooks/{path.relative_to(hooks).as_posix()}@{sha[:8]}")]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def resolve_ref(ref):
+    """Le commit que désigne la référence de `--contre`, vérifié avant usage : refusée si elle commence
+    par `-` (git la lirait comme une option) ou ne se résout pas en commit. Git la reçoit en liste
+    d'arguments, jamais dans une chaîne de shell."""
+    if not ref or ref.startswith("-"):
+        raise Failed(f"--contre : référence refusée ({ref!r}) : elle ne peut pas être vide ni commencer par « - »")
+    code, out = run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], 30, cwd=REPO)
+    sha = out.strip()
+    if code != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        raise Failed(f"--contre : « {ref} » ne désigne aucun commit de ce dépôt")
+    return sha
+
+
+def hooks_from(plugin, copy, sha):
+    """Remplace `hooks/` de la copie par celui du plugin au commit `sha` : ses seuls fichiers (blobs) y
+    sont écrits, un fichier absent à ce commit est absent de la copie (et le dossier, s'il n'y existait
+    pas). Lit le dépôt par `git ls-tree` et `git cat-file`, n'écrit que dans la copie."""
+    shutil.rmtree(copy / "hooks", ignore_errors=True)
+    prefix = plugin.resolve().relative_to(REPO.resolve()).as_posix() + "/hooks/"
+    code, out = run(["git", "ls-tree", "-r", "-z", "--full-tree", sha, "--", prefix], 60, cwd=REPO)
+    if code != 0:
+        raise Failed(f"--contre : git ls-tree : {out.strip()}")
+    for entry in out.split("\0"):
+        if not entry:
+            continue
+        meta, path = entry.split("\t", 1)
+        mode, kind, blob = meta.split()
+        rel = path[len(prefix):] if path.startswith(prefix) else None
+        if kind != "blob" or mode == "120000" or not rel or any(part in ("", ".", "..") for part in rel.split("/")):
+            continue
+        res = subprocess.run(["git", "cat-file", "blob", blob], cwd=str(REPO), capture_output=True, timeout=60)
+        if res.returncode != 0:
+            raise Failed(f"--contre : git cat-file {blob} : {res.stderr.decode('utf-8', 'replace').strip()}")
+        target = copy / "hooks" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(res.stdout)
+
+
+def other_storage_tests(plugin, ran_at, claude, label, targets, hooks_at=None):
     """Relance les fichiers marqués `BOTH_STORAGES` (parmi `targets`) sur une copie du plugin dans le
-    mode de stockage qu'ils n'ont pas eu à `ran_at`, le dossier d'où ils viennent de tourner."""
+    mode de stockage qu'ils n'ont pas eu à `ran_at`, le dossier d'où ils viennent de tourner (avec
+    `hooks_at`, `hooks/` pris à ce commit, comme la première passe)."""
     marked = both_storage_tests(plugin, targets)
     if not marked:
         return
     want = "$.store" if storage_mode(ran_at) == "fichier" else "fichier"
     tmp = Path(tempfile.mkdtemp(prefix="check-stockage-"))
     try:
-        copy = (tmp / plugin.name) if want == "$.store" else (tmp / ".claude" / "plugins" / plugin.name)
-        if storage_mode(copy.parent) != want:
-            raise Failed(f"copie pour le mode {want} impossible : {copy} donne le mode {storage_mode(copy.parent)}")
-        plugin_copy(plugin, copy, set(marked))
+        copy = mode_copy(plugin, tmp, want, set(marked), hooks_at)
         rel = " ".join(f"{shown_dir(plugin)}/{t.as_posix()}" for t in marked)
         step(f"claude plugin test {rel} ({label}, stockage {want})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
     finally:
@@ -1479,12 +1745,21 @@ def test_file(plugin, name):
     return found[0]
 
 
-def single_test(plugin, names):
+def single_test(plugin, names, against=None):
     """Les fichiers de test nommés, avec le Claude Code du terminal : les `.test.mjs` par `node --test`
     en place ; les `.test.ts`/`.test.tsx` par `claude plugin test` sur une copie temporaire du plugin
-    qui n'a que ces fichiers de test (les aides de `tests/` sans `.test.` restent), faute de filtre."""
+    qui n'a que ces fichiers de test (les aides de `tests/` sans `.test.` restent), faute de filtre,
+    posée en mode fichier (`FIRST_STORAGE`), puis la relance des fichiers marqués en `$.store`. Avec
+    `against` (`--contre <ref>`), le `hooks/` des deux copies est celui de cette référence (`hooks_from`),
+    les tests restant ceux de l'arbre : la preuve d'un test rouge sans écrire dans l'arbre ; un `.test.mjs`
+    nommé est alors refusé."""
     paths = [test_file(plugin, name) for name in names]
     node = [p for p in paths if p.name.endswith(".test.mjs")]
+    if against is not None and node:
+        raise Failed("--contre ne s'applique qu'aux tests du moteur (.test.ts, .test.tsx) : un .test.mjs tourne en "
+                     "place, sans copie du plugin (" + ", ".join(p.name for p in node) + ")")
+    sha = resolve_ref(against) if against is not None else None
+    check_invisibles_before_tests(plugin, paths, sha)
     if node:
         step("node --test " + " ".join(p.relative_to(REPO).as_posix() for p in node), [tool("node"), "--test", *node], 600, r"pass \d+")
     engine = [p for p in paths if not p.name.endswith(".test.mjs")]
@@ -1495,12 +1770,12 @@ def single_test(plugin, names):
     targets = {p.relative_to(plugin) for p in engine}
     tmp = Path(tempfile.mkdtemp(prefix="check-test-"))
     try:
-        copy = tmp / plugin.name
-        plugin_copy(plugin, copy, targets)
+        copy = mode_copy(plugin, tmp, FIRST_STORAGE, targets, sha)
         code, out = run([claude, "--version"], 60)
         version = out.strip().split(" ")[0] if code == 0 else "?"
-        step(f"claude plugin test {rel} (terminal {version})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
-        other_storage_tests(plugin, copy, claude, f"terminal {version}", targets)
+        label = f"terminal {version}" + (f", hooks à {against}" if sha else "")
+        step(f"claude plugin test {rel} ({label}, stockage {FIRST_STORAGE})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
+        other_storage_tests(plugin, copy, claude, label, targets, sha)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1626,6 +1901,9 @@ def check_plugin(plugin, desktop):
     DEFERRED.extend(deferred)
     check_engine_api(plugin, desktop)
     typecheck(plugin)
+    # Les empreintes de l'arbre avant les tests, une fois les types du moteur copiés par `typecheck` dans un
+    # worktree neuf (leur version entre dans le contexte) : retenues à la fin seulement si elles n'ont pas changé.
+    before = tree_marks(plugin)
     node_tests(plugin)
     code, out = run([claude, "--version"], 60)
     plugin_tests(plugin, claude, f"terminal {out.strip().split(' ')[0] if code == 0 else '?'}")
@@ -1635,7 +1913,7 @@ def check_plugin(plugin, desktop):
     validate(plugin, claude)
     # Un défaut signalé sans couper la suite fait échouer le contrôle : pas d'empreinte « vert ».
     if not deferred:
-        remember_passed(plugin)
+        remember_passed(plugin, before)
 
 
 def shown_dir(plugin):
@@ -1708,20 +1986,20 @@ def python_tests(root):
         path = keep_log(title, out)
         if path:
             log(f"  sortie entière : {path}")
-        failing = UNITTEST_FAILURE.findall(out)
-        raise Failed(f"{title} : échec (code {code})" + (f" ; tests en échec : {', '.join(failing)}" if failing else ""))
+        raise Failed(f"{title} : échec (code {code})" + named_failures(UNITTEST_FAILURE.findall(out)) + kept_log(path))
     found = re.findall(r"^Ran \d+ tests? in [\d.]+s", out, re.M)
     log(f"  ok{' (' + found[-1] + ')' if found else ''}")
 
 
 def index_suite(tree):
-    """La suite Python sur la copie de l'index du pre-commit : la copie devient d'abord un dépôt git
-    jetable, commité tel quel (des tests archivent `HEAD` ou lisent ce qu'ignore `.gitignore`), par des
-    appels git bornés à elle (`GIT_DIR` et `GIT_WORK_TREE` fixés, sans hook ni fsmonitor ni signature),
-    puis la suite tourne sur ses propres `scripts/` : le contenu qui part, pas l'arbre de travail. Une
-    copie sans `scripts/tests` n'a pas de suite à lancer."""
+    """La suite Python sur une copie : celle de l'index au pre-commit (le contenu qui part, pas l'arbre de
+    travail), ou celle de l'arbre de travail figé pour `check.sh scripts` (`suite_and_remember`). La copie
+    devient d'abord un dépôt git jetable, commité tel quel (des tests archivent `HEAD` ou lisent ce
+    qu'ignore `.gitignore`), par des appels git bornés à elle (`GIT_DIR` et `GIT_WORK_TREE` fixés, sans
+    hook ni fsmonitor ni signature), puis la suite tourne sur ses propres `scripts/`. Une copie sans
+    `scripts/tests` n'a pas de suite à lancer."""
     if not (tree / SCRIPTS / "tests").is_dir():
-        log(f"→ pas de {SCRIPTS}/tests dans l'index : pas de suite Python")
+        log(f"→ pas de {SCRIPTS}/tests dans la copie : pas de suite Python")
         return
     env ={**without_git_env(), "GIT_DIR": str(tree / ".git"), "GIT_WORK_TREE": str(tree)}
     settings = ["-c", f"core.hooksPath={(tree / '.git' / 'aucun-hook').as_posix()}", "-c", "core.fsmonitor=false",
@@ -1731,9 +2009,9 @@ def index_suite(tree):
             res = subprocess.run(["git", *settings, *args], cwd=str(tree), capture_output=True, text=True,
                                  encoding="utf-8", errors="replace", timeout=300, env=env)
         except subprocess.TimeoutExpired:
-            raise Failed(f"git {args[0]} dans la copie de l'index : pas fini en 300 s")
+            raise Failed(f"git {args[0]} dans la copie pour la suite Python : pas fini en 300 s")
         if res.returncode != 0:
-            raise Failed(f"git {args[0]} dans la copie de l'index : {(res.stdout + res.stderr).strip()}")
+            raise Failed(f"git {args[0]} dans la copie pour la suite Python : {(res.stdout + res.stderr).strip()}")
     python_tests(tree)
 
 
@@ -1757,35 +2035,367 @@ def fingerprint(plugin, env=None):
     return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8")).hexdigest() if rows else None
 
 
-def remember_passed(plugin):
-    """Après un `check.sh` vert : l'empreinte de l'arbre de travail du plugin (fichiers ignorés exclus),
-    calculée dans un index temporaire, sans toucher à l'index du dépôt."""
-    path = passed_path(plugin)
-    if path is None:
-        return
+# Ce qu'aucun contrôle d'un plugin ne lit et que la branche principale reçoit sans cesse : les dossiers
+# des chantiers et le journal.
+CONTEXT_EXCLUDED = ("travail", "ETAT_DU_PROJET.md")
+
+
+def context_fingerprint(plugin, env=None):
+    """L'empreinte de tout ce que les contrôles d'un plugin lisent hors de ses fichiers de code, tel que
+    l'index le porte (celui que nomme `env`, sinon celui du commit en cours) : le dépôt entier, sauf
+    `CONTEXT_EXCLUDED` (règles et références communes, glossaire, autres plugins, `scripts/check.py`,
+    que ses tests lisent aussi), plus ce qui n'est pas dans git : la version du Claude Code du terminal
+    qui lance ses tests et celle qui a écrit les types du moteur de son dossier (`tsc`). L'empreinte d'un
+    autre worktree ne vaut que si ce contexte est le même."""
+    code, out = run(["git", "ls-files", "-s", "--", ".", *(f":(exclude){p}" for p in CONTEXT_EXCLUDED)], 60, env=env)
+    rows = sorted(line for line in out.splitlines() if "\t" in line) if code == 0 else []
+    if not rows:
+        return None
+    claude = shutil.which("claude")
+    code, out = run([claude, "--version"], 60) if claude else (1, "")
+    rows += [f"claude {out.strip() if code == 0 else '?'}",
+             f"types {types_written_by(plugin / '.claude-plugin' / 'types') or '?'}"]
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+
+
+def tree_marks(plugin):
+    """Les empreintes de l'arbre de travail (fichiers ignorés exclus), calculées dans un index temporaire,
+    sans toucher à l'index du dépôt : celle du plugin (`fingerprint`) et celle du contexte
+    (`context_fingerprint`, None en échec) ; None quand celle du plugin manque."""
     fd, index = tempfile.mkstemp(prefix="check-index-")
     os.close(fd)
     os.unlink(index)
     env = {"GIT_INDEX_FILE": index}
     try:
-        code, _ = run(["git", "add", "-A", "--", f"plugins/{plugin.name}"], 120, env=env)
-        mark = fingerprint(plugin, env) if code == 0 else None
+        code, _ = run(["git", "add", "-A", "--", "."], 300, env=env)
+        marks = (fingerprint(plugin, env), context_fingerprint(plugin, env)) if code == 0 else None
     finally:
         if os.path.exists(index):
             os.unlink(index)
-    if mark:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(mark + "\n", encoding="utf-8")
+    return marks if marks and marks[0] else None
+
+
+def remember_passed(plugin, before):
+    """Après un `check.sh` vert : les empreintes de l'arbre de travail (`tree_marks`), comparées à celles
+    d'avant les contrôles (`before`) ; un arbre changé pendant qu'ils tournaient (une autre discussion)
+    n'est pas celui qu'ils ont vu passer. Celle du plugin s'écrit si elle n'a pas changé ; celle du
+    contexte, qui seule fait compter l'empreinte pour un autre worktree, si elle n'a pas changé non plus."""
+    path = passed_path(plugin)
+    after = tree_marks(plugin)
+    if path is None or before is None or after is None or after[0] != before[0]:
+        return
+    kept = before if after[1] == before[1] and before[1] else before[:1]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+# Deux empreintes de 64 caractères hexadécimaux et leurs fins de ligne : rien de plus n'est lu.
+MARK_MAX_BYTES = 256
+
+
+def read_marks(path):
+    """Les empreintes gardées dans `path` (celle du plugin, puis celle du contexte quand elle y est), ou
+    None : absentes, illisibles (dossier, droits, octets qui ne sont pas du texte) ou trop longues pour en
+    être. Une lecture ratée ne fait jamais sauter de test."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MARK_MAX_BYTES + 1)
+        lines = data.decode("utf-8").split()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return lines if len(data) <= MARK_MAX_BYTES and lines else None
+
+
+def worktree_git_dirs():
+    """Le dossier git de chaque worktree du dépôt que `git worktree list --porcelain` liste et dont le
+    dossier existe encore (le clone principal compris) : lu dans son fichier `.git` (« gitdir: … », 4 096
+    octets au plus), gardé seulement s'il est le dossier git commun ou l'un de ses `worktrees/<nom>`.
+    Aucun chemin lu n'entre dans une commande ; un worktree effacé (« prunable ») ou mal formé est ignoré."""
+    common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    listed = git(["worktree", "list", "--porcelain", "-z"])
+    if not common or listed is None:
+        return []
+    common = Path(common).resolve()
+    found = []
+    for entry in listed.split("\0\0"):
+        fields = [f for f in entry.split("\0") if f]
+        if not fields or not fields[0].startswith("worktree ") or any(f.startswith("prunable") for f in fields):
+            continue
+        dot_git = Path(fields[0][len("worktree "):]) / ".git"
+        try:
+            if dot_git.is_dir():
+                gitdir = dot_git.resolve()
+            elif dot_git.is_file():
+                with open(dot_git, "rb") as f:
+                    head = f.read(4096).decode("utf-8").strip()
+                if not head.startswith("gitdir: ") or "\n" in head:
+                    continue
+                gitdir = (dot_git.parent / head[len("gitdir: "):].strip()).resolve()
+            else:
+                continue
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if gitdir == common or gitdir.parent == common / "worktrees":
+            found.append(gitdir)
+    return found
+
+
+def worktree_passed_paths(plugin):
+    """Les fichiers d'empreinte `check-ok/<plugin>` des worktrees du dépôt (`worktree_git_dirs`),
+    celui de ce worktree compris : des chemins à lire seulement, jamais à écrire."""
+    return [gitdir / "check-ok" / plugin.name for gitdir in worktree_git_dirs()]
 
 
 def passed_already(plugin):
     """Vrai si l'index à commiter porte exactement les fichiers (hors documentation) du dernier
-    `check.sh` vert du plugin."""
-    path = passed_path(plugin)
-    if path is None or not path.is_file():
-        return False
+    `check.sh` vert du plugin dans ce worktree, ou s'il porte exactement l'arbre du dernier `check.sh`
+    vert du plugin dans un autre worktree présent du dépôt, contexte compris (`context_fingerprint`) :
+    la fusion d'un worktree dans la branche principale ne relance pas les tests d'un arbre déjà testé
+    vert, mais les relance quand la branche principale a changé entre-temps ce que lisent ses
+    contrôles. Chaque worktree n'écrit que les siennes (`remember_passed`) ; celles des autres sont
+    lues seulement."""
     mark = fingerprint(plugin)
-    return mark is not None and path.read_text(encoding="utf-8").strip() == mark
+    if mark is None:
+        return False
+    own = passed_path(plugin)
+    own_marks = read_marks(own) if own is not None else None
+    if own_marks and own_marks[0] == mark:
+        return True
+    context = context_fingerprint(plugin)
+    return context is not None and any(
+        marks is not None and marks[:2] == [mark, context] for marks in map(read_marks, worktree_passed_paths(plugin)))
+
+
+# La mémoire du dernier passage vert de la suite Python (`check.sh scripts` ou `--all`), comme celle des
+# plugins : sans elle, le pre-commit relançait la suite (25 à 60 s) à chaque commit qui touche `scripts/`,
+# sept fois dans un seul groupe. Un nom qu'aucun plugin ne porte, dans le même dossier `check-ok/`.
+SUITE_MARK = "suite-python"
+
+
+def suite_fingerprint(env=None):
+    """L'empreinte de ce qui déclenche la suite Python au pre-commit (`SCRIPTS_TRIGGERS`), telle que l'index
+    la porte (celui que nomme `env`, sinon celui du commit en cours) : chemin, mode et contenu de chaque
+    fichier suivi, documentation comprise ; None sans fichier ou en échec."""
+    code, out = run(["git", "ls-files", "-s", "--", *SCRIPTS_TRIGGERS], 60, env=env)
+    rows = sorted(line for line in out.splitlines() if "\t" in line) if code == 0 else []
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest() if rows else None
+
+
+def suite_context(env=None):
+    """L'empreinte de ce que la suite lit hors de ses déclencheurs, exigée pour toute empreinte, de ce
+    worktree comme d'un autre (sans elle, un commit partiel sauterait une copie jamais testée) : le dépôt
+    entier sauf `CONTEXT_EXCLUDED`, tel que l'index le porte, et la version de l'interprète qui la lance ;
+    None en échec."""
+    code, out = run(["git", "ls-files", "-s", "--", ".", *(f":(exclude){p}" for p in CONTEXT_EXCLUDED)], 60, env=env)
+    rows = sorted(line for line in out.splitlines() if "\t" in line) if code == 0 else []
+    if not rows:
+        return None
+    rows.append(f"python {sys.version}")
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+
+
+def suite_passed_path():
+    """Le fichier où ce worktree garde l'empreinte du dernier passage vert de la suite (son dossier git)."""
+    code, out = run(["git", "rev-parse", "--git-path", f"check-ok/{SUITE_MARK}"], 30)
+    return (REPO / out.strip()) if code == 0 and out.strip() else None
+
+
+def suite_tree():
+    """L'arbre de travail figé pour la suite : un index temporaire, amorcé par une copie de l'index du
+    dépôt (les entrées gardent leur mode quand `core.filemode` est faux, le cas de Windows), reçoit
+    `git add -A` (fichiers ignorés exclus, non suivis compris), puis son contenu est écrit dans un dossier
+    temporaire par `git checkout-index`, comme la copie de l'index du pre-commit. Rend (dossier,
+    empreintes `suite_fingerprint` et `suite_context` de ce contenu, ou None) ; ni l'index ni l'arbre du
+    dépôt ne changent. Lève `Failed` ou `OSError` en échec."""
+    fd, index = tempfile.mkstemp(prefix="check-index-")
+    os.close(fd)
+    tree = None
+    try:
+        code, out = run(["git", "rev-parse", "--git-path", "index"], 30)
+        real = (REPO / out.strip()) if code == 0 and out.strip() else None
+        if real is not None and real.is_file():
+            # Avec sa date : git s'en sert pour repérer une entrée modifiée dans la même seconde que l'index.
+            shutil.copy2(real, index)
+        else:
+            os.unlink(index)
+        env = {"GIT_INDEX_FILE": index}
+        code, out = run(["git", "add", "-A", "--", "."], 300, env=env)
+        if code != 0:
+            raise Failed(f"git add dans un index temporaire : {out.strip()}")
+        marks = (suite_fingerprint(env), suite_context(env))
+        tree = Path(tempfile.mkdtemp(prefix="check-suite-"))
+        code, out = run(["git", "checkout-index", "--all", f"--prefix={tree.as_posix()}/"], 300, env=env)
+        if code != 0:
+            raise Failed(f"git checkout-index : {out.strip()}")
+        result, tree = (tree, marks if marks[0] and marks[1] else None), None
+        return result
+    finally:
+        if os.path.exists(index):
+            os.unlink(index)
+        if tree is not None:
+            remove_tree(tree)
+
+
+def write_suite_marks(path, marks):
+    """Écrit l'empreinte d'un passage vert dans le fichier de ce worktree : à côté, puis mise en place
+    d'un coup (`os.replace`) ; dans le clone principal, plusieurs discussions partagent ce dossier git, et
+    un lecteur ne doit jamais voir une empreinte à moitié écrite. Une écriture ratée ne fait qu'oublier
+    le passage."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp = tempfile.mkstemp(prefix=f".{SUITE_MARK}-", dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("\n".join(marks) + "\n")
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+    except OSError:
+        return
+
+
+def forget_suite_pass(path):
+    """Retire l'empreinte de ce worktree avant une nouvelle suite : un passage rouge ne doit pas laisser
+    compter le vert d'avant. Seul ce fichier, à son chemin propre au worktree ; un retrait raté rend
+    `False` (la suite tourne alors sans mémoire)."""
+    try:
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+        return not path.exists()
+    except OSError:
+        return False
+
+
+def suite_passed_already():
+    """Vrai si l'index à commiter porte exactement les déclencheurs et le contexte (`suite_fingerprint`,
+    `suite_context`) d'un passage vert, gardés dans ce worktree ou dans un autre worktree présent du
+    dépôt (`worktree_git_dirs`, lus seulement). Une empreinte absente, illisible, vide, hors forme (autre
+    chose que ces deux empreintes) ou d'une autre version de Python fait tourner la suite ; une empreinte
+    aux mêmes déclencheurs mais à un autre contexte le dit (un fichier lu par la suite hors de l'index, un
+    fichier non suivi, un autre Python), pour qu'une suite relancée ne passe pas pour un oubli."""
+    mark, context = suite_fingerprint(), suite_context()
+    if mark is None or context is None:
+        return False
+    own = suite_passed_path()
+    paths = ([own] if own is not None else []) + [gitdir / "check-ok" / SUITE_MARK for gitdir in worktree_git_dirs()]
+    found = [read_marks(path) for path in paths]
+    if any(marks == [mark, context] for marks in found):
+        return True
+    if any(marks and marks[0] == mark for marks in found):
+        log("→ suite Python : un passage vert a ces déclencheurs, mais pas le reste du dépôt ou la version de Python "
+            "(fichier lu par la suite hors de l'index, fichier non suivi, autre interprète) : la suite tourne")
+    return False
+
+
+def suite_and_remember():
+    """`check.sh scripts` (ou `--all`) : la suite tourne sur l'arbre de travail figé (`suite_tree`),
+    devenu un dépôt git jetable commité tel quel comme au pre-commit (`index_suite`) ; verte, l'empreinte
+    de exactement ce contenu s'écrit (`write_suite_marks`). L'empreinte d'avant est retirée d'abord : un
+    échec n'en laisse aucune. Sans copie possible, la suite tourne sur l'arbre, sans mémoire."""
+    own = suite_passed_path()
+    remember = own is not None and forget_suite_pass(own)
+    if own is not None and not remember:
+        log(f"→ l'empreinte d'avant ne se retire pas ({own}) : elle reste, et ce passage n'en écrira pas")
+    try:
+        tree, marks = suite_tree()
+    except (Failed, OSError) as err:
+        log(f"→ copie de l'arbre pour la suite impossible ({err}) : suite sur l'arbre, sans mémoire")
+        python_tests(REPO)
+        return
+    try:
+        index_suite(tree)
+    finally:
+        remove_tree(tree)
+    if remember and marks is not None:
+        write_suite_marks(own, marks)
+
+
+# --- instantanés de tickets pas reposés -----------------------------------------
+
+# Les références que `plugins/flow-board/scripts/snapshot.mjs` pose pour figer ce que relisent les revues
+# d'un ticket sensible (une par ticket, propre à chaque worktree), et la forme d'un id de ticket qu'il
+# accepte (sa `SAFE_TICKET`, recopiée et comparée par test_check_snapshot.py) : une référence d'un autre
+# nom est ignorée et signalée.
+SNAPSHOT_REFS = "refs/worktree/flow-board/"
+SNAPSHOT_TICKET = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+OBJECT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+# Un chemin recopié dans le message et dans la commande de repose : liste blanche, ASCII imprimable sans
+# « - » en tête (snapshot.mjs refuse un fichier qui commence par « - »), 4 096 signes au plus. Un autre
+# chemin (caractère de contrôle, invisible, renversement de texte, octet non UTF-8 rendu U+FFFD) n'est
+# jamais recopié : la commande renvoie alors à ses fichiers sans les nommer.
+PRINTABLE_PATH = re.compile(r"[\x20-\x2c\x2e-\x7e][\x20-\x7e]{0,4095}")
+
+
+def git_names(args):
+    """Les chemins d'une commande git en `-z`, ou None en échec."""
+    code, out = run(["git", *args], 60)
+    return [p for p in out.split("\0") if p] if code == 0 else None
+
+
+def stale_snapshots():
+    """Les instantanés de tickets que le commit en cours prend sans les avoir reposés : pour chaque
+    référence `SNAPSHOT_REFS<id>` du worktree, les fichiers que l'instantané change face à son parent,
+    indexés par ce commit (sans détection des renommages : un fichier renommé compte comme supprimé) à
+    une autre version que la figée, alors que `HEAD` ne la porte pas non plus (le ticket n'est pas encore
+    commité : sinon l'index porte le travail d'un ticket suivant). Rend (avertissements, références
+    ignorées avec leur raison). Seul l'id hexadécimal de chaque instantané entre dans une commande,
+    jamais le nom de sa référence ni un chemin lu ; une seule commande sans référence, et rien dans le
+    clone principal, dont les références sont communes à ses discussions."""
+    out = git(["for-each-ref", "--format=%(objectname) %(objecttype) %(refname)", SNAPSHOT_REFS])
+    if not out:
+        return [], []
+    dirs = git(["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"])
+    if not dirs or len(set(dirs.splitlines())) != 2:
+        return [], []
+    staged_now = git_names(["diff", "--cached", "--no-renames", "--name-only", "-z"])
+    if staged_now is None:
+        return [], []
+    warnings, ignored = [], []
+    for line in out.splitlines():
+        oid, kind, name = (line.split(" ", 2) + ["", ""])[:3]
+        ticket = name[len(SNAPSHOT_REFS):]
+        if kind != "commit" or not OBJECT_ID.fullmatch(oid) or not SNAPSHOT_TICKET.fullmatch(ticket):
+            ignored.append((name, "hors forme, ou pas un commit"))
+            continue
+        frozen = git_names(["diff-tree", "-r", "--no-renames", "--name-only", "-z", f"{oid}^", oid])
+        changed = git_names(["diff-index", "--cached", "--no-renames", "--name-only", "-z", oid])
+        pending = git_names(["diff-tree", "-r", "--no-renames", "--name-only", "-z", oid, "HEAD"])
+        if frozen is None or changed is None or pending is None:
+            ignored.append((name, "commit sans parent, ou commande git en échec"))
+            continue
+        stale = [f for f in frozen if f in staged_now and f in changed and f in pending]
+        if not stale:
+            continue
+        # Une fois ce commit défait par `git reset --soft HEAD^`, l'index porte exactement ce qu'il
+        # indexait : la repose le fige tel quel (`--staged`, sans rien reprendre de l'arbre de travail),
+        # et nomme tous ses fichiers, snapshot.mjs refusant un index qui en porte un qu'on ne lui nomme pas.
+        shown = ", ".join(f if PRINTABLE_PATH.fullmatch(f) else ascii(f) for f in stale)
+        if all(PRINTABLE_PATH.fullmatch(f) for f in staged_now):
+            again = (f"node plugins/flow-board/scripts/snapshot.mjs --staged {ticket} "
+                     + " ".join(shlex.quote(f) for f in staged_now))
+        else:
+            again = (f"node plugins/flow-board/scripts/snapshot.mjs --staged {ticket} <les fichiers indexés> "
+                     "(un chemin ne peut pas être recopié tel quel)")
+        warnings.append(f"instantané du ticket {ticket} pas reposé : {shown} indexé(s) à une autre version que la figée ; "
+                        f"le contrôle ne refuse pas ce commit : si c'est celui du ticket {ticket}, une fois fait, le défaire "
+                        f"sans rien perdre (git reset --soft HEAD^, seulement s'il n'a pas été modifié par --amend), reposer "
+                        f"l'instantané ({again}), puis recommiter, sans quoi snapshot.mjs --clean {ticket} refusera et la "
+                        "référence ne s'effacera qu'à la main ; si c'est le correctif d'un autre ticket dans un fichier "
+                        "partagé, rien à faire")
+    return warnings, ignored
+
+
+def report_snapshots(warnings, ignored):
+    """Signale, sans refuser le commit, un fichier indexé qu'un instantané de ticket porte à une autre
+    version (`stale_snapshots`), et une référence d'instantané ignorée, avec sa raison."""
+    if not warnings and not ignored:
+        return
+    log("→ instantanés de tickets (refs/worktree/flow-board/), sans refuser le commit")
+    for w in warnings:
+        log(f"  avertissement : {w}")
+    for name, why in ignored:
+        log(f"  référence ignorée ({why}) : {ascii(name)}")
 
 
 # --- hook pre-commit ----------------------------------------------------------
@@ -1853,7 +2463,47 @@ def duplicate_series(path, source=None):
     return [f"{path} : titre « ## Série {n} » ajouté alors que ce numéro existe déjà ; premier numéro libre : {free}" for n in doubled]
 
 
-def check_decisions(paths):
+def main_branch():
+    """La branche principale du dépôt : celle que vise `origin/HEAD`, sinon `main`."""
+    ref = git(["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
+    return ref.split("/", 1)[1] if ref and "/" in ref else "main"
+
+
+def decisions_off_main(paths, merging=False):
+    """Les fichiers de décisions indexés (`paths`, changés face à `HEAD`) qu'un commit écrirait hors de
+    la branche principale : un tel fichier ne s'écrit que dans le clone principal, par
+    `scripts/decision.py`, sans quoi deux copies divergent et une série se perd, se renumérote ou
+    s'écrit deux fois. Passent : un commit sur la branche principale, une fusion (`merging`, que donne
+    le hook pre-merge-commit, qui ne voit pas `MERGE_HEAD` : constaté avec git 2.54 ; ou `MERGE_HEAD`,
+    le commit d'une fusion arrêtée par un conflit ou `--no-commit`), et un fichier indexé à la version
+    de la branche principale. Une tête détachée est hors de la branche principale."""
+    main = main_branch()
+    branch = git(["symbolic-ref", "--short", "-q", "HEAD"])
+    if merging or branch == main or git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None:
+        return []
+    clone = main_clone()
+    problems = []
+    for path in [p for p in paths if DECISIONS_FILE.fullmatch(p)]:
+        if git(["rev-parse", "--verify", "--quiet", f":{path}"]) == git(["rev-parse", "--verify", "--quiet", f"refs/heads/{main}:{path}"]):
+            continue
+        # Le chemin recopié dans la commande à lancer : liste blanche, puis cité pour le shell ; un nom de
+        # dossier hors forme (`DECISIONS_FILE` en accepte tout nom sans « / ») n'y est jamais recopié.
+        target = (clone / path).as_posix()
+        target = shlex.quote(target) if PRINTABLE_PATH.fullmatch(target) else "<son chemin dans le clone principal>"
+        where = f"la branche « {branch} »" if branch else "une tête détachée"
+        problems.append(f"{ascii(path) if not PRINTABLE_PATH.fullmatch(path) else path} : changé sur {where}, hors de "
+                        f"la branche principale « {main} » ; un fichier de décisions ne s'écrit que dans le clone "
+                        f"principal : python3 scripts/decision.py {target} <fichier de la série> -m <message>")
+    return problems
+
+
+def check_decisions(paths, merging=False):
+    log("→ fichiers de décisions : écrits sur la branche principale")
+    off_main = decisions_off_main(paths, merging)
+    if off_main:
+        log("\n".join(f"  {p}" for p in off_main))
+        raise Failed(f"{len(off_main)} fichier(s) de décisions changé(s) hors de la branche principale")
+    log("  ok")
     log("→ numéros de série des fichiers de décisions")
     sources = staged_sources()
     problems = [p for path in paths for p in duplicate_series(path, sources.get(path))]
@@ -2019,7 +2669,7 @@ def staged_code(code_paths, tree, ruled):
         if not (copy / ".claude-plugin" / "plugin.json").is_file():
             continue
         if passed_already(plugin):
-            log(f"→ plugins/{name} : identique au dernier check.sh vert, contrôles sautés")
+            log(f"→ plugins/{name} : identique au dernier check.sh vert (de ce worktree ou d'un autre), contrôles sautés")
         else:
             check_code(name, tree, ruled)
             staged_types(plugin, copy)
@@ -2028,20 +2678,36 @@ def staged_code(code_paths, tree, ruled):
             plugin_tests(copy, claude, "terminal")
 
 
-def staged():
+def staged(merging=False):
+    """Le hook pre-commit, ou pre-merge-commit quand `merging` (`--merge`) : le commit est une fusion.
+    Un instantané de ticket pas reposé se signale, même pour un commit de documentation seule (sa ligne
+    Status:), mais seulement une fois tous les contrôles passés : son conseil suppose le commit fait ; pas
+    à une fusion, qui n'est le commit d'aucun ticket."""
+    # Une fusion : le hook pre-merge-commit le dit (`--merge`) ; celle qu'un conflit ou `--no-commit` a
+    # arrêtée passe par le pre-commit, avec MERGE_HEAD.
+    merging = merging or git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None
+    snapshots = None if merging else stale_snapshots()
+    staged_checks(merging)
+    if snapshots:
+        report_snapshots(*snapshots)
+
+
+def staged_checks(merging):
+    """Les contrôles du hook (`staged`) : lève `Failed` pour refuser le commit."""
     code, out = run(["git", "diff", "--cached", "--name-only", "-z"], 60)
     if code != 0:
         raise Failed(f"git diff --cached : {out.strip()}")
     paths = [p for p in out.split("\0") if p]
     decisions = [p for p in paths if DECISIONS_FILE.fullmatch(p)]
     if decisions:
-        check_decisions(decisions)
+        check_decisions(decisions, merging)
     tickets = [p for p in paths if TICKET_FILE.fullmatch(p)]
     if tickets:
         check_tickets(tickets)
-    # Les règles du dépôt indexées (règle ou référence commune, règle de projet, .gitignore), même en
-    # documentation seule : leur version indexée, celle que le commit enregistre.
-    repo_rules = [p for p in paths if p == GITIGNORE_FILE or COMMON_RULE_FILE.fullmatch(p) or PROJECT_RULE_FILE.fullmatch(p)]
+    # Les règles du dépôt indexées (règle ou référence commune, règle de projet, .gitignore, test de la
+    # suite Python), même en documentation seule : leur version indexée, celle que le commit enregistre.
+    repo_rules = [p for p in paths if p == GITIGNORE_FILE or COMMON_RULE_FILE.fullmatch(p) or PROJECT_RULE_FILE.fullmatch(p)
+                  or SCRIPT_TEST_FILE.fullmatch(p)]
     if repo_rules:
         check_repo_rules(rules_problems((p, git_show(REPO, f":{p}")) for p in repo_rules))
     # La règle d'un plugin et les listes d'admis : leurs contrôles statiques, même en documentation seule,
@@ -2087,7 +2753,9 @@ def staged():
             staged_code(code_paths, tree, ruled)
         elif not suite:
             log("pre-commit : documentation seule, pas d'autre contrôle")
-        if suite:
+        if suite and suite_passed_already():
+            log("pre-commit : suite Python du dépôt identique au dernier passage vert, suite sautée (empreinte de ce worktree ou d'un autre)")
+        elif suite:
             log("pre-commit : suite Python du dépôt (un fichier indexé sous scripts/ ou register.tsx), sur la copie de l'index")
             index_suite(tree)
     finally:
@@ -2112,6 +2780,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="tous les plugins, la sonde et la suite Python du dépôt")
     parser.add_argument("--no-desktop", action="store_true", help="sans le Claude Code de l'app desktop")
     parser.add_argument("--staged", action="store_true", help="hook pre-commit : les plugins dont un fichier est indexé")
+    parser.add_argument("--merge", action="store_true", help="avec --staged, du hook pre-merge-commit : le commit est une fusion")
     parser.add_argument("--fix", action="store_true",
                         help="réécrit l'arbre « Architecture » du README des plugins et retire les blocs /** */ détachés, sans rien contrôler")
     parser.add_argument("--test", metavar="FICHIER", nargs="+", action="extend",
@@ -2119,13 +2788,18 @@ def main():
     parser.add_argument("--quick", action="store_true",
                         help="pré-contrôle rapide : contrôles statiques, tsc, tests Node et seuls fichiers de test du moteur touchés face à HEAD (terminal)")
     parser.add_argument("--tsc", action="store_true", help="le seul tsc des plugins nommés")
+    parser.add_argument("--contre", metavar="REF",
+                        help="avec --test : lance ces tests de l'arbre de travail contre hooks/ du plugin à cette référence, "
+                             "dans la copie temporaire, sans toucher à l'arbre")
     args = parser.parse_args()
+    if args.contre is not None and not args.test:
+        parser.error("--contre ne va qu'avec --test (scripts/check.sh --test <fichiers> --contre <ref> <plugin>)")
     known = {p.parent.parent.name for p in PLUGINS.glob("*/.claude-plugin/plugin.json")} | set(TOOLS) | {SCRIPTS}
     if args.test:
         args.test, args.plugins = split_tests(args.test, args.plugins, known)
     try:
         if args.staged:
-            staged()
+            staged(args.merge)
             return
         names = sorted(known) if args.all else args.plugins
         if not names:
@@ -2144,14 +2818,14 @@ def main():
         run_suite = SCRIPTS in names
         names = [n for n in names if n != SCRIPTS]
         if run_suite and not names:
-            python_tests(REPO)
+            suite_and_remember()
             check_repo_rules(repo_rules_problems())
             log("\nTous les contrôles sont passés.")
             return
         if args.test:
             if len(names) != 1:
                 parser.error("--test : nommer un seul plugin")
-            single_test(target(names[0]), args.test)
+            single_test(target(names[0]), args.test, args.contre)
             log(f"\n{'Les tests sont passés' if len(args.test) > 1 else 'Le test est passé'}.")
             return
         if args.tsc:
@@ -2186,18 +2860,24 @@ def main():
             else:
                 check_plugin(PLUGINS / name, desktop)
         if run_suite:
-            python_tests(REPO)
+            suite_and_remember()
         validate(REPO, tool("claude"))
         check_state(names)
         check_repo_rules(repo_rules_problems())
         fail_deferred(DEFERRED)
     except Failed as err:
-        if DEFERRED and not isinstance(err, DeferredFailed):
-            log("\nSignalés plus haut, sans arrêter les contrôles :")
-            log("\n".join(f"  {p}" for p in DEFERRED))
-        log(f"\nÉCHEC : {err}")
+        report_failure(err)
         sys.exit(1)
     log("\nTous les contrôles sont passés.")
+
+
+def report_failure(err):
+    """La fin de la sortie d'un échec : les contrôles signalés sans arrêt, puis la ligne « ÉCHEC : … »,
+    toujours la dernière (ou l'avant-dernière, suivie du chemin du journal gardé)."""
+    if DEFERRED and not isinstance(err, DeferredFailed):
+        log("\nSignalés plus haut, sans arrêter les contrôles :")
+        log("\n".join(f"  {p}" for p in DEFERRED))
+    log(f"\nÉCHEC : {err}")
 
 
 if __name__ == "__main__":

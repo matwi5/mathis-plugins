@@ -1,4 +1,4 @@
-// Le corpus hostile commun des gardes de forme (CODING_STANDARDS.md, « Un garde de forme passe le
+// Le corpus hostile commun des gardes de forme, avec les familles de la classe « ligne sûre » (CODING_STANDARDS.md, « Un garde de forme passe le
 // corpus hostile commun ») : corpus-hostile.test.ts y passe les gardes du mod, instantane.test.mjs
 // celui du script d'instantané. Les caractères s'écrivent par leur point de code : un caractère
 // invisible ou un séparateur de ligne écrit tel quel dans la source ne se relit pas, et U+2028 y
@@ -100,3 +100,20 @@ export const NON_TEXT = {
   'objet vide': {},
   'objet avec toString': { toString: () => 'ab' },
 }
+
+/** Les points de code de `from` à `to`, bornes comprises. */
+const range = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i)
+
+/**
+ * La classe « ligne sûre » : les familles qu'un garde de ligne sûre refuse, chacune par ses points de
+ * code (pas par la regex d'un garde, qu'elle éprouve), et les sosies de guillemets et d'apostrophes
+ * qu'il garde, puisqu'ils n'ouvrent pas de ligne. Les marques bidirectionnelles retenues sont celles
+ * qui ouvrent un enchâssement, un forçage ou un isolement : elles retournent l'affichage d'une ligne.
+ */
+export const LINE_BREAKERS = {
+  'fins de ligne': [0x0a, 0x0b, 0x0c, 0x0d, 0x85, 0x2028, 0x2029],
+  'contrôles C0': range(0x00, 0x1f),
+  'contrôles C1 et DEL': range(0x7f, 0x9f),
+  'marques bidirectionnelles d’enchâssement, de forçage et d’isolement': [...range(0x202a, 0x202e), ...range(0x2066, 0x2069)],
+}
+export const QUOTE_LOOKALIKES = ["'", '"', ch(0x2018), ch(0x2019), ch(0x201a), ch(0x201b), ch(0x201c), ch(0x201d), ch(0x2bc), ch(0xab), ch(0xbb)]
