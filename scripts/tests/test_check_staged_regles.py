@@ -6,11 +6,13 @@ commit qui indexe un fichier de code d'un plugin : il lance sur la copie de l'in
 statiques de check.sh hors arbre « Architecture » et appels du moteur (renvois, termes retirés, valeurs
 relues brutes, exports morts, termes de l'export public, règles du code). python3 -m unittest discover -s scripts/tests."""
 
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -269,6 +271,93 @@ class StagedCodeTest(StagedRepo):
         self.stage(HOOK, CODE + "// le mod lance la vague suivante\n")
         with mock.patch.object(check, "passed_already", lambda plugin: True):
             check.staged()
+
+
+class StagedCommentsTest(StagedRepo):
+    """Un commit qui ne change que des commentaires d'un module de `hooks/` : le pre-commit garde les
+    contrôles statiques, `tsc` et les tests qui épinglent un texte retiré, et saute la suite du plugin ;
+    chaque cas a son miroir où la suite tourne."""
+
+    LONG = "// une phrase de commentaire assez longue pour être épinglée par un test\n"
+
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+        for name in ("typecheck", "plugin_tests", "engine_subset"):
+            patcher = mock.patch.object(check, name, lambda *args, _n=name, **kw: self.calls.append((_n, args)))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        original = check.check_code
+
+        def code(*args):
+            self.calls.append(("check_code", args))
+            return original(*args)
+        patcher = mock.patch.object(check, "check_code", code)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(check, "EXPORT_DENYLIST", self.repo / "absente.txt")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def ran(self):
+        return [name for name, _ in self.calls]
+
+    def staged(self):
+        with redirect_stdout(io.StringIO()) as out:
+            check.staged()
+        return out.getvalue()
+
+    def test_un_commentaire_seul_saute_la_suite_et_garde_les_controles(self):
+        out = self.staged_after(HOOK, "// la règle (Q3), relue\n" + CODE.split("\n", 1)[1])
+        self.assertIn("check_code", self.ran())
+        self.assertIn("typecheck", self.ran())
+        self.assertNotIn("plugin_tests", self.ran())
+        self.assertIn("commentaires seuls dans hooks/, suite du plugin sautée", out)
+
+    def test_miroir_une_ligne_de_code_lance_la_suite(self):
+        self.staged_after(HOOK, CODE.replace("Parcours", "Mission"))
+        self.assertIn("plugin_tests", self.ran())
+
+    def test_miroir_un_commentaire_et_un_test_lancent_la_suite(self):
+        self.stage("plugins/flow-board/tests/a.test.ts", "// un test\n")
+        self.staged_after(HOOK, "// la règle (Q3), relue\n" + CODE.split("\n", 1)[1])
+        self.assertIn("plugin_tests", self.ran())
+
+    def test_miroir_un_commentaire_dans_un_module_neuf_lance_la_suite(self):
+        self.stage("plugins/flow-board/hooks/neuf.ts", "// rien que du commentaire\n")
+        self.staged()
+        self.assertIn("plugin_tests", self.ran())
+
+    def test_miroir_un_commentaire_dans_une_chaine_lance_la_suite(self):
+        self.write(HOOK, CODE + "const s = '// avant'\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "chaîne")
+        self.staged_after(HOOK, CODE + "const s = '// après'\n")
+        self.assertIn("plugin_tests", self.ran())
+
+    def test_miroir_un_commentaire_et_un_changement_de_mode_lancent_la_suite(self):
+        self.stage(HOOK, "// la règle (Q3), relue\n" + CODE.split("\n", 1)[1])
+        git(self.repo, "update-index", "--chmod=+x", HOOK)
+        self.staged()
+        self.assertIn("plugin_tests", self.ran())
+
+    def test_un_test_qui_epingle_le_commentaire_retire_tourne_seul(self):
+        self.write(HOOK, self.LONG + CODE)
+        self.write("plugins/flow-board/tests/epingle.test.ts",
+                   "// une phrase de commentaire assez longue pour être épinglée par un test\n")
+        self.write("plugins/flow-board/tests/autre.test.ts", "// rien\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "épingle")
+        out = self.staged_after(HOOK, "// une autre phrase\n" + CODE)
+        self.assertNotIn("plugin_tests", self.ran())
+        subset = [args for name, args in self.calls if name == "engine_subset"]
+        self.assertEqual(len(subset), 1)
+        self.assertEqual(subset[0][1], {Path("tests/epingle.test.ts")})
+        self.assertIn("epingle.test.ts", out)
+
+    def staged_after(self, rel, text):
+        self.stage(rel, text)
+        return self.staged()
 
 
 if __name__ == "__main__":

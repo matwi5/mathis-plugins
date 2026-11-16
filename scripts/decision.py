@@ -2,8 +2,33 @@
 """Ajoute une série à un fichier de décisions partagé (`travail/<sujet>/DECISIONS.md`) et ne commite qu'elle ;
 crée ce fichier dans le clone principal quand il n'existe pas encore.
 
+Le fichier de la série : sa première ligne est le titre, nu, sans « ## Série <n> — » et sans date (le script
+pose les deux) ; puis le corps, lignes vides de bord retirées, sans ligne qui serait un titre de série. Par
+exemple :
+
+    Réponses du cadrage
+
+    **Q1** : « oui, l'option 1 ».
+
+Un fichier mal formé est refusé avant tout verrou et toute écriture, toutes ses erreurs dites en une fois.
+
     python3 scripts/decision.py <DECISIONS.md> <fichier de la série> -m <message>
     python3 scripts/decision.py <DECISIONS.md> <fichier de la série> -F <fichier du message>
+    python3 scripts/decision.py <DECISIONS.md> <fichier de la série> -m <message> --index "<tickets ou sujets régis>"
+
+`--index "<texte>"` ajoute aussi la ligne « - Série <n> — <titre> (<texte>) » à la fin de la liste de l'index
+« Décisions en vigueur », avant la première série : sous le titre `## Décisions en vigueur` (après un éventuel
+texte d'introduction ; la section va jusqu'au titre suivant) ou sous la ligne `**Décisions en vigueur**`
+(index vide : la ligne va sous elle), après le dernier élément « - … » de premier niveau de la liste (ses
+lignes de suite indentées et les lignes vides entre deux éléments en font partie), dans le fichier de travail
+et dans le blob commité, sous le même verrou et dans le même commit que la série ; aucun autre octet ne
+change. Il refuse avant toute écriture un texte vide, de plus de 300 signes, sur plusieurs lignes ou qui porte
+un caractère non imprimable (code 2), un fichier à créer, un fichier de travail ou un HEAD sans bloc d'index
+ou avec plusieurs, et un index dont la fin n'est pas sûre (rien n'est deviné) : sous la ligne en gras, une
+première ligne qui n'est pas un élément « - … » ; sous le titre, une introduction sans liste ou un contenu
+après la liste ; une ligne non indentée collée à la liste qui n'en est pas un élément. La relance sans
+`--index` écrit la série comme avant. Un HEAD qui avance pendant le commit et n'a plus un tel index arrête en
+code 3 (étape 6). Une ligne périmée se retouche à la main : le script n'en retire aucune.
 
 Plusieurs discussions écrivent dans le même fichier de décisions : le numéro d'une série se prenait à
 la main, et le commit devait isoler ses lignes des ajouts non commités d'une autre discussion. Le
@@ -69,7 +94,8 @@ script fait tout le geste, et ne rend la main qu'avec la série commitée, ou le
    où le fichier vaut le blob commité, remplace
    HEAD s'il n'a pas bougé (`git update-ref HEAD <nouveau> <ancien>`), puis installe cet index. Un
    HEAD qui a bougé fait recommencer sur le nouveau, trois fois au plus, sauf si le nouveau porte déjà
-   le numéro pris, ou, pour une création, s'il suit maintenant le fichier (code 3). L'ajout non commité d'une autre discussion reste dans l'arbre, et ce
+   le numéro pris, ou, pour une création, s'il suit maintenant le fichier, ou, avec `--index`, s'il n'a plus
+   un seul bloc d'index où poser la ligne (code 3). L'ajout non commité d'une autre discussion reste dans l'arbre, et ce
    qu'elle indexe hors de ce fichier reste dans l'index partagé ;
 7. il rend « Série <n> : commit <hash> » sur la sortie, le hash étant celui qu'imprime `git commit-tree`
    (aussi quand le commit est fait avec un reste à vérifier, code 3), suivi pour une création de
@@ -181,34 +207,116 @@ TITLE_DATE = re.compile(r"\(\s*\d{1,2}/\d{1,2}/\d{4}\s*\)\s*$")
 
 
 def read_series(path):
-    """Le titre et le corps d'un fichier de série ; DecisionError s'il est mal formé (un titre qui finit par
-    une date compris : le script la pose lui-même)."""
+    """Le titre et le corps d'un fichier de série ; DecisionError s'il est mal formé, qui dit toutes ses erreurs
+    de format en un seul refus, une ligne par erreur avec son remède (un titre qui finit par une date compris :
+    le script la pose lui-même)."""
     path = Path(path)
     if not path.is_file():
         raise DecisionError(f"fichier de la série introuvable : {path}")
     lines = path.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")
     title = lines[0].strip() if lines else ""
+    # Le numéro de ligne, dans le fichier, de la première ligne du corps (lignes vides de tête retirées).
+    first = 2
     body = lines[1:]
     while body and not body[0].strip():
         body.pop(0)
+        first += 1
     while body and not body[-1].strip():
         body.pop()
+    errors = []
     if not title:
-        raise DecisionError(f"{path} : la première ligne, le titre de la série, est vide{WRITTEN}")
+        errors.append("la première ligne, le titre de la série, est vide : y écrire le titre")
     if SERIES_TITLE.search(title) or title.startswith("#"):
-        raise DecisionError(f"{path} : le titre se donne nu (« Réponses du cadrage »), le script le met en "
-                            f"« ## Série <n> — … »{WRITTEN}")
+        errors.append("le titre se donne nu (« Réponses du cadrage »), le script le met en « ## Série <n> — … » : "
+                      "retirer ce préfixe")
     dated = TITLE_DATE.search(title)
     if dated:
-        raise DecisionError(f"{path} : le titre finit par une date, alors que le script pose la date lui-même : "
-                            f"retirer « {dated[0].strip()} » du titre{WRITTEN}")
+        errors.append(f"le titre finit par une date, alors que le script pose la date lui-même : "
+                      f"retirer « {dated[0].strip()} » du titre")
     if not body:
-        raise DecisionError(f"{path} : le corps de la série est vide{WRITTEN}")
-    doubled = [n for n, line in enumerate(body, 3) if SERIES_TITLE.match(line)]
-    if doubled:
-        raise DecisionError(f"{path} : la ligne {doubled[0]} du corps est un titre de série (« ## Série N ») : elle "
-                            f"fausserait le numéro{WRITTEN}")
+        errors.append("le corps de la série est vide : l'écrire après le titre")
+    errors += [f"la ligne {n} du corps est un titre de série (« ## Série N ») : elle fausserait le numéro ; "
+               f"la changer (« ### … », ou sans « ## »)"
+               for n, line in enumerate(body, first) if SERIES_TITLE.match(line)]
+    if len(errors) == 1:
+        raise DecisionError(f"{path} : {errors[0]}{WRITTEN}")
+    if errors:
+        listed = "".join(f"\n  - {error}" for error in errors)
+        raise DecisionError(f"{path} : {len(errors)} erreurs de format du fichier de la série :{listed}\n{WRITTEN.lstrip(' ;')}")
     return title, body
+
+
+# Le titre du bloc de l'index « Décisions en vigueur », sous ses deux formes, avant la première série : un titre
+# de section (une introduction peut précéder la liste ; la section va jusqu'au titre suivant), ou une ligne en
+# gras suivie directement de la liste, après d'éventuelles lignes vides (`with_index_line`).
+INDEX_FORMS = ("## Décisions en vigueur", "**Décisions en vigueur**")
+INDEX_HELP = ("le titre « ## Décisions en vigueur » (une introduction, puis la liste « - … » ; rien après elle "
+              "jusqu'au titre suivant) ou la ligne « **Décisions en vigueur** » suivie de la liste « - … », avant la "
+              "première série")
+HEADING = re.compile(r"#{1,6} ")
+INDEX_TEXT_MAX = 300
+
+
+def with_index_line(text, line, where, before_writing=True):
+    """`text` où `line` s'insère après le dernier élément de la liste de l'index (`INDEX_FORMS`) : ses éléments
+    « - … » de premier niveau, leurs lignes de suite indentées et les lignes vides entre deux éléments ; sous la
+    ligne en gras sans liste, juste sous elle. À ses fins de ligne ; seul autre changement, la fin de ligne
+    ajoutée à ce dernier élément quand il finit le texte sans en avoir. DecisionError (code 1) sans bloc, avec
+    plusieurs, ou quand la fin de l'index n'est pas sûre (rien n'est deviné) ; `where` nomme le texte lu. Le
+    message conseille la relance sans --index seulement `before_writing` : après l'écriture de la série, elle
+    l'écrirait une seconde fois."""
+    retry = " ; relancer sans --index écrit la série sans ligne d'index" if before_writing else ""
+    newline = "\r\n" if "\r\n" in text else "\n"
+    parts = text.split("\n")
+    rows = [part + "\n" for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
+    bare = [row.rstrip("\n").rstrip("\r").rstrip() for row in rows]
+    # L'index précède la première série : un titre d'index plus bas est dans le corps d'une série commitée, que la
+    # ligne changerait.
+    first = next((k for k, row in enumerate(bare) if SERIES_TITLE.match(row)), len(bare))
+    heads = [k for k, row in enumerate(bare[:first]) if row in INDEX_FORMS]
+    if len(heads) != 1:
+        found = "aucun bloc d'index avant la première série" if not heads else \
+            f"{len(heads)} blocs d'index (lignes {', '.join(str(k + 1) for k in heads)})"
+        raise DecisionError(f"{where} : {found}, alors que --index en demande un seul, sous {INDEX_HELP}{retry}"
+                            f"{WRITTEN}")
+    start = end = heads[0]
+    bold = bare[start].startswith("**")
+    # La zone du bloc : jusqu'au titre suivant (ou à la première série). La liste de l'index commence à la première
+    # ligne non blanche sous le titre, et suit ses éléments « - » de premier niveau, leurs lignes de suite indentées
+    # et les lignes vides entre deux éléments ; tout autre contenu à la place de la liste, collé à elle ou (sous un
+    # titre de section) après elle, refuse : la fin de l'index n'est pas sûre, rien n'est deviné.
+    region = next((k for k in range(start + 1, first) if HEADING.match(bare[k])), first)
+    item = lambda k: bare[k].startswith("- ")
+    k = start + 1
+    # Sous un titre de section, un texte d'introduction peut précéder la liste ; sous la ligne en gras, non.
+    while k < region and (not bare[k].strip() or (not bold and not item(k))):
+        k += 1
+    intro = [j for j in range(start + 1, k) if bare[j].strip()]
+    if (k < region and not item(k)) or (k == region and intro):
+        where_line = k + 1 if k < region else intro[0] + 1
+        raise DecisionError(f"{where} : sous le titre de l'index, la ligne {where_line} n'est pas un élément de liste "
+                            f"« - … », et aucune liste ne la suit : la ligne de la série ne s'y ajoute pas{retry}{WRITTEN}")
+    while k < region:
+        if item(k) or (bare[k].strip() and rows[k][:1] in " \t"):
+            end, k = k, k + 1
+            continue
+        if bare[k].strip():
+            raise DecisionError(f"{where} : la ligne {k + 1}, collée à la liste de l'index, n'en est pas un élément « - … » : "
+                                f"la fin de l'index n'est pas sûre{retry}{WRITTEN}")
+        after = k
+        while after < region and not bare[after].strip():
+            after += 1
+        if after < region and item(after):
+            k = after
+            continue
+        break
+    rest = [j for j in range(k, region) if bare[j].strip()]
+    if rest and not bold:
+        raise DecisionError(f"{where} : la section de l'index porte, après sa liste, la ligne {rest[0] + 1}, qui n'en est "
+                            f"pas un élément : la fin de l'index n'est pas sûre{retry}{WRITTEN}")
+    if not rows[end].endswith("\n"):
+        rows[end] += newline
+    return "".join(rows[:end + 1]) + line + newline + "".join(rows[end + 1:])
 
 
 def target(path):
@@ -629,10 +737,12 @@ def swap_head_and_index(top, rel, mode, head, head_blob, blob, new, subject, pha
                 leftover.unlink()
 
 
-def commit_series(top, rel, mode, head, head_blob, head_text, block, n, message_args, subject, phase):
+def commit_series(top, rel, mode, head, head_blob, head_text, block, n, message_args, subject, phase, line=None):
     """Commite la série sur HEAD, sans l'index partagé, puis remplace HEAD et l'index ensemble ; rend
     (numéro, hash court, hash complet). Pour une création (`head_blob` None), `head_text` est le titre du
-    fichier, et un nouveau HEAD qui suit maintenant le fichier arrête (code 3)."""
+    fichier, et un nouveau HEAD qui suit maintenant le fichier arrête (code 3). Avec `line`, la ligne d'index
+    de la série s'insère aussi dans le texte de HEAD (`with_index_line`), relu à chaque reprise : un HEAD
+    sans un seul bloc d'index arrête (DecisionError, que l'appelant redit en code 3)."""
     creating = head_blob is None
     for _ in range(COMMIT_TRIES):
         if creating:
@@ -640,8 +750,10 @@ def commit_series(top, rel, mode, head, head_blob, head_text, block, n, message_
             # reprise) ne doit toujours pas suivre le fichier.
             refuse_taken(top, rel, head, appended(head_text, block))
         # Le blob de HEAD suivi de la même série : l'ajout non commité d'une autre discussion n'y est pas.
+        base = head_text if line is None else with_index_line(head_text, line, f"{rel} dans HEAD ({head[:12]})",
+                                                              before_writing=False)
         blob = git(top, "hash-object", "-w", "--no-filters", "--stdin",
-                   data=appended(head_text, block).encode("utf-8")).stdout.decode("utf-8").strip()
+                   data=appended(base, block).encode("utf-8")).stdout.decode("utf-8").strip()
         tree = commit_tree(top, rel, mode, head, blob, phase)
         new = out(top, "commit-tree", tree, "-p", head, *message_args)
         if swap_head_and_index(top, rel, mode, head, head_blob, blob, new, subject, phase):
@@ -683,20 +795,37 @@ def refuse_taken(top, rel, head, written):
                         f"relance", code=3)
 
 
-def add_series(decisions, series, message_args, subject, wait=DEFAULT_WAIT):
-    """Le geste entier ; rend (numéro, hash court, hash complet, chemin du fichier créé ou None)."""
+def add_series(decisions, series, message_args, subject, wait=DEFAULT_WAIT, index=None):
+    """Le geste entier ; rend (numéro, hash court, hash complet, chemin du fichier créé ou None). Avec `index`
+    (le texte de --index), la ligne « - Série <n> — <titre> (<index>) » s'ajoute à la fin du bloc de l'index,
+    dans le fichier de travail et dans le blob commité, sous le même verrou et dans le même commit que la
+    série ; sans un seul bloc d'index dans l'un ou l'autre, refus avant toute écriture, sauf dans un HEAD qui
+    avance pendant le commit : arrêt en code 3, la série et sa ligne écrites mais non commitées."""
     check_git_version()
     real, top, rel = target(decisions)
     title, body = read_series(series)
-    if not os.path.lexists(real) and head_state(top, rel) is None:
-        # Un refus sûr dès maintenant, sans fichier de verrou ; tout se relit sous le verrou (`check_repo`).
+    absent = not os.path.lexists(real) and head_state(top, rel) is None
+    if absent:
+        # Un refus sûr dès maintenant, sans fichier de verrou ; tout se relit sous le verrou (`check_repo`). Avant le
+        # refus de --index : un fichier porté ailleurs dans le dépôt se dit tel quel.
         check_creation(top, rel, real)
+    if index is not None:
+        # Des refus sûrs dès maintenant, sans fichier de verrou ; tout se relit sous le verrou.
+        if absent:
+            raise DecisionError(f"{rel} : aucun bloc d'index, le fichier n'existe pas encore (--index ne vaut pas pour "
+                                f"sa création, sous {INDEX_HELP}) ; relancer sans --index crée le fichier{WRITTEN}")
+        if real.is_file() and not real.is_symlink():
+            with_index_line(real.read_bytes().decode("utf-8", "replace"), "", rel)
     handle = take_lock(top, wait)
     try:
         mode, head, head_blob, head_text, creating = check_repo(top, rel, real)
         if creating:
+            if index is not None:
+                raise DecisionError(f"{rel} : aucun bloc d'index, le fichier n'existe pas encore{WRITTEN}")
             return (*create_with_series(top, rel, real, mode, head, head_text, title, body, message_args, subject),
                     real)
+        if index is not None:
+            with_index_line(head_text, "", f"{rel} dans HEAD ({head[:12]})")
         for _ in range(WRITE_TRIES):
             current = real.read_bytes().decode("utf-8")
             if not numbers(head_text) <= numbers(current):
@@ -704,16 +833,19 @@ def add_series(decisions, series, message_args, subject, wait=DEFAULT_WAIT):
                                     f"l'écrivait ?){WRITTEN}")
             n = max(numbers(current) | numbers(head_text) | {0}) + 1
             block = [f"## Série {n} — {title} ({time.strftime('%d/%m/%Y')})", "", *body]
-            if write_if_unchanged(real, current, appended(current, block)):
+            line = None if index is None else f"- Série {n} — {title} ({index})"
+            base = current if line is None else with_index_line(current, line, rel)
+            if write_if_unchanged(real, current, appended(base, block)):
                 break
         else:
             raise DecisionError(f"{rel} a changé à chaque essai entre la lecture et l'écriture{WRITTEN}")
         # La série est écrite : une erreur de git (code 1 de `git()`, « rien n'est écrit ») se redit en
         # code 3, avec ce qui est vrai à ce moment, pour qu'une relance n'ajoute pas la série une seconde fois.
-        phase = {"text": f"la série {n} reste écrite dans {rel}, non commitée", "commit": None}
+        written = "" if line is None else " avec sa ligne d'index"
+        phase = {"text": f"la série {n} reste écrite dans {rel}{written}, non commitée", "commit": None}
         try:
-            return (*commit_series(top, rel, mode, head, head_blob, head_text, block, n, message_args, subject, phase),
-                    None)
+            return (*commit_series(top, rel, mode, head, head_blob, head_text, block, n, message_args, subject, phase,
+                                   line), None)
         except BaseException as err:
             # Toute erreur, une erreur du système (disque plein, droits) ou de décodage comme une erreur de git
             # ou une interruption (Ctrl-C, SIGTERM et SIGHUP que `main` change en SystemExit), se redit en
@@ -896,10 +1028,33 @@ def main(argv):
     if argv[:1] in (["--aide"], ["-h"], ["--help"]):
         print(__doc__)
         return 0
-    if len(argv) != 4 or argv[2] not in {"-m", "-F"}:
+    # Les deux chemins, puis -m ou -F et sa valeur, et --index et son texte, ces deux options dans un ordre
+    # quelconque : la valeur d'une option se prend telle quelle, même si elle ressemble à une option.
+    positional, options, k = [], {}, 0
+    while k < len(argv):
+        if len(positional) == 2 and argv[k] in {"-m", "-F", "--index"} and k + 1 < len(argv):
+            key = "--index" if argv[k] == "--index" else "message"
+            if key in options:
+                positional.append(argv[k])
+                break
+            options[key] = (argv[k], argv[k + 1])
+            k += 2
+        else:
+            positional.append(argv[k])
+            k += 1
+    if len(positional) != 2 or "message" not in options:
         print("\n".join(USAGE), file=sys.stderr)
         return 2
-    decisions, series, flag, value = argv
+    decisions, series = positional
+    flag, value = options["message"]
+    index = options["--index"][1] if "--index" in options else None
+    # Le texte entre tel quel dans une ligne du fichier : une ligne imprimable (ni fin ni séparateur de ligne, ni
+    # caractère de contrôle ou invisible : `str.isprintable`), 300 signes au plus.
+    if index is not None and (not index.strip() or not index.isprintable() or len(index) > INDEX_TEXT_MAX):
+        print(f"ÉCHEC : le texte de --index est vide, trop long (plus de {INDEX_TEXT_MAX} signes) ou porte une fin de "
+              f"ligne ou un caractère non imprimable : une seule ligne, les tickets ou sujets que la série régit",
+              file=sys.stderr)
+        return 2
     if flag == "-F":
         message = Path(value)
         try:
@@ -923,7 +1078,7 @@ def main(argv):
         if hasattr(signal, name):
             signal.signal(getattr(signal, name), stop)
     try:
-        n, short, _, created = add_series(decisions, series, message_args, subject, wait_from_env())
+        n, short, _, created = add_series(decisions, series, message_args, subject, wait_from_env(), index)
     except DecisionError as err:
         if err.commit:
             print(f"Série {err.number} : commit {err.commit[:12]} (reste à vérifier : voir le message d'échec)")

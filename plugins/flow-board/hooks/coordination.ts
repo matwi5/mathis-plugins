@@ -23,6 +23,13 @@ import { NIGHT_FORCE_PAIRS_MAX, isNightId } from './night.ts'
 /** Le texte du réveil d'un manager : fixe, sans aucune valeur venue d'ailleurs. */
 export const WAKE_TEXT = 'Le COO a mis ta mission à jour : relis le tableau de bord.'
 
+/**
+ * Le texte du réveil de jour : envoyé par la discussion d'une mission dont
+ * une unité vient de finir, à chaque mission en auto qui l'attendait. Fixe, sans aucune valeur venue d'ailleurs ;
+ * vrai même quand l'auto de la mission réveillée n'a pas repris.
+ */
+export const DAY_WAKE_TEXT = 'Un groupe que ta mission attendait est terminé : relis le tableau de bord. Si ta mission est en auto, il envoie la suite de lui-même : ne lance rien toi-même.'
+
 /** Ce que dit une discussion qui ne lit pas le fichier de coordination. */
 export const COORD_UNREAD = 'Fichier de coordination illisible : retenues gardées, auto en pause.'
 

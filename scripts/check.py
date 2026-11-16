@@ -12,7 +12,8 @@
                                            l'union des deux côtés, lignes en double retirées ; refus, README inchangé, quand deux
                                            commentaires diffèrent, qu'une ligne hors de hooks/ et de tests/ n'est que d'un côté
                                            ou que des marques sont mal appariées, procédure à la main de docs/check-sh.md) et
-                                           retire les blocs /** */ détachés, sans rien contrôler
+                                           retire les blocs /** */ détachés (sauf un ajout glissé sous un
+                                           commentaire de HEAD, qu'il signale), sans rien contrôler
     scripts/check.sh --test <fichier>... <plugin>  ces seuls fichiers de test (nom nu ou chemin), terminal seulement,
                                            après la règle des caractères invisibles sur le plugin et ces fichiers
     scripts/check.sh --test <fichier>... --contre <ref> <plugin>  ces tests contre hooks/ du plugin à <ref>, sans toucher à l'arbre
@@ -49,6 +50,11 @@ Les contrôles d'un plugin, chacun seulement s'il s'applique :
    (`function`, `const`, `let`, `class`, `enum`, pas un type) qu'aucun autre fichier de code du
    plugin ne nomme, hors l'entrée `register` de `hooks/register.tsx`, au-delà des exports admis
    fichier par fichier (`scripts/exports-admis.json`) ;
+   la taille, en octets, de chaque fichier de code de `hooks/` : en échec au-delà de 1 048 576 octets,
+   le plafond du moteur (« is over 1048576 bytes and was not read » : le mod ne se charge plus), en
+   avertissement sous 16 384 octets de marge (une ligne « AVERTISSEMENT : … » après le verdict d'une
+   réussite, juste avant la ligne « ÉCHEC : … » d'un échec, sans changer le code de sortie) ; le
+   pre-commit la mesure sur la version indexée ;
    la forme du CHANGELOG : chaque entrée (`## <version> — <date>`) précédée d'une ligne `---`, versions
    uniques, de la plus récente à la plus ancienne, la première égale à la version de `plugin.json`
    (un séparateur perdu au déplacement d'une entrée n'avait été vu qu'au compte rendu) ;
@@ -112,9 +118,12 @@ pour un commit de documentation seule ; puis rien de
 plus pour un commit de documentation seule ; sinon, sur une copie de l'index (`git checkout-index`, le
 contenu qui part, pas l'arbre de travail), `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
 (terminal seulement) des plugins touchés : 39 erreurs de types étaient passées inaperçues sur trois
-groupes quand le hook ne lançait que `validate` et les tests. Enfin, quand un fichier indexé est sous
-`scripts/` (documentation comprise) ou est `plugins/flow-board/hooks/register.tsx`, et seulement alors,
-la suite Python du dépôt (`scripts/tests`) tourne sur la copie de l'index, devenue un dépôt git jetable
+groupes quand le hook ne lançait que `validate` et les tests ; un plugin dont le commit ne change que
+des commentaires de `hooks/` (`staged_comment_only`) ne lance de ses tests que ceux qui épinglent un
+texte retiré. Enfin, quand un fichier indexé est sous
+`scripts/` (documentation comprise) ou est `plugins/flow-board/hooks/decoupage.ts`, et seulement alors,
+la suite Python du dépôt (`scripts/tests` ; `decoupage.ts` seul déclencheur, `test_check_tickets.py`
+seul) tourne sur la copie de l'index, devenue un dépôt git jetable
 commité tel quel, sans les variables `GIT_*` du hook ; un test en échec refuse le commit et se nomme ; elle se
 saute quand l'index porte exactement les déclencheurs et le contexte d'un passage vert (`check.sh scripts`
 ou `--all`, qui tourne sur une copie de l'arbre commitée de même ; empreinte `check-ok/suite-python` :
@@ -129,7 +138,8 @@ Le hook pre-merge-commit lance `--staged --merge` à la fusion d'une branche qui
 
 Une commande en échec affiche ses lignes d'échec (tests, erreurs de types) avec un peu de contexte,
 puis sa fin ; sa sortie entière est écrite dans un fichier temporaire dont le chemin s'affiche. La
-ligne « ÉCHEC : … » nomme les tests en échec, et la dernière ligne de la sortie, juste après, ce fichier.
+ligne « ÉCHEC : … » nomme les tests en échec, et la ligne juste après, ce fichier : les deux dernières lignes de
+la sortie, sauf en `--quick`, dont le relevé « à relire avant commit » vient après elles.
 
 Sans dépendance hors de la bibliothèque standard ; Python 3.9 ou plus récent.
 """
@@ -152,6 +162,7 @@ from pathlib import Path
 # Le marqueur « 0.xx.0 » d'une version pas encore connue dans un README, et les lignes dont
 # `scripts/bump-version.py` le remplace : une seule règle pour les deux scripts.
 from placeholders import PLACEHOLDER, git_show, replaced_lines
+import commentaires
 # La normalisation et le seuil de `scripts/epingles.py` : un test épingle une phrase qu'il recopie sur
 # 30 signes et plus, échappements retirés et blancs comptés pour un (pré-contrôle rapide, `pinned_tests`).
 from epingles import MIN as PIN_MIN, fragment as pin_fragment, normal as pin_normal
@@ -217,6 +228,14 @@ PENDING = {}
 # de l'arbre sans commentaire) :
 # ils font échouer la commande à la fin, ou s'affichent avec l'échec d'un autre contrôle.
 DEFERRED = []
+# Les avertissements, qui n'échouent jamais : imprimés en lignes « AVERTISSEMENT : … » après le verdict
+# (avant la ligne « ÉCHEC : … » sur un échec), le code de sortie inchangé (`warn`).
+WARNINGS = []
+# Le plafond du moteur : il ne lit pas un module de hooks de plus de 1 048 576 octets (« is over 1048576
+# bytes and was not read ») et le mod ne se charge plus ; sous 16 384 octets de marge, un avertissement.
+MODULE_CEILING = 1_048_576
+MODULE_MARGIN = 16_384
+MODULE_SUFFIXES = {".ts", ".tsx", ".js", ".mjs", ".cjs"}
 # Les lignes qui disent un échec dans la sortie d'une commande : `(fail)` de `claude plugin test`,
 # `not ok` et `✖` de `node --test`, `error TS` de `tsc`. Une sortie coupée à sa fin les cachait :
 # « 466 pass / 2 fail » sans aucun nom de test.
@@ -334,12 +353,14 @@ RETIRED_LIST_FILE = re.compile(r"plugins/([\w-]+)/" + re.escape(RETIRED_FILE))
 # n'était lancée par rien, et une régression d'un script du dépôt passait inaperçue.
 SCRIPTS = "scripts"
 SCRIPTS_TIMEOUT = 600
-# Les fichiers indexés qui font lancer la suite au pre-commit : tout fichier sous `scripts/`, et
-# `register.tsx` de flow-board (`test_check_tickets.py` relit la ligne « Recherche » de la consigne du
-# cadrage). D'autres tests lisent d'autres fichiers du dépôt (`.claude/settings.json`, `.gitignore`, des
+# Les fichiers indexés qui font lancer la suite au pre-commit : tout fichier sous `scripts/` (la suite
+# entière), et `decoupage.ts` de flow-board (`test_check_tickets.py` relit la ligne « Recherche » de la
+# consigne du cadrage, sortie de `register.tsx`) : déclencheur seul, il ne fait lancer que ce test
+# (`TICKETS_TEST`). D'autres tests lisent d'autres fichiers du dépôt (`.claude/settings.json`, `.gitignore`, des
 # références de flow-board, tous les plugins pour les termes de l'export) sans les faire lancer : la
 # suite ne tourne pas à chaque commit ; un tel changement se vérifie par `check.sh scripts`.
-SCRIPTS_TRIGGERS = ("scripts/", "plugins/flow-board/hooks/register.tsx")
+SCRIPTS_TRIGGERS = ("scripts/", "plugins/flow-board/hooks/decoupage.ts")
+TICKETS_TEST = "test_check_tickets.py"
 # Une ligne de test en échec dans la sortie d'unittest : `FAIL: <test> (<classe>)` ou `ERROR: …`.
 UNITTEST_FAILURE = re.compile(r"^(?:FAIL|ERROR): (.+)$", re.M)
 
@@ -356,6 +377,24 @@ def log(msg=""):
     print(msg, flush=True)
 
 
+def warn(msg):
+    """Un avertissement, sans échec : gardé, puis imprimé par `report_warnings` après le verdict d'une
+    réussite, ou juste avant la ligne « ÉCHEC : … » d'un échec."""
+    WARNINGS.append(msg)
+
+
+def report_warnings():
+    """Les avertissements gardés, une ligne « AVERTISSEMENT : … » chacun, puis la liste vidée."""
+    if WARNINGS:
+        log("")
+        for msg in WARNINGS:
+            log(f"AVERTISSEMENT : {msg}")
+        WARNINGS.clear()
+
+
+TIMED_OUT = 124  # le code que `run` rend pour une commande qui n'a pas fini dans son délai
+
+
 def run(args, timeout, cwd=REPO, env=None):
     """Lance une commande, rend (code, sortie) ; une commande qui ne finit pas compte comme un échec."""
     try:
@@ -363,7 +402,7 @@ def run(args, timeout, cwd=REPO, env=None):
                              encoding="utf-8", errors="replace", timeout=timeout,
                              env={**os.environ, **env} if env else None)
     except subprocess.TimeoutExpired:
-        return 124, f"pas fini en {timeout} s"
+        return TIMED_OUT, f"pas fini en {timeout} s"
     except OSError as err:
         return 127, str(err)
     return res.returncode, (res.stdout or "") + (res.stderr or "")
@@ -449,15 +488,33 @@ def kept_log(path):
     return f"\nsortie entière : {path}" if path else ""
 
 
+RETRIED = "relancé une fois après un dépassement de délai"
+
+
+def retried_once(launch):
+    """Lance `launch()` (qui rend (code, sortie)) et, sur un dépassement de délai (`TIMED_OUT`), le relance
+    une fois, avec le même délai : une machine chargée fait dépasser son délai à une commande sans lien
+    avec le commit, et `check.py` ne sait pas quel fichier de test a dépassé, d'où la commande entière.
+    Rend (code, sortie, mention à ajouter au message d'échec : vide sans relance)."""
+    code, out = launch()
+    if code != TIMED_OUT:
+        return code, out, ""
+    log(f"  {out} : {RETRIED}")
+    code, out = launch()
+    if code == TIMED_OUT:
+        return code, out, f" (deux dépassements de délai : {RETRIED}, puis encore {out})"
+    return code, out, f" ({RETRIED})"
+
+
 def step(title, args, timeout, summary=None):
     log(f"→ {title}")
-    code, out = run(args, timeout)
+    code, out, retried = retried_once(lambda: run(args, timeout))
     if code != 0:
         log(failure_excerpt(out))
         path = keep_log(title, out)
         if path:
             log(f"  sortie entière : {path}")
-        raise Failed(f"{title} : échec (code {code})" + failing_tests(out) + kept_log(path))
+        raise Failed(f"{title} : échec (code {code})" + retried + failing_tests(out) + kept_log(path))
     found = re.findall(summary, out) if summary else []
     log(f"  ok{' (' + found[-1] + ')' if found else ''}")
 
@@ -1062,20 +1119,79 @@ def code_rules(plugin):
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         found = [(n, "liste étalée dans Math.min/max (une boucle à la place)")
                  for n, line in enumerate(lines, 1) if spreads_into_minmax(code_of(line))]
-        found += [(nxt, f"bloc /** */ suivi directement d'un autre (ligne {end}) : le premier ne documente rien (scripts/check.sh --fix le retire)")
-                  for _, end, nxt in detached_doc_blocks(lines)]
+        blocks = detached_doc_blocks(lines)
+        slipped = slipped_blocks(plugin, rel, lines, blocks)
+        found += [(nxt, slipped_message(slipped[start]) if start in slipped else
+                   f"bloc /** */ suivi directement d'un autre (ligne {end}) : le premier ne documente rien (scripts/check.sh --fix le retire)")
+                  for start, end, nxt in blocks]
         problems += [f"{plugin.name}/{rel}:{n} : {what}" for n, what in sorted(found)]
     return problems
 
 
+def slipped_message(name):
+    """Le message d'un bloc glissé (`slipped_blocks`), le même pour `--fix` et la règle du code."""
+    return f"ajout glissé entre le commentaire de {name} et sa déclaration : le placer au-dessus"
+
+
+def slipped_blocks(plugin, rel, lines, blocks):
+    """Parmi les blocs détachés `blocks` (`detached_doc_blocks` de `lines`), ceux qu'une déclaration neuve,
+    avec son propre commentaire, a séparés de la déclaration qu'ils documentaient dans `HEAD` : le bloc y
+    était directement au-dessus d'une ligne de code (ni vide ni un autre bloc), et cette ligne n'est plus
+    celle qui suit le bloc suivant mais revient plus bas dans le fichier ; retirer le premier bloc perdrait
+    alors un commentaire qui documente du code. Un commentaire réécrit juste sous l'ancien (la même
+    déclaration suit le bloc suivant), ou le même bloc au-dessus d'une autre déclaration de `HEAD`, n'en
+    est pas un. {première ligne du bloc : le nom de la déclaration (`DECLARED_NAME`), sinon le début de sa
+    ligne}. Un fichier absent de `HEAD`, ou hors de git, n'en a aucun."""
+    if not blocks:
+        return {}
+    head = git_show(REPO, f"HEAD:{shown_dir(plugin)}/{rel}")
+    if head is None:
+        return {}
+    old = head.split("\n")
+    found = {}
+    for start, end, nxt in blocks:
+        block = lines[start - 1 : end]
+        # La ligne de code qui suit le bloc suivant (et les blocs et lignes vides qui le suivent).
+        after = nxt - 1
+        while after < len(lines):
+            s = lines[after].strip()
+            if not s:
+                after += 1
+            elif s.startswith("/**") or s.startswith("*") or s.endswith("*/"):
+                after += 1
+            else:
+                break
+        following = lines[after].strip() if after < len(lines) else ""
+        rest = {line.strip() for line in lines[after + 1 :]}
+        # Toutes les places du bloc dans `HEAD` : un bloc court répété (« /** Interne. */ ») qui y documentait
+        # déjà la déclaration qui le suit encore est un commentaire réécrit, pas un ajout glissé, même si une
+        # autre de ses copies documente une déclaration plus bas.
+        belows = [old[at + len(block)].strip() for at in range(len(old) - len(block)) if old[at : at + len(block)] == block]
+        if following in belows:
+            continue
+        below = next((b for b in belows if b and not b.startswith("/**") and b in rest), None)
+        if below is not None:
+            m = DECLARED_NAME.match(below)
+            found[start] = m[1] if m else below[:60]
+    return found
+
+
 def fix_detached_docs(plugin):
     """Retire chaque bloc `/** */` suivi directement d'un autre, et les lignes vides qui l'en séparent :
-    le dernier d'une suite, qui documente le code, reste. Rend ce qui a été retiré, fichier et lignes."""
+    le dernier d'une suite, qui documente le code, reste. Rend ce qui a été retiré, fichier et lignes. Un
+    bloc qui était, dans `HEAD`, directement au-dessus d'une déclaration (`slipped_blocks`) n'est pas
+    retiré : un ajout s'est glissé entre lui et sa déclaration, et le message dit de le placer au-dessus."""
     said = []
     for path, rel in code_files(plugin):
         text = path.read_text(encoding="utf-8")
         lines = text.split("\n")
         blocks = detached_doc_blocks(lines)
+        if not blocks:
+            continue
+        slipped = slipped_blocks(plugin, rel, lines, blocks)
+        said += [f"{plugin.name}/{rel}:{nxt} : {slipped_message(slipped[start])} (rien de retiré)"
+                 for start, _, nxt in blocks if start in slipped]
+        blocks = [b for b in blocks if b[0] not in slipped]
         if not blocks:
             continue
         drop = {i for start, _, nxt in blocks for i in range(start, nxt)}
@@ -1311,10 +1427,43 @@ def static_checks(plugin):
         log("\n".join(f"  {p}" for p in rules))
         raise Failed(f"{plugin.name} : {len(rules)} terme(s) retiré(s) ou entorse(s) aux règles du code")
     log("  ok")
+    check_module_sizes(plugin)
     check_export_terms(plugin)
     check_changelog(plugin)
     check_versions(plugin)
     return deferred
+
+
+def module_sizes(plugin):
+    """La taille en octets (jamais en caractères) de chaque fichier de code de `hooks/` du plugin, face au
+    plafond du moteur : (au-delà, en échec ; sous la marge, en avertissement), une ligne chacun."""
+    over, near = [], []
+    for path, rel in files_of(plugin):
+        if not rel.startswith("hooks/") or path.suffix not in MODULE_SUFFIXES:
+            continue
+        size = path.stat().st_size
+        where = f"{plugin.name}/{rel} : {size} octets"
+        if size > MODULE_CEILING:
+            over.append(f"{where}, {size - MODULE_CEILING} au-delà du plafond de {MODULE_CEILING} du moteur, qui ne le lit pas "
+                        f"(« is over 1048576 bytes and was not read ») : le mod ne se charge plus ; sortir des déclarations "
+                        f"vers un autre module (scripts/deplace.py)")
+        elif MODULE_CEILING - size < MODULE_MARGIN:
+            near.append(f"{where}, {MODULE_CEILING - size} octets de marge sous le plafond de {MODULE_CEILING} du moteur "
+                        f"(moins de {MODULE_MARGIN}) : sortir des déclarations vers un autre module (scripts/deplace.py)")
+    return over, near
+
+
+def check_module_sizes(plugin):
+    """Le contrôle de taille des modules de `hooks/` : en échec au-delà du plafond du moteur, en
+    avertissement sous la marge (`warn`), sans couper les contrôles."""
+    log(f"→ taille des modules de hooks/ (plafond de {MODULE_CEILING} octets du moteur, avertissement sous {MODULE_MARGIN} de marge)")
+    over, near = module_sizes(plugin)
+    for msg in near:
+        warn(msg)
+    if over:
+        log("\n".join(f"  {p}" for p in over))
+        raise Failed(f"{len(over)} module(s) de hooks/ au-delà du plafond de {MODULE_CEILING} octets du moteur : " + " ; ".join(over))
+    log(f"  {len(near)} sous la marge, avertissement à la fin" if near else "  ok")
 
 
 def fail_deferred(deferred):
@@ -1930,18 +2079,22 @@ def hooks_from(plugin, copy, sha):
         target.write_bytes(res.stdout)
 
 
-def other_storage_tests(plugin, ran_at, claude, label, targets, hooks_at=None):
-    """Relance les fichiers marqués `BOTH_STORAGES` (parmi `targets`) sur une copie du plugin dans le
+def other_storage_tests(plugin, ran_at, claude, label, targets, hooks_at=None, outside=()):
+    """Relance les fichiers marqués `BOTH_STORAGES` (parmi `targets`, et parmi les fichiers `outside`
+    hors du plugin, copiés dans `tests/` comme à la première passe) sur une copie du plugin dans le
     mode de stockage qu'ils n'ont pas eu à `ran_at`, le dossier d'où ils viennent de tourner (avec
     `hooks_at`, `hooks/` pris à ce commit, comme la première passe)."""
     marked = both_storage_tests(plugin, targets)
-    if not marked:
+    extra = [p for p in outside if BOTH_STORAGES in p.read_text(encoding="utf-8")]
+    if not marked and not extra:
         return
     want = "$.store" if storage_mode(ran_at) == "fichier" else "fichier"
     tmp = Path(tempfile.mkdtemp(prefix="check-stockage-"))
     try:
         copy = mode_copy(plugin, tmp, want, set(marked), hooks_at)
-        rel = " ".join(f"{shown_dir(plugin)}/{t.as_posix()}" for t in marked)
+        place_outside(copy, extra)
+        rel = " ".join([f"{shown_dir(plugin)}/{t.as_posix()}" for t in marked]
+                       + [p.relative_to(REPO.resolve()).as_posix() for p in extra])
         step(f"claude plugin test {rel} ({label}, stockage {want})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1952,13 +2105,21 @@ def test_file(plugin, name):
     cherché dans `tests/` et `skills/` du plugin."""
     for candidate in (REPO / name, plugin / name):
         if candidate.is_file() and ".test." in candidate.name:
-            return candidate.resolve()
+            return no_link(candidate, name).resolve()
     found = sorted(t for folder in ("tests", "skills") if (plugin / folder).is_dir()
                    for t in (plugin / folder).rglob(Path(name).name) if t.is_file() and ".test." in t.name)
     if len(found) != 1:
         where = ", ".join(t.relative_to(REPO).as_posix() for t in found) or "aucun"
         raise Failed(f"fichier de test « {name} » dans {shown_dir(plugin)} : {len(found)} trouvé(s) ({where})")
-    return found[0]
+    return no_link(found[0], name)
+
+
+def no_link(path, name):
+    """`path`, le fichier de test que nomme `name`, refusé quand il est un lien symbolique (il pourrait
+    désigner un fichier hors du plugin, copié sous un autre nom que celui donné)."""
+    if path.is_symlink():
+        raise Failed(f"fichier de test « {name} » : un lien symbolique, refusé (un fichier ordinaire du dépôt)")
+    return path
 
 
 def single_test(plugin, names, against=None):
@@ -1968,8 +2129,11 @@ def single_test(plugin, names, against=None):
     posée en mode fichier (`FIRST_STORAGE`), puis la relance des fichiers marqués en `$.store`. Avec
     `against` (`--contre <ref>`), le `hooks/` des deux copies est celui de cette référence (`hooks_from`),
     les tests restant ceux de l'arbre : la preuve d'un test rouge sans écrire dans l'arbre ; un `.test.mjs`
-    nommé est alors refusé."""
-    paths = [test_file(plugin, name) for name in names]
+    nommé est alors refusé. Un `.test.ts`/`.test.tsx` hors du plugin (un test de diagnostic gardé dans
+    `travail/<sujet>/tests/`, qui casserait le pre-commit des autres discussions posé dans le plugin) est
+    copié dans `tests/` de la copie, sous son nom (`outside_tests`)."""
+    paths = list(dict.fromkeys(test_file(plugin, name) for name in names))
+    outside = outside_tests(plugin, paths)
     node = [p for p in paths if p.name.endswith(".test.mjs")]
     if against is not None and node:
         raise Failed("--contre ne s'applique qu'aux tests du moteur (.test.ts, .test.tsx) : un .test.mjs tourne en "
@@ -1981,19 +2145,64 @@ def single_test(plugin, names, against=None):
     engine = [p for p in paths if not p.name.endswith(".test.mjs")]
     if not engine:
         return
-    rel = " ".join(p.relative_to(REPO).as_posix() for p in engine)
     claude = tool("claude")
-    targets = {p.relative_to(plugin) for p in engine}
+    code, out = run([claude, "--version"], 60)
+    version = out.strip().split(" ")[0] if code == 0 else "?"
+    label = f"terminal {version}" + (f", hooks à {against}" if sha else "")
+    engine_subset(plugin, {p.relative_to(plugin) for p in engine if p not in outside}, claude, label, sha, outside)
+
+
+def outside_tests(plugin, paths):
+    """Les fichiers de test de `paths` (résolus par `test_file`) hors du plugin, après contrôle : un
+    `.test.ts`/`.test.tsx` sous la racine du dépôt (jamais un `.test.mjs`, qui importe par des chemins
+    relatifs au plugin), dont le nom n'est pas déjà dans `tests/` du plugin (il l'écraserait dans la
+    copie), ni celui d'un autre fichier nommé hors du plugin (le même fichier nommé deux fois compte une
+    fois) ; lève `Failed` sinon, en disant pourquoi. Les aides sans `.test.` qui l'accompagnent ne sont
+    pas copiées."""
+    root, repo = plugin.resolve(), REPO.resolve()
+    found = []
+    for p in dict.fromkeys(paths):
+        if root in p.parents:
+            continue
+        if not p.is_relative_to(repo):
+            raise Failed(f"fichier de test {p} : hors du dépôt, refusé")
+        rel = p.relative_to(repo).as_posix()
+        if p.name.endswith(".test.mjs"):
+            raise Failed(f"fichier de test {rel} : un .test.mjs hors du plugin est refusé (il importe par des chemins relatifs au plugin)")
+        if not p.name.endswith((".test.ts", ".test.tsx")):
+            raise Failed(f"fichier de test {rel} : hors du plugin, seul un .test.ts ou .test.tsx est accepté")
+        if (plugin / "tests" / p.name).exists():
+            raise Failed(f"fichier de test {rel} : tests/{p.name} existe déjà dans {shown_dir(plugin)}, refusé (il serait écrasé dans la copie)")
+        if any(q.name == p.name for q in found):
+            raise Failed(f"fichier de test {rel} : un autre fichier nommé hors du plugin porte déjà le nom {p.name}, refusé (l'un écraserait l'autre dans la copie)")
+        found.append(p)
+    return found
+
+
+def engine_subset(plugin, targets, claude, label, sha=None, outside=()):
+    """Les seuls fichiers de test du moteur `targets` (chemins depuis le plugin) d'un plugin ou de sa copie
+    de l'index, et les fichiers `outside` (hors du plugin, contrôlés par `outside_tests`) copiés dans son
+    `tests/` sous leur nom, par `claude plugin test` sur une copie temporaire qui n'a qu'eux (les aides de
+    `tests/` sans `.test.` restent), posée en mode fichier (`FIRST_STORAGE`), puis la relance des fichiers
+    marqués en `$.store` ; avec `sha`, le `hooks/` des copies est celui de ce commit (`hooks_from`)."""
+    rel = " ".join([f"{shown_dir(plugin)}/{t.as_posix()}" for t in sorted(targets)]
+                   + [p.relative_to(REPO.resolve()).as_posix() for p in outside])
     tmp = Path(tempfile.mkdtemp(prefix="check-test-"))
     try:
         copy = mode_copy(plugin, tmp, FIRST_STORAGE, targets, sha)
-        code, out = run([claude, "--version"], 60)
-        version = out.strip().split(" ")[0] if code == 0 else "?"
-        label = f"terminal {version}" + (f", hooks à {against}" if sha else "")
+        place_outside(copy, outside)
         step(f"claude plugin test {rel} ({label}, stockage {FIRST_STORAGE})", [claude, "plugin", "test", copy], 900, r"\d+ pass")
-        other_storage_tests(plugin, copy, claude, label, targets, sha)
+        other_storage_tests(plugin, copy, claude, label, targets, sha, outside)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def place_outside(copy, outside):
+    """Copie les fichiers de test hors du plugin dans `tests/` de la copie, sous leur nom."""
+    if outside:
+        (copy / "tests").mkdir(exist_ok=True)
+    for p in outside:
+        shutil.copyfile(p, copy / "tests" / p.name)
 
 
 def split_tests(tests, plugins, known):
@@ -2139,9 +2348,14 @@ def reread_list(plugin):
         return any(a <= last and b >= first for a, b in ranges)
 
     items = []
+    entry = f"{plugin.relative_to(REPO).as_posix()}/{MOD_ENTRY[0]}"
     for path, lines, begin, end, ranges, new in found:
         m = DECLARED_NAME.match(lines[begin - 1])
         if new or not m:
+            continue
+        # La fonction d'entrée du mod change dès qu'un de ses hooks change, et le README la nomme partout :
+        # ses entrées noyaient le relevé (37 entrées, surtout « nomme register »).
+        if path == entry and m[1] == MOD_ENTRY[1]:
             continue
         # Le commentaire de tête de la déclaration suivante tombe dans la plage de celle-ci : un bloc
         # du diff qui ne touche que lui ne change pas son corps, et ne la fait pas relever.
@@ -2185,19 +2399,20 @@ def engine_tests(plugin):
             if p.is_file() and p.name.endswith((".test.ts", ".test.tsx"))]
 
 
-def pinned_tests(plugin):
+def pinned_tests(plugin, cached=False):
     """Les fichiers de test du moteur du plugin dont une ligne porte une suite d'au moins 30 signes
-    d'une ligne retirée de `hooks/` face à `HEAD` (arbre de travail ou index, lignes « - » de
-    `git diff -U0`), les deux côtés normalisés comme le fait `scripts/epingles.py` : {chemin depuis le
-    plugin : un fragment trouvé}. Une ligne retirée plus courte, ou qui revient à l'identique parmi les
-    lignes ajoutées (un bloc déplacé), ne compte pas. Les suites des lignes retirées sont réunies
-    d'abord : chaque fichier de test se lit une fois. Deux pré-contrôles verts avaient été suivis d'un
-    refus du pre-commit, un test épinglant une phrase de `hooks/` que le diff venait de changer."""
+    d'une ligne retirée de `hooks/` face à `HEAD` (arbre de travail ou index ; avec `cached`, l'index
+    seul, pour la copie de l'index du pre-commit ; lignes « - » de `git diff -U0`), les deux côtés
+    normalisés comme le fait `scripts/epingles.py` : {chemin depuis le plugin : un fragment trouvé}. Une
+    ligne retirée plus courte, ou qui revient à l'identique parmi les lignes ajoutées (un bloc déplacé),
+    ne compte pas. Les suites des lignes retirées sont réunies d'abord : chaque fichier de test se lit
+    une fois. Deux pré-contrôles verts avaient été suivis d'un refus du pre-commit, un test épinglant une
+    phrase de `hooks/` que le diff venait de changer."""
     hooks = plugin / "hooks"
     if not hooks.is_dir():
         return {}
-    rel = hooks.relative_to(REPO).as_posix()
-    out = git(["diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", rel], 60)
+    rel = f"{shown_dir(plugin)}/hooks"
+    out = git(["diff", *(["--cached"] if cached else []), "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", rel], 60)
     if out is None:
         raise Failed(f"git diff ou git ls-files de {rel} : échec")
     removed, added, in_hunk = [], set(), False
@@ -2235,7 +2450,7 @@ def quick_check(plugin):
     sources), puis, en un seul lancement (terminal), ses fichiers de test du moteur touchés, ceux qui
     nomment une valeur exportée de `hooks/` changée (`named_tests`) et ceux qui épinglent un texte
     retiré de `hooks/` (`pinned_tests`), annoncés à part, sans plafond, puis le relevé « à relire
-    avant commit » (`log_reread`), qui ne fait jamais échouer. Un module hors de la
+    avant commit » (`note_reread`), gardé pour être imprimé après le verdict, qui ne fait jamais échouer. Un module hors de la
     marketplace (la sonde) passe par ses propres contrôles statiques, les termes de l'export public.
     Plus de 20 suites complètes avaient échoué sur un contrôle statique que ce pré-contrôle ne voyait pas."""
     log(f"\n=== {label_of(plugin)} (pré-contrôle rapide)")
@@ -2262,20 +2477,35 @@ def quick_check(plugin):
         else:
             log("→ aucun fichier de test du moteur touché face à HEAD")
     finally:
-        # Imprimé même quand un test échoue, avant la ligne « ÉCHEC : … » : c'est le moment où l'on corrige.
-        log_reread(plugin)
+        # Relevé même quand un test échoue (c'est le moment où l'on corrige), imprimé après le verdict.
+        note_reread(plugin)
 
 
-def log_reread(plugin):
-    """Le relevé de `reread_list`, imprimé après les tests du pré-contrôle rapide seulement (même quand l'un d'eux échoue), quand il a
-    quelque chose à dire, `REREAD_MAX` éléments au plus ; jamais dans `DEFERRED`, jamais en échec."""
+# Le relevé « à relire avant commit » de chaque plugin du pré-contrôle rapide, imprimé par `log_reread`
+# après le verdict : imprimé avant, il était coupé par un `| tail` et noyé sous la suite de la sortie.
+REREAD = []
+
+
+def note_reread(plugin):
+    """Garde le relevé de `reread_list` du plugin pour `log_reread`, quand il a quelque chose à dire,
+    `REREAD_MAX` éléments au plus ; jamais dans `DEFERRED`, jamais en échec."""
     items = reread_list(plugin)
     if not items:
         return
-    log("→ à relire avant commit :")
-    log("\n".join(f"  {item}" for item in items[:REREAD_MAX]))
+    block = [f"  {item}" for item in items[:REREAD_MAX]]
     if len(items) > REREAD_MAX:
-        log(f"  … et {len(items) - REREAD_MAX} de plus")
+        block.append(f"  … et {len(items) - REREAD_MAX} de plus")
+    REREAD.append((label_of(plugin), "\n".join(block)))
+
+
+def log_reread():
+    """Imprime les relevés gardés par `note_reread`, en dernier bloc de la sortie, après le verdict (« Pré-contrôle
+    passé » ou « ÉCHEC : … ») ; sans relevé, rien. Ses chemins partent du plugin : quand plusieurs plugins ont
+    un relevé, l'en-tête de chacun nomme le sien (imprimés loin de leur « === <plugin> »)."""
+    if REREAD:
+        several = len(REREAD) > 1
+        log("\n" + "\n".join(f"→ à relire avant commit{f' ({label})' if several else ''} :\n{block}" for label, block in REREAD))
+        REREAD.clear()
 
 
 def validate(target, claude, label=None):
@@ -2357,32 +2587,38 @@ def without_git_env():
     return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 
-def python_tests(root):
+def python_tests(root, only=None):
     """La suite Python d'un dépôt ou d'une copie de son index (`<root>/scripts/tests`), par l'interprète
-    qui lance ce script, depuis `root`, sans les variables `GIT_*` de la session ; un test rouge fait
-    échouer, et le message nomme chaque test en échec (FAIL ou ERROR)."""
-    title = f"python -m unittest discover -s {SCRIPTS}/tests"
+    qui lance ce script, depuis `root`, sans les variables `GIT_*` de la session (avec `only`, le nom
+    d'un fichier de test, ce seul fichier) ; un test rouge fait échouer, et le message nomme chaque test
+    en échec (FAIL ou ERROR)."""
+    pattern = ["-p", only] if only else []
+    title = f"python -m unittest discover -s {SCRIPTS}/tests" + (f" -p {only}" if only else "")
     log(f"→ {title}")
-    try:
-        res = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(Path(root) / SCRIPTS / "tests")],
-                             cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
-                             timeout=SCRIPTS_TIMEOUT, env=without_git_env())
-        code, out = res.returncode, (res.stdout or "") + (res.stderr or "")
-    except subprocess.TimeoutExpired:
-        code, out = 124, f"pas fini en {SCRIPTS_TIMEOUT} s"
+
+    def launch():
+        try:
+            res = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(Path(root) / SCRIPTS / "tests"), *pattern],
+                                 cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=SCRIPTS_TIMEOUT, env=without_git_env())
+        except subprocess.TimeoutExpired:
+            return TIMED_OUT, f"pas fini en {SCRIPTS_TIMEOUT} s"
+        return res.returncode, (res.stdout or "") + (res.stderr or "")
+    code, out, retried = retried_once(launch)
     if code != 0:
         log(failure_excerpt(out))
         path = keep_log(title, out)
         if path:
             log(f"  sortie entière : {path}")
-        raise Failed(f"{title} : échec (code {code})" + named_failures(UNITTEST_FAILURE.findall(out)) + kept_log(path))
+        raise Failed(f"{title} : échec (code {code})" + retried + named_failures(UNITTEST_FAILURE.findall(out)) + kept_log(path))
     found = re.findall(r"^Ran \d+ tests? in [\d.]+s", out, re.M)
     log(f"  ok{' (' + found[-1] + ')' if found else ''}")
 
 
-def index_suite(tree):
+def index_suite(tree, only=None):
     """La suite Python sur une copie : celle de l'index au pre-commit (le contenu qui part, pas l'arbre de
-    travail), ou celle de l'arbre de travail figé pour `check.sh scripts` (`suite_and_remember`). La copie
+    travail), ou celle de l'arbre de travail figé pour `check.sh scripts` (`suite_and_remember`) ; avec
+    `only`, ce seul fichier de test quand la copie l'a (sinon la suite entière, jamais une passe vide). La copie
     devient d'abord un dépôt git jetable, commité tel quel (des tests archivent `HEAD` ou lisent ce
     qu'ignore `.gitignore`), par des appels git bornés à elle (`GIT_DIR` et `GIT_WORK_TREE` fixés, sans
     hook ni fsmonitor ni signature), puis la suite tourne sur ses propres `scripts/`. Une copie sans
@@ -2401,7 +2637,7 @@ def index_suite(tree):
             raise Failed(f"git {args[0]} dans la copie pour la suite Python : pas fini en 300 s")
         if res.returncode != 0:
             raise Failed(f"git {args[0]} dans la copie pour la suite Python : {(res.stdout + res.stderr).strip()}")
-    python_tests(tree)
+    python_tests(tree, only if only and (tree / SCRIPTS / "tests" / only).is_file() else None)
 
 
 # --- empreinte d'un plugin contrôlé -------------------------------------------
@@ -3097,9 +3333,45 @@ def check_code(name, tree, ruled):
     refuse(name, problems)
 
 
+# Un module de `hooks/` d'un plugin, `.ts` ou `.tsx` : le seul fichier dont un commit de commentaires seuls
+# fait sauter la suite du plugin au pre-commit (`staged_comment_only`).
+HOOK_MODULE = re.compile(r"plugins/[\w-]+/hooks/[^\0]+\.tsx?")
+DIFF_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def staged_comment_only(name, code_paths):
+    """Vrai quand les seuls fichiers de code indexés du plugin `name` sont des modules de `hooks/`
+    (`HOOK_MODULE`), présents à `HEAD` comme dans l'index, dont chaque ligne retirée et ajoutée
+    (`git diff --cached -U0`) ne porte aucun code et dont le code est le même jeton pour jeton
+    (`commentaires.comment_only`, qui lit chaque ligne dans son contexte : un `//` dans une chaîne, un
+    gabarit ou du texte JSX est du code). Faux dans le doute (git en échec, fichier ajouté ou retiré,
+    changement de mode, lecture incertaine) : la suite tourne alors comme avant."""
+    mine = [p for p in code_paths if p.startswith(f"plugins/{name}/")]
+    if not mine or not all(HOOK_MODULE.fullmatch(p) for p in mine):
+        return False
+    for path in mine:
+        old, new = git_show(REPO, f"HEAD:{path}"), git_show(REPO, f":{path}")
+        out = git(["diff", "--cached", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD", "--", path], 60)
+        # Un changement de mode (« old mode » / « new mode ») n'a pas de bloc : il compte comme du code.
+        if old is None or new is None or out is None or "\nold mode " in f"\n{out}":
+            return False
+        removed, added = [], []
+        for line in out.splitlines():
+            if m := DIFF_HUNK.match(line):
+                start, count = int(m[1]), int(m[2] if m[2] is not None else 1)
+                removed += range(start, start + count)
+                start, count = int(m[3]), int(m[4] if m[4] is not None else 1)
+                added += range(start, start + count)
+        if not commentaires.comment_only(old, new, removed, added, path.endswith(".tsx")):
+            return False
+    return True
+
+
 def staged_code(code_paths, tree, ruled):
     """Les contrôles d'un commit qui indexe autre chose que de la documentation, sur la copie de
-    l'index : `validate` du dépôt, puis ceux de chaque plugin touché (hors empreinte d'un `check.sh` vert)."""
+    l'index : `validate` du dépôt, puis ceux de chaque plugin touché (hors empreinte d'un `check.sh` vert).
+    Un plugin dont le commit ne change que des commentaires de `hooks/` (`staged_comment_only`) garde ses
+    contrôles statiques, `tsc` et les tests qui épinglent un texte retiré (`pinned_tests`), sans sa suite."""
     claude = tool("claude")
     log("pre-commit : contrôles du contenu indexé, sur une copie de l'index (Claude Code du terminal)")
     validate(tree, claude, ".")
@@ -3108,14 +3380,25 @@ def staged_code(code_paths, tree, ruled):
         plugin, copy = PLUGINS / name, tree / "plugins" / name
         if not (copy / ".claude-plugin" / "plugin.json").is_file():
             continue
+        # La version indexée, celle que le commit enregistre : même quand un check.sh vert a déjà tout relu.
+        check_module_sizes(copy)
         if passed_already(plugin):
             log(f"→ plugins/{name} : identique au dernier check.sh vert (de ce worktree ou d'un autre), contrôles sautés")
         else:
+            comments = staged_comment_only(name, code_paths)
             check_code(name, tree, ruled)
             staged_types(plugin, copy)
             validate(copy, claude)
             typecheck(copy)
-            plugin_tests(copy, claude, "terminal")
+            if not comments:
+                plugin_tests(copy, claude, "terminal")
+                continue
+            pinned = pinned_tests(copy, cached=True)
+            log(f"→ plugins/{name} : commentaires seuls dans hooks/, suite du plugin sautée"
+                + (" ; tests qui épinglent un texte retiré : " + ", ".join(f"{Path(t).name} (« {piece[:60]} »)" for t, piece in pinned.items())
+                   if pinned else " (aucun test n'épingle un texte retiré)"))
+            if pinned:
+                engine_subset(copy, {Path(t) for t in pinned}, claude, "terminal")
 
 
 def staged(merging=False):
@@ -3172,6 +3455,8 @@ def staged_checks(merging):
     homes_changed = any(p.startswith(home + "/") for p in paths for home in SECTION_HOMES)
     # La suite Python du dépôt, même pour une documentation de `scripts/` seule : elle tourne en dernier.
     suite = any(p.startswith(SCRIPTS_TRIGGERS[0]) or p == SCRIPTS_TRIGGERS[1] for p in paths)
+    # `decoupage.ts` seul déclencheur (rien sous `scripts/`) : le seul test qui le lit.
+    only = None if any(p.startswith(SCRIPTS_TRIGGERS[0]) for p in paths) else TICKETS_TEST
     if not shaped and not code_paths and not ruled and not homes_changed and not suite:
         log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets or repo_rules else "pre-commit : documentation seule, pas de contrôle")
         return
@@ -3195,8 +3480,11 @@ def staged_checks(merging):
             log("pre-commit : documentation seule, pas d'autre contrôle")
         if suite and suite_passed_already():
             log("pre-commit : suite Python du dépôt identique au dernier passage vert, suite sautée (empreinte de ce worktree ou d'un autre)")
+        elif suite and only:
+            log(f"pre-commit : {TICKETS_TEST} seul ({SCRIPTS_TRIGGERS[1]}, seul déclencheur indexé, sans fichier sous scripts/), sur la copie de l'index")
+            index_suite(tree, only)
         elif suite:
-            log("pre-commit : suite Python du dépôt (un fichier indexé sous scripts/ ou register.tsx), sur la copie de l'index")
+            log("pre-commit : suite Python du dépôt (un fichier indexé sous scripts/), sur la copie de l'index")
             index_suite(tree)
     finally:
         remove_tree(tree)
@@ -3237,6 +3525,7 @@ def main():
     known = {p.parent.parent.name for p in PLUGINS.glob("*/.claude-plugin/plugin.json")} | set(TOOLS) | {SCRIPTS}
     if args.test:
         args.test, args.plugins = split_tests(args.test, args.plugins, known)
+    failed = False
     try:
         if args.staged:
             staged(args.merge)
@@ -3313,18 +3602,27 @@ def main():
         check_state(names)
         check_repo_rules(repo_rules_problems())
         fail_deferred(DEFERRED)
+        log("\nTous les contrôles sont passés.")
     except Failed as err:
+        failed = True
         report_failure(err)
         sys.exit(1)
-    log("\nTous les contrôles sont passés.")
+    finally:
+        # Après le verdict de chaque chemin réussi ; sur un échec, `report_failure` les a imprimés avant « ÉCHEC : … ».
+        if not failed:
+            report_warnings()
+        # Le relevé « à relire avant commit » de `--quick`, en dernier, après le verdict comme après l'échec.
+        log_reread()
 
 
 def report_failure(err):
     """La fin de la sortie d'un échec : les contrôles signalés sans arrêt, puis la ligne « ÉCHEC : … »,
-    toujours la dernière (ou l'avant-dernière, suivie du chemin du journal gardé)."""
+    suivie au plus du chemin du journal gardé, puis, en `--quick`, du relevé « à relire avant commit »
+    (`log_reread`, appelé par `main`)."""
     if DEFERRED and not isinstance(err, DeferredFailed):
         log("\nSignalés plus haut, sans arrêter les contrôles :")
         log("\n".join(f"  {p}" for p in DEFERRED))
+    report_warnings()
     log(f"\nÉCHEC : {err}")
 
 

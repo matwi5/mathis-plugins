@@ -26,8 +26,9 @@ commentaire collées au-dessus d'elle (`/** */`, `//`), jusqu'à l'instruction d
 (sans son commentaire de tête, ni les lignes vides ou de commentaire qui la précèdent). Pour lire une
 fonction entière d'un gros module sans deviner un nombre de lignes. Une instruction de premier niveau
 commence par un mot (ou `@`) en colonne 0, hors d'un littéral : le lecteur de `deplace.py` (son masque,
-qui saute commentaires, chaînes, gabarits et expressions régulières) les trouve. Il ne connaît pas le
-JSX : sur un fichier qu'il ne lit pas sans littéral laissé ouvert (un `.tsx`, le plus souvent), la
+qui saute commentaires, chaînes, gabarits et expressions régulières) les trouve. Du JSX, il ne lit que
+les balises fermantes et auto-fermantes (pas le texte entre deux balises : une apostrophe y ouvre une
+chaîne) : sur un fichier qu'il ne lit pas sans littéral laissé ouvert (un `.tsx`, souvent), la
 lecture se fait par lignes, toute ligne en colonne 0 qui commence par un mot ouvrant une instruction ;
 une ligne d'un gabarit qui commence ainsi la couperait, et le message prévient quand la déclaration
 affichée porte un nombre impair d'accents graves hors de ses lignes de commentaire. Un nom absent (le

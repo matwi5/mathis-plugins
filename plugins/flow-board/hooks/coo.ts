@@ -11,7 +11,7 @@ import { SKILLS } from './catalog.ts'
 import { COO_EFFORT, effortSent } from './effort.ts'
 import { asciiJson, consentDay, isGroupId, isOwnBranch, isSafeId, neutralInPrompt, neutralLine } from './closing.ts'
 import { isClosedLink } from './link.ts'
-import { LOT_KEY, OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, AUTO_RESUMED, AUTO_STOPS, autoPauseLabel, blockingQuestions, isAutoPauseStored, isEndedPause, isAutoResumed, isGroupDone, isRelaunchPause, stopLabel, awaitingArchivePrint, isArchivable, isAwaitingArchive, crossZones, crossedLaunches, holdMapOf, isAutoOn, isStoredPause, nextLaunchFor, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
+import { LOT_KEY, OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, AUTO_STOPS, autoPauseLabel, autoPauseWhy, autoResumedAt, autoResumedLabel, blockingQuestions, isAutoPauseStored, isEndedPause, isGroupDone, isRelaunchPause, awaitingArchivePrint, isArchivable, isAwaitingArchive, crossZones, crossedLaunches, holdMapOf, isAutoOn, isStoredPause, nextLaunchFor, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
 import { RELAY_PENDING_MS, instructOpenSince, instructState, soundInstructed, type CoordAnswer, type CoordEntry, type CoordGesture } from './coordination.ts'
 import type { PlanWait, ProjectPlan } from './plan-projet.ts'
 import type { Roadmap, RoadmapEntry, RoadmapGone, RoadmapGoneText } from './roadmap.ts'
@@ -41,8 +41,10 @@ export type CooMission = {
   pause?: string
   /** Ouverte dans une discussion (`isOpenMission`) : seule une telle mission peut s'allumer depuis la vue Coordination. */
   isOpen: boolean
-  /** En auto : repris de lui-même après une pause « plus rien ne peut avancer sans toi ». */
-  resumed?: true
+  /** En auto : repris de lui-même, le libellé de la reprise (« repris : questions répondues » ou « repris : discussion relancée »). */
+  resumed?: string
+  /** La date de son dernier allumage quand il est une reprise d'elle-même, l'auto allumé ou éteint depuis (`autoResumedAt`) : le résumé du matin la compare à la réouverture de nuit. */
+  resumedAt?: number
   done: number
   total: number
   workers: CooWorker[]
@@ -67,9 +69,6 @@ export type CooWaiting = { missionId: string; mission: string; kind: WaitsUser['
  * mission (son dossier de lancement), où le COO écrit une réponse.
  */
 export type CooWait = { missionId: string; mission: string; id: string; text: string; at: number | null; print: string; gesture?: QuestionGesture; relay?: 'gesture' | 'answer'; decisions?: string; isMod?: boolean; target?: string }
-
-/** Ce que dit un auto repris de lui-même (la vue Coordination le tire d'ici). */
-export { AUTO_RESUMED }
 
 /** Une mission ouverte dans une discussion : son mod y applique ce que le COO lui relaie (même garde que le mod). */
 export const isOpenMission = (run: Run): boolean => run.status === 'active' && isSafeId(run.owner)
@@ -573,6 +572,8 @@ export const cooStatement = (
   const runs = board.runs.filter(r => r.archivedAt === undefined).sort((x, y) => RANK[x.status] - RANK[y.status] || y.updatedAt - x.updatedAt)
   const missions = runs.map(run => {
     const isAuto = isAutoOn(run)
+    const resumed = autoResumedLabel(run)
+    const resumedAt = autoResumedAt(run)
     return {
       id: run.id,
       title: run.title,
@@ -581,8 +582,9 @@ export const cooStatement = (
       mode: isAuto ? ('auto' as const) : ('manual' as const),
       ...(!isAuto && autoPauseLabel(run) !== undefined ? { pause: autoPauseLabel(run)! } : {}),
       isOpen: isOpenMission(run),
-      // « repris : questions répondues » seulement tant qu'aucune question nouvelle n'attend, comme le bandeau.
-      ...(isAutoResumed(run) && openQuestions(run).length === 0 ? { resumed: true as const } : {}),
+      // « repris : … » seulement tant qu'aucune question nouvelle n'attend, comme le bandeau.
+      ...(resumed !== undefined && openQuestions(run).length === 0 ? { resumed } : {}),
+      ...(resumedAt !== undefined ? { resumedAt } : {}),
       done: run.tickets.filter(t => t.status === 'done').length,
       total: run.tickets.length,
       workers: workersOf(run, ctx.reported?.(run.id) ?? []),
@@ -697,7 +699,7 @@ export const nightViewsOf = (board: Board, ctx: { waveDue: (runId: string) => re
         id: run.id,
         title: run.title,
         isAuto: isAutoOn(run),
-        isPaused: isAutoPauseStored(run) && autoPauseLabel(run) !== stopLabel(AUTO_STOPS.coo),
+        isPaused: isAutoPauseStored(run) && autoPauseWhy(run) !== AUTO_STOPS.coo,
         isOpen: isOpenMission(run),
         isEnded: isEndedPause(run),
         isRelaunchPause: isRelaunchPause(run),
@@ -961,7 +963,8 @@ export const statementText = (s: CooStatement): string => {
 }
 
 /**
- * Ce que la section « Nuit » dit d'une mission à rouvrir (rouverte en manuel, son auto jamais rallumé la nuit) : dans le CLI, d'abord
+ * Ce que la section « Nuit » dit d'une mission à rouvrir (son auto repart de lui-même quand sa reprise à la relance vaut
+ * encore, sinon elle reste en manuel ; le COO ne l'allume jamais) : dans le CLI, d'abord
  * chercher dans `claude agents --json --all` si la session de sa discussion tourne encore (un `pid` : rien n'est lancé,
  * l'appel avec `running`), sinon la commande que compose le mod, à lancer telle quelle, puis l'appel qui l'enregistre ;
  * dans l'app, pour le matin ; déjà rouverte ; sa session trouvée en marche ; ou sans commande.
@@ -969,9 +972,9 @@ export const statementText = (s: CooStatement): string => {
 const reopenText = (mission: string, watch: string, r: NightReopen | undefined): string => {
   switch (r?.how) {
     case 'cli':
-      return `first check, right before launching, that its session no longer runs: run claude agents --json --all by the shell and look at every entry whose "sessionId" is exactly ${JSON.stringify(r.session)}; if one of them has a "pid" that is a number (not null), its session still runs: launch nothing and send {"coordinate": {"night": [{"mission": ${JSON.stringify(mission)}, "watch": "${watch}", "act": "reopen", "running": true}]}}, the reopen waits for the morning; if the list cannot be read, launch nothing and send nothing. Otherwise (no such entry, or none with a numeric "pid"), by this command, composed by the dashboard: run it by the shell, in the foreground, from this folder, never edited except for one addition, --permission-mode set to the mode of this discussion when you know it (else its messages would wait for an approval): ${r.command} ; once it answers « backgrounded », send {"coordinate": {"night": [{"mission": ${JSON.stringify(mission)}, "watch": "${watch}", "act": "reopen"}]}}; if it fails or answers « Workspace not trusted », send nothing: the reopen stays for the morning. It reopens the mission in manual: its auto stays off, never switch it on`
+      return `first check, right before launching, that its session no longer runs: run claude agents --json --all by the shell and look at every entry whose "sessionId" is exactly ${JSON.stringify(r.session)}; if one of them has a "pid" that is a number (not null), its session still runs: launch nothing and send {"coordinate": {"night": [{"mission": ${JSON.stringify(mission)}, "watch": "${watch}", "act": "reopen", "running": true}]}}, the reopen waits for the morning; if the list cannot be read, launch nothing and send nothing. Otherwise (no such entry, or none with a numeric "pid"), by this command, composed by the dashboard: run it by the shell, in the foreground, from this folder, never edited except for one addition, --permission-mode set to the mode of this discussion when you know it (else its messages would wait for an approval): ${r.command} ; once it answers « backgrounded », send {"coordinate": {"night": [{"mission": ${JSON.stringify(mission)}, "watch": "${watch}", "act": "reopen"}]}}; if it fails or answers « Workspace not trusted », send nothing: the reopen stays for the morning. It reopens the mission: its auto resumes by itself when its resume still holds (its discussion, the one that switched it on and still keeps its proof, the click date or the trace of a resume, relaunched under its id within 24 h of the mission's last activity), otherwise the user switches it on from the Coordination view; never switch it on yourself`
     case 'done':
-      return 'already reopened during this night watch (in manual): nothing more to do'
+      return 'already reopened during this night watch: nothing more to do'
     case 'running':
       return 'no command (its session still ran when checked during this night watch): for the morning, nothing to do'
     case 'unsafe':
@@ -1008,15 +1011,28 @@ const MORNING_WAITS = 'Then what still waits for the user: the blocking question
 
 /**
  * Le résumé de la nuit (décision R14) : chaque geste de la surveillance lu au journal (heure, mission, groupe,
- * geste, raison, résultat, refus de l'app compris), les missions rouvertes en manuel (leur auto s'allume
- * depuis la vue Coordination), puis ce qui attend la personne ; un journal illisible le dit.
+ * geste, raison, résultat, refus de l'app compris), les missions rouvertes, chacune d'après le fichier des missions
+ * au matin : son auto a repris de lui-même quand son dernier allumage est une reprise d'elle-même datée du début de
+ * la surveillance ou après (sa ligne « start » ; sans elle, la réouverture ; la reprise, écrite par un autre processus,
+ * peut précéder la ligne de réouverture) (`resumedAt`, gardée même si l'auto s'est éteint depuis : une pause, la fin), sinon allumé (un
+ * clic), ou elle est restée en manuel et s'allume depuis la vue Coordination ; absente du relevé (archivée, effacée) :
+ * dite absente. Puis ce qui attend la personne ; un journal illisible le dit.
  */
-export const nightMorningLines = (m: NightMorning, missions: readonly { id: string; title: string }[]): string[] => {
+export const nightMorningLines = (m: NightMorning, missions: readonly Pick<CooMission, 'id' | 'title' | 'mode' | 'resumedAt'>[]): string[] => {
   const title = (id: string) => neutralQuoted(missions.find(x => x.id === id)?.title ?? id, 80)
+  // D'après le fichier des missions au matin, face à l'heure de sa réouverture (`at`).
+  const reopenedState = (x: Pick<CooMission, 'mode' | 'resumedAt'> | undefined, at: number): string => {
+    if (x === undefined) return 'not in the missions list'
+    if (x.resumedAt !== undefined && x.resumedAt >= at) return x.mode === 'auto' ? 'its auto resumed by itself' : 'its auto resumed by itself, off again since: see the missions list'
+    return x.mode === 'auto' ? 'its auto on' : 'stayed in manual'
+  }
   const head = `Night summary (« Résumé de la nuit »): the night watch ${m.watch} stopped at ${hhmm(m.at)} UTC (${shownNightStop(m.why)}). Tell the user first, before anything else, what happened during it, then what still waits for them:`
   if ('unread' in m) return [head, '- the night journal could not be read: say so to the user; the night cannot be summarized from it.', MORNING_WAITS]
   const done = m.lines.filter(l => l.act !== 'start' && l.act !== 'stop')
-  const reopened = [...new Set(done.flatMap(l => (l.act === 'reopen' && l.result === 'written' && l.mission !== undefined ? [l.mission] : [])))]
+  // Chaque mission rouverte une fois, jugée depuis le début de la surveillance (sans ligne « start » : sa première réouverture notée).
+  const startAt = m.lines.find(l => l.act === 'start')?.at
+  const reopenedAt = new Map<string, number>()
+  for (const l of done) if (l.act === 'reopen' && l.result === 'written' && l.mission !== undefined && !reopenedAt.has(l.mission)) reopenedAt.set(l.mission, startAt ?? l.at)
   // Les plus récentes, bornées : le reste est dans le journal.
   const shown = done.slice(-MORNING_LINES_MAX)
   return [
@@ -1025,8 +1041,8 @@ export const nightMorningLines = (m: NightMorning, missions: readonly { id: stri
     ...(done.length === 0
       ? ['- no night gesture']
       : shown.map(l => `- ${hhmm(l.at)} UTC, ${l.mission !== undefined ? `mission ${title(l.mission)} (mission id ${neutralQuoted(l.mission, 40)})` : 'no mission'}${l.group !== undefined ? `, group ${neutralQuoted(l.group, 12)}` : ''}: ${l.act}, ${neutralInPrompt(l.why)}: ${neutralInPrompt(l.result)}`)),
-    ...(reopened.length > 0
-      ? [`Missions reopened at night (their command launched), in manual, their auto off: ${reopened.map(title).join(', ')}; whether each is open now is in the missions list below; the user switches each auto on from the Coordination view (« ⚡ Auto » then « Confirmer »); never switch it on yourself.`]
+    ...(reopenedAt.size > 0
+      ? [`Missions reopened at night (their command launched): ${[...reopenedAt].map(([id, at]) => `${title(id)} (${reopenedState(missions.find(x => x.id === id), at)})`).join(', ')}; whether each is open now is in the missions list below; the user switches on from the Coordination view (« ⚡ Auto » then « Confirmer ») the auto of each mission that stayed in manual; never switch it on yourself.`]
       : []),
     MORNING_WAITS,
   ]

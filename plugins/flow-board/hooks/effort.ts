@@ -218,7 +218,7 @@ export const FABLE_OFF_WORKER_EFFORT: LeadEffort = { level: 'xhigh', rule: 'fabl
 
 /**
  * Les phases de cadrage d'un manager (grilling et ses variantes, spec, découpage). Le tri (`triage`) n'y est pas,
- * exprès : il est un cadrage pour les consignes (`FRAMING_SKILLS` de `register.tsx`), pas pour le modèle ; il reste
+ * exprès : il est un cadrage pour les consignes (`FRAMING_SKILLS` de `decoupage.ts`), pas pour le modèle ; il reste
  * sur Opus, plancher high, règle « other » (choix du 13/11/2026 : l'élargir à Fable serait une dépense nouvelle).
  */
 const FRAMING = skillsWith('isModelFraming')

@@ -5,6 +5,7 @@ import { roadmapAsk, roadmapMoveAsk } from '../hooks/register.tsx'
 import { cooStatement, cutStateWhere, failedPlaceWrite, roadmapNow, statementText, wherePlaceRefusal, type CooRoadmap } from '../hooks/coo.ts'
 import { emptyBoard } from '../hooks/model.ts'
 import { CORPUS } from './corpus.mjs'
+import { settle } from './horloge.ts'
 
 // La feuille de route du COO. Invariant : « La feuille de route ne perd jamais une entrée sans ta
 // décision ; une disparition est montrée et se répare. »
@@ -163,9 +164,6 @@ const world = (on: any) => {
   return { mem, files, sent, fault }
 }
 const start = ($: any) => $.session.start({ cwd: ROOT, surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const openCoo = async ($: any, clock: { advance: (ms: number) => Promise<void> }): Promise<string> => {
   const loading = $.skill.prompt({ skill: COO, text: 'consignes du COO' })
   await settle(clock, 4)

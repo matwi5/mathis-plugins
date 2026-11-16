@@ -1,6 +1,7 @@
 """Tests de scripts/patch.py : python3 -m unittest discover -s scripts/tests."""
 
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,59 @@ class PatchTest(unittest.TestCase):
         out = run(str(self.file), "x", "y")
         self.assertEqual(out.returncode, 1)
         self.assertIn("présent 25 fois, lignes 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, … ;", out.stderr)
+
+    def test_un_ancien_texte_en_double_propose_la_commande_plage_de_chaque_occurrence(self):
+        self.file.write_text("a\nbloc début\nbloc fin\nb\nbloc début\nbloc fin\n", encoding="utf-8")
+        before = self.file.read_bytes()
+        out = run(str(self.file), "début\nbloc fin", "x")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("présent 2 fois, lignes 2, 5 ; il doit paraître exactement une fois", out.stderr)
+        self.assertIn(f"python3 scripts/patch.py --plage {self.file} 2 3 <nouveau> --debut 'début' --fin 'bloc fin'",
+                      out.stderr)
+        self.assertIn(f"python3 scripts/patch.py --plage {self.file} 5 6 <nouveau> --debut 'début' --fin 'bloc fin'",
+                      out.stderr)
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_la_commande_plage_proposee_remplace_l_occurrence_choisie(self):
+        self.file.write_text("a\nbloc\nb\nbloc\n", encoding="utf-8")
+        out = run(str(self.file), "bloc", "x")
+        proposed = [line.strip() for line in out.stderr.splitlines() if "--plage" in line]
+        self.assertEqual(len(proposed), 2, out.stderr)
+        args = shlex.split(proposed[1].replace("<nouveau>", "nouveau"))[2:]
+        done = run(*args)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "a\nbloc\nb\nnouveau\n")
+
+    def proposed(self, out):
+        return [shlex.split(line.strip().replace("<nouveau>", "nouveau"))[2:]
+                for line in out.stderr.splitlines() if "--plage" in line]
+
+    def test_les_bornes_proposees_se_relisent_telles_quelles_malgre_arobase_et_marqueur(self):
+        self.file.write_text("@prop {{u}}\ncode\n@prop {{u}}\ncode\n", encoding="utf-8")
+        out = run(str(self.file), "@@prop {{uu}}\ncode", "x")
+        commands = self.proposed(out)
+        self.assertEqual(len(commands), 2, out.stderr)
+        self.assertIn("--debut '@@prop {{uu}}'", out.stderr)
+        done = run(*commands[1])
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "@prop {{u}}\ncode\nnouveau\n")
+
+    def test_un_ancien_texte_qui_finit_par_deux_fins_de_ligne_propose_toutes_ses_lignes(self):
+        self.file.write_text("fin\n\nfin\n\nb\n", encoding="utf-8")
+        out = run(str(self.file), "fin\n\n", "x")
+        self.assertIn("--plage", out.stderr)
+        self.assertIn(f"{self.file} 1 2 <nouveau>", out.stderr)
+        self.assertIn(f"{self.file} 3 4 <nouveau>", out.stderr)
+
+    def test_une_borne_qui_cite_git_le_dit_pour_un_worktree(self):
+        self.file.write_text("git add x\nfin\ngit add x\nfin\n", encoding="utf-8")
+        out = run(str(self.file), "git add x\nfin", "y")
+        self.assertEqual(out.stderr.count("dans un worktree, le passer par @<fichier>"), 2, out.stderr)
+
+    def test_un_ancien_texte_tres_frequent_ne_propose_que_dix_commandes_plage(self):
+        self.file.write_text("x\n" * 25, encoding="utf-8")
+        out = run(str(self.file), "x", "y")
+        self.assertEqual(out.stderr.count("--plage "), 10)
 
     def test_un_ancien_texte_absent_donne_la_ligne_la_plus_proche_de_sa_premiere_ligne(self):
         before = self.file.read_bytes()
@@ -141,6 +195,21 @@ class BatchTest(unittest.TestCase):
         self.assertIn("paire 2 : ", out.stderr)
         self.assertIn("présent 2 fois, lignes 1, 2", out.stderr)
         self.assertEqual((self.a.read_bytes(), self.b.read_bytes()), before)
+
+    def test_un_ancien_texte_non_unique_d_un_lot_propose_aussi_la_commande_plage(self):
+        out = self.batch(f"::: fichier {self.b}\n::: ancien\nconst\n::: nouveau\nlet\n::: fin\n")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("présent 2 fois, lignes 1, 2", out.stderr)
+        self.assertIn(f"--plage {self.b} 1 1 <nouveau> --debut const --fin const", out.stderr)
+        self.assertIn(f"--plage {self.b} 2 2 <nouveau> --debut const --fin const", out.stderr)
+
+    def test_un_lot_ne_propose_pas_plage_quand_une_paire_precedente_a_change_le_fichier(self):
+        out = self.batch(
+            f"::: fichier {self.b}\n::: ancien\nconst x = 1\n::: nouveau\nconst y = 0\nconst x = 1\n::: fin\n"
+            f"::: ancien\nconst y\n::: nouveau\nlet y\n::: fin\n")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("pas de commande --plage proposée", out.stderr)
+        self.assertNotIn("--plage " + str(self.b), out.stderr)
 
     def test_un_ancien_texte_absent_dit_sa_paire_et_la_ligne_la_plus_proche(self):
         before = (self.a.read_bytes(), self.b.read_bytes())

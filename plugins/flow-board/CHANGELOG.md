@@ -4,6 +4,28 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.88.0 — 2026-11-16
+
+La mission « Auto gardé en attente », et les groupes A à E de « Pistes de rétro du 16/11 » (la suite partira dans une prochaine version).
+
+### Ajouté
+- **Auto gardé à la relance** : quand la discussion qui portait l'auto d'une mission est relancée sous son id, l'auto repart sans clic, pour l'allumage donné, au plus 24 h après la dernière activité et si rien d'autre ne l'a éteint ; une pause « plus rien ne peut avancer sans toi » reprend de même une fois les questions répondues ; la vue dit « ⚡ Auto · repris : discussion relancée ».
+- **Réveil des missions en attente** : quand un groupe ou une mission finit, les missions en auto qui l'attendaient sont réveillées ; une mission rouverte la nuit peut reprendre son auto.
+- **Relance sans reprise** : quand une relance laisse l'auto en pause, l'utilisateur en est prévenu.
+- **Compte rendu** : les faits donnés au compte rendu regroupent les choix déclarés en lignes courtes, les choix en zone sensible à part.
+
+### Modifié
+- La pause d'une discussion arrêtée se dit « discussion arrêtée », et la vue dit pourquoi l'auto est reparti.
+- Les consignes des skills et du mode auto sortent de `register.tsx` vers des modules (`decoupage.ts`, `auto-consignes.ts`) : le fichier repasse loin sous le plafond de 1 Mio du moteur.
+- Un correctif de revue qui contredit une décision déjà prise devient une question ; les comptes rendus des relecteurs se relisent par script après une compaction ; une question de worker cite sa preuve.
+- Les tests partagent une seule aide d'attente (`settle`).
+
+### Corrigé
+- Une réouverture de nuit n'est enregistrée comme reprise que depuis une discussion arrêtée.
+- Le reste d'un groupe de choix se lit par ses lignes, pas par le fichier entier.
+
+---
+
 ## 0.87.0 — 2026-11-16
 
 Sept missions : « Fin de mission sans gestes », « Refonte de la vue Coordination », « Cartes de lancement perdues », « Pistes de rétro déjà corrigées », « Modèle et effort réellement utilisés », « Fable resté après le cadrage » et « Pistes de rétro du triage ».

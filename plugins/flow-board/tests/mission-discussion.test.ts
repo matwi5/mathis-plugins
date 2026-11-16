@@ -4,6 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, archiveRun, clampFuture, detachOnLoad, emptyBoard, isAutoOn, mergeBoards, openHandoff, openRun, parkActive, resumeRun, setAsideActive } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
+import { settle } from './horloge.ts'
 
 // Une mission ne vit que dans sa discussion (choix de Mathis du 09/11/2026). Constat (quatre discussions, du
 // 03/11 au 09/11/2026) : chaque réponse « No mission is active » reçue par un manager suit une sortie de son
@@ -60,9 +61,6 @@ const world = (on: any) => {
   return { mem, disk, ids }
 }
 
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 type World = ReturnType<typeof world>
 /** Le board enregistré : dans le fichier commun s'il sert, sinon dans `$.store`. */
 const stored = (w: Pick<World, 'mem' | 'disk'>): Board => (w.disk.isUsed && w.disk.board !== undefined ? JSON.parse(w.disk.board) : w.mem[KEY]) as Board
@@ -223,7 +221,7 @@ test('vivante et muette, la discussion garde sa mission qu’une discussion d’
 
 // ─── Le mode auto et les processus ───────────────────────────────────────
 
-test('tuée en auto (sans session.end), la discussion relancée retrouve sa mission avec l’auto éteint : il ne repart que sur deux clics', { timeoutMs: 30000 }, async ($, on) => {
+test('tuée en auto (sans session.end), sans date du clic gardée : la discussion relancée retrouve sa mission avec l’auto éteint, un fichier seul ne le rallume pas (la reprise avec elle : reprise-relance.test.ts)', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: LATER })
   const w = world(on)
   const { board, id } = managerBoard()

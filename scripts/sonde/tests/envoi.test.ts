@@ -268,3 +268,15 @@ test('/sonde-compacte lance $.session.compact avec ses consignes, une fois le d�
   expect(asked).toEqual(['garde le mot banane'])
   expect(journal.at(-1)).toMatch(/"ev":"compacte:résultat"/)
 })
+
+test('un changement de modèle se journalise avec le modèle d\'avant, celui d\'après, celui demandé et la source', async ($, on) => {
+  const { journal } = engine(on)
+  on('classic.PostModelSwitch', () => ({}))
+  on('agent.list', () => ({ value: [] }) as any)
+  await start($)
+  await ($ as any).classic.PostModelSwitch({ session_id: 's', transcript_path: '/t', cwd: '', hook_event_name: 'PostModelSwitch', from_model: 'claude-opus-5-5', to_model: 'claude-fable-5-2', requested_model: 'fable', source: 'command', context_tokens: 0 })
+  const lines = journal.at(-1)!.trim().split('\n').map(l => JSON.parse(l))
+  const found = lines.filter(l => l.ev === 'classic.PostModelSwitch')
+  expect(found).toHaveLength(1)
+  expect(found[0]).toMatchObject({ from_model: 'claude-opus-5-5', to_model: 'claude-fable-5-2', requested_model: 'fable', source: 'command' })
+})

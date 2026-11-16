@@ -1,6 +1,7 @@
 """Tests de la suite Python du dépôt (`scripts/tests`) dans les contrôles : la cible `scripts/check.sh
 scripts`, et le hook pre-commit (`check.py --staged`), qui la lance sur la copie de l'index quand un
-fichier indexé est sous `scripts/` ou est `plugins/flow-board/hooks/register.tsx`.
+fichier indexé est sous `scripts/` ou est `plugins/flow-board/hooks/decoupage.ts` (la consigne du cadrage,
+que relit `test_check_tickets.py`).
 python3 -m unittest discover -s scripts/tests."""
 
 import io
@@ -158,7 +159,7 @@ class CibleScriptsTest(unittest.TestCase):
 
 class StagedSuiteTest(unittest.TestCase):
     """Le pre-commit lance la suite sur la copie de l'index, seulement quand l'index porte un fichier
-    sous `scripts/` ou `plugins/flow-board/hooks/register.tsx`."""
+    sous `scripts/` ou `plugins/flow-board/hooks/decoupage.ts`."""
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -171,7 +172,7 @@ class StagedSuiteTest(unittest.TestCase):
         write(self.repo, "scripts/valeur.py", "VALEUR = 1\n")
         write(self.repo, "scripts/tests/test_valeur.py", READS_SCRIPT)
         write(self.repo, "scripts/tests/test_depot.py", NEEDS_GIT)
-        write(self.repo, "plugins/flow-board/hooks/register.tsx", "export const register = 1\n")
+        write(self.repo, "plugins/flow-board/hooks/decoupage.ts", "export const register = 1\n")
         git(self.repo, "add", ".")
         git(self.repo, "commit", "-q", "-m", "base")
         self.saved = (check.REPO, check.run.__defaults__, check.validate, check.tool)
@@ -195,7 +196,9 @@ class StagedSuiteTest(unittest.TestCase):
 
         def counted(root, *args, **kwargs):
             runs.append(Path(root))
+            self.only.append(args[0] if args else kwargs.get("only"))
             return original(root, *args, **kwargs)
+        self.only = []
         return runs, mock.patch.object(check, "python_tests", counted)
 
     def test_un_script_indexe_lance_la_suite_sur_la_copie(self):
@@ -207,13 +210,44 @@ class StagedSuiteTest(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertNotEqual(runs[0].resolve(), self.repo.resolve())
 
-    def test_register_indexe_lance_la_suite(self):
-        write(self.repo, "plugins/flow-board/hooks/register.tsx", "export const register = 2\n")
-        git(self.repo, "add", "plugins/flow-board/hooks/register.tsx")
+    def test_decoupage_seul_ne_lance_que_test_check_tickets(self):
+        # Attendu changé par le ticket 16 : decoupage.ts, seul déclencheur indexé, ne fait plus lancer la
+        # suite entière, mais le seul test qui le lit.
+        write(self.repo, f"scripts/tests/{check.TICKETS_TEST}", GREEN)
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "test des tickets")
+        write(self.repo, "plugins/flow-board/hooks/decoupage.ts", "export const register = 2\n")
+        git(self.repo, "add", "plugins/flow-board/hooks/decoupage.ts")
+        runs, patch = self.counted_suites()
+        with patch:
+            out = self.staged()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(self.only, [check.TICKETS_TEST])
+        self.assertIn(f"{check.TICKETS_TEST} seul", out)
+        self.assertIn("Ran 1 test", out)
+
+    def test_decoupage_et_un_script_lancent_toute_la_suite(self):
+        write(self.repo, f"scripts/tests/{check.TICKETS_TEST}", GREEN)
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "test des tickets")
+        write(self.repo, "plugins/flow-board/hooks/decoupage.ts", "export const register = 2\n")
+        write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
+        git(self.repo, "add", "plugins/flow-board/hooks/decoupage.ts", "scripts/valeur.py")
         runs, patch = self.counted_suites()
         with patch:
             self.staged()
         self.assertEqual(len(runs), 1)
+        self.assertEqual(self.only, [None])
+
+    def test_decoupage_seul_sans_le_test_des_tickets_lance_toute_la_suite(self):
+        # Jamais une passe vide : sans le fichier dans la copie, la suite entière.
+        write(self.repo, "plugins/flow-board/hooks/decoupage.ts", "export const register = 2\n")
+        git(self.repo, "add", "plugins/flow-board/hooks/decoupage.ts")
+        runs, patch = self.counted_suites()
+        with patch:
+            out = self.staged()
+        self.assertEqual(self.only, [None])
+        self.assertIn("Ran 3 tests", out)
 
     def test_une_documentation_de_scripts_seule_lance_la_suite(self):
         write(self.repo, "scripts/LISEZ-MOI.md", "# Scripts\n")
@@ -301,11 +335,11 @@ class SuiteMemoryTest(unittest.TestCase):
         self.passed()
         for rel, text in (("scripts/valeur.py", "VALEUR = 1  # relu encore\n"),
                           ("scripts/LISEZ-MOI.md", "# Scripts\n"),
-                          ("plugins/flow-board/hooks/register.tsx", "export const register = 2\n")):
+                          ("plugins/flow-board/hooks/decoupage.ts", "export const register = 2\n")):
             with self.subTest(rel=rel):
                 # Chaque cas part du contenu du passage vert : un seul fichier diffère à la fois.
                 write(self.repo, "scripts/valeur.py", "VALEUR = 1  # relu\n")
-                write(self.repo, "plugins/flow-board/hooks/register.tsx", "export const register = 1\n")
+                write(self.repo, "plugins/flow-board/hooks/decoupage.ts", "export const register = 1\n")
                 (self.repo / "scripts" / "LISEZ-MOI.md").unlink(missing_ok=True)
                 git(self.repo, "reset", "-q")
                 git(self.repo, "add", "scripts/valeur.py")

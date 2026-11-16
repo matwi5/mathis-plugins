@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
+import { settle } from './horloge.ts'
 
 // La discussion qui porte une mission la garde en entrant dans un worktree du même dépôt. Invariant :
 // « Une mission active n'est jamais mise en pause, dupliquée ni perdue parce que sa discussion change de
@@ -103,9 +104,6 @@ const putBoard = (w: World, board: Board) => {
 }
 
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const say = async ($: any, input: Record<string, unknown>): Promise<string> => JSON.stringify(await $.tool.call({ tool: TOOL, ...input } as any))
 
 /** Une discussion à la racine ouvre sa mission, enregistrée dans le fichier du dépôt principal. */

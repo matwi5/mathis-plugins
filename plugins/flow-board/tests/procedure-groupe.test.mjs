@@ -13,7 +13,8 @@ const procedure = read('reference/procedure-groupe.md')
 const template = read('reference/consignes-revue.md')
 /** La consigne des relecteurs : la ligne de citation du gabarit, seul endroit de la procédure où elle est écrite (la section 7 du noyau y renvoie). */
 const consigne = template.split('\n').find(line => line.startsWith('> '))
-const register = read('hooks/register.tsx')
+/** `register.tsx`, avec les consignes qui en sont sorties (`decoupage.ts`, `auto-consignes.ts`). */
+const register = ['hooks/register.tsx', 'hooks/decoupage.ts', 'hooks/auto-consignes.ts'].map(read).join('\n')
 /** La description et le schéma de l'outil `flow`, sortis de register.tsx. */
 const toolSchema = read('hooks/tool-schema.ts')
 
@@ -733,7 +734,8 @@ test('le noyau garde les sections 1, 2, 3, 7 et 8, et une ligne par section dép
   has(procedure, '## 10. Worker autonome (annexe)\n\nÀ lire seulement quand le prompt dit que la session est un worker autonome, dans `procedure-groupe-autonome.md`')
   has(procedure, 'avant de lancer un worker ou d\'appliquer un correctif après son compte rendu, dans `effort-workers.md`')
   // Le noyau dit lui-même ce qu'il relit après une compaction.
-  has(procedure, 'Après une compaction, relire ce noyau, et `procedure-groupe-fin.md` quand le dernier ticket est commité.')
+  has(procedure, 'Après une compaction, relire ce noyau, et `procedure-groupe-fin.md` quand le dernier ticket est commité ; un rapport de relecteur reçu ou attendu avant la compaction se relit par `node <dossier de flow-board>/scripts/rapports-specialistes.mjs <transcript de la session> --prefixe "<nom du relecteur>"`')
+  has(procedure, 'et par la même commande sur le fichier d\'origine quand le transcript commence par une compaction (il en continue un autre), jamais en fouillant le transcript à la main ; sans nom sûr (une passe « bogues », que `/code-review` nomme elle-même), la même commande sans `--prefixe` les liste tous.')
   // Plus de section déplacée dans le noyau, et chaque annexe ne porte que les siennes.
   for (const [n, file] of Object.entries(FILE_OF)) {
     for (const other of Object.keys(files)) {

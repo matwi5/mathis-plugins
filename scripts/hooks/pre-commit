@@ -9,7 +9,7 @@
 # Code du terminal, sauf pour un plugin dont l'index est exactement celui que scripts/check.sh vient de
 # passer dans ce worktree, ou dans un autre worktree du dépôt, contexte compris ; enfin la suite Python du
 # dépôt (scripts/tests), sur la même copie, quand un fichier indexé est sous scripts/ ou est
-# plugins/flow-board/hooks/register.tsx (scripts/check.py --staged), sauf quand l'index porte
+# plugins/flow-board/hooks/decoupage.ts (scripts/check.py --staged), sauf quand l'index porte
 # exactement les déclencheurs et le contexte (le dépôt hors travail/ et ETAT_DU_PROJET.md) d'un
 # scripts/check.sh scripts (ou --all) vert ; une fois tous ces contrôles passés,
 # dans un worktree et hors d'une fusion, l'avertissement d'un instantané de ticket pas reposé

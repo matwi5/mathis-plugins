@@ -10,8 +10,9 @@ import { atom, read, update } from 'claude-code'
 import type { Board } from '../types'
 import { applyCardChange, cardsListFile, keepsCards, parseCardsList, type CardChange, type CardWriteState } from './cards-list.ts'
 import { cardStateOf, hasRetro, isRetroCardDue, retroOf, sameFolder, soundCard, type LaunchCard } from './launch.ts'
-import { claudeHome, coordinationName, isSettingMissing, normRoot, readMissionReport, seatForWrite } from './register.tsx'
+import { claudeHome, coordinationName, isSettingMissing, readMissionReport, seatForWrite } from './register.tsx'
 import { retroCard, retroCardId } from './retro-coo.ts'
+import { normRoot } from './basics.ts'
 
 /** Le board de cette discussion, lu seulement (le moteur ne suit une source d'état que déclarée dans le module qui la lit). */
 const boardAtom = atom({ plugin: 'flow-board', key: 'board' } as const, null as Board | null)

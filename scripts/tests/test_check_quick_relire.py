@@ -65,6 +65,8 @@ class RereadListTest(unittest.TestCase):
         self.saved = (check.REPO, check.run.__defaults__)
         check.REPO = self.repo
         check.run.__defaults__ = (self.repo, None)
+        # Le relevé gardé par un autre test (un `quick_check` sans `log_reread`) ne passe pas dans celui-ci.
+        check.REREAD.clear()
 
     def tearDown(self):
         check.REPO, check.run.__defaults__ = self.saved
@@ -80,7 +82,7 @@ class RereadListTest(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
 
     def quick(self):
-        """`quick_check` avec ses étapes lourdes simulées : sa sortie."""
+        """`quick_check` avec ses étapes lourdes simulées, puis le relevé qu'il garde : sa sortie."""
         out = io.StringIO()
         with mock.patch.object(check, "static_checks", lambda plugin: []), \
                 mock.patch.object(check, "typecheck", lambda plugin: None), \
@@ -88,7 +90,28 @@ class RereadListTest(unittest.TestCase):
                 mock.patch.object(check, "single_test", lambda plugin, names: None), \
                 redirect_stdout(out):
             check.quick_check(self.plugin)
+            check.log_reread()
         return out.getvalue()
+
+    def main_quick(self, single_test):
+        """`check.sh --quick essai` par `main`, étapes lourdes simulées : (sortie, code de sortie ou None)."""
+        self.write(".claude-plugin/plugin.json", '{"name": "essai", "version": "0.1.0"}\n')
+        out = io.StringIO()
+        code = None
+        with mock.patch.object(check, "static_checks", lambda plugin: []), \
+                mock.patch.object(check, "typecheck", lambda plugin: None), \
+                mock.patch.object(check, "node_tests", lambda plugin: None), \
+                mock.patch.object(check, "single_test", single_test), \
+                mock.patch.object(check, "check_repo_rules", lambda problems: None), \
+                mock.patch.object(check, "repo_rules_problems", lambda: []), \
+                mock.patch.object(check, "PLUGINS", self.repo / "plugins"), \
+                mock.patch.object(sys, "argv", ["check.py", "--quick", "essai"]), \
+                redirect_stdout(out):
+            try:
+                check.main()
+            except SystemExit as exit:
+                code = exit.code
+        return out.getvalue(), code
 
     def test_un_corps_change_sous_un_commentaire_reste_tel_quel_le_releve(self):
         self.edit("hooks/mod.ts", "return a + 1;", "return a + 2;")
@@ -132,12 +155,15 @@ class RereadListTest(unittest.TestCase):
         self.assertEqual(check.reread_list(self.plugin), [])
         self.assertNotIn("à relire", self.quick())
 
-    def test_quick_check_imprime_le_releve_apres_ses_tests(self):
+    def test_le_releve_s_imprime_apres_le_verdict_en_dernier(self):
+        # Attendu changé par le ticket 18 : le relevé vient après « Pré-contrôle passé », en dernier bloc.
         self.edit("hooks/mod.ts", "return a + 1;", "return a + 2;")
-        out = self.quick()
-        self.assertIn("→ à relire avant commit :\n  hooks/mod.ts:3 applySkill : commentaire de tête\n"
-                      "  README.md:3 : nomme applySkill\n", out)
-        self.assertLess(out.index("nomment une fonction modifiée"), out.index("à relire avant commit"))
+        out, code = self.main_quick(lambda plugin, names, against=None: None)
+        self.assertIsNone(code)
+        self.assertTrue(out.endswith("→ à relire avant commit :\n  hooks/mod.ts:3 applySkill : commentaire de tête\n"
+                                     "  README.md:3 : nomme applySkill\n"), out)
+        self.assertLess(out.index("nomment une fonction modifiée"), out.index("Pré-contrôle passé"))
+        self.assertLess(out.index("Pré-contrôle passé"), out.index("à relire avant commit"))
 
     def test_le_releve_s_arrete_a_40_elements(self):
         self.write("README.md", README + "".join(f"applySkill, ligne {n}.\n" for n in range(45)))
@@ -163,21 +189,47 @@ class RereadListTest(unittest.TestCase):
         git(self.repo, "add", ".")
         self.assertEqual(check.reread_list(self.plugin), [])
 
-    def test_le_releve_s_imprime_aussi_quand_un_test_echoue(self):
+    def test_le_releve_s_imprime_aussi_quand_un_test_echoue_apres_l_echec(self):
+        # Attendu changé par le ticket 18 : le relevé vient après la ligne « ÉCHEC : … », en dernier bloc.
         self.edit("hooks/mod.ts", "return a + 1;", "return a + 2;")
-        out = io.StringIO()
 
-        def fails(plugin, names):
+        def fails(plugin, names, against=None):
             raise check.Failed("test rouge")
 
-        with mock.patch.object(check, "static_checks", lambda plugin: []), \
-                mock.patch.object(check, "typecheck", lambda plugin: None), \
-                mock.patch.object(check, "node_tests", lambda plugin: None), \
-                mock.patch.object(check, "single_test", fails), \
+        out, code = self.main_quick(fails)
+        self.assertEqual(code, 1)
+        self.assertLess(out.index("ÉCHEC : test rouge"), out.index("→ à relire avant commit :"))
+        self.assertTrue(out.endswith("  README.md:3 : nomme applySkill\n"), out)
+
+    def test_avec_plusieurs_plugins_chaque_releve_nomme_le_sien(self):
+        # Revue du groupe D : imprimés en dernier, loin de leur « === <plugin> », les relevés de deux plugins
+        # aux chemins relatifs (« README.md:3 ») ne se distinguaient plus.
+        other = self.plugin.parent / "autre"
+        out = io.StringIO()
+        with mock.patch.object(check, "reread_list", lambda plugin: [f"README.md:3 : nomme {plugin.name}"]), \
                 redirect_stdout(out):
-            with self.assertRaises(check.Failed):
-                check.quick_check(self.plugin)
-        self.assertIn("→ à relire avant commit :", out.getvalue())
+            check.note_reread(self.plugin)
+            check.note_reread(other)
+            check.log_reread()
+        self.assertIn(f"→ à relire avant commit ({self.plugin.name}) :\n  README.md:3 : nomme {self.plugin.name}\n", out.getvalue())
+        self.assertIn("→ à relire avant commit (autre) :\n  README.md:3 : nomme autre\n", out.getvalue())
+        self.assertEqual(check.REREAD, [])
+
+    def test_la_fonction_d_entree_du_mod_n_est_pas_relevee(self):
+        self.write("hooks/register.tsx", "/** L'entrée. */\nexport default function register() {\n  return 1;\n}\n")
+        self.write("README.md", README + "register charge le mod.\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "entrée")
+        self.edit("hooks/register.tsx", "return 1;", "return 2;")
+        self.assertEqual(check.reread_list(self.plugin), [])
+        # Une autre déclaration du même module, elle, l'est toujours.
+        self.write("hooks/register.tsx", "/** L'entrée. */\nexport default function register() {\n  return 2;\n}\n"
+                   "/** Une aide. */\nexport function aide() {\n  return 1;\n}\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-q", "-m", "aide")
+        self.edit("hooks/register.tsx", "return 1;", "return 3;")
+        self.assertEqual(check.reread_list(self.plugin), ["hooks/register.tsx:5 aide : commentaire de tête",
+                                                          "README.md:4 : nomme aide"])
 
     def test_le_releve_ne_part_pas_dans_deferred(self):
         self.edit("hooks/mod.ts", "return a + 1;", "return a + 2;")

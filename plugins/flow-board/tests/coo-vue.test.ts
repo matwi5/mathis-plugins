@@ -5,6 +5,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 import type { Board, Run } from '../types'
+import { settle } from './horloge.ts'
 
 // La vue « Coordination » du COO et le relevé d'état que lit son Claude : l'onglet et le bandeau dans
 // la seule discussion qui tient le siège ; le relevé à chaque tour, et au chargement de /flow-board:coo.
@@ -65,9 +66,6 @@ const world = (on: any) => {
 type World = ReturnType<typeof world>
 
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const openCoo = async ($: any, clock: { advance: (ms: number) => Promise<void> }): Promise<string> => {
   const loading = $.skill.prompt({ skill: COO, text: 'consignes du COO' })
   await settle(clock, 4)

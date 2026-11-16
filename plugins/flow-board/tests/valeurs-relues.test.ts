@@ -13,6 +13,7 @@ import { applyReport, emptyBoard, newRun, reportFacts, startLinkedGroups } from 
 import { linkGroupSession } from '../hooks/link.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
+import { settle } from './horloge.ts'
 
 const T0 = 150_000_000
 const ROOT = '/proj'
@@ -118,9 +119,6 @@ const world = (on: any, remote: { main: string } = { main: 'main' }) => {
 }
 type World = ReturnType<typeof world>
 
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const press = async ($: any, key: string) => {
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pane.press({ key })

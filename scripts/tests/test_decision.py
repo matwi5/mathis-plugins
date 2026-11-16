@@ -373,6 +373,39 @@ class DecisionTest(unittest.TestCase):
         self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
 
+    def test_toutes_les_erreurs_de_format_de_la_serie_sont_dites_en_un_seul_refus(self):
+        series = self.series("s.md", "## Série 3 — Réponses du cadrage (14/11/2026)",
+                             "Texte.\n## Série 4 — glissée\n\n## Série 5 — glissée aussi")
+        out = self.run_script(self.file, series, "-m", "x")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("4 erreurs de format", out.stderr)
+        self.assertIn("le script le met en « ## Série <n> — … »", out.stderr)
+        self.assertIn("le script pose la date lui-même", out.stderr)
+        self.assertIn("retirer « (14/11/2026) » du titre", out.stderr)
+        self.assertIn("la ligne 4 du corps est un titre de série", out.stderr)
+        self.assertIn("la ligne 6 du corps est un titre de série", out.stderr)
+        self.assertEqual(out.stderr.count("rien n'est écrit"), 1)
+        self.assertFalse(self.lock_path().exists())
+        self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+
+    def test_un_titre_et_un_corps_vides_sont_dits_ensemble(self):
+        series = Path(self.dir.name) / "vide.md"
+        series.write_text("\n\n\n", encoding="utf-8")
+        out = self.run_script(self.file, series, "-m", "x")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("2 erreurs de format", out.stderr)
+        self.assertIn("le titre de la série, est vide", out.stderr)
+        self.assertIn("le corps de la série est vide", out.stderr)
+
+    def test_l_aide_commence_par_le_format_du_fichier_de_la_serie(self):
+        out = self.run_script("--aide")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        head = out.stdout.split("python3 scripts/decision.py")[0]
+        self.assertIn("Le fichier de la série", head)
+        self.assertIn("sans « ## Série <n> — »", head)
+        self.assertIn("sans date", head)
+
     def test_une_date_ailleurs_dans_le_titre_passe(self):
         out = self.run_script(self.file, self.series("s.md", "Réponse du 13/11/2026 à Q3", "Corps."), "-m", "x")
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -460,6 +493,271 @@ class DecisionTest(unittest.TestCase):
         self.assertFalse((self.repo / NEW).parent.exists())
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
         self.assertFalse(self.lock_path().exists())
+
+    # --index : la ligne de la série ajoutée à l'index « Décisions en vigueur ».
+    INDEX_A = ("# Décisions — essai\n\nIntro.\n\n## Décisions en vigueur\n\n- Série 1 — la demande.\n\n"
+               "## Série 1 — La demande (01/11/2026)\n\nTexte de la série 1.\n")
+    INDEX_B = ("# Décisions — essai\n\n**Décisions en vigueur**\n- Série 1 — la demande.\n\n"
+               "## Série 1 — La demande (01/11/2026)\n\nTexte de la série 1.\n")
+
+    def commit_base(self, text, newline="\n"):
+        """Le fichier de décisions remplacé par `text` (fins de ligne `newline`), commité ; le HEAD."""
+        self.file.write_bytes(text.replace("\n", newline).encode("utf-8"))
+        # Le blob garde les fins de ligne écrites, même sur un poste où `core.autocrlf` vaut true (Windows).
+        git(self.repo, "config", "core.autocrlf", "false")
+        git(self.repo, "add", PATH)
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", "base index")
+        return git(self.repo, "rev-parse", "HEAD")
+
+    def blob_bytes(self):
+        return subprocess.run(["git", "show", f"HEAD:{PATH}"], cwd=self.repo, capture_output=True, check=True,
+                              env=clean_env()).stdout
+
+    def test_index_sous_un_titre_ajoute_la_ligne_a_la_fin_du_bloc_dans_le_fichier_et_le_commit(self):
+        head = self.commit_base(self.INDEX_A)
+        out = self.run_script(self.file, self.series("s.md", "Réponses", "**Q1** : oui."), "-m", "docs: 2",
+                              "--index", "tickets 01 à 03")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Série 2 : commit", out.stdout)
+        today = time.strftime("%d/%m/%Y")
+        expected = ("# Décisions — essai\n\nIntro.\n\n## Décisions en vigueur\n\n- Série 1 — la demande.\n"
+                    "- Série 2 — Réponses (tickets 01 à 03)\n\n"
+                    "## Série 1 — La demande (01/11/2026)\n\nTexte de la série 1.\n"
+                    f"\n## Série 2 — Réponses ({today})\n\n**Q1** : oui.\n")
+        self.assertEqual(self.file.read_bytes(), expected.encode("utf-8"))
+        self.assertEqual(self.blob_bytes(), expected.encode("utf-8"))
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD^"), head)
+        self.assertEqual(git(self.repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"), PATH)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_index_sous_une_ligne_en_gras_garde_les_fins_de_ligne_crlf(self):
+        self.commit_base(self.INDEX_B, "\r\n")
+        out = self.run_script(self.file, self.series("s.md", "Suite", "Corps."), "--index", "ticket 04", "-m", "x")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        today = time.strftime("%d/%m/%Y")
+        expected = ("# Décisions — essai\n\n**Décisions en vigueur**\n- Série 1 — la demande.\n"
+                    "- Série 2 — Suite (ticket 04)\n\n"
+                    "## Série 1 — La demande (01/11/2026)\n\nTexte de la série 1.\n"
+                    f"\n## Série 2 — Suite ({today})\n\nCorps.\n").replace("\n", "\r\n")
+        self.assertEqual(self.file.read_bytes(), expected.encode("utf-8"))
+        self.assertEqual(self.blob_bytes(), expected.encode("utf-8"))
+
+    def test_index_en_gras_suivi_d_une_ligne_vide_pose_la_ligne_apres_la_liste(self):
+        text = self.INDEX_B.replace("**Décisions en vigueur**\n", "**Décisions en vigueur**\n\n")
+        self.commit_base(text)
+        out = self.run_script(self.file, self.series("s.md", "Suite", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("**Décisions en vigueur**\n\n- Série 1 — la demande.\n- Série 2 — Suite (t)\n\n## Série 1",
+                      self.committed())
+
+    def test_formes_de_l_index_posees_a_la_fin_de_la_liste_ou_refusees(self):
+        head = "# Décisions — essai\n\n"
+        tail = "\n## Série 1 — La demande (01/11/2026)\n\nTexte.\n"
+        line = "- Série 2 — Suite (t)\n"
+        placed = [
+            # Liste lâche sous la ligne en gras : la ligne va après son dernier élément.
+            ("**Décisions en vigueur**\n\n- Série 1 — a\n\n- Série 0 — b\n",
+             "**Décisions en vigueur**\n\n- Série 1 — a\n\n- Série 0 — b\n" + line),
+            # Sous la ligne en gras, un autre bloc après la ligne vide qui suit la liste n'en fait pas partie.
+            ("**Décisions en vigueur**\n- Série 1 — a\n\n**Remplacées**\n- Série 0 — z\n",
+             "**Décisions en vigueur**\n- Série 1 — a\n" + line + "\n**Remplacées**\n- Série 0 — z\n"),
+            # Sous un titre de section, une introduction précède la liste ; un élément a une ligne de suite indentée.
+            ("## Décisions en vigueur\n\nUne ligne par série.\n\n- Série 1 — a\n  suite de a\n",
+             "## Décisions en vigueur\n\nUne ligne par série.\n\n- Série 1 — a\n  suite de a\n" + line),
+            # Index vide sous la ligne en gras : la ligne va sous le titre.
+            ("**Décisions en vigueur**\n", "**Décisions en vigueur**\n" + line),
+        ]
+        for before, after in placed:
+            with self.subTest(before=before):
+                self.commit_base(head + before + tail)
+                out = self.run_script(self.file, self.series("s.md", "Suite", "Corps."), "-m", "x", "--index", "t")
+                self.assertEqual(out.returncode, 0, out.stderr)
+                expected = head + after + tail + f"\n## Série 2 — Suite ({time.strftime('%d/%m/%Y')})\n\nCorps.\n"
+                self.assertEqual(self.committed(), expected)
+                self.assertEqual(self.file.read_text(encoding="utf-8"), expected)
+                git(self.repo, "reset", "-q", "--hard", "HEAD^")
+        refused = [
+            "**Décisions en vigueur**\n\n**Questions ouvertes**\n- Q1\n",
+            "**Décisions en vigueur**\n\nContexte libre.\n",
+            "**Décisions en vigueur**\n* Série 1 — a\n",
+            "**Décisions en vigueur**\nAucune encore.\n",
+            "## Décisions en vigueur\n\n- Série 1 — a\n\n**Remplacées**\n- Série 0 — z\n",
+            "## Décisions en vigueur\n\nPas encore de liste.\n",
+            "## Décisions en vigueur\n\n- Série 1 — a\nUn paragraphe collé.\n",
+        ]
+        for before in refused:
+            with self.subTest(before=before):
+                commit = self.commit_base(head + before + tail)
+                out = self.run_script(self.file, self.series("s.md", "Suite", "Corps."), "-m", "x", "--index", "t")
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn("relancer sans --index", out.stderr)
+                self.assertEqual(self.file.read_text(encoding="utf-8"), head + before + tail)
+                self.assertEqual(git(self.repo, "rev-parse", "HEAD"), commit)
+
+
+    def test_index_en_derniere_ligne_sans_fin_de_ligne_finale(self):
+        text = "# Décisions — essai\n\n**Décisions en vigueur**\n- Série 0 — x."
+        self.commit_base(text)
+        out = self.run_script(self.file, self.series("s.md", "Suite", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        today = time.strftime("%d/%m/%Y")
+        expected = (text + "\n- Série 1 — Suite (t)\n" + f"\n## Série 1 — Suite ({today})\n\nCorps.\n")
+        self.assertEqual(self.file.read_text(encoding="utf-8"), expected)
+        self.assertEqual(self.blob_bytes(), expected.encode("utf-8"))
+
+    def test_index_absent_ou_en_double_refuse_sans_rien_ecrire_puis_la_relance_sans_index_ecrit(self):
+        double = self.INDEX_A.replace("Intro.", "**Décisions en vigueur**\n- Série 1 — doublon.")
+        for text, message in [(BASE, "aucun bloc"), (double, "2 blocs")]:
+            head = self.commit_base(text)
+            out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn(message, out.stderr)
+            self.assertIn("« ## Décisions en vigueur »", out.stderr)
+            self.assertIn("« **Décisions en vigueur** »", out.stderr)
+            self.assertIn("rien n'est écrit", out.stderr)
+            self.assertFalse(self.lock_path().exists())
+            self.assertEqual(self.file.read_text(encoding="utf-8"), text)
+            self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
+        out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Série 2 : commit", out.stdout)
+
+    def test_index_dont_la_derniere_ligne_n_est_pas_un_element_de_liste_refuse(self):
+        text = self.INDEX_A.replace("- Série 1 — la demande.", "- Série 1 — la demande.\nUn paragraphe.")
+        head = self.commit_base(text)
+        out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("« - … »", out.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), text)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
+
+    def test_index_absent_de_head_mais_present_dans_le_fichier_de_travail_refuse(self):
+        head = self.commit_base(BASE)
+        self.file.write_text(self.INDEX_A, encoding="utf-8")
+        out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("HEAD", out.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), self.INDEX_A)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
+
+    def test_index_garde_la_serie_et_la_ligne_non_commitees_d_une_autre_discussion_hors_du_commit(self):
+        self.commit_base(self.INDEX_A)
+        other = (self.INDEX_A.replace("- Série 1 — la demande.\n", "- Série 1 — la demande.\n- Série 2 — l'autre.\n")
+                 + "\n## Série 2 — L'autre (02/11/2026)\n\nPas encore commitée.\n")
+        self.file.write_text(other, encoding="utf-8")
+        out = self.run_script(self.file, self.series("s.md", "La mienne", "Mon corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Série 3 : commit", out.stdout)
+        today = time.strftime("%d/%m/%Y")
+        on_disk = (other.replace("- Série 2 — l'autre.\n", "- Série 2 — l'autre.\n- Série 3 — La mienne (t)\n")
+                   + f"\n## Série 3 — La mienne ({today})\n\nMon corps.\n")
+        self.assertEqual(self.file.read_text(encoding="utf-8"), on_disk)
+        committed = (self.INDEX_A.replace("- Série 1 — la demande.\n", "- Série 1 — la demande.\n- Série 3 — La mienne (t)\n")
+                     + f"\n## Série 3 — La mienne ({today})\n\nMon corps.\n")
+        self.assertEqual(self.blob_bytes(), committed.encode("utf-8"))
+        self.assertEqual(git(self.repo, "diff", "--cached", "--name-only"), "")
+
+    def test_deux_lancements_de_suite_avec_index_laissent_chacun_sa_ligne_une_fois(self):
+        self.commit_base(self.INDEX_A)
+        for name, title in [("a.md", "Première"), ("b.md", "Seconde")]:
+            out = self.run_script(self.file, self.series(name, title, "Corps."), "-m", "x", "--index", "t")
+            self.assertEqual(out.returncode, 0, out.stderr)
+        text = self.committed()
+        self.assertEqual(text.count("- Série 2 — Première (t)\n"), 1)
+        self.assertEqual(text.count("- Série 3 — Seconde (t)\n"), 1)
+        self.assertIn("- Série 1 — la demande.\n- Série 2 — Première (t)\n- Série 3 — Seconde (t)\n\n## Série 1", text)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), text)
+
+    def test_index_apres_un_commit_d_autrui_pendant_le_hook_se_pose_sur_le_nouveau_head(self):
+        self.commit_base(self.INDEX_A)
+        marker = Path(self.dir.name) / "deja-fait"
+        self.hook(f'[ -e "{marker}" ] && exit 0\ntouch "{marker}"\nunset GIT_INDEX_FILE\ncd "{self.repo}"\n'
+                  f'blob=$( (git show HEAD:{PATH}; printf "\\n## Série 5 — Autre (02/11/2026)\\n\\nAutre corps.\\n") '
+                  f'| git hash-object -w --stdin)\n'
+                  f'git update-index --cacheinfo 100644,$blob,{PATH} && git commit -q --no-verify -m autre')
+        out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        committed = self.committed()
+        self.assertIn("Autre corps.", committed)
+        self.assertEqual(committed.count("- Série 2 — Titre (t)\n"), 1)
+        self.assertIn("- Série 1 — la demande.\n- Série 2 — Titre (t)\n\n", committed)
+
+    def test_index_apres_un_commit_d_autrui_qui_retire_le_bloc_arrete_en_code_3(self):
+        self.commit_base(self.INDEX_A)
+        marker = Path(self.dir.name) / "deja-fait"
+        self.hook(f'[ -e "{marker}" ] && exit 0\ntouch "{marker}"\nunset GIT_INDEX_FILE\ncd "{self.repo}"\n'
+                  f'blob=$(git show HEAD:{PATH} | sed "s/^## Décisions en vigueur$/## Autre titre/" '
+                  f'| git hash-object -w --stdin)\n'
+                  f'git update-index --cacheinfo 100644,$blob,{PATH} && git commit -q --no-verify -m autre')
+        out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 3, out.stderr)
+        self.assertIn("reste écrite", out.stderr)
+        self.assertIn("avec sa ligne d'index, non commitée", out.stderr)
+        # Après l'écriture, aucune relance n'est conseillée : elle écrirait la série deux fois.
+        self.assertNotIn("relancer", out.stderr)
+        on_disk = self.file.read_text(encoding="utf-8")
+        self.assertEqual(on_disk.count("- Série 2 — Titre (t)\n"), 1)
+        self.assertEqual(on_disk.count("## Série 2 — Titre"), 1)
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%s"), "autre")
+        self.assertNotIn("## Série 2", self.committed())
+
+    def test_index_refuse_un_fichier_a_creer_un_texte_vide_ou_sur_plusieurs_lignes(self):
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("aucun bloc", out.stderr)
+        self.assert_nothing_created()
+        for text in ["", "  ", "a\n## Série 9 — faux", "a\rb", "a" + chr(0x2028) + "## Série 9 — faux",
+                     "a" + chr(0x2029) + "b", "a\x85b", "a\x0bb", "a\x0cb", "a\x1cb", "a\x1eb",
+                     "a\x1b[31mb", "a" + chr(0x200B) + "b", "a" + chr(0x202E) + "b", "x" * 301]:
+            out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", text)
+            self.assertEqual(out.returncode, 2, out.stdout)
+            self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
+        for args in (["--index"], ["--index", "a", "--index", "b"]):
+            out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", *args)
+            self.assertEqual(out.returncode, 2, out.stdout)
+        # « --index » donné comme valeur de -m reste le message.
+        self.commit_base(self.INDEX_A)
+        out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "--index")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%s"), "--index")
+        self.assertNotIn("- Série 2", self.committed())
+
+    def test_index_sous_la_premiere_serie_n_est_pas_un_index(self):
+        text = BASE + "\n**Décisions en vigueur**\n- Série 1 — dans le corps d'une série.\n"
+        head = self.commit_base(text)
+        out = self.run_script(self.file, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("aucun bloc d'index avant la première série", out.stderr)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), text)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
+
+    def test_index_d_un_fichier_porte_par_un_worktree_seul_garde_le_refus_d_aujourd_hui(self):
+        linked, _ = self.linked_worktree()
+        (linked / NEW).parent.mkdir(parents=True)
+        (linked / NEW).write_text(self.INDEX_A, encoding="utf-8")
+        git(linked, "add", NEW)
+        git(linked, "commit", "-q", "-m", "ailleurs")
+        out = self.run_script(linked / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t",
+                              cwd=linked)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("il existe déjà ailleurs dans le dépôt", out.stderr)
+        self.assertNotIn("aucun bloc d'index", out.stderr)
+        self.assert_nothing_created()
+
+    def test_index_sur_un_fichier_d_un_worktree_lie_est_refuse_comme_sans_index(self):
+        self.commit_base(self.INDEX_A)
+        linked, linked_head = self.linked_worktree()
+        out = self.run_script(linked / PATH, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t",
+                              cwd=linked)
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("worktree lié", out.stderr)
+        self.assertEqual((linked / PATH).read_text(encoding="utf-8"), self.INDEX_A)
+        self.assertEqual(git(linked, "rev-parse", "HEAD"), linked_head)
+
+    def test_l_aide_nomme_index(self):
+        out = self.run_script("--aide")
+        self.assertIn("--index", out.stdout)
+        self.assertIn("Décisions en vigueur", out.stdout)
 
     def new_text(self, title="Titre", body="Corps."):
         return (f"# Décisions — nouveau\n\n## Série 1 — {title} ({time.strftime('%d/%m/%Y')})\n\n{body}\n")

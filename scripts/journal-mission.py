@@ -2,6 +2,7 @@
 """Sort le journal d'une mission de flow-board entrelacé avec les arrêts et reprises de ses discussions.
 
     python3 scripts/journal-mission.py <titre ou id de la mission>
+    python3 scripts/journal-mission.py --modeles <titre ou id de la mission>
 
 Pour trouver pourquoi une mission s'est détachée de sa discussion, il fallait croiser à la main le journal
 de la mission (le fichier des missions de flow-board) et les fins et reprises des sessions, lues dans leurs
@@ -37,6 +38,18 @@ transcripts. Le script le fait, en lecture seule :
    qui précède est perdu ; avec des entrées sans date lisible, celle de la plus ancienne entrée datée, et
    leur nombre), le début de la mission (le `startedAt` de sa première phase) et le premier
    démarrage des discussions lues, qui n'est pas celui de la mission ; sous le plafond, rien.
+
+Avec `--modeles`, il sort à la place du journal, pour les mêmes discussions (étapes 1 et 2), qui a tourné sur
+quel modèle et à quel effort, dans l'ordre du temps et toujours sans le texte d'aucun message : une ligne par
+requête du fil principal (une entrée `api-request` de `querySource` `repl_main_thread`, ou `sdk` sous Claude
+Desktop quand sa réponse est hors fil secondaire ; les autres se comptent sur une ligne à part), avec le modèle et
+l'effort envoyés (`params.model`, `params.output_config.effort`) et le modèle qui a répondu (`message.model`
+de la première réponse `assistant` hors fil secondaire dont `requestRef` est l'id de la requête ; « ? » sans
+réponse) ; et, à leur place, les bascules : le modèle annoncé à la session (pièce jointe `model`), un
+`remote_session_change` (avec le modèle que nomme sa ligne `Co-Authored-By`, quand elle en nomme un), et les
+commandes `/model`, `/effort` et `/reload-plugins` tapées (leurs arguments seulement quand ils sont un mot
+court de lettres, chiffres, `.`, `_` et `-` ; un autre argument se dit « (argument masqué) »). Les lignes du
+journal de la mission n'y sont pas.
 
 Une date hors de 2020 à 2100, sans fuseau, ou qui ne se lit pas, est écartée à la lecture, comme une ligne
 de transcript illisible. Codes : 0 journal sorti, 1 mission introuvable ou désignée plusieurs fois,
@@ -196,6 +209,91 @@ def transcript_events(path, session):
     return [tuple(event) for event in events]
 
 
+# Un argument de commande montré : un mot court (`opus`, `claude-fable-5-2`, `high`), jamais un texte libre.
+WORD = re.compile(r"[A-Za-z0-9._-]{1,40}", re.ASCII)
+# Le modèle que nomme la ligne d'attribution d'un `remote_session_change` (« Claude Opus 5.5 »).
+ATTRIBUTED = re.compile(r"Co-Authored-By: Claude ([A-Za-z]+ \d+(?:\.\d+)?)", re.ASCII)
+SWITCHES = ("/model", "/effort", "/reload-plugins")
+
+
+def model_events(path, session):
+    """Les requêtes du fil principal et les bascules de modèle d'un transcript : (ms, discussion, texte), sans
+    le texte d'aucun message (seuls des noms de modèle, des efforts et des noms de commande en sortent)."""
+    requests, answered, events = [], {}, []
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            try:
+                entry = json.loads(line)
+            except (ValueError, RecursionError):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            kind = entry.get("type")
+            if kind == "assistant":
+                message = entry.get("message")
+                ref = entry.get("requestRef")
+                if not entry.get("isSidechain") and isinstance(ref, str) and isinstance(message, dict):
+                    answered.setdefault(ref, message.get("model"))
+                continue
+            ms = as_ms(entry.get("timestamp"))
+            if ms is None:
+                continue
+            if kind == "api-request":
+                params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+                config = params.get("output_config") if isinstance(params.get("output_config"), dict) else {}
+                requests.append((ms, entry.get("id"), params.get("model"), config.get("effort"), entry.get("querySource")))
+            elif kind == "attachment" and isinstance(entry.get("attachment"), dict):
+                attachment = entry["attachment"]
+                if attachment.get("type") == "model":
+                    identity = attachment.get("identity") if isinstance(attachment.get("identity"), dict) else {}
+                    events.append((ms, session, f"bascule : modèle annoncé {model_name(identity.get('modelId'))}"))
+                elif attachment.get("type") == "remote_session_change":
+                    named = ATTRIBUTED.search(attachment.get("commit") if isinstance(attachment.get("commit"), str) else "")
+                    events.append((ms, session, "bascule : remote_session_change" + (f" ({named[1]})" if named else "")))
+            elif kind == "user" and not entry.get("isSidechain"):
+                command = typed_command(entry.get("message"))
+                if command:
+                    events.append((ms, session, f"bascule : {command}"))
+    skipped = []
+    for ms, request, sent, effort, source in requests:
+        answer = answered.get(request) if isinstance(request, str) else None
+        # Le fil principal : `repl_main_thread` au terminal ; `sdk` sous Claude Desktop, quand sa réponse est hors
+        # fil secondaire. Toute autre requête (un spécialiste, un appel `sdk` sans réponse du fil principal) est
+        # comptée à part, pour qu'un écart se voie.
+        if source == "repl_main_thread" or (source == "sdk" and isinstance(request, str) and request in answered):
+            events.append((ms, session, f"requête : envoyé {model_name(sent)} / {model_name(effort, 'sans effort')} "
+                                        f"→ répondu {model_name(answer, '?')}"))
+        else:
+            skipped.append(ms)
+    if skipped:
+        events.append((max(skipped), session, f"{len(skipped)} requête(s) hors du fil principal écartée(s) (autre "
+                                              f"source, ou sdk sans réponse du fil principal)"))
+    return events
+
+
+def model_name(value, missing="?"):
+    """Un nom de modèle ou d'effort lu dans un transcript : un mot court, sinon cité (`quoted`)."""
+    if value is None:
+        return missing
+    return value if isinstance(value, str) and WORD.fullmatch(value) else quoted(value, 40)
+
+
+def typed_command(message):
+    """La commande de bascule (`SWITCHES`) qu'un message tapé porte, avec son argument s'il est un mot court ;
+    None pour tout autre message, dont rien ne sort."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str):
+        return None
+    name = re.search(r"<command-name>(/[A-Za-z0-9:_-]+)</command-name>", content)
+    if not name or name[1] not in SWITCHES:
+        return None
+    args = re.search(r"<command-args>([^<]*)</command-args>", content)
+    word = args[1].strip() if args else ""
+    if not word:
+        return name[1]
+    return name[1] + (f" {word}" if WORD.fullmatch(word) else " (argument masqué)")
+
+
 def transcripts(base, session):
     """Les transcripts d'un id de session en forme : des fichiers ordinaires sous `projects/`."""
     projects = base / "projects"
@@ -240,8 +338,9 @@ def capped(run, events, count):
     return lines
 
 
-def journal(wanted, base=None):
-    """Les lignes à sortir, et le code de sortie."""
+def journal(wanted, base=None, models=False):
+    """Les lignes à sortir, et le code de sortie ; avec `models`, les requêtes et bascules de modèle des
+    discussions (`model_events`) à la place du journal et des événements de session."""
     base = base or base_dir()
     chosen = pick(missions(base), wanted)
     if not chosen:
@@ -258,7 +357,7 @@ def journal(wanted, base=None):
         lines.append(f"aussi dans : {', '.join(others)} (mise à jour plus tôt)")
     events = []
     log = run.get("log")
-    for item in log if isinstance(log, list) else []:
+    for item in log if isinstance(log, list) and not models else []:
         ms = as_ms(item.get("at")) if isinstance(item, dict) else None
         if ms is not None:
             glyph = clean(item.get("glyph", ""), 4) if isinstance(item.get("glyph"), str) else ""
@@ -281,10 +380,10 @@ def journal(wanted, base=None):
         lines.append(f"{label} : {', '.join(str(p) for p in found)}")
         for transcript in found:
             try:
-                events += transcript_events(transcript, session)
+                events += (model_events if models else transcript_events)(transcript, session)
             except OSError as err:
                 lines.append(f"{label} : transcript illisible ({err})")
-    if isinstance(log, list) and len(log) >= LOG_CAP:
+    if isinstance(log, list) and len(log) >= LOG_CAP and not models:
         lines[1:1] = capped(run, events, len(log))
     lines.append("")
     for ms, session, text in sorted(events, key=lambda e: e[0]):
@@ -297,10 +396,13 @@ def main(argv):
     if argv[:1] in (["--aide"], ["-h"], ["--help"]):
         print(__doc__)
         return 0
-    if len(argv) != 1 or not argv[0].strip():
-        print("python3 scripts/journal-mission.py <titre ou id de la mission>", file=sys.stderr)
+    models = argv[:1] == ["--modeles"]
+    rest = argv[1:] if models else argv
+    if len(rest) != 1 or not rest[0].strip():
+        print("python3 scripts/journal-mission.py <titre ou id de la mission>\npython3 scripts/journal-mission.py --modeles "
+              "<titre ou id de la mission>", file=sys.stderr)
         return 2
-    lines, code = journal(argv[0].strip())
+    lines, code = journal(rest[0].strip(), models=models)
     print("\n".join(lines), file=sys.stdout if code == 0 else sys.stderr)
     return code
 

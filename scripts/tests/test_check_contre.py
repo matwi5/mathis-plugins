@@ -4,6 +4,7 @@ autre référence, dans la copie temporaire, sans rien écrire dans l'arbre ni l
 python3 -m unittest discover -s scripts/tests."""
 
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
 
-class AgainstRefTest(unittest.TestCase):
+class RefRepo(unittest.TestCase):
     """Un dépôt jetable : `hooks/` à v1 (avec `ancien.ts`), puis v2 (sans lui, avec `neuf.ts`), puis
     l'arbre de travail à v3 avec un fichier non suivi ; le test du plugin reste dans l'arbre."""
 
@@ -86,6 +87,8 @@ class AgainstRefTest(unittest.TestCase):
             check.single_test(self.plugin, names, against)
         return seen
 
+
+class AgainstRefTest(RefRepo):
     def test_la_copie_porte_hooks_de_la_reference_et_les_tests_de_l_arbre(self):
         before = self.state()
         [(title, files)] = self.single(["tests/essai.test.ts"], "v1")
@@ -141,6 +144,81 @@ class AgainstRefTest(unittest.TestCase):
             self.single(["tests/lecture.test.mjs"], "v1")
         self.assertIn(".test.mjs", str(caught.exception))
         self.assertIn("tourne en place", str(caught.exception))
+
+
+class OutsideTestFileTest(RefRepo):
+    """Un fichier de test gardé hors du plugin (`travail/<sujet>/tests/`) : copié dans `tests/` de la
+    copie, sous son nom, avec `--contre` aussi ; les formes qui ne peuvent pas tourner sont refusées."""
+
+    DIAG = "travail/diag/tests/diag.test.ts"
+
+    def setUp(self):
+        super().setUp()
+        self.outside(self.DIAG, "diagnostic\n")
+        self.outside("travail/diag/tests/aide.ts", "aide\n")
+
+    def outside(self, rel, text):
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_un_fichier_hors_du_plugin_est_copie_dans_tests_et_lance(self):
+        before = self.state()
+        [(title, files)] = self.single([self.DIAG], None)
+        self.assertIn(self.DIAG, title)
+        self.assertEqual(files["tests/diag.test.ts"], "diagnostic\n")
+        self.assertNotIn("tests/essai.test.ts", files)
+        self.assertNotIn("tests/aide.ts", files)
+        self.assertEqual(files["hooks/model.ts"], "v3\n")
+        self.assertEqual(self.state(), before)
+
+    def test_avec_contre_aussi(self):
+        [(title, files)] = self.single([self.DIAG, "tests/essai.test.ts"], "v1")
+        self.assertIn("hooks à v1", title)
+        self.assertEqual(files["hooks/model.ts"], "v1\n")
+        self.assertEqual(files["tests/diag.test.ts"], "diagnostic\n")
+        self.assertEqual(files["tests/essai.test.ts"], "test de l'arbre\n")
+
+    def test_les_deux_modes_le_relancent_comme_un_test_du_plugin(self):
+        self.outside(self.DIAG, f"// {check.BOTH_STORAGES}\n")
+        seen = self.single([self.DIAG], None)
+        self.assertEqual(len(seen), 2)
+        self.assertIn("stockage $.store", seen[1][0])
+        self.assertIn("tests/diag.test.ts", seen[1][1])
+
+    def test_les_formes_refusees_disent_pourquoi(self):
+        self.outside("travail/diag/tests/essai.test.ts", "même nom\n")
+        self.outside("travail/diag/tests/lecture.test.mjs", "// node\n")
+        dehors = Path(tempfile.mkdtemp(prefix="test-dehors-")).resolve()
+        self.addCleanup(shutil.rmtree, dehors, True)
+        (dehors / "loin.test.ts").write_text("loin\n", encoding="utf-8")
+        before = self.state()
+        for name, why in (("travail/diag/tests/essai.test.ts", "existe déjà"),
+                          ("travail/diag/tests/lecture.test.mjs", ".test.mjs hors du plugin"),
+                          (str(dehors / "loin.test.ts"), "hors du dépôt")):
+            with self.subTest(name=name), self.assertRaises(check.Failed) as caught:
+                self.single([name], None)
+            self.assertIn(why, str(caught.exception))
+        self.assertEqual(self.state(), before)
+
+    def test_deux_fichiers_hors_du_plugin_au_meme_nom_sont_refuses(self):
+        self.outside("travail/autre/tests/diag.test.ts", "autre\n")
+        with self.assertRaises(check.Failed) as caught:
+            self.single([self.DIAG, "travail/autre/tests/diag.test.ts"], None)
+        self.assertIn("porte déjà le nom diag.test.ts", str(caught.exception))
+        # Le même fichier nommé deux fois tourne une fois.
+        [(title, files)] = self.single([self.DIAG, self.DIAG], None)
+        self.assertEqual(title.count(self.DIAG), 1)
+
+    @unittest.skipIf(os.name == "nt", "liens symboliques : mode développeur requis sous Windows")
+    def test_un_lien_symbolique_est_refuse(self):
+        (self.repo / "travail" / "diag" / "tests" / "lien.test.ts").symlink_to(self.repo / self.DIAG)
+        (self.plugin / "tests" / "lien.test.ts").symlink_to(self.repo / self.DIAG)
+        for name in ("travail/diag/tests/lien.test.ts", "tests/lien.test.ts", "plugins/essai/tests/lien.test.ts", "lien.test.ts"):
+            with self.subTest(name=name), self.assertRaises(check.Failed) as caught:
+                self.single([name], None)
+            self.assertIn("lien symbolique", str(caught.exception))
 
 
 class OptionTest(unittest.TestCase):

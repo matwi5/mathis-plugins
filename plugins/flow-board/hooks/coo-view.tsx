@@ -11,7 +11,7 @@ import { shownGroupId } from './basics.ts'
 import { C, SKILLS } from './catalog.ts'
 import { COO_EFFORT, leadEffortPill } from './effort.ts'
 import { neutralLine } from './closing.ts'
-import { AUTO_RESUMED, WAITS_FR, cardTag, runTag, cooPoint, roadmapNow, waveText, type CooCard, type CooMission, REPORT_CHANGED, REPORT_PAUSED, type CooDelivery, type CooReport, type CooRoadmap, type CooStatement, type CooWait } from './coo.ts'
+import { WAITS_FR, cardTag, runTag, cooPoint, roadmapNow, waveText, type CooCard, type CooMission, REPORT_CHANGED, REPORT_PAUSED, type CooDelivery, type CooReport, type CooRoadmap, type CooStatement, type CooWait } from './coo.ts'
 import { isOrdinaryCard, type LaunchMode, type LaunchStart } from './launch.ts'
 import { roadmapTextPrint, type RoadmapEntry } from './roadmap.ts'
 import { titleOf, type RoadmapTitles } from './titles.ts'
@@ -126,7 +126,7 @@ const tagPart = (tag: string): CooPart[] => (tag ? [{ text: tag, bold: true }] :
 
 const missionParts = (m: CooMission, tag = ''): CooPart[] => {
   const def = SKILLS[m.phase]
-  const mode: CooPart = m.mode === 'auto' ? { text: `⚡${NB}Auto${m.resumed ? ` · ${AUTO_RESUMED}` : ''}`, color: C.teal, bold: true } : { text: `✋${NB}Manuel${m.pause !== undefined ? ` · ${neutralLine(m.pause)}` : ''}`, dim: true }
+  const mode: CooPart = m.mode === 'auto' ? { text: `⚡${NB}Auto${m.resumed !== undefined ? ` · ${m.resumed}` : ''}`, color: C.teal, bold: true } : { text: `✋${NB}Manuel${m.pause !== undefined ? ` · ${neutralLine(m.pause)}` : ''}`, dim: true }
   const status: CooPart[] = m.status === 'paused' ? [{ text: 'en pause, à reprendre', dim: true }] : m.status === 'done' ? [{ text: 'close', dim: true }] : []
   return [
     mode,

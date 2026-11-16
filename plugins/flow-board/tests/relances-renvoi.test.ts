@@ -11,6 +11,7 @@ import { cancelLinkedGroup, linkGroupSession } from '../hooks/link.ts'
 import { localTicketChange } from '../hooks/relay.ts'
 import { activeRun, currentPhase } from '../hooks/basics.ts'
 import type { Board, Run } from '../types'
+import { settle } from './horloge.ts'
 
 const T0 = 160_000_000
 const PLUGIN = 'flow-board'
@@ -94,9 +95,6 @@ const world = (on: any) => {
 }
 type World = ReturnType<typeof world>
 
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const press = async ($: any, key: string) => {
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pane.press({ key })

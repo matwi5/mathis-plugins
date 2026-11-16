@@ -272,7 +272,7 @@ test('Les notifications : une question qui apparaît en auto, une pause posée p
   const off = lot()
   expect(autoNotices(off, ask(off, [{ id: 'q1', ticket: 't2', text: 'x' }], T0 + 3).board)).toEqual([])
   // Une pause posée par la fin de la discussion ou par une lecture ratée : sa raison.
-  expect(autoNotices(on, parkActive(on, T0 + 5)!.board)).toEqual(['Mission Boutique : auto en pause (discussion fermée)'])
+  expect(autoNotices(on, parkActive(on, T0 + 5)!.board)).toEqual(['Mission Boutique : auto en pause (discussion arrêtée)'])
   expect(autoNotices(on, stopAutoUnread(on, T0 + 5)!)).toEqual(['Mission Boutique : auto en pause (lecture de la mission ratée)'])
   // Coupé par la personne : rien.
   expect(autoNotices(on, switchOffAuto(on, T0 + 5)!.board)).toEqual([])
@@ -404,7 +404,7 @@ test('La fin de la discussion porteuse notifie la pause de l’auto, avec sa rai
   await press($, 'auto-on')
   await press($, 'auto-confirm')
   await $.session.end({ reason: 'prompt_input_exit' } as any)
-  expect(notified.map(n => n.text)).toEqual(['Mission Boutique : auto en pause (discussion fermée)'])
+  expect(notified.map(n => n.text)).toEqual(['Mission Boutique : auto en pause (discussion arrêtée)'])
 })
 
 test('La mission qui n’est plus active ici liste encore ses questions dans l’onglet, avec ce qu’elles bloquent', { timeoutMs: 20000 }, async ($, on) => {

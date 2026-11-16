@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "deplace.py"
+sys.path.insert(0, str(SCRIPT.parent))
+import deplace  # noqa: E402
 
 MODEL = """import type { Run } from '../types'
 import { isTime } from './basics.ts'
@@ -172,6 +174,32 @@ export function count(run: Run) {
     def test_une_lecture_qui_deraille_est_refusee(self):
         self.write("hooks/model.ts", MODEL + "const ouverte = 'pas fermée\n")
         self.assertRefused(["hooks/model.ts", "hooks/link.ts", "title"], "la lecture a déraillé")
+
+    def test_une_balise_jsx_fermante_ou_auto_fermante_n_ouvre_pas_d_expression_reguliere(self):
+        # `</Text>` : le `/` suit `<`, le lecteur le prenait pour le début d'une expression régulière,
+        # laissée ouverte jusqu'à la fin de la ligne (register.tsx : 2 littéraux ouverts, `</Text>` et `</Box>`).
+        # `<Line bar={x} />` : le `/` suit `}`, de même, sans `/` plus loin sur la ligne.
+        view = ("import { Box, Text } from 'claude-code'\n\n"
+                "export const label = 'étiquette'\n\n"
+                "export const Row = (x: string) => (\n"
+                "  <Box>\n"
+                "    <Text dimColor={true}>\n"
+                "      {x}\n"
+                "    </Text>\n"
+                "    <Line bar={x} />\n"
+                "  </Box>\n"
+                ")\n\n"
+                "export const angle = (s: string) => s.replace(/>/g, '&gt;')\n")
+        self.assertEqual(deplace.mask(view)[1], 0)
+        # Une vraie expression régulière qui commence par `>` reste masquée : son `/` fermant n'est pas du code.
+        masked = deplace.mask(view)[0]
+        self.assertIn("s.replace(    , '    ')", masked)
+        # `a</re/` : une comparaison suivie d'une expression régulière, pas une balise fermante (pas de `>` après le nom).
+        self.assertEqual(deplace.mask("const ok = a</re/.test(s)\n"), ("const ok = a<    .test(s)\n", 0))
+        self.write("hooks/view.tsx", view)
+        out = self.move("hooks/view.tsx", "hooks/link.ts", "label")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(self.read("hooks/link.ts").endswith("\nexport const label = 'étiquette'\n"))
 
     def test_un_gabarit_ferme_en_colonne_0_part_en_entier(self):
         self.write("hooks/model.ts", "export const PROMPT = `\nligne un\n`\n\nexport const other = 1\n")

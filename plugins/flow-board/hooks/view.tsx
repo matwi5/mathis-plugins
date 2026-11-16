@@ -18,8 +18,7 @@ import {
   type OutsideHold,
   activeDetour,
   autoStateOf,
-  AUTO_RESUMED,
-  isAutoResumed,
+  autoResumedLabel,
   awaitedExternals,
   isAutoOn,
   CHOICES_LISTED,
@@ -3537,7 +3536,7 @@ const relayPills = (run: Run, view: View): BandPill[] =>
 
 /**
  * Dans le bandeau, le mode auto de la mission : « ⚡ Auto · en cours » quand il envoie d'ici (« ⚡ Auto · repris :
- * questions répondues » quand il a repris de lui-même, sans question ouverte depuis), « ⚡ Auto ·
+ * questions répondues » ou « ⚡ Auto · repris : discussion relancée » quand il a repris de lui-même, sans question ouverte depuis), « ⚡ Auto ·
  * en attente de <tâche> » quand il n'attend plus qu'une tâche externe pas faite (`awaitedExternals`), « ⚡ Auto ·
  * attend ta réponse (N) » quand des questions bloquantes l'attendent,
  * « ⚡ Auto en pause : <raison> » quand il s'est arrêté sans un geste de la personne ni la fin de la
@@ -3558,8 +3557,8 @@ const autoPill = (run: Run, view: View): BandPill | null => {
     const name = clip(neutralLine(typeof first.name === 'string' && first.name !== '' ? first.name : first.id), 48).replace(/ /g, NB)
     return { text: `⚡${NB}Auto${NB}·${NB}en${NB}attente${NB}de${NB}${name}${awaited.length > 1 ? `${NB}(+${awaited.length - 1})` : ''}`, color: C.teal, bold: true }
   }
-  // Repris de lui-même après une pause « plus rien ne peut avancer sans toi » : il le dit à la place de « en cours ».
-  if (state.kind === 'on') return { text: `⚡${NB}Auto${NB}·${NB}${isAutoResumed(run) ? AUTO_RESUMED.replace(/ /g, NB) : `en${NB}cours`}`, color: C.teal, bold: true }
+  // Repris de lui-même (questions répondues, ou discussion relancée) : il le dit à la place de « en cours ».
+  if (state.kind === 'on') return { text: `⚡${NB}Auto${NB}·${NB}${(autoResumedLabel(run) ?? 'en cours').replace(/ /g, NB)}`, color: C.teal, bold: true }
   if (state.kind === 'paused') return { text: `⚡${NB}Auto${NB}en${NB}pause${NB}:${NB}${state.why.replace(/ /g, NB)}`, color: C.amber, bold: true }
   return null
 }

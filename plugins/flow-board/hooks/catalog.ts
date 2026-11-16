@@ -143,7 +143,7 @@ export type SkillFlags = {
    */
   isModelFraming: boolean
   /**
-   * Cadrage pour les consignes (`FRAMING_SKILLS` de `register.tsx`) : un choix sensible y devient une question,
+   * Cadrage pour les consignes (`FRAMING_SKILLS` de `decoupage.ts`) : un choix sensible y devient une question,
    * une décision se recopie mot pour mot, un sous-skill de cadrage reçoit ces règles. Le tri en est un.
    */
   isNotesFraming: boolean
@@ -155,7 +155,7 @@ export type SkillFlags = {
   isLotPhase: boolean
   /** Phase que l'auto lance lui-même (`AUTO_PHASES` de `model.ts`) ; jamais la livraison, la rétro, la clôture ni la validation du rapport. */
   isAutoPhase: boolean
-  /** Consigne où une revue reçoit le fichier des choix déclarés et les règles de jugement (`REVIEW_NOTES` de `register.tsx`). */
+  /** Consigne où une revue reçoit le fichier des choix déclarés et les règles de jugement (`REVIEW_NOTES` de `decoupage.ts`). */
   hasReviewNotes: boolean
   /** Skill qui publie le lot lui-même : ce qu'il crée dans le tracker, ce sont les tickets, pas des trouvailles (`LOT_SKILLS` de `model.ts`). */
   publishesLot: boolean
@@ -235,7 +235,7 @@ export const SECURITY_FIXES_PASS = securityFixesPass('group')
  * La confiance d'un dossier, lue sans rien afficher d'autre de `~/.claude.json`, qui peut porter des
  * jetons (une session avait écrit le geste fait sans le vérifier). La procédure d'un worker
  * de groupe recopie la même commande (procedure-groupe.test.mjs les compare) ; le texte de
- * lancement (`launchHow` de register.tsx) la cite.
+ * lancement (`launchHow` de decoupage.ts) la cite.
  */
 export const TRUST_COMMAND = `python3 -c 'import json, os, sys; p = json.load(open(os.path.expanduser("~/.claude.json"))).get("projects", {}); r = os.path.realpath(sys.argv[1]); print((p.get(r) or p.get(r.replace(os.sep, "/")) or {}).get("hasTrustDialogAccepted"))' '<dossier>'`
 
@@ -244,7 +244,7 @@ export const SENSITIVE_AREAS = "privacy, data deletion, encryption, concurrency,
 
 /**
  * La description du drapeau `judgment` d'un ticket dans le schéma de l'outil flow : il porte la ligne « Jugement »
- * du ticket, écrite au découpage (`TICKET_FLAGS` de register.tsx, qui dit le reste). Courte : la description de
+ * du ticket, écrite au découpage (`TICKET_FLAGS` de decoupage.ts, qui dit le reste). Courte : la description de
  * l'outil et de ses clés a un plafond (`outil-flow-textes.test.ts`).
  */
 export const JUDGMENT_FIELD = 'Line « Jugement »: true for « oui »'
@@ -331,7 +331,7 @@ export const DECIDED_HINT = 'the path of the file of the choices already declare
  * de l'équipe Claude Code : pour un auteur agent, une remarque mineure coûte un commit et un tour de revue.
  */
 export const REVIEWER_BRIEF =
-  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, those of medium severity or more go to the user as a « durcissement » group proposed at the end of the lot, except a finding on older code that breaks the invariant of the ticket: it is Important and gets fixed (in a « durcissement » group, the code it targets is not older than the lot); tag every finding Important, Nit or Pre-existing (the code older than the lot just above, with its severity: high, medium or low): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; a description, a comment or a documentation text that the diff makes wrong is Important; a regression the diff introduces (an input that passed before it and now throws, gives another result or is refused) is Important, whether or not the ticket has an invariant, even on a line the diff did not change (the caller of a function whose contract it changes): it is not Pre-existing; a finding on the code of the lot that makes a ticket criterion fail without a signal (the promised behaviour does not happen, and nothing says so) is Important too, whether or not the ticket has an invariant; a choice made in session and missing from the decisions file is not a finding; the review of a ticket also looks for the neighbouring tests that read the same observable (a test that pins the old behaviour elsewhere); for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; a proposed fix for a branch specific to a platform the reviewer cannot try (Windows from a Mac, for example) carries the mention « non vérifiable sur ce poste » and is given as a trial lead, not as the most cautious fix; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review. ' +
+  'when the review has several axes (Standards and Spec), report only once all of them are back, and never launch an axis again that is already running; do not rerun the tests nor the checks (the session ran them); report apart the findings on code older than the lot (lines the lot did not change): do not fix them, those of medium severity or more go to the user as a « durcissement » group proposed at the end of the lot, except a finding on older code that breaks the invariant of the ticket: it is Important and gets fixed (in a « durcissement » group, the code it targets is not older than the lot); tag every finding Important, Nit or Pre-existing (the code older than the lot just above, with its severity: high, medium or low): only the Important ones get fixed, the Nits (style, naming, a cleanup that changes no behaviour) are not fixed and given as a count only, without detail, so that a nit costs neither a commit nor another review cycle; a description, a comment or a documentation text that the diff makes wrong is Important; a regression the diff introduces (an input that passed before it and now throws, gives another result or is refused) is Important, whether or not the ticket has an invariant, even on a line the diff did not change (the caller of a function whose contract it changes): it is not Pre-existing; a finding on the code of the lot that makes a ticket criterion fail without a signal (the promised behaviour does not happen, and nothing says so) is Important too, whether or not the ticket has an invariant; a choice made in session and missing from the decisions file is not a finding; the review of a ticket also looks for the neighbouring tests that read the same observable (a test that pins the old behaviour elsewhere); for a defect, name its class (the pattern, not only the line) so that every occurrence of it gets fixed; a proposed fix for a branch specific to a platform the reviewer cannot try (Windows from a Mac, for example) carries the mention « non vérifiable sur ce poste » and is given as a trial lead, not as the most cautious fix; do not report as a defect, nor apply, anything the spec, the ticket or the declared choices leave to another group or exclude; do not undo a declared choice out of preference nor report it again as such, but report any case where it produces a defect, with its scenario; a fix that would change what a series of the decisions file settled is given as a question (« contredit la série », followed by its number and what it says), never as a fix; never write in the working tree, not even for a moment (a red test that proves a defect stays with the session): the only writes are the fixes that /code-review --fix applies in a group review. ' +
   NO_ADVISOR_LINE.replace(/\.$/, '')
 
 /**
@@ -514,7 +514,7 @@ export const GROUP_REVIEWER =
 
 /** La consigne de la revue d'un groupe ; le point fixe ne se précise que sans git. */
 const groupReviewHint = (fixedPoint: string): string =>
-  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a worker, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review), and checking that each defect-class search the session quotes (notes, report, commit messages) covers the class's pattern and its variants, not just the changed lines: a search too narrow is a finding; ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them`
+  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a worker, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review), and checking that each defect-class search the session quotes (notes, report, commit messages) covers the class's pattern and its variants, not just the changed lines: a search too narrow is a finding; ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them. A fix that contradicts a series in force of the decisions file is undone before the commit and raised as a question (--fix applied it before any lookup)`
 
 /** Ce qui suit, par groupe, une fois ses tickets commités : revue du groupe, revue de sécurité, rendu. */
 const GROUP_STEPS = [

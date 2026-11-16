@@ -82,7 +82,8 @@ test('avec des groupes, le skill renvoie aux comptes rendus des workers ; « Tro
 })
 
 test('la consigne auto du compte rendu renvoie à la rubrique du code antérieur au lot', () => {
-  const register = readFileSync(new URL('../hooks/register.tsx', import.meta.url), 'utf8')
+  // Les notes de l'auto par phase, sorties de register.tsx vers auto-consignes.ts.
+  const register = readFileSync(new URL('../hooks/auto-consignes.ts', import.meta.url), 'utf8')
   const auto = register.match(/'compte-rendu':\s*\n\s*'([^']*)'/)
   assert.ok(auto, 'consigne auto du compte rendu absente')
   assert.ok(auto[1].includes('« Code antérieur au lot »'), 'la consigne auto ne nomme pas la rubrique')

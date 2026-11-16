@@ -43,6 +43,7 @@ const NOT_FORM_GUARDS = {
   ),
   ...Object.fromEntries(['isModQuestion', 'hasSeparator', 'wentWrong', 'answerAwaitsPerson', 'isFableModelId', 'isFixedReason'].map(name => [name, MEANING])),
   ...Object.fromEntries(['isPersonOrigin', 'isTypedOrigin'].map(name => [name, ORIGIN])),
+  isFramingSubSkill: 'dit si un skill chargé comme sous-skill d’une phase de cadrage reçoit les règles de cadrage (sorti de register.tsx, exporté pour lui) : il compare des ids à une liste fixe, et rien de ce qu’il lit n’entre dans une commande ni dans un texte cité',
   ...Object.fromEntries(['isCardInLaunch', 'finishPlanHolds', 'backCardTaken', 'orphanCardHolds', 'isPairDead'].map(name => [name, ON_MISSION])),
   ...Object.fromEntries(['seenAfter', 'setStep', 'needsRebuild', 'withoutGone', 'liveEntries', 'markClosesDone', 'stripRunAgents', 'markAutoStarted', 'projectPlan', 'closeOpen', 'parseSecuritySetting', 'orphanCardPlans'].map(name => [name, NOT_A_PREDICATE])),
   ...Object.fromEntries(
@@ -52,12 +53,12 @@ const NOT_FORM_GUARDS = {
       'isLotSecurityDue', 'isClosedTurnedOff', 'isBugPass', 'isWaitingTicket', 'isDelegable', 'isCloseCandidate', 'isStoredPause', 'isAutoOn',
       'isAutoLitBy', 'isAutoPauseStored', 'isEndedPause', 'isRelaunchPause', 'isGroupDone', 'isCutDue', 'isAutoResumed', 'isGroupLotStuck', 'isBlocked', 'isPickable', 'isLotUnderway', 'isKeptForReport',
       'isDeliveredRun', 'isAwaitingArchive', 'isCloseDone', 'isDeliveryOver', 'isReportShipped', 'isOtherDiscussions', 'isWaitlistRetro',
-      'needsReview', 'versionSet', 'hasWaitlistStep', 'hasUnsoundTombstones', 'canResumeStuck', 'isStuckResumable',
+      'needsReview', 'versionSet', 'hasWaitlistStep', 'hasUnsoundTombstones', 'canResumeStuck', 'isStuckResumable', 'relaunchStillDue',
       'isBeforeImplPhase', 'isAllDone', 'hasGroupReview', 'isSecuritySettled', 'isAdvisedUnrun', 'isSecuritySettledFor', 'hasUnreadableCounts', 'hasBeenAuto', 'isReportValidated',
       'suggestsCompaction', 'isOpenMission', 'isRetroCardRemovable', 'isEntryGone', 'isReleasedMark', 'isCutDated', 'isPlanUnreadFor', 'isPlanEntry', 'isInstructReceived', 'isInstructSent',
       'isDelivered', 'isDeliveryOpen', 'isClosedSession', 'isPistesCard', 'isOrdinaryCard', 'hasIntentTurn', 'isRecordStale', 'isRetroRequestStale', 'isRetroResumeUseful', 'holdsItemsSession', 'isResentInFlight', 'isSentGroup', 'isKeptGroup', 'isHoldingGroup',
       'isClosedLink', 'isRetried', 'isRetriedSince', 'isItemsCloseCandidate', 'hasLaunchedLinked', 'isSureLink', 'isSeatGap', 'isNightWakeDue', 'hasWaitCycle', 'isAdvisorUnsettled',
-      'isRepeatedReview', 'hasRetro', 'isRetroCardDue', 'isClosedAwaitingArchive', 'isArchivable', 'holdsPick', 'isAwaitingSession', 'isJudgmentTicket', 'isFableStuck',
+      'isRepeatedReview', 'hasRetro', 'isRetroCardDue', 'isClosedAwaitingArchive', 'isArchivable', 'holdsPick', 'isAwaitingSession', 'isJudgmentTicket', 'isFableStuck', 'isWakeable',
     ].map(name => [name, ON_MISSION]),
   ),
 }

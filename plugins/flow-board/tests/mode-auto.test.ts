@@ -11,6 +11,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { storageMode, storageModeOf } from './stockage.ts'
 import { applyReport, archiveRun, autoStateOf, clampFuture, emptyBoard, finishActive, isAutoOn, mergeBoards, newRun, openRun, parkActive, resumeRun, setAsideActive, stopAutoUnread, switchOffAuto, switchOnAuto } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
+import { settle } from './horloge.ts'
 
 const T0 = 90_000_000
 
@@ -80,9 +81,6 @@ const world = (on: any) => {
 }
 type World = ReturnType<typeof world>
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 /** Le board enregistré : dans le fichier commun s'il sert, sinon dans `$.store`. */
 const storedBoard = (w: Pick<World, 'mem' | 'disk'>): Board => (w.disk.isUsed && w.disk.board !== undefined ? JSON.parse(w.disk.board) : w.mem['board:']) as Board
 const storedRun = (w: Pick<World, 'mem' | 'disk'>): Run => storedBoard(w).runs[0]!
@@ -457,8 +455,8 @@ test('Une raison relue hors de la liste se lit « raison inconnue », courte et 
   const { a } = twoCopies()
   const off = (offWhy: unknown): Board => ({ ...a, runs: a.runs.map(r => ({ ...r, auto: { onAt: T0, onBy: 'sa', offAt: T0 + 1, offWhy } }) as unknown as Run) })
   expect(autoStateOf(runOf(off('x'.repeat(2000))), off(''), 'sa')).toEqual({ kind: 'paused', why: 'raison inconnue' })
-  expect(autoStateOf(runOf(off('discussion\nfermée')), off(''), 'sa')).toEqual({ kind: 'paused', why: 'discussion fermée' })
-  expect(autoStateOf(runOf(off('discussion fermée')), off(''), 'sa')).toEqual({ kind: 'paused', why: 'discussion fermée' })
+  expect(autoStateOf(runOf(off('discussion\nfermée')), off(''), 'sa')).toEqual({ kind: 'paused', why: 'discussion arrêtée' })
+  expect(autoStateOf(runOf(off('discussion fermée')), off(''), 'sa')).toEqual({ kind: 'paused', why: 'discussion arrêtée' })
   expect(autoStateOf(runOf(off(42)), off(''), 'sa')).toEqual({ kind: 'off' })
 })
 
@@ -467,7 +465,7 @@ test('Un geste de la personne après une pause (fin de discussion) en remplace l
   const parked = parkActive(switchOnAuto(a, 'sa', T0 + 1)!.board, T0 + 2)!.board
   expect(runOf(parked).auto).toMatchObject({ offWhy: 'discussion fermée' })
   const back = resumeRun(parked, runOf(parked).id, T0 + 3)!.board
-  expect(autoStateOf(runOf(back), back, 'sa')).toEqual({ kind: 'paused', why: 'discussion fermée' })
+  expect(autoStateOf(runOf(back), back, 'sa')).toEqual({ kind: 'paused', why: 'discussion arrêtée' })
   const aside = setAsideActive(back, T0 + 4)!.board
   expect(runOf(aside).auto).toMatchObject({ offWhy: 'parcours mis de côté' })
   expect(runOf(aside).auto!.offAt!).toBeGreaterThan(runOf(parked).auto!.offAt!)

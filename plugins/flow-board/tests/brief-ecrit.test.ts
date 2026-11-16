@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { briefFileName, tempDirForm } from '../hooks/closing.ts'
-import { BRIEF_RUBRICS } from '../hooks/register.tsx'
+import { BRIEF_RUBRICS } from '../hooks/decoupage.ts'
 
 // Rétro « Coordinateur de parcours » (décision : un fichier par lancement, dans le dossier temporaire du système) : chaque lancement faisait rédiger
 // à Claude un brief d'après une consigne d'environ 6 000 signes, et un `sed` sur une apostrophe avait

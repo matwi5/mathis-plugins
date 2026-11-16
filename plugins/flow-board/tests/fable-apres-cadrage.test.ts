@@ -5,6 +5,7 @@ import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 import { isFableModelId } from '../hooks/effort.ts'
 import { memoryDisk } from './disque-memoire.ts'
 import type { Ticket } from '../types'
+import { settle } from './horloge.ts'
 
 // Mission « Fable resté après le cadrage » : un manager dont la session elle-même
 // est sur Fable (bascule de l'app, `/model fable`, Fable par défaut du poste) gardait Fable après la fin du
@@ -83,11 +84,6 @@ const bandTexts = async ($: any): Promise<string[][]> => {
     await band.unmount()
   }
   return out
-}
-
-/** Laisse le mod écrire, seconde par seconde (comme effort-manager.test.ts). */
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
 const onFable = (m: string): 'Fable' | 'hors Fable' => (isFableModelId(m) || m === 'fable' ? 'Fable' : 'hors Fable')

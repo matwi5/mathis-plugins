@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
 import { emptyRegistry, startCall } from '../hooks/registry.ts'
 import type { Board, SessionRegistry } from '../types'
+import { settle } from './horloge.ts'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -33,9 +34,6 @@ const world = (on: any, id = 's-orch') => {
 }
 
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 
 /** Le registre d'un worker, tel que son fichier le garde : sa piste, un spécialiste au travail. */
 const linkedRegistry = (session: string, now: number, patch: Partial<SessionRegistry> = {}): SessionRegistry => {

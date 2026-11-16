@@ -10,6 +10,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { Board } from '../types'
+import { settle } from './horloge.ts'
 
 const T0 = 140_000_000
 const PLUGIN = 'flow-board'
@@ -98,9 +99,6 @@ const world = (on: any) => {
   return { mem, disk, commands, texts, notices, stored, filled, flags }
 }
 
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const press = async ($: any, key: string) => {
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pane.press({ key })

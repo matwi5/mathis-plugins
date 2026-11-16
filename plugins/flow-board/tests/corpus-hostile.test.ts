@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { closingProcedure, isGroupId, isNotedWorktree, isQuestionIdForm, isSafeBranch, isSafeId, isScriptPath, isSessionId, isVersionForm, isWorktreePath, linkedPrefix, neutralInPrompt, neutralLine, neutralRelayed, reopenText, shellQuote } from '../hooks/closing.ts'
-import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, isFableMark, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, isFableMark, newRun, startLinkedGroups, stopLabel } from '../hooks/model.ts'
 import { applyRelay, decidedFileText } from '../hooks/relay.ts'
 import { isSeat } from '../hooks/seat.ts'
 import { isDecisionsPath, isEntryId, isOneLine, isPrint, isQuestionRef, isReportPrint, isRound, isTicketRef, refOf, soundEntry } from '../hooks/coordination.ts'
@@ -384,14 +384,15 @@ test('shellQuote pour PowerShell : une valeur qui porte une apostrophe, droite o
 })
 
 test('la raison d’une pause du mode auto, relue d’un fichier, n’affiche qu’une raison connue ou « raison inconnue », pour chaque entrée du corpus', () => {
-  const known = [...Object.values(AUTO_STOPS), 'raison inconnue']
+  const known = [...Object.values(AUTO_STOPS).map(stopLabel), 'raison inconnue']
   const run = newRun('implement', 1_000, 'Boutique')
   const board: Board = { ...emptyBoard('', 'p'), session: 'sa', deleted: [], runs: [run], activeId: run.id }
   const shown = (offWhy: string) => {
     const view = autoStateOf({ ...run, auto: { onAt: 1_000, onBy: 'sa', offAt: 2_000, offWhy } }, board, 'sa')
     return view.kind === 'paused' ? view.why : ''
   }
-  expect(shown('discussion fermée')).toBe('discussion fermée')
+  // La valeur enregistrée « discussion fermée » se montre « discussion arrêtée ».
+  expect(shown('discussion fermée')).toBe('discussion arrêtée')
   // Une raison connue est un texte fixé, sans aucune entrée du corpus : seule une raison hors liste fuirait.
   expect(passing(token => !known.includes(shown(`discussion${token}fermée`)))).toEqual([])
   // « deuxième échec du groupe <id> » : seulement avec un id de groupe en forme (le garde d'`isGroupId`), sinon « raison inconnue ».

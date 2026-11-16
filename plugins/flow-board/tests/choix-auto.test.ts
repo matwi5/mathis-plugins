@@ -231,37 +231,67 @@ test('Au plafond, un retrait avec remplaçant laisse le choix d’origine en vig
 /** Les lignes des faits du compte rendu qui parlent des choix (comptes, liste, sensibles). */
 const choiceLines = (facts: string[]) => facts.filter(l => /choices reported|Choices reported|No choice was reported|Sensitive choices/.test(l))
 
-test('Avec le fichier des choix, les faits du compte rendu n’en donnent que les comptes par origine, le compte des sensibles et le chemin, sans les recopier', () => {
+/** Les lignes des choix aux faits du compte rendu avec le fichier des choix : la ligne des comptes, puis ses groupes en lignes courtes. */
+const choiceBlock = (facts: string[]) => {
+  const start = facts.findIndex(l => l.includes('choices reported as made without the user'))
+  if (start < 0) return []
+  const end = facts.findIndex((l, i) => i > start && !l.startsWith('  '))
+  return facts.slice(start, end < 0 ? undefined : end)
+}
+
+test('Avec le fichier des choix, les faits du compte rendu donnent les comptes par origine, le compte des sensibles et le chemin, puis les choix groupés en lignes courtes', () => {
   const sensitive = applyReport(switchOnAuto(lot(), 'sa', T0 + 2)!.board, { decided: [{ what: 'Zone sensible : garder la copie', why: 'la plus prudente', origin: 'recommendation' }] }, T0 + 3).board
   const board = declare(declare(sensitive, 29, 0, T0 + 3, 'recommendation'), 30, 30, T0 + 4, 'skipped-validation')
   const facts = reportFacts(runOf(board), 0, '/h/.claude/flow-board/choix/r.md')
   const lines = choiceLines(facts)
   expect(lines).toHaveLength(1)
-  expect(lines[0]).toContain('- 60 choices reported as made without the user (30 « reco prise », 30 « validation sautée », 0 « choix de worker », 0 without origin), 1 of them sensitive (their text starts with « Zone sensible : »): they are not copied here.')
-  expect(lines[0]).toContain('Read them all in the file of declared choices, /h/.claude/flow-board/choix/r.md (each with its reason and origin; it also holds the choices relayed by the workers, so it can list more than these counts: the file is the reference)')
+  expect(lines[0]).toContain('- 60 choices reported as made without the user (30 « reco prise », 30 « validation sautée », 0 « choix de worker », 0 without origin), 1 of them sensitive (their text starts with « Zone sensible : »), listed below in the groups of « Décidé sans toi », each in a short line (its text and reason, cut with « … » beyond 160 characters), at most 12 per group.')
+  expect(lines[0]).toContain('The file of declared choices, /h/.claude/flow-board/choix/r.md, stays the reference (each with its reason and origin; it also holds the choices relayed by the workers, so it can list more than these counts): open it only for a cut choice, the rest of a group, or a choice beyond these counts')
   expect(lines[0]).toContain('Group them by origin')
   expect(lines[0]).toContain('The sensitive ones go first and apart, under « Zone sensible, tranché en auto », and nowhere else.')
-  // Aucun choix recopié : ni un récent, ni le sensible (hors des alertes du journal, qui en citent 8 au plus, comme avant).
-  const all = facts.filter(l => !l.startsWith('- Warnings in the dashboard log')).join('\n')
-  expect(all).not.toContain('Choix 59')
-  expect(all).not.toContain('garder la copie')
-  // Sans choix sensible ni origine : ni la consigne des sensibles, ni le regroupement.
-  const plain = choiceLines(reportFacts(runOf(declare(lot(), 3, 0, T0 + 4)), 0, '/f.md'))
+  // Les groupes du rapport, « Zone sensible » en tête, puis une origine chacun ; 12 choix au plus, puis le compte des autres et le chemin.
+  expect(choiceBlock(facts).slice(1)).toEqual([
+    '  - « Zone sensible, tranché en auto » (1):',
+    '    - Zone sensible : garder la copie — la plus prudente',
+    '  - « Reco prise » (29):',
+    ...Array.from({ length: 12 }, (_, i) => `    - Choix ${i}`),
+    '    - et 17 autres : /h/.claude/flow-board/choix/r.md',
+    '  - « Validation sautée » (30):',
+    ...Array.from({ length: 12 }, (_, i) => `    - Choix ${30 + i}`),
+    '    - et 18 autres : /h/.claude/flow-board/choix/r.md',
+  ])
+  // Sans choix sensible ni origine : ni la consigne des sensibles, ni le regroupement ; un seul groupe, « Autres ».
+  const plainFacts = reportFacts(runOf(declare(lot(), 3, 0, T0 + 4)), 0, '/f.md')
+  const plain = choiceLines(plainFacts)
   expect(plain[0]).toContain('0 of them sensitive')
   expect(plain[0]).not.toContain('Zone sensible, tranché en auto')
   expect(plain[0]).not.toContain('Group them by origin')
+  expect(choiceBlock(plainFacts).slice(1)).toEqual(['  - « Autres » (3):', '    - Choix 0', '    - Choix 1', '    - Choix 2'])
   // Avec le fichier mais sans choix : la ligne d'avant.
   expect(choiceLines(reportFacts(runOf(lot()), 0, '/f.md'))).toEqual(['- No choice was reported as made without the user: check the work for any, and put them in « Décidé sans toi ».'])
 })
 
-test('Avec le fichier des choix, la partie des choix d’une mission de 60 choix dont 30 sensibles tient sous 2 000 caractères', () => {
+test('Avec le fichier des choix, un choix long est coupé à 160 caractères par « … », raison comprise ; un choix de 160 tout juste reste entier', () => {
+  const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
+  const exact = 'é'.repeat(160)
+  const board = applyReport(on, { decided: [{ what: 'a'.repeat(150), why: 'b'.repeat(40), origin: 'recommendation' }, { what: exact, origin: 'recommendation' }] }, T0 + 3).board
+  const block = choiceBlock(reportFacts(runOf(board), 0, '/f.md'))
+  const cut = `    - ${'a'.repeat(150)} — ${'b'.repeat(6)}…`
+  expect(block.slice(1)).toEqual(['  - « Reco prise » (2):', cut, `    - ${exact}`])
+  expect(Array.from(cut.slice('    - '.length))).toHaveLength(160)
+})
+
+test('Avec le fichier des choix, la partie des choix d’une mission de 60 choix dont 30 sensibles reste bornée par ses lignes courtes', () => {
   const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
   const long = (i: number) => `Choix numéro ${i}, avec une raison longue comme celles d’une vraie mission en auto, recopiée jusqu’ici`
   const sensitive = applyReport(on, { decided: Array.from({ length: 30 }, (_, i) => ({ what: `Zone sensible : ${long(i)}`, why: long(i), origin: 'recommendation' })) }, T0 + 3).board
   const board = applyReport(sensitive, { decided: Array.from({ length: 30 }, (_, i) => ({ what: long(100 + i), why: long(i), origin: 'skipped-validation' })) }, T0 + 4).board
-  const part = choiceLines(reportFacts(runOf(board), 0, '/h/.claude/flow-board/choix/mwaycj2c-74y5.md')).join('\n')
-  expect(part).toContain('30 of them sensitive')
-  expect(part.length).toBeLessThan(2000)
+  const block = choiceBlock(reportFacts(runOf(board), 0, '/h/.claude/flow-board/choix/mwaycj2c-74y5.md'))
+  expect(block[0]).toContain('30 of them sensitive')
+  // Deux groupes de 12 lignes de 160 caractères au plus, et leurs « et 18 autres ».
+  expect(block.slice(1).every(l => Array.from(l).length <= 160 + '    - '.length)).toBe(true)
+  expect(block.filter(l => l.startsWith('    - et 18 autres : '))).toHaveLength(2)
+  expect(block.join('\n').length).toBeLessThan(6000)
   // Sans le fichier, la même mission recopie bien plus.
   expect(choiceLines(reportFacts(runOf(board))).join('\n').length).toBeGreaterThan(10_000)
 })

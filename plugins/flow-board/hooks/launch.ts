@@ -340,8 +340,10 @@ export const cardStatus = (s: CardState): string => (s.kind === 'launched' ? 'la
 // `owner`), relu 1,5 s plus tard, effacé avant d'allumer, consommé une fois, dans les 10 minutes.
 // Invariant (validé par Mathis) : « L'auto d'une mission ne s'allume jamais sans un clic de Mathis,
 // consommé une seule fois, par la seule discussion de cette mission, dans les 10 minutes ; une lecture ou
-// une écriture ratée laisse l'auto éteint, sauf la reprise d'une pause « plus rien ne peut avancer sans toi », d'elle-même,
-// dans la discussion qui l'avait allumé, une fois toutes ses questions bloquantes répondues. » Un id consommé se note
+// une écriture ratée laisse l'auto éteint, sauf deux reprises d'elles-mêmes, dans la discussion qui l'avait allumé :
+// celle d'une pause « plus rien ne peut avancer sans toi », une fois toutes ses questions bloquantes répondues, et celle
+// d'une pause « discussion arrêtée », quand cette discussion est relancée sous son id dans les 24 h qui suivent la
+// dernière activité de la mission. » Un id consommé se note
 // dans les entrées appliquées de la mission (`coo-applied:<mission>`), avant l'effacement : une copie rejouée du même
 // clic n'allume plus rien, même quand l'allumage a raté. Le COO n'écrit jamais l'état auto ni la date gardée d'un
 // clic : la discussion de la mission les pose elle-même, comme pour « Confirmer » dans la mission.

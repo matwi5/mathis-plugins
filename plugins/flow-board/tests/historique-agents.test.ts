@@ -5,6 +5,7 @@ import { emptyBoard, newRun, stripRunAgents } from '../hooks/model.ts'
 import { laneFromTranscript } from '../hooks/transcript.ts'
 import { emptyRegistry, rowsFromRun, startCall } from '../hooks/registry.ts'
 import type { AgentRow, Board, Run, SessionRegistry } from '../types'
+import { settle } from './horloge.ts'
 
 const PLUGIN = 'flow-board'
 /** Le board du projet `/p` dans le stockage simulé (la racine de la session, voir `session.root`). */
@@ -62,10 +63,6 @@ const world = (on: any, seed: Record<string, unknown>) => {
   on('command.list', () => ({ value: [] }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   return mem
-}
-
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
 test('S1, S18 et S21 : au chargement, les lignes d’un ancien parcours vont dans le fichier de la mission, puis le champ se vide dans le board', { timeoutMs: 15000 }, async ($, on) => {

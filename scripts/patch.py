@@ -22,7 +22,9 @@ paraître exactement une fois : sinon rien n'est écrit, et le message dit ce qu
 corriger sans relire le fichier : un ancien texte absent donne « absent ; ligne la plus proche : <n> :
 <texte> », la ligne du fichier la plus proche de sa première ligne (la même mesure que `show.py`) ;
 un ancien texte présent plusieurs fois donne « présent N fois, lignes <n1>, <n2>… », la ligne où
-commence chaque occurrence.
+commence chaque occurrence, puis pour chacune (les dix premières) la commande `--plage` de ses lignes
+entières, avec les textes de `--debut` et de `--fin` qui les vérifient, `<nouveau>` à remplir (dans un
+lot, seulement quand aucune paire précédente n'a changé ce fichier : `--plage` lit le fichier).
 La forme simple refuse un fichier dont la première ligne est `::: fichier …` (un fichier de paires) :
 elle l'aurait modifié au lieu d'appliquer ses paires, et renvoie à `--lot`.
 Le fichier garde son encodage UTF-8 et ses fins de ligne. Dans chaque texte (argument, `@fichier`
@@ -115,6 +117,7 @@ Sans dépendance hors de la bibliothèque standard.
 import hashlib
 import os
 import re
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -122,7 +125,7 @@ from pathlib import Path
 # `show.py`, à côté de ce script, donne la mesure de la ligne la plus proche : chemin ajouté à la main
 # (un lancement par `python3 -I` n'ajoute pas le dossier du script).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from show import line_list, nearest_text  # noqa: E402
+from show import SHOWN_LINES, line_list, nearest_text  # noqa: E402
 
 # Le marqueur qui s'écrit `\u` (voir la docstring), et ses formes échappées : `{{uu}}` s'écrit
 # `{{u}}`, `{{uuu}}` s'écrit `{{uu}}`, etc. La barre oblique inverse est donnée par son code.
@@ -181,8 +184,10 @@ def decode(path, outcome="rien n'est écrit"):
         raise PatchError(f"{path} n'est pas en UTF-8 ({err.reason}, octet {err.start}) ; {outcome}")
 
 
-def replace_once(path, text, old, new):
-    """Le texte où l'unique occurrence de `old` devient `new`, et la ligne où elle commence."""
+def replace_once(path, text, old, new, propose=True):
+    """Le texte où l'unique occurrence de `old` devient `new`, et la ligne où elle commence. Un `old` présent
+    plusieurs fois propose la commande `--plage` de chaque occurrence, sauf sans `propose` (un lot dont une
+    paire précédente a changé ce texte : ses lignes ne sont plus celles du fichier, que `--plage` lit)."""
     if old == "":
         raise PatchError("ancien texte vide")
     starts, at = [], text.find(old)
@@ -195,8 +200,51 @@ def replace_once(path, text, old, new):
     lines_at = [text.count("\n", 0, at) + 1 for at in starts]
     if len(starts) > 1:
         raise PatchError(f"{path} : l'ancien texte est présent {len(starts)} fois, lignes "
-                         f"{line_list(lines_at)} ; il doit paraître exactement une fois ; rien n'est écrit")
+                         f"{line_list(lines_at)} ; il doit paraître exactement une fois ; rien n'est écrit"
+                         + (range_proposals(path, text, old, starts) if propose else
+                            " ; pas de commande --plage proposée : une paire précédente a changé ce texte, et "
+                            "--plage lit le fichier"))
     return text.replace(old, new), lines_at[0]
+
+
+# La longueur d'un texte de --debut ou de --fin proposé : un début de ligne suffit à la vérifier.
+PROPOSED_BOUND = 40
+
+
+def range_proposals(path, text, old, starts):
+    """Pour un ancien texte présent plusieurs fois : la commande `--plage` de chacune de ses SHOWN_LINES
+    premières occurrences, ses lignes entières (de celle où elle commence à celle où elle finit) et les
+    textes qui les vérifient (le morceau de l'ancien texte sur sa première et sa dernière ligne, ou la
+    ligne elle-même quand ce morceau est blanc), `<nouveau>` à remplir des lignes entières."""
+    lines = [line.rstrip("\r") for line in text.split("\n")]
+    # Une seule fin de ligne finale se retire : l'occurrence de « fin\n\n » couvre deux lignes.
+    trimmed = old.replace("\r\n", "\n")
+    trimmed = trimmed[:-1] if trimmed.endswith("\n") else trimmed
+    pieces = [piece.strip() for piece in trimmed.split("\n")]
+    span = len(pieces) - 1
+    proposed = []
+    for at in starts[:SHOWN_LINES]:
+        first = text.count("\n", 0, at) + 1
+        last = first + span
+        bounds = [(pieces[0] if pieces[0] else lines[first - 1].strip())[:PROPOSED_BOUND],
+                  (pieces[-1] if pieces[-1] else lines[last - 1].strip())[:PROPOSED_BOUND]]
+        # Une ligne blanche ne se vérifie par aucun texte : la place reste à remplir.
+        debut, fin = (shlex.quote(literal_argument(b)) if b else "<texte>" for b in bounds)
+        # Dans un worktree, un texte qui contient le mot git ne passe pas en argument (CLAUDE.md du dépôt) : le dire.
+        git_word = " (un texte cite « git » : dans un worktree, le passer par @<fichier>)" \
+            if any("git" in b.lower() for b in bounds) else ""
+        proposed.append(f"\n  python3 scripts/patch.py --plage {shlex.quote(str(path))} {first} {last} <nouveau> "
+                        f"--debut {debut} --fin {fin}{git_word}")
+    more = "\n  …" if len(starts) > SHOWN_LINES else ""
+    return (f"\npour remplacer une seule occurrence, ses lignes entières (<nouveau> : les lignes qui les "
+            f"remplacent) :{''.join(proposed)}{more}")
+
+
+def literal_argument(text):
+    """L'argument que `argument` relit en `text` : un `@` de tête doublé, et chaque marqueur `{{u…}}` pris
+    d'un `u` de plus (l'inverse de `unmark`)."""
+    text = U_MARKER.sub(lambda m: "{{u" + m[1] + "}}", text)
+    return "@" + text if text.startswith("@") else text
 
 
 def refusal(path):
@@ -468,7 +516,7 @@ def patch_batch(lot):
                 names[key] = target
             else:
                 guard(target, "rien n'est écrit")
-            texts[key], line = replace_once(target, texts[key], old, new)
+            texts[key], line = replace_once(target, texts[key], old, new, propose=key not in changed)
             done.append((number, target, line))
             changed.add(key)
         except PatchError as err:

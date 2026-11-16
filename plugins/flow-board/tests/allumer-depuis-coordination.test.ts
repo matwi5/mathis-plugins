@@ -9,8 +9,10 @@ import { PANE, PLUGIN, TOOL, openCoo, settle, start, stored, world, writeBoard }
 
 // Allumer l'auto d'une mission depuis la vue Coordination. Invariant : « L'auto d'une mission ne s'allume jamais sans
 // un clic de Mathis, consommé une seule fois, par la seule discussion de cette mission, dans les 10 minutes ; une
-// lecture ou une écriture ratée laisse l'auto éteint, sauf la reprise d'une pause « plus rien ne peut avancer sans toi », d'elle-même,
-// dans la discussion qui l'avait allumé, une fois toutes ses questions bloquantes répondues. »
+// lecture ou une écriture ratée laisse l'auto éteint, sauf deux reprises d'elles-mêmes, dans la discussion qui l'avait
+// allumé : celle d'une pause « plus rien ne peut avancer sans toi », une fois toutes ses questions bloquantes répondues,
+// et celle d'une pause « discussion arrêtée », quand cette discussion est relancée sous son id dans les 24 h qui suivent
+// la dernière activité de la mission. »
 
 const T0 = 500_000_000
 

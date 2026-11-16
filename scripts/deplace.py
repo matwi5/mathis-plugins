@@ -31,8 +31,12 @@ s'écrivent cible d'abord, source en dernier ; une écriture refusée remet ceux
 
 Le lecteur reprend celui du test anti-cycle de flow-board (`tests/modules-sans-cycle.test.mjs`) : il
 saute commentaires, chaînes, gabarits (leurs `${…}` relus comme du code) et expressions régulières,
-sur un masque de même longueur que la source. Il ne connaît pas le JSX : dans un `.tsx`, seuls les
-imports d'en-tête sont lus, sauf pour la source et la cible, qui doivent se lire sans littéral ouvert.
+sur un masque de même longueur que la source. Du JSX, il ne lit que les balises fermantes `</Text>` (un
+`/` collé à `<`, suivi d'un nom de balise et de `>`) et auto-fermantes `/>` (sans `/` fermant plus loin sur la ligne) comme du code, jamais
+comme le début d'une expression régulière, qu'il laissait ouverte jusqu'à la fin de la ligne
+(`register.tsx` en avait deux) ; le texte entre deux balises n'est pas lu à part : dans un `.tsx`,
+seuls les imports d'en-tête sont lus, sauf pour la source et la cible, qui doivent se lire sans
+littéral ouvert.
 Une instruction de premier niveau commence par un mot en colonne 0 (un accent grave ou une suite
 d'expression en colonne 0 continue la précédente). Les usages d'un nom se trouvent par mot dans le
 code (une propriété `a.nom`, une clé `{ nom: }`, un membre de type `nom?:` ou la déclaration d'une
@@ -64,6 +68,9 @@ CONTINUING_WORDS = {"extends", "implements", "return", "new", "await", "yield", 
                     "in", "of", "instanceof", "case", "throw"}
 METHOD_BODY = re.compile(r"[ \t]*(?::[ \t]*[\w$][\w$.<>\[\]|&, \t]*)?\{")
 SPECIFIER = re.compile(r"^(type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$")
+# Après `</`, le nom d'une balise JSX fermante puis `>` (ou `>` seul, le fragment `</>`) : `a</re/` reste une
+# comparaison suivie d'une expression régulière.
+JSX_CLOSING = re.compile(r"(?:[A-Za-z_$][\w$.:-]*)?\s*>")
 REGEX_AFTER = (re.compile(r"(?:^|[(,=:[&|?{};+\-*%~^<>])\s*$"), re.compile(r"(?:^|[^\w$)\]])\s*!\s*$"),
                re.compile(r"(?:^|[^\w$.])(?:return|typeof|instanceof|new|delete|throw|case|do|else|in|of|void|yield|await)\s*$"))
 
@@ -159,6 +166,11 @@ def mask(source):
             elif c == "`":
                 i = template(i + 1)
                 tail += "x"
+            elif c == "/" and (tail.endswith("<") and JSX_CLOSING.match(source, i + 1) or nxt == ">" and not regex_end(i + 1)[1]):
+                # Une balise JSX, jamais une expression régulière : `</Text>` (le `/` collé au `<`, suivi d'un nom et de `>`), ou
+                # `<Line bar={x} />` (`/>` sans `/` fermant plus loin sur la ligne) ; lu comme du code.
+                tail += c
+                i += 1
             elif c == "/" and any(p.search(tail) for p in REGEX_AFTER):
                 end, is_closed = regex_end(i + 1)
                 if not is_closed:

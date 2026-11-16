@@ -97,3 +97,10 @@
 # Le plafond des cartes de lancement, retiré (plus aucune carte n'en chasse une autre) :
 0.87.0	plafond de 8 cartes
 0.87.0	au-delà du plafond des cartes
+# La mission rouverte la nuit n'est plus dite « en manuel, l'auto éteint » (son auto repart de lui-même quand sa reprise vaut encore) :
+0.88.0	mission reprise en manuel, son auto éteint
+0.88.0	Son auto reste éteint : ne pas allumer
+0.88.0	its auto stays off
+0.88.0	in manual, their auto off
+# La règle « Mode auto » dit deux reprises sans clic (pause « plus rien ne peut avancer sans toi », pause « discussion arrêtée » relancée) :
+0.88.0	sauf la reprise d'une pause

@@ -6,6 +6,7 @@ import { emptyBoard, newRun } from '../hooks/model.ts'
 import { reportRoundOf, validatedRoundOf } from '../hooks/register.tsx'
 import type { Board, Run } from '../types'
 import { relayFileSlug } from '../hooks/closing.ts'
+import { settle } from './horloge.ts'
 
 // La boîte « À reprendre ». Invariants :
 // - « Une chose mise de côté par une mission ne sort de la liste que par ta décision ; elle ne disparaît
@@ -105,9 +106,6 @@ const world = (on: any) => {
 }
 type World = ReturnType<typeof world>
 const start = ($: any) => $.session.start({ cwd: ROOT, surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const openCoo = async ($: any, clock: { advance: (ms: number) => Promise<void> }): Promise<string> => {
   const loading = $.skill.prompt({ skill: COO, text: 'consignes du COO' })
   await settle(clock, 4)

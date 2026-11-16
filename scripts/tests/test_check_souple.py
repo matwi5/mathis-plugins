@@ -225,5 +225,98 @@ class FixDetachedDocTest(unittest.TestCase):
         self.assertEqual(self.read("tests/a.test.ts"), "/** un */\n/** deux */\nconst t = 1\n")
 
 
+class SlippedDocTest(unittest.TestCase):
+    """Un bloc `/** */` qui documentait une déclaration dans `HEAD` et qu'un ajout documenté a séparé
+    d'elle n'est pas retiré par `--fix` : le message dit de placer l'ajout au-dessus."""
+
+    DOC = "/**\n * Le commentaire de leadEffort,\n * sur plusieurs lignes.\n */\n"
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.dir.name)
+        self.plugin = self.repo / "plugins" / "essai"
+        (self.plugin / "hooks").mkdir(parents=True)
+        for args in (["init", "-q", "-b", "main"], ["config", "user.name", "essai"],
+                     ["config", "user.email", "essai@localhost"], ["config", "commit.gpgsign", "false"]):
+            subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True)
+        # `git_show` lit `HEAD` dans `check.REPO` : le dépôt d'essai le remplace.
+        self.saved = check.REPO
+        check.REPO = self.repo
+
+    def tearDown(self):
+        check.REPO = self.saved
+        self.dir.cleanup()
+
+    def test_hors_de_git_rien_n_est_garde(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        check.REPO = Path(outside.name)
+        self.write("/** ancien */\n/** doc */\nexport const b = 2\n")
+        check.fix_detached_docs(self.plugin)
+        self.assertEqual(self.read(), "/** doc */\nexport const b = 2\n")
+
+    def commit(self, text):
+        (self.plugin / "hooks" / "model.ts").write_text(text, encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=self.repo, check=True)
+
+    def write(self, text):
+        (self.plugin / "hooks" / "model.ts").write_text(text, encoding="utf-8")
+
+    def read(self):
+        return (self.plugin / "hooks" / "model.ts").read_text(encoding="utf-8")
+
+    def test_l_ajout_glisse_ne_retire_rien_et_le_dit(self):
+        self.commit("const a = 1\n" + self.DOC + "export function leadEffort() {}\n")
+        slipped = "const a = 1\n" + self.DOC + "/** Le nouveau. */\nexport const nouveau = 2\nexport function leadEffort() {}\n"
+        self.write(slipped)
+        said = check.fix_detached_docs(self.plugin)
+        self.assertEqual(self.read(), slipped)
+        self.assertEqual(len(said), 1)
+        self.assertIn("ajout glissé entre le commentaire de leadEffort et sa déclaration : le placer au-dessus", said[0])
+        problems = check.code_rules(self.plugin)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("ajout glissé entre le commentaire de leadEffort", problems[0])
+        self.assertNotIn("--fix", problems[0])
+
+    def test_un_bloc_vraiment_detache_part_comme_avant(self):
+        self.commit("const a = 1\nexport function leadEffort() {}\n")
+        self.write("const a = 1\n/** ancien */\n" + self.DOC + "export function leadEffort() {}\n")
+        said = check.fix_detached_docs(self.plugin)
+        self.assertEqual(self.read(), "const a = 1\n" + self.DOC + "export function leadEffort() {}\n")
+        self.assertIn("bloc /** */ détaché retiré", said[0])
+
+    def test_un_commentaire_reecrit_sous_l_ancien_part_comme_avant(self):
+        # Une fusion résolue en gardant les deux côtés : la même déclaration suit les deux blocs.
+        self.commit("const a = 1\n/** A */\nexport function f() {}\n")
+        self.write("const a = 1\n/** A */\n/** B */\nexport function f() {}\n")
+        said = check.fix_detached_docs(self.plugin)
+        self.assertEqual(self.read(), "const a = 1\n/** B */\nexport function f() {}\n")
+        self.assertIn("bloc /** */ détaché retiré", said[0])
+
+    def test_le_meme_bloc_au_dessus_d_une_autre_declaration_de_head_part_comme_avant(self):
+        self.commit("/** @internal */\nexport function a() {}\n")
+        self.write("/** @internal */\nexport function a() {}\n/** @internal */\n/** Doc b */\nexport function b() {}\n")
+        said = check.fix_detached_docs(self.plugin)
+        self.assertEqual(self.read(), "/** @internal */\nexport function a() {}\n/** Doc b */\nexport function b() {}\n")
+        self.assertIn("bloc /** */ détaché retiré", said[0])
+
+    def test_un_bloc_repete_reecrit_sous_l_ancien_part_comme_avant(self):
+        # Revue du groupe D : le même bloc court documente aussi une déclaration plus bas dans HEAD ; celle qui
+        # le suit encore l'avait déjà dans HEAD : un commentaire réécrit, pas un ajout glissé avant b.
+        self.commit("/** Interne. */\nexport function a() {}\n/** Interne. */\nexport function b() {}\n")
+        self.write("/** Interne. */\n/** Calcule a. */\nexport function a() {}\n/** Interne. */\nexport function b() {}\n")
+        said = check.fix_detached_docs(self.plugin)
+        self.assertEqual(self.read(), "/** Calcule a. */\nexport function a() {}\n/** Interne. */\nexport function b() {}\n")
+        self.assertIn("bloc /** */ détaché retiré", said[0])
+
+    def test_un_fichier_absent_de_head_garde_le_comportement_d_avant(self):
+        self.commit("const a = 1\n")
+        (self.plugin / "hooks" / "neuf.ts").write_text("/** ancien */\n/** doc */\nexport const b = 2\n", encoding="utf-8")
+        said = check.fix_detached_docs(self.plugin)
+        self.assertEqual((self.plugin / "hooks" / "neuf.ts").read_text(encoding="utf-8"), "/** doc */\nexport const b = 2\n")
+        self.assertIn("bloc /** */ détaché retiré", said[0])
+
+
 if __name__ == "__main__":
     unittest.main()

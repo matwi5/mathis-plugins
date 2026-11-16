@@ -71,6 +71,10 @@ _Avoid_: clore, fermer
 Arrêter la discussion d'un manager dont la mission est archivée et la retirer de la liste des discussions ; sa conversation est gardée et se rouvre.
 _Avoid_: archiver une discussion, supprimer une discussion
 
+**Discussion arrêtée** :
+Une discussion dont le processus ne tourne plus, quelle qu'en soit la cause (arrêt au repos, mise à jour, processus tué, app quittée) ; sa mission reste à son nom, et elle la retrouve une fois relancée sous son id. Elle n'est pas fermée : rien ne l'a retirée de la liste des discussions.
+_Avoid_: discussion fermée, discussion morte
+
 **Feuille de route** :
 La suite des jalons d'un projet, du jalon en cours aux suivants, que le COO tient pour mener l'utilisateur jusqu'à la fin ; le cap vient des objectifs du projet.
 _Avoid_: roadmap, planning, backlog
@@ -204,7 +208,7 @@ Le bouton qui propose la prochaine action à faire, le même dans le panneau d'u
 _Avoid_: bouton Ensuite, bouton suivant
 
 **Mode auto** :
-L'état d'une mission que l'utilisateur a allumé par un clic de sa part (« ⚡ Auto » puis « Confirmer » dans la mission ou sur sa ligne de la vue Coordination du COO, ou « Lancer en auto » chez le COO) : la mission avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour cette mission seulement, depuis la discussion où il a été allumé ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto » dans la mission, « ✋ Couper l'auto » sur sa ligne de la vue Coordination), le COO peut le couper sans jamais l'allumer, et le mod le met en pause dans certains cas (une lecture ratée ; plus rien qui puisse avancer sans l'utilisateur, seule pause qui reprend alors d'elle-même, une fois ses questions répondues). Une mission qui n'est pas en auto est en manuel.
+L'état d'une mission que l'utilisateur a allumé par un clic de sa part (« ⚡ Auto » puis « Confirmer » dans la mission ou sur sa ligne de la vue Coordination du COO, ou « Lancer en auto » chez le COO) : la mission avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour cette mission seulement, depuis la discussion où il a été allumé ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto » dans la mission, « ✋ Couper l'auto » sur sa ligne de la vue Coordination), le COO peut le couper sans jamais l'allumer, et le mod le met en pause dans certains cas (une lecture ratée ; plus rien qui puisse avancer sans l'utilisateur ; la discussion arrêtée). Deux de ces pauses reprennent d'elles-mêmes : la deuxième une fois ses questions répondues, la troisième quand la discussion est relancée sous son id dans les 24 h qui suivent la dernière activité de la mission. Une mission qui n'est pas en auto est en manuel.
 _Avoid_: pilote automatique, mode autonome
 
 **Choix d'expérience** :

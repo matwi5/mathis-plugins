@@ -3,10 +3,11 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { nightMorningLines } from '../hooks/coo.ts'
-import { AUTO_STOPS, detachOnLoad, emptyBoard, isEndedPause, newRun, parkActive } from '../hooks/model.ts'
+import { NIGHT_ENTRY_ACTS } from '../hooks/coordination.ts'
+import { AUTO_STOPS, autoResumedAt, detachOnLoad, emptyBoard, isAutoOn, isEndedPause, newRun, parkActive, switchOnAuto } from '../hooks/model.ts'
 import { parseNightLog, reopenCommand, type NightLogLine } from '../hooks/night.ts'
 import type { Run } from '../types'
-import { PANE, PLUGIN, TOOL, entries, openCoo, settle, start, world, writeBoard, type World } from './monde-coordination.ts'
+import { PANE, PLUGIN, TOOL, entries, openCoo, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
 
 // La réouverture d'une mission la nuit (la commande que compose le mod) et le résumé du matin (ce que le relevé
 // du COO dit de la nuit au premier message de la personne).
@@ -40,12 +41,14 @@ test('la commande de réouverture : claude --bg --resume relance la discussion d
   const words = posixWords(cmd)
   expect(words?.slice(0, 4)).toEqual(['claude', '--bg', '--resume', 'session-M'])
   expect(words).toHaveLength(5)
-  expect(words![4]).toContain('{"resume": "mx7abc-12"}')
-  expect(words![4]).toMatch(/en manuel/)
+  expect(words![4]).toBe(
+    'Reprends la mission mx7abc-12 du tableau de bord : commence par appeler flow avec {"resume": "mx7abc-12"}, puis continue cette mission là où elle en est. Si son auto a repris de lui-même, suis sa consigne ; sinon elle reste en manuel : ne pas allumer, la personne le fera depuis la vue Coordination.',
+  )
 })
 
 test('la commande de réouverture : aucune apostrophe dans son message ; un id de mission ou de discussion hors forme n’en a pas', () => {
-  expect(reopenCommand('m1', 'session-M')!.replace(/^claude --bg --resume 'session-M' '/, '').slice(0, -1)).not.toMatch(/'/)
+  // Ni droite (elle fermerait la citation) ni typographique.
+  expect(reopenCommand('m1', 'session-M')!.replace(/^claude --bg --resume 'session-M' '/, '').slice(0, -1)).not.toMatch(/['’]/)
   for (const bad of ['', 'a b', "m1'", 'm1;rm', '../m1', '-m1', 'x'.repeat(101), 3, null]) {
     expect(reopenCommand(bad as any, 'session-M')).toBeNull()
     expect(reopenCommand('m1', bad as any)).toBeNull()
@@ -55,20 +58,47 @@ test('la commande de réouverture : aucune apostrophe dans son message ; un id d
 })
 
 const line = (over: Partial<NightLogLine>): NightLogLine => ({ at: 3_600_000, watch: 'nwatchabcd1', act: 'wave', why: 'geste écrit', result: 'written', ...over })
-const missions = [{ id: 'm1', title: 'Riche' }]
+const missions: { id: string; title: string; mode: 'auto' | 'manual'; resumedAt?: number }[] = [{ id: 'm1', title: 'Riche', mode: 'manual' }]
 
 test('le résumé du matin : chaque geste de la surveillance (mission, groupe, geste, raison, résultat), puis ce qui attend la personne', () => {
   const text = nightMorningLines(
-    { watch: 'nwatchabcd1', at: 7_200_000, why: 'person', lines: [line({ act: 'start', why: 'clic', result: 'allumée' }), line({ mission: 'm1', group: 'B' }), line({ mission: 'm1', act: 'reopen', why: 'mission rouverte en manuel', result: 'written' }), line({ mission: 'm2', act: 'reopen', why: 'refusé par l’app : pour le matin', result: 'refused' }), line({ act: 'stop', why: 'message', result: 'arrêtée' })] },
+    { watch: 'nwatchabcd1', at: 7_200_000, why: 'person', lines: [line({ act: 'start', why: 'clic', result: 'allumée' }), line({ mission: 'm1', group: 'B' }), line({ mission: 'm1', act: 'reopen', why: 'commande de réouverture lancée par le COO : mission rouverte', result: 'written' }), line({ mission: 'm2', act: 'reopen', why: 'refusé par l’app : pour le matin', result: 'refused' }), line({ act: 'stop', why: 'message', result: 'arrêtée' })] },
     missions,
   ).join('\n')
   expect(text).toMatch(/^Night summary/)
   expect(text).toMatch(/mission « Riche » \(mission id « m1 »\), group « B »: wave, geste écrit: written/)
   expect(text).toMatch(/mission « m2 » \(mission id « m2 »\): reopen, refusé par l’app : pour le matin: refused/)
   expect(text).not.toMatch(/allumée|arrêtée/)
-  // Une mission rouverte la nuit : en manuel, l'auto s'allume depuis la vue Coordination.
-  expect(text).toMatch(/reopened at night.*« Riche ».*Coordination view/)
+  // Une mission rouverte la nuit, restée en manuel : son auto s'allume depuis la vue Coordination ; une absente du relevé est dite absente.
+  expect(text).toMatch(/reopened at night.*« Riche » \(stayed in manual\).*Coordination view/)
+  expect(nightMorningLines({ watch: 'nwatchabcd1', at: 7_200_000, why: 'person', lines: [line({ mission: 'm9', act: 'reopen', why: 'commande de réouverture lancée par le COO : mission rouverte', result: 'written' })] }, missions).join('\n')).toMatch(/« m9 » \(not in the missions list\)/)
   expect(text).toMatch(/still waits for the user/)
+})
+
+test('le résumé du matin : chaque mission rouverte dit, d’après le fichier des missions au matin, si son auto a repris de lui-même ou si elle est restée en manuel', () => {
+  // Rouvertes à 01:00 (3 600 000) ; la mission m4 rouverte deux fois, comptée une fois, à sa première réouverture.
+  const ids = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm4']
+  const night = { watch: 'nwatchabcd1', at: 7_200_000, why: 'person' as const, lines: ids.map(id => line({ mission: id, act: 'reopen', why: 'commande de réouverture lancée par le COO : mission rouverte', result: 'written' })) }
+  const text = nightMorningLines(night, [
+    { id: 'm1', title: 'Reprise', mode: 'auto', resumedAt: 3_660_000 },
+    { id: 'm2', title: 'Manuelle', mode: 'manual' },
+    { id: 'm3', title: 'Allumée au matin', mode: 'auto' },
+    // Reprise à la relance, puis en pause (une question qui bloque tout) ou finie : elle a bien repris.
+    { id: 'm4', title: 'Reprise puis en pause', mode: 'manual', resumedAt: 3_700_000 },
+    // Une reprise d'avant la réouverture (la veille) ne compte pas pour cette nuit.
+    { id: 'm5', title: 'Reprise d’avant', mode: 'manual', resumedAt: 1_000 },
+    // Une question ouverte retire le libellé « repris » du relevé, pas la date de la reprise.
+    { id: 'm6', title: 'Reprise avec question', mode: 'auto', resumedAt: 3_600_000 },
+  ]).join('\n')
+  expect(text).toMatch(
+    /Missions reopened at night \(their command launched\): « Reprise » \(its auto resumed by itself\), « Manuelle » \(stayed in manual\), « Allumée au matin » \(its auto on\), « Reprise puis en pause » \(its auto resumed by itself, off again since: see the missions list\), « Reprise d’avant » \(stayed in manual\), « Reprise avec question » \(its auto resumed by itself\);/,
+  )
+  expect(text).toMatch(/the auto of each mission that stayed in manual; never switch it on yourself\./)
+  expect(text).not.toMatch(/its auto stays off|their auto off|in manual, their/)
+  // Avec la ligne « start » de la surveillance (00:30), une reprise écrite avant la ligne de réouverture (00:50) mais après ce début compte.
+  const started = { ...night, lines: [line({ at: 1_800_000, act: 'start', why: 'clic', result: 'allumée' }), ...night.lines] }
+  expect(nightMorningLines(started, [{ id: 'm1', title: 'Reprise', mode: 'auto', resumedAt: 3_000_000 }]).join('\n')).toMatch(/« Reprise » \(its auto resumed by itself\)/)
+  expect(nightMorningLines(started, [{ id: 'm1', title: 'Reprise', mode: 'auto', resumedAt: 1_000_000 }]).join('\n')).toMatch(/« Reprise » \(its auto on\)/)
 })
 
 test('le résumé du matin : une nuit sans geste le dit ; un journal illisible le dit', () => {
@@ -122,11 +152,12 @@ const coo = async ($: any, on: any, runs: Run[], surface = 'desktop') => {
   await settle(clock, 1)
   return { clock, w }
 }
-const watchId = (w: World): string => {
+const watchOf = (w: World): { id: string; at: number } => {
   const path = Object.keys(w.files).find(p => p.endsWith('.nuit.json'))
   const raw = path ? JSON.parse(w.files[path]!) : w.mem[Object.keys(w.mem).find(k => k.startsWith('coo-night:'))!]
-  return (typeof raw === 'string' ? JSON.parse(raw) : raw).id
+  return typeof raw === 'string' ? JSON.parse(raw) : raw
 }
+const watchId = (w: World): string => watchOf(w).id
 const journal = (w: World): any[] => {
   const path = Object.keys(w.files).find(p => p.endsWith('.nuit-journal.jsonl'))
   const key = Object.keys(w.mem).find(k => k.startsWith('coo-night-log:'))
@@ -151,16 +182,17 @@ test('dans le CLI : le relevé donne la commande de réouverture composée par l
   const cmd = /when you know it \(else its messages would wait for an approval\): (claude --bg .*) ; once it answers/.exec(line)?.[1]
   expect(cmd).toBe(reopenCommand('run-1', 'session-M'))
   expect(line).toContain(`{"coordinate": {"night": [{"mission": "run-1", "watch": "${id}", "act": "reopen"}]}}`)
-  expect(line).toMatch(/in manual: its auto stays off/)
+  expect(line).toMatch(/It reopens the mission: its auto resumes by itself when its resume still holds \(its discussion, the one that switched it on and still keeps its proof, the click date or the trace of a resume, relaunched under its id within 24 h of the mission's last activity\), otherwise the user switches it on from the Coordination view; never switch it on yourself/)
+  expect(line).not.toMatch(/in manual|stays off/)
   // Lancée, puis enregistrée par l'appel que dicte la ligne, rejoué tel quel : une fois.
   const dictated = JSON.parse(/« backgrounded », send (\{"coordinate".*\}\]\}\}); if it fails/.exec(line)![1]!)
-  expect(String(((await $.tool.call({ tool: TOOL, ...dictated } as any)) as any).result)).toMatch(/recorded for mission « L'appli \$\(rm -rf ~\) »: reopened in manual/)
+  expect(String(((await $.tool.call({ tool: TOOL, ...dictated } as any)) as any).result)).toMatch(/recorded for mission « L'appli \$\(rm -rf ~\) »: reopened; its auto resumes by itself when its resume still holds, otherwise the user switches it on from the Coordination view; never switch it on yourself/)
   expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/already reopened during this night watch/)
   expect(journal(w).filter(l => l.act === 'reopen').map(l => l.result)).toEqual(['written', 'refused'])
   expect(entries(w).filter(e => e.kind === 'night')).toEqual([])
   // Le relevé suivant ne la redonne plus.
   const again = await statement($)
-  expect(again).toMatch(/already reopened during this night watch \(in manual\)/)
+  expect(again).toMatch(/already reopened during this night watch: nothing more to do/)
   expect(again).not.toMatch(/claude --bg/)
   // Sans surveillance, rien ne s'enregistre.
   expect(await press($, 'coo-night-stop', 'terminal')).toBeDefined()
@@ -229,11 +261,123 @@ test('une mission en auto dont la discussion s’est fermée (titulaire gardé) 
   // La commande d'aujourd'hui, inchangée.
   expect(/when you know it \(else its messages would wait for an approval\): (claude --bg .*) ; once it answers/.exec(line)?.[1]).toBe(reopenCommand('run-1', 'session-M'))
   const dictated = JSON.parse(/« backgrounded », send (\{"coordinate".*\}\]\}\}); if it fails/.exec(line)![1]!)
-  expect(String(((await $.tool.call({ tool: TOOL, ...dictated } as any)) as any).result)).toMatch(/recorded for mission « Close par sa fin »: reopened in manual/)
+  expect(String(((await $.tool.call({ tool: TOOL, ...dictated } as any)) as any).result)).toMatch(/recorded for mission « Close par sa fin »: reopened;/)
   expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/already reopened during this night watch/)
   expect(journal(w).filter(l => l.act === 'reopen').map(l => l.result)).toEqual(['written', 'refused'])
   const morning = await statement($, 'composer')
-  expect(morning).toMatch(/Missions reopened at night \(their command launched\), in manual, their auto off: « Close par sa fin »/)
+  expect(morning).toMatch(/Missions reopened at night \(their command launched\): « Close par sa fin » \(stayed in manual\)/)
+})
+
+/**
+ * La discussion « session-M » relancée par la commande de nuit (un nouveau processus) : sa mission arrêtée proprement
+ * (`parked`, prise de l'ancien processus `boot-1`), la date du clic gardée par cet ancien processus, ou absente.
+ */
+const relaunched = async ($: any, on: any, hasProof: boolean) => {
+  const clock = mock.clock(on, { now: T0 + 60_000 })
+  const w = world(on)
+  w.ids.now = 'session-M'
+  const run = parked('Rouverte')
+  writeBoard(w, b => ({ ...b, root: '', session: 'session-M', boot: 'boot-1', runs: [run] }))
+  if (hasProof) w.mem[`auto-confirm:${run.id}`] = { by: 'session-M', onAt: run.auto!.onAt, boot: 'boot-1' }
+  await start($)
+  await settle(clock, 3)
+  // Claude lit la consigne envoyée par le mod et finit son tour.
+  await $.turn.start({ turnId: 'brief' } as any)
+  await $.turn.complete({ answer: 'Lu.', durationMs: 10, isAborted: false, turnId: 'brief', reason: 'answer' } as any)
+  await settle(clock, 6)
+  return { w, run }
+}
+const storedRun = (w: World, id: string): Run => stored(w).runs.find(r => r.id === id)!
+
+test('rouverte la nuit puis relancée par un nouveau processus, sa preuve gardée : son auto repart de lui-même (reprise à la relance)', { timeoutMs: 40000 }, async ($, on) => {
+  const { w, run } = await relaunched($, on, true)
+  expect(storedRun(w, run.id).auto).toMatchObject({ onBy: 'session-M', onWhy: 'resumed' })
+  // Le premier appel que dicte le texte de la commande, rejoué tel quel : il n'éteint pas l'auto repris.
+  expect(String(((await $.tool.call({ tool: TOOL, resume: run.id } as any)) as any).result)).not.toMatch(/refused|No mission/)
+  expect(storedRun(w, run.id).auto).toMatchObject({ onBy: 'session-M', onWhy: 'resumed' })
+  expect(isAutoOn(storedRun(w, run.id))).toBe(true)
+})
+
+test('rouverte la nuit puis relancée, sa preuve absente : elle reste en manuel', { timeoutMs: 40000 }, async ($, on) => {
+  const { w, run } = await relaunched($, on, false)
+  expect(isAutoOn(storedRun(w, run.id))).toBe(false)
+  expect(storedRun(w, run.id).auto?.onWhy).toBeUndefined()
+  // Le premier appel que dicte le texte de la commande, rejoué tel quel : la mission reste en manuel, tenue ici.
+  await $.tool.call({ tool: TOOL, resume: run.id } as any)
+  expect(isAutoOn(storedRun(w, run.id))).toBe(false)
+  expect(storedRun(w, run.id).owner).toBe('session-M')
+})
+
+test('le résumé du matin d’une mission rouverte dont l’auto a repris à la relance (l’écriture de la reprise) dit qu’il a repris de lui-même', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, w } = await coo($, on, [parked('Reprise')], 'terminal')
+  const id = watchId(w)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/reopened;/)
+  // La discussion relancée écrit sa reprise (celle de la relance, `switchOnAuto` pour « resumed ») dans le fichier des missions.
+  writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === 'run-1' ? switchOnAuto({ ...b, activeId: 'run-1' }, 'session-M', T0 + 30_000, null, 'resumed')!.board.runs.find(x => x.id === 'run-1')! : r)) }))
+  await settle(clock, 6)
+  const text = await statement($, 'composer')
+  expect(text).toMatch(/Missions reopened at night \(their command launched\): « Reprise » \(its auto resumed by itself\)/)
+})
+
+test('la discussion relancée a repris son auto avant que le COO note la réouverture : notée quand même, et le matin dit qu’il a repris de lui-même', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, w } = await coo($, on, [parked('Reprise d’abord')], 'terminal')
+  const id = watchId(w)
+  // La reprise écrite d'abord par la discussion relancée (un autre processus), après l'allumage de la surveillance,
+  // puis l'appel que dicte la ligne du relevé.
+  const at = watchOf(w).at + 1000
+  writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === 'run-1' ? switchOnAuto({ ...b, activeId: 'run-1' }, 'session-M', at, null, 'resumed')!.board.runs.find(x => x.id === 'run-1')! : r)) }))
+  await settle(clock, 6)
+  expect(isAutoOn(storedRun(w, 'run-1'))).toBe(true)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/recorded for mission « Reprise d’abord »: reopened;/)
+  expect(journal(w).filter(l => l.act === 'reopen').map(l => l.result)).toEqual(['written'])
+  // Rien ne s'est allumé ni éteint par cet appel.
+  expect(isAutoOn(storedRun(w, 'run-1'))).toBe(true)
+  const text = await statement($, 'composer')
+  expect(text).toMatch(/Missions reopened at night \(their command launched\): « Reprise d’abord » \(its auto resumed by itself\)/)
+})
+
+test('une mission reprise d’une pause « plus rien ne peut avancer sans toi » (pas un blocage « à rouvrir ») n’est pas notée rouverte', { timeoutMs: 30000 }, async ($, on) => {
+  const stuck = { ...parked('Questions'), auto: { ...parked('Questions').auto!, offWhy: AUTO_STOPS.stuck } } as Run
+  const { clock, w } = await coo($, on, [stuck], 'terminal')
+  const id = watchId(w)
+  const at = watchOf(w).at + 1000
+  writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === 'run-1' ? switchOnAuto({ ...b, activeId: 'run-1' }, 'session-M', at, null, 'resumed')!.board.runs.find(x => x.id === 'run-1')! : r)) }))
+  await settle(clock, 6)
+  expect(isAutoOn(storedRun(w, 'run-1'))).toBe(true)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/not a mission in auto paused by its dashboard/)
+})
+
+test('une mission en auto allumé par un clic (pas une reprise) n’est pas notée rouverte', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, w } = await coo($, on, [parked('Cliquée')], 'terminal')
+  const id = watchId(w)
+  const at = watchOf(w).at + 1000
+  writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === 'run-1' ? switchOnAuto({ ...b, activeId: 'run-1' }, 'session-M', at, null)!.board.runs.find(x => x.id === 'run-1')! : r)) }))
+  await settle(clock, 6)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/not a mission in auto paused by its dashboard/)
+})
+
+test('autoResumedAt : la date d’une reprise d’elle-même, gardée l’auto éteint depuis (une pause) ; un clic ensuite l’efface', () => {
+  const b = { ...emptyBoard('', 'p'), activeId: 'run-1', runs: [parked('Reprise')] }
+  expect(autoResumedAt(b.runs[0]!)).toBeUndefined()
+  const resumed = switchOnAuto(b, 'session-M', T0 + 5000, null, 'resumed')!.board.runs[0]!
+  const at = resumed.auto!.onAt!
+  expect(autoResumedAt(resumed)).toBe(at)
+  // Éteint par le vrai chemin de la fin de sa discussion (parkActive) : la date de la reprise reste.
+  const off = parkActive({ ...b, runs: [resumed] }, at + 4000)!.board.runs[0]!
+  expect(isAutoOn(off)).toBe(false)
+  expect(autoResumedAt(off)).toBe(at)
+  expect(autoResumedAt(switchOnAuto({ ...b, runs: [off] }, 'session-M', at + 8000, null)!.board.runs[0]!)).toBeUndefined()
+})
+
+test('aucun geste de nuit n’allume l’auto : la liste des gestes ne change pas, un geste d’allumage est refusé et rien ne s’écrit', { timeoutMs: 30000 }, async ($, on) => {
+  expect([...NIGHT_ENTRY_ACTS]).toEqual(['wave', 'resend', 'relaunch', 'force'])
+  const { w } = await coo($, on, [stopped('Fermée')], 'terminal')
+  const id = watchId(w)
+  for (const act of ['auto', 'switchOn', 'resume', 'on']) {
+    expect(await ask($, [{ mission: 'run-1', watch: id, act }])).toMatch(/refused: at night only "wave", "resend", "relaunch", "force", "reopen" and "cutAuto"; never [^.]*switch auto on\. Nothing written\./)
+  }
+  expect(journal(w).filter(l => l.result === 'refused' && l.why === 'geste hors de la liste de nuit')).toHaveLength(4)
+  expect(isAutoOn(storedRun(w, 'run-1'))).toBe(false)
 })
 
 test('sa session tourne encore (un pid) : rien n’est lancé, un seul refus au journal par surveillance, et le relevé ne la repropose plus', { timeoutMs: 30000 }, async ($, on) => {
@@ -318,13 +462,13 @@ test('notée ouverte et en pause pour une autre raison, une mission n’est pas 
 test('le résumé du matin : au message de la personne qui arrête la surveillance, ses gestes, puis ce qui l’attend ; une seule fois', { timeoutMs: 30000 }, async ($, on) => {
   const { w } = await coo($, on, [stopped('Fermée')], 'terminal')
   const id = watchId(w)
-  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/reopened in manual/)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/reopened;/)
   // Un message d'une autre session n'arrête rien et ne résume rien.
   expect(await statement($)).not.toMatch(/Night summary/)
   const text = await statement($, 'composer')
   expect(text).toMatch(new RegExp(`Night summary \\(« Résumé de la nuit »\\): the night watch ${id} stopped at .* UTC \\(by the user’s message\\)`))
-  expect(text).toMatch(/mission « Fermée » \(mission id « run-1 »\): reopen, commande de réouverture lancée par le COO : mission reprise en manuel, son auto éteint: written/)
-  expect(text).toMatch(/Missions reopened at night \(their command launched\), in manual, their auto off: « Fermée »; whether each is open now is in the missions list below; the user switches each auto on from the Coordination view/)
+  expect(text).toMatch(/mission « Fermée » \(mission id « run-1 »\): reopen, commande de réouverture lancée par le COO : mission rouverte: written/)
+  expect(text).toMatch(/Missions reopened at night \(their command launched\): « Fermée » \(stayed in manual\); whether each is open now is in the missions list below; the user switches on from the Coordination view \(« ⚡ Auto » then « Confirmer »\) the auto of each mission that stayed in manual; never switch it on yourself\./)
   expect(text).not.toMatch(/Night watch \(« Nuit »\): on/)
   // Une seule fois.
   expect(await statement($, 'composer')).not.toMatch(/Night summary/)

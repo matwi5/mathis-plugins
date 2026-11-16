@@ -37,7 +37,8 @@ const SURFACES = {
   'agents/explorer.md': repoFile('plugins/agents/agents/explorer.md'),
   'agents/README.md': repoFile('plugins/agents/README.md'),
   'README.md': read('README.md'),
-  'hooks/register.tsx': read('hooks/register.tsx'),
+  // Avec les consignes qui en sont sorties (`decoupage.ts`, `auto-consignes.ts`), lues comme une seule surface.
+  'hooks/register.tsx': ['hooks/register.tsx', 'hooks/decoupage.ts', 'hooks/auto-consignes.ts'].map(read).join('\n'),
   // La description et le schéma de l'outil `flow`, sortis de register.tsx.
   'hooks/tool-schema.ts': read('hooks/tool-schema.ts'),
   'hooks/catalog.ts': read('hooks/catalog.ts'),
@@ -200,6 +201,22 @@ const CONSIGNES = [
   // Le filtre a besoin d'une gravité : la consigne des relecteurs la fait donner à chaque constat antérieur.
   { name: 'la gravité d’un constat antérieur, dans la consigne des relecteurs', keywords: ['avec sa gravité : haute, moyenne ou basse', 'ceux de gravité moyenne ou plus me sont proposés'], surfaces: ['reference/consignes-revue.md'] },
   { name: 'la gravité d’un constat antérieur, en anglais', keywords: ['with its severity: high, medium or low', 'those of medium severity or more go to the user'], surfaces: ['hooks/catalog.ts'] },
+  // Un correctif de revue qui défaisait une réponse d'une série du fichier de décisions avait été commité puis
+  // retiré : le relecteur le rend comme une question, et la session cherche son sujet avant de l'appliquer.
+  { name: 'un correctif contre une série du fichier de décisions, dans la consigne des relecteurs', keywords: ['un correctif qui changerait ce qu\'une série du fichier de décisions a tranché se rend comme une question (« contredit la série », suivi de son numéro et de ce qu\'elle dit), jamais comme un correctif'], surfaces: ['reference/consignes-revue.md'] },
+  { name: 'un correctif contre une série du fichier de décisions, en anglais', keywords: ['a fix that would change what a series of the decisions file settled is given as a question (« contredit la série », followed by its number and what it says), never as a fix'], surfaces: ['hooks/catalog.ts'] },
+  { name: 'un correctif de revue cherché dans le fichier de décisions avant de s’appliquer', keywords: ['Avant d\'appliquer un correctif de revue, chercher son sujet dans le fichier de décisions de la mission (son index « Décisions en vigueur » d\'abord)', 'un correctif qui contredit une série en vigueur ne s\'applique pas, il devient une question (au manager, pour un worker)'], surfaces: ['reference/procedure-groupe.md'] },
+  // Un rapport de relecteur perdu à la compaction avait été cherché à la main dans le transcript, en cinq appels :
+  // la procédure et la consigne de compaction d'un worker renvoient au même script, avec le préfixe du relecteur.
+  { name: 'un rapport de relecteur relu après une compaction', keywords: ['scripts/rapports-specialistes.mjs <transcript', '--prefixe "<'], surfaces: ['reference/procedure-groupe.md', 'hooks/compaction.ts'] },
+  // Une question à la prémisse fausse avait été relayée à la personne : le worker cite sa preuve, le manager la relit.
+  { name: 'une question de worker cite sa preuve', keywords: ['un `fichier:ligne` ou une commande avec son résultat'], surfaces: ['reference/procedure-groupe.md', 'reference/procedure-groupe-autonome.md'] },
+  { name: 'le manager relit la preuve d’une question de worker', keywords: ['relit la preuve qu\'elle cite', 'ne relance jamais telle quelle une commande qu\'un worker cite'], surfaces: ['reference/effort-workers.md'] },
+  // Les correctifs de la revue du groupe s'appliquent à la fin du groupe : la même exception, et un --fix relu.
+  { name: 'un correctif de la revue du groupe contre une série du fichier de décisions', keywords: ['sauf un correctif qui contredit une série en vigueur du fichier de décisions, qui devient une question (point 8 de la section 2)', 'un correctif qui contredit une série en vigueur du fichier de décisions se défait avant le commit et devient une question'], surfaces: ['reference/procedure-groupe-fin.md'] },
+  { name: 'un correctif de la revue du groupe contre une série du fichier de décisions, en anglais', keywords: ['rerun the checks and commit them. A fix that contradicts a series in force of the decisions file is undone before the commit and raised as a question (--fix applied it before any lookup)'], surfaces: ['hooks/catalog.ts', 'hooks/register.tsx'] },
+  // La demande « Revue du groupe · worker » (groupe revenu sans revue) recopie l'étape des correctifs en français.
+  { name: 'un correctif de la revue du groupe contre une série du fichier de décisions, demande au worker', keywords: ['relancer les contrôles du projet et commiter ; un correctif qui contredit une série en vigueur du fichier de décisions se défait avant le commit et devient une question'], surfaces: ['hooks/register.tsx'] },
   {
     // Le groupe « durcissement » proposé attend la réponse : la consigne de fin de lot et le README disent la même chose.
     name: 'le groupe « durcissement » proposé attend la réponse, en anglais',

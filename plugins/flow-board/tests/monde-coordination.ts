@@ -6,6 +6,7 @@
 
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, CooSeat, Run } from '../types'
+import { settle } from './horloge.ts'
 
 export const TOOL = 'mcp__flow-board__flow'
 export const KEY = 'board:'
@@ -217,9 +218,8 @@ export const world = (on: any) => {
 export type World = ReturnType<typeof world>
 
 export const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-export const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
+/** L'horloge des tests (`horloge.ts`), réexportée pour les tests qui la prennent d'ici avec le monde. */
+export { settle }
 /** Le board enregistré : dans le fichier commun s'il sert, sinon dans `$.store`. */
 export const stored = (w: World): Board => (w.disk.isUsed && w.disk.board !== undefined ? JSON.parse(w.disk.board) : w.mem[KEY]) as Board
 /** Ce qu'une autre discussion écrit dans le fichier des missions. */

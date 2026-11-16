@@ -1,6 +1,6 @@
 // Sonde des événements du moteur : journalise ceux qui servent à suivre une requête (prompt,
-// tours, appels, agents, arrêts et leurs tâches de fond, compactions, skills chargés, commandes, fin de
-// session) dans `<SONDE_JOURNAUX>/<heure d'ouverture>.jsonl` (le dossier que `scripts/sonde.py` crée hors
+// tours, appels, agents, arrêts et leurs tâches de fond, compactions, skills chargés, commandes, changements
+// de modèle, fin de session) dans `<SONDE_JOURNAUX>/<heure d'ouverture>.jsonl` (le dossier que `scripts/sonde.py` crée hors
 // du dépôt ; à défaut, `journaux/` sous le dossier de la sonde), un fichier par processus,
 // chaque ligne avec l'identifiant de session du moment. Jamais livrée : chargée par `--plugin-dir`
 // (scripts/sonde.py). Mode d'emploi et résultats : docs/evenements-moteur.md.
@@ -49,7 +49,8 @@ async function log($: any, ev: string, data: object) {
   await $.fs.write(await file!, lines.join("\n") + "\n");
 }
 
-async function logClassic($: any, name: string, e: any) {
+// `extra` : les champs propres à l'événement (le modèle d'avant et d'après d'un `classic.PostModelSwitch`).
+async function logClassic($: any, name: string, e: any, extra: object = {}) {
   let agents: unknown = null;
   try {
     agents = (await $.agent.list()).map((a: any) => ({ id: a.id, status: a.status, parentId: a.parentId }));
@@ -63,6 +64,7 @@ async function logClassic($: any, name: string, e: any) {
     background_tasks: e.background_tasks?.map((t: any) => ({ id: t.id, type: t.type, status: t.status, d: String(t.description).slice(0, 30) })),
     crons: e.session_crons?.length,
     agents,
+    ...extra,
   });
 }
 
@@ -262,6 +264,13 @@ export const register = (on: any) => {
   });
   on("classic.Stop", async ($: any, e: any, next: any) => {
     await logClassic($, "classic.Stop", e);
+    return next(e);
+  });
+  // Un changement de modèle (`/model`, sélecteur, repli, reprise) : ce que la session quitte et prend,
+  // ce qui était demandé et d'où il vient ; `scripts/sonde.py` y relit le dernier `/model` pour remettre le
+  // modèle par défaut du poste (`last_model_switch`).
+  on("classic.PostModelSwitch", async ($: any, e: any, next: any) => {
+    await logClassic($, "classic.PostModelSwitch", e, { from_model: e.from_model, to_model: e.to_model, requested_model: e.requested_model, source: e.source });
     return next(e);
   });
   // L'échec d'un tour (erreur d'API : `invalid_request` pour un 400, `rate_limit`, `billing_error`…).

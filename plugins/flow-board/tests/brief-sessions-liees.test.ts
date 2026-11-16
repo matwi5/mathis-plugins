@@ -194,6 +194,12 @@ test('le brief : ailleurs, les seuls chemins installés', async ($, on) => {
   expect(text).not.toContain('Index : concept → fichier et fonction')
   expect(text).not.toContain('est sa version installée')
   expect(text).toMatch(/puis lire la procédure d'un worker de groupe, \S*reference\/procedure-groupe\.md, et la suivre/)
+  // Les fichiers de méthode des relectures, au même dossier installé que la procédure : leurs chemins vivent
+  // dans decoupage.ts (`setMethodPaths`), relus en direct par register.tsx après `noteReferences`.
+  const root = text.match(/(\S*)reference\/procedure-groupe\.md, et la suivre/)![1]
+  expect(root).not.toBe('')
+  expect(text).toContain(`le fichier de méthode de la revue de sécurité, ${root}reference/revue-securite.md`)
+  expect(text).toContain(`le fichier de méthode de la relecture du fond et de la forme, ${root}reference/relecture-fond-forme.md`)
 })
 
 // Les décisions prises après le départ d'une branche manquaient à la copie du worktree que lisaient

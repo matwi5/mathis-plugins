@@ -5,6 +5,7 @@ import { emptyBoard, newRun } from '../hooks/model.ts'
 import { missionReportKey } from '../hooks/register.tsx'
 import { emptyRegistry, parseRegistry, startCall } from '../hooks/registry.ts'
 import type { Board, Run, SessionRegistry } from '../types'
+import { settle } from './horloge.ts'
 
 const PLUGIN = 'flow-board'
 const BOARD_KEY = 'board:/p'
@@ -43,10 +44,6 @@ const world = (on: any, seed: Record<string, unknown>, processRun?: (_$: unknown
   })
   on('ui.status', () => ({ value: undefined }))
   return mem
-}
-
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
 /** Un registre d'une session du projet, ses spécialistes finis, écrit pour la dernière fois à `updatedAt`. */

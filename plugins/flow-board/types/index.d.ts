@@ -1166,6 +1166,19 @@ declare module 'claude-code' {
        * gardé après /reload-plugins, neuf après un redémarrage, où une date gardée avant ne vaut plus.
        */
       autoBoot: string
+      /**
+       * Le verdict du premier chargement de ce processus (la reprise de l'auto à la relance de la discussion) :
+       * « reprise due » ou « pas de reprise ». Gardé après /reload-plugins, perdu avec le processus ; null : pas encore
+       * de chargement.
+       */
+      autoRelaunch:
+        | { kind: 'due'; run: string; onAt: number; claim: { boot: string; at: number }; wasOn: boolean; stuck?: true }
+        | { kind: 'none'; expired?: { run: string; onAt: number }; wasOn?: boolean }
+        | null
+      /** La pause laissée par la relance de la discussion, à dire (`pending`) ou dite (`sent`), une fois par verdict. */
+      autoRelaunchNotice: { key: string; run: string; state: 'pending' | 'sent' } | null
+      /** Les effacements de la date du clic encore à refaire (reprise à la relance), réessayés à chaque tentative. */
+      autoRelaunchErases: { run: string; onAt: number; by: string; isConfirmOnly?: boolean; keepBoot?: string }[]
       /** L'ancien état des cartes : celles que le Claude du COO proposait dans cette discussion, avant la liste des cartes du projet (jamais écrit ni vidé). */
       cooCards: unknown[]
       /** La marque « copié » de l'ancien état des cartes, posée une fois sa copie dans la liste relue (`hooks/cards-store.ts`). */

@@ -6,6 +6,7 @@ import { COO_EFFORT, codeModuleOf, effortSent, groupEffortLevel, leadEffort, lea
 import { memoryDisk } from './disque-memoire.ts'
 import { newRun } from '../hooks/model.ts'
 import type { Run, Ticket } from '../types'
+import { settle } from './horloge.ts'
 
 // L'effort d'un manager qui fait lui-même le travail d'un worker : la règle de ce worker, par la même
 // fonction ; rien hors de ce travail.
@@ -190,10 +191,6 @@ const bandTexts = async ($: any): Promise<string[][]> => {
     await band.unmount()
   }
   return out
-}
-
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
 test('la discussion qui tient le siège du COO : medium à chaque requête, high et low ramenés, xhigh et max laissés ; un spécialiste n’est pas touché', { timeoutMs: 20000 }, async ($, on) => {

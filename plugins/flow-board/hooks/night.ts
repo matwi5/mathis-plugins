@@ -296,13 +296,14 @@ export const nightLogOf = (lines: readonly string[], watch: string): NightLogLin
  * un `pid` n'en reçoit pas (le texte du relevé le fait chercher d'abord, `reopenText` de `coo.ts`) ; ce que fait
  * `--resume` d'une discussion qui tourne sans paraître dans cette liste, ou née dans un autre dossier (un worktree),
  * reste à confirmer ; une discussion qui tient une autre mission n'en reçoit pas (`nightReopensNow`). Son premier message ne cite que l'id contrôlé :
- * reprendre la mission par `{"resume": "<id>"}` (permis dans sa discussion), en manuel, son auto éteint (la nuit ne
- * rallume jamais l'auto). Null pour un id de mission ou de discussion hors forme sûre.
+ * reprendre la mission par `{"resume": "<id>"}` (permis dans sa discussion), puis suivre la consigne de l'auto s'il a
+ * repris de lui-même (sa reprise à la relance vaut encore), sinon rester en manuel ; le COO n'allume jamais l'auto. Null
+ * pour un id de mission ou de discussion hors forme sûre.
  */
 export const reopenCommand = (id: unknown, session: unknown): string | null => {
   if (!isSafeId(id) || !isSafeId(session)) return null
   // Sans apostrophe : aucune ne ferme la citation POSIX de `shellQuote`.
-  const prompt = `Reprends la mission ${id} du tableau de bord : commence par appeler flow avec {"resume": "${id}"}, puis continue cette mission là où elle en est, en manuel. Son auto reste éteint : ne pas allumer, la personne le fera depuis la vue Coordination.`
+  const prompt = `Reprends la mission ${id} du tableau de bord : commence par appeler flow avec {"resume": "${id}"}, puis continue cette mission là où elle en est. Si son auto a repris de lui-même, suis sa consigne ; sinon elle reste en manuel : ne pas allumer, la personne le fera depuis la vue Coordination.`
   return `claude --bg --resume ${shellQuote(session)} ${shellQuote(prompt)}`
 }
 

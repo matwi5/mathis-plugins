@@ -304,5 +304,104 @@ class JournalMissionTest(unittest.TestCase):
         self.assertIn("journal-mission.py <titre ou id", out.stderr)
 
 
+
+    def models_transcript(self):
+        return [
+            {"type": "attachment", "timestamp": "2026-11-10T10:00:00Z",
+             "attachment": {"type": "model", "identity": {"modelId": "claude-opus-5-5"}, "text": SECRET}},
+            {"type": "user", "timestamp": "2026-11-10T10:01:00Z", "message": {"content": SECRET}},
+            {"type": "api-request", "timestamp": "2026-11-10T10:01:01Z", "querySource": "repl_main_thread",
+             "id": "r1", "params": {"model": "claude-opus-5-5", "output_config": {"effort": "medium"},
+                                    "messages": [{"content": SECRET}]}},
+            {"type": "assistant", "timestamp": "2026-11-10T10:01:05Z", "requestRef": "r1",
+             "message": {"model": "claude-opus-5-5", "content": SECRET}},
+            {"type": "api-request", "timestamp": "2026-11-10T10:02:00Z", "querySource": "agent:x", "id": "r2",
+             "params": {"model": "claude-haiku-5-5"}},
+            {"type": "assistant", "timestamp": "2026-11-10T10:02:05Z", "requestRef": "r2", "isSidechain": True,
+             "message": {"model": "claude-haiku-5-5", "content": SECRET}},
+            {"type": "user", "timestamp": "2026-11-10T10:03:00Z",
+             "message": {"content": "<command-name>/model</command-name><command-args>fable</command-args>"}},
+            {"type": "user", "timestamp": "2026-11-10T10:03:10Z",
+             "message": {"content": f"<command-name>/effort</command-name><command-args>{SECRET}</command-args>"}},
+            {"type": "attachment", "timestamp": "2026-11-10T10:04:00Z",
+             "attachment": {"type": "remote_session_change",
+                            "commit": f"Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com> {SECRET}"}},
+            {"type": "api-request", "timestamp": "2026-11-10T10:05:00Z", "querySource": "repl_main_thread",
+             "id": "r3", "params": {"model": "claude-fable-5-2", "output_config": {"effort": "high"}}},
+            {"type": "assistant", "timestamp": "2026-11-10T10:05:09Z", "requestRef": "r3",
+             "message": {"model": "claude-opus-5-5", "content": SECRET}},
+            {"type": "user", "timestamp": "2026-11-10T10:06:00Z",
+             "message": {"content": "<command-name>/reload-plugins</command-name><command-args></command-args>"}},
+            {"type": "user", "timestamp": "2026-11-10T10:06:30Z",
+             "message": {"content": "<command-name>/compact</command-name><command-args></command-args>"}},
+            {"type": "api-request", "timestamp": "2026-11-10T10:07:00Z", "querySource": "repl_main_thread",
+             "id": "r4", "params": {"model": "claude-opus-5-5"}},
+            # Sous Claude Desktop, le fil principal écrit `sdk` ; un `sdk` sans réponse du fil principal est écarté.
+            {"type": "api-request", "timestamp": "2026-11-10T10:08:00Z", "querySource": "sdk", "id": "r5",
+             "params": {"model": "claude-opus-5-5", "output_config": {"effort": "xhigh"}}},
+            {"type": "assistant", "timestamp": "2026-11-10T10:08:04Z", "requestRef": "r5",
+             "message": {"model": "claude-opus-5-5", "content": SECRET}},
+            {"type": "api-request", "timestamp": "2026-11-10T10:09:00Z", "querySource": "sdk", "id": "r6",
+             "params": {"model": "claude-haiku-5-5"}},
+        ]
+
+    def test_modeles_sort_les_requetes_et_les_bascules_dans_l_ordre_sans_texte(self):
+        self.mission()
+        path = self.transcript(OWNER, self.models_transcript())
+        before = path.read_bytes()
+        out = self.run_script("--modeles", "mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.body(out), [
+            "2026-11-10 10:00:00  discussion 81ab9a05  bascule : modèle annoncé claude-opus-5-5",
+            "2026-11-10 10:01:01  discussion 81ab9a05  requête : envoyé claude-opus-5-5 / medium → répondu claude-opus-5-5",
+            "2026-11-10 10:03:00  discussion 81ab9a05  bascule : /model fable",
+            "2026-11-10 10:03:10  discussion 81ab9a05  bascule : /effort (argument masqué)",
+            "2026-11-10 10:04:00  discussion 81ab9a05  bascule : remote_session_change (Fable 5.2)",
+            "2026-11-10 10:05:00  discussion 81ab9a05  requête : envoyé claude-fable-5-2 / high → répondu claude-opus-5-5",
+            "2026-11-10 10:06:00  discussion 81ab9a05  bascule : /reload-plugins",
+            "2026-11-10 10:07:00  discussion 81ab9a05  requête : envoyé claude-opus-5-5 / sans effort → répondu ?",
+            "2026-11-10 10:08:00  discussion 81ab9a05  requête : envoyé claude-opus-5-5 / xhigh → répondu claude-opus-5-5",
+            "2026-11-10 10:09:00  discussion 81ab9a05  2 requête(s) hors du fil principal écartée(s) (autre source, ou "
+            "sdk sans réponse du fil principal)",
+        ])
+        self.assertNotIn(SECRET, out.stdout + out.stderr)
+        self.assertNotIn("mission ouverte", out.stdout)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_sans_modeles_la_sortie_ne_change_pas_et_ignore_les_requetes(self):
+        self.mission()
+        self.transcript(OWNER, self.models_transcript())
+        out = self.run_script("mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("requête", out.stdout)
+        self.assertNotIn("bascule", out.stdout)
+        self.assertIn("mission ouverte", out.stdout)
+        self.assertNotIn(SECRET, out.stdout)
+
+    def test_les_gardes_de_modeles_passent_le_corpus_hostile(self):
+        # Règle « Un garde de forme passe le corpus hostile commun » : WORD (arguments de commande, noms de modèle et
+        # d'effort) et ATTRIBUTED (le modèle d'un remote_session_change) ne laissent sortir ni contrôle, ni séparateur
+        # de ligne, ni caractère invisible ou hors ASCII.
+        pieces = ["\n", "\x00", "\t", "\x1b", "\x7f", "\x0b", "\x0c", "\r", chr(0x80), chr(0x85), chr(0x9F), chr(0x2028),
+                  chr(0x2029), chr(0x212A), chr(0xFF11), chr(0x200B), chr(0x200D), chr(0x202E), chr(0xAD), chr(0xFEFF),
+                  chr(0xA0), chr(0x435), "'", chr(0x2018), chr(0x2019), chr(0x2BC), '"', "$(x)", ";", "*", " ", "/"]
+        hostile = [*pieces, *("opus" + p for p in pieces), *("a" + p + "b" for p in pieces), "x" * 41]
+        spec = importlib.util.spec_from_file_location("journal_mission", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for value in hostile:
+            with self.subTest(value=repr(value)):
+                self.assertIsNone(module.WORD.fullmatch(value))
+                command = module.typed_command(
+                    {"content": f"<command-name>/model</command-name><command-args>{value}</command-args>"})
+                # Les blancs de bord d'un argument se retirent (« opus\n » sort « /model opus ») ; rien d'autre ne passe.
+                self.assertIn(command, ("/model", "/model opus", "/model (argument masqué)", None))
+                self.assertTrue(module.model_name(value).isprintable())
+                named = module.ATTRIBUTED.search(f"Co-Authored-By: Claude Opus{value}5")
+                self.assertTrue(named is None or (named[1].isascii() and named[1].isprintable()))
+
+    def test_modeles_sans_mission_ou_sans_argument(self):
+        self.assertEqual(self.run_script("--modeles").returncode, 2)
+        self.assertEqual(self.run_script("--modeles", "inconnue").returncode, 1)
 if __name__ == "__main__":
     unittest.main()

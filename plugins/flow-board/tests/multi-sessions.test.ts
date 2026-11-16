@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board } from '../types'
+import { settle } from './horloge.ts'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -53,10 +54,6 @@ const writtenByB = (mem: Record<string, unknown>, now: number, status: 'active' 
   const run = { ...newRun('diagnosing-bugs', now, 'Mission de B'), status, owner: status === 'active' ? 'session-B' : undefined }
   mem[KEY] = { ...base, runs: [run, ...base.runs], activeId: run.id, session: 'session-B' }
   return run
-}
-
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
 test('la discussion A voit, en quelques secondes, la mission lancée dans la discussion B', { timeoutMs: 15000 }, async ($, on) => {

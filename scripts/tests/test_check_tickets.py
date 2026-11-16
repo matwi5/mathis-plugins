@@ -76,9 +76,9 @@ class SensitiveTicketTest(TicketRepo):
             self.assertEqual(len(check.tickets_without_search([NEW])), 1, search)
 
     def test_la_ligne_recherche_ecrite_selon_la_consigne_du_cadrage_passe(self):
-        # La forme que la consigne du cadrage (register.tsx) donne à la ligne « Recherche », remplie : des
+        # La forme que la consigne du cadrage (decoupage.ts) donne à la ligne « Recherche », remplie : des
         # tickets sensibles avaient été refusés faute de connaître cette forme avant de l'écrire.
-        source = (Path(__file__).resolve().parents[2] / "plugins/flow-board/hooks/register.tsx").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[2] / "plugins/flow-board/hooks/decoupage.ts").read_text(encoding="utf-8")
         form = re.search(r"« (Recherche : `<command>` — <result>) »", source)
         self.assertIsNotNone(form, "la consigne du cadrage ne donne plus la forme de la ligne « Recherche »")
         line = form.group(1).replace("<command>", 'grep -rn "unlink" hooks').replace("<result>", "2 résultats, `model.ts:12`")

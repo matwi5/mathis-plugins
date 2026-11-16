@@ -6,6 +6,7 @@ import { emptyBoard, newRun } from '../hooks/model.ts'
 import { emptyRegistry, mergeRegistry, noteCarried, parseRegistry } from '../hooks/registry.ts'
 import { isTranscriptPath, type TranscriptAgent } from '../hooks/transcript.ts'
 import type { Board, RegistryAgent, Run, SessionRegistry } from '../types'
+import { settle } from './horloge.ts'
 
 const T0 = 80_000_000
 const MIN = 60_000
@@ -238,10 +239,6 @@ const world = (
   })
   on('ui.status', () => ({ value: undefined }))
   return { mem, files, sets, toasts, reads }
-}
-
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1_000)
 }
 
 const traceIds = (mem: Record<string, unknown>): string[] =>

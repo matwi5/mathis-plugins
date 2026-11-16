@@ -324,3 +324,5 @@ export const choiceRoom = (run: Run): number | null => (!hasBeenAuto(run) ? LIMI
 /** Une liste de choix coupée à sa place (les plus récents), ou entière quand rien ne se coupe. */
 export const keepChoices = <T,>(list: readonly T[], room: number | null): T[] => (room === null ? [...list] : list.slice(-room))
 
+
+export const normRoot = (root: string): string => root.replace(/\\/g, '/').replace(/\/+$/, '')

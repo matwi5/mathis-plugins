@@ -215,6 +215,15 @@ test('compactionInstructions : la session de groupe garde de quoi reprendre son 
   const bare = compactionInstructions({ kind: 'group', run: 'r1', group: 'E' })
   expect(bare).not.toContain('undefined')
   expect(bare).toContain('group E of the mission r1')
+  // Un rapport de relecteur perdu à la compaction se relit par le script, pas en fouillant le transcript,
+  // entre deux tickets comme en plein ticket ; la ligne est un texte fixe, sans chemin relu.
+  const between = compactionInstructions({ kind: 'group', run: 'r1', group: 'E', between: { done: '20', next: '21' } })
+  for (const t of [text, bare, between]) {
+    expect(t).toContain('- a reviewer report received or awaited before the compaction is reread with node <flow-board folder>/scripts/rapports-specialistes.mjs <transcript> --prefixe "<reviewer name>"')
+    expect(t).toContain('the transcript: the .jsonl file of this session under ~/.claude/projects/')
+    expect(t).toContain('and with the same command on the origin file when the transcript starts with a compaction (If the transcript starts with a compaction')
+    expect(t).toContain('never by searching the transcript by hand; without a sure name (a bug pass, which /code-review names itself), the same command without --prefixe lists them all;')
+  }
 })
 
 test('withCompactionInstructions : le texte de la personne reste en tête', () => {

@@ -10,6 +10,7 @@ import { offRequestLaunches } from '../hooks/link.ts'
 import type { LinkedSession } from '../hooks/linked.ts'
 import { memoryDisk } from './disque-memoire.ts'
 import type { Board, LinkedLaunch, Run } from '../types'
+import { settle } from './horloge.ts'
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -92,9 +93,6 @@ const world = (on: any) => {
   memoryDisk(on)
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'backgrounded · 9f3e21aa · Boutique > Groupe A · Synchro\n' } }))
   return mem
-}
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 const LOT = {
   title: 'Boutique',

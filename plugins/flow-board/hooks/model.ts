@@ -4261,8 +4261,13 @@ export const AUTO_STOPS = {
   unbriefed: 'Claude pas prévenu',
 } as const
 
-/** Ce que le bandeau et les notifications disent d'une raison enregistrée dans l'ancien vocabulaire. */
+/**
+ * Ce que le bandeau et les notifications disent d'une raison enregistrée dans l'ancien vocabulaire. La raison
+ * enregistrée « discussion fermée » se montre « discussion arrêtée » (rien n'a fermé la discussion : son processus
+ * s'est arrêté) ; le code compare toujours la valeur enregistrée, jamais ce libellé.
+ */
 const STOP_LABELS: Readonly<Record<string, string>> = {
+  [AUTO_STOPS.ended]: 'discussion arrêtée',
   [AUTO_STOPS.aside]: 'mission mise de côté',
   [AUTO_STOPS.closed]: 'mission close',
   [AUTO_STOPS.finished]: 'mission terminée',
@@ -4324,11 +4329,34 @@ export const canResumeStuck = (board: Board, here: string, rec: StuckResume): bo
 /** Ce que dit un auto repris de lui-même après une pause « plus rien ne peut avancer sans toi », une fois ses questions répondues. */
 export const AUTO_RESUMED = 'repris : questions répondues'
 
+/** Ce que dit un auto repris de lui-même à la relance de sa discussion (la pause d'avant : la raison enregistrée « discussion fermée »). */
+export const AUTO_RESUMED_RELAUNCH = 'repris : discussion relancée'
+
+/**
+ * Le libellé d'une reprise d'elle-même, déduit de la seule raison enregistrée de la pause d'avant (`offWhy`, que
+ * l'allumage garde) : « repris : discussion relancée » après la raison « discussion fermée » (une pause « plus rien
+ * ne peut avancer sans toi » renommée par la fin de la discussion comprise), « repris : questions répondues » sinon.
+ */
+export const resumedLabel = (offWhy: unknown): string => offWhy === AUTO_STOPS.ended ? AUTO_RESUMED_RELAUNCH : AUTO_RESUMED
+
 /** L'auto de la mission est allumé, et cet allumage est une reprise d'elle-même (`onWhy`). */
 export const isAutoResumed = (run: Run): boolean => {
   const auto = autoOf(run)
   return isAutoOnIn(auto) && auto?.onWhy === 'resumed'
 }
+
+/**
+ * La date de l'allumage le plus récent de la mission quand il est une reprise d'elle-même (`onWhy`), l'auto encore
+ * allumé ou éteint depuis (une pause, une coupure, la fin de la mission) ; undefined sinon (jamais allumé, ou rallumé
+ * ensuite par un clic, qui n'a pas `onWhy`).
+ */
+export const autoResumedAt = (run: Run): number | undefined => {
+  const auto = autoOf(run)
+  return auto?.onWhy === 'resumed' && auto.onAt !== undefined ? auto.onAt : undefined
+}
+
+/** Le libellé de la reprise d'un auto allumé par une reprise d'elle-même (`isAutoResumed`), undefined sinon. */
+export const autoResumedLabel = (run: Run): string | undefined => isAutoResumed(run) ? resumedLabel(autoOf(run)?.offWhy) : undefined
 
 /** Les pauses déduites, sans écriture : l'auto reste allumé, mais cette discussion n'envoie pas. */
 export const AUTO_PAUSES = {
@@ -4465,7 +4493,8 @@ const stopAuto = (run: Run, now: number, why: string): boolean => {
   // raison, pour que le bandeau ne redise plus la pause qu'elle vient de trancher ; une coupure par le COO aussi,
   // pour qu'une pause « plus rien ne peut avancer sans toi » coupée ne reprenne plus d'elle-même.
   // Toute autre raison posée pendant une pause « plus rien ne peut avancer sans toi » la remplace aussi (lecture ratée,
-  // fin de la discussion…) : seule cette raison-là reprend d'elle-même (`resumeStuckAuto`).
+  // fin de la discussion…) : seule cette raison-là reprend d'elle-même (`resumeStuckAuto`), ou, renommée par la fin de
+  // la discussion, à sa relance par sa trace (`relaunchVerdict`, puis la tentative qui juge la trace).
   const isRelabel = isStoredPause(auto) && (QUIET_STOPS.has(why) || why === AUTO_STOPS.coo || (auto?.offWhy === AUTO_STOPS.stuck && why !== AUTO_STOPS.stuck))
   if (!isAutoOnIn(auto) && !isRelabel) return false
   run.auto = { ...auto, offAt: Math.max(now, (auto!.onAt ?? -1) + 1, (auto!.offAt ?? -1) + 1), offWhy: why }
@@ -4490,8 +4519,9 @@ export const switchOnAuto = (board: Board, here: string, now: number, confirmedA
   run.auto = { onAt, onBy: clip(str(here), AUTO_ID_MAX), ...(why ? { onWhy: why } : {}), ...(was?.offAt !== undefined ? { offAt: was.offAt, ...(was.offWhy !== undefined ? { offWhy: was.offWhy } : {}) } : {}) }
   delete run.waitsUser
   run.updatedAt = now
-  log(run, now, '⚡', why ? `Mode auto ${AUTO_RESUMED}` : 'Mode auto allumé', 'accent')
-  if (why) return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto · ${AUTO_RESUMED} : ${run.title}`] } }
+  const resumed = resumedLabel(was?.offWhy)
+  log(run, now, '⚡', why ? `Mode auto ${resumed}` : 'Mode auto allumé', 'accent')
+  if (why) return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto · ${resumed} : ${run.title}`] } }
   return { board: b, fx: { ...noFx(), toasts: [`⚡ Auto allumé : ${run.title}`] } }
 }
 
@@ -4576,6 +4606,18 @@ export const autoDatesOf = (run: Run): { onAt?: number; offAt?: number } => {
 export const autoPauseLabel = (run: Run): string | undefined => {
   const auto = autoOf(run)
   return isStoredPause(auto) ? stopLabel(auto!.offWhy!) : undefined
+}
+
+/** « Allumé par » de l'auto d'une mission, relu borné (la discussion du dernier allumage), undefined sans lui. */
+export const autoOnByOf = (run: Run): string | undefined => autoOf(run)?.onBy
+
+/**
+ * La raison enregistrée de la pause posée par le mod sur l'auto d'une mission (relue bornée : une valeur d'`AUTO_STOPS`,
+ * une raison du guet, ou « raison inconnue » pour une raison relue hors de la liste), ou undefined hors d'une telle pause : ce que le code compare, jamais le libellé montré.
+ */
+export const autoPauseWhy = (run: Run): string | undefined => {
+  const auto = autoOf(run)
+  return isStoredPause(auto) ? auto!.offWhy! : undefined
 }
 
 /** L'auto est éteint par une pause du mod (ni un geste de la personne ni la fin de la mission) : le bandeau la montre. */
@@ -6018,6 +6060,12 @@ export const autoNotices = (before: Board, after: Board): string[] => {
  */
 export const autoQuestionsNotice = (title: string, count: number | string): string => `Mission ${neutralInPrompt(title)} : ${count} question(s) t'attendent`
 
+/**
+ * Le texte fixé de la notification « à rouvrir » du réveil de jour : le Claude qui réveille l'envoie (`PushNotification`) quand son message de réveil ne peut pas partir. Le titre neutralisé
+ * comme dans les autres notifications ; rien d'autre ne sort.
+ */
+export const reopenNotice = (title: string): string => `Mission ${neutralInPrompt(title)} : à rouvrir`
+
 /** Le texte fixé de la notification d'une pause de l'auto. */
 export const autoPauseNotice = (title: string, why: string): string => `Mission ${neutralInPrompt(title)} : auto en pause (${why})`
 
@@ -6144,7 +6192,8 @@ export const detachOnLoad = (board: Board, now: number, session: string, boot?: 
     return b
   }
   // Un nouveau processus : l'auto allumé par l'ancien s'éteint, comme à la fin de la discussion (un processus
-  // tué n'est pas passé par `parkActive`) ; il ne repart que sur deux clics d'ici.
+  // tué n'est pas passé par `parkActive`) ; il repart de lui-même quand le verdict du chargement le dit
+  // (`relaunchVerdict`, la reprise à la relance), sinon sur deux clics d'ici.
   stopAuto(kept, now, AUTO_STOPS.ended)
   // Ce processus prend la mission : un autre processus de la même discussion qui la tenait encore (une reprise au
   // terminal pendant que l'app la garde) la lui laisse à sa relecture (`mergeBoards`).
@@ -6152,6 +6201,118 @@ export const detachOnLoad = (board: Board, now: number, session: string, boot?: 
   kept.updatedAt = now
   return b
 }
+
+// ─── Reprise de l'auto à la relance de sa discussion ──────────────────────
+//
+// Invariant (validé par Mathis) : « À la relance
+// de sa discussion, l'auto d'une mission ne repart sans clic que dans la discussion qui le portait, relancée sous son
+// id par un nouveau processus, pour l'allumage que Mathis avait donné, au plus 24 h après la dernière activité de la
+// mission, et seulement si rien d'autre ne l'a éteint depuis (coupure de Mathis ou du COO, mise de côté, clôture,
+// archivage, reprise dans une autre discussion, quota, rapport prêt). Une lecture ou une écriture ratée le laisse
+// éteint. Deux processus d'une même discussion ne le font jamais repartir tous les deux. La reprise d'une pause
+// « plus rien ne peut avancer sans toi » dans le processus qui l'a posée garde sa règle d'aujourd'hui. »
+// Le chargement par un nouveau processus rend un verdict (`relaunchVerdict`), avant ses propres écritures ; les
+// tentatives (`relaunchStillDue`, relu sur le fichier juste avant) allument par `lightLaunchedAuto` de register.tsx.
+
+/** La reprise à la relance ne vaut qu'au plus 24 h après la dernière activité de la mission (borne comprise). */
+export const RELAUNCH_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Le verdict du chargement d'une discussion relancée : « reprise due » (`due`, la mission, son « allumé à », la prise que
+ * ce chargement pose, si l'auto était encore allumé dans le fichier, un processus tué, et `stuck` quand le fichier
+ * portait encore la pause « plus rien ne peut avancer sans toi » : seule sa trace la prouve), ou pas de reprise (`none`),
+ * avec, quand les 24 h sont passées sur une pause qui aurait repris, la mission et l'« allumé à » dont la preuve
+ * s'efface (`expired`).
+ */
+export type RelaunchVerdict =
+  | { kind: 'due'; run: string; onAt: number; claim: { boot: string; at: number }; wasOn: boolean; stuck?: true }
+  | { kind: 'none'; expired?: { run: string; onAt: number }; wasOn?: boolean }
+
+/**
+ * Le verdict, calculé sur le fichier des missions lu (`stored`, avant toute écriture du chargement) par le chargement
+ * d'un nouveau processus (`boot`, son id) de la discussion `session`, à l'heure `now` du chargement : la mission que
+ * `detachOnLoad` lui rendrait, prise d'un autre processus (le même processus revenu à sa discussion n'en reçoit
+ * aucun), son auto allumé au nom de cette discussion ou en pause sous la raison enregistrée « discussion fermée » ou
+ * « plus rien ne peut avancer sans toi », allumé par elle, et sa dernière écriture (`updatedAt` lu, une date future ramenée à maintenant) de 24 h au plus.
+ * Pure : la preuve gardée (la date du clic, ou la trace de reprise d'une pause « plus rien ne peut avancer sans toi ») se juge à la tentative.
+ */
+export const relaunchVerdict = (stored: Board, now: number, session: string, boot: string | undefined): RelaunchVerdict => {
+  const none: RelaunchVerdict = { kind: 'none' }
+  if (boot === undefined || boot === '' || str(session) === '') return none
+  const b = clampFuture(stored, now)
+  if (seatState(soundSeat(b.coo), session, now) === 'mine') return none
+  const kept = b.runs.filter(r => r.status === 'active' && r.owner === session).sort((x, y) => y.updatedAt - x.updatedAt)[0]
+  if (!kept || soundClaim(kept.claim)?.boot === boot) return none
+  // La dernière activité lue telle quelle, avant `clampFuture` (qui la ramène à la dernière ligne de journal) : future,
+  // ramenée à maintenant ; absente ou non lisible, pas de reprise.
+  const raw = stored.runs.find(r => r.id === kept.id)?.updatedAt
+  if (!isTime(raw)) return none
+  const activity = Math.min(raw, now)
+  const auto = autoOf(kept)
+  const here = clip(str(session), AUTO_ID_MAX)
+  if (auto === undefined || auto.onBy !== here || !isTime(auto.onAt)) return none
+  const wasOn = isAutoOnIn(auto)
+  // En pause posée par la fin de la discussion, ou « plus rien ne peut avancer sans toi » (un processus tué : le chargement
+  // la renomme « discussion fermée ») ; la preuve de cette dernière est sa trace de reprise, jugée à la tentative.
+  if (!wasOn && auto.offWhy !== AUTO_STOPS.ended && auto.offWhy !== AUTO_STOPS.stuck) return none
+  if (now - activity > RELAUNCH_WINDOW_MS) return { kind: 'none', expired: { run: kept.id, onAt: auto.onAt }, wasOn }
+  return { kind: 'due', run: kept.id, onAt: auto.onAt, claim: { boot, at: now }, wasOn, ...(auto.offWhy === AUTO_STOPS.stuck ? { stuck: true as const } : {}) }
+}
+
+/**
+ * La pause du verdict `v` est toujours en place sur `board`, vue de la discussion `here` : la mission active ici, la
+ * prise que son chargement a posée inchangée (aucune reprise ailleurs ni prise explicite depuis), son auto en pause
+ * sous la raison enregistrée « discussion fermée », allumé par cette discussion, au même « allumé à ».
+ */
+export const relaunchStillDue = (board: Board, here: string, v: Extract<RelaunchVerdict, { kind: 'due' }>): boolean => {
+  const run = board.delegate ? undefined : activeRun(board)
+  if (!run || run.id !== v.run || run.status !== 'active' || str(here) === '') return false
+  const claim = soundClaim(run.claim)
+  if (claim?.boot !== v.claim.boot || claim.at !== v.claim.at) return false
+  const auto = autoOf(run)
+  return !isAutoOnIn(auto) && auto?.offWhy === AUTO_STOPS.ended && auto.onBy === clip(str(here), AUTO_ID_MAX) && auto.onAt === v.onAt
+}
+
+/**
+ * Les missions que cette discussion vient de prendre de nouveau explicitement (une reprise, un retour de pause), dans ce
+ * processus (`boot`), leur auto en pause sous la raison enregistrée « discussion fermée » ou « plus rien ne peut avancer
+ * sans toi » : leur prise a changé entre `before` et `after`. La date du clic gardée pour elles s'oublie, et la trace de
+ * reprise d'un autre processus (une mission reprise ailleurs puis revenue ne repart pas à la relance suivante ; la
+ * reprise dans le processus qui a posé la pause garde sa règle). Un auto allumé n'est pas concerné (une mission mise en
+ * pause par l'ouverture d'une autre garde son auto allumé).
+ */
+export const retakenPaused = (before: Board, after: Board, boot: string): string[] => {
+  if (boot === '') return []
+  return after.runs
+    .filter(run => {
+      const claim = soundClaim(run.claim)
+      if (run.status !== 'active' || claim?.boot !== boot) return false
+      const auto = autoOf(run)
+      if (isAutoOnIn(auto) || (auto?.offWhy !== AUTO_STOPS.ended && auto?.offWhy !== AUTO_STOPS.stuck)) return false
+      const was = soundClaim(before.runs.find(r => r.id === run.id)?.claim)
+      return was === undefined || was.boot !== claim.boot || was.at !== claim.at
+    })
+    .map(run => run.id)
+}
+
+/**
+ * La mission dont le chargement d'une discussion relancée vient d'éteindre l'auto allumé par elle : allumé au nom de
+ * `session` dans le fichier lu (`stored`), éteint dans la copie chargée (`loaded`) ; null sinon. Pure.
+ */
+export const autoTurnedOffOnLoad = (stored: Board, loaded: Board, session: string): { run: string; onAt: number } | null => {
+  const here = clip(str(session), AUTO_ID_MAX)
+  if (here === '') return null
+  for (const run of stored.runs) {
+    const auto = autoOf(run)
+    if (!isAutoOnIn(auto) || auto?.onBy !== here || !isTime(auto.onAt)) continue
+    const now = loaded.runs.find(r => r.id === run.id)
+    if (now && !isAutoOn(now) && autoPauseWhy(now) === AUTO_STOPS.ended) return { run: run.id, onAt: auto.onAt }
+  }
+  return null
+}
+
+/** Le texte fixé de la notification d'une pause laissée par la relance de sa discussion (« discussion arrêtée »). */
+export const relaunchPauseNotice = (run: Run): string => autoPauseNotice(run.title, stopLabel(AUTO_STOPS.ended))
 
 /**
  * La fusion de la prise (`Run.claim`) : la plus récente des deux copies (une prise hors forme ne compte pas), sur la
@@ -6449,9 +6610,9 @@ export const reportFacts = (run: Run, failedAgents = 0, decidedFile: string | nu
   const withdrawn = (run.decided ?? []).filter(d => d.withdrawnAt !== undefined)
   const sensitive = all.filter(d => d.what.startsWith(SENSITIVE_CHOICE_MARK))
   if (decidedFile && all.length > 0) {
-    // Le fichier des choix les porte tous (texte, raison, origine, marque) : les faits n'en donnent que les comptes
-    // et le chemin, au lieu d'en recopier des dizaines de Ko dans la discussion.
-    lines.push(choicesByCount(all, sensitive.length, decidedFile))
+    // Le fichier des choix les porte tous (texte, raison, origine, marque) : les faits en donnent les comptes, puis
+    // chaque groupe du rapport en lignes courtes et bornées, au lieu de faire lire le fichier en entier (58 Ko vus).
+    lines.push(...choicesByCount(all, sensitive, decidedFile))
   } else {
     lines.push(...choicesListed(all, sensitive))
   }
@@ -6472,12 +6633,47 @@ const originCounts = (all: readonly SoloDecision[]): string =>
     .map(([key, label]) => `${all.filter(d => originOf(d.origin) === key).length} « ${label} »`)
     .join(', ')}, ${all.filter(d => !originOf(d.origin)).length} without origin`
 
+/** Les choix d'un groupe (une origine, ou la zone sensible) recopiés au plus aux faits du compte rendu ; au-delà, comptés. */
+export const CHOICES_PER_GROUP = 12
+/** La longueur d'un choix recopié aux faits du compte rendu (son texte et sa raison), « … » compris, en caractères. */
+export const CHOICE_LINE_MAX = 160
+
+/** Un choix en ligne courte : son texte et sa raison, neutralisés, coupés par « … » au-delà de `CHOICE_LINE_MAX`. */
+const shortChoice = (d: SoloDecision): string => {
+  const chars = Array.from(`${shownInNote(d.what)}${d.why ? ` — ${shownInNote(d.why)}` : ''}`)
+  return chars.length <= CHOICE_LINE_MAX ? chars.join('') : `${chars.slice(0, CHOICE_LINE_MAX - 1).join('')}…`
+}
+
 /**
- * Les choix aux faits du compte rendu quand le fichier des choix existe : leurs comptes et ce chemin, jamais leur liste
- * (une mission en auto en recopiait près de 30 Ko). La consigne de rangement est celle de la liste qu'elle remplace.
+ * Les groupes de « Décidé sans toi », dans l'ordre du rapport : les choix en zone sensible d'abord et à part (sous
+ * aucune autre origine), puis une origine chacun, puis ceux sans origine ; un groupe vide n'est pas dit.
  */
-const choicesByCount = (all: readonly SoloDecision[], sensitive: number, decidedFile: string): string =>
-  `- ${all.length} choices reported as made without the user (${originCounts(all)}), ${sensitive} of them sensitive (their text starts with « ${SENSITIVE_CHOICE_MARK} »): they are not copied here. Read them all in the file of declared choices, ${decidedFile} (each with its reason and origin; it also holds the choices relayed by the workers, so it can list more than these counts: the file is the reference), and put every one in « Décidé sans toi », adding any the file misses.${all.some(d => originOf(d.origin)) ? ' Group them by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».' : ''}${sensitive > 0 ? ' The sensitive ones go first and apart, under « Zone sensible, tranché en auto », and nowhere else.' : ''}`
+const choiceGroups = (all: readonly SoloDecision[], sensitive: readonly SoloDecision[]): Array<[string, SoloDecision[]]> => {
+  const rest = all.filter(d => !sensitive.includes(d))
+  const groups: Array<[string, SoloDecision[]]> = [
+    ['Zone sensible, tranché en auto', [...sensitive]],
+    ...Object.entries(ORIGIN_LABELS).map(([key, label]): [string, SoloDecision[]] => [
+      `${label.charAt(0).toUpperCase()}${label.slice(1)}`,
+      rest.filter(d => originOf(d.origin) === key),
+    ]),
+    ['Autres', rest.filter(d => !originOf(d.origin))],
+  ]
+  return groups.filter(([, list]) => list.length > 0)
+}
+
+/**
+ * Les choix aux faits du compte rendu quand le fichier des choix existe : leurs comptes, puis chaque groupe du rapport,
+ * son compte et ses choix en lignes courtes (`CHOICES_PER_GROUP` au plus, puis « et N autres : <chemin> »). Le fichier
+ * reste la référence : il ne s'ouvre que pour un choix coupé ou la suite d'un groupe (il en était lu 58 Ko en entier).
+ */
+const choicesByCount = (all: readonly SoloDecision[], sensitive: readonly SoloDecision[], decidedFile: string): string[] => [
+  `- ${all.length} choices reported as made without the user (${originCounts(all)}), ${sensitive.length} of them sensitive (their text starts with « ${SENSITIVE_CHOICE_MARK} »), listed below in the groups of « Décidé sans toi », each in a short line (its text and reason, cut with « … » beyond ${CHOICE_LINE_MAX} characters), at most ${CHOICES_PER_GROUP} per group. The file of declared choices, ${decidedFile}, stays the reference (each with its reason and origin; it also holds the choices relayed by the workers, so it can list more than these counts): open it only for a cut choice, the rest of a group, or a choice beyond these counts, and put every one in « Décidé sans toi », adding any the file misses.${all.some(d => originOf(d.origin)) ? ' Group them by origin, one subheading each (« Reco prise », « Validation sautée » with the path or link of the validated text, « Choix de worker »), then the others under « Autres ».' : ''}${sensitive.length > 0 ? ' The sensitive ones go first and apart, under « Zone sensible, tranché en auto », and nowhere else.' : ''}`,
+  ...choiceGroups(all, sensitive).flatMap(([label, list]) => [
+    `  - « ${label} » (${list.length}):`,
+    ...list.slice(0, CHOICES_PER_GROUP).map(d => `    - ${shortChoice(d)}`),
+    ...(list.length > CHOICES_PER_GROUP ? [`    - et ${list.length - CHOICES_PER_GROUP} autres : ${decidedFile}`] : []),
+  ]),
+]
 
 /** Les choix aux faits du compte rendu sans fichier des choix : les 40 plus récents recopiés, puis tous les sensibles. */
 const choicesListed = (all: readonly SoloDecision[], sensitive: readonly SoloDecision[]): string[] => {
@@ -7590,6 +7786,75 @@ export const planHolds = (board: Board, runId: string, waits: readonly PlanWait[
     if (out.some(h => h.held === w.group && h.run === w.awaited.run && h.group === w.awaited.group)) continue
     const title = board.runs.find(r => r.id === w.awaited.run)?.title ?? w.awaited.run
     out.push({ held: w.group, run: w.awaited.run, title, group: w.awaited.group, shared: PLAN_SHARED, on: 'plan' })
+  }
+  return out
+}
+
+/**
+ * Le réveil de jour : peut-on réveiller la mission `run` ? En cours, non
+ * archivée, tenue par une discussion d'id en forme, son auto allumé dans le fichier, ou en pause sous la raison
+ * enregistrée « discussion fermée » (jamais le libellé) avec une dernière écriture de 24 h au plus (une date future
+ * ramenée à maintenant). Une pause « plus rien ne peut avancer sans toi » attend des réponses, pas un groupe ; renommée
+ * « discussion fermée » par la fin de sa discussion, elle ne s'en distingue plus que par sa trace, gardée chez elle :
+ * elle est alors réveillée comme les autres. Une mission en manuel n'est jamais réveillée.
+ */
+export const isWakeable = (run: Run, now: number): boolean => {
+  if (run.status !== 'active' || run.archivedAt !== undefined || !isSafeId(run.owner)) return false
+  if (isAutoOn(run)) return true
+  if (autoPauseWhy(run) !== AUTO_STOPS.ended || typeof run.updatedAt !== 'number' || !Number.isFinite(run.updatedAt)) return false
+  return now - Math.min(run.updatedAt, now) <= RELAUNCH_WINDOW_MS
+}
+
+/**
+ * L'unité `unit` de la mission `runId` est finie sur ce board (le réveil de jour) : sa mission close ou archivée, ou
+ * l'unité encore là et faite, sans worker en vol ni rendu sans être clos (un groupe fait et clos, ou gardé par le
+ * manager ; le lot d'une mission toujours sans groupes, tous ses tickets faits). Plus étroit qu'`isAwaitedOver` : un
+ * groupe retiré du plan, un lot remplacé par un premier plan de groupes ou une mission effacée n'ont rien fini.
+ */
+const isUnitFinished = (board: Board, runId: string, unit: string): boolean => {
+  const run = board.runs.find(r => r.id === runId)
+  if (!run) return false
+  if (run.archivedAt !== undefined || run.status === 'done') return true
+  const groups = run.groups ?? []
+  if (unit === LOT_KEY) return groups.length === 0 && run.tickets.length > 0 && run.tickets.every(t => t.status === 'done')
+  const g = groups.find(x => x.id === unit)
+  return g !== undefined && isGroupDone(run, g) && g.linked === undefined && (g.delegated === undefined || isClosedLink(g.delegated))
+}
+
+/**
+ * Les missions à réveiller après une écriture de la mission `writer` (celle que tient la discussion qui écrit),
+ * d'après le board d'avant et celui d'après : chaque mission réveillable (`isWakeable`, sur le board d'après), autre
+ * que `writer`, dont une retenue (du fichier des missions, `outsideHolds`, ou du plan, `planHolds`) nommait avant
+ * une unité de `writer` et ne la nomme plus après parce que cette écriture l'a finie (`isUnitFinished` faux avant,
+ * vrai après) : une unité annulée, retirée du plan ou remplacée par un premier plan de groupes, ou une retenue forcée,
+ * ne réveille pas. Une entrée par paire (mission réveillée, unité finie). Pure : `waitsOf` et `forcesOf` rendent les attentes du plan et les paires forcées d'une
+ * mission, relues du fichier de coordination par l'appelant.
+ */
+export const wakeTargets = (
+  before: Board,
+  after: Board,
+  writer: string,
+  now: number,
+  waitsOf: (run: string) => readonly PlanWait[] = () => [],
+  forcesOf: (run: string) => readonly ForcedPair[] = () => [],
+): { run: string; group: string }[] => {
+  const out: { run: string; group: string }[] = []
+  // D'abord les unités de `writer` que cette écriture a finies : sans elles (presque toutes les écritures), rien à calculer.
+  const mine = before.runs.find(r => r.id === writer)
+  if (!mine) return out
+  const finished = [LOT_KEY, ...(mine.groups ?? []).map(g => g.id)].filter(u => !isUnitFinished(before, writer, u) && isUnitFinished(after, writer, u))
+  if (finished.length === 0) return out
+  for (const b of after.runs) {
+    if (b.id === writer || !isWakeable(b, now) || !before.runs.some(r => r.id === b.id)) continue
+    const named = (board: Board): Set<string> => {
+      const forces = forcesOf(b.id)
+      const holds = [...outsideHolds(board, b.id, forces), ...planHolds(board, b.id, waitsOf(b.id), forces)]
+      return new Set(holds.filter(h => h.run === writer).map(h => h.group))
+    }
+    const was = named(before)
+    if (was.size === 0) continue
+    const still = named(after)
+    for (const group of was) if (!still.has(group) && finished.includes(group)) out.push({ run: b.id, group })
   }
   return out
 }

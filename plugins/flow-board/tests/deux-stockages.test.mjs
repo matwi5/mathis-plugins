@@ -42,6 +42,15 @@ test('le contrôle voit un test des deux modes sans sa ligne, et laisse un test 
   assert.deepEqual(unmarked([['a.test.ts', `// ${MARK}.\n${withWorld}`]]), [])
 })
 
+test('un test qui n’importe que l’horloge (horloge.ts) n’est pas des deux modes ; un import du monde partagé l’est toujours, settle compris', () => {
+  const clockOnly = "import { settle } from './horloge.ts'\n"
+  const withWorld = "import { world } from './monde-coordination.ts'\n"
+  const otherValue = "import { stored } from './monde-coordination.ts'\n"
+  const settleFromWorld = "import { settle } from './monde-coordination.ts'\n"
+  assert.deepEqual(unmarked([['a.test.ts', clockOnly], ['b.test.ts', withWorld], ['c.test.ts', otherValue], ['d.test.ts', settleFromWorld]]), ['b.test.ts', 'c.test.ts', 'd.test.ts'])
+  assert.deepEqual(unmarked([['b.test.ts', `// ${MARK}.\n${withWorld}`]]), [])
+})
+
 test('tests/stockage.ts et scripts/check.py reprennent la règle de claudeHome (register.tsx) : « /.claude/ » dans le dossier du plugin, sans casse', () => {
   const hook = readFileSync(new URL('../hooks/register.tsx', import.meta.url), 'utf8')
   const helper = readFileSync(new URL('stockage.ts', DIR), 'utf8')

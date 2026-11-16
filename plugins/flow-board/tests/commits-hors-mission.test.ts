@@ -5,6 +5,7 @@ import { groupWorktree } from '../hooks/closing.ts'
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import { stepUsage, stoppedStep } from './flux-turn-step.ts'
 import type { Board, Run } from '../types'
+import { settle } from './horloge.ts'
 
 // Rétro « Coordinateur de parcours » : un diagnostic et une étude hors mission avaient commité dans la
 // branche de travail sur des fichiers des groupes en cours, et la coordination ne l'avait appris que par
@@ -148,10 +149,6 @@ const world = (on: any, answer: (args: string[]) => { exitCode: number; stdout: 
   mem[KEY] = b
   disk.board = JSON.stringify(b)
   return { sent, calls }
-}
-
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
 }
 
 /** La branche du worker du groupe C, telle que git la liste. */

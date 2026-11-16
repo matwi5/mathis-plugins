@@ -15,6 +15,7 @@ import { coordinationRows } from '../hooks/coo-view.tsx'
 import type { Board, Run } from '../types'
 import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 import { findAllAny, findAny, pressAny } from './page-coo.ts'
+import { settle } from './horloge.ts'
 
 const T0 = 120_000_000
 const PLUGIN = 'flow-board'
@@ -42,7 +43,7 @@ const world = (on: any) => {
   const files: Record<string, string> = {}
   const disk: { board?: string; isUsed: boolean } = { isUsed: false }
   const ids = { now: 'sa' }
-  const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false, refusePrompt: false, holdPrompt: false, coordUnreadable: false }
+  const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false, refusePrompt: false, holdPrompt: false, coordUnreadable: false, confirmDeleteRefuses: false }
   // Le fichier de coordination du COO, quel que soit son nom ; illisible quand le test le dit (une écriture coupée).
   const isCoord = (path: string): boolean => path.includes('/flow-board/coordination/') && !path.includes('feuille-de-route') && !path.includes('.nuit') && !path.includes('.numeros') && !path.includes('.cartes')
   const held: (() => void)[] = []
@@ -66,6 +67,7 @@ const world = (on: any) => {
     return { value: undefined }
   })
   on('store.delete', (_$: unknown, e: { key: string }) => {
+    if (flags.confirmDeleteRefuses && e.key.startsWith('auto-confirm:')) throw new Error('EACCES')
     delete mem[e.key]
     return { value: undefined }
   })
@@ -128,9 +130,6 @@ const seed = (w: World, value: unknown) => {
 }
 
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 const press = async ($: any, key: string) => {
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pressAny(pane, { key })
@@ -1042,9 +1041,10 @@ test('Un skill intégré à Claude Code (source « built-in », comme /code-revi
 // ─── Reprise d'elle-même d'une pause « plus rien ne peut avancer sans toi » ──
 //
 // Invariant : « L'auto d'une mission ne s'allume jamais sans un clic de Mathis, consommé une seule fois, par la seule
-// discussion de cette mission, dans les 10 minutes ; une lecture ou une écriture ratée laisse l'auto éteint, sauf la
-// reprise d'une pause « plus rien ne peut avancer sans toi », d'elle-même, dans la discussion qui l'avait allumé, une
-// fois toutes ses questions bloquantes répondues. »
+// discussion de cette mission, dans les 10 minutes ; une lecture ou une écriture ratée laisse l'auto éteint, sauf deux
+// reprises d'elles-mêmes, dans la discussion qui l'avait allumé : celle d'une pause « plus rien ne peut avancer sans
+// toi », une fois toutes ses questions bloquantes répondues, et celle d'une pause « discussion arrêtée », quand cette
+// discussion est relancée sous son id dans les 24 h qui suivent la dernière activité de la mission. »
 
 /** Une mission en auto mise en pause « plus rien ne peut avancer sans toi » par ces questions (q1, puis les autres). */
 const stuckOn = async ($: any, on: any, ids: string[] = ['q1']) => {
@@ -1078,6 +1078,25 @@ test('pause « plus rien ne peut avancer sans toi », ses questions répondues :
   await turnEnd($, w.clock, 's3')
   await turnEnd($, w.clock, 's4')
   expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('la pause « plus rien ne peut avancer sans toi » efface la date du clic pour de bon : un effacement refusé se refait, et la trace reste', { timeoutMs: 40000 }, async ($, on) => {
+  const w = await specDone($, on, { isAuto: false })
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Question q1 ?' }] } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  const runId = w.stored()!.runs[0]!.id
+  w.flags.confirmDeleteRefuses = true
+  await turnEnd($, w.clock, 's1')
+  await turnEnd($, w.clock, 's2')
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+  // Refusé : la date du clic reste pour l'instant, la trace est posée.
+  expect(w.mem[`auto-confirm:${runId}`]).toMatchObject({ by: 'sa' })
+  expect(w.mem[`auto-resume:${runId}`]).toMatchObject({ by: 'sa', questions: ['q1'] })
+  w.flags.confirmDeleteRefuses = false
+  await settle(w.clock, 8)
+  expect(w.mem[`auto-confirm:${runId}`]).toBeUndefined()
+  expect(w.mem[`auto-resume:${runId}`]).toMatchObject({ by: 'sa', questions: ['q1'] })
 })
 
 test('une question encore ouverte, ou une coupure pendant la pause : pas de reprise', { timeoutMs: 60000 }, async ($, on) => {

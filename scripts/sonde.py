@@ -36,6 +36,15 @@ système ne donne pas la date de création, comme Linux), puis son fichier de mi
 (`flow-board/parcours/<nom>.json`, même racine, si le dossier de transcripts part aussi), enfin son dossier
 de transcripts (s'il ne porte que les sessions de ce lancement, chaque transcript citant ce dossier),
 arrêtée à la première suppression qui échoue ; `~/.claude.json`, fichier partagé, n'est ni lu ni écrit.
+Au lancement, la sonde note dans la marque de son dossier jetable la clé `model` de `~/.claude/settings.json`
+(le modèle par défaut du poste, qu'un `/model` tapé dans la sonde réécrit), sans toucher au fichier ; à la
+sortie (et par `--nettoyer`), elle remet cette seule clé à la valeur notée (la retire si elle manquait),
+seulement quand la valeur du moment est celle que le dernier `/model` de sa propre session a demandée (lue
+dans son journal, `classic.PostModelSwitch`) et que le fichier date de ce `/model` (à quelques secondes
+près), une fois par lancement, par un fichier voisin renommé sur l'ancien ; sinon (autre session, `sync.py`,
+fichier absent, illisible ou changé entre-temps, `/model default`, `--garder`, `--dir`, `CLAUDE_CONFIG_DIR`
+passé ou hérité), elle n'écrit rien, et son rapport donne la valeur d'avant et la commande `/model` qui la
+remet.
 Elle liste ce qu'elle a
 supprimé et ce qui reste, au journal et dans le volet, qui reste ouvert jusqu'à Entrée. `--garder`, au
 lancement, ne supprime rien (à prendre pour reprendre ensuite la session par `--dir … --reprise`). Rien
@@ -50,6 +59,7 @@ Mac et Linux (tmux requis) ; sans dépendance hors de la bibliothèque standard.
 """
 
 import argparse
+import calendar
 import json
 import os
 import re
@@ -92,6 +102,22 @@ OPENING_SOURCES = ("startup", "clear")
 # La fin du nom d'un relevé de requêtes de stats-board après l'id de session (`<id>_<heure d'ouverture en
 # ms>.json`), en chiffres ASCII seulement.
 REQUEST = re.compile(r"_[0-9]{1,20}\.json")
+# La clé du modèle par défaut dans `~/.claude/settings.json`, qu'un `/model` tapé dans la sonde réécrit.
+MODEL_KEY = "model"
+# Le fichier que la remise du modèle pose dans le dossier jetable à sa première décision : un second
+# nettoyage ne décide plus rien (une autre session a pu choisir entre-temps le même modèle).
+MODEL_DONE = ".sonde-modele"
+# Les `source` d'un `classic.PostModelSwitch` qui écrivent le défaut du poste : `/model` et le sélecteur.
+SWITCH_SOURCES = ("command", "picker")
+# La forme d'un nom de modèle que la sonde accepte de noter, de redire et d'écrire (un alias, un id, `opus[1m]`,
+# un id Vertex `…@…` ou Bedrock `…:0`, un ARN), en signes ASCII, sans espace ni caractère de contrôle.
+MODEL_FORM = re.compile(r"[A-Za-z0-9._:@/\[\]-]{1,200}", re.ASCII)
+# Le nom d'un journal de la sonde : son heure d'ouverture, `toISOString()` aux `:` et `.` changés en `-`.
+JOURNAL_STAMP = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-([0-9]{3})Z\.jsonl")
+# L'écart toléré entre l'heure du dernier `/model` de la sonde et la date de modification de settings.json :
+# au-delà, un autre a pu écrire le fichier depuis (marge estimée : l'ordre de l'écriture et de l'événement
+# dans le moteur n'est pas observé).
+SWITCH_SLACK_NS = 5_000_000_000
 
 
 class SondeError(Exception):
@@ -168,16 +194,200 @@ def launch_folder(ref, tmp=None):
     return folder
 
 
-def mark_launch(folder, claude):
-    """Pose dans le dossier jetable la marque de ce lancement : le dossier réel et le Claude Code essayé.
-    Elle est fermée aux autres (0600), quel que soit l'umask : `launch_folder` refuse une marque ouverte en
-    écriture au groupe ou aux autres."""
+def mark_launch(folder, claude, model=None):
+    """Pose dans le dossier jetable la marque de ce lancement : le dossier réel, le Claude Code essayé et,
+    quand il est donné, l'état de la clé `model` du poste au lancement (`note_model`). Elle est fermée aux
+    autres (0600), quel que soit l'umask : `launch_folder` refuse une marque ouverte en écriture au groupe ou
+    aux autres."""
     # Dans le dossier neuf de `mkdtemp` : une marque déjà là (ou un lien à sa place) fait échouer le lancement.
     fd = os.open(folder / MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         if hasattr(os, "fchmod"):
             os.fchmod(f.fileno(), 0o600)
-        f.write(json.dumps({"dossier": os.path.realpath(folder), "claude": str(claude)}) + "\n")
+        data = {"dossier": os.path.realpath(folder), "claude": str(claude)}
+        if model is not None:
+            data["modele"] = model
+        f.write(json.dumps(data) + "\n")
+
+
+def note_model(settings):
+    """L'état de la clé `model` du fichier de réglages du poste (`~/.claude/settings.json`), lu sans rien y
+    écrire : {"etat": "valeur", "valeur": <texte>}, {"etat": "absent"} (fichier lisible sans la clé), ou
+    {"etat": "illisible"} (fichier absent, lien, JSON invalide ou autre qu'un objet, valeur autre qu'un
+    texte de la forme `MODEL_FORM`) : la sonde n'écrit alors jamais ce fichier."""
+    data = read_json(settings)
+    if not isinstance(data, dict):
+        return {"etat": "illisible"}
+    if MODEL_KEY not in data:
+        return {"etat": "absent"}
+    value = data[MODEL_KEY]
+    return {"etat": "valeur", "valeur": value} if valid_model(value) else {"etat": "illisible"}
+
+
+def valid_model(value):
+    """Vrai pour un nom de modèle de la forme `MODEL_FORM` (un alias, un id, `opus[1m]`) : seule une telle
+    valeur entre dans le rapport, la commande de l'étape de fin ou le fichier."""
+    return isinstance(value, str) and MODEL_FORM.fullmatch(value) is not None
+
+
+def valid_noted(noted):
+    """Vrai pour une valeur notée au lancement que la remise peut écrire : « absent », ou « valeur » d'une
+    forme valide (`valid_model`)."""
+    return isinstance(noted, dict) and (noted.get("etat") == "absent"
+                                        or (noted.get("etat") == "valeur" and valid_model(noted.get("valeur"))))
+
+
+def model_label(noted):
+    """La valeur notée au lancement et la commande `/model` qui la remet, en texte pour le rapport."""
+    if noted.get("etat") == "valeur":
+        return f"« {noted['valeur']} » (/model {noted['valeur']} la remet)"
+    return "absente (/model default la remet)"
+
+
+def journal_start_ns(path):
+    """L'heure d'ouverture d'un journal de la sonde, lue dans son nom (`2026-11-16T10-00-00-000Z.jsonl`, que
+    pose `register.tsx`), en nanosecondes depuis l'époque ; None pour un autre nom."""
+    m = JOURNAL_STAMP.fullmatch(path.name)
+    if not m:
+        return None
+    y, mo, d, h, mi, s, ms = (int(g) for g in m.groups())
+    try:
+        return (calendar.timegm((y, mo, d, h, mi, s, 0, 0, 0)) * 1000 + ms) * 1_000_000
+    except (ValueError, OverflowError):
+        return None
+
+
+def last_model_switch(folder):
+    """Le dernier `/model` des sessions de ce lancement (`classic.PostModelSwitch` du journal de la sonde,
+    source `command` ou `picker` : un changement automatique ou une reprise n'écrit pas le défaut du poste),
+    dans l'ordre des journaux (leur nom est l'heure d'ouverture), borné à la lecture : {"demande": le
+    `requested_model` s'il est d'une forme valide, sinon None, "defaut": vrai pour `/model default`
+    (`requested_model` nul), "a_ns": son heure (ouverture du journal plus son `t`, None si l'un manque ou
+    est mal formé)} ; None sans lui. Lève OSError sur un journal illisible."""
+    last = None
+    for path in sorted((folder / "journaux").glob("*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        start = journal_start_ns(path)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict) and entry.get("ev") == "classic.PostModelSwitch" \
+                        and entry.get("source") in SWITCH_SOURCES:
+                    asked, t = entry.get("requested_model"), entry.get("t")
+                    ok_t = isinstance(t, (int, float)) and not isinstance(t, bool) and 0 <= t < 10 ** 12
+                    last = {"demande": asked if valid_model(asked) else None,
+                            "defaut": "requested_model" in entry and asked is None,
+                            "a_ns": start + int(t * 1_000_000) if start is not None and ok_t else None}
+    return last
+
+
+def write_guarded(settings, raw, data, mtime=None):
+    """Écrit `data` à la place de `settings` (mise en forme de `scripts/sync.py`), par un fichier voisin
+    créé seul (O_EXCL, droits de l'original) puis renommé sur l'ancien, seulement si `settings` porte encore
+    les octets `raw` lus avant et, quand elle est donnée, la date de modification `mtime` lue avec eux (une
+    réécriture aux mêmes octets par un autre la change) : relus juste avant le renommage, il reste une fenêtre de quelques
+    microsecondes. Lève OSError (le fichier voisin retiré) sur un échec ou un fichier changé entre-temps, et
+    ValueError, avant toute écriture, pour un nombre que JSON n'écrit pas (`1e400` relu en infini)."""
+    text = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    mode = stat.S_IMODE(os.lstat(settings).st_mode)
+    neighbour = settings.with_name(f"{settings.name}.sonde-{os.getpid()}")
+    fd = os.open(neighbour, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            if hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), mode)
+        if settings.is_symlink() or settings.read_bytes() != raw \
+                or (mtime is not None and os.lstat(settings).st_mtime_ns != mtime):
+            raise OSError("le fichier a changé entre la lecture et l'écriture : pas écrasé")
+        os.replace(neighbour, settings)
+    except BaseException:
+        try:
+            neighbour.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def restore_model(folder, home, keep=False):
+    """Remet la clé `model` de `home/settings.json` à la valeur notée au lancement (marque du dossier
+    jetable), et seulement quand la valeur du moment est celle que le dernier `/model` d'une session de ce
+    lancement y a posée : son alias ou id demandé (`requested_model`, `last_model_switch`), et un fichier
+    modifié pour la dernière fois à moins de `SWITCH_SLACK_NS` de l'heure de ce `/model` (sinon un autre a pu
+    l'écrire depuis, la même valeur comprise) ; une clé absente au lancement est retirée. Toute autre clé garde
+    sa valeur et sa place. Rien n'est écrit : avec `keep`, sans valeur notée valide (`valid_noted`), sur un
+    fichier absent, illisible ou changé entre la lecture et le renommage, quand la valeur est celle d'un autre
+    (autre session, `sync.py`), après un `/model default` de la sonde (ce qu'il écrit n'est pas observé), sur
+    un journal illisible, ni après une première décision (`MODEL_DONE`, posé dans le dossier jetable au premier
+    passage, quelle qu'en soit l'issue). Rend les lignes du rapport."""
+    marker = read_json(folder / MARKER)
+    noted = marker.get("modele") if isinstance(marker, dict) else None
+    if not valid_noted(noted):
+        return ["modèle par défaut du poste : rien d'écrit (valeur au lancement illisible ou non notée)"]
+    before = model_label(noted)
+    if noted.get("ailleurs"):
+        return [f"modèle par défaut du poste : rien d'écrit (CLAUDE_CONFIG_DIR : le /model de la sonde écrit ailleurs) ; "
+                f"valeur au lancement : {before}"]
+    if keep:
+        return [f"modèle par défaut du poste : rien d'écrit (--garder) ; valeur au lancement : {before}"]
+    try:
+        fd = os.open(folder / MODEL_DONE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        os.close(fd)
+    except FileExistsError:
+        return [f"modèle par défaut du poste : rien d'écrit (décidé au premier nettoyage de ce lancement) ; valeur "
+                f"au lancement : {before}"]
+    except OSError as err:
+        return [f"modèle par défaut du poste : rien d'écrit ({folder / MODEL_DONE} : {err}) ; valeur au lancement : {before}"]
+    settings = home / "settings.json"
+    try:
+        raw = settings.read_bytes() if not settings.is_symlink() and settings.is_file() else None
+        data = json.loads(raw) if raw is not None else None
+        mtime = os.lstat(settings).st_mtime_ns if raw is not None else None
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):
+        return [f"modèle par défaut du poste : rien d'écrit ({settings} absent ou illisible) ; valeur au lancement : {before}"]
+    present, current = MODEL_KEY in data, data.get(MODEL_KEY)
+    if (noted["etat"] == "absent" and not present) or (noted["etat"] == "valeur" and current == noted["valeur"]):
+        return [f"modèle par défaut du poste : rien à remettre, valeur au lancement inchangée : {before}"]
+    shown = (f"« {current} »" if valid_model(current) else "d'une forme inattendue") if present else "absente"
+    try:
+        last = last_model_switch(folder)
+    except OSError as err:
+        return [f"modèle par défaut du poste : rien d'écrit (journal de la sonde illisible : {err}) ; la clé vaut "
+                f"{shown}, valeur au lancement : {before}"]
+    if last is not None and last["defaut"]:
+        return [f"modèle par défaut du poste : rien d'écrit (le dernier /model de cette sonde était /model default, "
+                f"dont l'écriture n'est pas observée ; la clé vaut {shown}) ; valeur au lancement : {before}"]
+    if last is None or last["demande"] is None or current != last["demande"]:
+        return [f"modèle par défaut du poste : rien d'écrit (la clé vaut {shown}, qu'aucun /model de cette sonde "
+                f"n'a posé : une autre session ou sync.py) ; valeur au lancement : {before}"]
+    if last["a_ns"] is None or abs(mtime - last["a_ns"]) > SWITCH_SLACK_NS:
+        when = f"à {stamp(last['a_ns'])}" if last["a_ns"] is not None else "à une heure illisible"
+        return [f"modèle par défaut du poste : rien d'écrit ({settings} modifié à {stamp(mtime)}, le dernier /model "
+                f"de cette sonde {when} : un autre a pu l'écrire depuis) ; la clé vaut {shown}, valeur au "
+                f"lancement : {before}"]
+    restored = dict(data)
+    if noted["etat"] == "absent":
+        del restored[MODEL_KEY]
+    else:
+        restored[MODEL_KEY] = noted["valeur"]
+    try:
+        write_guarded(settings, raw, restored, mtime)
+    except (OSError, ValueError) as err:
+        return [f"modèle par défaut du poste : écriture ratée ({err}) ; la clé vaut {shown}, "
+                f"valeur au lancement : {before}"]
+    back = f"« {noted['valeur']} »" if noted["etat"] == "valeur" else "absente (clé retirée)"
+    return [f"modèle par défaut du poste : remis de {shown} à {back}"]
+
+
+def stamp(ns):
+    """Une heure en nanosecondes depuis l'époque, en texte UTC à la milliseconde, pour le rapport."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ns // 1_000_000_000)) + f".{ns // 1_000_000 % 1000:03d} UTC"
 
 
 def mark_reused(folder):
@@ -606,7 +816,8 @@ def clean_target(folder, given_dir, env):
     return folder
 
 
-def session_command(tmux, name, folder, journals, claude, plugins, env, model, effort, resume, clean_name, keep):
+def session_command(tmux, name, folder, journals, claude, plugins, env, model, effort, resume, clean_name, keep,
+                    model_before=None):
     """La commande tmux de la session : Claude Code avec la sonde, puis, à sa sortie, l'étape de fin de
     `sonde.py` (version après l'essai, et le nettoyage du dossier jetable `clean_name`, chemin absolu,
     sauf `keep`), dont le volet reste ouvert jusqu'à Entrée pour qu'on lise ce qu'elle a fait."""
@@ -615,7 +826,9 @@ def session_command(tmux, name, folder, journals, claude, plugins, env, model, e
                "--model", model, "--effort", effort, *(["--continue"] if resume else [])]
     end = [sys.executable, str(Path(__file__).resolve()), "--apres-session", "--claude", str(claude),
            "--journaux", str(journals), *(["--nettoyer", str(clean_name)] if clean_name else []),
-           *(["--garder"] if keep else [])]
+           *(["--garder"] if keep else []),
+           # Sans dossier jetable à nettoyer (`--dir`, CLAUDE_CONFIG_DIR) : la valeur notée, que l'étape de fin redit.
+           *(["--modele-avant", json.dumps(model_before)] if model_before is not None and not clean_name else [])]
     pause = "printf '%s' 'Étape de fin finie (journal : sonde.log). Entrée ferme la session. '; read _"
     return [tmux, "new-session", "-d", "-s", name, "-c", str(folder), "--", "sh", "-c",
             f"{shlex.join(session)}; {shlex.join(end)}; {pause}"]
@@ -661,6 +874,18 @@ def finish(args, tmux, home=None, tmp=None):
     try:
         folder = launch_folder(args.nettoyer, tmp) if args.nettoyer else None
         if folder is None:
+            # `--dir` ou CLAUDE_CONFIG_DIR : rien ne se nettoie ni ne s'écrit ; le rapport dit la valeur d'avant.
+            before = getattr(args, "modele_avant", None)
+            try:
+                noted = json.loads(before) if isinstance(before, str) else None
+            except ValueError:
+                noted = {}
+            if noted is not None and journals is not None:
+                line = ("modèle par défaut du poste : rien d'écrit (dossier --dir ou CLAUDE_CONFIG_DIR) ; valeur au "
+                        f"lancement : {model_label(noted)}" if valid_noted(noted) else
+                        "modèle par défaut du poste : rien d'écrit (valeur au lancement illisible)")
+                print(line)
+                log_line(journals, line)
             return 0
         if journals is None:
             journals = folder / "journaux"
@@ -672,6 +897,16 @@ def finish(args, tmux, home=None, tmp=None):
         if busy:
             raise SondeError(f"une session travaille encore dans {folder} ({'; '.join(busy)}) : la quitter d'abord ; "
                              f"rien n'est supprimé")
+        # Après le contrôle des volets (une session encore ouverte pourrait refaire un /model), et quoi que
+        # donne le nettoyage : une remise ratée se dit sans l'arrêter, et ce qu'elle a fait se dit tout de
+        # suite, avant le relevé du nettoyage, qui peut lever.
+        try:
+            model_lines = restore_model(folder, home or Path.home() / ".claude", keep=args.garder)
+        except Exception as err:  # aucune erreur de la remise n'arrête le nettoyage
+            model_lines = [f"modèle par défaut du poste : remise interrompue, rien d'écrit ou écriture à vérifier ({err})"]
+        for line in model_lines:
+            print(line)
+            log_line(journals, f"{folder.name} : {line}")
         try:
             report = clean(folder, home or Path.home() / ".claude", keep=args.garder)
         except OSError as err:
@@ -731,13 +966,14 @@ def main():
     parser.add_argument("--attendre", type=float, default=0, metavar="S", help="avec --envoyer ou --voir : secondes d'attente avant de lire")
     parser.add_argument("--lignes", type=int, default=40, metavar="N", help="avec --voir : nombre de lignes affichées")
     parser.add_argument("--garder", action="store_true",
-                        help="au lancement : ne rien supprimer sous ~/.claude à la fin de l'essai (la liste de ce qui reste va au journal)")
+                        help="au lancement : ne rien supprimer sous ~/.claude à la fin de l'essai, ni remettre le modèle par défaut du poste (la liste de ce qui reste et la valeur d'avant vont au journal)")
     parser.add_argument("--nettoyer", metavar="NOM",
-                        help="nettoie sous ~/.claude ce qu'a laissé l'essai du dossier jetable NOM (sonde-xxxxxxxx), interrompu")
+                        help="nettoie sous ~/.claude ce qu'a laissé l'essai du dossier jetable NOM (sonde-xxxxxxxx), interrompu, et remet le modèle par défaut du poste qu'un /model de l'essai a changé")
     # L'étape de fin, que la session tmux lance à la sortie de Claude Code : pas pour la main.
     parser.add_argument("--apres-session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--claude", help=argparse.SUPPRESS)
     parser.add_argument("--journaux", help=argparse.SUPPRESS)
+    parser.add_argument("--modele-avant", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     tmux = shutil.which("tmux")
@@ -788,13 +1024,29 @@ def main():
     # donné par --dir (un vrai projet, une reprise), ni un ~/.claude déplacé par CLAUDE_CONFIG_DIR.
     moved = any(a.startswith("CLAUDE_CONFIG_DIR=") for a in args.env)
     clean_name = clean_target(folder, args.dir, args.env)
+    # Le modèle par défaut du poste au lancement, lu sans rien écrire : remis à la sortie s'il le faut. Pas
+    # noté (donc jamais écrit) quand la session lit ses réglages ailleurs (CLAUDE_CONFIG_DIR, passé par --env
+    # ou hérité) : son /model n'écrirait pas ~/.claude/settings.json.
+    config_moved = moved or bool(os.environ.get("CLAUDE_CONFIG_DIR"))
+    model_before = note_model(Path.home() / ".claude" / "settings.json")
+    if config_moved:
+        # Noté pour le rapport, jamais écrit (`restore_model` s'arrête sur « ailleurs »).
+        model_before = {**model_before, "ailleurs": True}
     if clean_name:
-        mark_launch(folder, claude)
+        mark_launch(folder, claude, model_before)
+    if not valid_noted(model_before):
+        model_line = "modèle par défaut du poste au lancement : illisible, la sonde ne l'écrira pas"
+    elif config_moved:
+        model_line = (f"modèle par défaut du poste au lancement : {model_label(model_before)} ; la sonde ne l'écrira "
+                      "pas (CLAUDE_CONFIG_DIR : son /model écrit ailleurs)")
+    else:
+        model_line = f"modèle par défaut du poste au lancement : {model_label(model_before)}"
+    log_line(journals, model_line)
     log_version(journals, claude, "avant")
     # Lancée depuis une session Claude Code, la sonde hériterait de son id de session (et de son
     # titre, qui passait devant `sessionTitle` : constaté le 28/10/2026) : ces variables sont retirées.
     command = session_command(tmux, args.name, folder, journals, claude, plugins, args.env, args.model, args.effort,
-                              args.reprise, clean_name, args.garder)
+                              args.reprise, clean_name, args.garder, model_before)
     res = subprocess.run(command, capture_output=True, text=True, timeout=30)
     if res.returncode != 0:
         sys.exit(f"tmux : {res.stderr.strip()} (une session « {args.name} » existe déjà ? --name pour en ouvrir une autre)")
@@ -816,6 +1068,8 @@ def main():
               f" après un kill-session : python3 scripts/sonde.py --nettoyer {folder}")
     else:
         print("Aucun nettoyage sous ~/.claude : " + ("CLAUDE_CONFIG_DIR passé à la session" if moved else "dossier donné par --dir"))
+    print(model_line + (" ; remis à la sortie si un /model de l'essai le change (~/.claude/settings.json)"
+                        if clean_name and not args.garder and not config_moved and valid_noted(model_before) else ""))
     print(f"Journaux : {journals} (versions de Claude Code et nettoyage : {LOG_NAME})")
     if args.titre:
         print(f"Titre renvoyé une fois dans sessionTitle : « {args.titre} » (session_title du hook suivant dit s'il a pris)")

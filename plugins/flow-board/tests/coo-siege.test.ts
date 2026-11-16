@@ -5,6 +5,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { emptyBoard, mergeBoards } from '../hooks/model.ts'
 import { SEAT_STALE_MS, mergeSeat, seatHolder } from '../hooks/seat.ts'
 import type { Board, CooSeat } from '../types'
+import { settle } from './horloge.ts'
 
 // Le siège du COO. Invariant : « Jamais deux discussions
 // n'écrivent comme COO du même projet sur le même poste. Celle qui a perdu le siège n'écrit plus
@@ -95,9 +96,6 @@ const world = (on: any, roots?: { root: string; repo: string | 'throws'; gitFile
 }
 
 const start = ($: any) => $.session.start({ cwd: '', surface: null, isInteractive: true })
-const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds: number) => {
-  for (let i = 0; i < seconds; i++) await clock.advance(1000)
-}
 type World = ReturnType<typeof world>
 /** Le board enregistré : dans le fichier commun s'il sert, sinon dans `$.store`. */
 const stored = (w: Pick<World, 'mem' | 'disk'>): Board => (w.disk.isUsed && w.disk.board !== undefined ? JSON.parse(w.disk.board) : w.mem[KEY]) as Board
