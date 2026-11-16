@@ -4,9 +4,10 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { newRun } from '../hooks/model.ts'
 import { keptPrint, missionReportKey, reportRoundOf } from '../hooks/register.tsx'
-import { relayFileSlug } from '../hooks/relay.ts'
 import type { Run } from '../types'
 import { PANE, PLUGIN, TOOL, coordFile, entries, openCoo, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
+import { relayFileSlug } from '../hooks/closing.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // Le rapport d'une mission lu et validé chez le COO. Invariant : « Un rapport n'est validé que par un
 // clic de l'utilisateur sur la version qu'il a lue ; un rapport changé depuis n'est pas validé. »
@@ -14,7 +15,7 @@ import { PANE, PLUGIN, TOOL, coordFile, entries, openCoo, settle, start, stored,
 const T0 = 400_000_000
 const REPORT = '# Compte rendu : Mission de B\n\n**En bref** : tout est fait.\n\n## Fait\n- Ticket 1 : fait.'
 
-const texts = async (pane: any): Promise<string> => ((await pane.findAll({ type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
+const texts = async (pane: any): Promise<string> => ((await findAllAny(pane, { type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
 
 /**
  * Le rapport d'une mission gardé par le mod : son fichier (`~/.claude/flow-board/rapports/<mission>.md`) quand
@@ -94,21 +95,21 @@ test('chez le COO : « Rapport de <mission> à valider », lu en entier, puis «
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await texts(pane)).toMatch(/Rapport de « Mission de B » à valider/)
+  expect(await texts(pane)).toMatch(/Rapport de (M\d+\s)?« Mission de B » à valider/)
   // Pas de validation avant la lecture.
-  expect(await pane.find({ key: `coo-report-validate-${run.id}` })).toBeUndefined()
-  await pane.press({ key: `coo-report-read-${run.id}` })
+  expect(await findAny(pane, { key: `coo-report-validate-${run.id}` })).toBeUndefined()
+  await pressAny(pane, { key: `coo-report-read-${run.id}` })
   await pane.unmount()
   const open = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(open)).toMatch(/tout est fait/)
-  await open.press({ key: `coo-report-validate-${run.id}` })
+  await pressAny(open, { key: `coo-report-validate-${run.id}` })
   await open.unmount()
   await settle(clock, 2)
   expect(entries(w)).toEqual([expect.objectContaining({ kind: 'validate', run: run.id, print: printFor(run, REPORT) })])
   // Un second clic sur la même version n'écrit rien de plus.
   const again = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(again)).toMatch(/validation en cours/)
-  expect(await again.find({ key: `coo-report-validate-${run.id}` })).toBeUndefined()
+  expect(await findAny(again, { key: `coo-report-validate-${run.id}` })).toBeUndefined()
   await again.unmount()
   expect(entries(w)).toHaveLength(1)
 })
@@ -123,11 +124,11 @@ test('chez le COO : le rapport changé entre la lecture et le clic n’est pas v
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: `coo-report-read-${run.id}` })
+  await pressAny(pane, { key: `coo-report-read-${run.id}` })
   await pane.unmount()
   const open = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   putReport($, w, run, `${REPORT}\n- Ajout de dernière minute.`)
-  await open.press({ key: `coo-report-validate-${run.id}` })
+  await pressAny(open, { key: `coo-report-validate-${run.id}` })
   await open.unmount()
   await settle(clock, 2)
   expect(entries(w)).toEqual([])
@@ -145,10 +146,10 @@ test('chez le COO : la mission en pause n’a pas de « ✓ Valider » : « Rapp
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(pane)).toMatch(/Rapport prêt, mission en pause : reprends-la pour valider/)
-  await pane.press({ key: `coo-report-read-${run.id}` })
+  await pressAny(pane, { key: `coo-report-read-${run.id}` })
   await pane.unmount()
   const open = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await open.find({ key: `coo-report-validate-${run.id}` })).toBeUndefined()
+  expect(await findAny(open, { key: `coo-report-validate-${run.id}` })).toBeUndefined()
   await open.unmount()
 })
 
@@ -196,10 +197,10 @@ test('« ✎ À reprendre » chez le COO met dans la saisie le début de la dema
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: `coo-report-read-${run.id}` })
+  await pressAny(pane, { key: `coo-report-read-${run.id}` })
   await pane.unmount()
   const open = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await open.press({ key: `coo-report-redo-${run.id}` })
+  await pressAny(open, { key: `coo-report-redo-${run.id}` })
   await open.unmount()
   expect(w.fills.at(-1)).toBe(`À reprendre dans le rapport de la mission « Mission de B » (id "${run.id}") : `)
   expect(entries(w)).toEqual([])
@@ -249,10 +250,10 @@ test('chez le COO, une validation consommée sans effet ne bloque « ✓ Valider
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(pane)).not.toMatch(/validation en cours/)
-  await pane.press({ key: `coo-report-read-${run.id}` })
+  await pressAny(pane, { key: `coo-report-read-${run.id}` })
   await pane.unmount()
   const open = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await open.press({ key: `coo-report-validate-${run.id}` })
+  await pressAny(open, { key: `coo-report-validate-${run.id}` })
   await open.unmount()
   await settle(clock, 2)
   expect(entries(w).filter((e: any) => e.kind === 'validate')).toHaveLength(2)
@@ -281,19 +282,19 @@ test('chez le COO, le rapport réécrit pendant la lecture : « ✓ Valider » d
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: `coo-report-read-${run.id}` })
+  await pressAny(pane, { key: `coo-report-read-${run.id}` })
   await pane.unmount()
   // Le manager redonne une version pendant la lecture ; la relecture des 5 s la voit.
   putReport($, w, run, `${REPORT}\n- Une ligne changée.`)
   await settle(clock, 6)
   const stale = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(stale)).toMatch(/Le rapport a changé depuis : relis-le/)
-  expect(await stale.find({ key: `coo-report-validate-${run.id}` })).toBeUndefined()
-  await stale.press({ key: `coo-report-read-${run.id}` })
+  expect(await findAny(stale, { key: `coo-report-validate-${run.id}` })).toBeUndefined()
+  await pressAny(stale, { key: `coo-report-read-${run.id}` })
   await stale.unmount()
   const reread = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(reread)).toMatch(/Une ligne changée/)
-  await reread.press({ key: `coo-report-validate-${run.id}` })
+  await pressAny(reread, { key: `coo-report-validate-${run.id}` })
   await reread.unmount()
   await settle(clock, 2)
   expect(entries(w)).toEqual([expect.objectContaining({ kind: 'validate', print: printFor(run, `${REPORT}\n- Une ligne changée.`) })])
@@ -313,7 +314,7 @@ test('chez le COO, le rapport d’un tour précédent du compte rendu ne se mont
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(pane)).toMatch(/Mission de B/)
-  expect(await texts(pane)).not.toMatch(/Rapport de « Mission de B » à valider/)
+  expect(await texts(pane)).not.toMatch(/Rapport de (M\d+\s)?« Mission de B » à valider/)
   await pane.unmount()
 })
 

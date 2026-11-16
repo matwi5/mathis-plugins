@@ -94,9 +94,9 @@ import type { LinkedSession, LinkedState } from './linked.ts'
 import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
 import { seatState } from './seat.ts'
-import { FABLE_STUCK_WORDS, leadEffort, leadEffortPill, quotaText, type LeadEffort, type QuotaWindow } from './effort.ts'
+import { FABLE_STUCK_WORDS, leadEffort, leadEffortPill, opusBack, quotaText, type LeadEffort, type QuotaWindow } from './effort.ts'
 import type { CooStatement } from './coo.ts'
-import { cooBandParts, coordinationRows, nightParts, securitySettingRows, type CooDo, type CooPart } from './coo-view.tsx'
+import { cooBandParts, coordinationRows, nightParts, type CooAction, type CooDo, type CooPart, type CooPill, type CooShow } from './coo-view.tsx'
 import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
 import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
@@ -196,6 +196,10 @@ export type View = {
   isFableOn?: boolean
   /** Fable éteint par le repli « Fable indisponible », sans `/model` tapé ; absent : non. */
   isFableOff?: boolean
+  /** La dernière requête du fil principal partait déjà sur Fable sans réécriture du mod (un `/model` tapé) ; absent : non. */
+  isOnFable?: boolean
+  /** La dernière requête du fil principal partait sur Fable et le mod l'a ramenée sur Opus (`withOpusBack`) ; absent : non. */
+  isOpusBack?: boolean
   /** Chez un manager, le cadrage fini et la session restée sur un modèle Fable (`isFableStuck`) : le bandeau dit « tape /model opus » ; absent : non. */
   isFableStuck?: boolean
   /** Le suivi en défaut (S11, R2) : `true`, une écriture du registre refusée ; `'lost'`, un changement perdu. */
@@ -370,6 +374,8 @@ export type Actions = {
   cooLeave: () => unknown
   /** Vue Coordination : un geste sur la feuille de route (demande au Claude du COO, ou choix de l'endroit où elle vit). */
   cooDo: (d: CooDo) => unknown
+  /** Un geste d'affichage de la vue Coordination (changer de page, déplier) : il n'écrit que l'état d'affichage du panneau, même pendant un tour. */
+  cooShow: (d: CooShow) => unknown
   /** « ⇥ Forcer » sur une retenue entre missions : la seule paire nommée. */
   forceHold: (pair: ForcedPair) => unknown
 }
@@ -2059,6 +2065,20 @@ const agentCard = (k: Kit, l: FriseLane, lanes: readonly FriseLane[], view: View
 
 
 /**
+ * L'effort que montre la piste d'un fil principal (le manager, un worker) : celui de sa requête en cours ou de la
+ * dernière, telle qu'elle est partie (`sent`), après la réécriture du mod, tant qu'elle est partie sous l'effort de
+ * session relevé (`effort`) ; après un réglage changé, l'effort tapé avec `/effort <niveau>` ; aucun quand le relevé
+ * ne dit pas d'effort de session (un `/model`, un `/effort` sans niveau) ou en dit un autre ; sans relevé, l'effort de
+ * session, comme avant.
+ */
+const sentEffortOf = (lane: AgentLane | undefined): string | undefined => {
+  const sent = lane?.sent
+  if (sent === undefined) return lane?.effort
+  if (sent.session.effort === undefined || sent.session.effort !== lane?.effort) return undefined
+  return sent.effort ?? lane.effort
+}
+
+/**
  * L'effort demandé aux requêtes d'un worker ou d'un spécialiste, sous son nom (jamais pour
  * le manager) ; rien quand il n'est pas relevé.
  */
@@ -2505,7 +2525,7 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
         name: ls.title,
         color: LINKED_COLOR,
         lane: {
-          ...(theirs?.main?.effort !== undefined ? { effort: theirs.main.effort } : {}),
+          ...(sentEffortOf(theirs?.main) !== undefined ? { effort: sentEffortOf(theirs?.main) } : {}),
           segments: settledLane(theirs?.main ?? {}, ls, theirs).segments ?? [],
           marks: [
             ...(ls.launchedAt !== undefined ? [{ k: 'relay' as const, at: ls.launchedAt }] : []),
@@ -2515,7 +2535,9 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
         linked: ls,
       }))
   const returns: AgentMark[] = chosen ? [] : linked.flatMap(({ session: ls }) => (ls.returnedAt !== undefined ? [{ k: 'back' as const, at: ls.returnedAt, to: `session:${ls.key}` }] : []))
-  const main = withoutVoidWaits(reg?.main ?? {}, MAIN)
+  const mainLane = withoutVoidWaits(reg?.main ?? {}, MAIN)
+  const mainEffort = sentEffortOf(mainLane)
+  const main = mainEffort !== undefined && mainEffort !== mainLane.effort ? { ...mainLane, effort: mainEffort } : mainLane
   // Les appels à l'advisor qui ont eu lieu : un appel sans réponse ne coûte rien et ne se montre pas.
   const advisorCalls = (reg?.advisor?.calls ?? []).filter(c => c.isVoid !== true)
   const advisor: AdvisorLane | undefined = advisorCalls.length > 0 ? { calls: advisorCalls } : undefined
@@ -2776,29 +2798,73 @@ const shownTab = (view: View): Tab => {
 /** Une ligne de morceaux de texte décrite par la vue du COO (`coo-view.tsx`). */
 const cooLine = (k: Kit, parts: readonly CooPart[]): unknown => line(k, parts.map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })), true)
 
-/** L'onglet Coordination : le point, ce qui t'attend, les missions, la feuille de route (variante A des planches), la bascule de la revue de sécurité. */
-const coordinationTab = (k: Kit, s: CooStatement, act: Actions, security: SecurityReview): unknown[] =>
-  [...coordinationRows(s), ...securitySettingRows(security)].map(row =>
-    row.kind === 'heading' ? (
-      <k.Box key={row.key} marginTop={1}>
-        {cooLine(k, row.parts)}
+/** Le geste d'un bouton de la vue Coordination : un geste d'affichage va à l'état du panneau, sans les gardes des gestes du COO. */
+const cooPress = (act: Actions, a: CooAction): unknown => (a.act.kind === 'show' ? act.cooShow(a.act) : act.cooDo(a.act))
+
+/** La rangée des pastilles des pages, en texte simple comme les onglets : la page choisie porte « ▸ », les autres sont atténuées. */
+const cooPills = (k: Kit, key: string, pills: readonly CooPill[], act: Actions): unknown => (
+  <k.Box key={key} flexDirection="row" flexWrap="wrap" marginTop={1}>
+    {pills.map(p => (
+      <k.Box key={`${p.key}-box`} marginRight={2}>
+        <k.Button key={p.key} plain={true} dimColor={!p.isCurrent} label={`${p.isCurrent ? '▸' : NB}${NB}${p.name}${p.count === undefined ? '' : `${NB}·${NB}${p.count ?? '—'}`}`} onPress={() => act.cooShow({ kind: 'show', page: p.page })}>
+          {`${p.isCurrent ? '▸' : NB}${NB}${p.name}`}
+          {p.count === undefined ? null : T(k, `${NB}·${NB}${p.count ?? '—'}`, p.isAmber ? { color: C.amber, bold: true } : {})}
+        </k.Button>
       </k.Box>
-    ) : (
-      <k.Box key={row.key} flexDirection="row" flexWrap="wrap">
-        <k.Box flexShrink={1}>{cooLine(k, row.parts)}</k.Box>
-        {(row.actions ?? []).map(a => (
-          <k.Box key={`${a.key}-box`} marginLeft={1}>
-            <k.Button key={a.key} plain={true} label={a.label} onPress={() => act.cooDo(a.act)} />
+    ))}
+  </k.Box>
+)
+
+/** Un bouton de la vue Coordination : encadré (le bouton ordinaire du moteur), coloré s'il est le principal, en texte simple s'il est une case ou une flèche. */
+const cooButton = (k: Kit, a: CooAction, act: Actions): unknown => (
+  <k.Button key={a.key} {...(a.isPlain ? { plain: true as const } : a.isPrimary ? { variant: 'primary' as const } : {})} label={a.label} onPress={() => cooPress(act, a)} />
+)
+
+/**
+ * L'onglet Coordination : la rangée des pages, puis les seules lignes de la page choisie (`coo-view.tsx`), aérées comme la
+ * planche A : une ligne vide avant chaque élément et chaque en-tête, sauf avant la suite d'un élément (`isPart`). Un élément
+ * est sa ligne, ses cases à cocher en tête (texte simple), puis la rangée de ses boutons, sous elle, en retrait, alignée à gauche.
+ */
+const coordinationTab = (k: Kit, s: CooStatement, act: Actions, security: SecurityReview, ui: UiState): unknown[] =>
+  coordinationRows(s, { page: ui.cooPage, open: ui.cooOpen, isAllPending: ui.cooAllPending, isLaterOpen: ui.cooLaterOpen }, security).map(row => {
+    if (row.kind === 'pills') return cooPills(k, row.key, row.pills ?? [], act)
+    if (row.kind === 'heading')
+      return (
+        <k.Box key={row.key} marginTop={1}>
+          {cooLine(k, row.parts)}
+        </k.Box>
+      )
+    const plain = (row.actions ?? []).filter(a => a.isPlain)
+    const boxed = (row.actions ?? []).filter(a => !a.isPlain)
+    return (
+      <k.Box key={row.key} flexDirection="column" marginTop={row.isPart ? 0 : 1}>
+        {row.parts.length + plain.length > 0 ? (
+          <k.Box flexDirection="row" flexWrap="wrap">
+            {plain.map(a => (
+              <k.Box key={`${a.key}-box`} marginRight={1}>
+                {cooButton(k, a, act)}
+              </k.Box>
+            ))}
+            <k.Box flexShrink={1}>{cooLine(k, row.parts)}</k.Box>
           </k.Box>
-        ))}
+        ) : null}
+        {boxed.length > 0 ? (
+          <k.Box key={`${row.key}-acts`} flexDirection="row" flexWrap="wrap" marginLeft={2}>
+            {boxed.map(a => (
+              <k.Box key={`${a.key}-box`} marginRight={1}>
+                {cooButton(k, a, act)}
+              </k.Box>
+            ))}
+          </k.Box>
+        ) : null}
       </k.Box>
-    ),
-  )
+    )
+  })
 
 /** Le panneau de la discussion du COO. */
 const cooPane = (k: Kit, view: View, s: CooStatement, act: Actions): unknown => {
   const tab = shownTab(view)
-  const body: unknown = tab === 'commands' ? commandsTab(k, act) : tab === 'agents' ? agentsTab(k, view, act) : tab === 'history' && view.board ? historyTab(k, view.board, view, act) : coordinationTab(k, s, act, view.security ?? 'unread')
+  const body: unknown = tab === 'commands' ? commandsTab(k, act) : tab === 'agents' ? agentsTab(k, view, act) : tab === 'history' && view.board ? historyTab(k, view.board, view, act) : coordinationTab(k, s, act, view.security ?? 'unread', view.ui)
   return (
     <k.Box flexDirection="column" paddingX={1} paddingBottom={1}>
       {tabsRow(k, view, null, act)}
@@ -3506,7 +3572,9 @@ const bandPills = (run: Run, view: View): BandPill[] => {
   // L'effort (et le modèle, en cadrage) que le mod impose à chaque requête du manager, et sa raison (règle des workers, suivi des groupes, phase,
   // cadrage en auto), quand il joue ; l'état de l'auto relu à chaque dessin, comme pour sa pastille.
   const isAutoHere = view.board ? autoStateOf(run, view.board, view.here ?? view.board.session ?? '', view.autoConfirmedAt).kind === 'on' : false
-  const effort = leadEffort(run, view.isFableOn === true, { isAutoHere, isFableOff: view.isFableOff === true })
+  const own = leadEffort(run, view.isFableOn === true, { isAutoHere, isFableOff: view.isFableOff === true, isOnFable: view.isOnFable === true })
+  // Ramenée sur Opus hors du cadrage : le bandeau nomme le modèle qui part vraiment.
+  const effort = view.isOpusBack === true ? opusBack(own) : own
   const pill = effort ? leadEffortPill(effort, view.agents?.main?.effort) : null
   return [
     ...(pill ? [{ text: pill.replace(/ /g, NB), color: C.blue }] : []),

@@ -7,13 +7,14 @@ import { newRun } from '../hooks/model.ts'
 import { picksPrint, retroCardId } from '../hooks/retro-coo.ts'
 import type { Run } from '../types'
 import { PANE, PLUGIN, TOOL, coordFile, entries, openCoo, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // La rétro lancée par le COO. Invariant : « Une piste de la rétro n'est découpée que si l'utilisateur l'a
 // cochée ; une piste non cochée part dans À reprendre, jamais nulle part. »
 
 const T0 = 700_000_000
 
-const texts = async (pane: any): Promise<string> => ((await pane.findAll({ type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
+const texts = async (pane: any): Promise<string> => ((await findAllAny(pane, { type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
 
 const PISTES = [
   { id: 'r1', label: 'Hooks : relire le siège après un sommeil', status: 'todo' },
@@ -53,9 +54,9 @@ test('livrée, la mission reçoit sa carte de rétro, recommandée parce qu’el
   expect(shown).toContain('Rétrospective · Mission de B')
   expect(shown).toMatch(/rétro : recommandée : elle a eu des workers/)
   // Sa clôture attend la discussion qui la tient : rien à archiver encore (tests/archiver-livrees.test.ts archive une mission close).
-  expect(await pane.find({ key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
-  // Sa clôture pas encore appliquée, elle n'attend pas « ✓ Archiver » : « ✕ Retirer » retire la carte (toute carte de rétro sans « ✓ Archiver »).
-  expect(await pane.find({ key: `coo-card-remove-${retroCardId(run.id)}` })).toBeDefined()
+  expect(await findAny(pane, { key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
+  // Sa clôture pas encore appliquée (en cours ailleurs), elle n'attend pas « ✓ Archiver » ni n'a droit à la carte : « ✕ Retirer » retire la carte.
+  expect(await findAny(pane, { key: `coo-card-remove-${retroCardId(run.id)}` })).toBeDefined()
   await pane.unmount()
 })
 
@@ -98,18 +99,18 @@ test('chez le COO, les pistes de la rétro se cochent, puis « Découper la sél
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await texts(pane)).toMatch(/Pistes de la rétro « Rétrospective · Mission de B » · 3/)
-  await pane.press({ key: `coo-retro-tick-${retro.id}-r1` })
-  await pane.press({ key: `coo-retro-tick-${retro.id}-r3` })
-  await pane.press({ key: `coo-retro-tick-${retro.id}-r3` })
+  expect(await texts(pane)).toMatch(/Pistes de la rétro (M\d+\s)?« Rétrospective · Mission de B » · 3/)
+  await pressAny(pane, { key: `coo-retro-tick-${retro.id}-r1` })
+  await pressAny(pane, { key: `coo-retro-tick-${retro.id}-r3` })
+  await pressAny(pane, { key: `coo-retro-tick-${retro.id}-r3` })
   await pane.unmount()
   const again = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await again.press({ key: `coo-retro-pick-${retro.id}` })
+  await pressAny(again, { key: `coo-retro-pick-${retro.id}` })
   await again.unmount()
   expect(entries(w)).toEqual([expect.objectContaining({ kind: 'pick', run: retro.id, picked: ['r1'], left: ['r2', 'r3'], print: picksPrint(PISTES) })])
   await settle(clock, 6)
   const sent = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await texts(sent)).toMatch(/Sélection des pistes de « Rétrospective · Mission de B » envoyée/)
+  expect(await texts(sent)).toMatch(/Sélection des pistes de (M\d+\s)?« Rétrospective · Mission de B » envoyée/)
   await sent.unmount()
 })
 
@@ -178,9 +179,9 @@ test('une sélection envoyée ne se recoche pas chez le COO, même une fois ses 
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   const shown = await texts(pane)
   // Seule la piste neuve se coche ; r1 n'a pas de case.
-  expect(shown).toMatch(/Pistes de la rétro « Rétrospective · Mission de B » · 1/)
+  expect(shown).toMatch(/Pistes de la rétro (M\d+\s)?« Rétrospective · Mission de B » · 1/)
   expect(shown).toContain('Docs : une piste neuve')
-  expect(await pane.find({ key: `coo-retro-tick-${retro.id}-r1` })).toBeUndefined()
+  expect(await findAny(pane, { key: `coo-retro-tick-${retro.id}-r1` })).toBeUndefined()
   await pane.unmount()
 })
 
@@ -207,8 +208,8 @@ test('en auto, la rétro envoie elle-même le découpage des cochées, après av
   w.ids.now = 'session-R'
   const runId = await retroHere($, clock, w)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'auto-on' })
-  await pane.press({ key: 'auto-confirm' })
+  await pressAny(pane, { key: 'auto-on' })
+  await pressAny(pane, { key: 'auto-confirm' })
   await pane.unmount()
   await settle(clock, 1)
   const before = w.prompts.length
@@ -237,8 +238,8 @@ test('une sélection rejetée par la rétro rend ses pistes à cocher chez le CO
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await texts(pane)).toMatch(/Pistes de la rétro « Rétrospective · Mission de B » · 2/)
-  expect(await pane.find({ key: `coo-retro-tick-${retro.id}-r2` })).toBeDefined()
+  expect(await texts(pane)).toMatch(/Pistes de la rétro (M\d+\s)?« Rétrospective · Mission de B » · 2/)
+  expect(await findAny(pane, { key: `coo-retro-tick-${retro.id}-r2` })).toBeDefined()
   await pane.unmount()
 })
 
@@ -272,7 +273,7 @@ test('une livraison arrêtée après le push propose aussi la rétro des mission
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'coo-deliver-drop' })
+  await pressAny(pane, { key: 'coo-deliver-drop' })
   await pane.unmount()
   await settle(clock, 2)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })

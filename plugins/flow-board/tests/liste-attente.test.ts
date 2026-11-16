@@ -79,6 +79,13 @@ test('une piste en exécution ou faite ne change plus : texte, fichiers, comment
   expect(keepsPistes(list, listWith([{ ...running, text: 'Autre' }, done]))).toBe(false)
   expect(keepsPistes(list, listWith([running, { ...done, state: 'ticket' }]))).toBe(false)
   expect(keepsPistes(list, listWith([{ ...running, state: 'done' }, done]))).toBe(true)
+  // Revenue à validée : admise pour une piste passée par en ticket dans la même écriture, son texte gardé ; sinon refusée ; jamais vers pas encore validée ni écartée.
+  const via = new Set(['retroA/p1'])
+  expect(keepsPistes(list, listWith([{ ...running, state: 'validated' }, done]), new Set(), via)).toBe(true)
+  expect(keepsPistes(list, listWith([{ ...running, state: 'validated' }, done]))).toBe(false)
+  expect(keepsPistes(list, listWith([{ ...running, state: 'validated', text: 'Autre' }, done]), new Set(), via)).toBe(false)
+  expect(keepsPistes(list, listWith([{ ...running, state: 'pending' }, done]), new Set(), via)).toBe(false)
+  expect(keepsPistes(list, listWith([{ ...running, state: 'dropped', reason: 'x' }, done]), new Set(), via)).toBe(false)
 })
 
 test('rien ne se perd : la garde refuse une piste absente, un texte d’historique ou un commentaire perdu, une piste hors forme retouchée, un doublon, une marque retirée', () => {

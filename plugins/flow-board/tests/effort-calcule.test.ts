@@ -162,7 +162,8 @@ for (const isBrief of [false, true]) {
     const [text = ''] = await launch($, on, LOT, ['launch-fable-A'], isBrief, written)
     expect(lineOf(text, 'A')).toMatch(/ — Fable 5.2 high, imposé$/)
     expect(text).toContain("Effort de la session (<effort>) : high, pour le worker Fable (Fable 5.2 high, choisi par moi au tableau de bord ; ne me pose aucune question sur l'effort).")
-    expect(text).toContain('aucun model dans start_session ni dans claude --bg')
+    expect(text).toContain('elle part sur Opus, model "claude-opus-5-5" dans start_session, --model opus dans claude --bg, quel que soit le modèle de cette discussion ou du poste (son mod la passe ensuite sur Fable 5.2 high)')
+    expect(text).not.toContain('aucun model')
     expect(text).not.toContain('pose-moi une question à boutons')
     expect(text).not.toContain('arrête-toi avant de lancer')
     expect(text).not.toContain('effort calculé')
@@ -369,7 +370,7 @@ test('une demande pour plusieurs groupes, sans brief écrit, dit l’autonomie a
 })
 
 // Un groupe Opus part avec son modèle écrit (l'id dans l'app, l'alias dans le CLI), quel que soit le modèle de la
-// discussion ou du poste ; un groupe Sonnet garde sa ligne, un worker Fable part sans modèle.
+// discussion ou du poste ; un groupe Sonnet garde sa ligne, un worker Fable part aussi sur Opus, par sa propre phrase (`FABLE_LAUNCH`).
 const OPUS_START = `model "${OPUS_APP_ID}" dans start_session`
 const OPUS_CLI = `--model ${OPUS_CLI_ALIAS} dans claude --bg`
 
@@ -386,13 +387,14 @@ for (const isBrief of [false, true]) {
     }
   })
 
-  test(`un groupe Sonnet seul garde sa ligne, sans modèle Opus ; un worker Fable n’en reçoit aucun (${form})`, async ($, on) => {
+  test(`un groupe Sonnet seul garde sa ligne, sans modèle Opus ; un worker Fable part sur Opus, que son mod passe sur Fable (${form})`, async ($, on) => {
     const [docs = '', fable = ''] = await launch($, on, FUSION, ['launch-linked-E', 'launch-fable-A'], isBrief)
     expect(docs).toContain(SONNET_LAUNCH_FR)
     expect(docs).not.toContain(OPUS_START)
-    expect(fable).toContain('aucun model dans start_session ni dans claude --bg')
-    expect(fable).not.toContain(OPUS_START)
-    expect(fable).not.toContain(OPUS_CLI)
+    // R212 : le worker Fable part sur Opus (son mod le passe ensuite sur Fable 5.2 high), sans la phrase des groupes Opus.
+    expect(fable).toContain('model "claude-opus-5-5"')
+    expect(fable).toContain('--model opus')
+    expect(fable).not.toContain(OPUS_LAUNCH_FR)
   })
 }
 

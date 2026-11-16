@@ -85,11 +85,15 @@ export const applyRebuilt = (reg: SessionRegistry, rebuilt: Rebuilt | null, now:
 /** La période d'une mission, une marge comprise après sa dernière activité. */
 export const runWindow = (run: Run): { s: number; e: number } => ({ s: run.startedAt - BEFORE_MS, e: (run.finishedAt ?? run.updatedAt) + AFTER_MS })
 
-/** Les segments d'une piste (et ses appels à l'advisor) qui touchent la période. */
+/**
+ * Les segments d'une piste (et ses appels à l'advisor) qui touchent la période ; sans la requête partie (`sent`) :
+ * celle d'une session vivante, que la vue d'une mission, faite de plusieurs discussions, ne montre pas.
+ */
 export const clipLane = <L extends AgentLane & { advisor?: AdvisorFigures[] }>(lane: L | undefined, w: { s: number; e: number }): L => {
   const inside = (x: { s: number; e?: number }) => (x.e ?? x.s) >= w.s && x.s <= w.e
+  const { sent: _sent, ...rest } = lane ?? ({} as L)
   return {
-    ...lane,
+    ...rest,
     segments: (lane?.segments ?? []).filter(inside),
     marks: (lane?.marks ?? []).filter(m => m.at >= w.s && m.at <= w.e),
     ...(lane?.advisor ? { advisor: lane.advisor.filter(inside) } : {}),

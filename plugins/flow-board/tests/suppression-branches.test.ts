@@ -14,6 +14,14 @@ import type { Board, Closing, Run } from '../types'
 
 const closed = (branch?: unknown): Closing => ({ state: 'closed', at: 5_000, ...(branch !== undefined ? { branch: branch as string } : {}) })
 
+/**
+ * L'option qui force la suppression d'une branche : `branch -D`, ou un `-D` détaché (une espace ou le
+ * début du texte avant, une espace, une apostrophe ou la fin après). Jamais un « -D » collé à un mot
+ * d'un chemin : la racine du dépôt ou le chemin du script entrent dans la consigne, et un worktree
+ * nommé « …-du-D » faisait tomber un `not.toContain('-D')` (R218).
+ */
+const FORCED_D = /branch -D|(?:^|\s)-D(?=[\s']|$)/
+
 /** Une mission aux groupes rendus par leur worker, chacun avec sa fermeture. */
 const runWith = (closings: Record<string, Closing | undefined>): Run => {
   const run = newRun('implement', 1_000, 'Boutique')
@@ -38,7 +46,31 @@ test('seules les branches notées des groupes fermés se suppriment, par git bra
   expect(text).toMatch(/groupe D : fermé, branche inconnue, gardée/)
   expect(text).toMatch(/groupe E : pas fermé, branche gardée/)
   // Jamais rien qui force.
-  for (const forced of ['-D', '--force', ' -f ']) expect(text).not.toContain(forced)
+  expect(text).not.toMatch(FORCED_D)
+  for (const forced of ['--force', ' -f ']) expect(text).not.toContain(forced)
+})
+
+test('une racine ou un chemin de script qui contiennent « -D » ne passent pas pour l’option qui force (R218)', () => {
+  // La consigne du premier test, la racine et le script dans un dossier « …-D » (un worktree du groupe D).
+  // Avec l'ancien motif (`not.toContain('-D')`), ce test échouait : le « -D » des chemins est bien dans le texte.
+  const root = '/tmp/projet-D/depot'
+  const run = runWith({
+    A: closed('worktree-groupe-boutique-A'),
+    B: { state: 'stopped', at: 5_000, why: '.env', branch: 'worktree-groupe-boutique-B' },
+    C: { state: 'app', at: 5_000, branch: 'worktree-groupe-boutique-C' },
+    D: closed(),
+    E: undefined,
+  })
+  for (const script of [null, '/opt/worktree-du-D/flow-board/scripts/fermeture.mjs']) {
+    const text = withScript(script, () => branchCleanupText({ run, isRepo: true, root })!)
+    expect(text).toContain('-D')
+    expect(text).toContain(root)
+    expect(text).not.toMatch(FORCED_D)
+    for (const forced of ['--force', ' -f ']) expect(text).not.toContain(forced)
+  }
+  // Le motif attrape bien l'option, collée à branch ou détachée.
+  for (const forced of ["git branch -D 'x'", "git -C '/r' branch -D x", "branch --delete -D 'x'", '-D x', "x -D'y'"]) expect(forced).toMatch(FORCED_D)
+  for (const path of ['/tmp/projet-D/depot', 'worktree-du-D', "'/a-D/b'"]) expect(path).not.toMatch(FORCED_D)
 })
 
 test('une branche notée hors forme n’entre dans aucune commande : elle est dite gardée, sans être citée', () => {
@@ -173,7 +205,8 @@ test('le script là : la consigne lance son mode --branches avec les branches du
   expect(text).not.toContain('worktree-groupe-boutique-B')
   // Ni la suite de commandes une à une, ni rien qui force.
   for (const old of ['show-ref', 'merge-base', 'Une commande à la fois', 'branch -d']) expect(text).not.toContain(old)
-  for (const forced of ['-D', '--force', ' -f ']) expect(text).not.toContain(forced)
+  expect(text).not.toMatch(FORCED_D)
+  for (const forced of ['--force', ' -f ']) expect(text).not.toContain(forced)
 })
 
 test('le script là, sans branche à supprimer ou le dossier hors forme : le seul bilan des gardées, sans commande ; un chemin de script hors forme : la consigne commande par commande', () => {
@@ -294,7 +327,8 @@ test('dans un dépôt git, « ✓ Valider le rapport » envoie la consigne de su
   // Le mod chargé connaît son script de fermeture (`closingScript`) : la consigne lance son mode --branches.
   expect(text).toContain(`/scripts/fermeture.mjs' --branches --dossier '${ROOT}' 'worktree-groupe-boutique-A' »`)
   expect(text).toMatch(/groupe B : fermeture arrêtée, branche gardée/)
-  for (const forced of ['-D', '--force']) expect(text).not.toContain(forced)
+  expect(text).not.toMatch(FORCED_D)
+  expect(text).not.toContain('--force')
   for (let i = 0; i < 6; i++) await clock.advance(1000)
   for (const surface of ['terminal', 'desktop'] as const) {
     const after = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
@@ -452,7 +486,9 @@ test('le nom d’un groupe, du texte libre relu du tableau de bord, n’entre pa
   run.groups!.push({ id: "A'; git branch -D main", name: 'n', tickets: [], delegated: { at: 2_000, closing: closed() } })
   const text = branchCleanupText({ run, isRepo: true, root: ROOT })!
   expect(text).toContain("branch -d 'worktree-groupe-boutique-A'")
-  expect(text).not.toContain('-D')
+  // Ni l'option qui force, ni aucun morceau du nom ou de l'id hostiles : sans viser tout « -D », qu'un chemin peut porter.
+  expect(text).not.toMatch(FORCED_D)
+  for (const piece of ['branch -D', "'main'", 'git branch', "puis 'y'", '(z', "A';", 'D main']) expect(text).not.toContain(piece)
   expect(text).toMatch(/groupe \(id hors forme, 2e groupe du plan\) : fermé, id de groupe hors forme, branche gardée/)
 })
 
@@ -515,6 +551,23 @@ test('la marque se pose, après l’envoi, sur chaque fermeture dont la branche 
   orphan.runs[0]!.phases.push(op)
   ;(orphan.runs[0]!.groups as unknown[]).push(null)
   expect(markCleanupSent(orphan, orphan.runs[0]!.id, ['worktree-pistes-boutique-2'], 9_000)).toBeNull()
+})
+
+test('une mission close puis archivée ailleurs pendant l’envoi de la consigne : la marque ne la redate pas, l’archivage tient et la marque voyage quand même', () => {
+  // L'envoi a attendu la fin d'un tour : la mission s'est close ici, puis le COO l'a archivée à 30 000.
+  const run = { ...runWith({ A: closed('worktree-groupe-boutique-A') }), status: 'done' as const, updatedAt: 20_000 }
+  const local: Board = { ...emptyBoard(ROOT, 'proj'), runs: [run], activeId: null, session: 'main' }
+  const archived: Board = { ...local, session: 'coo', runs: [{ ...run, archivedAt: 30_000, updatedAt: 30_000 }] }
+  const marked = markCleanupSent(local, run.id, ['worktree-groupe-boutique-A'], 35_000)!.board
+  // L'effet d'abord : la fermeture est marquée ; puis la mission close n'est pas redatée.
+  expect(marked.runs[0]!.groups![0]!.delegated!.closing!.cleanupAt).toBe(35_000)
+  expect(marked.runs[0]!.updatedAt).toBe(20_000)
+  const merged = mergeBoards(marked, archived).runs[0]!
+  expect(merged.archivedAt).toBe(30_000)
+  expect(merged.groups![0]!.delegated!.closing!.cleanupAt).toBe(35_000)
+  // Le témoin : une mission encore en cours est redatée, comme avant.
+  const open = { ...run, status: 'active' as const }
+  expect(markCleanupSent({ ...local, runs: [open] }, run.id, ['worktree-groupe-boutique-A'], 35_000)!.board.runs[0]!.updatedAt).toBe(35_000)
 })
 
 test('la marque et le plan de la consigne lisent une fermeture relue par le même garde : un objet, tel quel, sinon aucune', () => {

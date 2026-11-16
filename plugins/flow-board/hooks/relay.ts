@@ -12,7 +12,7 @@
 // « fait » dans un worktree pas encore fusionné ne doit pas libérer les tickets qui l'attendent.
 
 import type { Board, DecisionOrigin, GroupLink, Relay, RelayEntry, RelayEntryFile, Run, SoloDecision, TicketGroup, TicketStatus } from '../types'
-import { asciiJson, isGroupId, neutralInPrompt, neutralRelayed } from './closing.ts'
+import { asciiJson, isGroupId, neutralInPrompt, neutralRelayed, relayFileSlug } from './closing.ts'
 import { refOf } from './coordination.ts'
 import { activeRun, asanaChange, asList, choiceRoom, clip, hasBeenAuto, isoMinute, isSecurityCount, isTime, keepChoices, LIMITS, ORIGIN_LABELS, originOf, parseChanges, sameTicket, type StatusChange, str, TEXT_MAX, unreadableCounts, BUGS_REFUSED, isBugCount, BUGS_MAX } from './basics.ts'
 // Le prédicat des bogues vaut pour tous les comptes d'une revue relayée (count, standards, spec, fixed),
@@ -702,9 +702,6 @@ export const applyRelay = (stored: unknown, runId: string, session: string, even
 }
 
 const TICKET_WORDS: Record<TicketStatus, string> = { todo: 'à faire', doing: 'en cours', done: 'fait', blocked: 'bloqué' }
-
-/** Un id en nom de fichier du relais : minuscules, chaque suite de signes hors `[a-z0-9]` en tiret. */
-export const relayFileSlug = (id: string): string => id.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 
 /**
  * Le fichier de l'entrée d'un worker dans le relais, à côté de l'ancien fichier commun : écrit

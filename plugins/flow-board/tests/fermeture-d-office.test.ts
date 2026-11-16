@@ -522,8 +522,9 @@ test('le compte rendu qui compte est celui de la session visée : celui d’une 
   expect(procedureOf(withSession, relayOf(FULL))).toContain(`claude rm '${SHORT}', sans aucune option`)
   // Une autre session du groupe (redémarrée sous un autre id) l'a déposé, pas celle-ci : pas de claude rm.
   expect(procedureOf(withSession, relayOf('77aa88bb-0000-1111-2222-333344445555'))).not.toContain(`claude rm '${SHORT}'`)
-  // Id de session inconnu : rien ne rapproche une entrée de la session visée ; pas de claude rm.
-  expect(procedureOf(unknownId, relayOf(FULL))).toContain('10) pas de claude rm : le relais n’a pas son compte rendu')
+  // Aucune session notée : rien ne rapproche une entrée de la session visée ; pas de claude rm, et la vraie raison.
+  expect(procedureOf(unknownId, relayOf(FULL))).toContain('10) pas de claude rm : aucune session n’est notée pour cet envoi')
+  expect(procedureOf(unknownId, relayOf(FULL))).not.toContain("claude rm '")
   // Un compte rendu de 8000 signes sans longueur notée (une version qui le coupait sans le dire) : absent.
   const old = relayOf(FULL)
   old.sessions[FULL]!.report = { text: 'y'.repeat(8_000), at: 3_900 }

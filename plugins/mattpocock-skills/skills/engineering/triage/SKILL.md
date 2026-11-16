@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Move issues on the project issue tracker through a small state machine of triage roles.
 
-When the mission's first message names entries of the project roadmap to triage, or the project has no issue-tracker config at all and its tickets are local files (its `CLAUDE.md` says so), follow [Local files (no issue tracker)](#local-files-no-issue-tracker) at the end of this file instead of the flow below. A tracker of local Markdown files that the issue-tracker config sets up keeps the flow below for its own issue files.
+When the mission's first message names entries of the project roadmap to triage, or the project has no issue-tracker config at all (or only a `docs/agents/issue-tracker.md` that says there is no issue tracker) and its tickets are local files (its `CLAUDE.md` says so), follow [Local files (no issue tracker)](#local-files-no-issue-tracker) at the end of this file instead of the flow below. A tracker of local Markdown files that the issue-tracker config sets up keeps the flow below for its own issue files.
 
 If this repo treats external pull requests as a request surface (see the issue-tracker config), triage covers them too: **a PR is an issue with attached code**, using the same roles, same states, and same machine, with a few deltas marked "for a PR" below. Resolve a bare `#42` to an issue or PR per the tracker config.
 
@@ -115,7 +115,7 @@ If prior triage notes exist on the issue or PR, read them, check whether the rep
 
 ## Local files (no issue tracker)
 
-Use this section when the mission's first message names entries of the project roadmap to triage, or when the project has no issue-tracker config at all and its tickets are local files, as its `CLAUDE.md` says. There are no labels, no comments and no issues to close. What gets triaged is a batch of entries from the project roadmap's « À reprendre » section, and the result is one file, `tri.md`, in the mission's folder. Of the sections above, only these still apply: the two **category** roles (`bug`, `enhancement`), which classify each entry, the two checks of « Gather context » (step 2 below) and the grilling of its step 4; the state roles, the labels, the comments and the briefs do not.
+Use this section when the mission's first message names entries of the project roadmap to triage, or when the project has no issue-tracker config at all (or only a `docs/agents/issue-tracker.md` that says there is no issue tracker) and its tickets are local files, as its `CLAUDE.md` says. There are no labels, no comments and no issues to close. What gets triaged is a batch of entries from the project roadmap's « À reprendre » section, and the result is one file, `tri.md`, in the mission's folder. Of the sections above, only these still apply: the two **category** roles (`bug`, `enhancement`), which classify each entry, the two checks of « Gather context » (step 2 below) and the grilling of its step 4; the state roles, the labels, the comments and the briefs do not.
 
 ### Where the entries come from
 

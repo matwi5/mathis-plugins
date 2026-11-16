@@ -311,7 +311,7 @@ async function saveRegistryOnce($: any) {
   const header = noteCarried(titled, carriedNow, noted) ?? (titled === value ? null : titled)
   // S6 : les traces relues avant chaque écriture ; ce qu'elles couvrent sort du fichier et de l'état.
   const traces = await readTraces($)
-  const joined = mergeRegistry(header ?? value, stored.value)
+  const joined = mergeRegistry(header ?? value, stored.value, noted)
   // Les traces d'abord (celle de la mission couvre le worker qui la déclare), puis la mission
   // effacée quitte l'en-tête : la fusion, qui garde l'en-tête déjà écrit, ne la retirerait jamais.
   const merged = withoutErasedRun(applyTraces(joined, traces) ?? joined)
@@ -322,7 +322,7 @@ async function saveRegistryOnce($: any) {
   }
   if (merged !== value) await quietly(() => commitRegistry($, reg => {
     const titledReg = withHeader(reg, patch) ?? reg
-    const joined = mergeRegistry(noteCarried(titledReg, carriedNow, noted) ?? titledReg, merged)
+    const joined = mergeRegistry(noteCarried(titledReg, carriedNow, noted) ?? titledReg, merged, noted)
     const next = withoutErasedRun(applyTraces(joined, traces) ?? joined)
     return next === reg ? null : next
   }, false))

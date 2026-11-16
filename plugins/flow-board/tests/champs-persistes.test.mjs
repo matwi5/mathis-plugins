@@ -57,6 +57,7 @@ const EXCEPTIONS = {
     'AgentLane.models': TOTALS,
     'AgentLane.tokens': TOTALS,
     'AgentLane.lines': TOTALS,
+    'AgentLane.sent': "dernière requête partie de la session (un modèle, un effort, une heure ; ni texte ni prompt) : un effacement partiel ne la retire pas, l'effacement entier retire la piste",
     'Rebuilt.v': IDENTITY,
   },
   'hooks/history.ts': {
@@ -82,6 +83,7 @@ const EXCEPTIONS = {
     'SessionRegistry.parts': WRITE_META,
     'AgentLane.effort': 'lu par transcript.ts (laneFromTranscript), que catch-up.ts appelle',
     'AgentLane.lines': 'lu par transcript.ts (laneFromTranscript), que catch-up.ts appelle',
+    'AgentLane.sent': `${LIVE_ONLY} ; sans lui, la barre d'état et l'onglet Agents montrent le réglage de la session`,
   },
 }
 
@@ -161,6 +163,9 @@ const NOT_FUSIONS = {
   Map: 'constructeur de la table des missions par id, pas une fusion de champ',
   isGone: 'test local d’une mission effacée par une trace, rangé avec soundTombstones',
   isShipped: 'prédicat sur la mission (livraison marquée, push compris) qui décide, avec updatedAt, si une copie close comme livrée ailleurs l’emporte sur la mission active d’ici, comme isTakenOver ; pas une fusion de champ (testé par coordination.test.ts)',
+  isTime: 'relit en forme la date de clôture d’une copie livrée et archivée, pour décider si elle retire la mission en cours d’ici (isDeliveredElsewhere) ; pas une fusion de champ (testé par coordination.test.ts)',
+  isHeldElsewhere: 'dit si la copie relue est en cours dans une autre discussion ou un autre processus, pour décider si une copie archivée ici lui cède (isResumedElsewhere) ; pas une fusion de champ (testé par marque-archivage.test.ts)',
+  activityBeforeArchive: 'relit la dernière activité d’une copie archivée avant son archivage, pour décider si une copie en cours ailleurs la reprend (isResumedElsewhere) ; pas une fusion de champ (testé par marque-archivage.test.ts)',
   prune: 'plafonne les listes du board fusionné après coup, sans choisir entre deux copies',
   soundClaim: 'relit en forme la prise que keepClaim vient de fusionner, pour décider si un autre processus de la même discussion tient la mission (isOtherProcess, comme isTakenOver) ; pas une fusion de champ (testé par mission-discussion.test.ts)',
 }
@@ -176,7 +181,7 @@ const BOARD_FIELDS = {
   runs: 'keepRun',
   deleted: 'soundTombstones',
   coo: 'mergeSeat',
-  activeId: 'sans fusion de valeur : la mission active d’ici, retirée seulement quand une autre discussion l’a reprise, que le COO l’a close comme livrée depuis, ou qu’elle a disparu (testé par mode-auto, « prise en main comprise »)',
+  activeId: 'sans fusion de valeur : la mission active d’ici, retirée seulement quand une autre discussion l’a reprise, que le COO l’a close comme livrée depuis, qu’elle a été archivée ailleurs alors que close ici, ou qu’elle a disparu (testé par mode-auto, « prise en main comprise »)',
 }
 
 /** Les champs que `mergeBoards` écrit dans le board fusionné. */

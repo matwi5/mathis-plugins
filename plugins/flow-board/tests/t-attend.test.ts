@@ -7,6 +7,7 @@ import { cooStatement, statementText } from '../hooks/coo.ts'
 import type { Board, Run } from '../types'
 import { CORPUS } from './corpus.mjs'
 import { PANE, PLUGIN, TOOL, openCoo, settle, start, stored, world, writeBoard } from './monde-coordination.ts'
+import { findAny, pressAny } from './page-coo.ts'
 
 // Le signal « t'attend ». Invariant : « Un signal "t'attend" ne survit jamais à la reprise du travail de
 // la mission, ni à sa pause, sa clôture, son archivage ou sa suppression ; une attente n'est notifiée
@@ -140,9 +141,9 @@ test('l’auto éteint, la mission redevient manuelle : un tour fini sur une que
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Éteinte' } as any)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'auto-on' })
-  await pane.press({ key: 'auto-confirm' })
-  await pane.press({ key: 'auto-off' })
+  await pressAny(pane, { key: 'auto-on' })
+  await pressAny(pane, { key: 'auto-confirm' })
+  await pressAny(pane, { key: 'auto-off' })
   await pane.unmount()
   await settle(clock, 2)
   await $.turn.start({ text: 'x', turnId: 't1' } as any)
@@ -170,8 +171,8 @@ test('le COO montre la mission qui l’attend et la notifie une fois par attente
   expect(notices.filter(n => /elle t'attend/.test(n))).toEqual(['Mission Mission “ ) qui attend : elle t\'attend'])
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: /La mission « Mission « \] qui attend » t’attend : l’étape suivante, depuis/ }), surface).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /^en pause, à reprendre$/ }), surface).toBeDefined()
+    expect(await findAny(pane, { type: 'Text', text: /La mission (M\d+\s)?« Mission « \] qui attend » t’attend : l’étape suivante, depuis/ }), surface).toBeDefined()
+    expect(await findAny(pane, { type: 'Text', text: /^en pause, à reprendre$/ }), surface).toBeDefined()
     await pane.unmount()
   }
   // Le fichier de coordination devenu illisible n'arrête pas la notification d'une nouvelle attente.
@@ -231,8 +232,8 @@ test('en auto actif, rien ne se pose : seules ses questions bloquantes attendent
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'En auto' } as any)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'auto-on' })
-  await pane.press({ key: 'auto-confirm' })
+  await pressAny(pane, { key: 'auto-on' })
+  await pressAny(pane, { key: 'auto-confirm' })
   await pane.unmount()
   await settle(clock, 1)
   await $.turn.complete({ answer: 'Fait.', durationMs: 10, isAborted: false, turnId: 'consigne', reason: 'answer' } as any)

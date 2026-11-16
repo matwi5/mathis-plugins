@@ -55,15 +55,24 @@ export type DeliveryWaits = { groups: string[]; commits: string[] }
  * (`commitTimes`, en ms) tombe dans leur fenêtre `startedAt..finishedAt`, même partagée avec une autre mission :
  * une mission validée qui attend sa livraison n'a pas de fin de fenêtre, et l'aperçu range alors en « hors
  * mission » chaque commit de la mission pas finie (la livraison 0.80.0 en avait envoyé sans avertissement).
+ * Une mission active sans groupe confié dont la dernière activité (`updatedAt`) précède le plus ancien des commits
+ * de l'aperçu n'est pas comptée : aucune activité n'y est notée depuis (un commit fait autrement que par une commande
+ * `git commit` ne l'avance pas), et une mission restée active au nom d'une discussion fermée se signalait sinon à
+ * chaque livraison. Sans commit, ou une date illisible (`updatedAt`, ou aucune date de commit lisible, au sens de
+ * `isTime`) : comptée comme avant ; de même quand `isComplete` n'est pas vrai (l'aperçu coupé aux plus récents,
+ * `PREVIEW_MAX` : son plus ancien n'est pas celui de la livraison, des commits plus anciens partent aussi). Un affichage : le clic « ▶ Livrer » n'en dépend que par la clé de la carte
+ * (`measureDeliveryPreview`, qui porte ces missions), comme pour toute mission qui entre ou sort de cette liste.
  */
-export const deliveryWaits = (runs: readonly Run[], commitTimes: readonly number[]): DeliveryWaits => {
+export const deliveryWaits = (runs: readonly Run[], commitTimes: readonly number[], isComplete = false): DeliveryWaits => {
   const waits: DeliveryWaits = { groups: [], commits: [] }
+  const oldest = isComplete !== true ? undefined : commitTimes.reduce<number | undefined>((min, at) => (isTime(at) && (min === undefined || at < min) ? at : min), undefined)
   for (const r of runs) {
     if (r.archivedAt !== undefined || r.status === 'done' || isReportValidated(r)) continue
     const to = r.finishedAt ?? Number.MAX_SAFE_INTEGER
+    const isIdleSinceCommits = oldest !== undefined && isTime(r.updatedAt) && r.updatedAt < oldest
     if ((r.groups ?? []).some(g => g.delegated !== undefined)) waits.groups.push(r.title)
     // Une mission en pause n'a pas de fin de fenêtre non plus : comptée, elle se signalerait à chaque livraison.
-    else if (r.status === 'active' && commitTimes.some(at => at >= r.startedAt && at <= to)) waits.commits.push(r.title)
+    else if (r.status === 'active' && !isIdleSinceCommits && commitTimes.some(at => at >= r.startedAt && at <= to)) waits.commits.push(r.title)
   }
   return waits
 }

@@ -458,6 +458,26 @@ const COMMITS_LINE = '« les N commits de <branche> sont dans <branche de travai
 /** La conversation est gardée : elle se reprend par son id complet, plus par `claude attach` une fois retirée. */
 const RESUME = 'sa conversation est gardée et se reprend par claude --resume <sessionId> (le champ sessionId de claude agents --json, à relever avant l’arrêt)'
 
+/**
+ * Avec le script de vérification : le sessionId est déjà sur sa ligne « session : » ; le chercher dans claude agents
+ * --json (en devinant ses clés) était un geste en trop.
+ */
+const SCRIPT_RESUME =
+  'sa conversation est gardée et se reprend par claude --resume <sessionId>, lu sur une ligne « session : » du script qui le donne (« sessionId <id> », avant ou après l’arrêt) ; aucune ne le donne (« sessionId ? », pas de sessionId) : dis-le tel quel, sans le chercher par claude agents --json'
+
+/**
+ * Où reste le compte rendu d'un worker que le relais a (`hasReport`) : `claude rm` ne l'efface pas, il ne se recopie
+ * pas ailleurs. Le chemin ne nomme que le dossier du relais et, au plus, le préfixe de la mission, son id réduit par
+ * `relayFileSlug` (`[a-z0-9-]` seulement), suivi d'un joker ; un slug vide (un id sans lettre ni chiffre) donne le
+ * dossier seul, et dit qu'aucun fichier n'y garde le compte rendu entier (`reportPath` ne l'écrit pas sans slug). Le
+ * nom entier n'est pas composé : l'id de session qui le nomme est celui que le worker lit chez lui, pas celui noté ici.
+ */
+export const relayReportNote = (runId: unknown): string => {
+  const slug = typeof runId === 'string' ? relayFileSlug(runId) : ''
+  const whole = slug !== '' ? `, et entier dans ~/.claude/flow-board/relais/${slug}.*.report.md (* : l’id de session que le worker lit chez lui) s’il a pu s’écrire` : ' (aucun fichier de ~/.claude/flow-board/relais/ ne le garde entier pour cette mission)'
+  return `son compte rendu reste au relais (claude rm ne l’efface pas) : ne le recopie nulle part ; il est dans le champ « report » de l’entrée de sa session${whole}`
+}
+
 /** Une session de l'app archivée se rouvre dans l'app : sa conversation y reste. */
 const APP_RESUME = 'sa conversation est gardée dans l’app, qui la rouvre si on la désarchive (pour la reprendre dans le CLI : claude --resume <sessionId>, si l’app en donne un)'
 
@@ -521,36 +541,96 @@ const appArchive = (title: string): string => {
 }
 
 /**
- * La demande au Claude du COO, après l'archivage de missions livrées (« ✓ Archiver », « ✓ Tout archiver (n) », une
- * rétro lancée) : archiver aussi leur discussion dans l'app, une seule demande pour toutes. Chaque discussion se nomme
- * par le titre de sa mission (`title`, déjà neutralisé et cité par l'appelant) et, quand il est sûr, son id de session
- * (`id`, contrôlé par `isSessionId` ici aussi : un id hors forme n'est jamais passé). L'accord se demande toujours, en
- * une ligne qui les nomme : celui de /flow archive on ne nomme que les sessions des workers d'une fermeture ; sans id
- * sûr, une discussion ne s'archive jamais d'office. Au terminal (pas d'outil archive_session), rien.
+ * La racine du dépôt d'une mission, citée dans la procédure de fermeture pour y comparer le `cwd` d'une session :
+ * `repoDir` de la racine du projet, seulement si elle est absolue et qu'aucune neutralisation ne la change (ni fin de
+ * ligne, ni guillemet « », ni crochet) ; sinon `null`, et la procédure s'arrête à `claude stop` pour toutes.
  */
-export const missionSessionsArchiveText = (all: readonly { title: string; id?: string; day?: string }[]): string => {
-  // Deux missions nées dans la même discussion la nomment une fois, avec les titres des deux (elle peut porter l'un ou l'autre).
-  const sessions = all.flatMap((s, i) => {
-    if (!isSessionId(s.id)) return [s]
+export const closingRepo = (root: unknown): string | null => {
+  if (typeof root !== 'string' || root.length > 400) return null
+  const repo = repoDir(root)
+  return /^(?:\/|[A-Za-z]:\/)/.test(repo) && neutralInPrompt(repo) === repo && !/[`$]/.test(repo) ? repo : null
+}
+
+/**
+ * Les discussions à nommer, d'après les missions `all` (titre déjà neutralisé et cité, id de session) : seulement un id
+ * en forme (`isSessionId`) ; deux missions nées dans la même discussion la nomment une fois, avec les titres des deux
+ * (elle peut porter l'un ou l'autre).
+ */
+const closableSessions = (all: readonly { title: string; id?: string }[]): { id: string; title: string }[] =>
+  all.flatMap((s, i) => {
+    if (!isSessionId(s.id)) return []
     if (all.findIndex(o => o.id === s.id) !== i) return []
-    const same = all.filter(o => o.id === s.id)
-    return [same.length === 1 ? s : { ...s, title: same.map(o => o.title).join(' ou '), day: undefined }]
+    return [{ id: s.id, title: all.filter(o => o.id === s.id).map(o => o.title).join(' ou ') }]
   })
-  const isMany = all.length > 1
-  const isManyAsks = sessions.length > 1
-  const named = sessions.map(s => `la discussion de la mission ${s.title}${s.day ? `, livrée le ${s.day}` : ''} (${isSessionId(s.id) ? `id de session ${s.id}` : 'pas d’id sûr : cherche-la par ce titre'})`).join(' ; ')
-  return `◆ COO : ${isMany ? 'ces missions livrées sont archivées' : 'cette mission livrée est archivée'} dans le tableau de bord. ${isManyAsks ? 'Leur discussion' : isMany ? 'Leur discussion commune' : 'Sa discussion'} dans l’app Claude Desktop peut s’archiver aussi : ${named}. S’il n’y a pas d’outil archive_session ici (au terminal), ne fais rien et n’en dis rien. Sinon, ${askArchiveConsent(isManyAsks ? 'ces discussions' : 'cette discussion', isManyAsks ? 'chacune' : 'la discussion')} ; mon oui donné, ${isManyAsks ? 'archive celles qu’il nomme, chacune' : 'archive-la'} ${archiveWith('flow-board : mission livrée, archivée')}. Une session se cherche par son id, puis, sans id ou introuvable par lui, par le titre exact de sa mission (ou de l’une d’elles ; un titre cité qui finit par « … » est coupé : son début) : ni une session de ses workers (titre « <mission> > … »), ni sa rétro (« Rétrospective · … ») ; aucune ou plusieurs sessions à ce titre exact, introuvable ou déjà archivée : dis-le, sans autre geste. Jamais la discussion où tu tournes, même si son id ou son titre correspond. Si ta dernière ligne « COO seat » dit que tu ne tiens plus le siège, n’archive rien.`
+
+/** Les discussions nommées dans une demande au Claude du COO : le titre cité de leur mission et leur id de session. */
+const namedSessions = (sessions: readonly { id: string; title: string }[]): string => sessions.map(s => `la discussion de la mission ${s.title} (id de session ${s.id})`).join(' ; ')
+
+/**
+ * La demande unique pour les discussions des missions archivées sans marque (avant que le tableau de bord note le clic,
+ * ou par un chemin qui ne marque pas : rien ne vaut accord pour elles), remise au Claude du COO à chaque relevé tant
+ * que son repère n'est pas posé (il la pose une fois, puis attend la réponse)
+ * (`all` : comme pour `missionSessionsArchiveText` ; `more` : celles d'au-delà du plafond, jamais proposées). Elle fait
+ * chercher celles qui existent encore (`claude agents --json --all` au terminal, `list_sessions` dans l'app), les nommer à
+ * la personne en une ligne et attendre son oui tapé dans la discussion du COO ; puis le dire au tableau de bord
+ * (`coordinate.unmarked` : `yes`, `no` ou `none`), seul dans son appel, et, sur un oui, dans le même tour, suivre la
+ * procédure de fermeture, ce oui cité comme accord. Aucun id en forme : `null`.
+ */
+export const unmarkedAskText = (all: readonly { title: string; id?: string }[], repo: string | null, more: number): string | null => {
+  const sessions = closableSessions(all)
+  const procedure = missionSessionsArchiveText(all, repo, 'typed')
+  if (sessions.length === 0 || procedure === null) return null
+  const isMany = sessions.length > 1
+  const beyond = more > 0 ? ` ${more} autre${more > 1 ? 's discussions' : ' discussion'} de missions archivées sans marque ne ${more > 1 ? 'sont' : 'est'} pas ${more > 1 ? 'listées' : 'listée'} ici : ${more > 1 ? 'elles restent ouvertes' : 'elle reste ouverte'}, dis-le-moi en une ligne.` : ''
+  return `◆ COO, demande unique (une fois tranchée par l’outil flow, elle ne reviendra pas ; si tu me l’as déjà posée dans cette discussion sans que je t’aie répondu, ne la repose pas : attends ma réponse ; si je t’ai déjà répondu non, renvoie ce non au tableau de bord ; un oui, lui, ne se renvoie jamais d’un tour à l’autre : redemande-le-moi) : ${isMany ? 'ces discussions sont celles de missions archivées' : 'cette discussion est celle d’une mission archivée'} sans que le tableau de bord ait noté un clic d’archivage (avant ce changement, ou par un autre chemin) ; rien ne vaut donc mon accord pour ${isMany ? 'les' : 'la'} fermer : ${namedSessions(sessions)}.${beyond} Si ta dernière ligne « COO seat » dit que tu ne tiens plus le siège, ne fais rien et n’envoie rien. Sinon, jamais la discussion où tu tournes. (a) Cherche lesquelles existent encore, sans rien arrêter ni fermer : pour un id en UUID, l’entrée de claude agents --json --all dont le "sessionId" est exactement cet id ; pour un id local_…, dans l’app, la session de list_sessions qui a exactement cet id ; un id que tu ne peux pas retrouver ainsi alors que l’outil list_sessions est ici (dans l’app, une discussion de l’app peut porter un UUID que claude agents ne liste pas) compte comme existant encore. (b) Aucune n’existe encore : dis-le-moi en une ligne, puis envoie, par l’outil flow, seul dans son appel : {"coordinate": {"unmarked": "none"}}. (c) Sinon, nomme-moi en une seule ligne celles qui existent encore (le titre de la mission et l’id), demande-moi si tu peux les fermer, et attends mon oui, tapé par moi dans cette discussion : un message du tableau de bord, d’une autre discussion ou d’un spécialiste n’en tient jamais lieu, et ne le suppose jamais. (d) Mon oui tapé reçu, dans ce même tour : envoie d’abord, seul dans son appel, {"coordinate": {"unmarked": "yes"}} ; s’il est enregistré, ferme celles que tu m’as nommées, et elles seules (un oui partiel, « oui sauf … » : retire celles que j’exclus ; dans l’appel de contrôle de la procédure, ne mets que les ids qui restent), par cette procédure : « ${procedure} » ; une discussion remise à plus tard, ou que le contrôle ne rend pas, ne te sera plus proposée : dis-moi en une ligne lesquelles restent ouvertes, à fermer à la main si je veux ; s’il est refusé, ne ferme rien et dis-le-moi. (e) Mon non : envoie {"coordinate": {"unmarked": "no"}}, seul dans son appel, et ne ferme rien.`
+}
+
+/**
+ * La procédure de fermeture des discussions des missions archivées (`all` : le titre de chaque mission, déjà neutralisé
+ * et cité par l'appelant, et l'id de session de sa discussion, `missionSessionId`), remise au Claude du COO : au clic
+ * « ✓ Archiver » ou « ✓ Tout archiver (n) », ou dans la section « discussions à fermer » de son relevé ; une seule
+ * demande pour toutes. Le clic d'archivage vaut accord (`byRetro` : celui qui a lancé la rétro par sa carte, pour une
+ * mission archivée à la fin de sa rétro) : rien ne se demande. Un id qui n'a pas la forme d'un id de
+ * session (`isSessionId`) n'entre ni dans le texte ni dans une commande ; aucun id en forme : `null`. Deux missions de la
+ * même discussion la nomment une fois, avec leurs deux titres. Le texte fait d'abord redemander au tableau de bord
+ * lesquelles sont encore à fermer (`coordinate.toClose`), puis, au terminal (un UUID), cherche l'entrée dont le
+ * `sessionId` est exactement cet id dans `claude agents --json --all`, et ne passe à `claude stop` puis `claude rm` que
+ * son champ `id`, jamais un nom ni une option ; un `cwd` qui n'est pas la racine du dépôt (`repo`, `closingRepo` ;
+ * `null` : aucune n'est sûre) ne mène qu'à `claude stop`. Dans l'app (un id `local_…`), `archive_session`, le clic cité
+ * comme accord. Il finit par le compte rendu (`coordinate.discussionsClosed`) et une ligne à la personne. `consent` :
+ * `typed` pour la demande unique (`unmarkedAskText`), où l'accord cité est le oui que la personne a tapé, jamais un clic.
+ */
+export const missionSessionsArchiveText = (all: readonly { title: string; id?: string; byRetro?: boolean }[], repo: string | null, consent: 'click' | 'typed' = 'click'): string | null => {
+  const sessions = closableSessions(all)
+  if (sessions.length === 0) return null
+  const isMany = sessions.length > 1
+  // Une mission archivée à la fin de sa rétro : l'accord est le clic qui a lancé la rétro par sa carte.
+  const byRetro = all.some(s => isSessionId(s.id) && s.byRetro === true)
+  const click = consent === 'typed' ? 'Mon oui, tapé dans cette discussion, pour celles que tu m’as nommées et que je n’ai pas exclues,' : byRetro ? 'Mon clic d’archivage, ou celui qui a lancé sa rétro par sa carte,' : 'Mon clic d’archivage'
+  const cited = consent === 'typed' ? 'mon oui tapé dans cette discussion' : byRetro ? 'mon clic d’archivage, ou celui qui a lancé sa rétro, dans le tableau de bord' : 'mon clic d’archivage dans le tableau de bord'
+  const named = namedSessions(sessions)
+  // Sur un oui tapé, le contrôle ne porte que les ids que la personne a acceptés (un oui partiel en retire) : jamais la liste entière écrite d'avance.
+  const ids = consent === 'typed' ? '<les ids que j’ai acceptés, entre guillemets>' : sessions.map(s => `"${s.id}"`).join(', ')
+  // Sans racine sûre, le texte ne porte aucune branche qui mène à claude rm.
+  const stopOnly = 'claude stop <id> si elle a encore un "pid", jamais claude rm (il supprimerait son worktree), puis, l’entrée relue sans "pid", état « arrêtée seulement »'
+  const end =
+    repo !== null
+      ? `si son "cwd" (un \\ lu comme /) n’est pas exactement « ${repo} », la racine du dépôt : ${stopOnly}. Si son "cwd" est exactement cette racine : claude stop <id> si elle a encore un "pid", puis, l’entrée relue sans "pid", claude rm <id> sans aucune option, état « fermée » ; une entrée à la racine du dépôt déjà sans "pid" passe directement à claude rm. Si claude rm refuse, l’état est « arrêtée seulement », avec la raison du refus ; n’ajoute jamais d’option à claude rm, même si son refus en suggère une`
+      : `la racine du dépôt n’est pas sûre ici : pour chacune, ${stopOnly}`
+  return `◆ COO : ${all.length > 1 ? 'ces missions sont archivées' : 'cette mission est archivée'} dans le tableau de bord ; ${isMany ? 'leurs discussions sont' : 'sa discussion est'} à fermer : ${named}. ${click} vaut mon accord pour fermer ${isMany ? 'chacune de ces discussions' : 'cette discussion'} : ne me le demande pas. Si ta dernière ligne « COO seat » dit que tu ne tiens plus le siège, ne ferme rien et n’en dis rien ; sinon, suis ces étapes. Jamais la discussion où tu tournes, même si son id correspond, au terminal comme dans l’app. (1) d’abord, redemande au tableau de bord lesquelles sont encore à fermer, par l’outil flow, seul dans son appel : {"coordinate": {"toClose": [${ids}]}} ; seules celles que sa réponse rend se ferment, ne touche à aucune autre. (2) Pour un id de session en UUID, au terminal : lis claude agents --json --all et prends l’entrée dont le "sessionId" est exactement cet id ; aucune : absente, rien à faire (si l’outil archive_session est ici, dans l’app, elle peut être une discussion de l’app restée ouverte, que cet id ne retrouve pas : rends-la absente avec "why": "introuvable au terminal" et dis-moi en une ligne de l’archiver à la main si elle est encore là) ; plus d’une : rien, dis-le. Une entrée qui a encore un "pid" doit porter "status": "idle" et pas "state": "working" ("state": "blocked" d’une session qui a fini ne compte pas) : tout autre status (busy, absent, autre), ou "state": "working", la remet à plus tard, sans compte rendu pour elle, dis-le en une ligne. <id> est le champ "id" de cette entrée (lettres, chiffres, _ et -, sans - en tête, sinon rien) : jamais le sessionId complet, jamais un nom ni un titre (claude stop et claude rm acceptent une partie d’un nom). Puis : ${end}. Si claude stop refuse, ou que l’entrée garde son "pid" après lui, remets-la à plus tard, dis-le en une ligne. (3) Pour un id local_…, dans l’app : archive-la ${archiveWith('flow-board : mission archivée, discussion fermée')}, en citant ${cited} comme mon accord pour cette discussion, sans ligne de demande ; état « archivée dans l’app » ; si l’app refuse, ou qu’il n’y a pas d’outil archive_session ici, remets-la à plus tard, dis-le en une ligne. (4) Compte rendu, par l’outil flow, seul dans son appel : {"coordinate": {"discussionsClosed": [{"session": "<id de session>", "state": "<état>", "why": "<raison>"}]}}, une entrée par discussion traitée, aucune pour une discussion remise à plus tard ; "state" vaut "closed" (fermée), "stopped" (arrêtée seulement), "app" (archivée dans l’app) ou "absent" (absente) ; "why" seulement pour un arrêt seul ou une absence à dire. Puis dis-moi en une ligne ce qui a été fermé, arrêté seulement, archivé dans l’app, absent ou laissé.`
 }
 
 /**
  * L'id de session de la discussion d'une mission archivée, pour `missionSessionsArchiveText` : `bornIn`, puis `owner`,
  * le premier qui a la forme d'un id de session (`isSessionId`). `null` : la discussion ne se nomme pas du tout, parce
  * qu'un de ces ids est celui de cette discussion-ci (`here`, le COO) ou celui d'une autre mission non archivée (une
- * discussion partagée, encore au travail) ; `undefined` : pas d'id sûr, la discussion se cherche par son titre.
+ * discussion partagée, encore au travail) ; `undefined` : pas d'id sûr, la discussion n'est jamais nommée (ni cherchée par
+ * son titre).
  */
 export const missionSessionId = (run: Run, runs: readonly Run[], here: string): string | undefined | null => {
   const ids = [run.bornIn, run.owner].filter(isSessionId)
-  const isShared = (id: string) => runs.some(o => o.id !== run.id && o.archivedAt === undefined && (o.bornIn === id || o.owner === id))
+  // Une autre mission pas vraiment archivée (sans date d'archivage lisible, ou archivée mais redevenue active) la tient encore.
+  const isShared = (id: string) => runs.some(o => o.id !== run.id && !(typeof o.archivedAt === 'number' && Number.isFinite(o.archivedAt) && o.archivedAt >= 0 && o.status !== 'active') && (o.bornIn === id || o.owner === id))
   if (ids.some(id => id === here || isShared(id))) return null
   return ids[0]
 }
@@ -865,6 +945,17 @@ export const branchCleanup = (input: CleanupInput): { text: string; branches: st
   return { text, branches: [...toDelete.keys()] }
 }
 
+/**
+ * Le point de la procédure qui saute `claude rm` quand aucune session n'est notée pour l'envoi (ni la sortie de son
+ * lancement ni son entrée de relais ne l'ont donnée) : la vraie raison, la session gardée, et ce que la personne peut lancer
+ * elle-même, seulement une fois le compte rendu parvenu (son dossier de job, que `claude rm` efface, peut en être le
+ * seul exemplaire) ; Claude ne lance pas `claude rm` et ne cherche aucun id pour cela (invariant de la session notée).
+ * Le rapport dicté n'a ni `worktree` ni `sessionId` : avec `worktree`, l'arrêt se lirait comme une session gardée
+ * faute de compte rendu (`isKeptForReport`), qu'aucun compte rendu ne débloquera ici.
+ */
+const NO_SESSION_KEPT =
+  'pas de claude rm : aucune session n’est notée pour cet envoi, donc la session est gardée ; ne lance pas claude rm et ne cherche pas son id pour cela ; si son compte rendu ne t’est parvenu ni par SendMessage ni par l’outil flow, dis-le-moi et ne me propose pas claude rm : il effacerait son dossier de job, peut-être le seul exemplaire de ce compte rendu ; sinon, dis-moi que je peux la retirer moi-même, une fois le worktree retiré, par claude rm suivi de l’id court que montre claude agents (une session de l’app n’y est pas : elle s’archive dans l’app, jamais par claude rm) ; rapporte cette fermeture en "state": "stopped", pas "closed" (la session reste), avec "why": "aucune session notée pour cet envoi : session gardée", sans "worktree" ni "sessionId"'
+
 /** La fin d'un refus de fermeture : rien ne se ferme, et l'arrêt se rapporte. */
 const CLOSE_NOTHING = 'Ne ferme rien : n’arrête aucune session, ne retire aucun worktree ; dis-le-moi, puis envoie "state": "stopped" avec cette raison.'
 
@@ -881,9 +972,11 @@ const knownBranches = (target: CloseTarget, worktree: string, seq?: number): str
  * La procédure d'une fermeture dans un dépôt, quand le script de vérification est là (`closingScript`) : la
  * commande qui vérifie (lecture seule) et les gestes à faire sur son verdict, au lieu des 11 000 caractères de
  * la procédure entière. Les mêmes gardes : rien d'arrêté sans « SÛR », rien de retiré sans « SÛR » de la même
- * commande relancée après l'arrêt (`--apres-arret`), la branche jamais supprimée, `claude rm` selon le relais.
+ * commande relancée après l'arrêt (`--apres-arret`), la branche jamais supprimée, `claude rm` selon la session notée et le relais.
+ * Le point 4 fait lire le sessionId sur la ligne « session : » du script (`SCRIPT_RESUME`), et, quand le relais a le
+ * compte rendu, dit qu'il y reste (`relayReportNote`, `runId` : l'id de la mission, qui n'y entre que réduit).
  */
-const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, script: string, session: string | undefined, seq: number | undefined, isApp: boolean, isKept: boolean, hasReport: boolean): string => {
+const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, script: string, session: string | undefined, seq: number | undefined, isApp: boolean, isKept: boolean, hasReport: boolean, runId: unknown): string => {
   const cmd = `node ${shellQuote(script)} --worktree ${shellQuote(d.worktree)} ${knownBranches(target, d.worktree, seq).map(b => `--branche ${shellQuote(b)}`).join(' ')}${session ? ` --session ${shellQuote(session)}` : ''}`
   const id = session !== undefined ? shellQuote(session) : "'<id>'"
   const gone = isKept
@@ -893,9 +986,11 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
     ? '3) pas de claude rm : une session de l’app n’est pas dans la liste du CLI ; '
     : target.kind === 'items'
       ? '3) pas de claude rm : la session des pistes ne dépose pas son compte rendu au relais ; '
-      : !hasReport
-        ? `3) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage), la session est gardée ; rapporte "state": "stopped", "why": "compte rendu absent du relais : session gardée", avec "worktree" et "sessionId" ; `
-        : `3) seulement une fois le retrait constaté (la même commande relancée rend DÉJÀ RETIRÉ) : claude rm ${id}, sans aucune option ; s’il refuse pour des commits non poussés, ne force rien et dis-le-moi ; `
+      : session === undefined
+        ? `3) ${NO_SESSION_KEPT} ; `
+        : !hasReport
+          ? `3) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage), la session est gardée ; rapporte "state": "stopped", "why": "compte rendu absent du relais : session gardée", avec "worktree" et "sessionId" ; `
+          : `3) seulement une fois le retrait constaté (la même commande relancée rend DÉJÀ RETIRÉ) : claude rm ${id}, sans aucune option ; s’il refuse pour des commits non poussés, ne force rien et dis-le-moi ; `
   return (
     `Ferme ${d.what} et son worktree par le script de vérification, qui ne fait que lire ; rien n’est forcé, la fermeture ne fusionne jamais. ` +
     `0) si une question de son compte rendu attend encore une réponse, ne ferme rien et dis-le-moi ; ` +
@@ -905,7 +1000,7 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
       : '2) après l’arrêt fait sur SÛR, ') +
     `la même commande avec --apres-arret : seulement sur SÛR, la commande de retrait qu’il imprime ; sur ATTENDRE, la relancer comme le dit sa dernière ligne ; la branche reste : ne la supprime pas ; ` +
     removal +
-    `4) dis-moi ce qui a été fermé et ce qui reste, avec la ligne ${COMMITS_LINE} ; ${isApp ? APP_RESUME : RESUME}.`
+    `4) dis-moi ce qui a été fermé et ce qui reste, avec la ligne ${COMMITS_LINE} ; ${isApp ? APP_RESUME : SCRIPT_RESUME}${hasReport ? ` ; ${relayReportNote(runId)}` : ''}.`
   )
 }
 
@@ -913,7 +1008,7 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
  * La procédure de fermeture d'un worker rendu, pour Claude dans la discussion de la mission.
  * Dans un dépôt : retrouver la branche et la ligne du worktree, vérifier la fusion, l'arbre, les
  * instantanés de revue et que la session ne travaille pas ; puis arrêter, revérifier, retirer le
- * worktree, `claude rm` sans option, seulement avec le compte rendu de la session au relais (`hasReport`) et jamais
+ * worktree, `claude rm` sans option, seulement avec une session notée pour l'envoi et son compte rendu au relais (`hasReport`) et jamais
  * pour une session de l'app ou de pistes ; un worktree déjà retiré au départ ne mène à `claude rm` que s'il l'a été
  * par la fermeture précédente, gardée faute de compte rendu (`isKeptForReport`). Sans git : vérifier, puis arrêter
  * la session seulement.
@@ -964,7 +1059,7 @@ export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport,
   }
   // Le script des vérifications là (le plugin installé) : sa commande et les gestes, pas la procédure entière.
   const script = closingScript.path
-  if (isScriptPath(script)) return scriptProcedure(d, target, script, session, seq, isApp, !isApp && hasReport && isKeptForReport(run, target, seq, noted, send), hasReport)
+  if (isScriptPath(script)) return scriptProcedure(d, target, script, session, seq, isApp, !isApp && hasReport && isKeptForReport(run, target, seq, noted, send), hasReport, run.id)
   // L'entrée de la session dans claude agents --json n'est retenue que si son cwd est le worktree vérifié.
   const entry = `son entrée dans claude agents --json (${session ? `id ${session}` : `son name commence par ${d.titles}`}), retenue seulement si son cwd est <worktree> ; une autre entrée dont le cwd est dans <worktree> (une autre session au travail dedans) arrête la fermeture`
   const idle = isApp
@@ -984,11 +1079,13 @@ export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport,
     ? '10) pas de claude rm : une session de l’app n’est pas dans la liste du CLI ; '
     : target.kind === 'items'
       ? '10) pas de claude rm : la session des pistes ne dépose pas son compte rendu au relais, et claude rm effacerait son dossier de job ; dis-moi que la session reste dans la liste de claude agents ; '
-      : !hasReport
-        ? `10) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage) ; la fermeture se repropose d'elle-même quand il arrive au relais, ou la personne la relance par « ↻ Relancer la fermeture » (claude rm effacerait son dossier de job, peut-être le seul exemplaire de ce compte rendu : la session est gardée) ; rapporte cette fermeture en "state": "stopped", pas "closed" (la session reste), avec "why": "compte rendu absent du relais : session gardée", "worktree": "<le worktree retiré>" et "sessionId" ; une fois son compte rendu au relais, la fermeture se repropose et la suivante lance claude rm ; `
-        : isKept
-          ? `10) dans le CLI, seulement si le point 2 a constaté le worktree retiré par la fermeture précédente (git worktree list --porcelain n’a aucun bloc pour <dossier> et test -e '<dossier>' échoue ; sinon arrête-toi) : claude rm ${id}, sans aucune option (déjà retirée du CLI : pas de claude rm) ; ${unpushed}`
-          : `10) dans le CLI, seulement une fois le worktree retiré par cette fermeture (git worktree remove a réussi, git worktree list --porcelain n’a plus de bloc pour <worktree> et test -e '<worktree>' échoue ; sinon arrête-toi) : claude rm ${id}, sans aucune option (une session de l’app, ou déjà retirée du CLI : pas de claude rm ; un worktree constaté déjà retiré au point 2 : pas de claude rm, dis-moi que la session reste dans la liste de claude agents) ; ${unpushed}`
+      : session === undefined
+        ? `10) ${NO_SESSION_KEPT} ; `
+        : !hasReport
+          ? `10) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage) ; la fermeture se repropose d'elle-même quand il arrive au relais, ou la personne la relance par « ↻ Relancer la fermeture » (claude rm effacerait son dossier de job, peut-être le seul exemplaire de ce compte rendu : la session est gardée) ; rapporte cette fermeture en "state": "stopped", pas "closed" (la session reste), avec "why": "compte rendu absent du relais : session gardée", "worktree": "<le worktree retiré>" et "sessionId" ; une fois son compte rendu au relais, la fermeture se repropose et la suivante lance claude rm ; `
+          : isKept
+            ? `10) dans le CLI, seulement si le point 2 a constaté le worktree retiré par la fermeture précédente (git worktree list --porcelain n’a aucun bloc pour <dossier> et test -e '<dossier>' échoue ; sinon arrête-toi) : claude rm ${id}, sans aucune option (déjà retirée du CLI : pas de claude rm) ; ${unpushed}`
+            : `10) dans le CLI, seulement une fois le worktree retiré par cette fermeture (git worktree remove a réussi, git worktree list --porcelain n’a plus de bloc pour <worktree> et test -e '<worktree>' échoue ; sinon arrête-toi) : claude rm ${id}, sans aucune option (une session de l’app, ou déjà retirée du CLI : pas de claude rm ; un worktree constaté déjà retiré au point 2 : pas de claude rm, dis-moi que la session reste dans la liste de claude agents) ; ${unpushed}`
   return (
     `Ferme ${d.what}, rendue ici, et son worktree. Vérifie d’abord, n’arrête et ne retire qu’ensuite, une commande par étape, lancée dans ce dossier (celui de la mission). ` +
     `${FSMONITOR} ` +
@@ -1008,3 +1105,6 @@ export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport,
     `11) dis-moi ce qui a été fermé et ce qui reste, avec la ligne ${COMMITS_LINE} ; ${isApp ? APP_RESUME : RESUME}.`
   )
 }
+
+/** Un id en nom de fichier du relais : minuscules, chaque suite de signes hors `[a-z0-9]` en tiret. */
+export const relayFileSlug = (id: string): string => id.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')

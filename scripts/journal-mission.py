@@ -31,7 +31,12 @@ transcripts. Le script le fait, en lecture seule :
    chemin, et la discussion où elle continue n'est pas lue). Un processus tué n'écrit pas de fin : sa
    reprise ne se voit alors pas ;
 4. il sort une ligne par événement, triée par date (UTC) : les lignes du journal de la mission et,
-   entrelacés, les événements de ses discussions, chacun avec le début de l'id de sa discussion.
+   entrelacés, les événements de ses discussions, chacun avec le début de l'id de sa discussion ;
+5. un journal au plafond (`LOG_CAP` entrées ou plus, lisibles ou non : le mod n'en garde que les plus
+   récentes) le dit en tête, après la ligne « Mission … » : la date de la plus ancienne entrée gardée (ce
+   qui précède est perdu ; avec des entrées sans date lisible, celle de la plus ancienne entrée datée, et
+   leur nombre), le début de la mission (le `startedAt` de sa première phase) et le premier
+   démarrage des discussions lues, qui n'est pas celui de la mission ; sous le plafond, rien.
 
 Une date hors de 2020 à 2100, sans fuseau, ou qui ne se lit pas, est écartée à la lecture, comme une ligne
 de transcript illisible. Codes : 0 journal sorti, 1 mission introuvable ou désignée plusieurs fois,
@@ -52,6 +57,9 @@ LATEST = datetime(2100, 1, 1, tzinfo=timezone.utc).timestamp() * 1000
 # Les rôles d'une discussion pour la mission, dans l'ordre où ils se disent.
 ROLES = (("owner", "titulaire"), ("bornIn", "née dans"))
 SHORT = 8
+# Le plafond du journal d'une mission : `LIMITS.log` de plugins/flow-board/hooks/basics.ts (le mod y garde les
+# entrées les plus récentes). Un test compare les deux valeurs.
+LOG_CAP = 80
 
 
 def base_dir():
@@ -206,6 +214,32 @@ def transcripts(base, session):
     return found
 
 
+def capped(run, events, count):
+    """Les lignes d'en-tête d'un journal au plafond (`count` entrées, lisibles ou non) : la plus ancienne
+    entrée datée gardée (et le nombre d'entrées sans date lisible, qui peuvent être plus anciennes), le début
+    de la mission (le `startedAt` de sa première phase) et le premier démarrage des discussions lues, pour
+    qu'une lecture sache que le début du journal manque."""
+    kept = [e[0] for e in events if e[1] is None]
+    undated = count - len(kept)
+    if not kept:
+        oldest = "aucune entrée gardée n'a de date lisible"
+    elif undated:
+        oldest = f"la plus ancienne entrée datée gardée date du {shown(min(kept))} ({undated} sans date lisible)"
+    else:
+        oldest = f"la plus ancienne gardée date du {shown(min(kept))}"
+    lines = [f"journal au plafond ({LOG_CAP} entrées) : {oldest} ; ce qui précède est perdu"]
+    phases = run.get("phases")
+    first = phases[0] if isinstance(phases, list) and phases and isinstance(phases[0], dict) else {}
+    started = as_ms(first.get("startedAt"))
+    lines.append(f"mission commencée le {shown(started)} (début de sa première phase)" if started is not None
+                 else "début de la mission inconnu (date de sa première phase absente ou illisible)")
+    starts = sorted((e for e in events if e[1] is not None and e[2] == "démarrage"), key=lambda e: e[0])
+    lines.append(f"premier démarrage d'une discussion lue : {shown(starts[0][0])} (discussion {starts[0][1][:SHORT]}), "
+                 f"le début d'une discussion, pas celui de la mission" if starts
+                 else "premier démarrage d'une discussion inconnu (aucun transcript lu, ou sans entrée datée)")
+    return lines
+
+
 def journal(wanted, base=None):
     """Les lignes à sortir, et le code de sortie."""
     base = base or base_dir()
@@ -250,6 +284,8 @@ def journal(wanted, base=None):
                 events += transcript_events(transcript, session)
             except OSError as err:
                 lines.append(f"{label} : transcript illisible ({err})")
+    if isinstance(log, list) and len(log) >= LOG_CAP:
+        lines[1:1] = capped(run, events, len(log))
     lines.append("")
     for ms, session, text in sorted(events, key=lambda e: e[0]):
         who = "mission" if session is None else f"discussion {session[:SHORT]}"

@@ -5,7 +5,8 @@
 // ici : la plus récente est gardée (`keepRun`), l'autre lui apporte ses champs fusionnés à part. « Les
 // deux ordres » échangent la copie gardée et l'autre (chacune à son tour la plus récente), et aussi la
 // copie d'ici et celle du stockage : une valeur fautive se trouve ainsi une fois dans la copie gardée,
-// une fois dans l'autre.
+// une fois dans l'autre. Les cas « matrice · archivage fait ailleurs », en fin de fichier, ne sont pas des cases de
+// la matrice : la mission y est montrée ici (`activeId`), et la copie relue archivée ailleurs.
 
 import { expect, test } from 'claude-code/testing'
 
@@ -234,4 +235,94 @@ test('matrice · deleted · valeur absente : un board sans liste de traces n’e
   const gone: Board = { ...emptyBoard('/p', 'p'), session: 'sb', activeId: null, runs: [], deleted: [{ id: run.id, at: T0 + 5 }] }
   expect(mergeBoards(old, gone).runs).toEqual([])
   expect(mergeBoards(gone, old).runs).toEqual([])
+})
+
+// --- archivedAt : archivage fait ailleurs sur la mission que la discussion montre -----
+//
+// La copie relue est archivée (par le COO) et plus récente ; la copie d'ici est celle de la mission que la
+// discussion montre. Invariant : un archivage fait ailleurs sur une mission close n'est jamais défait par la
+// copie de sa discussion, tandis qu'une mission en cours n'est jamais archivée sous elle.
+
+/** La copie d'ici (montrée par cette discussion, au statut donné) et la copie relue, archivée à sa date. */
+const archivedElsewhere = (status: Run['status'], here: Partial<Run> = {}, there: Partial<Run> = {}, at = { here: T0 + 1, there: T0 + 2 }): { local: Board; stored: Board; run: Run } => {
+  const run: Run = { ...base(), status, ...(status === 'active' ? { owner: 'sa' } : {}) }
+  const local: Board = { ...emptyBoard('/p', 'p'), session: 'sa', activeId: run.id, runs: [{ ...run, ...here, updatedAt: at.here } as Run] }
+  const copy = { ...run, status, owner: undefined, ...there, archivedAt: at.there, updatedAt: at.there } as Run
+  const stored: Board = { ...emptyBoard('/p', 'p'), session: 'coo', activeId: null, runs: [copy] }
+  return { local, stored, run }
+}
+
+test('matrice · archivage fait ailleurs · close (done), montrée ici : la copie archivée l’emporte ; la discussion ne montre plus la mission', () => {
+  const { local, stored } = archivedElsewhere('done')
+  const merged = mergeBoards(local, stored)
+  expect(merged.activeId).toBeNull()
+  expect(merged.runs[0]!.archivedAt).toBe(T0 + 2)
+  expect(merged.runs[0]!.status).toBe('done')
+})
+
+test('matrice · archivage fait ailleurs · en cours (active), montrée ici : la copie d’ici garde la main, pas archivée', () => {
+  // La copie relue close et archivée, plus récente : le cas réel d'une mission reprise ici après une clôture.
+  const { local, stored, run } = archivedElsewhere('active', {}, { status: 'done' })
+  const merged = mergeBoards(local, stored)
+  expect(merged.activeId).toBe(run.id)
+  expect(merged.runs[0]!.archivedAt).toBeUndefined()
+  expect(merged.runs[0]!.status).toBe('active')
+})
+
+test('matrice · archivage fait ailleurs · copie relue archivée mais en cours : elle ne retire pas la mission close montrée ici', () => {
+  const { local, stored, run } = archivedElsewhere('done', {}, { status: 'active' })
+  const merged = mergeBoards(local, stored)
+  expect(merged.activeId).toBe(run.id)
+  expect(merged.runs[0]!.archivedAt).toBeUndefined()
+})
+
+test('matrice · archivage fait ailleurs · en pause, montrée ici : la copie d’ici garde la main, comme aujourd’hui', () => {
+  const { local, stored, run } = archivedElsewhere('paused', {}, { status: 'done' })
+  const merged = mergeBoards(local, stored)
+  expect(merged.activeId).toBe(run.id)
+  expect(merged.runs[0]!.archivedAt).toBeUndefined()
+})
+
+test('matrice · archivage fait ailleurs · pas montrée ici : la plus récente gagne, comme aujourd’hui', () => {
+  const { local, stored } = archivedElsewhere('done')
+  expect(mergeBoards({ ...local, activeId: null }, stored).runs[0]!.archivedAt).toBe(T0 + 2)
+  // Le témoin : la copie d'ici plus récente (désarchivée ici) l'emporte.
+  const newer = archivedElsewhere('done', {}, {}, { here: T0 + 3, there: T0 + 2 })
+  expect(mergeBoards({ ...newer.local, activeId: null }, newer.stored).runs[0]!.archivedAt).toBeUndefined()
+})
+
+test('matrice · archivage fait ailleurs · copie archivée plus ancienne que la close d’ici : la copie d’ici garde la main (désarchivée ou rouverte ici)', () => {
+  const { local, stored, run } = archivedElsewhere('done', {}, {}, { here: T0 + 3, there: T0 + 2 })
+  const merged = mergeBoards(local, stored)
+  expect(merged.activeId).toBe(run.id)
+  expect(merged.runs[0]!.archivedAt).toBeUndefined()
+  // Même date : la copie d'ici garde la main (« plus récente » est strict).
+  const same = archivedElsewhere('done', {}, {}, { here: T0 + 2, there: T0 + 2 })
+  expect(mergeBoards(same.local, same.stored).activeId).toBe(same.run.id)
+})
+
+test('matrice · archivage fait ailleurs · champs fusionnés à part : la copie d’ici leur apporte les siens, comme une copie close comme livrée ailleurs', () => {
+  const here = { instructed: ['cabc1234'], launch: launch(T0 + 5), waiting: [question('q1', T0 + 1)] }
+  const { local, stored } = archivedElsewhere('done', here as Partial<Run>, { instructed: ['cdef5678'] })
+  const merged = mergeBoards(local, stored).runs[0]!
+  expect(merged.archivedAt).toBe(T0 + 2)
+  expect((merged.waiting ?? []).map(q => q.id)).toEqual(['q1'])
+  expect([...(merged.instructed ?? [])].sort()).toEqual(['cabc1234', 'cdef5678'])
+  expect(merged.launch).toEqual(launch(T0 + 5))
+})
+
+// --- archivedBy : la marque du chemin d'un archivage voyage avec la copie gardée --------------------
+
+test('matrice · marque d’archivage · la marque suit la copie gardée avec sa date : copie archivée plus récente, copie désarchivée plus récente', () => {
+  const mark = { archivedAt: T0 + 2, archivedBy: { by: 'clic', at: T0 + 2 } }
+  // La copie archivée (b) plus récente : sa date et sa marque, dans les deux ordres.
+  for (const run of [bothWays({}, mark)[0]!, bothWays(mark, {})[1]!]) {
+    expect(run.archivedAt).toBe(T0 + 2)
+    expect(run.archivedBy).toEqual({ by: 'clic', at: T0 + 2 })
+  }
+  // La copie désarchivée plus récente : ni date ni marque.
+  for (const run of [bothWays(mark, {})[0]!, bothWays({}, mark)[1]!]) {
+    expect(run.archivedAt).toBeUndefined()
+    expect(run.archivedBy).toBeUndefined()
+  }
 })

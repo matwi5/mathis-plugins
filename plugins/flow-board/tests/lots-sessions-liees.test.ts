@@ -1036,7 +1036,7 @@ test('le brief des sessions de groupe : plus de renommage à la main, background
   expect(first).toContain("l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status), le tracker (statuts des tickets) et ListAgents")
   expect(first).toContain('jamais claude logs')
   // Une branche de travail qui a bougé depuis le départ du groupe se fusionne par un commit de fusion.
-  expect(first).toContain('fusionner sa branche (si la branche de travail a bougé : git merge --no-ff, conflits résolus en gardant les deux côtés, contrôles relancés)')
+  expect(first).toContain("fusionner sa branche (si la branche de travail a bougé : git merge --no-ff, conflits d'un fichier généré (l'arbre « Architecture » d'un README, par exemple) résolus comme le projet l'écrit (son CLAUDE.md ou la doc qu'il cite), les autres en gardant les deux côtés, contrôles relancés)")
   // Un groupe déjà confié : la discussion a déjà son nom, pas de nouvelle demande.
   await ui.press({ key: 'launch-linked-A' })
   await ui.unmount()

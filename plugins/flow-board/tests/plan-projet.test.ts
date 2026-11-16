@@ -8,6 +8,7 @@ import type { Board, Run } from '../types'
 import { PANE, PLUGIN, TOOL, coordFile, entries, openCoo, seatOf, settle, start, stored, world, writeBoard } from './monde-coordination.ts'
 import { cooStatement, statementText } from '../hooks/coo.ts'
 import { CORPUS } from './corpus.mjs'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // Le plan des vagues du projet, calculé par le code. Invariant : « Un groupe ne part jamais avant ce que
 // le plan validé lui fait attendre, sauf forçage ; un plan illisible ne lance rien, et les retenues de
@@ -167,7 +168,7 @@ const BAND = {
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 160, scroll: { offset: 0, bodyRows: 12 }, view: {} },
 } as const
-const texts = async (ui: any): Promise<string> => (await ui.findAll({ type: 'Text' })).map((t: any) => String(t.text ?? '')).join(' | ')
+const texts = async (ui: any): Promise<string> => (await findAllAny(ui, { type: 'Text' })).map((t: any) => String(t.text ?? '')).join(' | ')
 
 test('chez le manager : le groupe retenu par le plan dit ce qu’il attend, ne part pas, et repart quand le groupe attendu est clos, sans COO', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, w, other } = await setUp($, on)
@@ -177,8 +178,8 @@ test('chez le manager : le groupe retenu par le plan dit ce qu’il attend, ne p
     expect(all, surface).toMatch(/⏸.attend.groupe.D.de « Là-bas » \(plan du projet\)/)
     // La carte « Ensuite » le dit aussi.
     expect(all, surface).toMatch(/retenu par une autre mission : groupe.A attend groupe.D de « Là-bas » \(plan du projet\)/)
-    expect(await pane.find({ key: 'launch-linked-A' }), surface).toBeUndefined()
-    expect(await pane.find({ key: 'launch-linked-B' }), surface).toBeDefined()
+    expect(await findAny(pane, { key: 'launch-linked-A' }), surface).toBeUndefined()
+    expect(await findAny(pane, { key: 'launch-linked-B' }), surface).toBeDefined()
     await pane.unmount()
     const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
     expect(await texts(band), surface).toMatch(/⏸.groupe.A.attend.groupe.D.de « Là-bas » \(plan du projet\)/)
@@ -188,24 +189,24 @@ test('chez le manager : le groupe retenu par le plan dit ce qu’il attend, ne p
   await start($)
   await settle(clock, 6)
   const reloaded = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await reloaded.find({ key: 'launch-linked-A' })).toBeUndefined()
+  expect(await findAny(reloaded, { key: 'launch-linked-A' })).toBeUndefined()
   await reloaded.unmount()
   // Le groupe attendu clos dans l'autre mission : l'attente tombe, A se propose de nouveau.
   writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === other.id ? { ...r, updatedAt: T0 + 60_000, tickets: r.tickets.map(t => (t.id === 'tD' ? { ...t, status: 'done' as const } : t)), groups: r.groups!.map(g => (g.id === 'D' ? { ...g, delegated: { at: T0, closing: { state: 'closed' as const, at: T0 + 50_000 } } } : g)) } : r)) }))
   await settle(clock, 6)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await after.find({ key: 'launch-linked-A' })).toBeDefined()
+  expect(await findAny(after, { key: 'launch-linked-A' })).toBeDefined()
   await after.unmount()
 })
 
 test('chez le manager : « ⇥ Forcer » fait partir le groupe malgré le plan', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, w, here, other } = await setUp($, on)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: `force-A-${other.id}-D-plan` })
+  await pressAny(pane, { key: `force-A-${other.id}-D-plan` })
   await pane.unmount()
   await settle(clock, 2)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await after.find({ key: 'launch-linked-A' })).toBeDefined()
+  expect(await findAny(after, { key: 'launch-linked-A' })).toBeDefined()
   await after.unmount()
   expect(stored(w).runs.find(r => r.id === here.id)!.forced).toEqual([{ held: 'A', run: other.id, group: 'D', at: expect.any(Number), on: 'plan' }])
 })
@@ -215,14 +216,14 @@ test('un plan illisible (fichier de coordination, ou entrée de plan hors forme)
   w.coord.text = coordFile([{ id: 'cplan0002', kind: 'plan', run: here.id, at: T0, held: 'A B', awaited: { run: 'x', group: 'D' } }])
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'launch-linked-B' })
+  await pressAny(pane, { key: 'launch-linked-B' })
   await pane.unmount()
   await settle(clock, 2)
   expect(stored(w).runs.find(r => r.id === here.id)!.groups!.find(g => g.id === 'B')!.linked).toBeUndefined()
   w.coord.unread = true
   await settle(clock, 6)
   const again = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await again.press({ key: 'launch-linked-B' })
+  await pressAny(again, { key: 'launch-linked-B' })
   await again.unmount()
   await settle(clock, 2)
   expect(stored(w).runs.find(r => r.id === here.id)!.groups!.find(g => g.id === 'B')!.linked).toBeUndefined()
@@ -231,7 +232,7 @@ test('un plan illisible (fichier de coordination, ou entrée de plan hors forme)
   w.coord.text = coordFile([])
   await settle(clock, 6)
   const ok = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await ok.press({ key: 'launch-linked-B' })
+  await pressAny(ok, { key: 'launch-linked-B' })
   await ok.unmount()
   await settle(clock, 2)
   expect(stored(w).runs.find(r => r.id === here.id)!.groups!.find(g => g.id === 'B')!.linked).toBeDefined()
@@ -252,15 +253,15 @@ test('chez le COO : le plan proposé se montre vague par vague, « ✓ Valider l
   expect(opening).not.toMatch(/then deliver/)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(pane)).toMatch(/Plan du projet proposé · 2 vagues/)
-  expect(await texts(pane)).toMatch(/→ \| une livraison : « Mission 2 », « Mission 1 »/)
+  expect(await texts(pane)).toMatch(/→ \| une livraison : (M\d+\s)?« Mission 2 », (M\d+\s)?« Mission 1 »/)
   expect(await texts(pane)).not.toMatch(/livrer «/)
-  await pane.press({ key: 'coo-plan-validate' })
+  await pressAny(pane, { key: 'coo-plan-validate' })
   await pane.unmount()
   await settle(clock, 2)
   expect(entries(w)).toEqual([expect.objectContaining({ kind: 'plan', run: m1.id, held: 'C', awaited: { run: m2.id, group: 'D' } }), expect.objectContaining({ kind: 'plan', run: m1.id, held: 'C', awaited: { run: m2.id, group: 'E' } })])
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(after)).toMatch(/Plan du projet · 2 vagues/)
-  expect(await after.find({ key: 'coo-plan-validate' })).toBeUndefined()
+  expect(await findAny(after, { key: 'coo-plan-validate' })).toBeUndefined()
   await after.unmount()
 })
 
@@ -284,8 +285,8 @@ test('en auto, le groupe que le plan fait attendre ne part pas ; l’autre part 
   w.coord.text = coordFile([planA, { id: 'cplan0003', kind: 'plan', run: here.id, at: T0, held: 'B', awaited: { run: other.id, group: 'E' } }])
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'auto-on' })
-  await pane.press({ key: 'auto-confirm' })
+  await pressAny(pane, { key: 'auto-on' })
+  await pressAny(pane, { key: 'auto-confirm' })
   await pane.unmount()
   await settle(clock, 1)
   await $.turn.complete({ answer: 'Fait.', durationMs: 10, isAborted: false, turnId: 'consigne', reason: 'answer' })
@@ -311,14 +312,14 @@ test('un plan qui ne change pas l’ordre n’est pas reproposé : un groupe par
   await start($)
   await openCoo($, clock)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'coo-plan-validate' })
+  await pressAny(pane, { key: 'coo-plan-validate' })
   await pane.unmount()
   await settle(clock, 2)
   // A part dans la mission 1, D dans la mission 2 : l'ordre ne change pas.
   writeBoard(w, b => ({ ...b, runs: b.runs.map(r => ({ ...r, updatedAt: T0 + 30_000, groups: r.groups!.map(g => (g.id === 'A' || g.id === 'D' ? { ...g, linked: { at: T0 + 20_000 } } : g)) })) }))
   await settle(clock, 6)
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await after.find({ key: 'coo-plan-validate' })).toBeUndefined()
+  expect(await findAny(after, { key: 'coo-plan-validate' })).toBeUndefined()
   await after.unmount()
 })
 
@@ -355,7 +356,7 @@ test('une entrée de plan hors forme se montre chez le COO comme un plan à vali
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(pane)).toMatch(/Plan du projet proposé/)
-  await pane.press({ key: 'coo-plan-validate' })
+  await pressAny(pane, { key: 'coo-plan-validate' })
   await pane.unmount()
   await settle(clock, 2)
   // L'entrée hors forme est remplacée par le plan validé.
@@ -365,8 +366,8 @@ test('une entrée de plan hors forme se montre chez le COO comme un plan à vali
 test('chez le manager en auto, une entrée de plan hors forme met l’auto en pause, et le bandeau le dit', { timeoutMs: 30000 }, async ($, on) => {
   const { clock, w, here, other } = await setUp($, on)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'auto-on' })
-  await pane.press({ key: 'auto-confirm' })
+  await pressAny(pane, { key: 'auto-on' })
+  await pressAny(pane, { key: 'auto-confirm' })
   await pane.unmount()
   await settle(clock, 1)
   w.coord.text = coordFile([{ id: 'cplan0002', kind: 'plan', run: here.id, at: T0, held: 'A B', awaited: { run: other.id, group: 'D' } }])
@@ -403,7 +404,7 @@ test('un fichier de coordination présent mais illisible ne lance rien, même sa
   w.coord.unread = true
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'launch-linked-B' })
+  await pressAny(pane, { key: 'launch-linked-B' })
   await pane.unmount()
   await settle(clock, 2)
   expect(stored(w).runs.find(r => r.id === here.id)!.groups!.find(g => g.id === 'B')!.linked).toBeUndefined()

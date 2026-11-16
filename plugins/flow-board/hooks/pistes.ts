@@ -1,20 +1,23 @@
 // La liste d'attente des rétros d'un projet : les pistes de toutes ses rétros, écrites par le seul mod de la
 // discussion qui tient le siège du COO. Une rétro dépose ses opérations dans sa propre boîte, et la mission
-// « Pistes de rétro » les transitions d'état de ses pistes, un fichier par discussion ; le mod du COO les applique une fois chacune et
+// « Pistes de rétro » les transitions d'état de ses pistes et ses écarts (`missionChangeRefusal` à l'outil,
+// `applyMissionChange` à l'application, qui fait foi), un fichier par discussion ; le mod du COO les applique une fois chacune et
 // note leur id dans la liste, dans la même écriture que leur effet (jamais l'une sans l'autre) ; la
 // discussion déposante retire alors de sa boîte ce qui est noté, et seulement cela.
 //
 // Module pur, sans import du modèle.
 //
 // Invariant de la liste d'attente : « Une écriture d'une rétro ou du COO n'efface ni ne change jamais en silence la
-// piste d'une autre ; une piste ne quitte jamais le fichier, et une piste en exécution ne change plus. »
+// piste d'une autre ; une piste ne quitte jamais le fichier, et une piste en exécution ne change plus. La mission
+// « Pistes de rétro » n'écarte qu'une piste « validée » que porte sa carte, avec une raison qui cite le commit lu ;
+// l'écart passe par sa boîte et le mod du COO, et se dit dans le même tour. »
 // D'où : une modification garde l'ancien texte (et ses fichiers) dans l'historique de la piste, avec son
 // auteur et sa date ; « écarter » change l'état, ne retire rien ; une piste relue hors forme est gardée
 // telle quelle et aucune opération ne la touche ; une écriture qui ferait disparaître une piste, un texte de
 // son historique ou un commentaire est refusée (`keepsPistes`).
 
 import { clip, isTime } from './basics.ts'
-import { isGroupId, isSafeId } from './closing.ts'
+import { isGroupId, isSafeId, neutralInPrompt } from './closing.ts'
 
 /** Les états d'une piste, par leur code gardé ; leur libellé est `PISTE_STATE_FR`. */
 const PISTE_STATES = ['pending', 'validated', 'dropped', 'ticket', 'running', 'done'] as const
@@ -56,6 +59,12 @@ export type Piste = {
   /** Qui a changé l'état pour la dernière fois (un écart, une transition), et quand : un changement d'état n'est jamais muet. */
   stateBy?: string
   stateAt?: number
+  /**
+   * Qui a donné à la piste sa carte actuelle sans changer son état, et quand (le COO qui reprend sur une nouvelle carte
+   * les pistes d'une mission finie, ou celles d'une carte absente) : posé avec la carte, effacé avec elle (`releaseCardPistes`).
+   */
+  cardBy?: string
+  cardAt?: number
   by: string
   at: number
   history: PisteText[]
@@ -132,6 +141,7 @@ export const soundPiste = (raw: unknown): Piste | null => {
   if (x.group !== undefined && !isGroupId(x.group)) return null
   if (x.card !== undefined && !isSafeId(x.card)) return null
   if ((x.stateBy !== undefined && !isAuthor(x.stateBy)) || (x.stateAt !== undefined && !isTime(x.stateAt))) return null
+  if ((x.cardBy !== undefined && !isAuthor(x.cardBy)) || (x.cardAt !== undefined && !isTime(x.cardAt))) return null
   // En ticket, la piste a sa mission (son groupe une fois les groupes déclarés) ; en exécution, les deux.
   if ((x.state === 'ticket' && x.mission === undefined) || (x.state === 'running' && (x.mission === undefined || x.group === undefined))) return null
   return {
@@ -150,6 +160,8 @@ export const soundPiste = (raw: unknown): Piste | null => {
     comments: comments as PisteNote[],
     ...(x.stateBy !== undefined ? { stateBy: x.stateBy as string } : {}),
     ...(x.stateAt !== undefined ? { stateAt: x.stateAt as number } : {}),
+    ...(x.cardBy !== undefined ? { cardBy: x.cardBy as string } : {}),
+    ...(x.cardAt !== undefined ? { cardAt: x.cardAt as number } : {}),
   }
 }
 
@@ -237,7 +249,7 @@ export const validatePistes = (list: Waitlist, picks: readonly PistePick[], card
 
 /**
  * La carte `card` retirée : ses pistes lisibles encore « validée » qui la portent redeviennent « pas encore validée »,
- * sans carte, l'écriture signée du COO ; une piste qui a avancé (en ticket, en exécution, faite) ou écartée ne change pas.
+ * sans carte (ni son auteur ni sa date, `cardBy`, `cardAt`), l'écriture signée du COO ; une piste qui a avancé (en ticket, en exécution, faite) ou écartée ne change pas.
  */
 export const releaseCardPistes = (list: Waitlist, card: string, now: number): { list: Waitlist; released: string[] } => {
   const released: string[] = []
@@ -245,7 +257,7 @@ export const releaseCardPistes = (list: Waitlist, card: string, now: number): { 
     const piste = soundPiste(raw)
     if (!piste || piste.state !== 'validated' || piste.card !== card) return raw
     released.push(piste.id)
-    const { card: _c, mission: _m, group: _g, ...rest } = raw as Record<string, unknown>
+    const { card: _c, cardBy: _cb, cardAt: _ca, mission: _m, group: _g, ...rest } = raw as Record<string, unknown>
     return { ...rest, state: 'pending', stateBy: COO_AUTHOR, stateAt: now }
   })
   return { list: released.length > 0 ? { ...list, pistes } : list, released }
@@ -253,7 +265,7 @@ export const releaseCardPistes = (list: Waitlist, card: string, now: number): { 
 
 // ─── Les opérations ───────────────────────────────────────────────────────
 
-/** Les opérations qu'une rétro ou le COO dépose. */
+/** Les opérations qu'une rétro ou le COO dépose ; une mission « Pistes de rétro », `drop` seul. */
 const PISTE_OPS = ['add', 'edit', 'comment', 'drop'] as const
 export type PisteOpKind = (typeof PISTE_OPS)[number]
 
@@ -262,9 +274,10 @@ export type PisteOpKind = (typeof PISTE_OPS)[number]
  * la mission qui la dépose, ou `COO_AUTHOR` ; l'appelant le vérifie contre la boîte, jamais cru sur parole),
  * sa date ; le texte et les fichiers d'un ajout ou d'une modification, le texte d'un commentaire, la raison
  * d'un écart ; d'une transition (`state`, déposée par le mod d'une mission « Pistes de rétro », jamais par
- * l'outil), l'état visé et le groupe (la mission est l'auteur).
+ * l'outil), l'état visé et le groupe (la mission est l'auteur), et, sur un pas qui n'est pas le dernier de sa
+ * chaîne, l'état final de la chaîne et son groupe (`to`, `toGroup`).
  */
-export type PisteOp = { id: string; op: PisteOpKind | 'state'; piste: string; by: string; at: number; text?: string; files?: string[]; reason?: string; state?: PisteMoveState; mission?: string; group?: string }
+export type PisteOp = { id: string; op: PisteOpKind | 'state'; piste: string; by: string; at: number; text?: string; files?: string[]; reason?: string; state?: PisteMoveState; mission?: string; group?: string; to?: PisteMoveState; toGroup?: string }
 
 /**
  * Les états qu'une mission « Pistes de rétro » pose sur ses pistes (opération `state`, déposée par son mod,
@@ -301,7 +314,20 @@ export const soundPisteOp = (raw: unknown): PisteOp | null => {
     // Une transition : son état, et la mission et le groupe qu'elle pose ; jamais de texte.
     if (!isMoveState(x.state) || !isSafeId(x.by) || (x.mission !== undefined && !isSafeId(x.mission)) || (x.group !== undefined && !isGroupId(x.group))) return null
     if (x.text !== undefined || x.files !== undefined || x.reason !== undefined) return null
-    return { id: x.id, op: 'state', piste: x.piste, by: x.by, at: x.at, state: x.state, ...(x.mission !== undefined ? { mission: x.mission as string } : {}), ...(x.group !== undefined ? { group: x.group as string } : {}) }
+    // L'état final d'une chaîne : un état de transition, son groupe seulement avec lui.
+    if ((x.to !== undefined && !isMoveState(x.to)) || (x.toGroup !== undefined && (x.to === undefined || !isGroupId(x.toGroup)))) return null
+    return {
+      id: x.id,
+      op: 'state',
+      piste: x.piste,
+      by: x.by,
+      at: x.at,
+      state: x.state,
+      ...(x.mission !== undefined ? { mission: x.mission as string } : {}),
+      ...(x.group !== undefined ? { group: x.group as string } : {}),
+      ...(x.to !== undefined ? { to: x.to } : {}),
+      ...(x.toGroup !== undefined ? { toGroup: x.toGroup as string } : {}),
+    }
   }
   if (x.text !== undefined && (typeof x.text !== 'string' || x.text.trim() === '' || x.text.length > PISTE_TEXT_MAX)) return null
   if (x.files !== undefined && !isFiles(x.files)) return null
@@ -399,18 +425,75 @@ export const applyPisteChange = (list: Waitlist, change: PisteChange, by: string
 }
 
 /**
- * Une opération déposée, avec la boîte qui la porte et l'auteur que l'appelant a vérifié contre elle (null :
- * la boîte ne prouve pas l'auteur déclaré).
+ * La raison d'un écart d'une mission « Pistes de rétro » : « déjà corrigée par » puis un hash de commit (7 à 40
+ * chiffres hexadécimaux), suivi de la fin du texte, d'une espace ou d'une ponctuation `,;.:()` seulement (rien d'autre
+ * n'y est collé, ni lettre ni invisible), la suite libre. Le seul prédicat de l'outil et de l'application ; aucune
+ * commande ne vérifie que le commit existe.
  */
-export type BoxedOp = { op: PisteOp; session: string; by: string | null; gone?: true; card?: string }
+export const isFixedReason = (reason: unknown): boolean => typeof reason === 'string' && /^déjà corrigée par [0-9a-fA-F]{7,40}(?=$|[ ,;.:()])/.test(reason.normalize('NFC'))
+
+/** Les refus communs de l'outil et de l'application pour une mission « Pistes de rétro ». */
+const ONLY_DROPS = 'a mission other than a retro only drops a « validée » piste of its launch card'
+const REASON_FORM = 'the reason must start with « déjà corrigée par <commit hash> »'
+
+/**
+ * À l'outil, le changement demandé par une mission « Pistes de rétro » : pourquoi il ne part pas, ou null (un écart,
+ * raison en forme, d'une piste de `validated`, ses pistes « validée » relues à l'instant sous sa carte).
+ */
+export const missionChangeRefusal = (change: PisteChange, validated: readonly Piste[]): string | null =>
+  change.op !== 'drop' ? ONLY_DROPS : !isFixedReason(change.reason ?? '') ? REASON_FORM : !validated.some(p => p.id === change.piste) ? 'not a « validée » piste of this mission’s card in the waitlist read now' : null
+
+/** La réponse de l'outil aux écarts qu'une mission « Pistes de rétro » vient de déposer dans sa boîte. */
+export const missionDropsSaid = (ids: readonly string[]): string =>
+  `Deposited for the COO's dashboard: ${ids.map(id => `drop ${neutralInPrompt(id)}`).join(', ')}; the COO's dashboard applies it, and says it if it refuses (the piste then keeps its state). Tell the user in this turn each piste you dropped, with the commit and the line you read.`
+
+/**
+ * La nature de l'auteur prouvé d'une opération, que le mod du COO donne à l'application : le COO, une rétro, ou une
+ * autre mission (`other` : tout ce qui n'est ni le COO ni une rétro, la mission « Pistes de rétro » comprise).
+ */
+export type PisteAuthor = 'coo' | 'retro' | 'other'
+
+/**
+ * Une opération déposée, avec la boîte qui la porte et l'auteur que l'appelant a vérifié contre elle (null :
+ * la boîte ne prouve pas l'auteur déclaré), la nature de cet auteur (absente : le comportement d'avant, celui
+ * d'un appel direct du module) et la carte de son lancement vivant (pour une transition d'état, et pour toute
+ * opération d'un auteur `other`).
+ */
+export type BoxedOp = { op: PisteOp; session: string; by: string | null; gone?: true; card?: string; author?: PisteAuthor }
+
+/**
+ * Un ajout, une modification, un commentaire ou un écart d'un auteur qui n'est ni le COO ni une rétro : seul son écart
+ * d'une piste « validée » que porte la carte de son lancement vivant (`card`), avec une raison en forme, s'applique ;
+ * le reste est refusé. Une piste absente ou gardée hors forme suit le refus d'avant ; une piste déjà écartée, la règle
+ * d'avant (même raison : sans effet, sinon refusé).
+ */
+const applyMissionChange = (list: Waitlist, change: PisteChange, by: string, card: string | undefined, now: number): { list: Waitlist; outcome: PisteOutcome } => {
+  const refuse = (why: string) => ({ list, outcome: { kind: 'refused', why } as PisteOutcome })
+  const raw = list.pistes.find(p => rawId(p) === change.piste)
+  if (raw === undefined || soundPiste(raw) === null) return change.op === 'add' ? refuse(ONLY_DROPS) : applyPisteChange(list, change, by, now)
+  const piste = soundPiste(raw)!
+  if (change.op !== 'drop') return refuse(ONLY_DROPS)
+  if (!isFixedReason(change.reason ?? '')) return refuse(REASON_FORM)
+  if (card === undefined || piste.card !== card) return refuse('the piste is not carried by the launch card of this mission')
+  if (piste.state !== 'validated' && piste.state !== 'dropped') return refuse(`a piste « ${PISTE_STATE_FR[piste.state]} » is not dropped by a mission`)
+  return applyPisteChange(list, change, by, now)
+}
 
 /**
  * Une transition d'état posée par la mission `by`, dont le lancement vivant porte la carte `card` : seulement sur
  * une piste lisible qui porte cette carte, d'aucune autre mission, et d'un état d'où la transition est permise ;
  * en ticket et en exécution, la mission et le groupe se posent ; revenue à validée, ils partent. La même
- * transition renvoyée (même état, même mission, même groupe) est sans effet. Qui l'a faite et quand restent.
+ * transition renvoyée (même état, même mission, même groupe) est sans effet, de même qu'un pas d'une chaîne
+ * dont la piste est déjà à l'état final de la chaîne (`to`, `toGroup` : une chaîne redéposée ne fait jamais
+ * reculer la piste). Qui l'a faite et quand restent.
  */
-export const applyPisteState = (list: Waitlist, move: { piste: string; state: PisteMoveState; group?: string }, by: string, card: string | undefined, now: number): { list: Waitlist; outcome: PisteOutcome } => {
+export const applyPisteState = (
+  list: Waitlist,
+  move: { piste: string; state: PisteMoveState; group?: string; to?: PisteMoveState; toGroup?: string },
+  by: string,
+  card: string | undefined,
+  now: number,
+): { list: Waitlist; outcome: PisteOutcome } => {
   const refuse = (why: string) => ({ list, outcome: { kind: 'refused', why } as PisteOutcome })
   const at = list.pistes.findIndex(raw => rawId(raw) === move.piste)
   const raw = at >= 0 ? list.pistes[at] : undefined
@@ -420,7 +503,8 @@ export const applyPisteState = (list: Waitlist, move: { piste: string; state: Pi
   if (piste.mission !== undefined && piste.mission !== by) return refuse('the piste is already in a ticket of another mission')
   if (move.state === 'running' && move.group === undefined) return refuse('a piste « en exécution » needs its group')
   const isSame = piste.state === move.state && (move.state === 'validated' || (piste.mission === by && piste.group === move.group))
-  if (isSame) return { list, outcome: { kind: 'none' } }
+  const isAtEnd = move.to !== undefined && piste.state === move.to && (move.to === 'validated' || (piste.mission === by && piste.group === move.toGroup))
+  if (isSame || isAtEnd) return { list, outcome: { kind: 'none' } }
   if (!(STATE_MOVES[move.state] as readonly PisteState[]).includes(piste.state)) return refuse(`a piste « ${PISTE_STATE_FR[piste.state]} » does not become « ${PISTE_STATE_FR[move.state]} »`)
   const { mission: _m, group: _g, ...rest } = raw as Record<string, unknown>
   const next = move.state === 'validated' ? { ...rest, state: 'validated' } : { ...rest, state: move.state, mission: by, ...(move.group !== undefined ? { group: move.group } : {}) }
@@ -455,13 +539,25 @@ const WAITLIST_BYTES_MAX = 3 * 1024 * 1024
  * ailleurs le prouve de nouveau à son retour). Une opération sur une piste absente attend,
  * sans marque, tant qu'une boîte ne s'est pas relue (`isWhole` faux : son ajout y est peut-être). Une
  * opération qui ferait dépasser `WAITLIST_BYTES_MAX` est refusée. À la borne des marques, plus rien ne
- * s'applique : les opérations restantes attendent dans leur boîte. Rend la liste et les résultats, par marque.
+ * s'applique : les opérations restantes attendent dans leur boîte. Les transitions d'une même boîte sur une même
+ * piste, pas encore marquées, se lisent par chaînes (`chainsOf`) : seule la
+ * dernière chaîne s'applique, les précédentes, périmées, sont marquées sans effet. Une modification, un commentaire,
+ * un écart ou un ajout qui reprend son id, sur une piste gelée (en exécution, faite) au début de l'écriture, que cette écriture a dégelée, attend
+ * sans marque le relevé suivant (la garde `keepsPistes` juge l'écriture entière). Une opération qui n'est pas une
+ * transition, d'un auteur `other`, passe par `applyMissionChange`. Rend la liste et les résultats, par marque.
  */
 export const applyBoxedOps = (list: Waitlist, ops: readonly BoxedOp[], now: number, isWhole = true): { list: Waitlist; outcomes: Map<string, PisteOutcome> } => {
   const outcomes = new Map<string, PisteOutcome>()
   const done = new Set(list.applied)
   const key = (o: BoxedOp) => opMark(o.session, o.op.id)
   const todo = [...ops].filter(o => !done.has(key(o))).sort((a, b) => orderAt(a.op, now) - orderAt(b.op, now) || (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+  // La dernière chaîne de transitions de chaque boîte sur chaque piste l'emporte : les précédentes ont été calculées
+  // sur le même état de la liste (rien n'a été appliqué entre-temps) et ne valent plus.
+  const superseded = new Set<string>()
+  const bySession = new Map<string, BoxedOp[]>()
+  for (const o of todo) if (o.op.op === 'state' && o.by !== null) bySession.set(o.session, [...(bySession.get(o.session) ?? []), o])
+  for (const list of bySession.values()) for (const o of chainsOf(list.map(x => ({ ...x, piste: x.op.piste, ...(x.op.to !== undefined ? { to: x.op.to } : {}) }))).earlier) superseded.add(key(o))
+  const frozenAtStart = new Set(list.pistes.flatMap(raw => { const p = soundPiste(raw); return p && isFrozen(p.state) ? [p.id] : [] }))
   let out = list
   for (const boxed of todo) {
     const { op, by } = boxed
@@ -469,6 +565,17 @@ export const applyBoxedOps = (list: Waitlist, ops: readonly BoxedOp[], now: numb
     if (done.has(mark)) continue
     if (out.applied.length >= APPLIED_MAX) break
     if (!isWhole && op.op !== 'add' && !out.pistes.some(raw => rawId(raw) === op.piste)) continue
+    // Gelée au début de l'écriture, dégelée par elle : le changement attend le relevé suivant, sans marque, jamais perdu.
+    if (op.op !== 'state' && by !== null && frozenAtStart.has(op.piste)) {
+      const p = soundPiste(out.pistes.find(raw => rawId(raw) === op.piste))
+      if (p && !isFrozen(p.state)) continue
+    }
+    if (superseded.has(mark)) {
+      out = { ...out, applied: [...out.applied, mark] }
+      done.add(mark)
+      outcomes.set(mark, { kind: 'none' })
+      continue
+    }
     const change: PisteChange = { op: op.op === 'state' ? 'edit' : op.op, piste: op.piste, ...(op.text !== undefined ? { text: op.text } : {}), ...(op.files !== undefined ? { files: op.files } : {}), ...(op.reason !== undefined ? { reason: op.reason } : {}) }
     // Sans auteur prouvé, l'opération attend dans sa boîte, sans marque : jamais appliquée, jamais perdue ; sauf celle
     // d'une mission supprimée, qui ne reviendra pas : refusée et marquée, sa boîte s'en vide.
@@ -478,8 +585,16 @@ export const applyBoxedOps = (list: Waitlist, ops: readonly BoxedOp[], now: numb
       by === null
         ? { list: out, outcome: { kind: 'refused', why: 'its mission was deleted' } as PisteOutcome }
         : op.op === 'state'
-          ? applyPisteState(out, { piste: op.piste, state: op.state!, ...(op.group !== undefined ? { group: op.group } : {}) }, by, boxed.card, orderAt(op, now))
-          : applyPisteChange(out, change, by, orderAt(op, now))
+          ? applyPisteState(
+              out,
+              { piste: op.piste, state: op.state!, ...(op.group !== undefined ? { group: op.group } : {}), ...(op.to !== undefined ? { to: op.to } : {}), ...(op.toGroup !== undefined ? { toGroup: op.toGroup } : {}) },
+              by,
+              boxed.card,
+              orderAt(op, now),
+            )
+          : boxed.author === 'other'
+            ? applyMissionChange(out, change, by, boxed.card, orderAt(op, now))
+            : applyPisteChange(out, change, by, orderAt(op, now))
     if (result.outcome.kind === 'applied' && utf8Length(JSON.stringify(result.list)) > WAITLIST_BYTES_MAX) result = { list: out, outcome: { kind: 'refused', why: 'the list is full (its size): nothing more grows it' } }
     out = { ...result.list, applied: [...result.list.applied, mark] }
     if (result.outcome.kind === 'refused') out = { ...out, refused: [...out.refused, { op: mark, piste: op.piste, by: by ?? op.by, why: result.outcome.why, at: now }].slice(-REFUSED_MAX) }
@@ -488,6 +603,36 @@ export const applyBoxedOps = (list: Waitlist, ops: readonly BoxedOp[], now: numb
   }
   return { list: out, outcomes }
 }
+
+/**
+ * Les transitions d'une même boîte, dans leur ordre, rangées en chaînes par piste : un pas qui porte l'état final
+ * (`to`) commence toujours une chaîne, un pas sans lui finit la chaîne ouverte ou en fait une à lui seul. Rend la
+ * dernière chaîne de chaque piste (`last`) et les pas des chaînes d'avant (`earlier`). La règle commune de la
+ * mission qui dépose et du COO qui applique.
+ */
+export const chainsOf = <T extends { piste: string; to?: string }>(steps: readonly T[]): { last: Map<string, T[]>; earlier: T[] } => {
+  const last = new Map<string, T[]>()
+  const open = new Set<string>()
+  const earlier: T[] = []
+  for (const s of steps) {
+    const cur = last.get(s.piste)
+    if (cur && open.has(s.piste) && s.to === undefined) cur.push(s)
+    else {
+      earlier.push(...(cur ?? []))
+      last.set(s.piste, [s])
+    }
+    if (s.to !== undefined) open.add(s.piste)
+    else open.delete(s.piste)
+  }
+  return { last, earlier }
+}
+
+/**
+ * Les pistes qu'une application des boîtes a fait passer par « en ticket » (une transition vers en ticket
+ * appliquée) : celles dont la garde (`keepsPistes`) admet le retour d'en exécution à validée dans la même écriture.
+ */
+export const viaTicketOf = (ops: readonly BoxedOp[], outcomes: ReadonlyMap<string, PisteOutcome>): Set<string> =>
+  new Set(ops.filter(o => o.op.op === 'state' && o.op.state === 'ticket' && outcomes.get(opMark(o.session, o.op.id))?.kind === 'applied').map(o => o.op.piste))
 
 /**
  * Les ids de pistes déjà vus (gardés par le COO) qui manquent à une liste relue : une écriture par-dessus les
@@ -505,10 +650,11 @@ export const seenAfter = (seen: readonly string[], list: Waitlist): string[] => 
  * Une écriture de la liste garde-t-elle chaque piste ? La garde de toute écriture : chaque piste d'avant est
  * encore là (une piste hors forme, à l'identique) ; son texte et ses textes précédents sont encore son texte
  * ou dans son historique, ses commentaires encore là ; une piste en exécution ne change que d'état (vers
- * « faite » ou « en ticket ») ; une piste faite ne change plus ; aucun id en double ; aucune marque d'opération
+ * « faite », « en ticket », ou « validée » pour les seules pistes de `viaTicket`, passées par en ticket dans
+ * cette même écriture) ; une piste faite ne change plus ; aucun id en double ; aucune marque d'opération
  * retirée, sauf `released`.
  */
-export const keepsPistes = (before: Waitlist, after: Waitlist, released: ReadonlySet<string> = new Set()): boolean => {
+export const keepsPistes = (before: Waitlist, after: Waitlist, released: ReadonlySet<string> = new Set(), viaTicket: ReadonlySet<string> = new Set()): boolean => {
   const ids = after.pistes.map(rawId).filter((id): id is string => id !== undefined)
   if (new Set(ids).size !== ids.length) return false
   const byId = new Map(after.pistes.map(raw => [rawId(raw), raw] as const))
@@ -529,7 +675,7 @@ export const keepsPistes = (before: Waitlist, after: Waitlist, released: Readonl
     if (isFrozen(was.state)) {
       if (is.text !== was.text || !sameFiles(is.files, was.files) || is.comments.length !== was.comments.length || is.history.length !== was.history.length) return false
       if (was.state === 'done' && is.state !== 'done') return false
-      if (was.state === 'running' && is.state !== 'running' && is.state !== 'done' && is.state !== 'ticket') return false
+      if (was.state === 'running' && is.state !== 'running' && is.state !== 'done' && is.state !== 'ticket' && !(is.state === 'validated' && viaTicket.has(was.id))) return false
     }
   }
   const kept = new Set(after.applied)
@@ -619,26 +765,25 @@ const parseValue = (raw: string): PistesLine => {
 /** Le lien relu d'un fichier de ticket : l'id du ticket (le numéro du fichier) et sa ligne. */
 export type TicketLink = { ticket: string; line: PistesLine }
 
-/** Une transition à déposer : la piste, l'état visé, son groupe. */
-export type PisteMove = { piste: string; state: PisteMoveState; group?: string }
+/**
+ * Une transition à déposer : la piste, l'état visé, son groupe ; sur un pas qui n'est pas le dernier de sa
+ * chaîne, l'état final de la chaîne et son groupe (`to`, `toGroup`).
+ */
+export type PisteMove = { piste: string; state: PisteMoveState; group?: string; to?: PisteMoveState; toGroup?: string }
 
 /**
- * Les transitions qu'une mission « Pistes de rétro » doit déposer pour ses pistes (celles qui portent sa carte),
- * d'après ses tickets et ses groupes relus à l'instant, jamais de mémoire : une piste qu'un ticket du lot nomme
- * passe en ticket (avec le groupe de ce ticket), en exécution quand ce groupe est confié à un worker, faite quand
- * le ticket est fait ; une piste validée ou en exécution dans un autre groupe passe d'abord en ticket. Une piste
- * de cette mission qu'aucun ticket du lot ne nomme plus redevient validée si elle est en ticket, ou repasse en
- * ticket si elle est en exécution et que son groupe est rentré ; seulement quand chaque ticket du lot a son
- * fichier, tous relus (`isComplete`). Rien pour une piste pas encore validée, écartée ou faite, ni ce qui est
- * déjà l'état de la piste. `warnings` : ce qui ne rattache rien et doit se dire au manager (ligne absente ou en
- * gabarit, mot qui n'est pas un id, id inconnu, d'une autre carte, pas validé, écarté, d'une autre mission,
- * déjà nommé par un autre ticket).
+ * La lecture des lignes « Pistes : » des tickets d'un lot, commune à la mission qui dépose ses transitions et au COO
+ * qui finit une mission : chaque piste de la carte `card`, ni pas encore validée, ni écartée, ni d'une autre mission,
+ * revient au premier ticket du lot qui la nomme, dans l'ordre des tickets (`named` : piste → ticket) ; `warnings` dit
+ * ce qui ne rattache rien ; `isAllRead` : chaque fichier listé s'est lu, et chaque ticket du lot a le sien ;
+ * `unreadLines` : les tickets du lot dont la ligne est absente ou restée en gabarit.
  */
-export const pisteMoves = (
+export const namedOfLot = (
   pistes: readonly Piste[],
-  ctx: { card: string; mission: string; links: readonly TicketLink[]; tickets: readonly { id: string; status: string }[]; groups: readonly { id: string; tickets: readonly string[]; isOut: boolean }[]; isComplete: boolean; sameTicket: (a: string, b: string) => boolean },
-): { moves: PisteMove[]; warnings: string[] } => {
+  ctx: { card: string; mission: string; links: readonly TicketLink[]; tickets: readonly { id: string; status: string }[]; isComplete: boolean; sameTicket: (a: string, b: string) => boolean },
+): { named: Map<string, string>; warnings: string[]; isAllRead: boolean; unreadLines: string[] } => {
   const warnings: string[] = []
+  const unreadLines: string[] = []
   const byId = new Map(pistes.map(p => [p.id, p]))
   const inLot = (ticket: string) => ctx.tickets.find(t => ctx.sameTicket(t.id, ticket))
   const named = new Map<string, string>()
@@ -648,7 +793,10 @@ export const pisteMoves = (
     if (!inLot(link.ticket)) continue
     if (link.line.kind === 'absent') warnings.push(`ticket ${link.ticket}: it has no « Pistes : » line, nothing linked`)
     if (link.line.kind === 'template') warnings.push(`ticket ${link.ticket}: its « Pistes : » line is still the template, nothing linked`)
-    if (link.line.kind !== 'tokens') continue
+    if (link.line.kind !== 'tokens') {
+      unreadLines.push(link.ticket)
+      continue
+    }
     for (const odd of link.line.odd) warnings.push(`ticket ${link.ticket}: « ${odd} » is not a piste id (« <retro mission id>/<piste id> »), nothing linked`)
     for (const id of link.line.ids) {
       const p = byId.get(id)
@@ -662,17 +810,101 @@ export const pisteMoves = (
   }
   // Tout relu : chaque fichier listé s'est lu, et chaque ticket du lot a le sien (un dossier ou un fichier disparu ne rend rien).
   const isAllRead = ctx.isComplete && ctx.tickets.every(t => ctx.links.some(l => ctx.sameTicket(l.ticket, t.id)))
+  return { named, warnings, isAllRead, unreadLines }
+}
+
+/**
+ * Les pistes `ids` encore « validée », sans mission, sur la carte `oldCard` passent sur la carte `card`, l'écriture
+ * signée du COO (`cardBy`, `cardAt`) ; rien d'autre ne change : ni leur état, ni leur texte, ni leurs fichiers, ni
+ * leurs commentaires, ni leur historique, ni une autre piste.
+ */
+export const recardPistes = (list: Waitlist, m: { oldCard: string; card: string; ids: readonly string[] }, now: number): { list: Waitlist; moved: string[] } => {
+  const moved: string[] = []
+  const pistes = list.pistes.map(raw => {
+    const p = soundPiste(raw)
+    if (!p || !m.ids.includes(p.id) || p.state !== 'validated' || p.mission !== undefined || p.card !== m.oldCard) return raw
+    moved.push(p.id)
+    return { ...(raw as Record<string, unknown>), card: m.card, cardBy: COO_AUTHOR, cardAt: now }
+  })
+  return { list: moved.length > 0 ? { ...list, pistes } : list, moved }
+}
+
+/**
+ * Les pistes d'une mission « Pistes de rétro » finie (close, archivée ou effacée, aucun groupe chez un worker), que
+ * le COO finit lui-même, l'écriture signée de lui : une piste « en ticket » ou « en exécution » de cette mission que
+ * nomme un ticket fait (`doneIds`) devient faite, sa mission et son groupe gardés (`stateBy`, `stateAt`) ; les autres
+ * redeviennent validées, sans mission ni groupe, portées par la nouvelle carte `card` (`stateBy`, `stateAt`, et
+ * `cardBy`, `cardAt`) ; quand `oldCard` est donnée (la carte du lancement de la mission), ses pistes « validée »
+ * restées sur elle, sans mission, passent sur la nouvelle carte, leur état inchangé (`cardBy`, `cardAt` : la mission
+ * finie ne porte plus sa carte pour ses pistes restantes). Rien d'autre ne change : ni une piste d'une autre mission,
+ * ni une piste dans un autre état, ni une piste gardée illisible, ni, quand `oldCard` est donnée, une piste d'une autre
+ * carte, ni une piste de `keep` (celles qu'un worker tient peut-être encore) ; ni texte, ni fichiers, ni
+ * commentaires, ni historique. `moved` : les pistes « validée » passées sur la
+ * nouvelle carte ; `fromRunning` : les pistes sorties d'en exécution vers validée (passées par en ticket, au sens de
+ * la table), que la garde de l'écriture doit admettre.
+ */
+export const finishMissionPistes = (
+  list: Waitlist,
+  m: { mission: string; doneIds: ReadonlySet<string>; card: string; oldCard?: string; keep?: ReadonlySet<string> },
+  now: number,
+): { list: Waitlist; done: string[]; back: string[]; moved: string[]; fromRunning: string[] } => {
+  const done: string[] = []
+  const back: string[] = []
+  const moved: string[] = []
+  const fromRunning: string[] = []
+  const pistes = list.pistes.map(raw => {
+    const p = soundPiste(raw)
+    if (!p || (m.oldCard !== undefined && p.card !== m.oldCard) || m.keep?.has(p.id)) return raw
+    if (m.oldCard !== undefined && p.state === 'validated' && p.mission === undefined) {
+      moved.push(p.id)
+      return { ...(raw as Record<string, unknown>), card: m.card, cardBy: COO_AUTHOR, cardAt: now }
+    }
+    if (p.mission !== m.mission || (p.state !== 'ticket' && p.state !== 'running')) return raw
+    if (m.doneIds.has(p.id)) {
+      done.push(p.id)
+      return { ...(raw as Record<string, unknown>), state: 'done', stateBy: COO_AUTHOR, stateAt: now }
+    }
+    back.push(p.id)
+    if (p.state === 'running') fromRunning.push(p.id)
+    const { mission: _m, group: _g, ...rest } = raw as Record<string, unknown>
+    return { ...rest, state: 'validated', card: m.card, stateBy: COO_AUTHOR, stateAt: now, cardBy: COO_AUTHOR, cardAt: now }
+  })
+  return { list: done.length + back.length + moved.length > 0 ? { ...list, pistes } : list, done, back, moved, fromRunning }
+}
+
+/**
+ * Les transitions qu'une mission « Pistes de rétro » doit déposer pour ses pistes (celles qui portent sa carte),
+ * d'après ses tickets et ses groupes relus à l'instant, jamais de mémoire : une piste qu'un ticket du lot nomme
+ * passe en ticket (avec le groupe de ce ticket), en exécution quand ce groupe est confié à un worker, faite quand
+ * le ticket est fait. Toute la chaîne jusqu'à l'état visé, en une fois et dans l'ordre, chaque pas permis par la
+ * table : une piste validée ou en exécution dans un autre groupe passe d'abord en ticket, puis à l'état visé.
+ * Une piste de cette mission qu'aucun ticket du lot ne nomme plus redevient validée : directement si elle est en
+ * ticket, en repassant par en ticket si elle est en exécution et que son groupe est rentré ; seulement quand
+ * chaque ticket du lot a son fichier, tous relus (`isComplete`). Les pas avant le dernier portent l'état final
+ * (`to`, `toGroup`) : redéposée, la chaîne est sans effet. Rien pour une piste pas encore validée, écartée ou
+ * faite, ni ce qui est déjà l'état de la piste. `warnings` : ce qui ne rattache rien et doit se dire au manager (ligne absente ou en
+ * gabarit, mot qui n'est pas un id, id inconnu, d'une autre carte, pas validé, écarté, d'une autre mission,
+ * déjà nommé par un autre ticket).
+ */
+export const pisteMoves = (
+  pistes: readonly Piste[],
+  ctx: { card: string; mission: string; links: readonly TicketLink[]; tickets: readonly { id: string; status: string }[]; groups: readonly { id: string; tickets: readonly string[]; isOut: boolean }[]; isComplete: boolean; sameTicket: (a: string, b: string) => boolean },
+): { moves: PisteMove[]; warnings: string[] } => {
+  const { named, warnings, isAllRead } = namedOfLot(pistes, ctx)
+  const inLot = (ticket: string) => ctx.tickets.find(t => ctx.sameTicket(t.id, ticket))
   const moves: PisteMove[] = []
+  // Une chaîne de deux pas : le premier porte l'état final, pour qu'une chaîne redéposée ne fasse rien reculer.
+  const chain = (first: PisteMove, last: PisteMove): PisteMove[] => [{ ...first, to: last.state, ...(last.group !== undefined ? { toGroup: last.group } : {}) }, last]
   for (const p of pistes) {
     if (p.card !== ctx.card || (p.state !== 'validated' && p.state !== 'ticket' && p.state !== 'running')) continue
     if (p.mission !== undefined && p.mission !== ctx.mission) continue
     const ticket = named.get(p.id)
     if (ticket === undefined) {
-      // Plus nommée par aucun ticket du lot : en ticket, elle redevient validée ; en exécution, elle revient en ticket
-      // une fois son groupe rentré (puis validée au relevé suivant), jamais pendant qu'il travaille.
+      // Plus nommée par aucun ticket du lot : en ticket, elle redevient validée ; en exécution, elle repasse par en
+      // ticket puis redevient validée une fois son groupe rentré, jamais pendant qu'il travaille.
       const isGroupBack = !ctx.groups.some(g => g.id === p.group && g.isOut)
       if (isAllRead && p.state === 'ticket') moves.push({ piste: p.id, state: 'validated' })
-      if (isAllRead && p.state === 'running' && isGroupBack) moves.push({ piste: p.id, state: 'ticket', ...(p.group !== undefined ? { group: p.group } : {}) })
+      if (isAllRead && p.state === 'running' && isGroupBack) moves.push(...chain({ piste: p.id, state: 'ticket', ...(p.group !== undefined ? { group: p.group } : {}) }, { piste: p.id, state: 'validated' }))
       continue
     }
     const group = ctx.groups.find(g => g.tickets.some(t => ctx.sameTicket(t, ticket)))
@@ -683,12 +915,15 @@ export const pisteMoves = (
         : group?.isOut
           ? { piste: p.id, state: 'running', group: group.id }
           : { piste: p.id, state: 'ticket', ...(group ? { group: group.id } : {}) }
-    // Une piste validée passe d'abord en ticket : en exécution et faite ne viennent que de là (le relevé suivant avance).
+    // Une piste validée passe d'abord en ticket : en exécution et faite ne viennent que de là, dans la même chaîne.
     // De même, une piste en exécution dans un autre groupe repasse d'abord en ticket.
     const isRegroup = p.state === 'running' && move.state === 'running' && p.group !== move.group
-    const step: PisteMove = (p.state === 'validated' && move.state !== 'ticket') || isRegroup ? { piste: p.id, state: 'ticket', ...(group ? { group: group.id } : {}) } : move
-    const isSame = p.state === step.state && p.mission === ctx.mission && p.group === step.group
-    if (!isSame) moves.push(step)
+    if ((p.state === 'validated' && move.state !== 'ticket') || isRegroup) {
+      moves.push(...chain({ piste: p.id, state: 'ticket', ...(group ? { group: group.id } : {}) }, move))
+      continue
+    }
+    const isSame = p.state === move.state && p.mission === ctx.mission && p.group === move.group
+    if (!isSame) moves.push(move)
   }
   return { moves, warnings }
 }

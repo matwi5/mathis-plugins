@@ -7,6 +7,7 @@ import { archiveAwaiting, awaitingArchivePrint, closeDelivered, emptyBoard, isAw
 import { retroCard, retroCardId } from '../hooks/retro-coo.ts'
 import type { Board, Run } from '../types'
 import { PANE, PLUGIN, TOOL, openCoo, settle, start, stored, world, writeBoard } from './monde-coordination.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // « ✓ Archiver » et « ✓ Tout archiver (n) » dans la vue Coordination. Invariant : « Une mission livrée est toujours
 // close comme livrée (Version et Push ne lui sont plus jamais proposés), qu'elle soit ouverte, en pause ou reprise.
@@ -16,7 +17,7 @@ import { PANE, PLUGIN, TOOL, openCoo, settle, start, stored, world, writeBoard }
 const T0 = 800_000_000
 const CHANGED = "La liste a changé depuis : rien n'est archivé, regarde-la de nouveau"
 
-const texts = async (pane: any): Promise<string> => ((await pane.findAll({ type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
+const texts = async (pane: any): Promise<string> => ((await findAllAny(pane, { type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
 
 /** Une mission au rapport validé, sa phase « Version et push » à faire, en pause : prête à livrer. */
 const validated = (now: number, title: string): Run => {
@@ -37,7 +38,7 @@ const delivered = (now: number, title: string): Run => {
 
 const pane = (p: string) => ({ plugin: PLUGIN, surface: 'desktop' as const, ...PANE, key: p })
 
-test('deux missions livrées : leurs lignes « livrée », « ✓ Tout archiver (2) », puis les deux archivées d’un clic', { timeoutMs: 20000 }, async ($, on) => {
+test('deux missions livrées et une close sans livraison : leurs cartes de rétro et « ✓ Archiver », « ✓ Tout archiver (3) », puis les trois archivées d’un clic', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
   const a = delivered(T0, 'Mission A')
@@ -49,29 +50,32 @@ test('deux missions livrées : leurs lignes « livrée », « ✓ Tout archiver 
   await settle(clock, 6)
   const view = await $.ui.mount(pane('a'))
   const shown = await texts(view)
-  expect(shown).toContain('« Mission A » livrée')
-  expect(shown).toContain('« Mission B » livrée')
-  // Close sans livraison : jamais « ✓ Archiver ».
+  // Close, chaque mission a sa carte de rétro, posée au relevé du siège ; une mission livrée l'a avec « ✓ Archiver ».
+  expect(shown).toContain('Rétrospective · Mission A')
+  expect(shown).toContain('Rétrospective · Mission B')
+  expect(shown).not.toContain('« Mission A » livrée')
+  // Close sans livraison : « ✓ Archiver » sur sa carte seulement, jamais la ligne « « M » livrée ».
   expect(shown).not.toContain('« Mission C » livrée')
-  expect(await view.find({ key: `coo-archive-${a.id}` })).toBeDefined()
-  expect(await view.find({ key: `coo-archive-${open.id}` })).toBeUndefined()
-  const all = await view.find({ key: 'coo-archive-all' })
-  expect(String(all?.props.label ?? '').replace(/\s/g, ' ')).toBe('✓ Tout archiver (2)')
-  await view.press({ key: 'coo-archive-all' })
+  expect(await findAny(view, { key: `coo-card-archive-${retroCardId(a.id)}` })).toBeDefined()
+  expect(await findAny(view, { key: `coo-card-archive-${retroCardId(open.id)}` })).toBeDefined()
+  expect(await findAny(view, { key: `coo-archive-${open.id}` })).toBeUndefined()
+  const all = await findAny(view, { key: 'coo-archive-all' })
+  expect(String(all?.props.label ?? '').replace(/\s/g, ' ')).toBe('✓ Tout archiver (3)')
+  await pressAny(view, { key: 'coo-archive-all' })
   await view.unmount()
   await settle(clock, 2)
   const after = stored(w)
   expect(after.runs.find(r => r.id === a.id)!.archivedAt).toBeDefined()
   expect(after.runs.find(r => r.id === b.id)!.archivedAt).toBeDefined()
-  expect(after.runs.find(r => r.id === open.id)!.archivedAt).toBeUndefined()
+  expect(after.runs.find(r => r.id === open.id)!.archivedAt).toBeDefined()
   // Ce qu'écrit l'archivage : celui d'`archiveRun`, rien d'autre (les phases de livraison restent faites).
   const archived = after.runs.find(r => r.id === a.id)!
   expect(archived.status).toBe('done')
   expect(archived.phases.map(p => p.status)).toEqual(a.phases.map(p => p.status))
   expect(archived.log[0]!.text).toBe('Mission archivée')
   const again = await $.ui.mount(pane('b'))
-  expect(await texts(again)).not.toContain('« Mission A » livrée')
-  expect(await again.find({ key: 'coo-archive-all' })).toBeUndefined()
+  expect(await texts(again)).not.toContain('Rétrospective · Mission A')
+  expect(await findAny(again, { key: 'coo-archive-all' })).toBeUndefined()
   await again.unmount()
 })
 
@@ -85,14 +89,14 @@ test('une mission livrée de plus entre l’affichage et le clic : rien n’est 
   await openCoo($, clock)
   await settle(clock, 6)
   const view = await $.ui.mount(pane('c'))
-  expect(await view.find({ key: 'coo-archive-all' })).toBeDefined()
+  expect(await findAny(view, { key: 'coo-archive-all' })).toBeDefined()
   // Une autre discussion livre une troisième mission entre l’affichage et le clic : le clic relit le fichier, qui l’a.
   const c = delivered(T0, 'Mission D')
   w.probe.onBoardRead = () => {
     w.probe.onBoardRead = undefined
     writeBoard(w, x => ({ ...x, runs: [...x.runs, c] }))
   }
-  await view.press({ key: 'coo-archive-all' })
+  await pressAny(view, { key: 'coo-archive-all' })
   await view.unmount()
   await settle(clock, 2)
   expect(stored(w).runs.map(r => r.archivedAt)).toEqual([undefined, undefined, undefined])
@@ -108,15 +112,16 @@ test('une mission reprise entre l’affichage et le clic n’est pas archivée',
   await openCoo($, clock)
   await settle(clock, 6)
   const view = await $.ui.mount(pane('d'))
-  expect(await view.find({ key: `coo-archive-${a.id}` })).toBeDefined()
+  // Sa carte de rétro, posée au relevé du siège, porte « ✓ Archiver ».
+  expect(await findAny(view, { key: `coo-card-archive-${retroCardId(a.id)}` })).toBeDefined()
   // Seule mission livrée : pas de « Tout archiver ».
-  expect(await view.find({ key: 'coo-archive-all' })).toBeUndefined()
+  expect(await findAny(view, { key: 'coo-archive-all' })).toBeUndefined()
   // Reprise dans une autre discussion entre l’affichage et le clic.
   w.probe.onBoardRead = () => {
     w.probe.onBoardRead = undefined
     writeBoard(w, x => ({ ...x, runs: x.runs.map(r => (r.id === a.id ? { ...r, status: 'active', owner: 'session-B', updatedAt: T0 + 10 } : r)) }))
   }
-  await view.press({ key: `coo-archive-${a.id}` })
+  await pressAny(view, { key: `coo-card-archive-${retroCardId(a.id)}` })
   await view.unmount()
   await settle(clock, 2)
   expect(stored(w).runs[0]!.archivedAt).toBeUndefined()
@@ -141,10 +146,10 @@ test('la carte de rétro d’une mission livrée a « ✓ Archiver », qui archi
   expect(shown).toContain('Rétrospective · Mission de B')
   // Sa carte prête lui tient lieu de ligne « livrée ».
   expect(shown).not.toContain('« Mission de B » livrée')
-  expect(await view.find({ key: `coo-card-dismiss-${retroCardId(run.id)}` })).toBeUndefined()
-  const button = await view.find({ key: `coo-card-archive-${retroCardId(run.id)}` })
+  expect(await findAny(view, { key: `coo-card-dismiss-${retroCardId(run.id)}` })).toBeUndefined()
+  const button = await findAny(view, { key: `coo-card-archive-${retroCardId(run.id)}` })
   expect(String(button?.props.label ?? '').replace(/\s/g, ' ')).toBe('✓ Archiver')
-  await view.press({ key: `coo-card-archive-${retroCardId(run.id)}` })
+  await pressAny(view, { key: `coo-card-archive-${retroCardId(run.id)}` })
   await view.unmount()
   await settle(clock, 2)
   expect(stored(w).runs[0]!.archivedAt).toBeDefined()
@@ -196,10 +201,11 @@ test('deux missions livrées, chacune sa carte de rétro : « ✓ Tout archiver 
   expect(shown).toContain('Rétrospective · Mission A')
   expect(shown).toContain('Rétrospective · Mission B')
   expect(shown).not.toContain('« Mission A » livrée')
-  expect(shown).not.toContain('Rien pour l’instant.')
-  const all = await view.find({ key: 'coo-archive-all' })
+  // « Ce qui t'attend » n'est pas vide (les pages vides disent aussi « Rien pour l’instant. »).
+  expect(shown).not.toMatch(/Ce qui t’attend · \d+\nRien pour l’instant\./)
+  const all = await findAny(view, { key: 'coo-archive-all' })
   expect(String(all?.props.label ?? '').replace(/\s/g, ' ')).toBe('✓ Tout archiver (2)')
-  await view.press({ key: 'coo-archive-all' })
+  await pressAny(view, { key: 'coo-archive-all' })
   await view.unmount()
   await settle(clock, 2)
   expect(stored(w).runs.every(r => r.archivedAt !== undefined)).toBe(true)
@@ -242,7 +248,7 @@ test('une rétro livrée ne reçoit pas de carte de rétro : seule l’autre mis
   expect(shown).toContain('Rétrospective · Mission A')
   expect(shown).not.toContain('Rétrospective · Rétrospective · Mission Z')
   expect(shown).toContain('« Rétrospective · Mission Z » livrée')
-  expect(await view.find({ key: `coo-card-auto-${retroCardId(retro.id)}` })).toBeUndefined()
+  expect(await findAny(view, { key: `coo-card-auto-${retroCardId(retro.id)}` })).toBeUndefined()
   await view.unmount()
 })
 
@@ -263,13 +269,13 @@ test('la carte de rétro d’une mission archivée ailleurs a « ✕ Retirer » 
   await settle(clock, 40)
   const view = await $.ui.mount(pane('j'))
   expect(await texts(view)).toContain('Rétrospective · Mission de B')
-  expect(await view.find({ key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
+  expect(await findAny(view, { key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
   // Elle reste lançable.
-  expect(await view.find({ key: `coo-card-auto-${retroCardId(run.id)}` })).toBeDefined()
-  const remove = await view.find({ key: `coo-card-remove-${retroCardId(run.id)}` })
+  expect(await findAny(view, { key: `coo-card-auto-${retroCardId(run.id)}` })).toBeDefined()
+  const remove = await findAny(view, { key: `coo-card-remove-${retroCardId(run.id)}` })
   expect(String(remove?.props.label ?? '').replace(/\s/g, ' ')).toBe('✕ Retirer')
   const before = JSON.stringify(stored(w).runs[0])
-  await view.press({ key: `coo-card-remove-${retroCardId(run.id)}` })
+  await pressAny(view, { key: `coo-card-remove-${retroCardId(run.id)}` })
   await view.unmount()
   await settle(clock, 2)
   expect(JSON.stringify(stored(w).runs[0])).toBe(before)
@@ -292,18 +298,18 @@ test('la carte de rétro d’une mission reprise ailleurs a aussi « ✕ Retirer
   await settle(clock, 2)
   // Elle attend « ✓ Archiver » : ce bouton-là, pas « ✕ Retirer ».
   const first = await $.ui.mount(pane('l'))
-  expect(await first.find({ key: `coo-card-archive-${retroCardId(run.id)}` })).toBeDefined()
-  expect(await first.find({ key: `coo-card-remove-${retroCardId(run.id)}` })).toBeUndefined()
+  expect(await findAny(first, { key: `coo-card-archive-${retroCardId(run.id)}` })).toBeDefined()
+  expect(await findAny(first, { key: `coo-card-remove-${retroCardId(run.id)}` })).toBeUndefined()
   await first.unmount()
   // Reprise dans une autre discussion : plus de « ✓ Archiver », et « ✕ Retirer » retire la carte sans toucher la mission.
   await settle(clock, 12)
   writeBoard(w, b => ({ ...b, runs: b.runs.map(r => (r.id === run.id ? { ...r, status: 'active', owner: 'session-B', updatedAt: T0 + 20_000 } : r)) }))
   await settle(clock, 40)
   const view = await $.ui.mount(pane('m'))
-  expect(await view.find({ key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
-  expect(await view.find({ key: `coo-card-remove-${retroCardId(run.id)}` })).toBeDefined()
+  expect(await findAny(view, { key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
+  expect(await findAny(view, { key: `coo-card-remove-${retroCardId(run.id)}` })).toBeDefined()
   const before = JSON.stringify(stored(w).runs[0])
-  await view.press({ key: `coo-card-remove-${retroCardId(run.id)}` })
+  await pressAny(view, { key: `coo-card-remove-${retroCardId(run.id)}` })
   await view.unmount()
   await settle(clock, 2)
   expect(w.toasts.some(t => t.startsWith('◆ Carte retirée'))).toBe(true)
@@ -312,12 +318,12 @@ test('la carte de rétro d’une mission reprise ailleurs a aussi « ✕ Retirer
   expect(await texts(after)).not.toContain('Rétrospective · Mission de B')
   // Seule la carte cliquée part : celle de C, qui attend « ✓ Archiver », reste avec ce bouton.
   expect(await texts(after)).toContain('Rétrospective · Mission de C')
-  expect(await after.find({ key: `coo-card-archive-${retroCardId(other.id)}` })).toBeDefined()
-  expect(await after.find({ key: `coo-card-remove-${retroCardId(other.id)}` })).toBeUndefined()
+  expect(await findAny(after, { key: `coo-card-archive-${retroCardId(other.id)}` })).toBeDefined()
+  expect(await findAny(after, { key: `coo-card-remove-${retroCardId(other.id)}` })).toBeUndefined()
   await after.unmount()
 })
 
-test('isRetroCardRemovable : la garde du clic refuse la carte d’une mission qui attend « ✓ Archiver », et seulement elle', () => {
+test('isRetroCardRemovable : la garde du clic refuse la carte d’une mission qui attend « ✓ Archiver » (et celle d’une mission qui a droit à sa carte : archiver-closes.test.ts)', () => {
   const waiting = delivered(T0, 'Attend')
   expect(isRetroCardRemovable(waiting.id, [waiting])).toBe(false)
   expect(isRetroCardRemovable(waiting.id, [{ ...waiting, archivedAt: T0 }])).toBe(true)

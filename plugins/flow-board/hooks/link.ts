@@ -873,8 +873,10 @@ export const markCleanupSent = (board: Board, runId: string, branches: readonly 
     if (isEntry(phase.linked) && phase.linked.session) mark(target, phase.linked.seq, readClosing(phase.linked.closing))
   }
   if (!changed) return null
-  // Lue après l'envoi, l'heure ne fait jamais reculer la mission face à une écriture faite entre-temps.
-  run.updatedAt = Math.max(run.updatedAt, now)
+  // Lue après l'envoi, l'heure ne fait jamais reculer la mission face à une écriture faite entre-temps. Une mission close
+  // entre-temps n'est pas redatée : datée sur une copie d'ici d'avant un archivage fait ailleurs, elle le déferait à la
+  // fusion ; la marque, elle, voyage seule (`keepClosings` garde la fermeture marquée, quelle que soit la copie gardée).
+  if (run.status !== 'done') run.updatedAt = Math.max(run.updatedAt, now)
   return { board: b, fx: noFx() }
 }
 

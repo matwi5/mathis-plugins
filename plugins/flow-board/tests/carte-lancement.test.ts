@@ -9,6 +9,7 @@ import { coordinationRows } from '../hooks/coo-view.tsx'
 import { parseRoadmap } from '../hooks/roadmap.ts'
 import { launchText, roadmapAsk } from '../hooks/register.tsx'
 import { PANE, PLUGIN, TOOL, openCoo, seatOf, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
+import { findAny, pressAny } from './page-coo.ts'
 
 // La carte de lancement du COO. Invariant : « Une carte ne lance qu'une mission ; un
 // enregistrement de lancement n'est consommé qu'une fois, par une seule discussion, dans les 10 minutes. »
@@ -56,9 +57,9 @@ test('le COO propose une carte : elle paraît dans la vue et dans son relevé ; 
   expect(r).toMatch(/Launch card k[a-z0-9]+ shown in the Coordination view/)
   const card = { id: cardIdOf(r) }
   const ui = await pane($)
-  expect(await ui.find({ type: 'Text', text: /Lancements · 1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Export CSV des tickets' })).toBeDefined()
-  await ui.press({ key: `coo-card-manual-${card.id}` })
+  expect(await findAny(ui, { type: 'Text', text: /Lancements · 1/ })).toBeDefined()
+  expect(await findAny(ui, { type: 'Text', text: 'Export CSV des tickets' })).toBeDefined()
+  await pressAny(ui, { key: `coo-card-manual-${card.id}` })
   await ui.unmount()
   // Pendant le lancement, la carte n'a plus de bouton (un second clic n'a rien à presser) ; renvoyée, elle ne change pas.
   expect(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)).toMatch(/being launched/)
@@ -72,8 +73,8 @@ test('le COO propose une carte : elle paraît dans la vue et dans son relevé ; 
   expect(fill).toMatch(/--effort high/)
   expect(w.fills.filter(f => f.includes('"launch"'))).toHaveLength(1)
   const after = await pane($)
-  expect(await after.find({ type: 'Text', text: /lancement en cours \(manuel\)/ })).toBeDefined()
-  expect(await after.find({ type: 'Button', key: `coo-card-manual-${card.id}` })).toBeUndefined()
+  expect(await findAny(after, { type: 'Text', text: /lancement en cours \(manuel\)/ })).toBeDefined()
+  expect(await findAny(after, { type: 'Button', key: `coo-card-manual-${card.id}` })).toBeUndefined()
   await after.unmount()
 })
 
@@ -112,27 +113,33 @@ test('le texte de lancement : la feuille de route demandée quand la carte cite 
   expect(pistes).toContain("un découpage de pistes de rétro n'a pas de tour d'intention")
 })
 
-test('la carte revient au-delà de 10 minutes sans mission, et se dit lancée quand une mission la porte', { timeoutMs: 20000 }, async ($, on) => {
+test('la carte revient au-delà de 10 minutes sans mission ; une mission la porte : elle n’est plus montrée, et reste gardée', { timeoutMs: 20000 }, async ($, on) => {
   const now = 301_000_000
   const { clock, w } = await openCooWith($, on, now)
   const card = { id: cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)) }
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${card.id}` })
+  await pressAny(ui, { key: `coo-card-manual-${card.id}` })
   await ui.unmount()
   await clock.advance(LAUNCH_TTL_MS + 70_000)
   const back = await pane($)
-  expect(await back.find({ type: 'Button', key: `coo-card-manual-${card.id}` })).toBeDefined()
+  expect(await findAny(back, { type: 'Button', key: `coo-card-manual-${card.id}` })).toBeDefined()
   // Un nouveau clic efface d'abord l'enregistrement périmé : un seul reste, le nouveau.
-  await back.press({ key: `coo-card-manual-${card.id}` })
+  await pressAny(back, { key: `coo-card-manual-${card.id}` })
   await back.unmount()
   const kept = records(w)
   expect(kept).toHaveLength(1)
   // Une mission d'une autre discussion porte la carte : lancée.
   writeBoard(w, b => ({ ...b, runs: [{ ...newRun('grill-with-docs', now, 'Export CSV des tickets'), status: 'active', owner: 'session-M', launch: { id: kept[0]!.id, card: card.id, at: kept[0]!.at, folder: 'export-csv', start: 'grill-with-docs', mode: 'manual' } }] }))
   await settle(clock, 6)
+  // Décision des cartes lancées : une carte lancée n'est plus montrée (ni sa ligne d'ask-matt, ni l'en-tête « Lancements »).
   const done = await pane($)
-  expect(await done.find({ type: 'Text', text: /lancée : « Export CSV des tickets »/ })).toBeDefined()
+  expect(await findAny(done, { key: `coo-card-${card.id}` })).toBeUndefined()
+  expect(await findAny(done, { key: `coo-card-why-${card.id}` })).toBeUndefined()
+  expect(await findAny(done, { type: 'Text', text: /^Lancements/ })).toBeUndefined()
+  expect(await findAny(done, { type: 'Text', text: /lancée : « Export CSV des tickets »/ })).toBeUndefined()
   await done.unmount()
+  // Rien n'est effacé : la carte reste gardée, et la reproposer sur le même dossier est refusé comme déjà lancée.
+  expect(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)).toMatch(/is already launched; a card launches only once/)
 })
 
 test('une carte refusée ne paraît pas ; elle ne vient que de la discussion du COO, seule dans son appel', { timeoutMs: 20000 }, async ($, on) => {
@@ -263,13 +270,13 @@ test('après /reload-plugins, la carte reste en lancement et l’enregistrement 
   const { w } = await openCooWith($, on, now)
   const card = { id: cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)) }
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${card.id}` })
+  await pressAny(ui, { key: `coo-card-manual-${card.id}` })
   await ui.unmount()
   // Le mod rechargé : `session.start` repasse ; l'enregistrement pas encore périmé reste.
   await start($)
   expect(records(w)).toHaveLength(1)
   const after = await pane($)
-  expect(await after.find({ type: 'Text', text: /lancement en cours/ })).toBeDefined()
+  expect(await findAny(after, { type: 'Text', text: /lancement en cours/ })).toBeDefined()
   await after.unmount()
 })
 
@@ -327,7 +334,7 @@ test('un lancement encore valable pour ce dossier refuse un second clic, même s
   w.mem[launchKey('lavant12345')] = record({ id: 'lavant12345', at: now - 60_000, card: 'kperdue123' })
   const card = { id: cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)) }
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${card.id}` })
+  await pressAny(ui, { key: `coo-card-manual-${card.id}` })
   await ui.unmount()
   expect(records(w).map(x => x.id)).toEqual(['lavant12345'])
   expect(w.fills.some(f => f.includes('"launch"'))).toBe(false)
@@ -339,7 +346,7 @@ test('les lancements gardés illisibles (la liste des clés du magasin refusée)
   const card = { id: cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)) }
   w.probe.refuseKeys = () => true
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${card.id}` })
+  await pressAny(ui, { key: `coo-card-manual-${card.id}` })
   await ui.unmount()
   expect(w.toasts.at(-1)).toBe('◆ Rien n’est lancé : un lancement gardé ne se lit pas ; réessaie.')
   expect(records(w)).toHaveLength(0)
@@ -347,23 +354,28 @@ test('les lancements gardés illisibles (la liste des clés du magasin refusée)
   // La carte n'est pas « en lancement » : son bouton reste, et le même clic lance une fois la liste relue.
   w.probe.refuseKeys = undefined
   const again = await pane($)
-  await again.press({ key: `coo-card-manual-${card.id}` })
+  await pressAny(again, { key: `coo-card-manual-${card.id}` })
   await again.unmount()
   expect(records(w)).toHaveLength(1)
   expect(w.fills.filter(f => f.includes('"launch"'))).toHaveLength(1)
 })
 
-test('au-delà du plafond, seules les cartes prêtes les plus anciennes partent : une carte en lancement reste',{ timeoutMs: 20000 }, async ($, on) => {
+// Décision « plus de plafond pour les cartes prêtes » : toutes les cartes restent, prêtes ou en lancement.
+test('neuf cartes de plus après une carte en lancement : toutes restent, et la carte en lancement le reste',{ timeoutMs: 20000 }, async ($, on) => {
   const now = 322_000_000
   const { w } = await openCooWith($, on, now)
   const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${first}` })
+  await pressAny(ui, { key: `coo-card-manual-${first}` })
   await ui.unmount()
   for (let i = 0; i < 9; i++) await $.tool.call({ tool: TOOL, card: { ...CARD, title: `Carte ${i}`, folder: `dossier-${i}` } } as any)
   // Renvoyée avec le même dossier (casse comprise), elle est toujours en lancement.
   expect(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, folder: 'EXPORT-csv' } } as any)) as any).result)).toMatch(/being launched/)
   expect(records(w)).toHaveLength(1)
+  const all = await pane($)
+  for (let i = 0; i < 9; i++) expect(await findAny(all, { type: 'Text', text: `Carte ${i}` })).toBeDefined()
+  expect(await findAny(all, { type: 'Text', text: /Lancements · 10/ })).toBeDefined()
+  await all.unmount()
 })
 
 test('une mission qui en voit une autre porter le même lancement perd (sens unique), et la perte ne se défait pas à la fusion', () => {
@@ -422,7 +434,13 @@ test('une idée « à lancer » a son bouton ▶ Lancer, qui demande la carte au
   const launched = (parseCard({ ...CARD, idea: 'I1' }, 1, 'kabcdef12') as { card: any }).card
   const run = { ...newRun('grill-with-docs', 2, 'Export CSV'), launch: { id: 'labcdefgh12', card: 'kabcdef12', at: 1, folder: 'export-csv', start: 'grill-with-docs', mode: 'manual' as const } }
   const s = cooStatement({ ...emptyBoard('', 'p'), runs: [run] }, { now: 3, roadmap, cards: [launched], askMatt: '/c/plugins/cache/m/mattpocock-skills/1/skills/engineering/ask-matt/SKILL.md' })
-  const idea = coordinationRows(s).find(r => r.key === 'coo-idea-I1')
+  // La carte lancée n'est plus montrée sur la page « Missions », ni comptée ; une carte prête à côté l'est, seule comptée.
+  expect(coordinationRows(s, { page: 'missions' }).some(r => r.key.startsWith('coo-card'))).toBe(false)
+  const ready = (parseCard({ ...CARD, title: 'Autre carte', folder: 'autre' }, 1, 'kready0001') as { card: any }).card
+  const both = coordinationRows(cooStatement({ ...emptyBoard('', 'p'), runs: [run] }, { now: 3, roadmap, cards: [launched, ready] }), { page: 'missions' })
+  expect(both.filter(r => r.key.startsWith('coo-card-k')).map(r => r.key)).toEqual(['coo-card-kready0001'])
+  expect(both.find(r => r.key === 'coo-cards')?.parts.map(p => p.text).join('')).toBe('Lancements · 1')
+  const idea = coordinationRows(s, { page: 'ideas' }).find(r => r.key === 'coo-idea-I1')
   expect(idea?.actions?.map(a => a.act)).toContainEqual({ kind: 'idea-launch', id: 'I1' })
   expect(roadmapAsk({ kind: 'idea-launch', id: 'I1' }, roadmap)).toMatch(/je veux lancer l'idée I1 de la feuille de route\. Relis ask-matt, puis propose-moi sa carte de lancement par le champ "card"/)
   const text = statementText(s)
@@ -442,10 +460,10 @@ test('deux cartes cliquées coup sur coup : la demande de la première, pas enco
   const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
   const second = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, title: 'Durcir les scripts', folder: 'durcir-scripts' } } as any)) as any).result))
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${first}` })
+  await pressAny(ui, { key: `coo-card-manual-${first}` })
   const launched = records(w).find(r => r.card === first)!
   expect(w.box.text).toContain(`{"launch": "${launched.id}"}`)
-  await ui.press({ key: `coo-card-manual-${second}` })
+  await pressAny(ui, { key: `coo-card-manual-${second}` })
   await ui.unmount()
   // La demande de la première carte n'est jamais écrasée : la seconde s'ajoute à sa suite, Entrée lance les deux.
   const next = records(w).find(r => r.card === second)!
@@ -458,13 +476,13 @@ test('une demande restée dans le prompt au-delà de son lancement (périmée) e
   const { clock, w } = await openCooWith($, on, now)
   const card = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${card}` })
+  await pressAny(ui, { key: `coo-card-manual-${card}` })
   await ui.unmount()
   const old = records(w).find(r => r.card === card)!
   // Plus de 11 minutes sans Entrée : le lancement est périmé, la carte redevient prête.
   await clock.advance(LAUNCH_TTL_MS + 2 * 60_000)
   const again = await pane($)
-  await again.press({ key: `coo-card-manual-${card}` })
+  await pressAny(again, { key: `coo-card-manual-${card}` })
   await again.unmount()
   const fresh = records(w).find(r => r.card === card && r.id !== old.id)!
   expect(fresh).toBeDefined()
@@ -478,6 +496,8 @@ test('deux cartes cliquées en même temps : aucune demande n’écrase l’autr
   const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
   const second = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, title: 'Durcir les scripts', folder: 'durcir-scripts' } } as any)) as any).result))
   const ui = await pane($)
+  // La page « Missions » d'abord, pour que les deux pressions partent bien ensemble.
+  await ui.press({ key: 'coo-page-missions' })
   await Promise.all([ui.press({ key: `coo-card-manual-${first}` }), ui.press({ key: `coo-card-manual-${second}` })])
   await ui.unmount()
   const ids = records(w).map(r => r.id)
@@ -492,7 +512,7 @@ test('un prompt qui mêle une demande périmée et une valable ne reçoit rien :
   const second = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, title: 'Durcir les scripts', folder: 'durcir-scripts' } } as any)) as any).result))
   const press = async (card: string) => {
     const ui = await pane($)
-    await ui.press({ key: `coo-card-manual-${card}` })
+    await pressAny(ui, { key: `coo-card-manual-${card}` })
     await ui.unmount()
   }
   await press(first)
@@ -512,7 +532,7 @@ test('une demande dont la ligne de lancement a été retouchée reste dans le pr
   const card = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
   w.box.text = '◆ COO : lance maintenant la mission « Autre » dans une nouvelle discussion. Ma note à moi.'
   const ui = await pane($)
-  await ui.press({ key: `coo-card-manual-${card}` })
+  await pressAny(ui, { key: `coo-card-manual-${card}` })
   await ui.unmount()
   expect(w.box.text).toBe('◆ COO : lance maintenant la mission « Autre » dans une nouvelle discussion. Ma note à moi.')
   expect(w.toasts.at(-1)).toMatch(/^▶ Demande à taper : lance la mission « Export CSV des tickets »/)
@@ -541,4 +561,16 @@ test('« Lancer » une chose à reprendre demande de la passer « rattachée à 
   expect(cardRoadmapIds(parsed(long))).toEqual(['R123'])
   expect(cardRoadmapIds(parsed(`${'x'.repeat(66)} R123`))).not.toContain('R123')
   expect(roadmapAsk({ kind: 'pending-launch', id: 'R1"; rm' }, roadmap)).toBeNull()
+})
+
+test('une carte proposée sur un dossier qu’une mission porte déjà, sans carte gardée (carte retirée, siège repris) : refusée comme déjà lancée, rien n’est gardé', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 305_000_000
+  const { clock, w } = await openCooWith($, on, now)
+  writeBoard(w, b => ({ ...b, runs: [{ ...newRun('grill-with-docs', now, 'Export CSV des tickets'), status: 'active', owner: 'session-M', launch: { id: 'lold000001', card: 'kperdue01', at: now - 1000, folder: 'export-csv', start: 'grill-with-docs', mode: 'manual' } }] }))
+  await settle(clock, 6)
+  // Acceptée, elle serait lancée dès sa pose, donc cachée : la réponse annoncerait une carte que la personne ne voit pas.
+  expect(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)).toMatch(/is already launched; a card launches only once/)
+  const ui = await pane($)
+  expect(await findAny(ui, { type: 'Text', text: /^Lancements/ })).toBeUndefined()
+  await ui.unmount()
 })

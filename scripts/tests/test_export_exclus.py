@@ -3,7 +3,8 @@ python3 -m unittest discover -s scripts/tests.
 
 Le hook du dépôt qui refuse un `cd` dans un sous-dossier ne vaut que pour ce dépôt, dont le CLAUDE.md
 porte le piège : ni son réglage, ni son script, ni ses tests ne partent dans la version publique. De même
-le détail de check.sh (docs/check-sh.md) et les pièges des mods (.claude/rules/), sortis du CLAUDE.md privé.
+le détail de check.sh (docs/check-sh.md) et les pièges des mods (.claude/rules/), sortis du CLAUDE.md privé,
+et la fiche du gestionnaire de tickets (docs/agents/), qui renvoie à ce CLAUDE.md privé.
 Sans scripts/export_public.py (la version publique), ces tests sont sans objet."""
 
 import re
@@ -40,6 +41,8 @@ class ExportExclusTest(unittest.TestCase):
             export_public.build_snapshot("HEAD", staging)
             self.assertFalse((staging / "docs" / "check-sh.md").exists())
             self.assertFalse((staging / ".claude" / "rules" / "pieges-des-mods.md").exists())
+            # Où vivent les tickets de ce dépôt (des fichiers de travail/, qui ne part pas) : le CLAUDE.md public ne le dit pas.
+            self.assertFalse((staging / "docs" / "agents").exists())
             self.assertTrue((staging / "docs" / "evenements-moteur.md").is_file())
 
     def test_aucun_test_exporte_ne_charge_un_script_qui_ne_part_pas(self):

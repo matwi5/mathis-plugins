@@ -225,14 +225,17 @@ test('« 🐞 Bug · worker » : seulement en code ou revue ; le diagnostic s’
   const text = filled.at(-1)!
   expect(text).toMatch(/^Lance un diagnostic de bug dans un worker, pour la mission « Lot SC » \(phase Implémentation\), avec un titre qui commence par « Lot SC > Bug · »\./)
   // Elle reprend la mission : elle reste dans ce dossier, qui a le fichier de la mission, sans worktree.
-  expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, effort "<effort>" et use_worktree false \(elle reprend la mission, qui vit dans ce dossier\)/)
-  expect(text).toContain(`claude --bg -n 'Lot SC > Bug · <sujet>' --effort <effort> (sans -w : elle reste dans ce dossier, où vit la mission) "<prompt>"`)
+  expect(text).toMatch(/start_session, avec initiation user_asked, context "fresh", wake_when_done true, model "claude-opus-5-5", effort "<effort>" et use_worktree false \(elle reprend la mission, qui vit dans ce dossier\)/)
+  expect(text).toContain(`claude --bg -n 'Lot SC > Bug · <sujet>' --model opus --effort <effort> (sans -w : elle reste dans ce dossier, où vit la mission) "<prompt>"`)
   // L'effort : high à la première tentative, xhigh à la deuxième, pas de troisième session.
   expect(text).toContain("Effort de la session (<effort>) : high pour une première tentative ; xhigh pour une deuxième, quand une session de bug de cette mission a déjà essayé de corriger ce même bug et qu'il est toujours là")
   expect(text).toContain('Pas de troisième session après un second échec : on replanifie ensemble ici.')
   expect(text).toContain("dans les deux cas, reprendre d'abord la mission ici avec")
   expect(text).toContain("si le bug est toujours là, arrêter la session (ci-dessous), puis me le dire et me proposer la deuxième tentative (règle d'effort ci-dessus), que je lance par un nouveau clic sur « 🐞 Bug · worker »")
   expect(text).toMatch(/\{"resume": "[^"]+"\}/)
+  // R212 : le worker de diagnostic part sur Opus, quel que soit le modèle de la discussion.
+  expect(text).toContain('model "claude-opus-5-5"')
+  expect(text).toContain('--model opus')
   expect(text).toContain('2) puis lancer /mattpocock-skills:diagnosing-bugs avec la description du bug')
   expect(text).toContain('4) à la fin, envoyer {"complete": true} pour clore le détour.')
   expect(text.endsWith('Bug : ')).toBe(true)

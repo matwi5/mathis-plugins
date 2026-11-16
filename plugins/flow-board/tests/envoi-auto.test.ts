@@ -14,6 +14,7 @@ import { cooStatement } from '../hooks/coo.ts'
 import { coordinationRows } from '../hooks/coo-view.tsx'
 import type { Board, Run } from '../types'
 import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 const T0 = 120_000_000
 const PLUGIN = 'flow-board'
@@ -43,7 +44,7 @@ const world = (on: any) => {
   const ids = { now: 'sa' }
   const flags = { unreadable: false, unwritable: false, storeRefuses: false, refuseNext: false, refusePrompt: false, holdPrompt: false, coordUnreadable: false }
   // Le fichier de coordination du COO, quel que soit son nom ; illisible quand le test le dit (une écriture coupée).
-  const isCoord = (path: string): boolean => path.includes('/flow-board/coordination/') && !path.includes('feuille-de-route') && !path.includes('.nuit')
+  const isCoord = (path: string): boolean => path.includes('/flow-board/coordination/') && !path.includes('feuille-de-route') && !path.includes('.nuit') && !path.includes('.numeros') && !path.includes('.cartes')
   const held: (() => void)[] = []
   // Les messages que le mod soumet (la consigne de l'allumage, au repos).
   const prompts: { text: string; origin: any }[] = []
@@ -132,18 +133,18 @@ const settle = async (clock: { advance: (ms: number) => Promise<void> }, seconds
 }
 const press = async ($: any, key: string) => {
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key })
+  await pressAny(pane, { key })
   await pane.unmount()
 }
 const paneHas = async ($: any, key: string): Promise<boolean> => {
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  const found = (await pane.find({ key })) !== undefined
+  const found = (await findAny(pane, { key })) !== undefined
   await pane.unmount()
   return found
 }
 const bandText = async ($: any): Promise<string> => {
   const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...BAND })
-  const texts = (await band.findAll({ type: 'Text' })).map((t: any) => String(t.text ?? '')).join(' | ')
+  const texts = (await findAllAny(band, { type: 'Text' })).map((t: any) => String(t.text ?? '')).join(' | ')
   await band.unmount()
   return texts
 }
@@ -1104,6 +1105,174 @@ test('après un /clear (une autre discussion), la pause ne reprend pas ici', { t
   expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
 })
 
+// ─── Ce que la réponse dit de la pause, et le rappel court à la reprise ─────
+//
+// La pause « plus rien ne peut avancer sans toi » qui reprendra d'elle-même n'est pas un arrêt : la réponse de l'outil
+// le dit, sans faire demander à Claude les validations que l'auto saute. À la reprise d'elle-même, dans le même
+// processus et sans compaction depuis le bloc, Claude reçoit un rappel court au lieu du bloc entier (7 à 9 Ko).
+
+const PAUSED_RESUMING = 'Auto mode is PAUSED for this mission now, not stopped'
+const OFF = 'Auto mode is OFF for this mission now'
+const AGAIN = 'Auto mode is ON again for this mission'
+const BLOCK = 'Auto mode is on for this mission'
+const BUTTON = 'button question)'
+
+test('pause qui reprendra d’elle-même : la réponse dit d’attendre, sans validation à boutons ; repris, un rappel court au lieu du bloc entier, et la suite part', { timeoutMs: 40000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  // Le contrôle positif : le message de l'allumage portait le bloc entier.
+  expect(w.prompts.at(-1)!.text).toContain(BLOCK)
+  const asked = w.prompts.length
+  const answer = String((await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)).result)
+  expect(answer).toContain(PAUSED_RESUMING)
+  // La dernière question répondue dans cet appel même : l'avis ne dit plus que des questions attendent.
+  expect(answer).toContain('its blocking questions are all answered, and it resumes by itself here shortly')
+  expect(answer).not.toContain('whose blocking questions wait')
+  expect(answer).toContain('ask no button question for a validation the auto mode skips, and declare no validation skipped')
+  expect(answer).not.toContain(BUTTON)
+  expect(answer).not.toContain(OFF)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ onWhy: 'resumed' })
+  // Un seul message de plus : le rappel court, sans le bloc.
+  expect(w.prompts.length).toBe(asked + 1)
+  const again = w.prompts.at(-1)!.text
+  expect(again).toContain(AGAIN)
+  expect(again).toContain('The auto mode block you received before the pause applies again')
+  expect(again).not.toContain(BLOCK)
+  expect(again.length).toBeLessThan(800)
+  // Prévenu par le rappel : la fin du tour de ce message envoie la suite, et la réponse suivante n'a plus d'avis.
+  await turnEnd($, w.clock, 's3')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+  const next = String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)
+  for (const notice of [AGAIN, BLOCK, PAUSED_RESUMING, OFF]) expect(next).not.toContain(notice)
+})
+
+test('le rappel court dans la réponse de l’outil : un tour ouvert juste après la reprise, avant le message du mod', { timeoutMs: 40000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  // La reprise se fait au repos ; un message de la personne ouvre un tour avant que le mod envoie le sien.
+  for (let i = 0; i < 100 && autoOf(w)?.onWhy !== 'resumed'; i++) await w.clock.advance(100)
+  expect(autoOf(w)).toMatchObject({ onWhy: 'resumed' })
+  const asked = w.prompts.length
+  await $.turn.start({ text: 'x', turnId: 's3' })
+  const reply = String((await $.tool.call({ tool: TOOL, note: 'suite' } as any)).result)
+  expect(reply).toContain(AGAIN)
+  expect(reply).toContain('Go on with the current phase')
+  expect(reply).not.toContain(BLOCK)
+  // Prévenu par la réponse : aucun message du mod, et la fin du tour envoie la suite.
+  await turnEnd($, w.clock, 's3')
+  expect(w.prompts.length).toBe(asked)
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('coupée pendant la pause dite « reprendra d’elle-même » : la réponse suivante redit l’état, avis éteint d’aujourd’hui', { timeoutMs: 40000 }, async ($, on) => {
+  const w = await stuckOn($, on, ['q1', 'q2'])
+  const waits = String((await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)).result)
+  expect(waits).toContain(PAUSED_RESUMING)
+  // Une question attend encore : l'avis dit d'attendre ses réponses et de n'avancer que ce qu'elle ne bloque pas.
+  expect(waits).toContain('It resumes by itself here once they are all answered')
+  expect(waits).toContain('go on only with what those questions do not block')
+  // Toujours la même pause : rien de plus.
+  expect(String((await $.tool.call({ tool: TOOL, note: 'encore' } as any)).result)).not.toContain('Auto mode is')
+  await press($, 'auto-off')
+  await settle(w.clock, 1)
+  const cut = String((await $.tool.call({ tool: TOOL, note: 'coupé' } as any)).result)
+  expect(cut).toContain(OFF)
+  expect(cut).toContain('ask the user for every validation (button question) and every tracker write')
+  expect(cut).not.toContain('PAUSED')
+  // Une fois seulement.
+  expect(String((await $.tool.call({ tool: TOOL, note: 'après' } as any)).result)).not.toContain('Auto mode is')
+})
+
+test('une pause sans trace de reprise ici : l’avis « pause » dit sa raison, qu’elle ne reprend pas d’elle-même, et les validations comme sans l’auto', { timeoutMs: 40000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  delete w.mem[`auto-resume:${w.runId}`]
+  const text = String((await $.tool.call({ tool: TOOL, note: 'pause' } as any)).result)
+  expect(text).toContain('Auto mode is PAUSED for this mission now (plus rien ne peut avancer sans toi): it does not resume by itself; the user lights it again or cuts it')
+  expect(text).toContain('ask the user for every validation (button question) and every tracker write')
+  expect(text).not.toContain(PAUSED_RESUMING)
+})
+
+test('reprise après une compaction de la discussion : le bloc entier, comme pour tout allumage', { timeoutMs: 60000 }, async ($, on) => {
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'résumé', toolUses: [] }] }))
+  const w = await stuckOn($, on)
+  // Compactée après le bloc : le rappel court ne suffit plus.
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'x', toolUses: [] }] } as any)
+  await settle(w.clock, 1)
+  // Seule différence avec le premier test de cette section (rappel court) : cette compaction, dont le hook pose le repère.
+  const asked = w.prompts.length
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ onWhy: 'resumed' })
+  expect(w.prompts.length).toBe(asked + 1)
+  expect(w.prompts.at(-1)!.text).toContain(BLOCK)
+  expect(w.prompts.at(-1)!.text).not.toContain(AGAIN)
+  // L'invariant « Claude prévenu de l'allumage » tient : la suite part à la fin du tour de ce message.
+  await turnEnd($, w.clock, 's3')
+  expect(w.runs.map(r => r.command)).toEqual(['mattpocock-skills:to-tickets'])
+})
+
+test('reprise après un changement de phase pendant la pause : le bloc entier, celui de la nouvelle phase', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  // Pendant la pause, la personne tape la phase suivante : sa consigne ne porte pas le bloc (l'auto est en pause).
+  await $.turn.start({ text: '/mattpocock-skills:to-tickets', turnId: 'p1' })
+  await $.command.run({ command: 'mattpocock-skills:to-tickets', args: '' } as any)
+  const consigne = String((await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x', source: 'plugin', pluginName: 'mattpocock-skills', frontmatter: {} } as any)).text)
+  expect(consigne).not.toContain(BLOCK)
+  await turnEnd($, w.clock, 'p1')
+  await settle(w.clock, 1)
+  const run = w.stored()!.runs[0]!
+  expect(run.phases[run.cursor]?.skill).toBe('to-tickets')
+  const asked = w.prompts.length
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ onWhy: 'resumed' })
+  expect(w.prompts.length).toBe(asked + 1)
+  expect(w.prompts.at(-1)!.text).toContain(BLOCK)
+  expect(w.prompts.at(-1)!.text).toContain('(to-tickets)')
+  expect(w.prompts.at(-1)!.text).not.toContain(AGAIN)
+})
+
+test('un skill hors de la phase chargé après une compaction ne vaut pas le bloc : la reprise d’elle-même redonne le bloc entier', { timeoutMs: 60000 }, async ($, on) => {
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'résumé', toolUses: [] }] }))
+  const w = await specDone($, on, { isAuto: false })
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', phase: 'to-tickets', text: 'Question q1 ?' }] } as any)
+  await press($, 'auto-on')
+  await press($, 'auto-confirm')
+  // Le message de l'allumage entre : Claude a le bloc de la phase.
+  await turnEnd($, w.clock, 's1')
+  expect(w.prompts.at(-1)!.text).toContain(BLOCK)
+  // La discussion est compactée, puis Claude charge un skill qui n'est pas celui de la phase (un événement, sans son bloc).
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'x', toolUses: [] }] } as any)
+  await settle(w.clock, 1)
+  await $.turn.start({ text: '/security-review', turnId: 'r1' })
+  await $.command.run({ command: 'security-review', args: '' } as any)
+  const consigne = String((await $.skill.prompt({ skill: 'security-review', text: 'x', source: 'plugin', pluginName: 'x', frontmatter: {} } as any)).text)
+  expect(consigne).toContain('Dashboard (flow-board)')
+  await turnEnd($, w.clock, 'r1')
+  await turnEnd($, w.clock, 's2')
+  expect(autoOf(w)).toMatchObject({ offWhy: 'plus rien ne peut avancer sans toi' })
+  const asked = w.prompts.length
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ onWhy: 'resumed' })
+  expect(w.prompts.length).toBe(asked + 1)
+  expect(w.prompts.at(-1)!.text).toContain(BLOCK)
+  expect(w.prompts.at(-1)!.text).not.toContain(AGAIN)
+})
+
+test('reprise après /reload-plugins : le bloc entier', { timeoutMs: 60000 }, async ($, on) => {
+  const w = await stuckOn($, on)
+  await start($)
+  await settle(w.clock, 1)
+  const asked = w.prompts.length
+  await $.tool.call({ tool: TOOL, waiting: [{ id: 'q1', answered: true }] } as any)
+  await settle(w.clock, 8)
+  expect(autoOf(w)).toMatchObject({ onWhy: 'resumed' })
+  expect(w.prompts.length).toBe(asked + 1)
+  expect(w.prompts.at(-1)!.text).toContain(BLOCK)
+  expect(w.prompts.at(-1)!.text).not.toContain(AGAIN)
+})
+
 test('un fichier qui pose la raison « plus rien ne peut avancer » sans trace gardée ici : pas de reprise', { timeoutMs: 60000 }, async ($, on) => {
   const w = await stuckOn($, on)
   // Sans la trace gardée ici (un fichier forgé ou rejoué) : rien ne reprend.
@@ -1185,7 +1354,7 @@ test('la ligne de la vue Coordination dit la reprise : « ⚡ Auto · repris : q
   const base = { ...newRun('implement', T0, 'Mission R'), status: 'active', owner: 'sb' } as Run
   const rowOf = (auto: Run['auto']) => {
     const board: Board = { ...emptyBoard('', 'p'), deleted: [], runs: [{ ...base, auto }] }
-    const row = coordinationRows(cooStatement(board, { now: T0 + 10_000 })).find(r => r.key === `coo-mission-${base.id}`)!
+    const row = coordinationRows(cooStatement(board, { now: T0 + 10_000 }), { page: 'missions' }).find(r => r.key === `coo-mission-${base.id}`)!
     return row.parts.map(p => p.text).join(' ')
   }
   expect(rowOf({ onAt: T0 + 5_000, onBy: 'sb', onWhy: 'resumed', offAt: T0 + 1_000, offWhy: 'plus rien ne peut avancer sans toi' })).toMatch(/⚡\sAuto · repris : questions répondues/)

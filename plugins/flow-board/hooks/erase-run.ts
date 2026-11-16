@@ -15,9 +15,9 @@ import { carriedRunAt, runFileId, runWindow, runsCarriedBy } from './history.ts'
 import { isSameProject, isSureLink, linkedSessions } from './linked.ts'
 import { EMPTY_UI, dropRun } from './model.ts'
 import { autoOnKey } from './launch.ts'
-import { relayFileSlug } from './relay.ts'
 import { type HistoryShown, appliedKey, resumeKey, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, missionReportKey, missionReportPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
 import { commitRegistry, readRegistry, registryDir, registryKey, registryPath, writeRegistry } from './registry-file.ts'
+import { relayFileSlug } from './closing.ts'
 
 /** Les atomes lus ou mis à jour ici : le moteur veut leur déclaration dans le fichier qui les lit. */
 const boardAtom = atom({ plugin: 'flow-board', key: 'board' } as const, null)

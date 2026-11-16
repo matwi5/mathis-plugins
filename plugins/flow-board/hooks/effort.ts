@@ -9,8 +9,9 @@
 // (`isJudgmentTicket`), en xhigh au moins, chez un worker comme dans un lot. Hors de ce travail, l'effort d'une requête suit le
 // rôle et la phase (`leadEffort`) : le COO en medium ; le manager d'une mission à groupes en medium de
 // la fin du découpage au début du compte rendu ; un manager en cadrage sur Fable 5.2 medium, high quand l'auto de la
-// mission envoie de sa discussion, quand le mod peut réécrire le modèle (sinon high au moins, xhigh au moins pour un
-// cadrage en auto dont Fable a été éteint par le repli) ; high au moins dans toute autre phase d'un manager.
+// mission envoie de sa discussion, quand le mod peut réécrire le modèle ou que la requête part déjà sur Fable (un `/model`
+// tapé : le mod ne change pas le modèle, il garde l'effort de la règle) ; sinon high au moins, xhigh au moins pour un
+// cadrage en auto dont Fable a été éteint par le repli ; high au moins dans toute autre phase d'un manager.
 // Le mod n'impose xhigh que pendant un ticket « Jugement : oui » en cours (le drapeau qu'envoie la discussion qui
 // tient la mission), au repli d'un worker Fable et au repli d'un cadrage en auto ; il ne choisit jamais le worker Fable.
 //
@@ -18,6 +19,7 @@
 
 import type { Run, Ticket } from '../types'
 import { currentPhase, isJudgmentTicket, sameTicket } from './basics.ts'
+import { skillsWith } from './catalog.ts'
 import { isSafeId } from './closing.ts'
 import { activeDetour } from './model.ts'
 
@@ -90,7 +92,7 @@ export const groupLaunchNote = (open: readonly Ticket[], files: readonly string[
 }
 
 /** Les phases où un manager fait le travail d'un worker de groupe, quand sa mission n'a pas de groupes. */
-const LOT_PHASES = new Set(['implement', 'tdd'])
+const LOT_PHASES = skillsWith('isLotPhase')
 
 /**
  * L'effort que prend un manager qui fait lui-même le travail d'un worker, par la règle de ce worker,
@@ -167,20 +169,22 @@ export const workerTicketEffort = (doing: readonly string[] | null, mission: Run
  * cadrage dont l'auto envoie d'ici (`framingAuto`), compte rendu, rétrospective, toute autre phase), un ticket
  * sensible en cours chez un worker, ou un ticket de jugement en cours (`judgment`, chez un worker ou dans un lot).
  */
-export type LeadRule = 'group' | 'diagnosis' | 'coo' | 'groups' | 'framing' | 'framingAuto' | 'report' | 'retro' | 'other' | 'sensitive' | 'judgment' | 'fable' | 'fableOff'
+export type LeadRule = 'group' | 'diagnosis' | 'coo' | 'groups' | 'framing' | 'framingAuto' | 'report' | 'retro' | 'other' | 'sensitive' | 'judgment' | 'fable' | 'fableOff' | 'opusBack'
 
 /**
  * Comment l'effort se pose : `exact`, l'effort de la règle quel que soit celui de la discussion (un lot,
  * jamais xhigh) ; `floor`, `level` au moins (high ou xhigh), un effort plus haut restant ; `medium`, medium imposé (low et
  * high ramenés à medium), xhigh et max laissés, un choix délibéré de la personne. `ticket` et `isUnknown` :
  * pour les règles `sensitive` et `judgment`, le ticket en cours qui l'impose et si sa sensibilité ne se lit pas. `model` :
- * le modèle imposé à la requête (Fable 5.2, `FABLE_MODEL`), toujours avec un effort `exact` ; absent, la
- * requête garde le sien. `level` xhigh : le repli d'un worker Fable quand Fable est indisponible
+ * le modèle imposé à la requête : Fable 5.2 (`FABLE_MODEL`), toujours avec un effort `exact`, ou Opus (`OPUS_CLI_ALIAS`)
+ * pour une requête partie sur Fable hors du cadrage (`withOpusBack`), à l'effort de sa règle ; absent, la requête
+ * garde le sien. `session` : l'effort de la requête part tel quel (la règle `opusBack` d'un worker sans autre règle). `isOnFable` : la requête part déjà sur Fable sans que le mod réécrive son modèle (un
+ * `/model` tapé pendant un cadrage), avec la règle du cadrage sur Fable ; le bandeau nomme alors Fable 5.2. `level` xhigh : le repli d'un worker Fable quand Fable est indisponible
  * (`FABLE_OFF_WORKER_EFFORT`), le remplaçant d'Opus xhigh que Mathis a choisi, le plancher d'un ticket de
  * jugement en cours (`judgment`) et celui d'un cadrage en auto dont Fable a été éteint par le repli
  * (`framingAuto`) ; jamais autrement.
  */
-export type LeadEffort = { level: WorkerEffort | 'xhigh'; rule: LeadRule; how: 'exact' | 'floor' | 'medium'; ticket?: string; isUnknown?: true; model?: typeof FABLE_MODEL }
+export type LeadEffort = { level: WorkerEffort | 'xhigh'; rule: LeadRule; how: 'exact' | 'floor' | 'medium' | 'session'; ticket?: string; isUnknown?: true; model?: typeof FABLE_MODEL | typeof OPUS_CLI_ALIAS; isOnFable?: true }
 
 /**
  * Le modèle que le mod impose à une requête du fil principal : l'alias `fable`, Fable 5.2 depuis Claude Code
@@ -194,7 +198,7 @@ const FABLE_ID_PREFIX = 'claude-fable-'
 /** L'id complet d'un modèle (celui de `$.session.model()`) est un Fable ; un id illisible ou un alias : non. */
 export const isFableModelId = (id: unknown): boolean => typeof id === 'string' && id.startsWith(FABLE_ID_PREFIX)
 
-/** Les mots que montre le rappel d'un manager resté sur Fable après le cadrage (bandeau et demande de lancement). */
+/** Les mots que montre le rappel d'un manager resté sur Fable après le cadrage (au bandeau seulement : la demande de lancement des groupes ne le porte plus). */
 export const FABLE_STUCK_WORDS = 'tape /model opus'
 
 /** La discussion qui tient le siège du COO : medium à chaque requête, xhigh et max laissés. */
@@ -217,7 +221,7 @@ export const FABLE_OFF_WORKER_EFFORT: LeadEffort = { level: 'xhigh', rule: 'fabl
  * exprès : il est un cadrage pour les consignes (`FRAMING_SKILLS` de `register.tsx`), pas pour le modèle ; il reste
  * sur Opus, plancher high, règle « other » (choix du 13/11/2026 : l'élargir à Fable serait une dépense nouvelle).
  */
-const FRAMING = new Set(['grilling', 'grill-with-docs', 'grill-me', 'to-questionnaire', 'to-spec', 'to-tickets', 'domain-modeling'])
+const FRAMING = skillsWith('isModelFraming')
 
 /**
  * La fenêtre du cadrage sur Fable : la phase du curseur est une phase de cadrage, active ou faite tant que la
@@ -254,7 +258,9 @@ const isGroupsFollowUp = (run: Run): boolean => {
  * Le rappel « tape /model opus » est dû chez un manager : sa mission active, le découpage fini, au suivi ou au
  * lancement de ses groupes (`isGroupsFollowUp`), hors d'un cadrage en cours (la règle du manager, `leadEffort`, n'y
  * impose alors plus Fable), et le modèle de la session (`sessionModel`, l'id complet relu à chaque fois) un Fable.
- * Le mod ne change jamais ce modèle lui-même : un `/model` tapé reste respecté, seule la personne le retape.
+ * Le mod ramène sur Opus chaque requête du fil principal (`withOpusBack`), mais il ne peut pas changer le modèle de
+ * la session lui-même : les forks et les agents sans modèle propre le gardent ; le bandeau le dit, seule la
+ * personne le retape (décision de Mathis du 14/11/2026, « retour sur Opus hors du cadrage »).
  */
 export const isFableStuck = (run: Run | null, sessionModel: unknown): boolean =>
   run !== null && run.status === 'active' && isGroupsFollowUp(run) && leadEffort(run)?.rule !== 'framing' && isFableModelId(sessionModel)
@@ -263,16 +269,37 @@ export const isFableStuck = (run: Run | null, sessionModel: unknown): boolean =>
  * Ce que la règle d'un manager lit de sa discussion, en plus de la mission : `isAutoHere`, l'auto de la mission
  * envoie d'ici (l'état qui met le bloc « mode auto » dans sa consigne : allumé par un geste de Mathis pour cette
  * discussion, la mission y étant active) ; `isFableOff`, Fable éteint par le repli « Fable indisponible », sans
- * `/model` tapé. Absents : non.
+ * `/model` tapé ; `isOnFable`, la requête part déjà sur Fable sans réécriture du mod (un `/model` tapé, ou une
+ * bascule de l'app que le moteur rapporte comme telle). Absents : non.
  */
-export type LeadContext = { isAutoHere?: boolean; isFableOff?: boolean }
+export type LeadContext = { isAutoHere?: boolean; isFableOff?: boolean; isOnFable?: boolean }
+
+/**
+ * Le retour sur Opus hors du cadrage (décision de Mathis du 14/11/2026) :
+ * une requête du fil principal qui part sur Fable (`requestModel`, un id `claude-fable-*`) sans que la règle lui
+ * impose un modèle part sur Opus (`OPUS_CLI_ALIAS`), à l'effort de cette règle, même après un `/model` tapé. Restent
+ * tels quels : une règle qui impose déjà un modèle ou qui garde Fable (le cadrage sur Fable, `isOnFable`), le worker
+ * Fable et son repli (`fable`, `fableOff`). Sans règle : rien chez un manager ou une discussion sans mission (`null`),
+ * la règle `opusBack` chez un worker (`isWorker`), qui garde l'effort de la requête.
+ */
+export const withOpusBack = (rule: LeadEffort | null, requestModel: unknown, isWorker = false): LeadEffort | null =>
+  isFableModelId(requestModel) ? opusBack(rule, isWorker) : rule
+
+/** La règle d'une requête que `withOpusBack` ramène sur Opus (le bandeau la relit d'après la dernière requête). */
+export const opusBack = (rule: LeadEffort | null, isWorker = false): LeadEffort | null => {
+  if (rule === null) return isWorker ? { level: 'medium', rule: 'opusBack', how: 'session', model: OPUS_CLI_ALIAS } : null
+  if (rule.model !== undefined || rule.isOnFable === true || rule.rule === 'fable' || rule.rule === 'fableOff') return rule
+  return { ...rule, model: OPUS_CLI_ALIAS }
+}
 
 /**
  * L'effort qu'impose le mod à une requête du fil principal d'un manager, mission active ici : la règle
  * d'un worker quand il en fait le travail (`managerWorkEffort`, inchangée, sur le modèle de la session) ;
  * pendant la fenêtre du cadrage (`isFramingWindow`), quand `isFableOn` dit que le mod peut réécrire le modèle
  * (pas de `/model` tapé, Fable pas éteint, la requête sur le modèle de la session), Fable 5.2 en high exact si
- * l'auto envoie d'ici (`here.isAutoHere`), en medium exact sinon ; dans cette fenêtre, Fable éteint par le
+ * l'auto envoie d'ici (`here.isAutoHere`), en medium exact sinon ; de même, sans modèle à réécrire, pour une
+ * requête qui part déjà sur Fable (`here.isOnFable` : un `/model` tapé arrête le changement de modèle, pas la
+ * règle du cadrage sur Fable, décision du 14/11/2026) ; dans cette fenêtre, Fable éteint par le
  * repli (`here.isFableOff`) et l'auto envoyant d'ici, xhigh au moins ; medium pendant le suivi des groupes d'une
  * mission à groupes ; sinon high au moins, avec la raison de la phase. Rien sans mission active (`null`). Le
  * COO, qui n'a pas de mission, a `COO_EFFORT`. Sans `isFableOn`, jamais de modèle : dans le doute, la requête
@@ -284,6 +311,7 @@ export const leadEffort = (run: Run | null, isFableOn = false, here: LeadContext
   if (work) return { level: work.level, rule: work.rule, how: work.rule === 'group' ? 'exact' : 'floor', ...(work.ticket !== undefined ? { ticket: work.ticket } : {}) }
   if (isFramingWindow(run)) {
     if (isFableOn) return here.isAutoHere === true ? { level: 'high', rule: 'framingAuto', how: 'exact', model: FABLE_MODEL } : { level: 'medium', rule: 'framing', how: 'exact', model: FABLE_MODEL }
+    if (here.isOnFable === true) return here.isAutoHere === true ? { level: 'high', rule: 'framingAuto', how: 'exact', isOnFable: true } : { level: 'medium', rule: 'framing', how: 'exact', isOnFable: true }
     if (here.isAutoHere === true && here.isFableOff === true) return { level: 'xhigh', rule: 'framingAuto', how: 'floor' }
   }
   // Un cadrage en cours, en détour (/grilling sur une question remontée) ou en phase active, passe avant le suivi des groupes.
@@ -298,7 +326,7 @@ export const leadEffort = (run: Run | null, isFableOn = false, here: LeadContext
 
 /** Les niveaux d'effort nommés, du plus bas au plus haut ; un effort relevé hors de cette liste (un budget numérique) part tel quel. */
 const EFFORT_ORDER: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max']
-const EFFORT_LEVELS = new Set(EFFORT_ORDER)
+export const EFFORT_LEVELS: ReadonlySet<string> = new Set(EFFORT_ORDER)
 
 /**
  * L'effort qui part, d'après la règle et l'effort de la requête : un lot et un ticket de jugement en cours
@@ -308,7 +336,9 @@ const EFFORT_LEVELS = new Set(EFFORT_ORDER)
  * (`floor`) monte un effort plus bas que le sien à son niveau et laisse un effort égal ou plus haut.
  */
 export const effortSent = <E extends string | number>(x: LeadEffort, current: E): E | WorkerEffort | 'xhigh' =>
-  x.how === 'exact'
+  x.how === 'session'
+    ? current
+    : x.how === 'exact'
     ? x.level
     : typeof current !== 'string' || !EFFORT_LEVELS.has(current)
       ? typeof current === 'number' && x.rule === 'judgment'
@@ -336,6 +366,7 @@ const LEAD_REASON: Record<LeadRule, string> = {
   judgment: 'ticket de jugement en cours',
   fable: 'worker Fable',
   fableOff: 'repli sur Opus',
+  opusBack: 'retour sur Opus hors du cadrage',
 }
 
 /**
@@ -356,13 +387,59 @@ const judgmentReason = (x: LeadEffort): string => (x.ticket === undefined ? LEAD
 
 /**
  * Le texte du bandeau : l'effort imposé et sa raison (« effort : medium, suivi des groupes »), espaces comprises ;
- * avec un modèle imposé, le modèle d'abord (« modèle : Fable 5.2 medium, cadrage », « modèle : Fable 5.2 high,
- * cadrage en auto »).
+ * avec un modèle imposé, ou une requête qui part déjà sur Fable (`isOnFable`), le modèle d'abord (« modèle : Fable 5.2
+ * medium, cadrage », « modèle : Fable 5.2 high, cadrage en auto », « modèle : Opus 5.5 medium, suivi des groupes »).
+ * `level` : l'effort dit, celui de la règle par défaut.
  */
-const leadEffortText = (x: LeadEffort): string =>
-  x.model
-    ? `modèle : Fable 5.2 ${x.level}, ${LEAD_REASON[x.rule]}`
-    : `effort${x.rule === 'group' ? ' du lot' : x.rule === 'diagnosis' ? ' du diagnostic' : ''} : ${x.level}, ${x.rule === 'sensitive' ? sensitiveReason(x) : x.rule === 'judgment' ? judgmentReason(x) : LEAD_REASON[x.rule]}`
+const leadEffortText = (x: LeadEffort, level: string = x.level): string =>
+  x.model || x.isOnFable
+    ? `modèle : ${modelName(x.model ?? FABLE_MODEL) ?? 'Fable 5.2'} ${level}, ${leadReason(x)}`
+    : `effort${x.rule === 'group' ? ' du lot' : x.rule === 'diagnosis' ? ' du diagnostic' : ''} : ${level}, ${leadReason(x)}`
+
+/** La raison d'une règle, comme le bandeau la dit (« cadrage », « ticket sensible 03 en cours »…). */
+const leadReason = (x: LeadEffort): string => (x.rule === 'sensitive' ? sensitiveReason(x) : x.rule === 'judgment' ? judgmentReason(x) : LEAD_REASON[x.rule])
+
+/**
+ * Le nom d'un modèle pour une note : « Fable 5.2 » pour l'alias que le mod impose (`FABLE_MODEL`), celui d'`OPUS_APP_ID`
+ * pour l'alias du retour sur Opus (`OPUS_CLI_ALIAS`), « Opus 5.5 » pour `claude-opus-5-5` (un suffixe daté ou `[1m]`
+ * laissé) ; null pour toute autre forme, qui ne s'écrit pas.
+ */
+export const modelName = (id: unknown): string | null => {
+  if (id === FABLE_MODEL) return 'Fable 5.2'
+  if (id === OPUS_CLI_ALIAS) return modelName(OPUS_APP_ID)
+  const m = typeof id === 'string' ? /^claude-([a-z]+)-(\d{1,2})-(\d{1,2})(?!\d)/.exec(id) : null
+  return m ? `${m[1]!.charAt(0).toUpperCase()}${m[1]!.slice(1)} ${m[2]}.${m[3]}` : null
+}
+
+/** Un effort à écrire dans une note : un niveau nommé (`EFFORT_ORDER`) ; tout autre (budget, illisible) : null. */
+const effortName = (effort: unknown): string | null => (typeof effort === 'string' && EFFORT_LEVELS.has(effort) ? effort : null)
+
+/** Le réglage de la session, pour une note : « Opus 5.5, high », l'effort tu quand il ne se lit pas. */
+const settingText = (model: string, effort: string | null): string => (effort ? `${model}, ${effort}` : model)
+
+/**
+ * Ce que le mod dit à Claude de ses requêtes, quand ce qui part diffère du réglage de la session : l'en-tête
+ * « You are powered by » du prompt système et CLAUDE_EFFORT donnent ce réglage, que la réécriture par `turn.step` ne
+ * change pas. `note` : ce qui part et la règle qui l'impose (`rule`), null quand rien ne diffère ou qu'un nom de modèle
+ * ne se lit pas ; `reset` : la note qui dit que les requêtes repartent sur le réglage, null sans réglage lisible.
+ * Textes fixes : seuls des noms de modèle (`modelName`), des niveaux d'effort nommés et la raison du bandeau y entrent.
+ */
+export const sentNote = (
+  rule: LeadEffort | null,
+  session: { model: unknown; effort: unknown },
+  sent: { model: unknown; effort: unknown },
+): { note: string | null; reset: string | null } => {
+  const sessionModel = modelName(session.model)
+  const sessionEffort = effortName(session.effort)
+  const reset = sessionModel ? `flow-board : tes requêtes repartent sur le réglage de la session (${settingText(sessionModel, sessionEffort)}).` : null
+  const sentModel = modelName(sent.model)
+  const sentEffort = effortName(sent.effort)
+  if (!rule || !sessionModel || !sentModel || !sentEffort || (sentModel === sessionModel && sentEffort === sessionEffort)) return { note: null, reset }
+  return {
+    note: `flow-board : tes requêtes partent sur ${sentModel} en ${sentEffort} (${leadReason(rule)}) ; l'en-tête « You are powered by » et CLAUDE_EFFORT donnent le réglage de la session (${settingText(sessionModel, sessionEffort)}).`,
+    reset,
+  }
+}
 
 /**
  * Le texte du bandeau quand la règle joue : un lot et un diagnostic se disent toujours, comme avant ;
@@ -372,6 +449,10 @@ const leadEffortText = (x: LeadEffort): string =>
  * max laissés.
  */
 export const leadEffortPill = (x: LeadEffort, current: string | undefined): string | null => {
+  // Un worker ramené sur Opus sans autre règle : rien d'imposé à son effort, rien à dire au bandeau.
+  if (x.how === 'session') return null
+  // Ramené sur Opus sous une règle qui laisse un effort (xhigh et max laissés, un plancher dépassé) : l'effort qui part.
+  if (x.model === OPUS_CLI_ALIAS && x.how !== 'exact' && current !== undefined && EFFORT_LEVELS.has(current)) return leadEffortText(x, String(effortSent(x, current)))
   if (x.model || x.how === 'exact' || x.rule === 'diagnosis') return leadEffortText(x)
   return current !== undefined && effortSent(x, current) !== current ? leadEffortText(x) : null
 }
@@ -442,11 +523,13 @@ export const XHIGH_LAUNCH = (many: boolean, current: string | undefined): string
 /**
  * Ce qu'ajoute le chemin Fable retenu : la session est un worker Fable et un worker autonome ; elle part
  * sur Opus avec son brief Fable (son appel `delegate` porte `"model": "fable"`), et son mod envoie chaque
- * requête de son fil principal sur Fable 5.2 high. Aucun modèle au lancement, et aucun effort à monter dans
- * cette discussion : le mod impose l'effort par requête, et l'app ne plafonne pas ce qu'il impose.
+ * requête de son fil principal sur Fable 5.2 high. Le modèle Opus s'écrit au lancement (`OPUS_APP_ID`,
+ * `OPUS_CLI_ALIAS`) : sans lui, la session héritait de Fable après un `/model fable`, et son repli « Fable
+ * indisponible » (le modèle de la session, en xhigh) restait sur Fable. Aucun effort à monter dans cette
+ * discussion : le mod impose l'effort par requête, et l'app ne plafonne pas ce qu'il impose.
  */
 export const FABLE_LAUNCH = (many: boolean): string =>
-  `${many ? 'Une session lancée sur Fable' : 'Lancée sur Fable, la session'} est un worker Fable et un worker autonome : son brief Fable, effort high, aucun model dans start_session ni dans claude --bg (son mod la passe sur Fable 5.2 high) ; rien à monter ici.`
+  `${many ? 'Une session lancée sur Fable' : 'Lancée sur Fable, la session'} est un worker Fable et un worker autonome : son brief Fable, effort high ; elle part sur Opus, model "${OPUS_APP_ID}" dans start_session, --model ${OPUS_CLI_ALIAS} dans claude --bg, quel que soit le modèle de cette discussion ou du poste (son mod la passe ensuite sur Fable 5.2 high) ; rien à monter ici.`
 
 
 /**
@@ -479,7 +562,7 @@ export const SONNET_LAUNCH_FR =
 /**
  * Comment lancer un groupe Opus : tout groupe qui n'est ni annoncé « Sonnet high » ni lancé par « ↗ Fable », en
  * mode auto comme hors auto, effort imposé (« ↗ xhigh ») compris, reçoit le modèle Opus, dans l'app comme dans le
- * CLI. Dit quand la demande porte un tel groupe ; jamais pour un worker Fable, qui part sans modèle (`FABLE_LAUNCH`).
+ * CLI. Dit quand la demande porte un tel groupe ; jamais pour un worker Fable, dont `FABLE_LAUNCH` dit lui-même le modèle Opus.
  */
 export const OPUS_LAUNCH_FR =
   `Un groupe dont la ligne ne nomme pas un autre modèle part sur Opus, quel que soit le modèle de cette discussion ou du poste : model "${OPUS_APP_ID}" dans start_session, --model ${OPUS_CLI_ALIAS} dans claude --bg. `

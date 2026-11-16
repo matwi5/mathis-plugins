@@ -4,6 +4,17 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.12 — 2026-11-16
+
+### Ajouté
+- **`retro`, pistes déjà corrigées** : une étape 4 vérifie chaque piste contre le texte actuel de ses fichiers sur la branche principale avant de la proposer ; la présentation passe à l'étape 5.
+
+### Modifié
+- **`triage`** : un `docs/agents/issue-tracker.md` qui dit qu'il n'y a pas de gestionnaire de tickets mène à la branche « fichiers locaux ».
+- **`to-tickets`** : chercher d'abord un invariant qui interdit un critère ; l'invariant d'un ticket très sensible reste à l'utilisateur.
+
+---
+
 ## 1.3.1-mathis.11 — 2026-11-13
 
 ### Ajouté

@@ -144,10 +144,11 @@ class CheckboxTest(TicketRepo):
                     check.staged()
 
     def test_des_cases_bien_formees_un_lien_ou_un_bloc_de_code_passent(self):
+        # Sur un ticket que HEAD porte déjà : un ticket neuf coché est refusé pour une autre raison (DoneNewTicketTest).
         text = ("# 02: essai\n\n- [ ] à faire\n- [x] fait\n  - [x] sous-critère\n- [CR](lien) une liste de liens\n"
                 "Exemple cité : `- [x ]`, refusé.\n```\n- [x ] dans un bloc de code\n```\n")
-        self.stage(NEW, text)
-        self.assertEqual(check.malformed_checkboxes([NEW]), [])
+        self.stage(OLD, text)
+        self.assertEqual(check.malformed_checkboxes([OLD]), [])
         check.staged()
 
     def test_un_bloc_clos_par_tildes_cache_ses_cases_mais_pas_celles_d_apres(self):
@@ -161,6 +162,92 @@ class CheckboxTest(TicketRepo):
     def test_un_lien_dont_le_texte_est_x_ou_vide_n_est_pas_une_case(self):
         self.stage(NEW, "# 02: essai\n\n- [x](lien) un lien\n- [ ](lien) un autre\n")
         self.assertEqual(check.malformed_checkboxes([NEW]), [])
+
+
+class DoneNewTicketTest(TicketRepo):
+    """Un ticket neuf (absent de HEAD, pas renommé) ne se commite pas écrit comme déjà fait."""
+
+    def problems(self):
+        return check.new_tickets_written_done([NEW], check.staged_moves())
+
+    def test_un_ticket_neuf_au_statut_fait_est_refuse_avec_la_ligne_et_la_forme_attendue(self):
+        for status in ("**Status:** fait (03/11/2026)", "Status: done", "**Status:** Fait", "Status : fait"):
+            with self.subTest(status=status):
+                self.stage(NEW, f"# 02: essai\n\n{status}\n\n- [ ] critère\n")
+                problems = self.problems()
+                self.assertEqual(len(problems), 1)
+                self.assertIn(f"{NEW}:3", problems[0])
+                self.assertIn("Status: ready-for-agent", problems[0])
+                self.assertIn("« - [ ] »", problems[0])
+                with self.assertRaises(check.Failed):
+                    check.staged()
+
+    def test_un_ticket_neuf_qui_porte_une_case_cochee_est_refuse(self):
+        self.stage(NEW, "# 02: essai\n\n**Status:** ready-for-agent\n\n- [ ] critère\n- [x] check.sh passé\n")
+        problems = self.problems()
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"{NEW}:6", problems[0])
+        with self.assertRaises(check.Failed):
+            check.staged()
+
+    def test_une_case_cochee_dans_un_bloc_de_code_passe(self):
+        self.stage(NEW, "# 02: essai\n\n**Status:** ready-for-agent\n\n```\n- [x] exemple\n```\n- [ ] critère\n")
+        self.assertEqual(self.problems(), [])
+        check.staged()
+
+    def test_les_statuts_bloque_retire_et_pret_passent(self):
+        for status in ("**Status:** ready-for-agent", "**Status:** blocked (attend 01)", "**Status:** retiré (doublon)",
+                       "Status: blocked"):
+            with self.subTest(status=status):
+                self.stage(NEW, f"# 02: essai\n\n{status}\n\n- [ ] critère\n")
+                self.assertEqual(self.problems(), [])
+                check.staged()
+
+    def test_un_ticket_deja_a_head_fait_ou_coche_passe(self):
+        self.stage(OLD, "# 01: ancien\n\n**Status:** fait\n\n- [x] critère\n")
+        self.assertEqual(check.new_tickets_written_done([OLD], check.staged_moves()), [])
+        check.staged()
+
+    def test_un_ticket_renomme_passe_une_copie_compte_comme_neuve(self):
+        git(self.repo, "rm", "-q", "--cached", OLD)
+        (self.repo / OLD).unlink()
+        self.write(OLD, "# 01: ancien\n\n**Status:** fait\n\n- [x] critère\n")
+        git(self.repo, "add", OLD)
+        git(self.repo, "commit", "-q", "-m", "ancien fait")
+        git(self.repo, "mv", OLD, NEW)
+        self.assertEqual(check.staged_moves()[NEW][0], "R")
+        self.assertEqual(self.problems(), [])
+        check.staged()
+        git(self.repo, "commit", "-q", "-m", "renommé")
+        # Une copie du ticket fait sous un nouveau nom : neuve, refusée.
+        copy = "travail/essai/issues/03-copie.md"
+        self.stage(copy, (self.repo / NEW).read_text(encoding="utf-8"))
+        self.assertEqual(len(check.new_tickets_written_done([copy], check.staged_moves())), 2)
+        with self.assertRaises(check.Failed):
+            check.staged()
+
+    def test_a_la_fusion_un_ticket_fait_de_la_branche_fusionnee_passe(self):
+        git(self.repo, "checkout", "-q", "-b", "groupe")
+        self.write(NEW, "# 02: essai\n\n**Status:** fait\n\n- [x] critère\n")
+        git(self.repo, "add", NEW)
+        git(self.repo, "commit", "-q", "-m", "ticket fait du groupe")
+        git(self.repo, "checkout", "-q", "main")
+        git(self.repo, "merge", "-q", "--no-ff", "--no-commit", "groupe")
+        self.assertEqual(self.problems(), [])
+        check.staged()
+        # Un autre ticket neuf écrit fait pendant la fusion arrêtée, que la branche fusionnée ne portait pas.
+        other = "travail/essai/issues/03-autre.md"
+        self.stage(other, "# 03: autre\n\n**Status:** fait\n")
+        with self.assertRaises(check.Failed):
+            check.staged()
+
+    def test_le_hook_d_une_fusion_propre_ne_juge_pas_les_tickets_neufs(self):
+        # Le hook pre-merge-commit (check.py --staged --merge) ne voit pas MERGE_HEAD : la fusion n'apporte
+        # que des tickets commités ailleurs.
+        self.stage(NEW, "# 02: essai\n\n**Status:** fait\n\n- [x] critère\n")
+        check.staged(merging=True)
+        with self.assertRaises(check.Failed):
+            check.staged()
 
 
 if __name__ == "__main__":

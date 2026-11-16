@@ -4,6 +4,35 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.87.0 — 2026-11-16
+
+Sept missions : « Fin de mission sans gestes », « Refonte de la vue Coordination », « Cartes de lancement perdues », « Pistes de rétro déjà corrigées », « Modèle et effort réellement utilisés », « Fable resté après le cadrage » et « Pistes de rétro du triage ».
+
+### Ajouté
+- **Vue Coordination en six pages** : boutons encadrés sur leur propre ligne, une ligne par entrée « À reprendre » (avec un titre court donné par le COO), seules les pistes qui attendent un choix sur la page « Pistes », numéros courts L12 / M12 pour les cartes et les missions, retenues à forcer en tête de « Ce qui t'attend », et choix de l'endroit de la feuille de route depuis la page Réglages.
+- **Cartes de lancement** : plus de plafond ; la liste est gardée par projet et suit le siège du COO (les anciennes cartes de chaque discussion y sont copiées) ; « ✕ Retirer » sur une carte ordinaire prête ; une carte lancée est cachée de la vue et quitte le relevé une fois son idée passée ; une liste illisible est dite, et rien n'y est écrit.
+- **Fin de mission** : carte de rétro pour toute mission close, lancée dans la discussion du manager (avec un repli quand aucune discussion ne la prend) ; la mission étudiée et sa rétro s'archivent à la fin de la rétro ; une mission close sans livraison s'archive depuis sa carte de rétro ; chaque archivage porte la marque du geste qui l'a fait.
+- **Fermeture des discussions de manager** : le COO les liste dans son relevé et les ferme par une procédure, le clic d'archivage valant accord ; une demande unique pour les missions archivées sans marque.
+- **Nuit** : la surveillance peut rouvrir une mission dont la discussion s'est fermée.
+- **Modèle et effort réellement envoyés** : la barre et l'onglet Agents montrent ceux de la dernière requête du fil principal, et une note les dit à Claude.
+- **Retour sur Opus** : hors du cadrage, une requête partie sur Fable sans que le mod l'impose est ramenée sur Opus (sauf le worker Fable).
+- **Pistes de rétro déjà corrigées** : l'étape « Pistes » garde la trace d'une piste déjà corrigée sur la branche principale, et une mission « Pistes de rétro » peut écarter une piste de sa carte, la raison citant le commit ; le brief vérifie chaque piste avant son ticket et donne la date de son dernier texte.
+- **Pistes de rétro** : la chaîne de transitions d'une piste se dépose en une fois ; les pistes d'une mission « Pistes de rétro » finie sont rendues ; des pistes validées dont la carte a disparu en reçoivent une nouvelle ; le COO relève une mission close sans montrer d'abord.
+- **Pause de l'auto** : une pause qui reprendra d'elle-même se distingue d'un arrêt, avec un rappel court au lieu du bloc entier.
+- **Fermeture d'un groupe** : le texte dit où lire le sessionId du worker et où reste son compte rendu.
+
+### Modifié
+- Le modèle Opus est écrit au lancement des workers de diagnostic, d'éléments et Fable ; un cadrage sur une session restée sur Fable reste en Fable 5.2 medium ; le bandeau ne nomme plus Fable une fois la session repartie.
+- Les cartes de rétro ne comptent pas dans le plafond, y compris à la livraison.
+
+### Corrigé
+- Attentes de livraison : une mission inactive depuis les commits livrés n'est plus signalée ; dates bornées.
+- Un archivage fait ailleurs est gardé sur une mission close affichée ; la fin d'une rétro est revérifiée juste avant l'archivage.
+- Une carte de lancement sur un dossier qu'une mission porte déjà est refusée.
+- Correctifs des revues des groupes de chaque mission.
+
+---
+
 ## 0.86.0 — 2026-11-13
 
 Deux missions : la fiabilité du tri (une mission qui part en `/triage` se déroule de bout en bout comme les autres) et « Pistes de rétro · découpage » (les pistes de la rétro « Répartition des modèles et efforts »).

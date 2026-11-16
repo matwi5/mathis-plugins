@@ -20,9 +20,9 @@ const validated = (title: string, startedAt: number): Run => {
   return { ...run, phases: [done, report], cursor: 1, status: 'active', owner: 'session-A', reportValidatedAt: NOW - 40_000 } as Run
 }
 
-/** Une mission en cours, sans rapport validé. */
+/** Une mission en cours, sans rapport validé, active jusqu'à maintenant (sa dernière activité suit les commits). */
 const unfinished = (title: string, startedAt: number, extra: Partial<Run> = {}): Run =>
-  ({ ...newRun('implement', startedAt, title), status: 'active', owner: 'session-B', ...extra }) as Run
+  ({ ...newRun('implement', startedAt, title), status: 'active', owner: 'session-B', updatedAt: NOW, ...extra }) as Run
 
 const withDelegatedGroup = (run: Run): Run =>
   ({ ...run, groups: [{ id: 'A', name: 'Groupe', tickets: [], delegated: { session: 'w1', at: run.startedAt + 1 } }] }) as unknown as Run
@@ -51,6 +51,52 @@ test('une mission à groupes confiés reste à attendre comme avant, même sans 
   const runs = [withDelegatedGroup(unfinished('Mission G', NOW - 200_000)), unfinished('Mission B', NOW - 200_000)]
   expect(deliveryWaits(runs, [])).toEqual({ groups: ['Mission G'], commits: [] })
   expect(deliveryWaits(runs, [NOW - 100_000])).toEqual({ groups: ['Mission G'], commits: ['Mission B'] })
+})
+
+test('une mission active sans activité depuis le plus ancien des commits à livrer n’est plus à attendre', () => {
+  const commits = [NOW - 100_000, NOW - 50_000]
+  // Restée active au nom d'une discussion fermée : sa dernière activité précède le plus ancien commit.
+  const idle = unfinished('Oubliée', NOW - 900_000, { updatedAt: NOW - 100_001 } as Partial<Run>)
+  expect(deliveryWaits([idle], commits, true)).toEqual({ groups: [], commits: [] })
+  // L'ordre des commits ne compte pas : le plus ancien est cherché.
+  expect(deliveryWaits([idle], [NOW - 50_000, NOW - 100_000], true)).toEqual({ groups: [], commits: [] })
+})
+
+test('un aperçu coupé aux plus récents commits (PREVIEW_MAX) ne fait écarter aucune mission inactive : le comportement d’avant', () => {
+  // Plus de commits à livrer que l'aperçu n'en montre : son plus ancien n'est pas celui de la livraison, et des commits
+  // plus anciens de la mission inactive partent aussi.
+  const idle = unfinished('Oubliée', NOW - 900_000, { updatedAt: NOW - 100_001 } as Partial<Run>)
+  expect(deliveryWaits([idle], [NOW - 100_000, NOW - 50_000], false)).toEqual({ groups: [], commits: ['Oubliée'] })
+  // Sans le drapeau (un appel d'avant) : de même.
+  expect(deliveryWaits([idle], [NOW - 100_000, NOW - 50_000])).toEqual({ groups: [], commits: ['Oubliée'] })
+})
+
+test('une mission active dont la dernière activité suit au moins un commit à livrer reste à attendre', () => {
+  // Activité au moment même du plus ancien commit, ou entre deux commits : signalée, comme aujourd'hui.
+  for (const updatedAt of [NOW - 100_000, NOW - 75_000]) {
+    const busy = unfinished('Active', NOW - 900_000, { updatedAt } as Partial<Run>)
+    expect(deliveryWaits([busy], [NOW - 100_000, NOW - 50_000], true)).toEqual({ groups: [], commits: ['Active'] })
+  }
+})
+
+test('une mission à groupes confiés reste à attendre quel que soit sa dernière activité', () => {
+  const idle = withDelegatedGroup(unfinished('Mission G', NOW - 900_000, { updatedAt: NOW - 800_000 } as Partial<Run>))
+  expect(deliveryWaits([idle], [NOW - 100_000], true)).toEqual({ groups: ['Mission G'], commits: [] })
+})
+
+test('sans commit à livrer, ou une date illisible : le comportement d’avant', () => {
+  const idle = unfinished('Oubliée', NOW - 900_000, { updatedAt: NOW - 800_000 } as Partial<Run>)
+  // Sans commit : aucune mission « aux commits », comme avant.
+  expect(deliveryWaits([idle], [], true)).toEqual({ groups: [], commits: [] })
+  // updatedAt illisible : comptée comme avant, sur sa seule fenêtre.
+  for (const updatedAt of [undefined, Number.NaN, -1, '12' as unknown as number]) {
+    const odd = unfinished('Illisible', NOW - 900_000, { updatedAt } as Partial<Run>)
+    expect(deliveryWaits([odd], [NOW - 100_000], true)).toEqual({ groups: [], commits: ['Illisible'] })
+  }
+  // Aucune date de commit lisible : pas de plus ancien commit, comptée comme avant sur sa fenêtre (rien n'y tombe).
+  expect(deliveryWaits([idle], [Number.NaN], true)).toEqual({ groups: [], commits: [] })
+  // Une date illisible à côté d'une lisible : le plus ancien commit lisible compte.
+  expect(deliveryWaits([idle], [Number.NaN, NOW - 100_000], true)).toEqual({ groups: [], commits: [] })
 })
 
 const board = (...runs: Run[]): Board => ({ ...emptyBoard('/p', 'p'), runs })

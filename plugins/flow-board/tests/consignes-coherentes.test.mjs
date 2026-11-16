@@ -38,6 +38,8 @@ const SURFACES = {
   'agents/README.md': repoFile('plugins/agents/README.md'),
   'README.md': read('README.md'),
   'hooks/register.tsx': read('hooks/register.tsx'),
+  // La description et le schéma de l'outil `flow`, sortis de register.tsx.
+  'hooks/tool-schema.ts': read('hooks/tool-schema.ts'),
   'hooks/catalog.ts': read('hooks/catalog.ts'),
   'hooks/compaction.ts': read('hooks/compaction.ts'),
   'hooks/effort.ts': read('hooks/effort.ts'),
@@ -357,7 +359,7 @@ const CONSIGNES = [
     keywords: ["un choix d'expérience, une zone sensible, un invariant ou une contradiction, une suppression ou une exposition"],
     surfaces: ['skills/coo/SKILL.md'],
   },
-  { name: 'les questions répondues par écrit chez le COO, en anglais', keywords: ['an experience choice, a sensitive area, an invariant or a contradiction, a deletion or an exposure'], surfaces: ['hooks/register.tsx'] },
+  { name: 'les questions répondues par écrit chez le COO, en anglais', keywords: ['an experience choice, a sensitive area, an invariant or a contradiction, a deletion or an exposure'], surfaces: ['hooks/tool-schema.ts'] },
   { name: 'la question sensible tranchée seule par un worker autonome, en anglais', keywords: ['a worker of a mission in auto mode', '« Worker autonome »'], surfaces: ['hooks/model.ts'] },
   {
     // Les origines d'un choix déclaré en auto, et la notification au texte fixé : la règle des lots et le README.
@@ -459,6 +461,12 @@ const CONSIGNES = [
     // Un critère d'un ticket sensible qui contredisait son invariant n'était vu qu'à l'implémentation.
     name: 'la relecture des critères d’un ticket sensible contre son invariant',
     keywords: ['against its invariant'],
+    surfaces: ['to-tickets/SKILL.md', 'hooks/catalog.ts'],
+  },
+  {
+    // L'invariant d'un ticket interdisait le chemin que son propre critère devait lire : la revue l'avait relevé trois fois.
+    name: 'l’invariant qui interdit ce qu’un critère doit lire, premier cas cherché',
+    keywords: ['an invariant that forbids what a criterion of the same ticket must read or do', '« no path built from the text of an entry » against a criterion « check in the code what the entry claims »', 'bounds what the criterion does', 'the invariant of a very sensitive ticket, fixed with the user, is never rewritten by you: make it a question for the user now'],
     surfaces: ['to-tickets/SKILL.md', 'hooks/catalog.ts'],
   },
   {
@@ -773,4 +781,15 @@ test('les règles communes ne recopient pas les exceptions du mode auto, hors de
     }
   }
   assert.deepEqual(copied, [], 'exceptions du mode auto recopiées hors de la règle « Mode auto »')
+})
+
+// La note à Claude que cite le README (« Ce que Claude sait de ses requêtes ») est celle que rend `sentNote` :
+// `effort-dit-a-claude.test.ts` épingle ce texte mot pour mot (`toBe`), et ce test compare le README à cette épingle.
+test('le README cite la note à Claude telle que la rend sentNote', () => {
+  const pinned = /toBe\('(flow-board : tes requêtes partent sur (?:[^'\\]|\\.)*)'\)/.exec(read('tests/effort-dit-a-claude.test.ts'))
+  assert.ok(pinned, 'texte de la note introuvable dans effort-dit-a-claude.test.ts')
+  const note = pinned[1].replace(/\\(.)/g, '$1')
+  const line = read('README.md').split('\n').find(l => l.startsWith('**Ce que Claude sait de ses requêtes'))
+  assert.ok(line, 'paragraphe « Ce que Claude sait de ses requêtes » absent du README')
+  assert.ok(line.includes(`« ${note} »`), `le README ne cite pas la note : ${note}`)
 })

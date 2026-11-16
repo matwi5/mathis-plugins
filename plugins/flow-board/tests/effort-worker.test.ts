@@ -783,3 +783,35 @@ test('jugement : un worker Fable avec un ticket de jugement en cours reste sur F
   expect(sent.map(s => s.effort)).toEqual(['high'])
   expect(models).toEqual(['fable'])
 })
+
+// ─── Retour sur Opus hors du cadrage (décision de Mathis du 14/11/2026) ─────────────
+
+test('un worker dont la session est passée sur Fable : chaque requête revient sur Opus, à l’effort de sa règle ou de sa session ; un spécialiste n’est pas touché', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { w, sent, models } = engine(on, { sessionModel: 'claude-fable-5-2' })
+  const mission = missionWith(w, TICKETS)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]' })
+  await say($, { set: [{ id: 't1', status: 'doing' }] })
+  await playStep($, { model: 'claude-fable-5-2', effort: 'medium' })
+  await say($, { set: [{ id: 't1', status: 'done' }, { id: 't2', status: 'doing' }] })
+  await playStep($, { model: 'claude-fable-5-2', effort: 'medium' })
+  await playStep($, { model: 'claude-fable-5-2', effort: 'high', agentId: 'a1' })
+  expect(models).toEqual(['opus', 'opus', 'claude-fable-5-2'])
+  expect(sent.map(s => s.effort)).toEqual(['high', 'medium', 'high'])
+})
+
+test('le worker Fable n’est jamais ramené sur Opus, même après un /model tapé', { timeoutMs: 20000 }, async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const { w, models } = engine(on, { sessionModel: 'claude-fable-5-2' })
+  on('classic.PostModelSwitch', () => ({}))
+  const mission = missionWith(w, TICKETS)
+  await start($)
+  await say($, { delegate: mission.id, group: 'A', main: '[abc123]', model: 'fable' })
+  await say($, { set: [{ id: 't2', status: 'doing' }] })
+  await playStep($, { model: 'claude-fable-5-2', effort: 'high' })
+  await ($ as any).classic.PostModelSwitch({ session_id: 'session-A', transcript_path: '/t', cwd: '', hook_event_name: 'PostModelSwitch', from_model: 'claude-opus-5-5', to_model: 'claude-fable-5-2', requested_model: 'fable', source: 'command', context_tokens: 0 })
+  await playStep($, { model: 'claude-fable-5-2', effort: 'high' })
+  expect(models).toHaveLength(2)
+  expect(models.every(m => m === 'fable' || m === 'claude-fable-5-2')).toBe(true)
+})

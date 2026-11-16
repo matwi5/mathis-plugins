@@ -8,7 +8,7 @@
 //   transcript (catch-up.ts) rendra ce qui manque.
 // - Sur le disque, jamais de rapport ni de texte de message : la description, le prompt (Q8), des chiffres.
 
-import type { AdvisorCall, AdvisorFigures, AdvisorLane, AgentLane, AgentMark, AgentSegment, AgentStatus, AgentType, CarrySpan, LinkedLaunch, RegistryAgent, RegistryPart, Run, SessionRegistry } from '../types'
+import type { AdvisorCall, AdvisorFigures, AdvisorLane, AgentLane, AgentMark, AgentSegment, AgentStatus, AgentType, CarrySpan, LinkedLaunch, RegistryAgent, RegistryPart, Run, SentRequest, SessionRegistry } from '../types'
 import { maskSecrets } from './timeline.ts'
 
 /** Longueur gardée d'un prompt (S11) : environ 300 spécialistes tiennent sous la limite de 4 Mio d'une écriture. */
@@ -74,7 +74,25 @@ const cleanMark = (x: unknown): AgentMark | null => {
 const cleanList = <T>(x: unknown, clean: (item: unknown) => T | null): T[] | undefined =>
   Array.isArray(x) ? x.map(clean).filter((v): v is T => v !== null) : undefined
 
-/** Ce qu'une piste porte de valide : segments, repères, effort, modèles, tokens, lignes. */
+/**
+ * Une requête partie (`AgentLane.sent`) telle qu'elle est enregistrée : un modèle et un réglage de session en texte,
+ * des efforts en texte quand ils sont là, une heure plausible (`isTime`) ; toute autre forme : null (la piste ne la
+ * garde pas, et la barre d'état montre alors le réglage de la session).
+ */
+export const cleanSent = (x: unknown): SentRequest | null => {
+  if (!isObject(x) || !isText(x.model) || x.model === '' || !isTime(x.at) || !isObject(x.session) || !isText(x.session.model) || x.session.model === '') return null
+  const isEffort = (e: unknown): e is string | undefined => e === undefined || isText(e)
+  if (!isEffort(x.effort) || !isEffort(x.session.effort) || (x.by !== undefined && !isText(x.by))) return null
+  return {
+    model: x.model,
+    ...(x.effort !== undefined ? { effort: x.effort } : {}),
+    session: { model: x.session.model, ...(x.session.effort !== undefined ? { effort: x.session.effort } : {}) },
+    at: x.at,
+    ...(x.by !== undefined ? { by: x.by } : {}),
+  }
+}
+
+/** Ce qu'une piste porte de valide : segments, repères, effort, modèles, tokens, lignes, requête partie. */
 export const cleanLane = (x: Loose): AgentLane => {
   const lane: AgentLane = {}
   const segments = cleanList(x.segments, cleanSegment)
@@ -87,6 +105,8 @@ export const cleanLane = (x: Loose): AgentLane => {
   if (isObject(t) && isNum(t.input) && isNum(t.output) && isNum(t.cacheRead) && isNum(t.cacheWrite)) lane.tokens = { input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite }
   const l = x.lines
   if (isObject(l) && isNum(l.added) && isNum(l.removed)) lane.lines = { added: l.added, removed: l.removed }
+  const sent = cleanSent(x.sent)
+  if (sent) lane.sent = sent
   return lane
 }
 
@@ -500,9 +520,10 @@ const progress = (a: RegistryAgent): number =>
 /**
  * Fusionne le registre de ce processus avec celui du fichier (S7) : union par clé d'appel, et pour
  * une même clé l'état le plus avancé l'emporte (à égalité, celui d'ici). L'en-tête est celui d'ici,
- * complété par le fichier. Rend `local` tel quel quand le fichier n'apporte rien.
+ * complété par le fichier. Rend `local` tel quel quand le fichier n'apporte rien. `now` : l'heure de
+ * la fusion, au-delà de laquelle la requête partie du fichier (`main.sent`) ne l'emporte jamais.
  */
-export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | null): SessionRegistry => {
+export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | null, now = Number.POSITIVE_INFINITY): SessionRegistry => {
   if (!stored || stored.session !== local.session) return local
   let isChanged = false
   const byKey = new Map(local.agents.map(a => [a.key, a]))
@@ -543,7 +564,7 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
     Object.entries(spans).some(([id, s]) => !sameSpans(local.carriedAt?.[id], s)) ||
     (Number.isFinite(notedAt) && notedAt !== local.carriedNotedAt)
   // La piste du manager se fusionne aussi (S12), et la ligne advisor.
-  const main = mergeLane(local.main, stored.main)
+  const main = mergeLane(local.main, stored.main, now)
   const advisor = mergeAdvisor(local.advisor, stored.advisor)
   if (!isChanged && !isHeaderChanged && !isLinkedChanged && !isCarriedChanged && main === local.main && advisor === local.advisor) return local
   const merged: SessionRegistry = {
@@ -566,12 +587,17 @@ export const mergeRegistry = (local: SessionRegistry, stored: SessionRegistry | 
 
 /**
  * La piste du manager de deux processus de la même session (S12) : union des segments
- * (même sorte et même début : un seul, fermé de préférence) et des repères, sans doublon. Rend
- * `mine` tel quel quand l'autre n'apporte rien.
+ * (même sorte et même début : un seul, fermé de préférence) et des repères, sans doublon, et la
+ * requête partie la plus récente (`sent`), jamais une datée après `now` (une horloge recalée en
+ * arrière la figerait). Rend `mine` tel quel quand l'autre n'apporte rien.
  */
-const mergeLane = (mine: AgentLane | undefined, theirs: AgentLane | undefined): AgentLane | undefined => {
+const mergeLane = (mine: AgentLane | undefined, theirs: AgentLane | undefined, now = Number.POSITIVE_INFINITY): AgentLane | undefined => {
   if (!theirs) return mine
-  if (!mine) return theirs
+  if (!mine) {
+    if (theirs.sent === undefined || theirs.sent.at <= now) return theirs
+    const { sent: _future, ...rest } = theirs
+    return rest
+  }
   let isChanged = false
   // La clé d'union (sorte et début) d'un segment change après coup, et une écriture d'avant le
   // changement garde l'ancienne copie, ouverte, qui s'allongerait jusqu'à la fin du tour :
@@ -607,8 +633,13 @@ const mergeLane = (mine: AgentLane | undefined, theirs: AgentLane | undefined): 
       isChanged = true
     }
   }
+  // La requête partie la plus récente des deux processus : celle de l'autre seulement si elle est plus récente.
+  // Un relevé du même processus (`by`) : le sien en mémoire est toujours le plus récent, même sous une horloge recalée.
+  const isOwn = theirs.sent?.by !== undefined && theirs.sent.by === mine.sent?.by
+  const sent = theirs.sent && !isOwn && theirs.sent.at <= now && (mine.sent === undefined || theirs.sent.at > mine.sent.at) ? theirs.sent : undefined
+  if (sent) isChanged = true
   if (!isChanged) return mine
-  return { ...mine, segments: [...segs.values()].sort((a, b) => a.s - b.s), marks: [...marks.values()].sort((a, b) => a.at - b.at) }
+  return { ...mine, segments: [...segs.values()].sort((a, b) => a.s - b.s), marks: [...marks.values()].sort((a, b) => a.at - b.at), ...(sent ? { sent } : {}) }
 }
 
 /**
@@ -1055,6 +1086,18 @@ export const addUsage = (reg: SessionRegistry, lane: string, usage: StepUsage | 
   if (usage?.model && !(l.models ?? []).includes(usage.model)) next.models = [...(l.models ?? []), usage.model]
   if (effort !== undefined) next.effort = effort
   return withLane(reg, lane, next, now)
+}
+
+/**
+ * La dernière requête du fil principal telle qu'elle est partie, sur la piste du manager, ou le réglage que vient
+ * de prendre la session (un relevé sans effort, après un `/model` ou un `/effort`) : elle remplace toujours la
+ * précédente, le processus vivant relevant ses requêtes dans l'ordre (une horloge recalée en arrière ne la fige
+ * pas). L'effort de la session qu'il porte devient aussi celui de la piste (`effort`), dès le départ de la requête.
+ * Une forme hors de `cleanSent` ne change rien.
+ */
+export const noteSent = (reg: SessionRegistry, sent: SentRequest, now: number): SessionRegistry | null => {
+  const clean = cleanSent(sent)
+  return clean ? withLane(reg, MAIN, { sent: clean, ...(clean.session.effort !== undefined ? { effort: clean.session.effort } : {}) }, now) : null
 }
 
 /** Des lignes ajoutées et retirées par une modification de fichier de la piste. */

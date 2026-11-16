@@ -19,7 +19,7 @@ export const PANE = {
 
 export const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
 /** Le fichier de coordination, quel que soit son nom (le nom de ce projet sur ce poste), hors copies mises de côté. */
-export const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-') && !path.includes('.nuit')
+export const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-') && !path.includes('.nuit') && !path.includes('.numeros') && !path.includes('.cartes')
 export const isCoordKey = (key: string): boolean => key.startsWith('coo-coordination:') && !key.includes(':illisible:')
 
 /**
@@ -50,9 +50,13 @@ export const world = (on: any) => {
   const toasts: string[] = []
   /** Joué à chaque relecture du fichier de coordination (pour une écriture croisée d'une autre discussion à ce moment-là). */
   /** `holdNight` : l'écriture de l'enregistrement de la surveillance de nuit attend cette promesse (une écriture du moteur qui tarde). */
-  /** `refuseRead` : une lecture du magasin qui lève pour cette clé (une clé illisible, comme `delegate:<session>`). */
+  /** `refuseRead` : une lecture qui lève pour cette clé du magasin (une clé illisible, comme `delegate:<session>`) ou pour ce chemin de fichier (`fs.read`). */
+  /** `refuseCommand` : le moteur refuse cette commande lancée par le mod (`$.command.run`), comme une limite de l'hôte. */
+  /** `refusePrompt` : la lecture de la saisie (`prompt.read`) lève tant qu'il rend vrai. */
+  /** `list` : les noms qu'un dossier liste, à la place de ceux du monde (undefined : ceux du monde). */
+  /** `refuseWrite` : une écriture de fichier qui lève pour ce chemin (une table des numéros qui ne s'écrit pas). */
   /** `refuseKeys` : la lecture de la liste des clés du magasin (`store.keys`) lève tant qu'il rend vrai, comme `refuseRead` pour une clé (des lancements gardés qui ne se relisent pas). */
-  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean; refuseRead?: (key: string) => boolean; refuseKeys?: () => boolean; holdNight?: Promise<void> } = {}
+  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean; refuseRead?: (key: string) => boolean; refuseKeys?: () => boolean; refuseWrite?: (path: string) => boolean; list?: (dir: string) => string[] | undefined; refusePrompt?: () => boolean; holdNight?: Promise<void>; refuseCommand?: (command: string) => boolean } = {}
   on('session.end', () => ({ sessionId: ids.now }))
   on('classic.SessionStart', () => ({}))
   on('prompt.submit', (_$: unknown, e: { text: string; context?: readonly string[] }) => {
@@ -71,7 +75,10 @@ export const world = (on: any) => {
     box.text = e.mode === 'append' || e.mode === 'insert' ? `${box.text}${e.text}` : e.text
     return { isFilled: true, text: box.text }
   })
-  on('prompt.read', () => ({ value: { text: box.text, cursor: box.text.length } }))
+  on('prompt.read', () => {
+    if (probe.refusePrompt?.()) throw new Error('EIO')
+    return { value: { text: box.text, cursor: box.text.length } }
+  })
   on('turn.start', (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
   on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
   on('ui.notify', (_$: unknown, e: { text: string }) => {
@@ -109,8 +116,11 @@ export const world = (on: any) => {
       coord.text = JSON.stringify(e.value)
       coord.unread = false
       coord.writes.push(coord.text)
-    } else if (e.key.includes(':illisible:')) asides[e.key] = String(e.value)
-    else if (e.key === KEY && (disk.unwritable || probe.refuseBoard?.(JSON.stringify(e.value)))) throw new Error('EROFS')
+    } else if (e.key.includes(':illisible:')) {
+      // Une copie mise de côté refusée comme toute écriture que la sonde refuse.
+      if (probe.refuseStore?.(e.key)) throw new Error('EROFS')
+      asides[e.key] = String(e.value)
+    } else if (e.key === KEY && (disk.unwritable || probe.refuseBoard?.(JSON.stringify(e.value)))) throw new Error('EROFS')
     else if (probe.refuseStore?.(e.key)) throw new Error('EROFS')
     else {
       mem[e.key] = JSON.parse(JSON.stringify(e.value))
@@ -137,6 +147,7 @@ export const world = (on: any) => {
     return { value: isBoardFile(e.path) ? disk.board !== undefined : isCoordFile(e.path) ? coord.unread || coord.text !== undefined : e.path in files || e.path in asides || isProjectFile || isPistesDir } as any
   })
   on('fs.read', (_$: unknown, e: { path: string }) => {
+    if (probe.refuseRead?.(e.path)) throw new Error(`EIO ${e.path}`)
     if (isBoardFile(e.path)) {
       disk.isUsed = true
       probe.onBoardRead?.()
@@ -155,6 +166,7 @@ export const world = (on: any) => {
     return { value: files[key] } as any
   })
   on('fs.write', (_$: unknown, e: { path: string; text: string }) => {
+    if (probe.refuseWrite?.(e.path)) throw new Error(`EROFS ${e.path}`)
     if (probe.holdNight && e.path.endsWith('.nuit.json')) {
       return probe.holdNight.then(() => {
         files[e.path] = e.text
@@ -176,6 +188,8 @@ export const world = (on: any) => {
   })
   // Seuls le dossier des boîtes de pistes et les dossiers de tickets (« …/issues ») se listent ; les autres restent vides, comme avant.
   on('fs.list', (_$: unknown, e: { path: string }) => {
+    const forced = probe.list?.(e.path)
+    if (forced) return { value: forced.map(name => ({ name, kind: 'file', mtimeMs: 1 })) } as any
     // Un dossier de tickets du projet (« travail/<sujet>/issues ») : les fichiers posés par leur chemin relatif.
     if (e.path.endsWith('/issues')) {
       const rel = Object.keys(files).filter(k => !k.startsWith('/') && k.includes('/') && e.path.endsWith(`/${k.slice(0, k.lastIndexOf('/'))}`))
@@ -193,6 +207,7 @@ export const world = (on: any) => {
   on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('command.list', () => ({ value: [] }))
   on('command.run', (_$: unknown, e: { command: string }) => {
+    if (probe.refuseCommand?.(e.command)) throw new Error('refused: past a host limit')
     if (e.command === COO) commands.push(e.command)
     else runs.push(e.command)
     return { text: '' }

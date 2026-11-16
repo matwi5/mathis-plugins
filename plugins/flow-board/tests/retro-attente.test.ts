@@ -8,6 +8,7 @@ import { emptyWaitlist, type Piste, type Waitlist } from '../hooks/pistes.ts'
 import { picksPrint, retroCardId } from '../hooks/retro-coo.ts'
 import type { Run } from '../types'
 import { PANE, PLUGIN, TOOL, coordFile, openCoo, seatOf, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
+import { findAny } from './page-coo.ts'
 
 // Une rétro relit la liste d'attente avant de présenter (étape « attente »), seulement dans un projet qui a
 // un COO. Sûreté : une piste non cochée ne quitte « À reprendre » que relue dans la liste ; jamais nulle part.
@@ -179,8 +180,8 @@ test('chez le COO, une rétro qui relit la liste n’a pas de bouton de découpa
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await pane.find({ key: `coo-retro-pick-${retro.id}` })).toBeUndefined()
-  expect(await pane.find({ key: `coo-piste-tick-${retro.id}/r1` })).toBeDefined()
+  expect(await findAny(pane, { key: `coo-retro-pick-${retro.id}` })).toBeUndefined()
+  expect(await findAny(pane, { key: `coo-piste-tick-${retro.id}/r1` })).toBeDefined()
   await pane.unmount()
 })
 

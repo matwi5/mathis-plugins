@@ -4,6 +4,7 @@
 // quand le signal ne change rien.
 
 import type {
+  ArchivePath,
   Artifact,
   ArtifactKind,
   Board,
@@ -38,12 +39,12 @@ import type {
   WaitsUser,
   RunLaunch,
 } from '../types'
-import { CODE_SKILLS, SECURITY_OFF_DELEGATE, SECURITY_OFF_REPLY, SENSITIVE_AREAS, SKILLS, agree, commandOf, skillIdOf, type PhaseSpec, type SkillDef } from './catalog.ts'
+import { CODE_SKILLS, SECURITY_OFF_DELEGATE, SECURITY_OFF_REPLY, SENSITIVE_AREAS, SKILLS, agree, commandOf, skillIdOf, skillsWith, type PhaseSpec, type SkillDef } from './catalog.ts'
 import { GROUP_ID_FORM, asciiJson, closingScript, isScriptPath, neutralInPrompt, neutralLine, neutralRelayed, closedHint, closingProcedure, hasSendName, sendRefusalEn, isGroupId, isKeptForReport, isQuestionIdForm, isSafeId, sendNumber, type SendName } from './closing.ts'
 import { maxOf, minOf } from './timeline.ts'
 import { unionInstructed } from './coordination.ts'
 import { isSeatAhead, mergeSeat, seatState, soundSeat } from './seat.ts'
-import { soundRunLaunch } from './launch.ts'
+import { isRetroCardDue, retroOf, soundRunLaunch } from './launch.ts'
 import type { SecurityReview } from './security-setting.ts'
 import type { PlanUnit, PlanWait } from './plan-projet.ts'
 import { activeRun, isReportValidated, addedCount, asanaChange, asList, AUTO_CHOICES_MAX, formText, choiceRoom, clip, clone, countTickets, currentPhase, type Effects, hasBeenAuto, hasGroupReview, hasUnreadableCounts, isAdvisedUnrun, isAllDone, isJudgmentTicket, isoMinute, isSecurityCount, isSecuritySettled, isSecuritySettledFor, isTime, keepChoices, LIMITS, log, noFx, ORIGIN_LABELS, originOf, type Outcome, parseChanges, recordedGroup, reviewTimeOf, sameTicket, sentGroupOf, setStep, shownGroupId, shownGroupName, type StatusChange, statusLine, str, TEXT_MAX, TICKET_STATUSES, unreadableCounts, BUGS_REFUSED, bugsText, isBugCount, BUGS_MAX } from './basics.ts'
@@ -4050,7 +4051,7 @@ const setFound = (run: Run, changes: StatusChange[], now: number) => {
  * pas des trouvailles. Pas la rétro : elle publie aussi des issues sur un autre dépôt, et son lot
  * arrive par l'outil (une trouvaille qu'il envoie dans les tickets entre dans le lot).
  */
-const LOT_SKILLS = new Set(['to-tickets', 'to-spec', 'triage'])
+const LOT_SKILLS = skillsWith('publishesLot')
 
 const isFindingTime = (run: Run): boolean => {
   const { phase, detour } = focusOf(run)
@@ -4301,18 +4302,24 @@ export const resumableQuestions = (run: Run): string[] | null => {
 }
 
 /**
- * La reprise d'elle-même d'une pause « plus rien ne peut avancer sans toi », vue de la discussion `here` (son id du
- * moment) avec la trace `rec` qu'elle a gardée : la mission active ici, son auto toujours dans cette pause-là (les
- * mêmes « allumé à », « éteint à » et la même raison : tout autre arrêt depuis a changé la raison), allumé au nom de
- * cette discussion, la trace posée par elle, et plus aucune question ouverte. Le processus (`boot`) se vérifie à part.
+ * La pause « plus rien ne peut avancer sans toi » que la trace `rec` garde, toujours en place, vue de la discussion
+ * `here` (son id du moment) : la mission active ici, son auto toujours dans cette pause-là (les mêmes « allumé à »,
+ * « éteint à » et la même raison : tout autre arrêt depuis a changé la raison), allumé au nom de cette discussion, la
+ * trace posée par elle. Elle reprendra d'elle-même une fois ses questions répondues (`canResumeStuck`) ; le processus
+ * (`boot`) se vérifie à part.
  */
-export const canResumeStuck = (board: Board, here: string, rec: StuckResume): boolean => {
+export const isStuckResumable = (board: Board, here: string, rec: StuckResume): boolean => {
   const run = board.delegate ? undefined : activeRun(board)
   if (!run || run.status !== 'active' || str(here) === '' || rec.by !== here) return false
   const auto = autoOf(run)
-  if (isAutoOnIn(auto) || auto?.offWhy !== AUTO_STOPS.stuck || auto.onAt !== rec.onAt || auto.offAt !== rec.offAt || auto.onBy !== clip(str(here), AUTO_ID_MAX)) return false
-  return readWaiting(run).length === 0
+  return !isAutoOnIn(auto) && auto?.offWhy === AUTO_STOPS.stuck && auto.onAt === rec.onAt && auto.offAt === rec.offAt && auto.onBy === clip(str(here), AUTO_ID_MAX)
 }
+
+/**
+ * La reprise d'elle-même d'une pause « plus rien ne peut avancer sans toi », vue de la discussion `here` avec la trace
+ * `rec` qu'elle a gardée : la pause toujours en place (`isStuckResumable`), et plus aucune question ouverte.
+ */
+export const canResumeStuck = (board: Board, here: string, rec: StuckResume): boolean => isStuckResumable(board, here, rec) && readWaiting(activeRun(board)!).length === 0
 
 /** Ce que dit un auto repris de lui-même après une pause « plus rien ne peut avancer sans toi », une fois ses questions répondues. */
 export const AUTO_RESUMED = 'repris : questions répondues'
@@ -4575,6 +4582,27 @@ export const autoPauseLabel = (run: Run): string | undefined => {
 export const isAutoPauseStored = (run: Run): boolean => isStoredPause(autoOf(run))
 
 /**
+ * En pause « discussion fermée » posée par la fin de sa discussion, après la dernière prise du processus qui la tenait :
+ * la fin (`parkActive`) date la pause à cet instant, même déjà posée (`redateEnded`, seulement par le processus qui tient
+ * la dernière prise), et garde la prise ; un processus qui la retrouve la reprend à cet instant ou après (`detachOnLoad`, `Run.claim`, aussi le même processus qui revient
+ * à sa discussion), et tourne alors, que `claude agents` le liste ou non (une discussion de l'app n'y paraît pas). Sans
+ * prise lisible (un processus sans id, une prise hors forme) ou sans date de pause : pas une fin prouvée.
+ */
+export const isEndedPause = (run: Run): boolean => {
+  const auto = autoOf(run)
+  if (!isStoredPause(auto) || auto!.offWhy !== AUTO_STOPS.ended || auto!.offAt === undefined) return false
+  const claim = run.claim === undefined ? undefined : soundClaim(run.claim)
+  return claim !== undefined && claim.at < auto!.offAt
+}
+
+/** La pause « discussion fermée » déjà posée, redatée à la fin de la discussion (`parkActive`), sans ligne de journal. */
+const redateEnded = (run: Run, now: number) => {
+  const auto = autoOf(run)
+  if (!isStoredPause(auto) || auto!.offWhy !== AUTO_STOPS.ended) return
+  run.auto = { ...auto, offAt: Math.max(now, (auto!.offAt ?? -1) + 1) }
+}
+
+/**
  * L'auto en pause sur un groupe revenu trop de fois : « deuxième échec du groupe <id> », ou la pause « plus rien ne
  * peut avancer sans toi » exacte, jamais celle qui nomme une suite (`nextStop`) (une question « relance: » ouverte y suffit ; un groupe qu'une question de la personne
  * bloque ne se relance pas pour autant, `nightBlocks` et `applyNightOne`). La seule pause où une relance de nuit vaut.
@@ -4615,7 +4643,7 @@ const AUTO_KEY_MAX = 200
 export const AUTO_STALE_MS = 2 * 60_000
 
 /** Les phases que l'auto lance lui-même ; jamais la livraison, la rétro, la clôture ni la validation du rapport. */
-export const AUTO_PHASES: ReadonlySet<string> = new Set(['to-spec', 'to-tickets', 'implement', 'compte-rendu'])
+export const AUTO_PHASES: ReadonlySet<string> = skillsWith('isAutoPhase')
 
 /** Le préfixe de l'id de la question « envoi resté sans suite » d'une marque : suivi de sa clé. */
 export const STALE_PREFIX = 'sans-suite:'
@@ -5545,6 +5573,23 @@ export const loseLaunch = (board: Board, runId: string, now: number): Outcome =>
   return { board: b, fx: noFx() }
 }
 
+/** Ce que dit le journal de la mission étudiée quand le moteur refuse la commande de sa rétro dans la discussion de son manager. */
+export const RETRO_REFUSED_TEXT = 'Rétro demandée par le COO : la commande a été refusée dans cette discussion ; le lancement est rendu'
+
+/**
+ * Le moteur a refusé la commande de rétro que le mod lançait ici pour la mission close `runId` : une ligne de son
+ * journal le dit (la prise du lancement est rendue par l'appelant). Rien pour une mission absente ou archivée.
+ */
+export const noteRetroRefused = (board: Board, runId: string, now: number): Outcome => {
+  const run0 = board.runs.find(r => r.id === runId)
+  if (!run0 || run0.archivedAt !== undefined) return null
+  const b = clone(board)
+  const run = b.runs.find(r => r.id === runId)!
+  run.updatedAt = now
+  log(run, now, '◆', RETRO_REFUSED_TEXT, 'warn')
+  return { board: b, fx: noFx() }
+}
+
 /**
  * Rattache la mission active ici à la carte de lancement dont elle est née, une seule fois : rien quand
  * elle l'est déjà, ou que le rattachement est hors forme.
@@ -6092,7 +6137,12 @@ export const detachOnLoad = (board: Board, now: number, session: string, boot?: 
   if (!kept) return b
   b.activeId = kept.id
   // Ce même processus qui revient à ce fichier (un changement de racine dans un worktree) : rien ne change.
-  if (b.boot !== undefined && soundClaim(kept.claim)?.boot === b.boot) return b
+  if (b.boot !== undefined && soundClaim(kept.claim)?.boot === b.boot) {
+    // Revenu à sa discussion après l'avoir quittée (sa fin a posé la pause « discussion fermée ») : il la tient de
+    // nouveau, sa prise prend cette date (`isEndedPause`).
+    if (isEndedPause(kept)) claimHere(b, kept, now)
+    return b
+  }
   // Un nouveau processus : l'auto allumé par l'ancien s'éteint, comme à la fin de la discussion (un processus
   // tué n'est pas passé par `parkActive`) ; il ne repart que sur deux clics d'ici.
   stopAuto(kept, now, AUTO_STOPS.ended)
@@ -6115,9 +6165,32 @@ const keepClaim = (kept: Run, a: Run | undefined, b: Run | undefined): Run => {
 }
 
 /**
+ * Une copie relue en cours tenue ailleurs : par une autre discussion, ou par un autre processus de celle-ci (sa prise,
+ * `Run.claim`, d'un autre démarrage : relancée au terminal pendant que l'app la garde).
+ */
+const isHeldElsewhere = (other: Run, local: Board): boolean => {
+  if (other.status !== 'active' || other.owner === undefined) return false
+  if (other.owner !== local.session) return true
+  const claim = soundClaim(other.claim)
+  return local.boot !== undefined && claim !== undefined && claim.boot !== local.boot
+}
+
+/**
+ * La dernière activité d'une mission archivée avant son archivage : la ligne de journal la plus récente d'avant sa date
+ * d'archivage, sinon sa clôture, sinon son début.
+ */
+const activityBeforeArchive = (run: Run): number => {
+  const at = run.archivedAt ?? Infinity
+  const logged = run.log.filter(l => isTime(l.at) && l.at < at).map(l => l.at)
+  return logged.length > 0 ? maxOf(logged) : isTime(run.finishedAt) && run.finishedAt < at ? run.finishedAt : run.startedAt
+}
+
+/**
  * Fusionne la copie de cette discussion avec le stockage partagé. Pour chaque mission, la
  * version la plus récente l'emporte, sauf la mission active ici, qui garde la version locale
- * tant qu'une autre discussion ne l'a pas repris. Une trace de suppression bien formée l'emporte sur
+ * tant qu'une autre discussion ne l'a pas reprise, ni close comme livrée ni archivée ailleurs depuis (une copie
+ * close ici cède à une copie archivée plus récente ; une copie en cours ou en pause garde la main face à une copie seulement
+ * archivée, et une copie en cours face à une copie livrée et archivée close avant sa dernière activité) ; et une mission archivée ici sur une copie qui ne voyait pas sa reprise ailleurs, que cette discussion ne montre pas, cède à la copie en cours ailleurs touchée après sa dernière activité d'avant l'archivage, même plus ancienne (`isResumedElsewhere`). Une trace de suppression bien formée l'emporte sur
  * toute copie qui n'est pas plus récente qu'elle ; une trace mal formée ne s'applique jamais, et une
  * trace future est tombée à la lecture (`clampFuture`).
  * Certains champs se fusionnent à part, quelle que soit la copie gardée (`keepRun`) : les fermetures
@@ -6160,15 +6233,35 @@ export const mergeBoards = (local: Board, stored: Board, ownTraces?: OwnTraces |
         ((other.owner !== local.session && other.updatedAt > run.updatedAt) || isOtherProcess)
       // Close comme livrée ailleurs depuis (le mod du COO, sur une mission ouverte nulle part) : la copie relue, plus
       // récente, l'emporte, et Version et Push ne se proposent plus ici (invariant des missions livrées). Une
-      // livraison rouverte ici depuis reste plus récente.
-      const isDeliveredElsewhere = other !== undefined && other.status === 'done' && isShipped(other) && !isShipped(run) && other.updatedAt > run.updatedAt
-      if (isTakenOver || isDeliveredElsewhere) {
+      // livraison rouverte ici depuis reste plus récente. Une copie relue aussi archivée ne retire une mission en cours
+      // ici que si sa clôture (`finishedAt`) suit la dernière activité d'ici (une discussion muette depuis) : une mission
+      // au travail après sa clôture n'est jamais archivée sous elle (un clic resté d'un affichage ancien).
+      const isDeliveredElsewhere =
+        other !== undefined &&
+        other.status === 'done' &&
+        isShipped(other) &&
+        !isShipped(run) &&
+        other.updatedAt > run.updatedAt &&
+        (other.archivedAt === undefined || run.status !== 'active' || (isTime(other.finishedAt) && other.finishedAt > run.updatedAt))
+      // Archivée ailleurs depuis (le COO, « ✓ Archiver » ou la fin d'une rétro, sur une mission close que cette
+      // discussion montre encore) : la copie relue, plus récente, l'emporte, et la discussion ne montre plus la
+      // mission. Une copie d'ici en cours ou en pause garde la main : une mission au travail n'est jamais archivée
+      // sous elle ; une copie relue archivée mais en cours (un clic resté d'un affichage ancien) ne la retire pas.
+      const isArchivedElsewhere = other !== undefined && other.archivedAt !== undefined && other.status !== 'active' && run.archivedAt === undefined && run.status === 'done' && other.updatedAt > run.updatedAt
+      if (isTakenOver || isDeliveredElsewhere || isArchivedElsewhere) {
         activeId = null
         byId.set(run.id, keepHandoff(keepClaim(keepRun(other, run, own, false), run, other), run))
       } else byId.set(run.id, keepHandoff(keepClaim(keepRun(run, other, own), run, other), other))
       continue
     }
-    const isLocalKept = !other || run.updatedAt >= other.updatedAt
+    // Archivée ici sur une copie qui ne voyait pas encore sa reprise ailleurs (la reprise pas encore écrite au moment
+    // du clic, ou pas relue) : la copie relue, en cours ailleurs et touchée après la dernière activité d'ici avant
+    // l'archivage (`activityBeforeArchive`), l'emporte, même plus ancienne que l'archivage ; une mission en cours n'est
+    // jamais archivée sous elle. Une copie en cours plus ancienne que le travail d'ici (une discussion restée muette) ne
+    // reprend rien.
+    const isResumedElsewhere =
+      other !== undefined && isHeldElsewhere(other, local) && other.archivedAt === undefined && run.archivedAt !== undefined && run.status !== 'active' && other.updatedAt > activityBeforeArchive(run)
+    const isLocalKept = !other || (!isResumedElsewhere && run.updatedAt >= other.updatedAt)
     const kept = isLocalKept ? keepRun(run, other, own) : keepRun(other, run, own, false)
     byId.set(run.id, keepHandoff(keepClaim(kept, run, other), isLocalKept ? other : run))
   }
@@ -6198,8 +6291,11 @@ export const parkActive = (board: Board, now: number): Outcome => {
   if (!activeRun(board)) return null
   const b = clone(board)
   const run = activeRun(b)!
-  // La discussion qui porte la mission se ferme : son auto s'éteint ; un /clear n'arrive pas ici.
-  stopAuto(run, now, AUTO_STOPS.ended)
+  // La discussion qui porte la mission se ferme : son auto s'éteint ; un /clear n'arrive pas ici. Déjà en pause
+  // « discussion fermée » (relancée depuis, ou d'un processus tué), la pause prend la date de cette fin (`isEndedPause`).
+  // Seulement quand ce processus tient la dernière prise : un autre processus de la même discussion qui l'a reprise
+  // depuis (l'app pendant que le terminal se ferme) tourne encore.
+  if (!stopAuto(run, now, AUTO_STOPS.ended) && b.boot !== undefined && soundClaim(run.claim)?.boot === b.boot) redateEnded(run, now)
   if (isRunComplete(run)) shelve(run, now)
   b.activeId = null
   return { board: b, fx: noFx() }
@@ -6495,8 +6591,9 @@ export const resumeRun = (board: Board, id: string, now: number): Outcome => {
   const current = activeRun(b)
   if (current) shelve(current, now)
   const run = b.runs.find(r => r.id === id)!
-  // Reprendre une mission archivée la sort des archives ; mise de côté, elle revient telle qu'elle était.
+  // Reprendre une mission archivée la sort des archives (sa marque part avec la date) ; mise de côté, elle revient telle qu'elle était.
   delete run.archivedAt
+  delete run.archivedBy
   delete run.asideAt
   delete run.waitsUser
   run.status = 'active'
@@ -6511,13 +6608,47 @@ export const resumeRun = (board: Board, id: string, now: number): Outcome => {
   return { board: b, fx: { ...noFx(), toasts: [`↻ Reprise : ${run.title}`] } }
 }
 
+/** Les chemins d'un archivage qui portent une marque (`Run.archivedBy`). */
+const ARCHIVE_PATHS: readonly ArchivePath[] = ['clic', 'retro']
+
+/**
+ * Le chemin de l'archivage d'une mission, relu de son fichier : seulement pour une mission archivée (une date en forme)
+ * dont la marque a une valeur connue et la même date que son archivage ; toute autre forme (absente, autre valeur ou
+ * autre type, marque sans date d'archivage, marque d'un archivage précédent laissée par une version d'avant) se lit
+ * comme absente, et une marque absente ne vaut jamais accord pour fermer une discussion.
+ */
+export const archiveMarkOf = (run: Run): ArchivePath | undefined => {
+  const mark: unknown = run.archivedBy
+  if (!isTime(run.archivedAt) || mark === null || typeof mark !== 'object') return undefined
+  const { by, at } = mark as { by?: unknown; at?: unknown }
+  return ARCHIVE_PATHS.includes(by as ArchivePath) && at === run.archivedAt ? (by as ArchivePath) : undefined
+}
+
+/**
+ * Le chemin de « ▣ Archiver » du panneau : `clic`, sauf dans la discussion où la mission est née ou qui la tient
+ * (`bornIn` ou `owner` est cette discussion : la personne y travaille, comme pour `/flow reset`), où rien ne se marque ;
+ * une discussion dont l'id ne se lit pas ne marque rien non plus (dans le doute, rien ne se fermera d'office).
+ */
+export const paneArchiveMark = (board: Board, run: Run): ArchivePath | undefined => {
+  const here: unknown = board.session
+  if (typeof here !== 'string' || here === '') return undefined
+  return run.bornIn === here || run.owner === here ? undefined : 'clic'
+}
+
 /**
  * Range une mission aux archives : elle quitte l'historique visible, n'est plus proposée à la reprise
- * et n'est jamais élaguée. La mission en cours ici est d'abord mise en pause.
+ * et n'est jamais élaguée. La mission en cours ici est d'abord mise en pause. `path` : le chemin de l'appelant
+ * (`clic`, `retro`), posé dans la même écriture que la date (`archivedBy`) ; sans lui, aucune marque, et une marque
+ * d'un archivage précédent part. Une mission en cours n'est jamais archivée, sauf celle que cette discussion tient,
+ * sans chemin (`/flow reset`) : un clic resté d'un affichage ancien n'archive pas une mission reprise ailleurs
+ * entre-temps, telle que la porte le board donné (une reprise pas encore écrite, c'est la fusion qui la garde).
  */
-export const archiveRun = (board: Board, id: string, now: number, why = 'Mission archivée'): Outcome => {
+export const archiveRun = (board: Board, id: string, now: number, why = 'Mission archivée', path?: ArchivePath): Outcome => {
   const run0 = board.runs.find(r => r.id === id)
   if (!run0 || run0.archivedAt !== undefined) return null
+  // Une mission en cours ailleurs n'est jamais archivée, avec ou sans chemin ; seule celle que cette discussion tient
+  // (`/flow reset`) l'est, sans marque.
+  if (run0.status === 'active' && (path !== undefined || board.activeId !== id)) return null
   const b = clone(board)
   const run = b.runs.find(r => r.id === id)!
   if (b.activeId === id) {
@@ -6528,6 +6659,8 @@ export const archiveRun = (board: Board, id: string, now: number, why = 'Mission
   }
   closeHandoff(run, now)
   run.archivedAt = now
+  if (path !== undefined) run.archivedBy = { by: path, at: now }
+  else delete run.archivedBy
   run.updatedAt = now
   delete run.waitsUser
   stopAuto(run, now, AUTO_STOPS.archived)
@@ -6560,31 +6693,130 @@ export const isAwaitingArchive = (run: Run): boolean =>
   isNothingSentSincePush(run, false)
 
 /**
- * L'empreinte de la liste des missions livrées et pas archivées (leurs ids, triés) : un bouton « ✓ Archiver » ou
- * « ✓ Tout archiver (n) » la porte ; recalculée au clic sur le fichier relu, une liste changée n'archive rien.
+ * Ce que seul le mod du COO sait des missions closes sans livraison : celles dont la carte de rétro est prête chez lui
+ * (`carded` : le bouton « ✓ Archiver » qui les montre), et celles que vise une clôture demandée ou la livraison en
+ * cours (`held` : leur clôture comme livrée n'est peut-être pas encore écrite), et la mission que montre la discussion
+ * du COO (jamais archivée par ces boutons). Sans lui, aucune mission close sans
+ * livraison n'attend « ✓ Archiver ».
  */
-export const awaitingArchivePrint = (runs: readonly Run[]): string => `a${fingerprint(runs.filter(isAwaitingArchive).map(r => r.id).sort())}`
+export type ArchiveScope = { carded: ReadonlySet<string>; held: ReadonlySet<string> }
+
+const NO_SCOPE: ArchiveScope = { carded: new Set(), held: new Set() }
 
 /**
- * Archive, d'un seul geste de la personne, les missions qu'elle a vues livrées et pas archivées : seulement si la
- * liste du board est encore celle de l'affichage (`print`, null pour le lancement d'une rétro, qui ne vise que sa
- * mission) et que chaque id en fait partie ; chacune par
+ * Une mission close sans livraison qui attend « ✓ Archiver » : elle a droit à sa carte de rétro (`isRetroCardDue` :
+ * close, pas archivée, l'id en forme, ni une rétro ni une mission qui a déjà la sienne), sa carte est prête chez le COO
+ * (le bouton qui la montre), aucun de ses groupes n'est chez un worker ni rendu sans être fermé (`isHoldingGroup`),
+ * aucune phase de livraison n'est en cours, et ni une clôture demandée ni la livraison ne la visent, ni elle n'est la
+ * mission que montre la discussion du COO (`scope.held`). Une phase de livraison restée « à faire » ne la retient pas :
+ * une mission close (fermée avec sa discussion, ou close par le COO) ne se livre plus (« ▶ Livrer » ne prend pas une
+ * mission close), et une livraison qui la vise encore est dans `scope.held`. Dans le doute, elle ne s'archive pas par
+ * ces boutons.
+ */
+export const isClosedAwaitingArchive = (run: Run, runs: readonly Run[], scope: ArchiveScope): boolean =>
+  !isDeliveredRun(run) &&
+  isRetroCardDue(run, runs) &&
+  scope.carded.has(run.id) &&
+  !scope.held.has(run.id) &&
+  !(run.groups ?? []).some(isHoldingGroup) &&
+  !run.phases.some(p => DELIVERY.has(p.skill) && p.status === 'active')
+
+/** Une mission qu'un bouton « ✓ Archiver » peut archiver : livrée (`isAwaitingArchive`), ou close sans livraison (`isClosedAwaitingArchive`). */
+export const isArchivable = (run: Run, runs: readonly Run[], scope: ArchiveScope = NO_SCOPE): boolean => isAwaitingArchive(run) || isClosedAwaitingArchive(run, runs, scope)
+
+/**
+ * L'empreinte de la liste des missions qui attendent « ✓ Archiver » (`isArchivable`, leurs ids, triés) : un bouton
+ * « ✓ Archiver » ou « ✓ Tout archiver (n) » la porte ; recalculée au clic sur le fichier relu, une liste changée
+ * n'archive rien.
+ */
+export const awaitingArchivePrint = (runs: readonly Run[], scope: ArchiveScope = NO_SCOPE): string => `a${fingerprint(runs.filter(r => isArchivable(r, runs, scope)).map(r => r.id).sort())}`
+
+/**
+ * Archive, d'un seul geste de la personne, les missions qu'elle a vues avec « ✓ Archiver » : seulement si la
+ * liste du board est encore celle de l'affichage (`print` ; null : sans liste à comparer, que le mod ne
+ * passe plus depuis que le lancement d'une rétro n'archive rien) et que chaque id en fait partie (`isArchivable`, avec ce que sait le COO : `scope`) ; chacune par
  * `archiveRun` (rien d'autre n'est écrit), tout ou rien. Null sinon.
  */
-export const archiveAwaiting = (board: Board, ids: readonly string[], print: string | null, now: number, why?: string): Outcome => {
-  // `print` null : un geste qui ne vise pas une liste montrée (le lancement d'une rétro, sur sa seule mission).
-  if (ids.length === 0 || (print !== null && awaitingArchivePrint(board.runs) !== print)) return null
+export const archiveAwaiting = (board: Board, ids: readonly string[], print: string | null, now: number, why?: string, path?: ArchivePath, scope: ArchiveScope = NO_SCOPE): Outcome => {
+  // `print` null : un geste qui ne vise pas une liste montrée.
+  if (ids.length === 0 || (print !== null && awaitingArchivePrint(board.runs, scope) !== print)) return null
   // Une mission active ici (`archiveRun` la mettrait d'abord en pause) n'est jamais archivée par ce geste.
-  if (!ids.every(id => id !== board.activeId && board.runs.some(r => r.id === id && isAwaitingArchive(r)))) return null
+  if (!ids.every(id => id !== board.activeId && board.runs.some(r => r.id === id && isArchivable(r, board.runs, scope)))) return null
   let b = board
   for (const id of new Set(ids)) {
-    const out = archiveRun(b, id, now, why)
+    const out = archiveRun(b, id, now, why, path)
     if (!out) return null
     b = out.board
   }
   return { board: b, fx: noFx() }
 }
 
+
+/** La ligne de journal des missions archivées à la fin de leur rétro (la mission étudiée et la rétro). */
+export const RETRO_END_TEXT = 'Archivée : sa rétro est finie'
+
+/** Une mission qu'un worker retient : un groupe chez lui ou rendu sans être fermé, ou le worker de ses éléments pas fermé. */
+const isHeldByWorker = (run: Run): boolean => (run.groups ?? []).some(isHoldingGroup) || run.phases.some(holdsItemsSession)
+
+/**
+ * Ce que l'opération déposée par une rétro dans les boîtes de pistes dit de sa fin : `none` (aucune n'attend : toutes
+ * portent leur marque dans la liste d'attente, ou aucune boîte), `pending` (une attend sans sa marque), `doubt` (une
+ * boîte, une opération ou la liste ne se lit pas).
+ */
+export type RetroBoxes = 'none' | 'pending' | 'doubt'
+
+/**
+ * Ce que la fin de la rétro `retroId` archive, jugé sur le board donné (le fichier relu et fusionné à l'instant) :
+ * rien (null) tant que la rétro n'est pas close, pas archivée, lancée par sa carte (son lancement porte la mission
+ * étudiée), sans worker qui la retient, pas la mission montrée ici, ni tant qu'une de ses opérations n'est pas écrite
+ * dans la liste d'attente ou que ses boîtes sont un doute (`boxes`). La mission étudiée absente du fichier ou déjà
+ * archivée : la rétro seule (`studied` le dit). Sinon la mission étudiée doit être close, pas montrée ici, sans worker
+ * qui la retient : alors les deux. Chacune des missions qu'elle archive garde en plus les retenues d'une mission close
+ * (`isEndHeld` : une phase de livraison en cours, et, livrée, celles d'une mission livrée, `isAwaitingArchive`) et
+ * celles que seul le COO sait (`held` : une clôture demandée pas encore faite ou la livraison qui la visent, la mission
+ * que montre sa discussion ; `archiveHeldOf`, toutes les missions dans le doute). Ces conditions sont les siennes,
+ * pas celles des boutons « ✓ Archiver ».
+ */
+export const retroEndOf = (board: Board, retroId: string, boxes: RetroBoxes, held: ReadonlySet<string>): { ids: string[]; studied: 'with' | 'absent' | 'archived' } | null => {
+  const retro = board.runs.find(r => r.id === retroId)
+  if (!retro || boxes !== 'none' || !isSafeId(retro.id) || retro.status !== 'done' || retro.archivedAt !== undefined || isEndHeld(retro, board, held)) return null
+  const of = retroOf(retro)
+  if (of === null) return null
+  const studied = board.runs.find(r => r.id === of)
+  if (!studied) return { ids: [retro.id], studied: 'absent' }
+  if (studied.archivedAt !== undefined) return { ids: [retro.id], studied: 'archived' }
+  if (studied.status !== 'done' || isEndHeld(studied, board, held)) return null
+  return { ids: [studied.id, retro.id], studied: 'with' }
+}
+
+/**
+ * Une mission close que la fin d'une rétro n'archive pas encore : montrée ici, retenue par un worker, par le COO
+ * (`held`), par une phase de livraison en cours, ou, livrée, par les retenues d'une mission livrée.
+ */
+const isEndHeld = (run: Run, board: Board, held: ReadonlySet<string>): boolean =>
+  run.id === board.activeId ||
+  held.has(run.id) ||
+  isHeldByWorker(run) ||
+  run.phases.some(p => DELIVERY.has(p.skill) && p.status === 'active') ||
+  (isDeliveredRun(run) && !isAwaitingArchive(run))
+
+/**
+ * La fin d'une rétro (`retroEndOf`) écrite sur le board donné : la mission étudiée puis la rétro, chacune par
+ * `archiveRun` avec la marque « retro » et `RETRO_END_TEXT` (la rétro seule : la ligne dit pourquoi), tout ou rien.
+ * Null quand rien ne s'archive.
+ */
+export const archiveRetroEnd = (board: Board, retroId: string, boxes: RetroBoxes, held: ReadonlySet<string>, now: number): Outcome => {
+  const end = retroEndOf(board, retroId, boxes, held)
+  if (!end) return null
+  const alone = end.studied === 'absent' ? ' (la mission étudiée n’est plus dans le fichier des missions)' : end.studied === 'archived' ? ' (la mission étudiée était déjà archivée)' : ''
+  let b = board
+  for (const id of end.ids) {
+    const out = archiveRun(b, id, now, id === retroId ? `${RETRO_END_TEXT}${alone}` : RETRO_END_TEXT, 'retro')
+    if (!out) return null
+    b = out.board
+  }
+  return { board: b, fx: noFx() }
+}
 /** L'étape « Sync et push » d'une phase « Version et push » est faite (le code est parti). */
 const isPushDone = (phase: FlowPhase): boolean => phase.steps.some(s => s.id === 'pushed' && s.status === 'done')
 
@@ -6770,6 +7002,7 @@ export const unarchiveRun = (board: Board, id: string, now: number): Outcome => 
   const b = clone(board)
   const run = b.runs.find(r => r.id === id)!
   delete run.archivedAt
+  delete run.archivedBy
   run.updatedAt = now
   log(run, now, '▢', 'Mission désarchivée', 'info')
   return { board: b, fx: { ...noFx(), toasts: [`▢ Désarchivé : ${run.title}`] } }

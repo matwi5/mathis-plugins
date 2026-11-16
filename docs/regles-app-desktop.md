@@ -47,7 +47,7 @@ Ce qui en dépend, dans `plugins/flow-board/hooks/closing.ts` :
 - `archiveConsent` : l'accord donné d'avance par `/flow archive on`, venu d'un geste de la personne ;
 - `appArchive` : cite cet accord en nommant la session, ou demande l'accord en une ligne ;
 - `closingProcedure` : la procédure de fermeture d'un groupe rendu, qui l'emploie pour une session de l'app ;
-- `missionSessionsArchiveText` et `missionSessionId` : la demande d'archiver la discussion d'une mission livrée et archivée, l'accord toujours demandé en une ligne (test : `plugins/flow-board/tests/discussion-archivee.test.ts`) ;
+- `missionSessionsArchiveText` et `missionSessionId` : la procédure de fermeture de la discussion d'une mission archivée par un clic ; dans l'app, elle archive la session par `archive_session` en citant le clic d'archivage de la personne comme son accord pour cette discussion précise, sans ligne de demande (l'app peut encore demander son approbation hors des modes auto et bypass) ; un refus de l'app la remet à plus tard (test : `plugins/flow-board/tests/discussion-archivee.test.ts`) ; dans la demande unique pour les discussions des missions archivées sans marque (`unmarkedAskText`), le même texte cite à la place le oui que la personne a tapé dans la discussion du COO, et `list_sessions` sert à chercher celles qui existent encore ; un id que ni `claude agents` ni `list_sessions` ne retrouvent alors que `list_sessions` est là (dans l'app, les ids notés sont en pratique des UUID de transcript) compte comme existant, et la procédure le rend ensuite absent (test : `plugins/flow-board/tests/demande-unique.test.ts`) ;
 - test : `plugins/flow-board/tests/archivage-d-office.test.ts`.
 
 ## `set_session_title` : un titre posé par la personne se fait approuver

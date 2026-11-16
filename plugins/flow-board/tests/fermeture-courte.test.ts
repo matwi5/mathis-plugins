@@ -9,10 +9,13 @@ import type { Run } from '../types'
 // exécutait commande par commande. Le script est celui du plugin installé (`closingScript`, posé au chargement).
 
 const SCRIPT = '/opt/poste/.claude/plugins/cache/m/flow-board/1.0.0/scripts/fermeture.mjs'
-/** Le plafond du texte court d'une session du CLI (quelques centaines de caractères) : la procédure entière en faisait environ 11 000. */
-const SHORT_MAX = 1_800
-/** Celui d'une session de l'app, qui ajoute le geste d'archivage et son accord. */
-const SHORT_APP_MAX = 2_600
+/**
+ * Le plafond du texte court d'une session du CLI : la procédure entière en faisait environ 11 000. Relevé de 1 800 à
+ * 2 200 quand le point 4 a dit où lire le sessionId (la ligne « session : » du script) et où reste le compte rendu (le relais).
+ */
+const SHORT_MAX = 2_200
+/** Celui d'une session de l'app, qui ajoute le geste d'archivage et son accord (relevé de 2 600 à 3 000 de même). */
+const SHORT_APP_MAX = 3_000
 
 const run = (): Run => ({ ...newRun('implement', 1_000, 'Boutique'), id: 'm1' }) as Run
 const group = { kind: 'group', id: 'A', name: 'Code' } as const

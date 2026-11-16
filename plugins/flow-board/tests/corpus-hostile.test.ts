@@ -15,6 +15,7 @@ import { isRoadmapId } from '../hooks/roadmap.ts'
 import { isCardId, isFolderName, isLaunchId } from '../hooks/launch.ts'
 import { activeRun } from '../hooks/basics.ts'
 import { relayShortId } from '../hooks/link.ts'
+import { modelName } from '../hooks/effort.ts'
 import type { Board, Closing } from '../types'
 import { CORPUS, LINE_BREAKERS, NON_TEXT, QUOTE_LOOKALIKES, ch } from './corpus.mjs'
 
@@ -138,6 +139,21 @@ const LINE_SAFE: Record<string, (text: string) => boolean> = {
   isOneLine: text => isOneLine(text, 200),
   isQuestionRef,
 }
+
+// `modelName` choisit le nom de modèle écrit dans la note à Claude (`sentNote`) : de chaque entrée du corpus glissée
+// dans un id ou à sa suite, il rend null ou un nom fait de lettres, de chiffres et d'un point, jamais l'entrée.
+test('modelName ne rend, d’un id où une entrée du corpus est glissée, que null ou un nom sans elle', () => {
+  const NAME = /^[A-Z][a-z]+ \d{1,2}\.\d{1,2}$/
+  const leaks = (id: (token: string) => string) => passing(token => {
+    const name = modelName(id(token))
+    return name !== null && !NAME.test(name)
+  })
+  expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(leaks(token => `claude-op${token}us-5-5`)).toEqual([])
+  expect(leaks(token => `claude-opus-5-5${token}`)).toEqual([])
+  expect(leaks(token => `${token}claude-opus-5-5`)).toEqual([])
+  expect(Object.values(NON_TEXT).filter(value => modelName(value) !== null)).toEqual([])
+})
 
 test('chaque garde de ligne sûre accepte une ligne et ses sosies de guillemets, et refuse chaque fin de ligne, contrôle C0 ou C1 et marque bidirectionnelle', () => {
   for (const [name, isSafe] of Object.entries(LINE_SAFE)) {

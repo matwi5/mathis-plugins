@@ -6,6 +6,7 @@ import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
 import { CORPUS } from './corpus.mjs'
 import { PANE, PLUGIN, TOOL, coordFile, entries, openCoo, seatOf, settle, start, stored, world, writeBoard } from './monde-coordination.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // La vague lancée chez le COO, et le découpage informé. Invariant (celui du plan) : « Un groupe ne part
 // jamais avant ce que le plan validé lui fait attendre, sauf forçage ; un plan illisible ne lance rien, et
@@ -13,7 +14,7 @@ import { PANE, PLUGIN, TOOL, coordFile, entries, openCoo, seatOf, settle, start,
 // affichés, et seulement si le plan les fait toujours partir.
 
 const T0 = 600_000_000
-const texts = async (ui: any): Promise<string> => (await ui.findAll({ type: 'Text' })).map((t: any) => String(t.text ?? '')).join(' | ')
+const texts = async (ui: any): Promise<string> => (await findAllAny(ui, { type: 'Text' })).map((t: any) => String(t.text ?? '')).join(' | ')
 
 /** Une mission dans l'implémentation, avec ses groupes (un ticket chacun, sur son fichier). */
 const mission = (title: string, at: number, groups: Record<string, string>, owner?: string): Run => {
@@ -35,7 +36,7 @@ test('chez le COO : la prochaine vague du projet se montre, « ⇉ Lancer la vag
   expect(opening).toMatch(/Next wave of the project, what each open mission would launch now \(plan and holds included\): « Mission 1 » : « A », « B » · « Mission 2 » : « D », « E »/)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(pane)).toMatch(/« Mission 1 » : A, B · « Mission 2 » : D, E/)
-  await pane.press({ key: 'coo-wave-launch' })
+  await pressAny(pane, { key: 'coo-wave-launch' })
   await pane.unmount()
   await settle(clock, 2)
   const waves = entries(w).filter(e => e.kind === 'wave')
@@ -44,7 +45,7 @@ test('chez le COO : la prochaine vague du projet se montre, « ⇉ Lancer la vag
   // Pendant le lancement, plus de bouton : un second clic n'a rien à presser.
   const after = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await texts(after)).toMatch(/lancement en cours/)
-  expect(await after.find({ key: 'coo-wave-launch' })).toBeUndefined()
+  expect(await findAny(after, { key: 'coo-wave-launch' })).toBeUndefined()
   await after.unmount()
 })
 
@@ -172,7 +173,7 @@ test('chez le COO : un plan illisible pour une mission (entrée de plan hors for
   w.coord.unread = true
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await pane.find({ key: 'coo-wave-launch' })).toBeUndefined()
+  expect(await findAny(pane, { key: 'coo-wave-launch' })).toBeUndefined()
   await pane.unmount()
 })
 

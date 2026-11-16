@@ -11,7 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import check  # noqa: E402
 
-README = "# essai\n\n## Architecture\n\n```\nessai/\n├── hooks/\n│   └── model.ts\n└── tests/\n    └── a.test.ts\n```\n"
+README = "# essai\n\n## Architecture\n\n```\nessai/\n├── hooks/\n│   └── model.ts   modèle\n└── tests/\n    └── a.test.ts   essai a\n```\n"
 
 
 def git(cwd, *args):

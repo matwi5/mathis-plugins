@@ -1,4 +1,4 @@
-// La rétro d'une mission livrée, proposée par le COO : une mission à part, lancée par une carte du mod, qui
+// La rétro d'une mission close, proposée par le COO : une mission à part, lancée par une carte du mod, qui
 // garde l'id de la mission close et lit ses transcripts ; ses pistes se cochent chez le COO.
 // Invariant : « Une piste de la rétro n'est découpée que si l'utilisateur l'a cochée ; une piste non cochée
 // part dans À reprendre, jamais nulle part. » Depuis la liste d'attente (R11 de coo-autonome) : ou reste dans
@@ -6,10 +6,24 @@
 
 import type { FlowItem, Run } from '../types'
 import { clip } from './basics.ts'
-import { isSafeId, isSessionId, neutralLine } from './closing.ts'
-import { RETRO_START, isFolderName, liveLaunchOf, soundRunLaunch, type LaunchCard } from './launch.ts'
+import { isSessionId, missionSessionId, neutralInPrompt, neutralLine } from './closing.ts'
+import type { CoordRetro } from './coordination.ts'
+import { CLOCK_SKEW_MS, LAUNCH_TTL_MS, RETRO_START, hasRetro, isFolderName, isRecordStale, launchFirstLine, runOfCard, runOfLaunch, soundRunLaunch, type LaunchCard, type LaunchRecord } from './launch.ts'
 import { linkedSessionsOf } from './link.ts'
 import { printOf } from './oppositions.ts'
+
+/**
+ * L'id de la carte « Pistes de rétro » qui reprend les pistes rendues d'une mission « Pistes de rétro » finie,
+ * tiré de la mission et des pistes qu'elle portera : toujours le même pour elles (une seule carte, même rejouée ou
+ * après un rechargement), un autre pour d'autres pistes (une seconde fin de la mission, reprise après le lancement
+ * de la première carte) ; jamais celui d'une carte de rétro (`kr`), donc un dossier (`pistes-de-retro-<id sans k>`)
+ * qui diffère de celui de la mission finie. Préfixe `kn` : la carte qui reprend des pistes dont la carte a disparu,
+ * tirée de l'ancienne carte au lieu de la mission.
+ */
+export const pistesBackCardId = (mission: string, pistes: readonly string[], prefix: 'kq' | 'kn' = 'kq'): string => {
+  const print = printOf([mission, ...[...pistes].sort()].join('\n')).replace('.', '').padStart(8, '0')
+  return `${prefix}${print}`.slice(0, 25)
+}
 
 /** L'id de la carte de rétro d'une mission : toujours le même pour elle (une seule carte, même après un rechargement). */
 export const retroCardId = (mission: string): string => {
@@ -54,7 +68,7 @@ export const retroReason = (run: Run, report: string | null): string | null => {
   return why.length > 0 ? why.join(', ') : null
 }
 
-/** La carte « ▶ Rétro de « M » » d'une mission livrée : départ rétro, auto recommandé, effort high. */
+/** La carte « ▶ Rétro de « M » » d'une mission close (livrée ou non) : départ rétro, auto recommandé, effort high. */
 export const retroCard = (run: Run, report: string | null, now: number): LaunchCard => {
   const reason = retroReason(run, report)
   return {
@@ -73,32 +87,118 @@ export const retroCard = (run: Run, report: string | null, now: number): LaunchC
   }
 }
 
-/** Une rétro lancée par le COO : l'id de la mission close qu'elle étudie, ou null (une rétro lancée à la main n'en a pas). */
-export const retroOf = (run: Run): string | null => {
-  const l = liveLaunchOf(run)
-  return l?.of && isSafeId(l.of) ? l.of : null
-}
-
-/** La mission close a déjà sa rétro (lancée par le COO). */
-export const hasRetro = (runs: readonly Run[], mission: string): boolean => runs.some(r => retroOf(r) === mission)
-
 /** Les discussions d'une mission dont la rétro lit les transcripts : celle où elle est née, la dernière qui l'a portée, et ses workers. */
 export const retroSessions = (closed: Run): string[] => [...new Set([...(closed.bornIn ? [closed.bornIn] : []), ...(closed.owner ? [closed.owner] : []), ...linkedSessionsOf(closed).ids])].filter(isSessionId)
 
 /**
  * Les transcripts de la mission close parmi ceux du projet (listés sous le dossier des projets de Claude, jamais
- * un chemin construit d'une valeur relue) ; les discussions sans transcript trouvé, nommées pour que la rétro le dise.
+ * un chemin construit d'une valeur relue) ; les discussions sans transcript trouvé, nommées pour que la rétro le dise ;
+ * avec `here`, ceux de cette discussion-là (`own`), quand elle est une discussion de la mission close.
  */
-export const retroTranscripts = (closed: Run, listed: readonly { path: string; id: string }[]): { found: string[]; missing: string[] } => {
+export const retroTranscripts = (closed: Run, listed: readonly { path: string; id: string }[], here?: string): { found: string[]; missing: string[]; own?: string[] } => {
   const found: string[] = []
   const missing: string[] = []
+  const own: string[] = []
   for (const id of retroSessions(closed)) {
     const hit = listed.filter(t => t.id === id).map(t => t.path)
     if (hit.length > 0) found.push(...hit)
     else missing.push(id)
+    // La rétro tourne dans une discussion de la mission étudiée (celle de son manager) : son transcript est parmi eux.
+    if (here !== undefined && id === here) own.push(...hit)
   }
-  return { found, missing }
+  return here === undefined ? { found, missing } : { found, missing, own }
 }
+
+/**
+ * La discussion du manager d'une mission étudiée, où son clic « Lancer » envoie la rétro : celle que
+ * `missionSessionId` désigne (`bornIn` puis `owner`, un id de session en forme, jamais celle du COO, jamais une
+ * discussion que nomme une autre mission non archivée), et qu'aucune mission en cours ne tient (la reprendre la mettrait en pause). null : le chemin
+ * d'aujourd'hui, une nouvelle discussion. Une discussion de l'autre surface (app ou terminal) ne lit pas le lancement
+ * gardé, propre au stockage de chacune : elle ne le prend jamais, et la demande reste sans prise.
+ */
+export const retroTarget = (studied: Run, runs: readonly Run[], here: string): string | null => {
+  const id = missionSessionId(studied, runs, here)
+  if (typeof id !== 'string') return null
+  if (runs.some(r => r.status === 'active' && r.owner === id)) return null
+  return id
+}
+
+/**
+ * Pourquoi une discussion n'applique pas une demande de rétro (null : elle la prend). `stale` : plus vieille que la
+ * durée d'un lancement, ou datée du futur ; `other` : pas pour cette discussion (ni désignée, ni `bornIn` ni `owner`
+ * de la mission étudiée) ; `absent` : la mission étudiée n'est pas dans le fichier des missions ; `state` : archivée,
+ * plus close, ou qui a déjà une rétro ; `busy` : une mission en cours ici ; `launch` : le lancement absent, d'un
+ * autre projet ou d'une autre mission, périmé ou à moins de `RETRO_TAKE_MARGIN_MS` de sa péremption (la rétro doit
+ * encore le consommer), déjà pris (par n'importe qui : une prise d'ici date d'une application déjà faite) ou porté par
+ * une mission ; `turn` : un tour ouvert ici, la demande attend la relecture suivante.
+ * Invariant : « Une demande de rétro n'est jamais appliquée deux fois, ni dans une discussion qui tient une mission
+ * en cours ou qui n'est pas celle de la mission étudiée. »
+ */
+export type RetroRequestRefusal = 'stale' | 'other' | 'absent' | 'state' | 'busy' | 'launch' | 'turn'
+
+/**
+ * Le temps qu'il doit rester au lancement avant sa péremption pour qu'une discussion le prenne : la rétro qu'elle lance
+ * le consomme ensuite à son premier appel de l'outil, et `consumeRefusal` juge la péremption sans tenir compte de la prise.
+ */
+export const RETRO_TAKE_MARGIN_MS = 2 * 60_000
+
+/**
+ * Le temps que laisse la reprise au terminal pour rouvrir la discussion (processus d'arrière-plan, plugins chargés),
+ * finir le tour de son message fixe, la relire (5 s) et prendre le lancement (1,5 s).
+ */
+export const RETRO_RESUME_LEAD_MS = 90_000
+
+/**
+ * L'heure (ms) au-delà de laquelle la reprise de la discussion du manager ne sert plus : la discussion rouverte ne prend
+ * plus le lancement à moins de `RETRO_TAKE_MARGIN_MS` de sa péremption, et il lui faut `RETRO_RESUME_LEAD_MS` pour le
+ * prendre.
+ */
+export const retroResumeUntil = (record: Pick<LaunchRecord, 'at'>): number => record.at + LAUNCH_TTL_MS - RETRO_TAKE_MARGIN_MS - RETRO_RESUME_LEAD_MS
+
+/**
+ * La reprise au terminal de la discussion du manager servirait-elle la demande de rétro `ask` ? Jugé chez le COO à la
+ * composition du repli, d'après les refus que cette discussion opposerait une fois rouverte (`retroRequestRefusal`, et
+ * les retours anticipés de son application) : ni la discussion d'ici (le siège du COO n'applique rien), ni une
+ * discussion où la mission étudiée n'est ni née ni tenue, une mission étudiée absente, archivée, plus close ou qui a
+ * déjà sa rétro, une mission en cours dans cette discussion, une demande déjà notée appliquée chez elle (`applied`), ni
+ * un lancement trop près de sa péremption (`retroResumeUntil`). Les autres refus (demande ou lancement périmé, pris ou
+ * porté par une mission) écartent le repli entier, plus tôt.
+ */
+export const isRetroResumeUseful = (o: { ask: CoordRetro; runs: readonly Run[]; here: string; applied: ReadonlySet<string>; record: Pick<LaunchRecord, 'at'>; now: number }): boolean => {
+  const { ask, runs } = o
+  if (ask.session === o.here || o.applied.has(ask.id) || o.now >= retroResumeUntil(o.record)) return false
+  const studied = runs.find(r => r.id === ask.run)
+  if (!studied || (studied.bornIn !== ask.session && studied.owner !== ask.session)) return false
+  if (studied.archivedAt !== undefined || studied.status !== 'done' || hasRetro(runs, studied.id)) return false
+  return !runs.some(r => r.status === 'active' && r.owner === ask.session)
+}
+
+/** La demande de rétro est plus vieille que la durée d'un lancement (plus `grace`), ou datée du futur. */
+export const isRetroRequestStale = (entry: Pick<CoordRetro, 'at'>, now: number, grace = 0): boolean => now - entry.at >= LAUNCH_TTL_MS + grace || entry.at > now + CLOCK_SKEW_MS
+
+export const retroRequestRefusal = (o: { entry: CoordRetro; runs: readonly Run[]; here: string; root: string; record: LaunchRecord | null; isTurnOpen: boolean; now: number }): RetroRequestRefusal | null => {
+  const { entry, runs, here, record, now } = o
+  if (isRetroRequestStale(entry, now)) return 'stale'
+  if (entry.session !== here) return 'other'
+  const studied = runs.find(r => r.id === entry.run)
+  if (!studied) return 'absent'
+  if (studied.bornIn !== here && studied.owner !== here) return 'other'
+  if (studied.archivedAt !== undefined || studied.status !== 'done' || hasRetro(runs, studied.id)) return 'state'
+  if (runs.some(r => r.status === 'active' && r.owner === here)) return 'busy'
+  if (!record || record.id !== entry.launch || record.root !== o.root || record.of !== studied.id || isRecordStale(record, now) || record.at + LAUNCH_TTL_MS - now < RETRO_TAKE_MARGIN_MS) return 'launch'
+  if (record.claim !== undefined || runOfLaunch(runs, record.id) || runOfCard(runs, record.card, record.folder)) return 'launch'
+  if (o.isTurnOpen) return 'turn'
+  return null
+}
+
+/**
+ * Les arguments de la commande de rétro que le mod lance dans la discussion du manager : le premier message
+ * d'aujourd'hui (la rétrospective de la mission, son dossier, la ligne qui fait rattacher le lancement), qui dit que
+ * la rétro tourne dans cette discussion, celle du manager de la mission étudiée. Le titre vient de l'enregistrement
+ * (contrôlé à sa pose), neutralisé ; le dossier, en forme.
+ */
+export const retroCommandArgs = (record: Pick<LaunchRecord, 'id' | 'title' | 'folder'>): string =>
+  `Rétrospective de la mission close « ${neutralInPrompt(record.title.replace(/^Rétrospective · /, ''))} », lancée par le COO dans cette discussion, celle du manager de la mission étudiée (le dossier de la rétro est travail/${record.folder}/), puis cette ligne telle quelle : « ${launchFirstLine(record.id)} » Rien d'autre : le tableau de bord de cette discussion lui donne la mission close et ses transcripts.`
 
 /** L'empreinte des pistes montrées au clic (ids et libellés, dans l'ordre) : changées depuis, la sélection ne s'applique pas. */
 export const picksPrint = (items: readonly Pick<FlowItem, 'id' | 'label'>[]): string => `p${printOf(JSON.stringify(items.map(i => [i.id, i.label]))).replace('.', '')}`

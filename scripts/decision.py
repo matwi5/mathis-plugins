@@ -51,8 +51,9 @@ script fait tout le geste, et ne rend la main qu'avec la série commitée, ou le
    discussion comptent donc ;
 4. il ajoute la série à la fin du fichier, titrée `## Série <n> — <titre> (<jj/mm/aaaa>)`, après une
    ligne vide : le titre est la première ligne du fichier de la série, le corps ce qui suit (lignes
-   vides de bord retirées). Un titre vide, un corps vide, ou une ligne du corps qui serait un titre de
-   série sont refusés. L'écriture passe par un fichier voisin, renommé sur l'ancien (pas de fichier
+   vides de bord retirées). Le titre s'écrit sans date : le script pose la sienne, et refuse un titre qui
+   finit par une date entre parenthèses (« (14/11/2026) »), avant tout verrou et toute écriture. Un titre
+   vide, un corps vide, ou une ligne du corps qui serait un titre de série sont refusés. L'écriture passe par un fichier voisin, renommé sur l'ancien (pas de fichier
    tronqué) ; un fichier changé entre la lecture et le renommage (un Edit d'une autre discussion) fait
    recommencer la lecture, trois fois au plus ;
 5. il commite son seul ajout, sans passer par l'index partagé, que d'autres discussions indexent
@@ -175,8 +176,13 @@ def out(cwd, *args, index=None):
     return git(cwd, *args, index=index).stdout.decode("utf-8").strip()
 
 
+# Une date entre parenthèses en fin de titre (« (14/11/2026) », « ( 4/1/2026 ) ») : le script pose la sienne.
+TITLE_DATE = re.compile(r"\(\s*\d{1,2}/\d{1,2}/\d{4}\s*\)\s*$")
+
+
 def read_series(path):
-    """Le titre et le corps d'un fichier de série ; DecisionError s'il est mal formé."""
+    """Le titre et le corps d'un fichier de série ; DecisionError s'il est mal formé (un titre qui finit par
+    une date compris : le script la pose lui-même)."""
     path = Path(path)
     if not path.is_file():
         raise DecisionError(f"fichier de la série introuvable : {path}")
@@ -192,6 +198,10 @@ def read_series(path):
     if SERIES_TITLE.search(title) or title.startswith("#"):
         raise DecisionError(f"{path} : le titre se donne nu (« Réponses du cadrage »), le script le met en "
                             f"« ## Série <n> — … »{WRITTEN}")
+    dated = TITLE_DATE.search(title)
+    if dated:
+        raise DecisionError(f"{path} : le titre finit par une date, alors que le script pose la date lui-même : "
+                            f"retirer « {dated[0].strip()} » du titre{WRITTEN}")
     if not body:
         raise DecisionError(f"{path} : le corps de la série est vide{WRITTEN}")
     doubled = [n for n, line in enumerate(body, 3) if SERIES_TITLE.match(line)]

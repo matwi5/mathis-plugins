@@ -3,9 +3,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import { copiedIn, keepsItems, roadmapText, withoutCopied } from '../hooks/a-reprendre.ts'
 import { cooStatement, statementText, type CooGlean } from '../hooks/coo.ts'
 import { emptyBoard, newRun } from '../hooks/model.ts'
-import { relayFileSlug } from '../hooks/relay.ts'
 import { reportRoundOf, validatedRoundOf } from '../hooks/register.tsx'
 import type { Board, Run } from '../types'
+import { relayFileSlug } from '../hooks/closing.ts'
 
 // La boîte « À reprendre ». Invariants :
 // - « Une chose mise de côté par une mission ne sort de la liste que par ta décision ; elle ne disparaît
@@ -25,7 +25,7 @@ const PANE = {
 } as const
 const isBoardFile = (path: string): boolean => path.includes('/flow-board/parcours/')
 const isStateFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.feuille-de-route.json')
-const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-') && !path.includes('.nuit')
+const isCoordFile = (path: string): boolean => path.includes('/flow-board/coordination/') && path.endsWith('.json') && !path.includes('feuille-de-route') && !path.includes('.illisible-') && !path.includes('.nuit') && !path.includes('.numeros') && !path.includes('.cartes')
 const isBoxFile = (path: string): boolean => path.includes('/flow-board/a-reprendre/')
 const STATE_KEY = `coo-roadmap:${ROOT}`
 const BOARD_KEY = `board:${ROOT}`
@@ -281,11 +281,15 @@ test('« À reprendre » dans la vue : ses quatre boutons demandent la décision
   await settle(clock, 6)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    await pane.press({ key: 'coo-page-pending' })
+    // Les boutons d'une entrée sont dans l'entrée dépliée ; dépliée une fois, elle le reste au montage suivant.
+    if (surface === 'terminal') await pane.press({ key: 'coo-pending-open-R1' })
     for (const key of ['coo-pending-launch-R1', 'coo-pending-attach-R1', 'coo-pending-later-R1', 'coo-pending-drop-R1']) expect(await pane.find({ key }), `${surface} ${key}`).toBeDefined()
     if (surface === 'terminal') expect(await pane.find({ type: 'Svg' })).toBeUndefined()
     await pane.unmount()
   }
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await pane.press({ key: 'coo-page-pending' })
   await pane.press({ key: 'coo-pending-drop-R1' })
   await pane.unmount()
   await settle(clock, 1)
@@ -309,19 +313,23 @@ test('« À reprendre » dans la vue : une entrée rattachée paraît après les
   await settle(clock, 6)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    await pane.press({ key: 'coo-page-pending' })
     const tree = ((await pane.findAll({ type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
-    expect(tree, surface).toMatch(/Idées · À reprendre · 2/)
+    // Depuis que la vue Coordination a six pages, « À reprendre » a son propre en-tête.
+    expect(tree, surface).toMatch(/À reprendre · 2/)
     expect(tree.indexOf('Revoir le délai'), surface).toBeGreaterThan(-1)
     expect(tree.indexOf('Relire le README'), surface).toBeGreaterThan(tree.indexOf('Revoir le délai'))
     expect(tree, surface).toMatch(/R2 · rattachée à Mode auto/)
     for (const text of ['Déjà lancée', 'Écartée', 'Faite']) expect(tree.split('\n'), `${surface} ${text}`).not.toContain(text)
     expect(tree.split('\n'), surface).toContain('Relire le README')
+    if (surface === 'terminal') await pane.press({ key: 'coo-pending-open-R2' })
     for (const key of ['coo-pending-later-R2', 'coo-pending-drop-R2']) expect(await pane.find({ key }), `${surface} ${key}`).toBeDefined()
     for (const key of ['coo-pending-launch-R2', 'coo-pending-attach-R2']) expect(await pane.find({ key }), `${surface} ${key}`).toBeUndefined()
     await pane.unmount()
   }
   for (const [key, re] of [['coo-pending-later-R2', /passe la chose à reprendre R2 au statut « plus tard », sans rien changer d'autre/], ['coo-pending-drop-R2', /écarter la chose à reprendre R2\. Demande-moi d'abord ma raison/]] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+    await pane.press({ key: 'coo-page-pending' })
     await pane.press({ key })
     await pane.unmount()
     await settle(clock, 1)
@@ -337,7 +345,9 @@ test('« À reprendre » dans la vue : une section qui n’a que des entrées ra
   await openCoo($, clock)
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await pane.find({ type: 'Text', text: /Idées · À reprendre · 1/ })).toBeDefined()
+  await pane.press({ key: 'coo-page-pending' })
+  expect(await pane.find({ type: 'Text', text: /^À reprendre · 1$/ })).toBeDefined()
+  await pane.press({ key: 'coo-pending-open-R2' })
   // La clé se compose à l'exécution : écrite d'un bloc derrière « key: », gitleaks la prend pour une clé d'API.
   expect(await pane.find({ key: ['coo-pending-later', 'R2'].join('-') })).toBeDefined()
   await pane.unmount()
@@ -420,12 +430,14 @@ test('le relevé d’une mission close nomme « Entrées triées » seulement qu
   const base: CooGlean = { id: 'm1', title: 'Tri', reports: [], untaken: [] }
   const bare = line(base)
   expect(bare).toMatch(/^Closed mission « Tri » \(mission id « m1 »\) is not gleaned yet: read the « Pistes » sections/)
-  expect(bare.endsWith('then send {"coordinate": {"gleaned": ["<mission id>"]}}.')).toBe(true)
+  // Le relevé seul : écrire les entrées « à décider », envoyer la mission relevée, puis le dire en une ligne ; jamais montrer d'abord.
+  expect(bare.endsWith('; glean it yourself, without showing anything first: add what was not declared yet to « À reprendre » as new « à décider » entries with their source; then, unless what follows says to wait, send {"coordinate": {"gleaned": ["<mission id>"]}} and tell the user in one line what you added (nothing to add: send it all the same and say so in one line).')).toBe(true)
+  expect(bare).not.toMatch(/show the user/)
   expect(bare).not.toMatch(/Entrées triées/)
   const report = '/h/.claude/flow-board/rapports/m1.md'
   const validated = line({ ...base, report, reportValidated: true, reportRound: '1.0.5' })
-  expect(validated.startsWith(bare.slice(0, bare.indexOf('; show the user')))).toBe(true)
-  expect(validated).toMatch(/then send \{"coordinate": \{"gleaned": \["<mission id>"\]\}\}\. Before sending « gleaned »: its own report is validated: also read its section « Entrées triées » \(absent or « Rien\. »: nothing changes; a file whose first line « <!-- flow-board report round … --> » does not carry the validated round « 1\.0\.5 » is not the validated version: nothing changes; write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated\) and update only the « À reprendre » entries at « rattachée à » this mission's title \(each « · » of it written « - »\), as section « Les choses à reprendre » of your instructions says/)
+  expect(validated.startsWith(bare.slice(0, bare.indexOf('; glean it yourself')))).toBe(true)
+  expect(validated).toMatch(/say so in one line\)\. Before sending « gleaned »: its own report is validated: also read its section « Entrées triées » \(absent or « Rien\. »: nothing changes; a file whose first line « <!-- flow-board report round … --> » does not carry the validated round « 1\.0\.5 » is not the validated version: nothing changes; write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated\) and update only the « À reprendre » entries at « rattachée à » this mission's title \(each « · » of it written « - »\), as section « Les choses à reprendre » of your instructions says/)
   expect(validated).toMatch(/write « faite : … » for an entry said done; propose « écartée : <raison> » or « à décider » and write them only with the user's agreement; every « · » of a title or a reason put in a state written « - »\)/)
   expect(validated).toMatch(/send « gleaned » only once those states are written or refused by the user, and tell the user which entries stay « rattachée à »\.$/)
   // Non validé (marque absente ou fausse), ou validé sans tour lisible : aucun état ne change, et les entrées encore rattachées se disent.
@@ -492,4 +504,132 @@ test('le relevé d’une mission close relit la validation de son compte rendu :
   }
   expect(lineOf('Tri · double')).toMatch(/another mission of this project has the same title/)
   expect(lineOf('Tri · double')).not.toMatch(/write « faite : … »/)
+})
+
+// ─── La page « À reprendre » : une ligne par entrée, le détail au clic ─────
+
+/** Les clés des lignes d'entrées « À reprendre » montrées, dans l'ordre (sans leurs lignes de détail). */
+const entryKeys = async (pane: any): Promise<string[]> =>
+  ((await pane.findAll({ type: 'Box' })) as any[]).map(b => String(b.props.key ?? b.key ?? '')).filter(k => /^coo-pending-R\d+$/.test(k))
+
+/** Une entrée « à décider » de la feuille de route : son numéro et sa date (jour de novembre). */
+const entry = (n: number, day: number, status = 'à décider') => `- [R${n}] ${status} · 2026-11-${String(day).padStart(2, '0')} · boîte aabc1234, ticket ${n} · Chose à reprendre numéro ${n}`
+
+/** La clé d'un élément d'une entrée « À reprendre » (`pendingKey('launch', 'R1')` : « coo-pending-launch-R1 »), construite plutôt qu'écrite en littéral, que gitleaks prenait pour une clé d'API. */
+const pendingKey = (...parts: string[]): string => ['coo-pending', ...parts].join('-')
+
+const pendingPage = async ($: any, on: any, lines: string[]) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  w.files[ROADMAP] = roadmapWith(lines)
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await pane.press({ key: 'coo-page-pending' })
+  return { clock, w, pane }
+}
+
+test('« À reprendre » : les plus récentes d’abord (date, puis numéro), 20 décrites, « ▸ tout voir (N) » puis « ▾ réduire »', { timeoutMs: 30000 }, async ($, on) => {
+  // 23 entrées : R1 à R23, deux par jour sauf la dernière ; R5 plus récente que son numéro ne le dit.
+  const lines = Array.from({ length: 23 }, (_, i) => entry(i + 1, i === 4 ? 28 : 1 + Math.floor(i / 2)))
+  const { pane } = await pendingPage($, on, lines)
+  const shown = await entryKeys(pane)
+  expect(shown).toHaveLength(20)
+  expect(shown.slice(0, 4)).toEqual(['coo-pending-R5', 'coo-pending-R23', 'coo-pending-R22', 'coo-pending-R21'])
+  const all = await pane.find({ key: 'coo-pendings-all' })
+  expect(String(all?.props.label).replace(/\s/g, ' ')).toBe('▸ tout voir (3)')
+  expect(all?.props.plain).toBe(true)
+  await pane.press({ key: 'coo-pendings-all' })
+  expect(await entryKeys(pane)).toHaveLength(23)
+  expect(String((await pane.find({ key: 'coo-pendings-all' }))?.props.label).replace(/\s/g, ' ')).toBe('▾ réduire')
+  await pane.press({ key: 'coo-pendings-all' })
+  expect(await entryKeys(pane)).toHaveLength(20)
+  await pane.unmount()
+})
+
+test('« À reprendre » : ligne repliée puis dépliée (texte complet, provenance, quatre boutons, « ▶ Lancer » coloré), une seule entrée dépliée à la fois', { timeoutMs: 30000 }, async ($, on) => {
+  const long = `${'Un texte très long '.repeat(6)}qui se termine ici`
+  const { pane } = await pendingPage($, on, [`- [R1] à décider · 2026-11-02 · boîte aabc1234, ticket 3 · ${long}`, entry(2, 3)])
+  const head = `${long.slice(0, 80)}…`
+  expect(await pane.find({ type: 'Text', text: head }), 'head').toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'R1 · 02/11' }), 'dim').toBeDefined()
+  expect(String((await pane.find({ key: 'coo-pending-open-R1' }))?.props.label)).toBe('▸')
+  expect(await pane.find({ key: pendingKey('launch', 'R1') })).toBeUndefined()
+  await pane.press({ key: 'coo-pending-open-R1' })
+  expect(String((await pane.find({ key: 'coo-pending-open-R1' }))?.props.label)).toBe('▾')
+  expect(await pane.find({ type: 'Text', text: long }), 'long').toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'boîte aabc1234, ticket 3' }), 'from').toBeDefined()
+  for (const key of ['coo-pending-launch-R1', 'coo-pending-attach-R1', 'coo-pending-later-R1', 'coo-pending-drop-R1']) expect(await pane.find({ key }), key).toBeDefined()
+  expect((await pane.find({ key: pendingKey('launch', 'R1') }))?.props.variant).toBe('primary')
+  // Déplier R2 replie R1.
+  await pane.press({ key: 'coo-pending-open-R2' })
+  expect(await pane.find({ key: pendingKey('launch', 'R1') })).toBeUndefined()
+  expect(await pane.find({ key: pendingKey('launch', 'R2') })).toBeDefined()
+  await pane.unmount()
+})
+
+test('« À reprendre » : une entrée dépliée qui quitte la liste ne laisse rien d’ouvert', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, w, pane } = await pendingPage($, on, [entry(1, 2), entry(2, 3)])
+  await pane.press({ key: 'coo-pending-open-R1' })
+  expect(await pane.find({ key: 'coo-pending-R1-text' })).toBeDefined()
+  await pane.unmount()
+  // Le COO écarte R1 : la feuille de route relue ne l'a plus parmi les ouvertes.
+  w.files[ROADMAP] = roadmapWith([entry(1, 2, 'écartée : doublon'), entry(2, 3)])
+  await settle(clock, 6)
+  const again = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await again.find({ key: 'coo-pending-R1' })).toBeUndefined()
+  expect(((await again.findAll({ type: 'Box' })) as any[]).some(b => /-text$|-from$/.test(String(b.props.key ?? b.key ?? '')))).toBe(false)
+  expect(await again.find({ key: pendingKey('launch', 'R2') })).toBeUndefined()
+  await again.unmount()
+})
+
+test('« À reprendre » : le bloc « Plus tard · N » est replié ; « ▸ voir les N » déplie ses entrées, sans le bouton « Plus tard »', { timeoutMs: 30000 }, async ($, on) => {
+  const { pane } = await pendingPage($, on, [entry(1, 2), entry(2, 3, 'plus tard'), entry(3, 4, 'plus tard')])
+  expect(await pane.find({ type: 'Text', text: /^À reprendre · 1$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /^Plus tard · 2$/ })).toBeDefined()
+  expect(await pane.find({ key: 'coo-pending-R2' })).toBeUndefined()
+  const toggle = await pane.find({ key: 'coo-later-open' })
+  expect(String(toggle?.props.label).replace(/\s/g, ' ')).toBe('▸ voir les 2')
+  expect(toggle?.props.plain).toBe(true)
+  await pane.press({ key: 'coo-later-open' })
+  expect(await entryKeys(pane)).toEqual(['coo-pending-R1', 'coo-pending-R3', 'coo-pending-R2'])
+  await pane.press({ key: 'coo-pending-open-R3' })
+  for (const key of ['coo-pending-launch-R3', 'coo-pending-attach-R3', 'coo-pending-drop-R3']) expect(await pane.find({ key }), key).toBeDefined()
+  expect(await pane.find({ key: pendingKey('later', 'R3') })).toBeUndefined()
+  await pane.unmount()
+})
+
+test('« À reprendre » : déplier une entrée, tout voir et voir les « plus tard » marchent pendant un tour de Claude ; les boutons de l’entrée gardent leur garde', { timeoutMs: 30000 }, async ($, on) => {
+  on('turn.start', (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  const lines = [...Array.from({ length: 21 }, (_, i) => entry(i + 1, 1 + Math.floor(i / 2))), entry(30, 25, 'plus tard')]
+  const { w, pane } = await pendingPage($, on, lines)
+  await $.turn.start({ turnId: 't1', text: 'un tour' } as any)
+  await pane.press({ key: 'coo-pending-open-R21' })
+  expect(await pane.find({ key: 'coo-pending-drop-R21' })).toBeDefined()
+  await pane.press({ key: 'coo-pendings-all' })
+  expect(await entryKeys(pane)).toHaveLength(21)
+  await pane.press({ key: 'coo-later-open' })
+  expect(await pane.find({ key: pendingKey('R30') })).toBeDefined()
+  // Un bouton d'action, lui, attend la fin du tour : rien n'est demandé au COO.
+  const before = w.sent.length
+  await pane.press({ key: 'coo-pending-drop-R21' })
+  expect(w.sent.length).toBe(before)
+  await pane.unmount()
+})
+
+test('« À reprendre » : une entrée dépliée dont le statut change (passée « plus tard ») revient repliée dans son nouveau bloc', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, w, pane } = await pendingPage($, on, [entry(1, 2), entry(2, 3)])
+  await pane.press({ key: 'coo-pending-open-R1' })
+  expect(await pane.find({ key: 'coo-pending-R1-text' })).toBeDefined()
+  await pane.unmount()
+  // Le COO passe R1 à « plus tard » : la feuille de route relue la range dans le bloc « Plus tard ».
+  w.files[ROADMAP] = roadmapWith([entry(1, 2, 'plus tard'), entry(2, 3)])
+  await settle(clock, 6)
+  const again = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await again.press({ key: 'coo-later-open' })
+  expect(await again.find({ key: 'coo-pending-R1' })).toBeDefined()
+  expect(String((await again.find({ key: 'coo-pending-open-R1' }))?.props.label)).toBe('▸')
+  expect(await again.find({ key: 'coo-pending-R1-text' })).toBeUndefined()
+  await again.unmount()
 })

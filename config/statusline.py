@@ -13,10 +13,24 @@ The 5-hour quota shows only from 1 % used. The Ultra plan has no 5-hour limit:
 Claude Code then omits the window or reports it near 0 %, and neither the payload nor
 ~/.claude.json names an Ultra plan (checked on Claude Code 2.1.316). Pro and
 Max, which keep the limit, see it again as soon as it reaches 1 %.
+
+model (effort) is what the main-thread request in flight, or the last one,
+really used when the flow-board mod rewrote it (a framing sent on Fable 5.2
+medium from an Opus 5.5 high session): the mod records it in its session
+registry, ~/.claude/flow-board/agents/<session>.json, under main.sent, with
+the session setting it was sent under, as the request starts. It shows only
+while the payload's model.id and effort.level are still that setting, the
+model name only when it differs from the session's or the payload has no
+display name (the display name, such as "Opus 5.5 (1M context)", stays
+otherwise); a /model or /effort typed
+since (the mod then records the new setting without an effort), an
+unreadable or missing record, an effort that is not a known level, or a
+record of another session shows the session setting, as before.
 """
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -130,6 +144,53 @@ def experiment(model_id):
     return f"\033[2mexp:none{RESET}"
 
 
+def model_name(model_id):
+    """Display name of a model id: "Fable 5.2" for claude-fable-5-2 (a dated or
+    [1m] suffix left out) and for the mod's "fable" alias, "Opus 5.5" for the
+    mod's "opus" alias (its return to Opus after the framing; OPUS_APP_ID of
+    flow-board's effort.ts, to update with it); None otherwise."""
+    if model_id == "fable":
+        return "Fable 5.2"
+    if model_id == "opus":
+        return "Opus 5.5"
+    m = re.match(r"^claude-([a-z]+)-(\d{1,2})-(\d{1,2})(?!\d)", model_id) if isinstance(model_id, str) else None
+    return f"{m.group(1).capitalize()} {m.group(2)}.{m.group(3)}" if m else None
+
+
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def sent_setting(data):
+    """(model, effort) of the last main-thread request as flow-board sent it,
+    or None: no session id, no readable record of this session, or a record
+    taken under another setting than the payload's (see the module docstring)."""
+    sid = data.get("session_id")
+    if not isinstance(sid, str) or not sid:
+        return None
+    slug = re.sub(r"[^a-z0-9_-]+", "-", sid.lower()).strip("-")
+    if not slug:
+        return None
+    path = os.path.join(os.path.expanduser("~"), ".claude", "flow-board", "agents", f"{slug}.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            reg = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(reg, dict) or reg.get("session") != sid:
+        return None
+    sent = dig(reg, ["main", "sent"])
+    session = sent.get("session") if isinstance(sent, dict) else None
+    if not isinstance(session, dict):
+        return None
+    if session.get("model") != dig(data, ["model", "id"]) or session.get("effort") != dig(data, ["effort", "level"]):
+        return None
+    name = model_name(sent.get("model"))
+    effort = sent.get("effort")
+    if name is None or effort not in EFFORT_LEVELS:
+        return None
+    return name, effort
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -143,6 +204,13 @@ def main():
     if model.startswith("Claude "):
         model = model[len("Claude "):]
     effort = dig(data, ["effort", "level"])
+    sent = sent_setting(data)
+    if sent is not None:
+        # The name only when another model was sent: an unchanged one keeps the
+        # payload's display name ("Opus 5.5 (1M context)"); the effort apart.
+        if not model or sent[0] != model_name(dig(data, ["model", "id"])):
+            model = sent[0]
+        effort = sent[1]
     if model and effort:
         model = f"{model} ({effort})"
 

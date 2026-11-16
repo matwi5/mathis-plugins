@@ -14,6 +14,8 @@ const template = read('reference/consignes-revue.md')
 /** La consigne des relecteurs : la ligne de citation du gabarit, seul endroit de la procédure où elle est écrite (la section 7 du noyau y renvoie). */
 const consigne = template.split('\n').find(line => line.startsWith('> '))
 const register = read('hooks/register.tsx')
+/** La description et le schéma de l'outil `flow`, sortis de register.tsx. */
+const toolSchema = read('hooks/tool-schema.ts')
 
 /**
  * Le fichier de chaque section : le noyau garde celles lues à chaque ticket ; les autres sont dans des
@@ -656,7 +658,7 @@ test('un worker ne demande jamais d’envoyer "sensitive" lui-même : il corrige
 
 test('un ticket reclassé par un worker : la description de l’outil fait renvoyer "sensitive" par le manager', () => {
   // L'outil ne relaie pas "tickets" depuis un worker : au retour du groupe, le manager renvoie le ticket.
-  assert.ok(register.includes('and resend with "sensitive": true each ticket its report reclassified (a worker cannot send it)'))
+  assert.ok(toolSchema.includes('and resend with "sensitive": true each ticket its report reclassified (a worker cannot send it)'))
 })
 
 test('la passe « bogues » d’un ticket sensible cite le critère d’effort qui lui est propre, dans la méthode de sécurité', () => {

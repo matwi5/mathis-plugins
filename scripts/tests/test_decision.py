@@ -361,6 +361,24 @@ class DecisionTest(unittest.TestCase):
         self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
 
+    def test_un_titre_qui_finit_par_une_date_est_refuse_sans_rien_ecrire_ni_verrouiller(self):
+        for title, date in [("Réponses du cadrage (14/11/2026)", "14/11/2026"), ("Réponse à Q2 ( 4/1/2026 )", "4/1/2026"),
+                            ("Réponse à Q3 (4/01/2026)  ", "4/01/2026")]:
+            out = self.run_script(self.file, self.series("s.md", title, "Corps."), "-m", "x")
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("le script pose la date lui-même", out.stderr)
+            self.assertIn(f"retirer « (", out.stderr)
+            self.assertIn(date, out.stderr)
+            self.assertFalse(self.lock_path().exists())
+        self.assertEqual(self.file.read_text(encoding="utf-8"), BASE)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.base_head)
+
+    def test_une_date_ailleurs_dans_le_titre_passe(self):
+        out = self.run_script(self.file, self.series("s.md", "Réponse du 13/11/2026 à Q3", "Corps."), "-m", "x")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        today = time.strftime("%d/%m/%Y")
+        self.assertIn(f"## Série 2 — Réponse du 13/11/2026 à Q3 ({today})", self.committed())
+
     def test_un_fichier_d_un_worktree_lie_est_refuse_et_renvoie_au_clone_principal(self):
         linked, linked_head = self.linked_worktree()
         out = self.run_script(linked / PATH, self.series("s.md", "Titre", "Corps."), "-m", "x", cwd=linked)

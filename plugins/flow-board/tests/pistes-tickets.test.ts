@@ -5,7 +5,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { sameTicket } from '../hooks/basics.ts'
 import { launchKey, type LaunchRecord } from '../hooks/launch.ts'
 import { newRun } from '../hooks/model.ts'
-import { applyBoxedOps, applyPisteState, emptyWaitlist, keepsPistes, opMark, parsePistesLine, pisteMoves, pistesOf, soundPisteOp, type Piste, type PisteOp, type Waitlist } from '../hooks/pistes.ts'
+import { applyBoxedOps, applyPisteState, emptyWaitlist, keepsPistes, newPisteOpId, opMark, parsePistesLine, pisteMoves, pistesOf, soundPisteOp, viaTicketOf, chainsOf, type Piste, type PisteOp, type Waitlist } from '../hooks/pistes.ts'
 import { TOOL, openCoo, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
 
 // Les pistes suivent leurs tickets. Invariant de la liste d'attente : « Une écriture d'une rétro ou du COO
@@ -101,7 +101,11 @@ test('les états suivent le lot : groupe parti, groupe revenu le ticket ouvert, 
   const running = [piste('retroA/p1', { state: 'running', mission: MISSION, group: 'A' })]
   expect(pisteMoves(running, { ...base, tickets: [{ id: '01', status: 'doing' }], groups: groups(false) }).moves).toEqual([{ piste: 'retroA/p1', state: 'ticket', group: 'A' }])
   expect(pisteMoves(running, { ...base, tickets: [{ id: '01', status: 'done' }], groups: groups(false) }).moves).toEqual([{ piste: 'retroA/p1', state: 'done', group: 'A' }])
-  expect(pisteMoves([piste('retroA/p1')], { ...base, tickets: [{ id: '01', status: 'done' }], groups: groups(false) }).moves).toEqual([{ piste: 'retroA/p1', state: 'ticket', group: 'A' }])
+  // Validée, ticket fait : toute la chaîne en une fois, en ticket puis faite.
+  expect(pisteMoves([piste('retroA/p1')], { ...base, tickets: [{ id: '01', status: 'done' }], groups: groups(false) }).moves).toEqual([
+    { piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'done', toGroup: 'A' },
+    { piste: 'retroA/p1', state: 'done', group: 'A' },
+  ])
   // Ticket retiré : la piste en ticket redevient validée, seulement sur des fichiers tous relus ; une piste en exécution attend.
   expect(pisteMoves(inTicket, { ...base, tickets: [], groups: groups(false) }).moves).toEqual([{ piste: 'retroA/p1', state: 'validated' }])
   expect(pisteMoves(inTicket, { ...base, tickets: [], groups: groups(false), isComplete: false }).moves).toEqual([])
@@ -113,11 +117,152 @@ test('les états suivent le lot : groupe parti, groupe revenu le ticket ouvert, 
   expect(twice.moves).toEqual([{ piste: 'retroA/p1', state: 'ticket', group: 'A' }])
   expect(twice.warnings).toEqual(['ticket 02: piste retroA/p1 is already named by ticket 01, which keeps it'])
 
-  // En exécution dans un autre groupe : d'abord en ticket.
-  expect(pisteMoves(running, { ...base, tickets: [{ id: '01', status: 'doing' }], groups: [{ id: 'A', tickets: [], isOut: false }, { id: 'B', tickets: ['01'], isOut: true }] }).moves).toEqual([{ piste: 'retroA/p1', state: 'ticket', group: 'B' }])
-  // En exécution, ticket retiré : rien tant que le groupe travaille ; revenu, la piste repasse en ticket.
+  // En exécution dans un autre groupe : d'abord en ticket, puis en exécution dans le nouveau, en une fois.
+  expect(pisteMoves(running, { ...base, tickets: [{ id: '01', status: 'doing' }], groups: [{ id: 'A', tickets: [], isOut: false }, { id: 'B', tickets: ['01'], isOut: true }] }).moves).toEqual([
+    { piste: 'retroA/p1', state: 'ticket', group: 'B', to: 'running', toGroup: 'B' },
+    { piste: 'retroA/p1', state: 'running', group: 'B' },
+  ])
+  // En exécution, ticket retiré : rien tant que le groupe travaille ; revenu, la piste repasse en ticket puis redevient validée, en une fois.
   expect(pisteMoves(running, { ...base, tickets: [], groups: groups(true) }).moves).toEqual([])
-  expect(pisteMoves(running, { ...base, tickets: [], groups: groups(false) }).moves).toEqual([{ piste: 'retroA/p1', state: 'ticket', group: 'A' }])
+  expect(pisteMoves(running, { ...base, tickets: [], groups: groups(false) }).moves).toEqual([
+    { piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'validated' },
+    { piste: 'retroA/p1', state: 'validated' },
+  ])
+})
+
+// ─── La chaîne en une fois ─────────────────────────────────────
+
+/** Les pas d'une chaîne en opérations de la boîte de `sM`, comme le mod les dépose : la même date, des ids qui suivent l'ordre. */
+const boxed = (moves: readonly { piste: string; state: any; group?: string; to?: any; toGroup?: string }[], at: number) =>
+  moves.map((m, i) => ({ op: { id: newPisteOpId(at + i, 0.5), op: 'state' as const, piste: m.piste, by: MISSION, at, state: m.state, ...(m.group !== undefined ? { group: m.group } : {}), ...(m.to !== undefined ? { to: m.to } : {}), ...(m.toGroup !== undefined ? { toGroup: m.toGroup } : {}) }, session: 'sM', by: MISSION, card: CARD }))
+
+test('la chaîne entière jusqu’à l’état visé : validée vers faite, validée vers en exécution, en exécution dans un autre groupe, en exécution retirée du lot', () => {
+  const links = [{ ticket: '01', line: parsePistesLine('Pistes : retroA/p1') }]
+  const base = { card: CARD, mission: MISSION, links, isComplete: true, sameTicket }
+  const out = (isOut: boolean) => [{ id: 'A', tickets: ['01'], isOut }]
+  const cases: { name: string; from: Piste; tickets: { id: string; status: string }[]; groups: { id: string; tickets: string[]; isOut: boolean }[]; end: Partial<Piste> }[] = [
+    { name: 'validée vers faite', from: piste('retroA/p1'), tickets: [{ id: '01', status: 'done' }], groups: out(false), end: { state: 'done', mission: MISSION, group: 'A' } },
+    { name: 'validée vers en exécution', from: piste('retroA/p1'), tickets: [{ id: '01', status: 'doing' }], groups: out(true), end: { state: 'running', mission: MISSION, group: 'A' } },
+    {
+      name: 'en exécution dans un autre groupe',
+      from: piste('retroA/p1', { state: 'running', mission: MISSION, group: 'B' }),
+      tickets: [{ id: '01', status: 'doing' }],
+      groups: [...out(true), { id: 'B', tickets: [], isOut: false }],
+      end: { state: 'running', mission: MISSION, group: 'A' },
+    },
+    { name: 'en exécution retirée du lot, son groupe rentré', from: piste('retroA/p1', { state: 'running', mission: MISSION, group: 'A' }), tickets: [], groups: out(false), end: { state: 'validated' } },
+  ]
+  for (const c of cases) {
+    const { moves } = pisteMoves([c.from], { ...base, tickets: c.tickets, groups: c.groups })
+    // Deux pas, le premier vers en ticket : aucune piste ne saute un état.
+    expect(moves.map(m => m.state)).toEqual(['ticket', c.end.state])
+    // Le siège applique toute la chaîne dans l'ordre, dans une seule écriture de la liste.
+    const ops = boxed(moves, NOW)
+    const once = applyBoxedOps(listWith([c.from]), ops, NOW + 10)
+    expect([...once.outcomes.values()]).toEqual([{ kind: 'applied' }, { kind: 'applied' }])
+    const got = pistesOf(once.list)[0]!
+    expect({ name: c.name, state: got.state, mission: got.mission, group: got.group }).toEqual({ name: c.name, state: c.end.state, mission: c.end.mission, group: c.end.group })
+    // La garde de l'écriture admet la chaîne : la piste est passée par en ticket dans cette même écriture.
+    expect(viaTicketOf(ops, once.outcomes)).toEqual(new Set(['retroA/p1']))
+    expect(keepsPistes(listWith([c.from]), once.list, new Set(), viaTicketOf(ops, once.outcomes))).toBe(true)
+    // La même chaîne redéposée (relevé suivant avant application) : chaque pas sans effet, rien ne bouge, pas même la date.
+    const again = applyBoxedOps(once.list, boxed(moves, NOW + 5), NOW + 20)
+    expect({ name: c.name, outcomes: [...again.outcomes.values()] }).toEqual({ name: c.name, outcomes: [{ kind: 'none' }, { kind: 'none' }] })
+    expect(again.list.pistes).toEqual(once.list.pistes)
+    // Puis le relevé suivant ne calcule plus rien.
+    expect(pisteMoves([got], { ...base, tickets: c.tickets, groups: c.groups }).moves).toEqual([])
+  }
+})
+
+test('un pas refusé laisse les suivants refusés, sans rien changer d’autre ; la table des transitions ne change pas', () => {
+  const chain = [
+    { piste: 'retroA/p1', state: 'ticket' as const, group: 'A', to: 'done' as const, toGroup: 'A' },
+    { piste: 'retroA/p1', state: 'done' as const, group: 'A' },
+  ]
+  for (const from of [piste('retroA/p1', { state: 'dropped', reason: 'x' }), piste('retroA/p1', { state: 'pending' }), piste('retroA/p1', { state: 'ticket', mission: 'mautre01', group: 'A' }), piste('retroA/p1', { card: 'kautre001' })]) {
+    const out = applyBoxedOps(listWith([from]), boxed(chain, NOW), NOW + 10)
+    expect([...out.outcomes.values()].map(o => o.kind)).toEqual(['refused', 'refused'])
+    expect(out.list.pistes).toEqual([from])
+  }
+  // Un état final porté par un pas ne fait jamais sauter un état : en exécution vers faite reste permise, validée vers faite non.
+  expect(applyPisteState(listWith([piste('retroA/p1')]), { piste: 'retroA/p1', state: 'done', group: 'A', to: 'done', toGroup: 'A' }, MISSION, CARD, NOW).outcome.kind).toBe('refused')
+  expect(applyPisteState(listWith([piste('retroA/p1')]), { piste: 'retroA/p1', state: 'running', group: 'A' }, MISSION, CARD, NOW).outcome.kind).toBe('refused')
+})
+
+test('deux chaînes déposées en deux relevés, la première pas encore appliquée : seule la dernière s’applique, la première est sans effet', () => {
+  // Premier relevé : [en ticket A → en exécution A] ; second, le ticket fait : [en ticket A → faite].
+  const first = boxed([{ piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'running', toGroup: 'A' }, { piste: 'retroA/p1', state: 'running', group: 'A' }], NOW)
+  const second = boxed([{ piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'done', toGroup: 'A' }, { piste: 'retroA/p1', state: 'done', group: 'A' }], NOW + 5)
+  const out = applyBoxedOps(listWith([piste('retroA/p1')]), [...second, ...first], NOW + 10)
+  expect([...out.outcomes.values()].map(o => o.kind)).toEqual(['none', 'none', 'applied', 'applied'])
+  expect(pistesOf(out.list)[0]).toEqual(expect.objectContaining({ state: 'done', mission: MISSION, group: 'A' }))
+  // À l'inverse, le ticket rouvert entre les deux relevés : la piste finit en exécution, jamais faite.
+  const reopened = boxed([{ piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'running', toGroup: 'A' }, { piste: 'retroA/p1', state: 'running', group: 'A' }], NOW + 5)
+  const done = boxed([{ piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'done', toGroup: 'A' }, { piste: 'retroA/p1', state: 'done', group: 'A' }], NOW)
+  const back = applyBoxedOps(listWith([piste('retroA/p1')]), [...done, ...reopened], NOW + 10)
+  expect(pistesOf(back.list)[0]).toEqual(expect.objectContaining({ state: 'running', mission: MISSION, group: 'A' }))
+  // Les marques sont toutes posées : la boîte se vide ensuite.
+  expect(back.list.applied).toHaveLength(4)
+})
+
+test('une chaîne déposée dans le futur (au-delà de la minute admise) garde son ordre : ses pas ont la même date', () => {
+  const chain = boxed([{ piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'done', toGroup: 'A' }, { piste: 'retroA/p1', state: 'done', group: 'A' }], NOW + 60_000)
+  const out = applyBoxedOps(listWith([piste('retroA/p1')]), [...chain].reverse(), NOW)
+  expect([...out.outcomes.values()].map(o => o.kind)).toEqual(['applied', 'applied'])
+  expect(pistesOf(out.list)[0]!.state).toBe('done')
+  const later = boxed([{ piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'done', toGroup: 'A' }, { piste: 'retroA/p1', state: 'done', group: 'A' }], NOW + 60_001)
+  expect(pistesOf(applyBoxedOps(listWith([piste('retroA/p1')]), [...later].reverse(), NOW).list)[0]!.state).toBe('done')
+})
+
+test('un commentaire d’une autre rétro, déposé après la chaîne qui rend validée une piste en exécution : il attend le relevé suivant, sans marque, et l’écriture passe la garde', () => {
+  const from = piste('retroA/p1', { state: 'running', mission: MISSION, group: 'A' })
+  const chain = boxed([{ piste: 'retroA/p1', state: 'ticket', group: 'A', to: 'validated' }, { piste: 'retroA/p1', state: 'validated' }], NOW)
+  const comment = { op: { id: 'obbbbbbb01', op: 'comment' as const, piste: 'retroA/p1', by: 'retroB', at: NOW + 100, text: 'Encore utile ?' }, session: 'sB', by: 'retroB' }
+  const ops = [...chain, comment]
+  const first = applyBoxedOps(listWith([from]), ops, NOW + 200)
+  expect(first.outcomes.has(opMark('sB', 'obbbbbbb01'))).toBe(false)
+  expect(pistesOf(first.list)[0]!.state).toBe('validated')
+  expect(keepsPistes(listWith([from]), first.list, new Set(), viaTicketOf(ops, first.outcomes))).toBe(true)
+  // Au relevé suivant, la piste n'est plus gelée : le commentaire s'applique.
+  const second = applyBoxedOps(first.list, ops, NOW + 5200)
+  expect(second.outcomes.get(opMark('sB', 'obbbbbbb01'))).toEqual({ kind: 'applied' })
+  expect(pistesOf(second.list)[0]!.comments.map(c => c.text)).toEqual(['Encore utile ?'])
+  // Un commentaire sur une piste encore en exécution reste refusé, comme avant.
+  const still = applyBoxedOps(listWith([from]), [comment], NOW + 200)
+  expect(still.outcomes.get(opMark('sB', 'obbbbbbb01'))!.kind).toBe('refused')
+  // De même une modification, un écart, ou un ajout qui reprend l'id de la piste : chacun attend, et l'écriture passe la garde.
+  const others: PisteOp[] = [
+    { id: 'obbbbbbb02', op: 'edit', piste: 'retroA/p1', by: 'retroB', at: NOW + 100, text: 'Autre texte' },
+    { id: 'obbbbbbb03', op: 'drop', piste: 'retroA/p1', by: 'coo', at: NOW + 100, reason: 'caduque' },
+    { id: 'obbbbbbb04', op: 'add', piste: 'retroA/p1', by: 'retroA', at: NOW + 100, text: 'Nouveau texte', files: [] },
+  ]
+  for (const o of others) {
+    const all = [...chain, { op: o, session: 'sB', by: o.by }]
+    const got = applyBoxedOps(listWith([from]), all, NOW + 200)
+    expect({ op: o.op, waits: !got.outcomes.has(opMark('sB', o.id)) }).toEqual({ op: o.op, waits: true })
+    expect({ op: o.op, kept: keepsPistes(listWith([from]), got.list, new Set(), viaTicketOf(all, got.outcomes)) }).toEqual({ op: o.op, kept: true })
+  }
+})
+
+test('les chaînes d’une boîte : un pas qui porte l’état final en commence toujours une ; une chaîne inachevée suivie d’une chaîne entière ne les fond pas', () => {
+  const s = (piste: string, state: string, to?: string) => ({ piste, state, ...(to !== undefined ? { to } : {}) })
+  const unfinished = s('p1', 'ticket', 'done')
+  const full = [s('p1', 'ticket', 'done'), s('p1', 'done')]
+  const got = chainsOf([unfinished, ...full, s('p2', 'validated')])
+  expect(got.last.get('p1')).toEqual(full)
+  expect(got.last.get('p2')).toEqual([s('p2', 'validated')])
+  expect(got.earlier).toEqual([unfinished])
+  // Deux pas seuls à la suite : chacun sa chaîne, le dernier l'emporte.
+  expect(chainsOf([s('p1', 'ticket'), s('p1', 'running')]).last.get('p1')).toEqual([s('p1', 'running')])
+})
+
+test('l’état final d’un pas, relu de la boîte : hors forme, l’opération est ignorée ; absent, le comportement d’avant', () => {
+  const op = { id: 'oaaaaaa01', op: 'state', piste: 'retroA/p1', by: MISSION, at: NOW, state: 'ticket', group: 'A' }
+  expect(soundPisteOp({ ...op, to: 'done', toGroup: 'A' })).toEqual({ ...op, to: 'done', toGroup: 'A' })
+  expect(soundPisteOp({ ...op, to: 'pending' })).toBeNull()
+  expect(soundPisteOp({ ...op, toGroup: 'A' })).toBeNull()
+  expect(soundPisteOp({ ...op, to: 'done', toGroup: '../x' })).toBeNull()
+  expect(soundPisteOp(op)).toEqual(op)
 })
 
 // ─── Le mod ───────────────────────────────────────────────────────────────
@@ -162,6 +307,104 @@ test('la mission « Pistes de rétro » dépose « en ticket » pour la piste qu
   expect(said).toMatch(/Pistes lines that linked nothing .*ticket 02: its . Pistes : . line is still the template/)
   // Dit une fois.
   expect(await call($, { note: 'encore' })).not.toMatch(/Pistes lines that linked nothing/)
+})
+
+test('la mission « Pistes de rétro » dépose toute la chaîne d’une piste en une fois, dans l’ordre, dans sa boîte', { timeoutMs: 40000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  putList(w, listWith([piste('retroA/p1')]))
+  w.files['travail/pistes-de-retro/issues/01-borner.md'] = '# 01: Borner\n\n**Status:** done\n\nPistes : retroA/p1\n'
+  w.files['travail/pistes-de-retro/issues/02-autre.md'] = '# 02: Autre\n\n**Status:** ready-for-agent\n\nPistes : <ids>\n'
+  const mission = await pistesMission($, w, clock)
+  await call($, { tickets: [{ id: '01', name: 'Borner', status: 'done' }, { id: '02', name: 'Autre' }], groups: [{ id: 'A', name: 'Un', tickets: ['01'] }, { id: 'B', name: 'Deux', tickets: ['02'] }] })
+  await settle(clock, 12)
+  const ops = boxOf(w, 'session-A')!.ops
+  expect(ops).toEqual([
+    expect.objectContaining({ op: 'state', piste: 'retroA/p1', by: mission, state: 'ticket', group: 'A', to: 'done', toGroup: 'A' }),
+    expect.objectContaining({ op: 'state', piste: 'retroA/p1', by: mission, state: 'done', group: 'A' }),
+  ])
+  expect(ops[1].to).toBeUndefined()
+  expect(ops[0].at).toBe(ops[1].at)
+  expect(ops[0].id < ops[1].id).toBe(true)
+  // Relue telle quelle et appliquée par le siège : faite, en une écriture.
+  const out = applyBoxedOps(listWith([piste('retroA/p1')]), ops.map(o => ({ op: soundPisteOp(o)!, session: 'session-A', by: mission, card: CARD })), NOW + 60_000)
+  expect(pistesOf(out.list)[0]).toEqual(expect.objectContaining({ state: 'done', mission, group: 'A' }))
+})
+
+test('une chaîne vers « faite » en attente que la mission ne veut plus (le ticket ne nomme plus la piste) : un pas vers l’état d’aujourd’hui la remplace, la piste ne devient jamais « faite »', { timeoutMs: 40000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  putList(w, listWith([piste('retroA/p1'), piste('retroA/p2')]))
+  w.files['travail/pistes-de-retro/issues/01-borner.md'] = '# 01: Borner\n\n**Status:** done\n\nPistes : retroA/p1\n'
+  w.files['travail/pistes-de-retro/issues/02-autre.md'] = '# 02: Autre\n\n**Status:** ready-for-agent\n\nPistes : retroA/p2\n'
+  const mission = await pistesMission($, w, clock)
+  await call($, { tickets: [{ id: '01', name: 'Borner', status: 'done' }, { id: '02', name: 'Autre' }], groups: [{ id: 'A', name: 'Un', tickets: ['01'] }, { id: 'B', name: 'Deux', tickets: ['02'] }] })
+  await settle(clock, 12)
+  expect(boxOf(w, 'session-A')!.ops.filter(o => o.piste === 'retroA/p1').map(o => o.state)).toEqual(['ticket', 'done'])
+  // Avant que le COO l'applique, le premier ticket ne nomme plus la piste : la mission ne veut plus rien pour elle.
+  w.files['travail/pistes-de-retro/issues/01-borner.md'] = '# 01: Borner\n\n**Status:** done\n\nPistes : retroA/p2\n'
+  await settle(clock, 12)
+  const ops = boxOf(w, 'session-A')!.ops
+  const p1 = ops.filter(o => o.piste === 'retroA/p1')
+  expect(p1.map(o => o.state)).toEqual(['ticket', 'done', 'validated'])
+  expect(p1[2].to).toBeUndefined()
+  // Le COO applique la boîte : la dernière chaîne seule, sans effet ; p1 reste « validée ».
+  const out = applyBoxedOps(listWith([piste('retroA/p1'), piste('retroA/p2')]), ops.map(o => ({ op: soundPisteOp(o)!, session: 'session-A', by: mission, card: CARD })), NOW + 60_000)
+  expect(pistesOf(out.list)[0]!.state).toBe('validated')
+  // Rejoué : rien de plus n'est déposé.
+  await settle(clock, 12)
+  expect(boxOf(w, 'session-A')!.ops).toHaveLength(ops.length)
+})
+test('un premier pas que le COO a refusé retient toute la chaîne : rien n’est redéposé tant que la piste garde son état', { timeoutMs: 40000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  const refusedOp = { id: 'oaaaaaa01', op: 'state', piste: 'retroA/p1', by: MISSION, at: NOW - 500, state: 'ticket', group: 'A', to: 'done', toGroup: 'A' }
+  const mark = opMark('session-A', refusedOp.id)
+  putList(w, { ...listWith([piste('retroA/p1'), piste('retroA/p2')]), applied: [mark], refused: [{ op: mark, piste: 'retroA/p1', by: MISSION, why: 'x', at: NOW - 400 }] })
+  const box = { v: 1, root: '', session: 'session-A', ops: [refusedOp] }
+  w.files[`flow-board/pistes/boites/${PROJECT}.session-A.json`] = JSON.stringify(box)
+  w.mem['pistes-boite::session-A'] = box
+  w.files['travail/pistes-de-retro/issues/01-borner.md'] = '# 01: Borner\n\n**Status:** done\n\nPistes : retroA/p1, retroA/p2\n'
+  w.files['travail/pistes-de-retro/issues/02-autre.md'] = '# 02: Autre\n\n**Status:** ready-for-agent\n\nPistes : <ids>\n'
+  const mission = await pistesMission($, w, clock)
+  await call($, { tickets: [{ id: '01', name: 'Borner', status: 'done' }, { id: '02', name: 'Autre' }], groups: [{ id: 'A', name: 'Un', tickets: ['01'] }, { id: 'B', name: 'Deux', tickets: ['02'] }] })
+  await settle(clock, 12)
+  // La chaîne de p2, non retenue, part (le mod a bien relu) ; pour p1, ni le premier pas, ni « faite » seul, qui serait refusé pour rien.
+  expect(boxOf(w, 'session-A')!.ops).toEqual([
+    refusedOp,
+    expect.objectContaining({ piste: 'retroA/p2', by: mission, state: 'ticket', group: 'A', to: 'done', toGroup: 'A' }),
+    expect.objectContaining({ piste: 'retroA/p2', by: mission, state: 'done', group: 'A' }),
+  ])
+})
+
+test('chez le COO, une chaîne qui rend une piste en exécution à validée s’écrit en une fois, avec l’opération d’une autre discussion', { timeoutMs: 40000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  const pistesRun = { ...newRun('to-tickets', NOW - 50_000, 'Pistes de rétro'), status: 'active', owner: 'session-P', launch: { id: 'lpistes0001', card: CARD, at: NOW - 60_000, folder: 'pistes-de-retro', start: 'to-tickets', mode: 'auto' } } as any
+  const other = { ...newRun('implement', NOW - 50_000, 'Autre'), status: 'active', owner: 'session-Q' } as any
+  writeBoard(w, b => ({ ...b, runs: [pistesRun, other] }))
+  putList(w, listWith([piste('retroA/p1', { state: 'running', mission: pistesRun.id, group: 'A' }), piste('retroA/p2')]))
+  await start($)
+  await openCoo($, clock)
+  const put = (session: string, ops: unknown[]) => {
+    const box = { v: 1, root: '', session, ops }
+    w.files[`flow-board/pistes/boites/${PROJECT}.${session}.json`] = JSON.stringify(box)
+    w.mem[`pistes-boite::${session}`] = box
+  }
+  put('session-P', [
+    { id: newPisteOpId(NOW, 0.1), op: 'state', piste: 'retroA/p1', by: pistesRun.id, at: NOW, state: 'ticket', group: 'A', to: 'validated' },
+    { id: newPisteOpId(NOW + 1, 0.1), op: 'state', piste: 'retroA/p1', by: pistesRun.id, at: NOW + 1, state: 'validated' },
+  ])
+  put('session-Q', [{ id: 'oqqqqqqq1', op: 'state', piste: 'retroA/p2', by: other.id, at: NOW, state: 'ticket', group: 'A' }])
+  await settle(clock, 6)
+  const path = Object.keys(w.files).find(p => p.startsWith('/') && p.endsWith(`/flow-board/pistes/${PROJECT}.json`))
+  const list = (path ? JSON.parse(w.files[path]!) : w.mem['coo-pistes:']) as Waitlist
+  const [p1, p2] = pistesOf(list)
+  expect(p1).toEqual(expect.objectContaining({ state: 'validated', card: CARD, text: 'Texte de retroA/p1' }))
+  expect(p1!.mission).toBeUndefined()
+  expect(p2!.state).toBe('validated')
+  expect(list.applied).toHaveLength(3)
+  expect(list.refused).toEqual([expect.objectContaining({ piste: 'retroA/p2' })])
 })
 
 test('chez le COO, la transition d’une mission qui porte la carte s’applique ; d’une mission sans cette carte, refusée ; rien ne change en silence', { timeoutMs: 40000 }, async ($, on) => {

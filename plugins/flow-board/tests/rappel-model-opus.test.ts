@@ -8,8 +8,9 @@ import type { Board, Run } from '../types'
 import { openCoo, start, world, writeBoard } from './monde-coordination.ts'
 
 // Après le cadrage, un manager resté sur Fable (un `/model fable` tapé, ou Fable modèle par défaut du poste) voit
-// « tape /model opus » au bandeau et dans la demande de lancement des groupes ; le fait se lit sur le modèle de la
-// session, relu à chaque fois.
+// « tape /model opus » au bandeau ; le fait se lit sur le modèle de la session, relu à chaque fois. Ses requêtes
+// reviennent seules sur Opus (fable-apres-cadrage.test.ts), pas les forks ni les agents sans modèle propre : la
+// demande de lancement des groupes ne le dit plus (décision de Mathis du 14/11/2026).
 
 const PLUGIN = 'flow-board'
 const TOOL = 'mcp__flow-board__flow'
@@ -130,13 +131,14 @@ test('le fait « resté sur Fable » : au suivi des groupes, pas pendant un dét
   expect(isFableStuck(grilled, 'claude-fable-5-2')).toBe(false)
 })
 
-test('le cadrage fini, la session restée sur Fable : le bandeau et la demande de lancement disent « tape /model opus », une fois', { timeoutMs: 20000 }, async ($, on) => {
+test('le cadrage fini, la session restée sur Fable : le bandeau dit « tape /model opus », la demande de lancement non', { timeoutMs: 20000 }, async ($, on) => {
   const model = { id: 'claude-fable-5-2' }
   const { filled } = engine(on, model)
   await cut($)
   expect(await bandTexts($)).toContain(WORDS)
   const text = await launchA($, filled)
-  expect(text.split(WORDS)).toHaveLength(2)
+  expect(text).toContain('Confie')
+  expect(text).not.toContain(WORDS)
 })
 
 test('dès que la session n’est plus sur Fable (/model opus tapé), ni le bandeau ni la demande ne le disent, sans attendre une requête', { timeoutMs: 20000 }, async ($, on) => {

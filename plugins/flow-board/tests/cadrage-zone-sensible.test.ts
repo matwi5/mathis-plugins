@@ -138,6 +138,11 @@ test('/to-tickets et le découpage d’une rétro relisent chaque critère d’u
     const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
     // En mode auto, la validation est sautée et déclarée : la relecture garde son moment.
     expect(text).toContain('before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant')
+    // Le premier cas à chercher : un invariant qui interdit ce qu'un critère du même ticket doit lire ou faire, et son remède.
+    expect(text).toContain("look first for an invariant that forbids what a criterion of the same ticket must read or do (« no path built from the text of an entry » against a criterion « check in the code what the entry claims »)")
+    expect(text).toContain('rewrite the invariant so that it bounds what the criterion does (the path read stays under the repository root, for example) when it is the invariant of a ticket that is only sensitive, which the session that splits wrote')
+    // L'invariant d'un ticket très sensible, fixé avec la personne, ne se réécrit pas : une question.
+    expect(text).toContain('the invariant of a very sensitive ticket, fixed with the user, is never rewritten by you: make it a question for the user now')
   }
   const retro = (await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })).text as string
   expect(retro).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back)')

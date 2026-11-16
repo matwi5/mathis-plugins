@@ -16,7 +16,7 @@
 //   (entrées « plan »), que le plan suivant validé remplace en entier.
 
 import { isTime } from './basics.ts'
-import { isGroupId, isSafeId } from './closing.ts'
+import { isGroupId, isSafeId, isSessionId } from './closing.ts'
 import { soundPlanWait, type PlanWait } from './plan-projet.ts'
 import { NIGHT_FORCE_PAIRS_MAX, isNightId } from './night.ts'
 
@@ -175,11 +175,33 @@ export type CoordNight = {
   awaited?: { run: string; group: string; on?: 'plan' }[]
 }
 
+/**
+ * Une demande de rétro, écrite au clic « Lancer » d'une carte de rétro chez le COO, quand la discussion du manager de
+ * la mission étudiée (`run`) se désigne : le lancement gardé qu'elle porte (`launch`, dans le stockage du mod) et la
+ * discussion désignée (`session`). Le mod de cette seule discussion la revérifie à l'instant, prend le lancement à son
+ * nom, puis y lance la commande de rétro ; jamais au-delà de la durée d'un lancement. Une version plus ancienne du mod
+ * ne connaît pas ce genre : elle le garde tel quel, sans l'appliquer.
+ */
+export type CoordRetro = { id: string; kind: 'retro'; run: string; at: number; launch: string; session: string }
+
+/** Les états d'une discussion de manager que le Claude du COO rend par `coordinate.discussionsClosed`. */
+export const DISCUSSION_STATES = ['closed', 'stopped', 'app', 'absent'] as const
+export type DiscussionState = (typeof DISCUSSION_STATES)[number]
+
+/**
+ * Une trace de fermeture : la discussion (`session`) de la mission archivée `run` a été traitée par le Claude du COO,
+ * avec cet état (fermée, arrêtée seulement, archivée dans l'app, absente), à la date `at`. Écrite par le seul mod du
+ * siège sur le compte rendu de son Claude ; datée de l'archivage de la mission ou après, elle retient la discussion
+ * hors de la liste des discussions à fermer (`discussionsToClose`), et ne fait jamais rien lister. Une version plus
+ * ancienne du mod ne connaît pas ce genre : elle le garde tel quel.
+ */
+export type CoordDiscussion = { id: string; kind: 'discussion'; run: string; at: number; session: string; state: DiscussionState }
+
 /** Au plus, les pistes d'une sélection. */
 export const PICK_MAX = 60
 
 /** Une entrée bien formée du fichier de coordination. */
-export type CoordEntry = CoordClose | CoordForce | CoordCopied | CoordGleaned | CoordTaken | CoordPlan | CoordWave | CoordGesture | CoordAnswer | CoordValidate | CoordRedo | CoordInstruct | CoordContradiction | CoordCompatible | CoordPick | CoordCutAuto | CoordNight
+export type CoordEntry = CoordClose | CoordForce | CoordCopied | CoordGleaned | CoordTaken | CoordPlan | CoordWave | CoordGesture | CoordAnswer | CoordValidate | CoordRedo | CoordInstruct | CoordContradiction | CoordCompatible | CoordPick | CoordCutAuto | CoordNight | CoordRetro | CoordDiscussion
 
 /**
  * L'empreinte d'un rapport : son texte entier réduit à un code (deux sommes de 32 bits et la longueur, séparées) ;
@@ -294,6 +316,9 @@ export const soundEntry = (raw: unknown): CoordEntry | null => {
   }
   if (e.kind === 'cutAuto') return e.by === 'click' || e.by === 'coo' ? { id: e.id, kind: 'cutAuto', run: e.run, at: e.at, by: e.by } : null
   if (e.kind === 'night') return soundNightEntry(e as Record<string, unknown> & { id: string; run: string; at: number })
+  // L'id du lancement a la forme d'`isLaunchId` (launch.ts, qui importe ce module) ; la discussion, celle d'un id de session.
+  if (e.kind === 'retro') return typeof e.launch === 'string' && /^l[a-z0-9]{8,24}$/.test(e.launch) && isSessionId(e.session) ? { id: e.id, kind: 'retro', run: e.run, at: e.at, launch: e.launch, session: e.session } : null
+  if (e.kind === 'discussion') return isSessionId(e.session) && DISCUSSION_STATES.includes(e.state as DiscussionState) ? { id: e.id, kind: 'discussion', run: e.run, at: e.at, session: e.session, state: e.state as DiscussionState } : null
   if (e.kind === 'validate') return isReportPrint(e.print) ? { id: e.id, kind: 'validate', run: e.run, at: e.at, print: e.print } : null
   if (e.kind === 'redo') return isDecisionsPath(e.file) && isSeries(e.series) && isRound(e.round) ? { id: e.id, kind: 'redo', run: e.run, at: e.at, file: e.file, series: e.series, round: e.round } : null
   if (e.kind === 'instruct') return isDecisionsPath(e.file) && isSeries(e.series) && (e.origin === 'user' || e.origin === 'coo') ? { id: e.id, kind: 'instruct', run: e.run, at: e.at, file: e.file, series: e.series, origin: e.origin } : null

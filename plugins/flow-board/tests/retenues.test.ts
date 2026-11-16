@@ -332,7 +332,7 @@ test('le COO montre qui attend qui, et son « ⇥ Forcer » écrit une entrée q
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await texts(pane), surface).toMatch(/groupe.A de « Retenue » attend groupe.A de « Occupée »/)
-    if (surface === 'desktop') await pane.press({ key: 'coo-force-0' })
+    if (surface === 'desktop') await pane.press({ key: `coo-force-${[held.id, 'A', busy.id, 'A', 'file'].join('~')}` })
     await pane.unmount()
   }
   await settle(clock, 2)

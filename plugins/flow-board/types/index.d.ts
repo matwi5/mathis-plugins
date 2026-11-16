@@ -6,6 +6,8 @@
 
 /** Actif, en pause (une autre mission a pris la main) ou terminé. */
 export type FlowStatus = 'active' | 'paused' | 'done'
+/** Le chemin d'un archivage qui vaut accord pour fermer la discussion de la mission (`Run.archivedBy`). */
+export type ArchivePath = 'clic' | 'retro'
 
 export type PhaseStatus = 'pending' | 'active' | 'done' | 'skipped'
 
@@ -480,7 +482,22 @@ export type AgentLane = {
   tokens?: AgentTokens
   /** Lignes ajoutées et retirées par ses modifications de fichiers. */
   lines?: { added: number; removed: number }
+  /**
+   * Piste du manager seulement : la dernière requête de son fil principal telle qu'elle est partie, après la
+   * réécriture du mod (`model`, le modèle qui a répondu ou celui envoyé ; `effort`, celui envoyé), le réglage de la
+   * session sous lequel elle est partie (`session`, avant réécriture) et son heure (`at`), relevée au départ de la
+   * requête et précisée à sa fin. La barre d'état la montre tant que ce réglage est encore celui qu'elle reçoit ;
+   * l'onglet Agents en montre l'effort tant qu'elle est partie sous l'effort de session relevé (`effort` ci-dessus, qui
+   * garde l'effort de la session, posé dès le départ de la requête). Un `/model`, un `/effort` ou une bascule de modèle
+   * la remplacent par un relevé de réglage, sans effort envoyé, sous le modèle de la session : la barre montre alors le
+   * réglage de la session ; l'onglet, jusqu'à la requête suivante, l'effort tapé avec `/effort <niveau>`, et aucun
+   * après un `/model` ou un `/effort` sans niveau. Seule une requête avec un effort se relève.
+   */
+  sent?: SentRequest
 }
+
+/** Une requête du fil principal telle qu'elle est partie (`AgentLane.sent`) ; `by` : la marque du processus qui l'a relevée. */
+export type SentRequest = { model: string; effort?: string; session: { model: string; effort?: string }; at: number; by?: string }
 
 /**
  * Un spécialiste du registre de la session (onglet Agents) : sans limite de nombre, gardé après
@@ -731,6 +748,14 @@ export type Run = {
   linkedAt?: number
   /** Rangé aux archives : caché de l'historique, ni repris ni proposé, jamais élagué ; se désarchive. */
   archivedAt?: number
+  /**
+   * Le chemin de l'archivage, posé dans la même écriture que `archivedAt` et effacé avec lui : `clic` pour
+   * « ✓ Archiver », « ✓ Tout archiver (n) » et « ▣ Archiver » cliqué ailleurs que dans la discussion de la mission,
+   * `retro` pour la fin d'une rétro lancée par sa carte (la mission étudiée et la rétro, `archiveRetroEnd`) ;
+   * absent pour `/flow reset` et « ▣ Archiver » dans la discussion même. Sa date égale `archivedAt` : une marque d'un autre archivage, ou hors forme, se lit comme
+   * absente (`archiveMarkOf`), et une marque absente ne vaut jamais accord pour fermer une discussion.
+   */
+  archivedBy?: { by: ArchivePath; at: number }
   /**
    * Mis de côté par la personne (`/flow pause`, « ‖ Mettre de côté ») : en pause, jamais clos, et
    * repris seulement à sa demande (« Reprendre », champ `resume`), pas au chargement d'un skill.
@@ -1102,6 +1127,14 @@ export type UiState = {
   isPromptOpen?: boolean
   /** Onglet Agents : la légende détaillée est dépliée (repliée par défaut). */
   isLegendOpen?: boolean
+  /** Vue Coordination du COO : la page choisie (`todo`, `missions`, `ideas`, `pending`, `pistes`, `settings`) ; absente ou inconnue, « À faire ». */
+  cooPage?: string
+  /** Vue Coordination du COO, page « À reprendre » : l'entrée dépliée (son id), une seule à la fois. */
+  cooOpen?: string
+  /** Vue Coordination du COO, page « À reprendre » : « ▸ tout voir », toutes les entrées et pas seulement les 20 plus récentes. */
+  cooAllPending?: boolean
+  /** Vue Coordination du COO, page « À reprendre » : le bloc « Plus tard » déplié. */
+  cooLaterOpen?: boolean
   /** Frise : les Workflow dépliés (par leur `runId`), pour la discussion. */
   openWorkflows?: string[]
 }
@@ -1133,8 +1166,10 @@ declare module 'claude-code' {
        * gardé après /reload-plugins, neuf après un redémarrage, où une date gardée avant ne vaut plus.
        */
       autoBoot: string
-      /** Les cartes de lancement que le Claude du COO a proposées dans cette discussion (`hooks/launch.ts`). */
+      /** L'ancien état des cartes : celles que le Claude du COO proposait dans cette discussion, avant la liste des cartes du projet (jamais écrit ni vidé). */
       cooCards: unknown[]
+      /** La marque « copié » de l'ancien état des cartes, posée une fois sa copie dans la liste relue (`hooks/cards-store.ts`). */
+      cooCardsCopied: boolean
       /** Les prix des modèles tirés de ccusage (Q15), relevés au plus une fois par jour. */
       agentPrices: { at: number; prices: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> } | null
     }

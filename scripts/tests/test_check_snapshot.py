@@ -197,11 +197,12 @@ class StaleSnapshotTest(unittest.TestCase):
 
     def test_une_fusion_arretee_puis_commitee_ne_dit_rien(self):
         # Une fusion arrêtée (conflit, --no-commit) se commite par le pre-commit, sans --merge : MERGE_HEAD
-        # la dit, et le conseil de défaire le commit n'est jamais donné pour elle.
+        # la dit, et le conseil de défaire le commit n'est jamais donné pour elle. (Un statut autre que
+        # « fait » : ce ticket absent de HEAD et de MERGE_HEAD serait refusé comme ticket neuf écrit fait.)
         doc = "travail/essai/issues/01-a.md"
         self.write(doc, "**Status:** en cours\n")
         self.snapshot("01", doc)
-        self.write(doc, "**Status:** fait\n")
+        self.write(doc, "**Status:** en revue\n")
         git(self.repo, "add", doc)
         merge_head = Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"))
         merge_head.write_text(git(self.main, "rev-parse", "main") + "\n", encoding="utf-8")
@@ -250,10 +251,11 @@ class StaleSnapshotTest(unittest.TestCase):
         self.assertIn("<les fichiers indexés>", warning)
 
     def test_le_hook_avertit_meme_pour_un_commit_de_documentation_seule(self):
+        # Un statut autre que « fait » : ce ticket absent de HEAD serait refusé comme ticket neuf écrit fait.
         doc = "travail/essai/issues/01-a.md"
         self.write(doc, "**Status:** en cours\n")
         self.snapshot("01", doc)
-        self.write(doc, "**Status:** fait\n")
+        self.write(doc, "**Status:** en revue\n")
         git(self.repo, "add", doc)
         with mock.patch.object(check, "log") as log:
             check.staged()

@@ -68,7 +68,7 @@ test('une opposition s’écrit pour la mission qui a décidé en second ; un su
   await settle(clock, 6)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   const shown = await texts(pane)
-  expect(shown).toMatch(/Décisions opposées sur la base de données : « Mission B » et « Mission A »/)
+  expect(shown).toMatch(/Décisions opposées sur la base de données : (M\d+\s)?« Mission B » et « Mission A »/)
   expect(shown).toMatch(/« Mission A » et « Mission B » décident tous deux sur le format des dates, compatibles/)
   await pane.unmount()
   // L'autre mission archivée avant la réponse : la question reste posée, et le COO le dit.

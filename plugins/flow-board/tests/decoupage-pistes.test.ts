@@ -4,7 +4,7 @@ import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
 import { linkSession, pickableItems } from '../hooks/link.ts'
 import { activeRun, currentPhase, isJudgmentTicket } from '../hooks/basics.ts'
 import { GROUP_ID_FORM, isGroupId } from '../hooks/closing.ts'
-import { TOOL_SCHEMA } from '../hooks/register.tsx'
+import { TOOL_SCHEMA } from '../hooks/tool-schema.ts'
 import type { Board } from '../types'
 import { withItemsLink } from './lien-pistes.ts'
 

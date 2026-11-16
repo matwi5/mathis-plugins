@@ -4,10 +4,10 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
 import { NIGHT_MS, newNightWatch, parseNightLog } from '../hooks/night.ts'
-import { relayFileSlug } from '../hooks/relay.ts'
 import { soundEntry } from '../hooks/coordination.ts'
 import type { Board, Run } from '../types'
 import { PANE, PLUGIN, TOOL, coordFile, entries, openCoo, seatOf, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
+import { relayFileSlug } from '../hooks/closing.ts'
 
 // Les gestes de nuit. Invariant : « Hors d'une surveillance allumée par Mathis et encore valide, aucun
 // geste ne part sans son clic ; pendant la surveillance, seul un geste de la liste fermée part, une seule fois, et

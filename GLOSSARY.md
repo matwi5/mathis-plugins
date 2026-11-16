@@ -103,6 +103,14 @@ _Avoid_: résumé, libellé, chapeau
 Une des parties de la vue Coordination du COO, montrée seule et choisie par une pastille en tête de l'onglet : À faire, Missions, Idées, À reprendre, Pistes, Réglages.
 _Avoid_: sous-onglet, section, écran
 
+**Carte de lancement** :
+La proposition de mission que le COO montre à l'utilisateur, avec son départ, son mode, son effort et son dossier ; elle est « prête » tant que l'utilisateur ne l'a pas lancée, « en lancement » juste après son clic, « lancée » quand sa mission existe. Elle ne lance qu'une mission, et une carte prête ne quitte la vue que par un clic de l'utilisateur.
+_Avoid_: proposition, suggestion, ticket de lancement
+
+**Liste des cartes** :
+Les cartes de lancement d'un projet sur un poste, gardées hors de toute discussion pour suivre le siège du COO ; seule la discussion qui tient le siège l'écrit, et une carte lancée y reste gardée.
+_Avoid_: file d'attente des lancements, état des cartes, cartes de la discussion
+
 **Numéro court** :
 Le numéro unique qu'une carte de lancement (« L12 »), puis sa mission (« M12 »), portent chez le COO, et que l'utilisateur peut dire à la place du titre ; il ne sert jamais deux fois.
 _Avoid_: id, référence, matricule
@@ -115,6 +123,7 @@ _Avoid_: id, référence, matricule
 | Relais des workers | `~/.claude/flow-board/relais/<id de la mission>.<id de la session>.entry.json`, un par worker |
 | Feuille de route | `travail/feuille-de-route.md` du projet, ou `~/.claude/flow-board/coordination/<projet>.feuille-de-route.md` quand elle reste sur le poste |
 | Boîte « À reprendre » | `~/.claude/flow-board/a-reprendre/<projet>.<discussion>.json`, une par discussion |
+| Liste des cartes | `~/.claude/flow-board/coordination/<projet>.cartes.json`, une par projet |
 
 Dans ces chemins, `<racine du projet>` est le chemin de la racine du projet mis en forme de nom de fichier, `<projet>` ce même nom (raccourci) suivi d'une empreinte de la racine, et `<discussion>` l'id de la discussion. La règle exacte de ces noms, les autres fichiers de flow-board et ce qui se passe quand le mod ne trouve pas `~/.claude` sont dans la section « Données et stockage » du README de flow-board (`plugins/flow-board/README.md`).
 
@@ -231,6 +240,10 @@ _Avoid_: blocage, conflit, verrou
 **Piste** :
 Une amélioration qu'une rétro propose pour les prochaines sessions. Une fois choisie, elle entre dans un ticket, seule ou avec des pistes voisines, et se traite comme lui. Une piste déjà choisie par une autre mission y reste ; la seconde rétro la marque « déjà prise ».
 _Avoid_: amélioration, correction de rétro
+
+**Piste déjà corrigée** :
+Une piste dont le projet fait déjà ce qu'elle demande, par un correctif qui n'était pas en vigueur dans la session étudiée au moment de la gêne. Elle n'est pas « déjà prise » (une mission en cours la porte dans un ticket) ; un correctif déjà en vigueur ne la corrige pas, puisque la gêne a eu lieu malgré lui.
+_Avoid_: piste en double, piste périmée
 
 **Liste d'attente des rétros** :
 Les pistes de toutes les rétros d'un projet, en un seul endroit, chacune avec son état (pas encore validée, validée, écartée, en ticket, en exécution, faite) et les fichiers qu'elle touche. Une piste n'en sort jamais : elle change d'état, et une piste en exécution ne change plus.

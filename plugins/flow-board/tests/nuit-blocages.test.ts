@@ -18,6 +18,7 @@ const view = (over: Partial<NightMissionView> = {}): NightMissionView => ({
   isAuto: true,
   isPaused: false,
   isOpen: true,
+  isEnded: false,
   isRelaunchPause: false,
   heldByUser: [],
   hasOpenGroups: true,
@@ -51,6 +52,9 @@ test('une mission en manuel ne bloque rien ; une mission en pause ne lance pas s
   expect(nightBlocks([paused], none, NOW)).toEqual([])
   expect(nightBlocks([{ ...paused, isOpen: false, hasOpenGroups: false }], none, NOW)).toEqual([])
   expect(nightBlocks([{ ...paused, isOpen: false }], none, NOW).map(b => b.act)).toEqual(['reopen'])
+  // En pause « discussion fermée », notée ouverte au nom de sa discussion (titulaire gardé) : à rouvrir, avec des groupes ouverts seulement.
+  expect(nightBlocks([{ ...paused, isEnded: true }], none, NOW).map(b => b.act)).toEqual(['reopen'])
+  expect(nightBlocks([{ ...paused, isEnded: true, hasOpenGroups: false }], none, NOW)).toEqual([])
   // Une question « relance: » sans groupe n'a rien à relancer.
   expect(nightBlocks([view({ questions: [{ id: 'relance:x' }] })], none, NOW)).toEqual([])
   // En pause du mod (le retour de trop l'y a mise) : la relance seule, pas le renvoi.

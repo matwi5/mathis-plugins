@@ -106,7 +106,13 @@ test('la discussion qui tient le siège montre l’onglet Coordination : le poin
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect((await pane.find({ key: 'tab-coord' }))?.props.label).toMatch(/^▸ Coordination$/)
     expect(await pane.find({ key: 'tab-flow' })).toBeUndefined()
-    for (const text of [/^Le point$/, /^1 mission en cours, 1 en pause, 1 en auto\.$/, /^Ce qui t’attend · 1$/, /« Garder le refus ou le lever \? »/, /^Missions · 2$/, /^Mode auto du parcours Flow$/, /^Idée floue$/, /attend 1 question/]) {
+    // La page « À faire », puis la page « Missions » (les six pages de la vue).
+    await pane.press({ key: 'coo-page-todo' })
+    for (const text of [/^Le point$/, /^1 mission en cours, 1 en pause, 1 en auto\.$/, /^Ce qui t’attend · 1$/, /« Garder le refus ou le lever \? »/]) {
+      expect(await pane.find({ type: 'Text', text }), `${surface} ${text}`).toBeDefined()
+    }
+    await pane.press({ key: 'coo-page-missions' })
+    for (const text of [/^Missions · 2$/, /^Mode auto du parcours Flow$/, /^Idée floue$/, /attend 1 question/]) {
       expect(await pane.find({ type: 'Text', text }), `${surface} ${text}`).toBeDefined()
     }
     // Le terminal ne dessine que du texte : aucun Svg.

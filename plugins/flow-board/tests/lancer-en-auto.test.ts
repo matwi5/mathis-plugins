@@ -7,6 +7,7 @@ import { coordinationRows } from '../hooks/coo-view.tsx'
 import { cooStatement } from '../hooks/coo.ts'
 import { emptyBoard, isAutoOn, newRun } from '../hooks/model.ts'
 import { PANE, PLUGIN, TOOL, openCoo, settle, start, stored, world, writeBoard } from './monde-coordination.ts'
+import { pressAny } from './page-coo.ts'
 
 // « Lancer en auto » chez le COO. Invariant de l'accord du mode auto : « Le mode auto d'une mission n'est jamais allumé
 // sans un clic de l'utilisateur : "Confirmer" dans la mission, ou "Lancer en auto" chez le COO. Le clic du
@@ -120,10 +121,11 @@ test('un lancement en manuel puis l’auto allumé dans la mission : le cadrage 
 
 test('chez le COO : « Lancer en auto » en tête quand l’auto est recommandé, et jamais sur une carte en xhigh', () => {
   const card = (mode: 'auto' | 'manual', effort: 'high' | 'xhigh') => ({ id: 'kabcdef12', title: 'Export CSV', start: 'grill-with-docs' as const, askMatt: 'l. 19', alts: [], mode, modeWhy: '', effort, effortWhy: '', folder: 'export-csv', at: 1 })
-  const labels = (c: ReturnType<typeof card>) => coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 2, cards: [c] })).find(row => row.key === 'coo-card-kabcdef12')?.actions?.map(a => a.label.replace(/\s/g, ' ')) ?? []
-  expect(labels(card('auto', 'high'))).toEqual(['▶ Lancer en auto', '▶ Lancer en manuel'])
-  expect(labels(card('manual', 'high'))).toEqual(['▶ Lancer en manuel', '▶ Lancer en auto'])
-  expect(labels(card('manual', 'xhigh'))).toEqual(['▶ Lancer en manuel'])
+  const labels = (c: ReturnType<typeof card>) => coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 2, cards: [c] }), { page: 'missions' }).find(row => row.key === 'coo-card-kabcdef12')?.actions?.map(a => a.label.replace(/\s/g, ' ')) ?? []
+  // Une carte ordinaire prête porte aussi « ✕ Retirer », à la suite de ses boutons de lancement.
+  expect(labels(card('auto', 'high'))).toEqual(['▶ Lancer en auto', '▶ Lancer en manuel', '✕ Retirer'])
+  expect(labels(card('manual', 'high'))).toEqual(['▶ Lancer en manuel', '▶ Lancer en auto', '✕ Retirer'])
+  expect(labels(card('manual', 'xhigh'))).toEqual(['▶ Lancer en manuel', '✕ Retirer'])
 })
 
 test('le clic « Lancer en auto » écrit un enregistrement en auto et fait vérifier demande.md au COO avant de lancer tout de suite (le tour d’intention se recueille avant le clic)', { timeoutMs: 20000 }, async ($, on) => {
@@ -137,7 +139,7 @@ test('le clic « Lancer en auto » écrit un enregistrement en auto et fait vér
   const answer = String(((await $.tool.call({ tool: TOOL, card: { title: 'Export CSV', start: 'grill-with-docs', askMatt: 'l. 19', mode: 'auto', effort: 'high', folder: 'export-csv' } } as any)) as any).result)
   const id = /Launch card (k[a-z0-9]+)/.exec(answer)![1]
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await ui.press({ key: `coo-card-auto-${id}` })
+  await pressAny(ui, { key: `coo-card-auto-${id}` })
   await ui.unmount()
   const kept = Object.entries(w.mem).filter(([k]) => k.startsWith('coo-launch:')).map(([, v]) => v as LaunchRecord)
   expect(kept).toHaveLength(1)

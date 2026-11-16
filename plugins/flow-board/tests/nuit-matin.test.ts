@@ -3,7 +3,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { nightMorningLines } from '../hooks/coo.ts'
-import { AUTO_STOPS, newRun } from '../hooks/model.ts'
+import { AUTO_STOPS, detachOnLoad, emptyBoard, isEndedPause, newRun, parkActive } from '../hooks/model.ts'
 import { parseNightLog, reopenCommand, type NightLogLine } from '../hooks/night.ts'
 import type { Run } from '../types'
 import { PANE, PLUGIN, TOOL, entries, openCoo, settle, start, world, writeBoard, type World } from './monde-coordination.ts'
@@ -204,6 +204,115 @@ test('une mission coupée par le COO ne se rouvre pas : pas de commande, l’app
   expect(await statement($)).not.toMatch(/claude --bg/)
   expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/not a mission in auto paused by its dashboard/)
   expect(journal(w).filter(l => l.act === 'reopen').map(l => l.result)).toEqual(['refused'])
+})
+
+/**
+ * Une mission en auto dont la discussion s'est fermée par la fin de sa session, telle que `parkActive` l'écrit :
+ * titulaire gardé (`session-M`), statut « active », auto en pause « discussion fermée ».
+ */
+const parked = (title: string, id = 'run-1', session = 'session-M'): Run => {
+  const run = { ...stopped(title), id, status: 'active', owner: session, auto: { onAt: T0 - 30_000, onBy: session }, claim: { boot: 'boot-1', at: T0 - 50_000 } } as unknown as Run
+  const out = parkActive({ ...emptyBoard('/p', 'p'), activeId: id, runs: [run] }, T0 - 1000)
+  return out!.board.runs.find(r => r.id === id)!
+}
+
+test('une mission en auto dont la discussion s’est fermée (titulaire gardé) est à rouvrir : le texte fait d’abord chercher son pid, puis la commande d’aujourd’hui ; notée une fois, et le matin le dit', { timeoutMs: 30000 }, async ($, on) => {
+  const run = parked('Close par sa fin')
+  // L'état réel : rien n'a retiré son titulaire ni son statut.
+  expect([run.status, run.owner, run.auto?.offWhy]).toEqual(['active', 'session-M', AUTO_STOPS.ended])
+  const { w } = await coo($, on, [run], 'terminal')
+  const id = watchId(w)
+  const line = (await statement($)).split('\n').find(l => /night gesture: reopen/.test(l))!
+  expect(line).toMatch(/the mission open in no discussion or its discussion ended; night gesture: reopen, first check, right before launching, that its session no longer runs: run claude agents --json --all by the shell and look at every entry whose "sessionId" is exactly "session-M"; if one of them has a "pid" that is a number \(not null\)/)
+  expect(line).toContain(`launch nothing and send {"coordinate": {"night": [{"mission": "run-1", "watch": "${id}", "act": "reopen", "running": true}]}}, the reopen waits for the morning`)
+  expect(line).toMatch(/if the list cannot be read, launch nothing and send nothing\. Otherwise \(no such entry, or none with a numeric "pid"\), by this command/)
+  // La commande d'aujourd'hui, inchangée.
+  expect(/when you know it \(else its messages would wait for an approval\): (claude --bg .*) ; once it answers/.exec(line)?.[1]).toBe(reopenCommand('run-1', 'session-M'))
+  const dictated = JSON.parse(/« backgrounded », send (\{"coordinate".*\}\]\}\}); if it fails/.exec(line)![1]!)
+  expect(String(((await $.tool.call({ tool: TOOL, ...dictated } as any)) as any).result)).toMatch(/recorded for mission « Close par sa fin »: reopened in manual/)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/already reopened during this night watch/)
+  expect(journal(w).filter(l => l.act === 'reopen').map(l => l.result)).toEqual(['written', 'refused'])
+  const morning = await statement($, 'composer')
+  expect(morning).toMatch(/Missions reopened at night \(their command launched\), in manual, their auto off: « Close par sa fin »/)
+})
+
+test('sa session tourne encore (un pid) : rien n’est lancé, un seul refus au journal par surveillance, et le relevé ne la repropose plus', { timeoutMs: 30000 }, async ($, on) => {
+  const { w } = await coo($, on, [parked('Relancée')], 'terminal')
+  const id = watchId(w)
+  // Témoin : avant le refus, le relevé donne la commande ; l'appel « running » qu'il dicte, rejoué tel quel.
+  const line = (await statement($)).split('\n').find(l => /night gesture: reopen/.test(l))!
+  expect(line).toMatch(/claude --bg --resume 'session-M'/)
+  const dictated = JSON.parse(/launch nothing and send (\{"coordinate".*\}\]\}\}), the reopen waits/.exec(line)![1]!)
+  expect(String(((await $.tool.call({ tool: TOOL, ...dictated } as any)) as any).result)).toMatch(/refused: its session still runs; it stays for the morning\. Nothing written\./)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen', running: true }])).toMatch(/its session still runs/)
+  expect(journal(w).filter(l => l.act === 'reopen').map(l => `${l.result}:${l.why}`)).toEqual(['refused:sa session tourne encore : pour le matin'])
+  const again = await statement($)
+  expect(again).toMatch(/night gesture: reopen, no command \(its session still ran when checked during this night watch\): for the morning/)
+  expect(again).not.toMatch(/claude --bg/)
+  // Une réouverture envoyée ensuite (la commande d'un relevé d'avant) n'est pas notée : la session tournait.
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/refused: its session still ran when checked during this night watch/)
+  expect(journal(w).filter(l => l.act === 'reopen')).toHaveLength(1)
+  // Rien ne s'écrit au fichier de coordination.
+  expect(entries(w).filter(e => e.kind === 'night')).toEqual([])
+})
+
+test('la mission dont la discussion est celle du COO n’est pas relancée sous elle : pour le matin', { timeoutMs: 30000 }, async ($, on) => {
+  // Arrêtée, ouverte nulle part, née dans la discussion qui tient maintenant le siège du COO.
+  const { w } = await coo($, on, [{ ...stopped('Chez le COO'), bornIn: 'session-A' } as Run, parked('Témoin', 'run-2', 'session-M')], 'terminal')
+  expect(w.ids.now).toBe('session-A')
+  const text = await statement($)
+  expect(text).toMatch(/mission « Chez le COO » \(mission id « run-1 »\): [^\n]*night gesture: reopen, no command \(its discussion carries another mission now/)
+  expect(text).not.toMatch(/claude --bg --resume 'session-A'/)
+  // Témoin : l'autre mission a sa commande.
+  expect(text).toMatch(/claude --bg --resume 'session-M'/)
+})
+
+test('une mission dont la discussion s’est fermée pendant la surveillance, sans être à rouvrir, n’est pas notée rouverte', { timeoutMs: 30000 }, async ($, on) => {
+  // Ses groupes tous faits : pas un blocage, même mise à jour après l'allumage.
+  const done = { ...parked('Groupes faits'), tickets: [{ id: '1', name: 'Un', status: 'done' }, { id: '2', name: 'Deux', status: 'done' }] } as unknown as Run
+  const { w } = await coo($, on, [{ ...done, updatedAt: T0 + 60_000 } as Run], 'terminal')
+  const id = watchId(w)
+  expect(await ask($, [{ mission: 'run-1', watch: id, act: 'reopen' }])).toMatch(/not a mission in auto paused by its dashboard/)
+})
+
+test('une discussion relancée qui a retrouvé sa mission (detachOnLoad) tourne : pas à rouvrir, même absente de claude agents (une discussion de l’app)', { timeoutMs: 30000 }, async ($, on) => {
+  // La fin de la discussion d'abord (prise gardée de son chargement), puis l'app redémarrée la relance sous le même id.
+  const loaded = { ...stopped('Relancée'), id: 'run-2', status: 'active', owner: 'local_app1', auto: { onAt: T0 - 30_000, onBy: 'local_app1' }, claim: { boot: 'boot-1', at: T0 - 50_000 } } as unknown as Run
+  const ended = parkActive({ ...emptyBoard('/p', 'p'), activeId: 'run-2', runs: [loaded] }, T0 - 2000)!.board
+  expect(isEndedPause(ended.runs[0]!)).toBe(true)
+  const back = detachOnLoad(ended, T0 - 1000, 'local_app1', 'boot-2').runs[0]!
+  expect([back.status, back.owner, back.auto?.offWhy]).toEqual(['active', 'local_app1', AUTO_STOPS.ended])
+  expect(isEndedPause(back)).toBe(false)
+  // Relancée puis refermée : la fin redate la pause, de nouveau à rouvrir.
+  expect(isEndedPause(parkActive(detachOnLoad(ended, T0 - 1000, 'local_app1', 'boot-2'), T0 - 500)!.board.runs[0]!)).toBe(true)
+  // Deux processus de la même discussion : l'app l'a reprise, le terminal se ferme ensuite ; elle tourne dans l'app.
+  const twice = detachOnLoad(ended, T0 - 1000, 'local_app1', 'boot-2')
+  expect(isEndedPause(parkActive({ ...twice, boot: 'boot-1' }, T0 - 500)!.board.runs[0]!)).toBe(false)
+  // Le même processus revenu à sa discussion après l'avoir quittée : il la tient, pas à rouvrir.
+  expect(isEndedPause(detachOnLoad(ended, T0 - 1000, 'local_app1', 'boot-1').runs[0]!)).toBe(false)
+  // Sans prise lisible (un processus sans id) : pas une fin prouvée.
+  expect(isEndedPause({ ...ended.runs[0]!, claim: undefined } as Run)).toBe(false)
+  const { w } = await coo($, on, [parked('Témoin'), back], 'terminal')
+  const id = watchId(w)
+  const text = await statement($)
+  // Témoin : la mission dont la discussion s'est seulement fermée est à rouvrir dans le même relevé.
+  expect(text).toMatch(/- mission « Témoin » \(mission id « run-1 »\): [^\n]*night gesture: reopen/)
+  expect(text).not.toMatch(/mission « Relancée » \(mission id « run-2 »\): /)
+  expect(text).not.toMatch(/claude --bg --resume 'local_app1'/)
+  expect(await ask($, [{ mission: 'run-2', watch: id, act: 'reopen' }])).toMatch(/not a mission in auto paused by its dashboard/)
+})
+
+test('notée ouverte et en pause pour une autre raison, une mission n’est pas à rouvrir ; une mission en manuel non plus', { timeoutMs: 30000 }, async ($, on) => {
+  const quota = { ...parked('Quota', 'run-2', 'session-N'), auto: { onAt: T0 - 30_000, offAt: T0 - 1000, offWhy: AUTO_STOPS.quota } } as unknown as Run
+  const manual = { ...stopped('Manuelle'), id: 'run-3', status: 'active', owner: 'session-P', auto: undefined } as unknown as Run
+  const { w } = await coo($, on, [parked('Témoin'), quota, manual], 'terminal')
+  const id = watchId(w)
+  const text = await statement($)
+  // Témoin : la mission « discussion fermée » est à rouvrir dans le même relevé.
+  expect(text).toMatch(/- mission « Témoin » \(mission id « run-1 »\): [^\n]*night gesture: reopen/)
+  expect(text).not.toMatch(/mission « Quota » \(mission id « run-2 »\): /)
+  expect(text).not.toMatch(/mission « Manuelle » \(mission id « run-3 »\): /)
+  expect(await ask($, [{ mission: 'run-2', watch: id, act: 'reopen' }])).toMatch(/not a mission in auto paused by its dashboard/)
 })
 
 test('le résumé du matin : au message de la personne qui arrête la surveillance, ses gestes, puis ce qui l’attend ; une seule fois', { timeoutMs: 30000 }, async ($, on) => {

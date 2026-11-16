@@ -8,6 +8,7 @@ import { newRun } from '../hooks/model.ts'
 import { emptyWaitlist, keepsPistes, pistesOf, releaseCardPistes, validatePistes, type Piste, type Waitlist } from '../hooks/pistes.ts'
 import type { Run } from '../types'
 import { PANE, PLUGIN, TOOL, openCoo, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // La section « Pistes en attente » et la carte « Pistes de rétro ». Invariant de la liste d'attente : « Une écriture d'une rétro ou
 // du COO n'efface ni ne change jamais en silence la piste d'une autre ; une piste ne quitte jamais le fichier, et une
@@ -45,7 +46,7 @@ test('une carte retirée rend ses seules pistes encore « validée » à « pas 
   expect(keepsPistes(list, out.list)).toBe(true)
 })
 
-test('la section range ensemble les pistes ouvertes qui partagent un fichier (p1 rejoint a.ts par p2), une case sur les seules « pas encore validée », la carte nommée ou dite absente', () => {
+test('la section range ensemble les pistes ouvertes qui partagent un fichier (p1 rejoint a.ts par p2), ne montre que les « pas encore validée », chacune avec sa case, et compte les autres', () => {
   const card = pistesCard('kcarte01', NOW)
   const pistes = [
     piste('retroA/p1', { files: ['hooks/b.ts'] }),
@@ -56,16 +57,18 @@ test('la section range ensemble les pistes ouvertes qui partagent un fichier (p1
   ]
   const runs = [{ ...newRun('retro', NOW, 'Rétro A'), id: 'retroA' } as Run]
   const view = pistesWaitingOf(pistes, runs, [card], new Map([['retroA/p1', 0], ['retroA/p3', 0], ['retroA/p2', 3]]))
+  // Décision de la page « Pistes » : seules les pistes « pas encore validée » sont montrées ; les validées, en ticket ou en
+  // exécution (p3, p4) ne sont plus que comptées, et le rang de p3 (a.ts) tient toujours ensemble p1 et p2.
   expect(view.rows.map(r => [r.id, r.file, r.isTickable, r.isTicked])).toEqual([
     ['retroA/p1', 'hooks/a.ts', true, true],
     ['retroA/p2', 'hooks/a.ts', true, false],
-    ['retroA/p3', 'hooks/a.ts', false, false],
-    ['retroA/p4', '', false, false],
   ])
   expect(view.rows[1]).toEqual(expect.objectContaining({ retro: 'Rétro A', last: 'Voir R12' }))
-  expect(view.rows.map(r => r.card)).toEqual([undefined, undefined, card.title, 'carte absente'])
   expect(card.title).toMatch(/^Pistes de rétro · \d\d:\d\d$/)
-  expect([view.closed, view.ticked]).toEqual([1, 1])
+  expect([view.closed, view.ticked, view.hidden, view.pending, view.more]).toEqual([1, 1, 2, 2, 0])
+  // Une piste « pas encore validée » qui porte encore une carte la nomme, ou la dit absente.
+  const carded = pistesWaitingOf([piste('retroA/p6', { card: 'kcarte01' }), piste('retroA/p7', { card: 'kperdue1' })], runs, [card], new Map())
+  expect(carded.rows.map(r => r.card)).toEqual([card.title, 'carte absente'])
   // Un texte changé change l'empreinte.
   expect(pistesWaitingOf([...pistes.slice(0, 1).map(p => ({ ...p, history: [{ text: 'x', files: [], by: 'b', at: 1 }] })), ...pistes.slice(1)], runs, [card], new Map()).print).not.toBe(view.print)
   // Cochée sous un texte, puis le texte change : elle ne compte plus cochée.
@@ -94,7 +97,7 @@ const listOf = (w: World): Waitlist => {
   const path = Object.keys(w.files).find(p => p.startsWith('/') && p.endsWith(`/flow-board/pistes/${PROJECT}.json`))
   return (path ? JSON.parse(w.files[path]!) : w.mem['coo-pistes:']) as Waitlist
 }
-const texts = async (pane: any): Promise<string> => ((await pane.findAll({ type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
+const texts = async (pane: any): Promise<string> => ((await findAllAny(pane, { type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
 
 /** Le COO ouvert ici, la liste relue ; rend la vue montée. */
 const cooWithList = async ($: any, clock: any, w: World, pistes: unknown[]) => {
@@ -112,21 +115,24 @@ test('chez le COO : la section montre les pistes ; cocher puis « ✂ Découper 
   await cooWithList($, clock, w, [piste('retroA/p1', { files: ['hooks/coo.ts'] }), piste('retroA/p2'), piste('retroA/p3', { state: 'ticket', mission: 'm1', card: 'kautre01' })])
   const pane = await mount($)
   const shown = await texts(pane)
-  expect(shown).toMatch(/Pistes en attente · 3/)
+  // Seules les « pas encore validée » sont montrées : la piste en ticket tient dans la ligne de compte.
+  expect(shown).toMatch(/Pistes en attente · 2/)
+  expect(shown).toContain('1 piste validée ou en ticket, pas montrée')
+  expect(shown).not.toContain('Texte de retroA/p3')
   expect(shown).toContain('hooks/coo.ts')
   // Une piste en ticket n'a pas de case.
-  expect(await pane.find({ key: 'coo-piste-tick-retroA/p3' })).toBeUndefined()
+  expect(await findAny(pane, { key: 'coo-piste-tick-retroA/p3' })).toBeUndefined()
   // Au terminal : la même section, ses cases et son bouton, sans dessin.
   const term = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  expect(await texts(term)).toMatch(/Pistes en attente · 3/)
-  expect(await term.find({ key: 'coo-piste-tick-retroA/p1' })).toBeDefined()
-  expect(await term.find({ key: 'coo-pistes-cut-go' })).toBeDefined()
-  expect(await term.find({ type: 'Svg' })).toBeUndefined()
+  expect(await texts(term)).toMatch(/Pistes en attente · 2/)
+  expect(await findAny(term, { key: 'coo-piste-tick-retroA/p1' })).toBeDefined()
+  expect(await findAny(term, { key: 'coo-pistes-cut-go' })).toBeDefined()
+  expect(await findAny(term, { type: 'Svg' })).toBeUndefined()
   await term.unmount()
-  await pane.press({ key: 'coo-piste-tick-retroA/p1' })
+  await pressAny(pane, { key: 'coo-piste-tick-retroA/p1' })
   await pane.unmount()
   const again = await mount($)
-  await again.press({ key: 'coo-pistes-cut-go' })
+  await pressAny(again, { key: 'coo-pistes-cut-go' })
   await again.unmount()
   await settle(clock, 2)
   const [p1, p2, p3] = pistesOf(listOf(w))
@@ -139,12 +145,13 @@ test('chez le COO : la section montre les pistes ; cocher puis « ✂ Découper 
   const after = await texts(view)
   expect(after).toMatch(/Lancements · 1/)
   expect(after).toContain(`travail/${pistesCardFolder(p1!.card!)}/`)
-  expect(after).toMatch(/carte « Pistes de rétro · \d\d:\d\d »/)
+  // Validée, p1 quitte les pistes montrées : elle tient avec p3 dans la ligne de compte.
+  expect(after).toContain('2 pistes validées ou en ticket, pas montrées')
   await view.unmount()
-  // Le plafond des cartes ne la chasse pas : huit cartes de Claude ensuite, elle reste.
+  // Décision « plus de plafond pour les cartes prêtes » : aucune carte ne la chasse ; huit cartes de Claude ensuite, elle reste.
   for (let i = 0; i < 8; i++) await call($, { card: { title: `Carte ${i}`, start: 'to-spec', askMatt: 'l. 3', mode: 'manual', effort: 'high', folder: `dossier-${i}` } })
   const full = await mount($)
-  expect(await full.find({ key: `coo-card-remove-${p1!.card!}` })).toBeDefined()
+  expect(await findAny(full, { key: `coo-card-remove-${p1!.card!}` })).toBeDefined()
   await full.unmount()
 })
 
@@ -153,12 +160,12 @@ test('une piste changée entre l’affichage et le clic : la sélection ne part 
   const w = world(on)
   await cooWithList($, clock, w, [piste('retroA/p1')])
   const pane = await mount($)
-  await pane.press({ key: 'coo-piste-tick-retroA/p1' })
+  await pressAny(pane, { key: 'coo-piste-tick-retroA/p1' })
   await pane.unmount()
   const shownBefore = await mount($)
   // Une autre rétro l'écarte pendant ce temps (relu dans la liste, la vue n'a pas encore été redessinée).
   putList(w, [piste('retroA/p1', { state: 'dropped', reason: 'doublon', stateBy: 'retroB', stateAt: NOW + 1 })])
-  await shownBefore.press({ key: 'coo-pistes-cut-go' })
+  await pressAny(shownBefore, { key: 'coo-pistes-cut-go' })
   await shownBefore.unmount()
   await settle(clock, 2)
   expect(pistesOf(listOf(w))[0]).toEqual(expect.objectContaining({ state: 'dropped', reason: 'doublon' }))
@@ -171,7 +178,7 @@ test('une piste changée entre l’affichage et le clic : la sélection ne part 
   putList(w, [piste('retroA/p1', { history: [{ text: 'avant', files: [], by: 'retroB', at: NOW }] })])
   await settle(clock, 6)
   const later = await mount($)
-  expect((await later.find({ key: 'coo-piste-tick-retroA/p1' }))?.props.label).toBe('☐')
+  expect((await findAny(later, { key: 'coo-piste-tick-retroA/p1' }))?.props.label).toBe('☐')
   await later.unmount()
 })
 
@@ -179,10 +186,10 @@ test('une piste changée entre l’affichage et le clic : la sélection ne part 
 const cutOne = async ($: any, clock: any, w: World): Promise<string> => {
   await cooWithList($, clock, w, [piste('retroA/p1'), piste('retroA/p2')])
   const pane = await mount($)
-  await pane.press({ key: 'coo-piste-tick-retroA/p1' })
+  await pressAny(pane, { key: 'coo-piste-tick-retroA/p1' })
   await pane.unmount()
   const again = await mount($)
-  await again.press({ key: 'coo-pistes-cut-go' })
+  await pressAny(again, { key: 'coo-pistes-cut-go' })
   await again.unmount()
   await settle(clock, 2)
   return pistesOf(listOf(w))[0]!.card!
@@ -193,7 +200,7 @@ test('« ✕ Retirer » la carte : ses pistes encore « validée » redeviennent
   const w = world(on)
   const card = await cutOne($, clock, w)
   const pane = await mount($)
-  await pane.press({ key: `coo-card-remove-${card}` })
+  await pressAny(pane, { key: `coo-card-remove-${card}` })
   await pane.unmount()
   await settle(clock, 2)
   expect(pistesOf(listOf(w))[0]).toEqual(expect.objectContaining({ state: 'pending', stateBy: 'coo' }))
@@ -211,7 +218,7 @@ test('« ✕ Retirer » refusé tant qu’un lancement de la carte est gardé : 
   const rec: LaunchRecord = { v: 1, id: 'lpistes0001', card, root: '', title: 'Pistes de rétro', start: 'to-tickets', mode: 'manual', effort: 'high', folder: pistesCardFolder(card), at: NOW, by: 'session-A' }
   w.mem[launchKey(rec.id)] = rec
   const pane = await mount($)
-  await pane.press({ key: `coo-card-remove-${card}` })
+  await pressAny(pane, { key: `coo-card-remove-${card}` })
   await pane.unmount()
   await settle(clock, 2)
   expect(pistesOf(listOf(w))[0]).toEqual(expect.objectContaining({ state: 'validated', card }))
@@ -226,7 +233,7 @@ test('une carte « Pistes de rétro » dont plus aucune piste n’est « validé
   putList(w, [piste('retroA/p1', { state: 'dropped', card, reason: 'doublon' }), piste('retroA/p2')])
   await settle(clock, 6)
   const pane = await mount($)
-  await pane.press({ key: `coo-card-manual-${card}` })
+  await pressAny(pane, { key: `coo-card-manual-${card}` })
   await pane.unmount()
   await settle(clock, 2)
   expect(w.toasts.join('\n')).toMatch(/Rien n’est lancé : plus aucune piste ne porte cette carte/)
@@ -269,12 +276,12 @@ test('une rétro qui relit la liste n’a plus sa section de rétro chez le COO 
   await cooWithList($, clock, w, [piste(`${fresh}/r1`)])
   const pane = await mount($)
   const shown = await texts(pane)
-  expect(shown).toMatch(/Pistes de la rétro « Rétro ancienne » · 2/)
+  expect(shown).toMatch(/Pistes de la rétro (M\d+\s)?« Rétro ancienne » · 2/)
   // La rétro qui relit la liste ne garde dans sa section que sa piste absente de la liste ; l'autre se coche dans « Pistes en attente ».
-  expect(shown).toMatch(/Pistes de la rétro « Rétro nouvelle » · 1/)
-  expect(await pane.find({ key: `coo-retro-tick-${fresh}-r1` })).toBeUndefined()
-  expect(await pane.find({ key: `coo-retro-tick-${fresh}-r2` })).toBeDefined()
-  expect(await pane.find({ key: `coo-piste-tick-${fresh}/r1` })).toBeDefined()
+  expect(shown).toMatch(/Pistes de la rétro (M\d+\s)?« Rétro nouvelle » · 1/)
+  expect(await findAny(pane, { key: `coo-retro-tick-${fresh}-r1` })).toBeUndefined()
+  expect(await findAny(pane, { key: `coo-retro-tick-${fresh}-r2` })).toBeDefined()
+  expect(await findAny(pane, { key: `coo-piste-tick-${fresh}/r1` })).toBeDefined()
   await pane.unmount()
 })
 
@@ -301,16 +308,16 @@ test('une coche d’un texte changé depuis (montrée vide) se refait d’un cli
   const w = world(on)
   await cooWithList($, clock, w, [piste('retroA/p1')])
   const pane = await mount($)
-  await pane.press({ key: 'coo-piste-tick-retroA/p1' })
+  await pressAny(pane, { key: 'coo-piste-tick-retroA/p1' })
   await pane.unmount()
   putList(w, [piste('retroA/p1', { text: 'Nouveau', history: [{ text: 'Texte de retroA/p1', files: [], by: 'retroB', at: NOW }] })])
   await settle(clock, 6)
   const shown = await mount($)
-  expect((await shown.find({ key: 'coo-piste-tick-retroA/p1' }))?.props.label).toBe('☐')
-  await shown.press({ key: 'coo-piste-tick-retroA/p1' })
+  expect((await findAny(shown, { key: 'coo-piste-tick-retroA/p1' }))?.props.label).toBe('☐')
+  await pressAny(shown, { key: 'coo-piste-tick-retroA/p1' })
   await shown.unmount()
   const again = await mount($)
-  expect((await again.find({ key: 'coo-piste-tick-retroA/p1' }))?.props.label).toBe('☑')
+  expect((await findAny(again, { key: 'coo-piste-tick-retroA/p1' }))?.props.label).toBe('☑')
   await again.unmount()
 })
 
@@ -321,4 +328,38 @@ test('les pistes qui partagent un fichier, de proche en proche, se rangent ensem
     ['retroA/p1', 'hooks/b.ts'],
     ['retroA/p2', 'hooks/b.ts'],
   ])
+})
+
+test('« ☑ Tout cocher » coche les seules pistes montrées, sans rien décocher, puis disparaît ; « ✂ Découper » valide alors les seules montrées, la piste cachée reste dans la liste', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  await cooWithList($, clock, w, [piste('retroA/p1'), piste('retroA/p2', { files: ['hooks/a.ts'] }), piste('retroA/p3', { state: 'validated', card: 'kautre01' })])
+  const pane = await mount($)
+  // Une case déjà cochée le reste : le bouton est additif.
+  await pressAny(pane, { key: 'coo-piste-tick-retroA/p1' })
+  const all = await findAny(pane, { key: 'coo-pistes-all-go' })
+  expect(all).toBeDefined()
+  expect([all?.props.plain, all?.props.variant]).toEqual([undefined, undefined])
+  await pressAny(pane, { key: 'coo-pistes-all-go' })
+  await pane.unmount()
+  const ticked = await mount($)
+  for (const id of ['retroA/p1', 'retroA/p2']) expect((await findAny(ticked, { key: `coo-piste-tick-${id}` }))?.props.label, id).toBe('☑')
+  // Plus de case vide : plus de « Tout cocher ».
+  expect(await findAny(ticked, { key: 'coo-pistes-all-go' })).toBeUndefined()
+  expect(await findAny(ticked, { key: 'coo-piste-tick-retroA/p3' })).toBeUndefined()
+  expect(await texts(ticked)).toContain('1 piste validée ou en ticket, pas montrée')
+  await pressAny(ticked, { key: 'coo-pistes-cut-go' })
+  await ticked.unmount()
+  await settle(clock, 2)
+  const [p1, p2, p3] = pistesOf(listOf(w))
+  expect([p1!.state, p2!.state]).toEqual(['validated', 'validated'])
+  expect(p1!.card).toMatch(/^k/)
+  expect(p2!.card).toBe(p1!.card)
+  // La piste cachée n'a pas bougé, et reste dans la liste relue.
+  expect(pistesOf(listOf(w))).toHaveLength(3)
+  expect(p3).toEqual(expect.objectContaining({ id: 'retroA/p3', state: 'validated', card: 'kautre01' }))
+  const after = await mount($)
+  expect(await texts(after)).toContain('3 pistes validées ou en ticket, pas montrées')
+  expect(await findAny(after, { key: 'coo-pistes-all-go' })).toBeUndefined()
+  await after.unmount()
 })

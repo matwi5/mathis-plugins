@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { TOOL_DESCRIPTION, TOOL_SCHEMA } from '../hooks/register.tsx'
+import { TOOL_DESCRIPTION, TOOL_SCHEMA } from '../hooks/tool-schema.ts'
 import { TOOL_SHAPE } from './outil-flow-forme.ts'
 
 // Les textes de l'outil `flow` (sa description et celles des clés de son schéma) sont chargés dans chaque

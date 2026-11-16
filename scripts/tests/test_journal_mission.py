@@ -91,6 +91,58 @@ class JournalMissionTest(unittest.TestCase):
             "2026-11-10 11:00:00 discussion 81ab9a05 reprise (première entrée datée)",
         ])
 
+    def full_log(self, count):
+        """Un journal de `count` entrées, la plus récente d'abord, une par minute depuis 10:00 (la plus ancienne)."""
+        return [{"at": ms("2026-11-10T10:00:00Z") + 60_000 * i, "glyph": "·", "text": f"entrée {i}"}
+                for i in reversed(range(count))]
+
+    def test_un_journal_au_plafond_le_dit_en_tete_avec_les_debuts_connus(self):
+        self.mission(log=self.full_log(80), phases=[{"skill": "to-tickets", "startedAt": ms("2026-11-10T08:30:00Z")}])
+        self.transcript(OWNER, [{"type": "user", "timestamp": "2026-11-10T09:55:00Z", "message": {"content": SECRET}}])
+        self.transcript(BORN, [{"type": "user", "timestamp": "2026-11-10T09:00:00Z", "message": {"content": SECRET}}],
+                        folder="-autre")
+        out = self.run_script("mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        head = out.stdout.splitlines()
+        self.assertTrue(head[0].startswith("Mission mwawyzj5-3nf4"))
+        self.assertEqual(head[1:4], [
+            "journal au plafond (80 entrées) : la plus ancienne gardée date du 2026-11-10 10:00:00 ; ce qui précède est perdu",
+            "mission commencée le 2026-11-10 08:30:00 (début de sa première phase)",
+            "premier démarrage d'une discussion lue : 2026-11-10 09:00:00 (discussion 2c190b55), le début d'une discussion, pas celui de la mission",
+        ])
+
+    def test_un_journal_sous_le_plafond_ne_dit_rien(self):
+        self.mission(log=self.full_log(79), phases=[{"startedAt": ms("2026-11-10T08:30:00Z")}])
+        out = self.run_script("mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("plafond", out.stdout)
+        self.assertNotIn("mission commencée", out.stdout)
+
+    def test_un_journal_au_plafond_sans_transcript_ni_phase_lisible_le_dit_aussi(self):
+        log = self.full_log(79) + ["entrée illisible"]
+        self.mission(log=log, phases=[{"startedAt": "hier"}])
+        out = self.run_script("mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        head = out.stdout.splitlines()
+        self.assertEqual(head[1:4], [
+            "journal au plafond (80 entrées) : la plus ancienne entrée datée gardée date du 2026-11-10 10:00:00 "
+            "(1 sans date lisible) ; ce qui précède est perdu",
+            "début de la mission inconnu (date de sa première phase absente ou illisible)",
+            "premier démarrage d'une discussion inconnu (aucun transcript lu, ou sans entrée datée)",
+        ])
+
+    def test_le_plafond_du_script_est_celui_du_journal_de_flow_board(self):
+        spec = importlib.util.spec_from_file_location("journal_mission", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        basics = (SCRIPT.parent.parent / "plugins" / "flow-board" / "hooks" / "basics.ts").read_text(encoding="utf-8")
+        import re
+        limits = re.search(r"export const LIMITS = \{(.*?)\}", basics, re.S)
+        self.assertIsNotNone(limits, "LIMITS introuvable dans basics.ts")
+        found = re.search(r"^\s*log:\s*(\d+),", limits.group(1), re.M)
+        self.assertIsNotNone(found, "LIMITS.log introuvable dans basics.ts")
+        self.assertEqual(module.LOG_CAP, int(found.group(1)))
+
     def test_un_titre_trouve_la_mission_et_un_titre_qui_en_designe_plusieurs_donne_leur_liste(self):
         self.mission()
         self.mission(id="mwb00000-aaaa", title="Rétrospective · Missions détachées de leur discussion")

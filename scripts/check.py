@@ -8,7 +8,11 @@
                                            sur une copie de l'arbre commitée ; verte, son empreinte (le pre-commit la saute)
     scripts/check.sh <plugin> --no-desktop sans le Claude Code de l'app desktop (poste sans l'app)
     scripts/check.sh --staged              le hook pre-commit : les plugins dont un fichier est indexé
-    scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README et retire les blocs /** */ détachés, sans rien contrôler
+    scripts/check.sh --fix <plugin>...     réécrit l'arbre « Architecture » du README (conflit de fusion dans son bloc résolu par
+                                           l'union des deux côtés, lignes en double retirées ; refus, README inchangé, quand deux
+                                           commentaires diffèrent, qu'une ligne hors de hooks/ et de tests/ n'est que d'un côté
+                                           ou que des marques sont mal appariées, procédure à la main de docs/check-sh.md) et
+                                           retire les blocs /** */ détachés, sans rien contrôler
     scripts/check.sh --test <fichier>... <plugin>  ces seuls fichiers de test (nom nu ou chemin), terminal seulement,
                                            après la règle des caractères invisibles sur le plugin et ces fichiers
     scripts/check.sh --test <fichier>... --contre <ref> <plugin>  ces tests contre hooks/ du plugin à <ref>, sans toucher à l'arbre
@@ -18,8 +22,10 @@
 Les contrôles d'un plugin, chacun seulement s'il s'applique :
 1. pas de renvoi aux tickets ni aux dossiers de travail (`travail/`, absent de la version publique) ;
 2. l'arbre « Architecture » du README cite chaque fichier de `hooks/` et de `tests/` (`--fix` l'écrit,
-   en gardant le commentaire de chaque ligne existante) : un fichier absent est signalé sans couper
-   les contrôles suivants, et la commande échoue à la fin ;
+   en gardant le commentaire de chaque ligne existante), chaque ligne de `hooks/` avec un commentaire,
+   et chaque ligne de `tests/` que le README à HEAD n'avait pas sans commentaire aussi : un fichier
+   absent ou une telle ligne nue est signalé sans couper les contrôles suivants, et la commande échoue
+   à la fin ;
    les termes retirés du plugin (`termes-retires.txt`, une version et un terme par ligne) sont absents
    de son README, de ses consignes (`hooks/`, `skills/`, `commands/`, `reference/`, hors fichiers de
    test), de ses types (`types/*.d.ts`), de sa règle (`config/rules/<plugin>.md`) et des entrées de son
@@ -83,7 +89,11 @@ fichier de décisions indexé, même pour un commit de documentation seule : un 
 passent ; puis chaque ticket indexé (`travail/<sujet>/issues/*.md`) qui dit « Zone sensible : oui » porte une
 ligne « Recherche » avec une commande et son résultat (sur la ligne, ou dans le bloc de code qui la suit),
 sauf un ticket que `HEAD` portait déjà sensible sans elle, et n'a aucune case mal formée hors bloc de code
-(seules `- [ ] ` et `- [x] ` sont des cases : `- [x ]`, `- [ x]`, `- []` sont refusées) ;
+(seules `- [ ] ` et `- [x] ` sont des cases : `- [x ]`, `- [ x]`, `- []` sont refusées) ; un ticket indexé neuf
+(absent de `HEAD` à son chemin et pas renommé, une copie comptant comme neuve ; pendant une fusion arrêtée, un
+ticket que la branche fusionnée portait déjà passe ; le hook pre-merge-commit d'une fusion propre ne juge pas ce
+point) n'est pas écrit comme fait : ni `Status:` « fait » ou « done », ni case
+`- [x] ` hors bloc de code (« Status: ready-for-agent », cases vides) ;
 puis, même pour un commit de documentation seule, la version indexée d'une règle ou d'une référence commune,
 d'une règle de projet (`.claude/rules/*.md`), de `.gitignore` ou d'un test de `scripts/tests` passe les contrôles
 des règles du dépôt (point 8) ;
@@ -203,7 +213,8 @@ MOD_ENTRY = ("hooks/register.tsx", "register")
 ADMITTED_EXPORTS = Path(__file__).resolve().parent / "exports-admis.json"
 # Contrôles 1 et 2 pas encore tenus par un plugin : signalés sans échec, jusqu'à leur reprise.
 PENDING = {}
-# Les défauts signalés sans couper les contrôles (fichiers absents de l'arbre « Architecture ») :
+# Les défauts signalés sans couper les contrôles (fichiers absents de l'arbre « Architecture », lignes
+# de l'arbre sans commentaire) :
 # ils font échouer la commande à la fin, ou s'affichent avec l'échec d'un autre contrôle.
 DEFERRED = []
 # Les lignes qui disent un échec dans la sortie d'une commande : `(fail)` de `claude plugin test`,
@@ -568,23 +579,182 @@ def architecture_tree(text):
 TREE_ENTRY = re.compile(r"^(?P<lead>(?:│   |    )*)(?P<link>├── |└── )(?P<name>\S+)(?P<rest>.*)$")
 
 
-def rewrite_folder(lines, folder, names):
-    """Les lignes de l'arbre où les enfants de `folder/` sont exactement `names` : les lignes existantes
-    gardent leur ordre et leur commentaire, une ligne d'un fichier disparu part, un fichier nouveau
-    entre à sa place alphabétique quand la liste est triée, sinon à la fin. None sans ligne `folder/`."""
+TREE_FOLDERS = ("hooks", "tests")
+TREE_HAND_FIX = "procédure à la main de docs/check-sh.md, paragraphe « Un conflit dans l'arbre « Architecture » »"
+
+
+class TreeRefused(Failed):
+    """`--fix` ne réécrit pas un arbre qu'il ne sait pas fusionner sans perte : rien n'est écrit."""
+
+
+def folder_span(lines, folder):
+    """(index de la ligne `folder/`, préfixe de ses enfants directs, fin de ses enfants) dans les lignes
+    de l'arbre, ou None sans ligne `folder/`. Une ligne vide suivie d'un autre enfant direct (une ligne
+    d'arbre au préfixe des enfants) reste dans la liste (une fusion passée avait laissé ainsi un bloc de
+    doublons après une ligne vide) : la réécriture la retire ; suivie d'autre chose (une note indentée),
+    elle clôt la liste."""
     at = next((i for i, line in enumerate(lines) if (m := TREE_ENTRY.match(line)) and m["name"] == folder + "/"), None)
     if at is None:
         return None
     head = TREE_ENTRY.match(lines[at])
     inner = head["lead"] + ("│   " if head["link"] == "├── " else "    ")
     end = at + 1
-    while end < len(lines) and lines[end].startswith(inner):
-        end += 1
-    kept = []
-    for line in lines[at + 1:end]:
-        m = TREE_ENTRY.match(line)
-        if m and m["lead"] == inner and m["name"] in names:
-            kept.append((m["name"], m["rest"]))
+    while end < len(lines):
+        if lines[end].startswith(inner):
+            end += 1
+            continue
+        after = next((i for i in range(end, len(lines)) if lines[i].strip()), len(lines))
+        child = TREE_ENTRY.match(lines[after]) if after < len(lines) else None
+        if after > end and child and child["lead"] == inner:
+            end = after
+            continue
+        break
+    return at, inner, end
+
+
+def folder_entries(lines, span):
+    """Les enfants directs d'un dossier de l'arbre, dans l'ordre : [(nom, reste de la ligne)]."""
+    at, inner, end = span
+    return [(m["name"], m["rest"]) for line in lines[at + 1:end]
+            if (m := TREE_ENTRY.match(line)) and m["lead"] == inner]
+
+
+def folder_rows(inner, entries):
+    """Les lignes d'une liste d'enfants, le dernier en `└── `."""
+    return [f"{inner}{'└── ' if i == len(entries) - 1 else '├── '}{n}{rest}" for i, (n, rest) in enumerate(entries)]
+
+
+def dedupe_entries(entries, folder):
+    """Les enfants sans doublon de nom : de plusieurs lignes d'un même nom reste la première qui a un
+    commentaire, sinon la première ; et les problèmes, un par nom qui porte deux commentaires non vides
+    différents (rien n'est alors à réécrire)."""
+    chosen, comments = {}, {}
+    for i, (name, rest) in enumerate(entries):
+        note = rest.strip()
+        if note:
+            comments.setdefault(name, [])
+            if note not in comments[name]:
+                comments[name].append(note)
+        if name not in chosen or (note and not entries[chosen[name]][1].strip()):
+            chosen[name] = i
+    problems = [f"{folder}/{name} : deux commentaires différents, « {notes[0]} » et « {notes[1]} »"
+                for name, notes in comments.items() if len(notes) > 1]
+    return [e for i, e in enumerate(entries) if chosen[e[0]] == i], problems
+
+
+CONFLICT_MARKS = ("<<<<<<<", "|||||||", "=======", ">>>>>>>")
+TREE_LIST = "liste"  # marque d'une liste `hooks/` ou `tests/` dans le squelette de `tree_skeleton`
+
+
+def conflict_mark(line):
+    """La marque de conflit qui ouvre la ligne (`<<<<<<<`, `|||||||`, `=======`, `>>>>>>>`), ou None."""
+    return next((m for m in CONFLICT_MARKS if line.rstrip() == m or line.startswith(m + " ")), None)
+
+
+def conflict_sides(lines):
+    """(premier côté, second côté) des lignes d'un bloc à marques de conflit, la base d'un diff3 jetée ;
+    None sans marque ; lève TreeRefused sur des marques mal appariées."""
+    if not any(conflict_mark(line) for line in lines):
+        return None
+    order = {"<<<<<<<": (None, "a"), "|||||||": ("a", "base"), "=======": ("ab", "b"), ">>>>>>>": ("b", None)}
+    first, second, state = [], [], None
+    for n, line in enumerate(lines, 1):
+        mark = conflict_mark(line)
+        if mark:
+            expected, state_after = order[mark]
+            if not (state == expected or (expected == "ab" and state in ("a", "base"))):
+                raise TreeRefused(f"marque {mark} mal appariée (ligne {n} du bloc de l'arbre)")
+            state = state_after
+            continue
+        if state in (None, "a"):
+            first.append(line)
+        if state in (None, "b"):
+            second.append(line)
+    if state is not None:
+        raise TreeRefused("marque de conflit sans fin (>>>>>>>) dans le bloc de l'arbre")
+    return first, second
+
+
+def tree_skeleton(lines):
+    """Les lignes de l'arbre hors des enfants de `hooks/` et de `tests/`, chaque liste remplacée par
+    une marque (le tuple `(TREE_LIST, dossier)`, jamais une ligne) ; et ces listes, {dossier: (préfixe, enfants)}."""
+    skeleton, lists, cut = list(lines), {}, []
+    for folder in TREE_FOLDERS:
+        span = folder_span(lines, folder)
+        if span:
+            lists[folder] = (span[1], folder_entries(lines, span))
+            cut.append((span[0] + 1, span[2], folder))
+    for start, end, folder in sorted(cut, reverse=True):
+        skeleton[start:end] = [(TREE_LIST, folder)]
+    return skeleton, lists
+
+
+def union_entries(first, second, folder):
+    """L'union des enfants des deux côtés d'un conflit, chaque nom une fois : triée quand chaque côté
+    l'est, sinon l'ordre du premier côté puis les noms du second seul ; un commentaire vide d'un côté
+    prend celui de l'autre ; et les problèmes (deux commentaires non vides différents)."""
+    first, problems = dedupe_entries(first, folder)
+    second, more = dedupe_entries(second, folder)
+    problems += more
+    notes = dict(first)
+    merged = list(first)
+    for name, rest in second:
+        if name not in notes:
+            merged.append((name, rest))
+        elif rest.strip() and not notes[name].strip():
+            merged[[n for n, _ in merged].index(name)] = (name, rest)
+        elif rest.strip() and rest.strip() != notes[name].strip():
+            problems.append(f"{folder}/{name} : deux commentaires différents, « {notes[name].strip()} » et « {rest.strip()} »")
+    names_a, names_b = [n for n, _ in first], [n for n, _ in second]
+    if names_a == sorted(names_a) and names_b == sorted(names_b):
+        merged.sort(key=lambda e: e[0])
+    return merged, problems
+
+
+def resolve_tree_conflict(lines):
+    """Les lignes de l'arbre, un conflit de fusion résolu par l'union des listes `hooks/` et `tests/` ;
+    les mêmes lignes sans marque de conflit. Lève TreeRefused, sans rien résoudre, quand le reste de
+    l'arbre diffère d'un côté à l'autre (une ligne d'un seul côté, l'union la remettrait) ou que deux
+    commentaires non vides diffèrent pour un même fichier."""
+    sides = conflict_sides(lines)
+    if sides is None:
+        return lines
+    (skel_a, lists_a), (skel_b, lists_b) = tree_skeleton(sides[0]), tree_skeleton(sides[1])
+    problems = []
+    if skel_a != skel_b:
+        only_a = [line for line in skel_a if isinstance(line, str) and line not in skel_b]
+        only_b = [line for line in skel_b if isinstance(line, str) and line not in skel_a]
+        problems += [f"ligne du premier côté seulement, hors de hooks/ et de tests/ : « {line} »" for line in only_a]
+        problems += [f"ligne du second côté seulement, hors de hooks/ et de tests/ : « {line} »" for line in only_b]
+        if not problems:
+            problems.append("lignes hors de hooks/ et de tests/ dans un ordre différent d'un côté à l'autre")
+    merged = {}
+    for folder in lists_a.keys() & lists_b.keys():
+        merged[folder], more = union_entries(lists_a[folder][1], lists_b[folder][1], folder)
+        problems += more
+    if problems:
+        raise TreeRefused("\n".join(problems))
+    out = []
+    for line in skel_a:
+        if isinstance(line, str):
+            out.append(line)
+        else:
+            out += folder_rows(lists_a[line[1]][0], merged[line[1]])
+    return out
+
+
+def rewrite_folder(lines, folder, names):
+    """Les lignes de l'arbre où les enfants de `folder/` sont exactement `names` : les lignes existantes
+    gardent leur ordre et leur commentaire, une ligne d'un fichier disparu part, une ligne en double
+    part (`dedupe_entries` ; deux commentaires différents lèvent TreeRefused), un fichier nouveau entre
+    à sa place alphabétique quand la liste est triée, sinon à la fin. None sans ligne `folder/`."""
+    span = folder_span(lines, folder)
+    if span is None:
+        return None
+    at, inner, end = span
+    kept, problems = dedupe_entries([e for e in folder_entries(lines, span) if e[0] in names], folder)
+    if problems:
+        raise TreeRefused("\n".join(problems))
     known = [n for n, _ in kept]
     is_sorted = known == sorted(known)
     for name in names:
@@ -593,12 +763,14 @@ def rewrite_folder(lines, folder, names):
         place = next((i for i, (n, _) in enumerate(kept) if n > name), len(kept)) if is_sorted else len(kept)
         kept.insert(place, (name, ""))
         known.insert(place, name)
-    rows = [f"{inner}{'└── ' if i == len(kept) - 1 else '├── '}{n}{rest}" for i, (n, rest) in enumerate(kept)]
-    return lines[:at + 1] + rows + lines[end:]
+    return lines[:at + 1] + folder_rows(inner, kept) + lines[end:]
 
 
 def fix_architecture(plugin):
-    """Réécrit l'arbre « Architecture » du README pour qu'il cite chaque fichier de hooks/ et de tests/."""
+    """Réécrit l'arbre « Architecture » du README pour qu'il cite chaque fichier de hooks/ et de tests/,
+    une fois chacun : un conflit de fusion dans le bloc se résout par l'union des deux côtés
+    (`resolve_tree_conflict`), les lignes en double partent. Lève Failed, sans rien écrire, sur ce qu'il
+    ne sait pas fusionner sans perte, avec chaque ligne en cause et la procédure à la main."""
     readme = plugin / "README.md"
     text = readme.read_text(encoding="utf-8") if readme.is_file() else ""
     span = architecture_tree(text)
@@ -606,10 +778,16 @@ def fix_architecture(plugin):
         log(f"  {plugin.name} : pas d'arbre « Architecture » dans le README, rien à réécrire")
         return
     lines = text[span[0]:span[1]].split("\n")
-    for folder in ("hooks", "tests"):
-        names = sorted(rel[len(folder) + 1:] for _, rel in files_of(plugin) if rel.startswith(folder + "/"))
-        if names:
-            lines = rewrite_folder(lines, folder, names) or lines
+    try:
+        lines = resolve_tree_conflict(lines)
+        for folder in TREE_FOLDERS:
+            names = sorted(rel[len(folder) + 1:] for _, rel in files_of(plugin) if rel.startswith(folder + "/"))
+            if names:
+                lines = rewrite_folder(lines, folder, names) or lines
+    except TreeRefused as err:
+        said = "\n".join(f"    {line}" for line in str(err).split("\n"))
+        raise Failed(f"{plugin.name}/README.md : arbre « Architecture » non réécrit, à résoudre à la main "
+                     f"({TREE_HAND_FIX}) :\n{said}") from None
     new = text[:span[0]] + "\n".join(lines) + text[span[1]:]
     if new != text:
         with open(readme, "w", encoding="utf-8", newline="\n") as f:
@@ -633,6 +811,31 @@ def architecture_gaps(plugin):
             if rel.startswith(folder + "/") and not re.search(r"(?<![\w.-])" + re.escape(path.name) + r"(?![\w.-])", tree.group(1)):
                 missing.append(f"{plugin.name}/{rel}")
     return missing
+
+
+def bare_tree_names(text, folder):
+    """Les noms des enfants de `folder/` sans commentaire dans l'arbre « Architecture » d'un README
+    (doublons retirés comme le fait `--fix`) ; vide sans arbre ni dossier."""
+    span = architecture_tree(text or "")
+    lines = text[span[0]:span[1]].split("\n") if span else []
+    folder_at = folder_span(lines, folder)
+    if folder_at is None:
+        return []
+    entries, _ = dedupe_entries(folder_entries(lines, folder_at), folder)
+    return [name for name, rest in entries if not rest.strip()]
+
+
+def architecture_bare(plugin):
+    """Les lignes de l'arbre « Architecture » sans commentaire qui ne passent pas : toute ligne de
+    `hooks/`, et une ligne de `tests/` que le README à HEAD n'avait pas sans commentaire (une ligne neuve,
+    ou un commentaire perdu) ; les lignes nues déjà à HEAD restent permises. Un README absent à HEAD
+    (plugin neuf) : toutes ses lignes sont neuves."""
+    readme = plugin / "README.md"
+    text = readme.read_text(encoding="utf-8") if readme.is_file() else ""
+    old = set(bare_tree_names(git_show(REPO, f"HEAD:plugins/{plugin.name}/README.md"), "tests"))
+    bare = [f"{plugin.name}/hooks/{name}" for name in bare_tree_names(text, "hooks")]
+    bare += [f"{plugin.name}/tests/{name}" for name in bare_tree_names(text, "tests") if name not in old]
+    return bare
 
 
 def retired_list(plugin):
@@ -1064,8 +1267,8 @@ def check_changelog(plugin):
 
 
 def static_checks(plugin):
-    """Les contrôles statiques ; rend les fichiers absents de l'arbre « Architecture », qui ne coupent
-    pas les contrôles suivants (un fichier de test nouveau arrêtait toute la suite) mais échouent à la
+    """Les contrôles statiques ; rend les fichiers absents de l'arbre « Architecture » et ses lignes sans
+    commentaire (`architecture_bare`), qui ne coupent pas les contrôles suivants (un fichier de test nouveau arrêtait toute la suite) mais échouent à la
     fin (`fail_deferred`)."""
     pending = PENDING.get(plugin.name)
     log("→ renvois aux tickets et aux dossiers de travail")
@@ -1081,7 +1284,11 @@ def static_checks(plugin):
         log("  ok")
     log("→ arbre « Architecture » du README")
     gaps = architecture_gaps(plugin)
-    deferred = [f"{g} : absent de l'arbre « Architecture » du README (scripts/check.sh --fix {plugin.name} l'écrit)" for g in gaps or []]
+    deferred = [f"{g} : absent de l'arbre « Architecture » du README (scripts/check.sh --fix {plugin.name} "
+                f"l'ajoute, puis écrire son commentaire)" for g in gaps or []]
+    if gaps is not None:
+        deferred += [f"{b} : ligne de l'arbre « Architecture » du README sans commentaire (l'écrire, d'après le fichier)"
+                     for b in architecture_bare(plugin)]
     if gaps is None:
         log("  pas d'arbre « Architecture » : contrôle sans objet")
     elif deferred and pending:
@@ -1115,7 +1322,7 @@ def fail_deferred(deferred):
     if deferred:
         log("\nSignalés plus haut, sans arrêter les contrôles :")
         log("\n".join(f"  {p}" for p in deferred))
-        raise DeferredFailed(f"{len(deferred)} fichier(s) absent(s) de l'arbre « Architecture »")
+        raise DeferredFailed(f"{len(deferred)} défaut(s) de l'arbre « Architecture » (fichier absent, ligne sans commentaire)")
 
 
 # --- versions -----------------------------------------------------------------
@@ -2616,19 +2823,24 @@ def series_numbers(text):
     return Counter(int(n) for n in SERIES_TITLE.findall(text or ""))
 
 
-def staged_sources():
-    """Les fichiers indexés renommés ou copiés (`git mv`), avec leur chemin d'origine dans `HEAD`."""
+def staged_moves():
+    """Les fichiers indexés renommés (R) ou copiés (C) : {chemin : (lettre, chemin d'origine dans `HEAD`)}."""
     code, out = run(["git", "diff", "--cached", "--name-status", "-M", "-C", "-z"], 60)
     if code != 0:
         raise Failed(f"git diff --cached : {out.strip()}")
-    fields, sources, i = out.split("\0"), {}, 0
+    fields, moves, i = out.split("\0"), {}, 0
     while i < len(fields) and fields[i]:
         if fields[i][0] in "RC":
-            sources[fields[i + 2]] = fields[i + 1]
+            moves[fields[i + 2]] = (fields[i][0], fields[i + 1])
             i += 3
         else:
             i += 2
-    return sources
+    return moves
+
+
+def staged_sources():
+    """Les fichiers indexés renommés ou copiés (`git mv`), avec leur chemin d'origine dans `HEAD`."""
+    return {path: source for path, (_, source) in staged_moves().items()}
 
 
 def duplicate_series(path, source=None):
@@ -2738,27 +2950,65 @@ def tickets_without_search(paths, sources=None):
     return problems
 
 
+def lines_outside_code(text):
+    """Les lignes d'un texte Markdown hors de ses blocs de code, numérotées : [(n, ligne)]."""
+    out = []
+    fence = None  # la clôture qui a ouvert le bloc en cours ; il se ferme par la même suite, au moins aussi longue
+    for n, line in enumerate((text or "").split("\n"), 1):
+        m = FENCE.match(line)
+        if m and fence is None:
+            fence = m.group(1)
+        elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+            fence = None
+        elif fence is None:
+            out.append((n, line))
+    return out
+
+
 def malformed_checkboxes(paths):
     """Les cases mal écrites des tickets indexés (`- [x ]`, `- [ x]`, `- []`, `- [X]`…), hors blocs de
     code, avec le fichier et la ligne : seules `- [ ] ` et `- [x] ` sont des cases. Une case `- [x ]`
     était passée inaperçue au cochage d'un ticket."""
     problems = []
     for path in paths:
-        fence = None  # la clôture qui a ouvert le bloc en cours ; il se ferme par la même suite, au moins aussi longue
-        for n, line in enumerate((git_show(REPO, f":{path}") or "").split("\n"), 1):
-            m = FENCE.match(line)
-            if m and fence is None:
-                fence = m.group(1)
-            elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
-                fence = None
-            elif fence is None and CHECKBOX.match(line) and not CHECKBOX_OK.match(line) and not CHECKBOX_LINK.match(line):
+        for n, line in lines_outside_code(git_show(REPO, f":{path}")):
+            if CHECKBOX.match(line) and not CHECKBOX_OK.match(line) and not CHECKBOX_LINK.match(line):
                 problems.append(f"{path}:{n} : case mal formée « {line.strip()[:40]} » ; écrire « - [ ] » ou « - [x] », suivi d'une espace")
     return problems
 
 
-def check_tickets(paths):
+TICKET_DONE_STATUS = re.compile(r"^\s*(?:\*\*)?Status\s*:\s*(?:\*\*)?\s*(?:fait|done)\b", re.I)
+TICKET_CHECKED = re.compile(r"^\s*- \[x\] ")
+
+
+def new_tickets_written_done(paths, moves=None):
+    """Les tickets indexés neufs écrits comme déjà faits : absents de `HEAD` à leur chemin et pas renommés
+    depuis un fichier de `HEAD` (une copie compte comme neuve), dont la ligne `Status:` dit fait (« fait »,
+    « done ») ou qui portent une case cochée `- [x] ` hors bloc de code. Pendant une fusion, un ticket que
+    la branche fusionnée (`MERGE_HEAD`) portait déjà passe. Un manager avait créé un ticket en copiant un
+    ticket fait : « Status: fait » et six cases cochées de fausses preuves."""
+    moves = moves or {}
+    merging = git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None
+    problems = []
+    for path in paths:
+        if moves.get(path, ("",))[0] == "R" or git_show(REPO, f"HEAD:{path}") is not None \
+                or (merging and git_show(REPO, f"MERGE_HEAD:{path}") is not None):
+            continue
+        for n, line in lines_outside_code(git_show(REPO, f":{path}")):
+            if TICKET_DONE_STATUS.match(line) or TICKET_CHECKED.match(line):
+                problems.append(f"{path}:{n} : ticket neuf écrit comme déjà fait (« {line.strip()[:60]} ») ; un ticket "
+                                f"neuf s'écrit « Status: ready-for-agent », ses cases vides (« - [ ] »)")
+    return problems
+
+
+def check_tickets(paths, merging=False):
+    """Les contrôles des tickets indexés. `merging` sans `MERGE_HEAD` (le hook pre-merge-commit d'une fusion
+    propre, qui ne le voit pas) : la fusion n'apporte que des tickets déjà commités ailleurs, le refus d'un
+    ticket neuf écrit comme fait ne la juge pas ; une fusion arrêtée (`MERGE_HEAD`) le garde, un ticket que
+    la branche fusionnée portait déjà passant (`new_tickets_written_done`)."""
     log("→ recherche citée des tickets sensibles")
-    problems = tickets_without_search(paths, staged_sources())
+    moves = staged_moves()
+    problems = tickets_without_search(paths, {path: source for path, (_, source) in moves.items()})
     if problems:
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} ticket(s) sensible(s) sans recherche citée")
@@ -2768,6 +3018,14 @@ def check_tickets(paths):
     if problems:
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} case(s) mal formée(s) : " + " ; ".join(problems))
+    log("  ok")
+    if merging and git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is None:
+        return
+    log("→ tickets neufs écrits comme faits")
+    problems = new_tickets_written_done(paths, moves)
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} ligne(s) d'un ticket neuf écrit comme fait : " + " ; ".join(problems))
     log("  ok")
 
 
@@ -2885,7 +3143,7 @@ def staged_checks(merging):
         check_decisions(decisions, merging)
     tickets = [p for p in paths if TICKET_FILE.fullmatch(p)]
     if tickets:
-        check_tickets(tickets)
+        check_tickets(tickets, merging)
     # Les règles du dépôt indexées (règle ou référence commune, règle de projet, .gitignore, test de la
     # suite Python), même en documentation seule : leur version indexée, celle que le commit enregistre.
     repo_rules = [p for p in paths if p == GITIGNORE_FILE or COMMON_RULE_FILE.fullmatch(p) or PROJECT_RULE_FILE.fullmatch(p)
@@ -3024,12 +3282,20 @@ def main():
             log(f"\nPré-contrôle passé ; la suite complète reste à lancer (scripts/check.sh {' '.join(names)}).")
             return
         if args.fix:
+            refused = []
             for name in names:
                 if name not in TOOLS:
-                    fix_architecture(PLUGINS / name)
+                    # Un arbre refusé (README inchangé) n'arrête pas les autres plugins : échec à la fin.
+                    try:
+                        fix_architecture(PLUGINS / name)
+                    except Failed as err:
+                        log(f"  {err}")
+                        refused.append(name)
                     for said in fix_detached_docs(PLUGINS / name):
                         log(f"  {said}")
             log(f"\nRelancer scripts/check.sh {' '.join(names)} pour les contrôles.")
+            if refused:
+                raise Failed(f"arbre « Architecture » non réécrit ({', '.join(refused)}) : à résoudre à la main, voir plus haut")
             return
         desktop = None
         if not args.no_desktop:

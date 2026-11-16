@@ -4,6 +4,7 @@ import { coordinationRows } from '../hooks/coo-view.tsx'
 import { cooStatement } from '../hooks/coo.ts'
 import { GROUP_EFFORT, quotaText, type QuotaWindow } from '../hooks/effort.ts'
 import { emptyBoard } from '../hooks/model.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // Le quota de la discussion avant un lancement : la limite hebdomadaire était tombée 5 minutes après le
 // lancement d'un groupe en xhigh, et sa session était restée arrêtée 24 h. La carte de lancement le montre,
@@ -82,14 +83,14 @@ const mount = async ($: any, on: any, limits: unknown, presses: string[]): Promi
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...LOT } as any)
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
-  const shown = (await ui.find({ type: 'Text', text: /^quota de la discussion/ })) !== undefined
-  const exact = (await ui.find({ type: 'Text', text: QUOTA_LINE })) !== undefined
+  const shown = (await findAny(ui, { type: 'Text', text: /^quota de la discussion/ })) !== undefined
+  const exact = (await findAny(ui, { type: 'Text', text: QUOTA_LINE })) !== undefined
   // La carte « Ensuite » du lancement des deux groupes indépendants (« ⇉ A ∥ B en parallèle · workers »).
-  const isLaunchDrawn = ((await ui.findAll({ type: 'Button' })) as { key?: unknown; props: { key?: unknown } }[]).some(b => String(b.key ?? b.props.key) === 'next-parallel-linked')
+  const isLaunchDrawn = ((await findAllAny(ui, { type: 'Button' })) as { key?: unknown; props: { key?: unknown } }[]).some(b => String(b.key ?? b.props.key) === 'next-parallel-linked')
   const texts: string[] = []
   for (const key of presses) {
     const before = filled.length
-    await ui.press({ key })
+    await pressAny(ui, { key })
     // Chaque appui remplit le prompt : sinon le texte d'avant serait relu à tort.
     expect(filled.length).toBe(before + 1)
     texts.push(filled.at(-1)!)
@@ -159,7 +160,7 @@ test('chez le COO : le quota sous une carte prête en xhigh, jamais sous une car
   const card = (effort: 'high' | 'xhigh') => ({ id: 'kabcdef12', title: 'Export CSV', start: 'grill-with-docs' as const, askMatt: 'l. 19', alts: [], mode: 'manual' as const, modeWhy: '', effort, effortWhy: '', folder: 'export-csv', at: 1 })
   const quotaRow = (effort: 'high' | 'xhigh', quota?: string) => {
     const s = cooStatement(emptyBoard('', 'p'), { now: 2, cards: [card(effort)] })
-    return coordinationRows(quota ? { ...s, quota } : s).find(row => row.key === 'coo-card-quota-kabcdef12')?.parts.map(p => p.text.replace(/\u00a0/g, ' ')).join('')
+    return coordinationRows(quota ? { ...s, quota } : s, { page: 'missions' }).find(row => row.key === 'coo-card-quota-kabcdef12')?.parts.map(p => p.text.replace(/\u00a0/g, ' ')).join('')
   }
   expect(quotaRow('xhigh', QUOTA_TEXT)).toBe(`quota de la discussion · ${QUOTA_TEXT}`)
   expect(quotaRow('high', QUOTA_TEXT)).toBeUndefined()

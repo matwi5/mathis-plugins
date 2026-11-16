@@ -230,6 +230,37 @@ test('la copie close comme livrée par le COO, plus récente, l’emporte sur la
   expect(newer.runs[0]!.status).toBe('active')
 })
 
+test('une copie close comme livrée et archivée ailleurs, plus récente, ne retire jamais une mission travaillée ici après sa clôture ; close ici, elle l’emporte', () => {
+  const run = toDeliver('active')
+  // Travaillée ici à 2 050, après la clôture par le COO (2 000) ; l'archivage (2 100) vient d'un affichage ancien.
+  const local: Board = { ...emptyBoard('', 'p'), runs: [{ ...run, owner: 's', updatedAt: 2_050 }], activeId: run.id, session: 's' }
+  const delivered = closeDelivered({ ...local, activeId: null, session: 'coo', runs: [{ ...run, status: 'paused', owner: undefined, updatedAt: 1_600 }] }, run.id, 2_000, RESULT)!.board
+  const archived: Board = { ...delivered, runs: delivered.runs.map(r => ({ ...r, archivedAt: 2_100, updatedAt: 2_100 })) }
+  const merged = mergeBoards(local, archived)
+  expect(merged.activeId).toBe(run.id)
+  expect(merged.runs[0]!.archivedAt).toBeUndefined()
+  expect(merged.runs[0]!.status).toBe('active')
+  // Le témoin : la même copie, sur une mission close ici, l'emporte et la discussion ne la montre plus.
+  const closedHere = mergeBoards({ ...local, runs: [{ ...local.runs[0]!, status: 'done' }] }, archived)
+  expect(closedHere.activeId).toBeNull()
+  expect(closedHere.runs[0]!.archivedAt).toBe(2_100)
+})
+
+test('une copie livrée et archivée, close après la dernière activité d’ici (discussion muette) : elle l’emporte, Version et Push ne reviennent pas', () => {
+  const run = toDeliver('active')
+  // La dernière activité d'ici (1 500) précède la clôture par le COO (2 000), puis l'archivage (2 100).
+  const local: Board = { ...emptyBoard('', 'p'), runs: [{ ...run, owner: 's', updatedAt: 1_500 }], activeId: run.id, session: 's' }
+  const delivered = closeDelivered({ ...local, activeId: null, session: 'coo', runs: [{ ...run, status: 'paused', owner: undefined, updatedAt: 1_600 }] }, run.id, 2_000, RESULT)!.board
+  const archived: Board = { ...delivered, runs: delivered.runs.map(r => ({ ...r, archivedAt: 2_100, updatedAt: 2_100 })) }
+  const muette = mergeBoards(local, archived)
+  expect(muette.activeId).toBeNull()
+  expect(isDeliveredRun(muette.runs[0]!)).toBe(true)
+  expect(muette.runs[0]!.archivedAt).toBe(2_100)
+  // Travaillée ici après la clôture (1 800 < 2 000 : pas encore ; 2 050 > 2 000 : oui) : la copie d'ici garde la main.
+  expect(mergeBoards({ ...local, runs: [{ ...local.runs[0]!, updatedAt: 1_800 }] }, archived).activeId).toBeNull()
+  expect(mergeBoards({ ...local, runs: [{ ...local.runs[0]!, updatedAt: 2_050 }] }, archived).activeId).toBe(run.id)
+})
+
 test('une mission livrée et pas archivée n’est jamais élaguée, même au-delà des missions gardées', () => {
   const closedAt = (i: number, delivered: boolean): Run => {
     const r = { ...toDeliver('paused'), id: `run-${delivered ? 'd' : 'c'}-${i}`, title: `M${i}` }

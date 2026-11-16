@@ -83,3 +83,17 @@
 0.86.0	framing agreement, spec, ticket split
 # Le trou du gabarit du relecteur que chaque worker remplissait à la main ; le fichier de consignes donne le chemin :
 0.86.0	<chemin du SKILL.md du skill code-review>
+# L'archivage de la mission étudiée au lancement de sa rétro, remplacé par la fin de la rétro (mission « Fin de mission sans gestes ») :
+0.87.0	Archivée : sa rétro est lancée
+0.87.0	La mission étudiée est archivée
+# La demande d'archiver la discussion d'une mission, qui ne faisait rien au terminal, remplacée par la procédure de fermeture (mission « Fin de mission sans gestes ») :
+0.87.0	ne fais rien et n’en dis rien
+# Les toasts qui disaient d'archiver à la main la discussion d'une mission archivée, remplacés par la fermeture au tour suivant du COO (mission « Fin de mission sans gestes ») :
+0.87.0	archive-la à la main si tu veux
+0.87.0	archive-les à la main si tu veux
+# La consigne de montrer d'abord le relevé d'une mission close, remplacée par le relevé seul (mission « Fin de mission sans gestes ») :
+0.87.0	show the user what was not declared yet
+0.87.0	montre à la personne ce qui n'a pas été déclaré
+# Le plafond des cartes de lancement, retiré (plus aucune carte n'en chasse une autre) :
+0.87.0	plafond de 8 cartes
+0.87.0	au-delà du plafond des cartes

@@ -13,7 +13,7 @@
 
 import type { CooSeat } from '../types'
 import { isTime } from './basics.ts'
-import { isSafeId, shellQuote } from './closing.ts'
+import { isSafeId, isSessionId, shellQuote } from './closing.ts'
 import { isSeatAhead, soundSeat, seatHolder } from './seat.ts'
 
 /** Une surveillance dure au plus 12 heures après son allumage. */
@@ -291,9 +291,11 @@ export const nightLogOf = (lines: readonly string[], watch: string): NightLogLin
 /**
  * La commande qui rouvre la nuit une mission en auto arrêtée (décision R33) : `claude --bg --resume <id>` relance la
  * discussion de la mission elle-même (`session` : la discussion qui la tient, ou où elle est née), jamais une session
- * neuve (une mission ne vit que dans sa discussion, choix de Mathis du 09/11/2026). Ce que fait `--resume` d'une
- * discussion qui tourne encore, ou née dans un autre dossier (un worktree), reste à confirmer ; une discussion qui
- * tient une autre mission n'en reçoit pas (`nightReopensNow`). Son premier message ne cite que l'id contrôlé :
+ * neuve (une mission ne vit que dans sa discussion, choix de Mathis du 09/11/2026). Une discussion relancée qui a
+ * retrouvé sa mission n'est pas à rouvrir (`isEndedPause`) ; une discussion que `claude agents --json --all` montre avec
+ * un `pid` n'en reçoit pas (le texte du relevé le fait chercher d'abord, `reopenText` de `coo.ts`) ; ce que fait
+ * `--resume` d'une discussion qui tourne sans paraître dans cette liste, ou née dans un autre dossier (un worktree),
+ * reste à confirmer ; une discussion qui tient une autre mission n'en reçoit pas (`nightReopensNow`). Son premier message ne cite que l'id contrôlé :
  * reprendre la mission par `{"resume": "<id>"}` (permis dans sa discussion), en manuel, son auto éteint (la nuit ne
  * rallume jamais l'auto). Null pour un id de mission ou de discussion hors forme sûre.
  */
@@ -305,13 +307,33 @@ export const reopenCommand = (id: unknown, session: unknown): string | null => {
 }
 
 /**
- * Ce que le relevé dit d'une mission à rouvrir : la commande à lancer (`cli`, dans le CLI), pour le matin (`app` :
- * l'app Desktop), pas encore (`unseen` : la discussion pas encore dessinée, sa surface inconnue), déjà rouverte
- * pendant cette surveillance (`done`), ou sans commande
- * (`unsafe` : son id n'a pas la forme sûre ; `unread` : le journal ne se lit pas, une réouverture déjà faite ne se
- * distinguerait pas).
+ * Le message fixe passé à la discussion du manager rouverte pour une rétro que personne n'a prise : il ne recopie aucune valeur
+ * relue, ne reprend aucune mission, et fait finir le tour aussitôt (un tour ouvert retient la prise de la demande, que
+ * le tableau de bord de cette discussion applique de lui-même à sa relecture suivante). Sans apostrophe d'aucune
+ * forme (ASCII ou typographique) : aucune ne ferme la citation, ni POSIX ni PowerShell.
  */
-export type NightReopen = { how: 'cli'; command: string } | { how: 'app' } | { how: 'unseen' } | { how: 'done' } | { how: 'unsafe' } | { how: 'unread' } | { how: 'busy' }
+export const RETRO_RESUME_PROMPT = 'Le COO a rouvert cette discussion pour une rétro : son tableau de bord la lance de lui-même dans quelques secondes. Ne fais rien, sans appeler flow ni reprendre aucune mission : termine ce tour tout de suite, en un mot.'
+
+/**
+ * La commande qui rouvre au terminal la discussion du manager pour une rétro que personne n'a prise : `claude --bg
+ * --resume <session>` avec le message fixe `RETRO_RESUME_PROMPT`. Null pour un id de mission hors forme sûre, et
+ * pour une discussion dont l'id n'est pas un sessionId du CLI (un UUID : `claude --resume` ne reprend que lui, ni un id
+ * court, ni un id `local_…` de l'app).
+ */
+export const retroResumeCommand = (run: unknown, session: unknown): string | null => {
+  if (!isSafeId(run) || !isSessionId(session) || session.startsWith('local_')) return null
+  return `claude --bg --resume ${shellQuote(session)} ${shellQuote(RETRO_RESUME_PROMPT)}`
+}
+
+/**
+ * Ce que le relevé dit d'une mission à rouvrir : la commande à lancer et l'id de la discussion dont le texte fait d'abord
+ * chercher le `pid` (`cli`, dans le CLI), pour le matin (`app` : l'app Desktop ; `running` : sa session trouvée en
+ * marche pendant cette surveillance), pas encore (`unseen` : la discussion pas encore dessinée, sa surface inconnue),
+ * déjà rouverte pendant cette surveillance (`done`), ou sans commande (`unsafe` : son id n'a pas la forme sûre ;
+ * `unread` : le journal ne se lit pas, une réouverture déjà faite ne se distinguerait pas ; `busy` : sa discussion
+ * tient une autre mission).
+ */
+export type NightReopen = { how: 'cli'; command: string; session: string } | { how: 'running' } | { how: 'app' } | { how: 'unseen' } | { how: 'done' } | { how: 'unsafe' } | { how: 'unread' } | { how: 'busy' }
 
 /** Le résumé de la nuit : la surveillance arrêtée (son id, l'heure et la cause de l'arrêt), ses lignes du journal, ou un journal illisible. */
 export type NightMorning = { watch: string; at: number; why: NightStop } & ({ lines: NightLogLine[] } | { unread: true })
@@ -345,6 +367,12 @@ export type NightMissionView = {
   isAuto: boolean
   isPaused: boolean
   isOpen: boolean
+  /**
+   * En pause « discussion fermée » posée par la fin de sa discussion (`isEndedPause` : pas une discussion relancée qui
+   * l'a retrouvée, qui tourne) : notée ouverte au nom de cette discussion (titulaire gardé), elle se rouvre comme une
+   * mission ouverte nulle part.
+   */
+  isEnded: boolean
   /** En pause sur un groupe revenu trop de fois (`isRelaunchPause`) : la relance y vaut encore. */
   isRelaunchPause: boolean
   /** Les groupes qu'une question de la personne bloque (pas une question du mod) : aucun geste de nuit ne les lance. */
@@ -359,7 +387,7 @@ export type NightMissionView = {
  * Les blocages des missions en auto, dans l'ordre des missions : un groupe de la vague en cours qui ne part pas
  * (`wave`, l'auto allumé), une question « sans-suite: » (`resend`, l'auto allumé) ou « relance: » d'un groupe (`relaunch`),
  * celle-ci l'auto allumé ou dans la pause d'un groupe revenu trop de fois, une mission en auto arrêtée avec des groupes
- * ouverts et ouverte nulle part (`reopen`), un groupe d'une mission dont l'auto est allumé dont chaque retenue (8 au
+ * ouverts, ouverte nulle part ou en pause « discussion fermée » (`reopen`), un groupe d'une mission dont l'auto est allumé dont chaque retenue (8 au
  * plus) est tenue par un groupe d'une mission ouverte nulle part dont le worker a fini depuis plus de 30 minutes
  * (`force`, un blocage pour toutes ses retenues). `deadSince` : pour le groupe d'une mission, la date relayée la plus
  * récente après un signe sûr de fin, absente sans signe sûr (une supposition ne force rien).
@@ -379,7 +407,7 @@ export const nightBlocks = (missions: readonly NightMissionView[], deadSince: (m
       if (q.id.startsWith('sans-suite:') && m.isAuto) out.push({ ...at, act: 'resend', question: q.id, ...(q.group !== undefined ? { group: q.group } : {}) })
       else if (q.id.startsWith('relance:') && q.group !== undefined && isFree(q.group) && (m.isAuto || m.isRelaunchPause)) out.push({ ...at, act: 'relaunch', question: q.id, group: q.group })
     }
-    if (m.isPaused && !m.isOpen && m.hasOpenGroups) out.push({ ...at, act: 'reopen' })
+    if (m.isPaused && (!m.isOpen || m.isEnded) && m.hasOpenGroups) out.push({ ...at, act: 'reopen' })
     // Forcer fait partir un groupe d'une mission dont l'auto est allumé, comme la vague.
     if (!m.isAuto) continue
     // Une paire retenue par le plan et par un fichier n'est qu'un blocage : son forçage lève les deux (`on` absent).
@@ -392,17 +420,22 @@ export const nightBlocks = (missions: readonly NightMissionView[], deadSince: (m
     const byHeld = new Map<string, { mission: string; group: string; isPlan: boolean }[]>()
     for (const h of pairs.values()) byHeld.set(h.held, [...(byHeld.get(h.held) ?? []), h])
     for (const [held, list] of byHeld) {
-      const isDead = (h: { mission: string; group: string }) => {
-        const holder = byId.get(h.mission)
-        const since = deadSince(h.mission, h.group)
-        return holder !== undefined && !holder.isOpen && isNightGroup(h.group) && since !== undefined && now - since > NIGHT_DEAD_MS
-      }
+      const isDead = (h: { mission: string; group: string }) => isPairDead(byId.get(h.mission), h.group, deadSince(h.mission, h.group), now)
       if (!isNightGroup(held) || !isFree(held) || list.length > NIGHT_FORCE_PAIRS_MAX || !list.every(isDead)) continue
       out.push({ ...at, act: 'force', group: held, awaited: list.map(h => ({ mission: h.mission, group: h.group, ...(h.isPlan ? { on: 'plan' as const } : {}) })) })
     }
   }
   return out
 }
+
+/**
+ * Le test d'une paire (groupe retenu, groupe attendu), le seul : la mission attendue (`holder`) est connue et ouverte
+ * nulle part, le groupe attendu a un worker (pas le lot sans groupes, `*`), et ce worker a fini (`since` : sa date
+ * relayée la plus récente après un signe sûr de fin, absente sans signe sûr) depuis plus de `NIGHT_DEAD_MS`. La nuit
+ * l'applique à chaque paire d'un groupe retenu, avec ses conditions en plus ; la vue du COO y lit la marque « à forcer ».
+ */
+export const isPairDead = (holder: { isOpen: boolean } | undefined, group: string, since: number | undefined, now: number): boolean =>
+  holder !== undefined && !holder.isOpen && isNightGroup(group) && since !== undefined && now - since > NIGHT_DEAD_MS
 
 /** Au plus, les retenues qu'un même forçage de nuit lève (le format de l'entrée `night` les borne aussi). */
 export const NIGHT_FORCE_PAIRS_MAX = 8

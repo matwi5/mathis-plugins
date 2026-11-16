@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { activeRun } from '../hooks/basics.ts'
 import { applyAsana, applyReport, clampFuture, emptyBoard, mergeBoards, newRun, openBlockers } from '../hooks/model.ts'
-import { TOOL_SCHEMA } from '../hooks/register.tsx'
+import { TOOL_SCHEMA } from '../hooks/tool-schema.ts'
 import type { Board, ExternalBlocker, Run } from '../types'
 
 // Un bloqueur externe peut être local (la session d'une autre mission, levée par "status": "done" une fois

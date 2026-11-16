@@ -14,7 +14,7 @@
 
 import type { Run, RunLaunch } from '../types'
 import { clip, isTime } from './basics.ts'
-import { isSafeId } from './closing.ts'
+import { asciiJson, isSafeId } from './closing.ts'
 import { isEntryId } from './coordination.ts'
 import { isRoadmapId, roadmapIdsIn } from './roadmap.ts'
 
@@ -30,7 +30,7 @@ export const LAUNCH_TTL_MS = 10 * 60_000
 export const LAUNCH_GRACE_MS = 60_000
 
 /** Une date de clic venue d'ailleurs ne vaut pas au-delà de cette avance sur l'horloge d'ici. */
-const CLOCK_SKEW_MS = 60_000
+export const CLOCK_SKEW_MS = 60_000
 
 /** Ce que dit une mission qui n'a pas pu consommer son lancement : elle reste en manuel. */
 export const LAUNCH_STALE = "Accord de lancement périmé : la mission est en manuel, allume l'auto ici si tu veux"
@@ -129,6 +129,8 @@ export const isFolderName = (v: unknown): v is string => typeof v === 'string' &
 const PISTES_CARD_PREFIX = 'pistes-de-retro-'
 export const pistesCardFolder = (id: string): string => `${PISTES_CARD_PREFIX}${id.slice(1)}`
 export const isPistesCard = (card: Pick<LaunchCard, 'id' | 'start' | 'folder' | 'of'>): boolean => card.of === undefined && card.start === 'to-tickets' && sameFolder(card.folder, pistesCardFolder(card.id))
+/** Une carte de lancement ordinaire, proposée par le Claude du COO : ni carte de rétro, ni carte « Pistes de rétro ». */
+export const isOrdinaryCard = (card: Pick<LaunchCard, 'id' | 'start' | 'folder' | 'of'>): boolean => card.of === undefined && !isPistesCard(card)
 
 /**
  * Les entrées de la feuille de route qu'une carte cite : son champ `idea`, puis les ids `R<chiffres>` ou `I<chiffres>` de
@@ -138,6 +140,12 @@ export const cardRoadmapIds = (card: Pick<LaunchCard, 'title' | 'idea'>): string
   const found = [...(card.idea !== undefined && isRoadmapId(card.idea) ? [card.idea] : []), ...roadmapIdsIn(card.title, 'RI')]
   return [...new Set(found)]
 }
+
+/**
+ * La ligne qui fait rattacher une mission à son lancement, dans le premier message de sa discussion (nouvelle
+ * discussion, ou commande de rétro lancée par le mod dans la discussion du manager) : seul l'id du lancement y entre.
+ */
+export const launchFirstLine = (launch: string): string => `Lancée par le COO : appelle d'abord l'outil flow de flow-board avec {"launch": ${asciiJson(launch)}}, une fois le skill chargé, avant toute autre écriture.`
 
 /** Une carte qui a un tour d'intention (`demande.md`) : ni une rétro (la mission close est sa demande) ni des pistes de rétro (ses pistes). */
 export const hasIntentTurn = (card: Pick<LaunchCard, 'id' | 'start' | 'folder' | 'of'>): boolean => card.of === undefined && !isPistesCard(card)
@@ -200,7 +208,7 @@ export const parseCard = (raw: unknown, now: number, id: string, isMod = false):
   }
 }
 
-/** Une carte relue de l'état de la discussion : seulement en forme ; null sinon. */
+/** Une carte relue de la liste des cartes du projet (ou de l'ancien état d'une discussion) : seulement en forme ; null sinon. */
 export const soundCard = (raw: unknown): LaunchCard | null => {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const x = raw as Record<string, unknown>
@@ -275,7 +283,7 @@ export const otherCarrierOf = (runs: readonly Run[], launch: RunLaunch, self: st
 export type CardState = { kind: 'ready' } | { kind: 'launching'; mode: LaunchMode } | { kind: 'launched'; run: { id: string; title: string } }
 
 export const cardStateOf = (card: LaunchCard, runs: readonly Run[], now: number): CardState => {
-  // Une mission qui porte la carte, ou son dossier (une carte reproposée après un redémarrage a un autre id) : lancée.
+  // Une mission qui porte la carte, ou son dossier (une carte reproposée après la perte de la sienne a un autre id) : lancée.
   const run = runOfCard(runs, card.id, card.folder)
   if (run) return { kind: 'launched', run: { id: run.id, title: run.title } }
   if (card.launch && now - card.launch.at < LAUNCH_TTL_MS + LAUNCH_GRACE_MS) return { kind: 'launching', mode: card.launch.mode }
@@ -384,3 +392,19 @@ export const autoOnRefusal = (record: AutoOnRecord, run: Run, isActiveHere: bool
   if (record.claim !== undefined && record.claim.by !== here) return 'taken'
   return null
 }
+
+/** Une rétro lancée par le COO : l'id de la mission close qu'elle étudie, ou null (une rétro lancée à la main n'en a pas). */
+export const retroOf = (run: Run): string | null => {
+  const l = liveLaunchOf(run)
+  return l?.of && isSafeId(l.of) ? l.of : null
+}
+
+/** La mission close a déjà sa rétro (lancée par le COO). */
+export const hasRetro = (runs: readonly Run[], mission: string): boolean => runs.some(r => retroOf(r) === mission)
+
+/**
+ * La mission a droit à sa carte de rétro : close, pas archivée, l'id en forme, ni une rétro (sa première phase, ou le
+ * lancement d'une rétro du COO) ni une mission qui a déjà la sienne (`runs` : toutes les missions, archivées comprises).
+ */
+export const isRetroCardDue = (run: Run, runs: readonly Run[]): boolean =>
+  run.status === 'done' && run.archivedAt === undefined && isSafeId(run.id) && run.phases[0]?.skill !== 'retro' && retroOf(run) === null && !hasRetro(runs, run.id)

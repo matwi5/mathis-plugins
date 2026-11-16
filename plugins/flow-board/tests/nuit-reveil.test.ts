@@ -146,6 +146,6 @@ test('une mission en auto arrêtée avec des groupes ouverts, ouverte nulle part
   // Dessinée dans l'app, la discussion ne peut pas rouvrir la nuit : ce blocage seul ne la réveille pas.
   expect(wakes(w)).toBe(0)
   const text = await statement($)
-  expect(text).toMatch(/- mission « Fermée » \(mission id « run-1 »\): auto paused by the dashboard with open groups, the mission open in no discussion; night gesture: reopen/)
+  expect(text).toMatch(/- mission « Fermée » \(mission id « run-1 »\): auto paused by the dashboard with open groups, the mission open in no discussion or its discussion ended; night gesture: reopen/)
   expect(text).not.toMatch(/mission « Coupée » \(mission id « run-2 »\): /)
 })

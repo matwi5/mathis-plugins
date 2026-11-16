@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { ROADMAP_EXAMPLE, isRoadmapId, parseRoadmap, partialSeen, roadmapTextPrint, soundSeen, unionSeen, watchRoadmap, type RoadmapSeen } from '../hooks/roadmap.ts'
 import { roadmapAsk, roadmapMoveAsk } from '../hooks/register.tsx'
-import { cooStatement, roadmapNow, statementText, type CooRoadmap } from '../hooks/coo.ts'
+import { cooStatement, cutStateWhere, failedPlaceWrite, roadmapNow, statementText, wherePlaceRefusal, type CooRoadmap } from '../hooks/coo.ts'
 import { emptyBoard } from '../hooks/model.ts'
 import { CORPUS } from './corpus.mjs'
 
@@ -185,7 +185,11 @@ test('le titulaire du siège lit la feuille de route : la vue montre le jalon, l
   expect(opening).toMatch(/Next steps \(1\): « E1 » « à faire »: « Lancer le groupe C »/)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await pane($, surface)
-    for (const text of [/^Feuille de route$/, /^Le COO suit les missions — fin : chaque mission passe par lui$/, /^Lancer le groupe C$/, /^un tableau des coûts · par mission$/, /^Prochaine étape du projet : Lancer le groupe C \(E1\)\.$/]) {
+    // Le point sur la page « À faire », la feuille de route sur la page « Idées ».
+    await ui.press({ key: 'coo-page-todo' })
+    expect(await ui.find({ type: 'Text', text: /^Prochaine étape du projet : Lancer le groupe C \(E1\)\.$/ }), surface).toBeDefined()
+    await ui.press({ key: 'coo-page-ideas' })
+    for (const text of [/^Feuille de route$/, /^Le COO suit les missions — fin : chaque mission passe par lui$/, /^Lancer le groupe C$/, /^un tableau des coûts · par mission$/]) {
       expect(await ui.find({ type: 'Text', text }), `${surface} ${text}`).toBeDefined()
     }
     // Une idée écartée ne se montre plus, mais reste dans le fichier.
@@ -268,6 +272,7 @@ test('« Plus tard » et « Écarter » d’une idée demandent au COO, qui seul
   await start($)
   await openCoo($, clock)
   const ui = await pane($)
+  await ui.press({ key: 'coo-page-ideas' })
   await ui.press({ key: 'coo-later-I1' })
   await ui.press({ key: 'coo-drop-I1' })
   await ui.unmount()
@@ -308,6 +313,7 @@ test('la vue du COO porte la bascule de la revue de sécurité du projet : jamai
   await openCoo($, clock)
   const label = async (): Promise<string> => {
     const ui = await pane($)
+    await ui.press({ key: 'coo-page-settings' })
     const found = String((await ui.find({ key: 'coo-security-toggle' }))?.props?.label ?? '')
     await ui.unmount()
     return found.replace(/ /g, ' ')
@@ -611,7 +617,8 @@ test('la demande de remise d’un ancien texte : seulement pour un texte relevé
 test('le relevé nomme chaque copie mise de côté de l’état gardé et la fait montrer à la personne, sans jamais l’effacer', () => {
   const file = '/c/flow-board/coordination/proj-ab12.feuille-de-route.json.illisible-1000'
   const key = 'coo-roadmap:/proj:illisible:2000'
-  const roadmap: CooRoadmap = { where: 'repo', path: '/proj/travail/feuille-de-route.md', read: { ok: true, entries: [] }, gone: [], asides: [file, key] }
+  // L'endroit perdu avec l'état (sinon il est gardé, et le relevé ne le redemande pas).
+  const roadmap: CooRoadmap = { where: 'unasked', path: '/proj/travail/feuille-de-route.md', read: { ok: true, entries: [] }, gone: [], asides: [file, key] }
   const text = statementText(cooStatement({ ...emptyBoard('/p', 'p') }, { now: 1, roadmap }))
   expect(text).toContain(`What the dashboard kept of the roadmap could not be read and was set aside as it was, at « ${file} »`)
   expect(text).toMatch(/show it to the user and copy back together what it held \(the place chosen for the roadmap, the entries seen\): compare the entries it lists, with their last versions, to the roadmap file, and put back in the roadmap file, with the user's agreement, each one missing from it/)
@@ -727,4 +734,348 @@ test('une entrée qui passe de « rattachée à … » à « faite : … » n’
   // Une lecture hors format ensuite ne retire rien de ce qui est gardé.
   const broken = watchRoadmap(second.seen, parseRoadmap(`${edited}texte libre\n`), 3_000)
   expect(broken.seen.R1!.line).toBe(second.seen.R1!.line)
+})
+
+// ─── Changer l'endroit, depuis la page « Réglages » ──────────────────────
+// Invariant : « Une fois le premier choix fait, l'endroit ne change jamais sans le second clic de Mathis ; aucun
+// changement d'endroit ne retire un fichier de feuille de route, n'en retire une entrée ni n'en change un texte ; seul le
+// statut d'une entrée de la copie du poste peut être remplacé, au retour du dépôt, par celui du fichier du dépôt. »
+
+/** La page « Réglages » montée, ses textes et ses boutons. */
+const settings = async ($: any) => {
+  const ui = await pane($)
+  await ui.press({ key: 'coo-page-settings' })
+  return ui
+}
+const texts = async (ui: any): Promise<string[]> => ((await ui.findAll({ type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? ''))
+/** Changer l'endroit par la page « Réglages » : « Changer l'endroit » puis « Confirmer ». */
+const changePlace = async ($: any, clock: { advance: (ms: number) => Promise<void> }) => {
+  const ui = await settings($)
+  await ui.press({ key: 'coo-place-change' })
+  await ui.unmount()
+  const asking = await settings($)
+  await asking.press({ key: 'coo-place-confirm' })
+  await asking.unmount()
+  await settle(clock, 2)
+}
+
+test('Réglages : où vit la feuille de route ; « Changer l’endroit » seul et « Annuler » n’écrivent rien', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  w.files[FILE_PATH] = FILE
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  const ui = await settings($)
+  expect(await texts(ui)).toContain('Feuille de route : dans ce projet (travail/feuille-de-route.md)')
+  expect((await texts(ui)).join('\n')).not.toMatch(/Le fichier reste dans travail/)
+  expect(await ui.find({ key: 'coo-place-confirm' })).toBeUndefined()
+  await ui.press({ key: 'coo-place-change' })
+  await ui.unmount()
+  await settle(clock, 6)
+  expect(state(w)?.where).toBe('repo')
+  const asking = await settings($)
+  expect(await asking.find({ key: 'coo-place-confirm' })).toBeDefined()
+  expect((await asking.find({ key: 'coo-place-confirm' }))?.props.variant).toBe('primary')
+  await asking.press({ key: 'coo-place-cancel' })
+  await asking.unmount()
+  await settle(clock, 6)
+  const after = await settings($)
+  expect(await after.find({ key: 'coo-place-confirm' })).toBeUndefined()
+  expect(await after.find({ key: 'coo-place-change' })).toBeDefined()
+  await after.unmount()
+  expect(state(w)?.where).toBe('repo')
+  expect(asks(w.sent)).toEqual([])
+  expect(w.files[FILE_PATH]).toBe(FILE)
+})
+
+test('Réglages : avant le premier choix, la page dit seulement qu’il n’est pas fait ; la question reste sur « À faire », à un clic', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  w.mem[STATE_KEY] = { seen: {} }
+  await start($)
+  await openCoo($, clock)
+  const ui = await settings($)
+  expect(await texts(ui)).toContain('Endroit pas encore choisi : la question est sur la page « À faire ».')
+  expect(await ui.find({ key: 'coo-place-change' })).toBeUndefined()
+  await ui.unmount()
+  const todo = await pane($)
+  await todo.press({ key: 'coo-page-todo' })
+  await todo.press({ key: 'coo-where-poste' })
+  await todo.unmount()
+  expect(state(w)?.where).toBe('poste')
+  // Sur le poste, sans fichier dans travail/ : la ligne « Le fichier reste… » n'y est pas.
+  const after = await settings($)
+  expect(await texts(after)).toContain('Feuille de route : sur ce poste')
+  expect((await texts(after)).join('\n')).not.toMatch(/Le fichier reste dans travail/)
+  await after.unmount()
+})
+
+
+test('deux clics en vol sur le premier choix (ou sur « Confirmer ») : un seul s’applique, l’endroit ne revient jamais sans le second clic', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  w.mem[STATE_KEY] = { seen: {} }
+  await start($)
+  await openCoo($, clock)
+  const todo = await pane($)
+  await todo.press({ key: 'coo-page-todo' })
+  await Promise.all([todo.press({ key: 'coo-where-repo' }), todo.press({ key: 'coo-where-poste' })])
+  await todo.unmount()
+  await settle(clock, 2)
+  // Le premier clic décide ; le second, en vol pendant le premier, n'écrit rien.
+  expect(state(w)?.where).toBe('repo')
+  // Puis deux « Confirmer » en vol : un seul changement, une seule demande au plus.
+  const ui = await settings($)
+  await ui.press({ key: 'coo-place-change' })
+  await ui.unmount()
+  const asking = await settings($)
+  const before = asks(w.sent).length
+  await Promise.all([asking.press({ key: 'coo-place-confirm' }), asking.press({ key: 'coo-place-confirm' })])
+  await asking.unmount()
+  await settle(clock, 2)
+  expect(state(w)?.where).toBe('poste')
+  expect(asks(w.sent).length - before).toBeLessThanOrEqual(1)
+})
+test('« Confirmer » du dépôt vers le poste : le choix change, la demande recopie sans rien retirer, le fichier du dépôt reste octet pour octet', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  w.files[FILE_PATH] = FILE
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  const ui = await settings($)
+  await ui.press({ key: 'coo-place-change' })
+  await ui.unmount()
+  const asking = await settings($)
+  await asking.press({ key: 'coo-place-confirm' })
+  await asking.unmount()
+  await settle(clock, 2)
+  expect(state(w)?.where).toBe('poste')
+  expect(w.files[FILE_PATH]).toBe(FILE)
+  expect(asks(w.sent).at(-1)).toMatch(/Recopie-la telle quelle de "\/proj\/travail\/feuille-de-route\.md" vers /)
+  // Le fichier de travail/ reste : la page le dit.
+  const after = await settings($)
+  expect(await texts(after)).toContain('Feuille de route : sur ce poste')
+  expect(await texts(after)).toContain('Le fichier reste dans travail/ et dans l’historique git : retire-le toi-même si tu veux.')
+  await after.unmount()
+})
+
+test('« Confirmer » sans le siège ou pendant un tour n’écrit rien', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  on('turn.start', (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
+  w.files[FILE_PATH] = FILE
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  const ui = await settings($)
+  await ui.press({ key: 'coo-place-change' })
+  await ui.unmount()
+  await $.turn.start({ turnId: 't1', text: 'un tour' } as any)
+  const during = await settings($)
+  await during.press({ key: 'coo-place-confirm' })
+  await during.unmount()
+  await settle(clock, 2)
+  expect(state(w)?.where).toBe('repo')
+  await $.turn.complete({ answer: 'Fait.', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  // Le clic refusé pendant le tour laisse la confirmation en attente : « Confirmer » reste, rien n'est écrit.
+  const again = await settings($)
+  expect(await again.find({ key: 'coo-place-confirm' })).toBeDefined()
+  await again.unmount()
+  // Une autre discussion prend le siège : « Confirmer » n'écrit rien.
+  const other = { by: 'session-B', at: NOW + 20_000, seenAt: NOW + 20_000 }
+  const boardAt = Object.keys(w.files).find(isBoardFile)
+  if (boardAt) w.files[boardAt] = JSON.stringify({ ...JSON.parse(w.files[boardAt]!), coo: other })
+  else w.mem[`board:${ROOT}`] = { ...(w.mem[`board:${ROOT}`] as object), coo: other }
+  const lost = await settings($)
+  // Le bouton est dessiné : c'est bien la garde du siège qui refuse.
+  expect(await lost.find({ key: 'coo-place-confirm' })).toBeDefined()
+  await lost.press({ key: 'coo-place-confirm' })
+  await lost.unmount()
+  await settle(clock, 2)
+  expect(state(w)?.where).toBe('repo')
+  expect(asks(w.sent)).toEqual([])
+})
+
+test('la demande d’union dans chaque sens : vers le poste, le statut du dépôt l’emporte sur les mêmes id et texte ; vers le dépôt, rien n’est remplacé et les statuts qui diffèrent se listent', () => {
+  const back = roadmapMoveAsk('/proj/travail/feuille-de-route.md', '/h/x.feuille-de-route.md', true, 'poste')
+  expect(back).toMatch(/prend le statut qu'elle a dans le fichier du dépôt/)
+  expect(back).toMatch(/sans rien y retirer/)
+  expect(back).toMatch(/laisse l'ancien fichier en place/)
+  expect(back).not.toMatch(/commite/)
+  const there = roadmapMoveAsk('/h/x.feuille-de-route.md', '/proj/travail/feuille-de-route.md', true, 'repo')
+  expect(there).toMatch(/sans rien y retirer ni remplacer/)
+  expect(there).toMatch(/dont le statut diffère, sans en changer aucun/)
+  expect(there).not.toMatch(/prend le statut/)
+  const copyBack = roadmapMoveAsk('/proj/travail/feuille-de-route.md', '/h/x.feuille-de-route.md', false, 'poste')
+  expect(copyBack).toMatch(/Recopie-la telle quelle/)
+  expect(copyBack).not.toMatch(/prend le statut|statut diffère/)
+  const copyThere = roadmapMoveAsk('/h/x.feuille-de-route.md', '/proj/travail/feuille-de-route.md', false, 'repo')
+  expect(copyThere).toMatch(/Recopie-la telle quelle/)
+  expect(copyThere).toMatch(/commite la nouvelle par son chemin/)
+})
+
+test('aller-retour par « Confirmer » : vers le dépôt qui existe, union sans rien remplacer et statuts listés ; retour vers le poste qui existe, le statut du dépôt l’emporte ; les deux fichiers restent octet pour octet', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  w.files[FILE_PATH] = FILE
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  // Du dépôt vers le poste, sans fichier sur le poste : recopie ; le Claude du COO l'écrit (simulé ici).
+  await changePlace($, clock)
+  expect(state(w)?.where).toBe('poste')
+  const poste = /vers "([^"]+)"/.exec(asks(w.sent).at(-1) ?? '')?.[1]
+  expect(poste).toMatch(/\/flow-board\/coordination\/.*\.feuille-de-route\.md$/)
+  const posteText = FILE.replace('Lancer le groupe C', 'Lancer le groupe C (poste)')
+  w.files[poste!] = posteText
+  await settle(clock, 6)
+  // Du poste vers le dépôt, qui existe : union, rien de remplacé, les statuts qui diffèrent listés.
+  await changePlace($, clock)
+  expect(state(w)?.where).toBe('repo')
+  expect(asks(w.sent).at(-1)).toMatch(/sans rien y retirer ni remplacer.*dont le statut diffère, sans en changer aucun.*commite la nouvelle/)
+  // Retour vers le poste, qui existe : le statut du dépôt l'emporte sur les mêmes id et texte, rien n'est retiré, rien n'est commité.
+  await changePlace($, clock)
+  expect(state(w)?.where).toBe('poste')
+  expect(asks(w.sent).at(-1)).toMatch(/prend le statut qu'elle a dans le fichier du dépôt/)
+  expect(asks(w.sent).at(-1)).not.toMatch(/commite/)
+  expect(w.files[FILE_PATH]).toBe(FILE)
+  expect(w.files[poste!]).toBe(posteText)
+})
+
+test('la garde du mod (wherePlaceRefusal) : le premier choix une fois l’endroit choisi, « Confirmer » sans « Changer l’endroit » (un dessin périmé, ou après un rechargement), vers l’endroit déjà choisi, sont refusés', () => {
+  // Le premier choix, à un clic, tant qu'aucun n'est fait ; ensuite, jamais.
+  expect(wherePlaceRefusal('where', false, 'unasked', 'repo')).toBeNull()
+  expect(wherePlaceRefusal('where', false, 'repo', 'poste')).toBe('first-done')
+  expect(wherePlaceRefusal('where', true, 'poste', 'repo')).toBe('first-done')
+  // Un changement : seulement confirmé, après un premier choix, vers l'autre endroit.
+  expect(wherePlaceRefusal('where-confirm', true, 'repo', 'poste')).toBeNull()
+  expect(wherePlaceRefusal('where-confirm', false, 'repo', 'poste')).toBe('unconfirmed')
+  expect(wherePlaceRefusal('where-confirm', true, 'unasked', 'repo')).toBe('unconfirmed')
+  expect(wherePlaceRefusal('where-confirm', true, 'poste', 'poste')).toBe('same')
+})
+
+test('cutStateWhere : l’endroit lu en tête d’un texte coupé, seulement au début exact qu’écrit le mod, pour cette racine', () => {
+  const head = '{"v":1,"root":"/proj","where":'
+  expect(cutStateWhere(`${head}"poste","seen":{"E1":{"li`, '/proj')).toBe('poste')
+  expect(cutStateWhere(`${head}"repo"`, '/proj')).toBe('repo')
+  // Coupé avant la fin de l'endroit, tête retouchée, autre racine, autre version, pas de where : la question revient.
+  expect(cutStateWhere(`${head}"pos`, '/proj')).toBeUndefined()
+  expect(cutStateWhere('{"v":1,"root":"/proj","wh', '/proj')).toBeUndefined()
+  expect(cutStateWhere('{ "v":1,"root":"/proj","where":"poste"', '/proj')).toBeUndefined()
+  expect(cutStateWhere('{"v":1,"root":"/autre","where":"poste","seen":{', '/proj')).toBeUndefined()
+  expect(cutStateWhere('{"v":2,"root":"/proj","where":"poste","seen":{', '/proj')).toBeUndefined()
+  expect(cutStateWhere('{"v":1,"root":"/proj","seen":{"E1', '/proj')).toBeUndefined()
+  expect(cutStateWhere(`${head}"ailleurs"`, '/proj')).toBeUndefined()
+})
+
+/** Coupe l'état gardé qu'a écrit le mod au fichier du poste (une écriture coupée) à `cut(text)`, puis laisse le mod le relire. */
+const cutState = async (w: ReturnType<typeof world>, clock: { advance: (ms: number) => Promise<void> }, cut: (text: string) => string) => {
+  const path = Object.keys(w.files).find(isStateFile)
+  expect(path).toBeDefined()
+  w.files[path!] = cut(w.files[path!]!)
+  await settle(clock, 6)
+}
+
+test('un état coupé qui porte encore l’endroit en tête : l’endroit est gardé, aucune question ; la copie part de côté quand même', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  // Le dossier du poste se liste : la copie mise de côté paraît au relevé.
+  on('fs.list', (_$: unknown, e: { path: string }) => ({ value: Object.keys(w.files).filter(k => k.startsWith(`${e.path}/`)).map(k => ({ name: k.slice(e.path.length + 1), kind: 'file', mtimeMs: 1 })) }) as any)
+  w.files[FILE_PATH] = FILE
+  w.mem[STATE_KEY] = { where: 'poste', seen: {} }
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  expect(state(w)?.where).toBe('poste')
+  await cutState(w, clock, text => text.slice(0, text.indexOf('"seen"') + 9))
+  expect(state(w)?.where).toBe('poste')
+  const aside = Object.keys(w.files).filter(k => k.includes('.feuille-de-route.json.illisible-'))
+  expect(aside.length).toBe(1)
+  const ui = await pane($)
+  await ui.press({ key: 'coo-page-todo' })
+  expect(await ui.find({ key: 'coo-where-repo' })).toBeUndefined()
+  await ui.unmount()
+  // Le relevé ne redemande pas l'endroit.
+  await $.prompt.submit({ text: 'et alors ?', origin: { kind: 'composer' } } as any)
+  const said = (w.sent.at(-1)?.context ?? []).find(c => /COO statement/.test(c)) ?? ''
+  expect(said).toMatch(/the place chosen for the roadmap is kept as it was/)
+  expect(said).not.toMatch(/the place of the roadmap is chosen again/)
+})
+
+test('un état coupé dont la tête ne porte plus l’endroit, ou une autre racine : la question revient comme avant', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  // Le dossier du poste se liste : la copie mise de côté paraît au relevé.
+  on('fs.list', (_$: unknown, e: { path: string }) => ({ value: Object.keys(w.files).filter(k => k.startsWith(`${e.path}/`)).map(k => ({ name: k.slice(e.path.length + 1), kind: 'file', mtimeMs: 1 })) }) as any)
+  w.files[FILE_PATH] = FILE
+  w.mem[STATE_KEY] = { where: 'poste', seen: {} }
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  // Coupé au milieu de « where » : rien ne se lit, l'endroit se repose.
+  await cutState(w, clock, text => text.slice(0, text.indexOf('"where"') + 4))
+  expect(state(w)?.where).toBeUndefined()
+  const ui = await pane($)
+  await ui.press({ key: 'coo-page-todo' })
+  expect(await ui.find({ key: 'coo-where-repo' })).toBeDefined()
+  await ui.unmount()
+  await $.prompt.submit({ text: 'et alors ?', origin: { kind: 'composer' } } as any)
+  const said = (w.sent.at(-1)?.context ?? []).find(c => /COO statement/.test(c)) ?? ''
+  expect(said).toMatch(/the place of the roadmap is chosen again/)
+  // Une autre racine, l'endroit pourtant écrit en entier : jamais gardé pour ce projet.
+  const path = Object.keys(w.files).find(isStateFile)!
+  w.files[path] = '{"v":1,"root":"/autre","where":"poste","seen":{"E1'
+  await settle(clock, 6)
+  expect(state(w)?.where).toBeUndefined()
+  expect(Object.keys(w.files).filter(k => k.includes('.feuille-de-route.json.illisible-')).length).toBe(2)
+})
+
+test('un état gardé vidé (fichier de 0 octet) est une écriture coupée : copié de côté, l’alerte le dit, la question de l’endroit revient', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  on('fs.list', (_$: unknown, e: { path: string }) => ({ value: Object.keys(w.files).filter(k => k.startsWith(`${e.path}/`)).map(k => ({ name: k.slice(e.path.length + 1), kind: 'file', mtimeMs: 1 })) }) as any)
+  w.files[FILE_PATH] = FILE
+  w.mem[STATE_KEY] = { where: 'poste', seen: {} }
+  await start($)
+  await openCoo($, clock)
+  await settle(clock, 6)
+  await cutState(w, clock, () => '')
+  const asides = Object.keys(w.files).filter(k => k.includes('.feuille-de-route.json.illisible-'))
+  expect(asides.length).toBe(1)
+  expect(w.files[asides[0]!]).toBe('')
+  expect(state(w)?.where).toBeUndefined()
+  const ui = await pane($)
+  await ui.press({ key: 'coo-page-todo' })
+  expect(await ui.find({ key: 'coo-where-repo' })).toBeDefined()
+  await ui.unmount()
+  await $.prompt.submit({ text: 'et alors ?', origin: { kind: 'composer' } } as any)
+  const said = (w.sent.at(-1)?.context ?? []).find(c => /COO statement/.test(c)) ?? ''
+  expect(said).toMatch(/could not be read and was set aside as it was/)
+  expect(said).toMatch(/the place of the roadmap is chosen again/)
+  // « null » ne porte pas plus d'état qu'un fichier vide : mis de côté de même.
+  await cutState(w, clock, () => 'null')
+  expect(Object.keys(w.files).filter(k => k.includes('.feuille-de-route.json.illisible-')).length).toBe(2)
+})
+
+test('failedPlaceWrite : après une écriture du choix qui lève, l’état relu dit changé, perdu ou inchangé', () => {
+  // La tête porte déjà l'endroit visé : changé (la demande de recopie part).
+  expect(failedPlaceWrite('repo', 'repo', 'poste')).toBe('changed')
+  expect(failedPlaceWrite('poste', 'poste', 'unasked')).toBe('changed')
+  // Coupée avant l'endroit, un endroit choisi avant : perdu, et le message le dit.
+  expect(failedPlaceWrite(undefined, 'repo', 'poste')).toBe('lost')
+  // Rien d'écrit, une lecture ratée, ou pas d'endroit avant : inchangé.
+  expect(failedPlaceWrite('poste', 'repo', 'poste')).toBe('unchanged')
+  expect(failedPlaceWrite('unread', 'repo', 'poste')).toBe('unchanged')
+  expect(failedPlaceWrite(undefined, 'repo', 'unasked')).toBe('unchanged')
+})
+
+test('le relevé, état ou feuille de route illisible, ne dit ni l’endroit à rechoisir ni à recopier', () => {
+  const roadmap: CooRoadmap = { where: 'unasked', path: '/proj/travail/feuille-de-route.md', read: 'unread', gone: [], asides: ['/c/flow-board/coordination/proj-ab12.feuille-de-route.json.illisible-1000'] }
+  const text = statementText(cooStatement({ ...emptyBoard('/proj', 'p'), session: 's', deleted: [], runs: [] } as any, { now: NOW, roadmap }))
+  expect(text).toMatch(/its place cannot be told: do not ask for it now/)
+  expect(text).not.toMatch(/the place of the roadmap is chosen again/)
+  expect(text).toMatch(/copy back together what it held \(the entries seen\)/)
 })

@@ -223,6 +223,35 @@ export const TOOL_SHAPE: unknown = {
         "nightOn": {
           "type": "boolean"
         },
+        "toClose": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "discussionsClosed": {
+          "items": {
+            "properties": {
+              "session": {
+                "type": "string"
+              },
+              "state": {
+                "enum": ["closed", "stopped", "app", "absent"],
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": ["session", "state"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "unmarked": {
+          "enum": ["yes", "no", "none"],
+          "type": "string"
+        },
         "night": {
           "items": {
             "properties": {
@@ -234,6 +263,9 @@ export const TOOL_SHAPE: unknown = {
               },
               "mission": {
                 "type": "string"
+              },
+              "running": {
+                "type": "boolean"
               },
               "watch": {
                 "type": "string"
@@ -386,6 +418,24 @@ export const TOOL_SHAPE: unknown = {
               "mission",
               "item",
               "by"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "titles": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title"
             ],
             "type": "object"
           },
