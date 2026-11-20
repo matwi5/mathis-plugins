@@ -371,5 +371,131 @@ class PyDeclTest(unittest.TestCase):
         self.assertEqual(show.PY_SUFFIXES, {".py"})
 
 
+APPELS ="""import { cooDo } from './coo'
+
+/** Le geste : vérifie le siège, puis appelle launchCard. */
+const cooDo = async (kind: string) => {
+  // launchCard dans un commentaire n'est pas un emploi
+  if (kind === 'launch') await launchCard('x')
+  const texte = 'launchCard dans une chaîne non plus'
+  return `${launchCard.name}`
+}
+
+/** Appelée seulement par cooDo. */
+async function launchCard(id: string) {
+  return launchCard.length + id.length
+}
+
+const launchCards = 1
+const seul = () => 0
+"""
+
+APPELS_PY = """import os
+
+
+def appelant():
+    # cible dans un commentaire
+    return cible() + len("cible")
+
+
+def cible():
+    return cible.__name__
+
+
+class Classe:
+    def methode(self):
+        return self.cible
+"""
+
+
+class AppelantsTest(unittest.TestCase):
+    """`show.py --appelants <fichier> <nom>` : chaque emploi du nom hors de sa propre déclaration, avec sa
+    ligne, la déclaration de premier niveau qui l'englobe et la ligne de celle-ci."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.file = Path(self.dir.name) / "register.tsx"
+        self.file.write_text(APPELS, encoding="utf-8")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_chaque_emploi_hors_de_sa_declaration_avec_la_declaration_englobante(self):
+        out = run("--appelants", str(self.file), "launchCard")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = out.stdout.splitlines()
+        self.assertEqual(rows, [
+            "6\tdans cooDo (ligne 4)\t  if (kind === 'launch') await launchCard('x')",
+            "8\tdans cooDo (ligne 4)\t  return `${launchCard.name}`",
+        ])
+
+    def test_hors_de_toute_declaration_un_import_est_dit_au_premier_niveau(self):
+        out = run("--appelants", str(self.file), "cooDo")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines(), ["1\tau premier niveau\timport { cooDo } from './coo'"])
+
+    def test_un_nom_sans_emploi_le_dit_en_code_0(self):
+        out = run("--appelants", str(self.file), "seul")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("aucun emploi de « seul »", out.stdout)
+
+    def test_en_python_les_emplois_viennent_de_l_arbre_syntaxique(self):
+        py = self.file.with_name("module.py")
+        py.write_text(APPELS_PY, encoding="utf-8")
+        out = run("--appelants", str(py), "cible")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines(), [
+            "6\tdans appelant (ligne 4)\t    return cible() + len(\"cible\")",
+            "15\tdans Classe (ligne 13)\t        return self.cible",
+        ])
+
+    def test_en_python_un_attribut_sur_une_ligne_de_suite_et_un_import_ont_leur_ligne(self):
+        py = self.file.with_name("suite.py")
+        py.write_text("from outils import cible\n\n\ndef f(objet):\n    return (objet\n            .cible)\n", encoding="utf-8")
+        out = run("--appelants", str(py), "cible")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.splitlines(), [
+            "1\tau premier niveau\tfrom outils import cible",
+            "6\tdans f (ligne 4)\t            .cible)",
+        ])
+
+    def test_en_python_import_a_point_b_ne_lie_que_a(self):
+        py = self.file.with_name("lie.py")
+        py.write_text("import os.path\nimport json as path2\n\n\ndef path():\n    return 0\n", encoding="utf-8")
+        out = run("--appelants", str(py), "path")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("aucun emploi de « path »", out.stdout)
+        self.assertEqual(run("--appelants", str(py), "os").stdout.splitlines(), ["1\tau premier niveau\timport os.path"])
+        self.assertEqual(run("--appelants", str(py), "path2").stdout.splitlines(), ["2\tau premier niveau\timport json as path2"])
+
+    def test_arguments_et_fichiers_invalides(self):
+        out = run("--appelants", str(self.file))
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("--appelants <fichier> <nom>", out.stderr)
+        self.assertEqual(run("--appelants", str(self.file), "").returncode, 2)
+        self.assertEqual(run("--appelants", str(Path(self.dir.name) / "absent.ts"), "x").returncode, 1)
+        md = self.file.with_name("doc.md")
+        md.write_text("x\n", encoding="utf-8")
+        self.assertEqual(run("--appelants", str(md), "x").returncode, 2)
+
+
+class MoinsNTest(unittest.TestCase):
+    """`show.py <fichier> <motif> -N` : refusé, en disant que seul `+N` est accepté."""
+
+    def test_un_nombre_en_moins_est_refuse_en_disant_seul_plus_n(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "doc.md"
+            f.write_text("a\nb\n", encoding="utf-8")
+            out = run(str(f), "a", "-8")
+            self.assertEqual(out.returncode, 2)
+            self.assertIn("seul +N est accepté", out.stderr)
+            self.assertIn("<motif> [+N]", out.stderr)
+            self.assertEqual(out.stdout, "")
+            # « -0 » ne propose pas « +0 », lui-même refusé : l'usage seul.
+            zero = run(str(f), "a", "-0")
+            self.assertEqual(zero.returncode, 2)
+            self.assertNotIn("+0", zero.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -202,7 +202,7 @@ class StaleSnapshotTest(unittest.TestCase):
         doc = "travail/essai/issues/01-a.md"
         self.write(doc, "**Status:** en cours\n")
         self.snapshot("01", doc)
-        self.write(doc, "**Status:** en revue\n")
+        self.write(doc, "**Status:** en attente (porteur)\n")
         git(self.repo, "add", doc)
         merge_head = Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"))
         merge_head.write_text(git(self.main, "rev-parse", "main") + "\n", encoding="utf-8")
@@ -255,7 +255,7 @@ class StaleSnapshotTest(unittest.TestCase):
         doc = "travail/essai/issues/01-a.md"
         self.write(doc, "**Status:** en cours\n")
         self.snapshot("01", doc)
-        self.write(doc, "**Status:** en revue\n")
+        self.write(doc, "**Status:** en attente (porteur)\n")
         git(self.repo, "add", doc)
         with mock.patch.object(check, "log") as log:
             check.staged()

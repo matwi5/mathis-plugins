@@ -11,6 +11,8 @@
 //   node <dossier de flow-board>/scripts/consignes.mjs --securite <id du groupe> <base>..<lancement> <sortie> <fichier de ticket>…
 //        [--chemins <chemin>…] [--choix <fichier des choix>] [--declares <fichier>]
 //
+// `--help` imprime ces lignes d'usage (`HELP`) et sort en 0, sans rien écrire.
+//
 // à lancer depuis la racine du worktree. `--groupe` écrit les consignes de la revue du groupe : les lignes
 // « Revue du groupe » du gabarit gardées et remplies (les ids des tickets, tirés de leurs fichiers, leurs
 // chemins et leurs invariants), les lignes propres à un ticket retirées, et le dossier du relecteur
@@ -475,7 +477,26 @@ export const writeConsignes = (argv, cwd = process.cwd()) => {
   return target
 }
 
+/**
+ * L'usage que `--help` imprime : les lignes de commande de l'en-tête de ce fichier, recopiées telles quelles (un
+ * test de `consignes-generees.test.mjs` vérifie que chaque ligne y est).
+ */
+const HELP = [
+  '  node <dossier de flow-board>/scripts/consignes.mjs <fichier de ticket> <base>..<fin> <sortie>',
+  '       [--chemins <chemin>…] [--choix <fichier des choix>] [--faits <fichier ou id de ticket>…] [--declares <fichier>]',
+  '       [--relecteur <id du ticket>]',
+  '  node <dossier de flow-board>/scripts/consignes.mjs --groupe <id du groupe> <base>..<fin> <sortie> <fichier de ticket>…',
+  '       [--chemins <chemin>…] [--choix <fichier des choix>] [--declares <fichier>]',
+  '  node <dossier de flow-board>/scripts/consignes.mjs --securite <id du groupe> <base>..<lancement> <sortie> <fichier de ticket>…',
+  '       [--chemins <chemin>…] [--choix <fichier des choix>] [--declares <fichier>]',
+].join('\n')
+
 const main = argv => {
+  // `--help`, où qu'il soit : l'usage, sans rien écrire ; une autre option inconnue échoue (`parse`).
+  if (argv.includes('--help')) {
+    console.log(HELP)
+    return 0
+  }
   try {
     const target = writeConsignes(argv)
     console.log(`Consignes écrites : ${target}`)

@@ -775,3 +775,29 @@ test('section 3 : l’outil Grep peut manquer, et toutes les formes que le garde
     'puis lancer ce script par une commande simple',
   )
 })
+
+test('le geste de fin, entre les sections 5 et 6 : la branche de travail entre dans celle du groupe, le manager n’a plus qu’une avance rapide', () => {
+  const fin = files['procedure-groupe-fin.md']
+  const at = fin.indexOf('## Geste de fin, entre les sections 5 et 6')
+  // Placé après la revue de sécurité et avant le compte rendu.
+  assert.ok(at > fin.indexOf('## 5. Revue de sécurité') && at < fin.indexOf('## 6. Compte rendu'))
+  const gesture = fin.slice(at, fin.indexOf('## 6. Compte rendu'))
+  has(
+    gesture,
+    // Le manager : une seule fusion, en avance rapide, refusée si la branche de travail a encore bougé.
+    'le manager n\'a plus ensuite qu\'une fusion en avance rapide (`git merge --ff-only <branche du groupe>`, dans le clone principal), refusée si la branche de travail a encore bougé',
+    // Les trois cas : rien à amener, une fusion (suite passée sur l'arbre fusionné), une branche de travail réécrite (rebase).
+    '`git merge-base --is-ancestor <branche de travail> HEAD` rend 0) : rien à amener',
+    '`git merge --no-edit <branche de travail>`',
+    'Puis la suite complète, une fois, sur l\'arbre fusionné',
+    'une fusion amènerait deux fois les mêmes changements, sous d\'autres hashes',
+    '`git rebase --onto <branche de travail> <base>`',
+    // La fermeture veut l'arbre de chaque instantané de revue dans un commit de la branche de travail : pas de rebase tant qu'il en reste un.
+    'seulement quand aucun instantané de revue ne reste (`git for-each-ref refs/worktree/flow-board/` ne rend rien',
+    'vérifier que `git diff <branche de travail>...HEAD` ne montre que le travail du groupe',
+    'Le compte rendu (section 6) dit le commit de la branche de travail amené',
+  )
+  // Le compte rendu le dit, et l'ancienne fusion du manager n'est plus nulle part dans la procédure.
+  has(section(6), 'le commit de la branche de travail que le geste de fin y a amené')
+  assert.ok(!whole.includes('--no-ff'))
+})

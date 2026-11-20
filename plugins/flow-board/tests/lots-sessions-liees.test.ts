@@ -230,6 +230,31 @@ test('une session déléguée n’ouvre ni ne reprend aucune mission, et n’éc
   expect(detachOnLoad(delegated, 3_300, 'other').delegate).toBeUndefined()
 })
 
+/**
+ * L'envoi que dicte la procédure d'un worker de groupe (point 2 de sa section 2) quand la ligne `Status:` d'un
+ * ticket s'écrit par une commande, ou chez un manager qui fait le lot lui-même : recopié tel quel
+ * (`test_check_tickets.py` vérifie que la procédure le porte).
+ */
+const PROCEDURE_SET = '{"set": [{"id": "<id du ticket>", "status": "doing"}]}'
+
+test('l’envoi « en cours » de la procédure, rejoué : relayé depuis un worker, appliqué chez un manager qui fait le lot', () => {
+  const sent = (id: string) => JSON.parse(PROCEDURE_SET.replace('<id du ticket>', id))
+  // Dans un worker : relayé au manager, la mission du worker inchangée.
+  const main = boardWith(THREE, 'main')
+  const runId = activeRun(main)!.id
+  const delegated = applyReport(detachOnLoad({ ...main, session: 'main' }, 3_000, 'linked'), { delegate: runId, group: 'P' }, 3_100).board
+  const relayed = applyReport(delegated, sent('p1'), 3_200)
+  expect(relayed.board).toBe(delegated)
+  expect(relayed.text).toMatch(/^Relayed to the manager's dashboard: 1 ticket status/)
+  // Chez un manager qui fait le lot lui-même : le ticket passe en cours ; renvoyé, il le reste ; un id inconnu ne crée rien.
+  const own = applyReport(main, sent('p1'), 3_200).board
+  expect(activeRun(own)!.tickets.find(t => t.id === 'p1')!.status).toBe('doing')
+  const again = applyReport(own, sent('p1'), 3_300).board
+  expect(activeRun(again)!.tickets.find(t => t.id === 'p1')!.status).toBe('doing')
+  const unknown = applyReport(own, sent('zz9'), 3_400).board
+  expect(activeRun(unknown)!.tickets.map(t => t.id)).toEqual(activeRun(own)!.tickets.map(t => t.id))
+})
+
 test('une session déléguée garde l’adresse du manager et la rappelle à chaque réponse', () => {
   const main = boardWith(THREE, 'main')
   const runId = activeRun(main)!.id
@@ -821,7 +846,9 @@ test('un groupe rendu sans revue : « Revue du groupe · worker » la demande à
   // La branche par défaut du distant n'est pas mesurée ici : la demande la nomme, sans commande (une
   // branche en forme entre dans « git merge --ff-only », valeurs-relues.test.ts).
   expect(text).toContain('1) remettre sa branche au niveau de la branche principale par une avance rapide, pour que les correctifs portent sur le code actuel ;')
-  expect(text).not.toContain('git merge --ff-only')
+  // Aucune branche principale dans une commande ; seule la fusion du manager, en avance rapide, nomme la branche du groupe.
+  expect(text).not.toMatch(/git merge --ff-only (?!<branche du groupe>)/)
+  expect(text).toContain('Au compte rendu : vérifier son travail, fusionner sa branche (seulement en avance rapide, dans le clone principal : git merge --ff-only <branche du groupe> ; refusée')
   // e1 ne dit pas s'il touche une zone sensible : dans le doute, le groupe est sensible, sa revue part sans --fix.
   expect(text).toContain('2) lancer elle-même la revue, par l\'outil Skill, sans spécialiste qui l\'enveloppe : /code-review tourne en exécution dérivée de celui qui la lance, à l\'effort de son niveau (seule une session qui ne tourne pas sur Opus la confie à un spécialiste relecteur de modèle opus, qui la lance lui-même ; règle des revues, config/rules/agents.md et son détail config/reference/revues.md, une fois installés) ; la revue est /code-review high (outil Skill « code-review », arguments « high <plage> consignes : <chemin> ») sur les seuls commits du groupe')
   expect(text).not.toContain('high --fix')
@@ -831,7 +858,7 @@ test('un groupe rendu sans revue : « Revue du groupe · worker » la demande à
   await ui.press({ key: 'review-linked-E' })
   await ui.unmount()
   expect(filled.at(-1)!).toContain('la revue est /code-review high --fix (outil Skill « code-review », arguments « high --fix <plage> consignes : <chemin> »)')
-  expect(text).toContain('3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ;')
+  expect(text).toContain('3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet, suite complète comprise, et commiter ;')
   // La consigne des relecteurs : celle de la procédure des sessions de groupe, citée par son chemin.
   expect(text).toMatch(/en lui donnant la liste des choix déjà déclarés dans \{"decided": …\} de l'outil flow \(ceux que tu connais, ceux de la session compris\), à ne pas défaire par préférence, en signalant tout cas où l.un d.eux produit un défaut, avec son scénario et la consigne des relecteurs \(section 7 de la procédure des workers de groupe, \S*reference\/procedure-groupe\.md\), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets/)
   // La sécurité par un spécialiste relecteur limité aux commits du groupe, jamais /security-review.
@@ -1035,8 +1062,11 @@ test('le brief des sessions de groupe : plus de renommage à la main, background
   // Le suivi passe par le worktree, le tracker et ListAgents.
   expect(first).toContain("l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status), le tracker (statuts des tickets) et ListAgents")
   expect(first).toContain('jamais claude logs')
-  // Une branche de travail qui a bougé depuis le départ du groupe se fusionne par un commit de fusion.
-  expect(first).toContain("fusionner sa branche (si la branche de travail a bougé : git merge --no-ff, conflits d'un fichier généré (l'arbre « Architecture » d'un README, par exemple) résolus comme le projet l'écrit (son CLAUDE.md ou la doc qu'il cite), les autres en gardant les deux côtés, contrôles relancés)")
+  // La fusion d'un groupe, toujours en avance rapide dans le clone principal (le geste de fin du worker a amené la
+  // branche de travail dans la sienne) ; refusée, le geste se refait dans le worktree du groupe, jamais une fusion en cours ici.
+  expect(first).toContain('fusionner sa branche (seulement en avance rapide, dans le clone principal : git merge --ff-only <branche du groupe> ; ')
+  expect(first).toContain("refusée (la branche de travail a bougé depuis le geste de fin du worker), refaire ce geste dans le worktree du groupe, encore là avant sa fermeture, tel que le dit la procédure d'un worker (son « Geste de fin », dans procedure-groupe-fin.md : la branche de travail amenée par une fusion, ou par un rebase quand elle a été réécrite depuis, par un /project:sync par exemple, jamais fusionnée alors ; la suite complète passée là), puis recommencer l'avance rapide : jamais une fusion laissée en cours dans le clone principal pendant qu'une suite tourne)")
+  expect(first).not.toContain('--no-ff')
   // Un groupe déjà confié : la discussion a déjà son nom, pas de nouvelle demande.
   await ui.press({ key: 'launch-linked-A' })
   await ui.unmount()

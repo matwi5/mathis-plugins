@@ -200,7 +200,8 @@ test('fusion : l’avis de l’autre copie n’est repris que si elle avait vu, 
 })
 
 test('fusion : un ticket rouvert puis refini ici, après que l’autre copie l’a vu fini, n’est pas couvert par sa revue', () => {
-  const base = review(doneLot(), 5_000)
+  // Deux tickets (t2 fini à 3 500) : un lot d'un seul ticket n'a pas de revue du lot.
+  const base = review(addDone(doneLot(), 2, 3_000), 5_000)
   // L'autre copie relit à 7 000, après avoir vu t1 fini à 4 000 ; ici, t1 est rouvert puis refini à 6 500.
   const theirs = review(base, 7_000)
   const reopened = applyReport(base, { set: [{ id: 't1', status: 'doing' }] }, 6_000).board

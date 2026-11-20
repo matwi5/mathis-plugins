@@ -6,8 +6,8 @@
 
 import { expect, test } from 'claude-code/testing'
 
-import { applyReport, autoNotices, finishActive, emptyBoard, isAutoOn, mergeBoards, newRun, reportFacts, switchOffAuto, switchOnAuto, validateReport } from '../hooks/model.ts'
-import { applyRelay, decidedFileText } from '../hooks/relay.ts'
+import { applyReport, autoNotices, finishActive, emptyBoard, isAutoOn, mergeBoards, newRun, openQuestions, reportFacts, switchOffAuto, switchOnAuto, validateReport } from '../hooks/model.ts'
+import { applyRelay, decidedFileText, experienceChoiceNotice } from '../hooks/relay.ts'
 import type { Board, Relay, Run } from '../types'
 
 const T0 = 97_000_000
@@ -374,4 +374,79 @@ test('En auto, la fusion de deux copies garde l’union des choix : un choix dé
   const plainHere = declare(lot(), 3, 0, T0 + 3)
   const plainThere = declare({ ...(JSON.parse(JSON.stringify(lot())) as Board), session: 'sb' }, 2, 10, T0 + 9)
   expect(whats(mergeBoards(plainHere, plainThere))).toEqual(['Choix 10', 'Choix 11'])
+})
+
+// En auto, un choix déclaré qui ressemble à un choix d'expérience (un libellé, un bouton, un texte
+// montré, un emplacement, une mise en page, une notification) fait ajouter une ligne de rappel à la réponse ; le
+// choix est enregistré tel quel, avec ou sans elle. Hors auto, la réponse ne change pas.
+const EXPERIENCE_LINE = 'reads like an experience choice'
+
+test('En auto, un libellé déclaré fait rappeler qu’un choix d’expérience revient à l’utilisateur ; le choix est enregistré', () => {
+  const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
+  const out = applyReport(on, { decided: [{ what: 'Libellé « Aucune copie gardée » sur la page Missions', origin: 'recommendation' }] }, T0 + 3)
+  expect(out.text).toContain(EXPERIENCE_LINE)
+  expect(out.text).toContain('"waiting"')
+  expect(runOf(out.board).decided!.map(d => d.what)).toEqual(['Libellé « Aucune copie gardée » sur la page Missions'])
+})
+
+test('En auto, un choix technique ne fait aucun rappel ; « question à boutons » n’est pas un bouton de l’interface ; le choix est enregistré', () => {
+  const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
+  const out = applyReport(on, { decided: [{ what: 'Option A : un module à part pour le relais' }, { what: 'Découpage validé sans question à boutons' }] }, T0 + 3)
+  expect(out.text).not.toContain(EXPERIENCE_LINE)
+  expect(runOf(out.board).decided!.map(d => d.what)).toEqual(['Option A : un module à part pour le relais', 'Découpage validé sans question à boutons'])
+})
+
+test('Hors auto, un libellé déclaré ne change pas la réponse ; le choix est enregistré', () => {
+  const out = applyReport(lot(), { decided: [{ what: 'Bouton « Annuler » retiré de la carte' }] }, T0 + 3)
+  expect(out.text).not.toContain(EXPERIENCE_LINE)
+  expect(runOf(out.board).decided!.map(d => d.what)).toEqual(['Bouton « Annuler » retiré de la carte'])
+})
+
+test('Dans un worker, le rappel dit d’envoyer la question au manager par SendMessage, sans "waiting" ; mots anglais et accents compris', () => {
+  const line = experienceChoiceNotice([{ what: 'Layout of the Missions page kept' }, { what: 'Emplacement de l’alerte : page « À faire »' }, { what: 'Un module à part' }], true)
+  expect(line).toContain('read like an experience choice')
+  expect(line).toContain('SendMessage')
+  expect(line).not.toContain('"waiting"')
+  expect(line).toContain('"Layout of the Missions page kept", "Emplacement de l’alerte : page « À faire »"')
+  expect(line).not.toContain('Un module à part')
+  expect(experienceChoiceNotice([{ what: 'Un module à part' }, { what: 'Remplacement du verrou' }], true)).toBe('')
+})
+
+test('Au plafond de 1 000 choix, un libellé refusé n’est pas nommé par le rappel, qui dirait le choix enregistré', () => {
+  let board = switchOnAuto(lot(), 'sa', T0 + 2)!.board
+  for (let i = 0; i < 1000; i += 250) board = declare(board, 250, i, T0 + 3 + i)
+  const refused = applyReport(board, { decided: [{ what: 'Bouton « Annuler » retiré de la carte' }] }, T0 + 2000)
+  expect(refused.text).toContain('1000 choices at most')
+  expect(refused.text).not.toContain(EXPERIENCE_LINE)
+})
+
+test('L’appel « waiting » que dicte le rappel, rejoué contre le modèle : la question est ouverte sur sa phase, son groupe ou son ticket', () => {
+  const on = switchOnAuto(lot(), 'sa', T0 + 2)!.board
+  const line = applyReport(on, { decided: [{ what: 'Libellé du bouton « Lancer »' }] }, T0 + 3)
+  expect(line.text).toContain('{"waiting": [{"id": "<short id>", "phase" | "group" | "ticket": "<what it blocks>", "text": "<the question>"}]}')
+  const asked = applyReport(
+    line.board,
+    {
+      waiting: [
+        { id: 'libelle-lancer', phase: 'implement', text: 'Quel libellé pour le bouton « Lancer » ?' },
+        { id: 'libelle-groupe', group: 'A', text: 'Quel libellé pour le groupe A ?' },
+        { id: 'libelle-ticket', ticket: 't2', text: 'Quel libellé pour le ticket t2 ?' },
+      ],
+    },
+    T0 + 4,
+  )
+  expect(openQuestions(runOf(asked.board)).map(q => [q.id, q.blocks])).toEqual([
+    ['libelle-lancer', { kind: 'phase', id: 'implement' }],
+    ['libelle-groupe', { kind: 'group', id: 'A' }],
+    ['libelle-ticket', { kind: 'ticket', id: 't2' }],
+  ])
+  // Le choix déclaré reste enregistré à côté de la question.
+  expect(runOf(asked.board).decided!.map(d => d.what)).toEqual(['Libellé du bouton « Lancer »'])
+})
+
+test('En auto, un libellé envoyé comme remplaçant d’un choix retiré (`replacedBy`) fait aussi rappeler le choix d’expérience', () => {
+  const on = applyReport(switchOnAuto(lot(), 'sa', T0 + 2)!.board, { decided: [{ what: 'Module à part' }] }, T0 + 3).board
+  const out = applyReport(on, { withdrawn: [{ what: 'Module à part', why: 'revu', replacedBy: 'Bouton « Annuler » retiré de la carte' }] }, T0 + 4)
+  expect(out.text).toContain('"Bouton « Annuler » retiré de la carte" reads like an experience choice')
+  expect(runOf(out.board).decided!.some(d => d.what === 'Bouton « Annuler » retiré de la carte' && d.withdrawnAt === undefined)).toBe(true)
 })

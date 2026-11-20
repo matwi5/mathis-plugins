@@ -115,6 +115,28 @@ test('/to-spec et /to-tickets font lire le code avant un ticket sensible, et lis
   }
 })
 
+// Une recherche sur le seul geste avait conclu « le seul chemin qui écrit » quand la fonction qui
+// écrit avait sept appelants, et une spec avait contredit une consigne qui lisait une sortie du mod.
+test('/to-spec et /to-tickets font nommer la fonction qui écrit et tous ses appelants, compter les consignes lectrices et garder un piège rapporté', async ($, on) => {
+  mock.clock(on, { now: 52_500_000 })
+  mock.store(on)
+  world(on)
+  for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('the search of the paths that write names the function that writes the data and lists every one of its callers, never only the gesture that calls it')
+    expect(text).toContain('the paths that read it to make a decision include the instructions (skills/, reference/, commands/) that interpret an output of the code')
+    expect(text).toContain('a pitfall an explorer reports on these paths goes into the ticket or the spec, or becomes a question of the framing')
+  }
+  for (const id of ['to-spec', 'to-tickets'] as const) {
+    const explore = SKILLS[id]!.steps.find(s => s.id === 'explore')!.hint
+    expect(explore).toContain('lists every one of its callers, never only the gesture that calls it')
+    expect(explore).toContain('a pitfall an explorer reports on these paths')
+  }
+  const verify = SKILLS.triage!.steps.find(s => s.id === 'verify')!.hint
+  expect(verify).toContain('the instructions (skills/, reference/, commands/) that interpret an output of the code')
+  expect(verify).toContain('a pitfall an explorer reports on these paths goes into the entry\'s verified facts, or becomes a question of the triage')
+})
+
 // Les décisions d'une mission avaient posé, ticket par ticket, des questions prévisibles au cadrage :
 // les étapes de /to-spec et /to-tickets listent les cas du cycle de vie d'un champ persisté.
 test('/to-spec et /to-tickets listent les cas du cycle de vie d’un champ persisté et les transitions de l’objet qui porte une marque', async ($, on) => {
@@ -206,5 +228,35 @@ test('l’étape « Arbre des décisions » des deux cadrages fait chercher une 
     expect(hint.startsWith('map the design tree of decisions; ')).toBe(true)
     expect(hint).toContain('search its term in every decision file of the project (those its CLAUDE.md names, not only this mission\'s)')
     expect(hint).toContain('cite in the question the decision found, with its file and date; a recommendation against a decision found says so')
+  }
+})
+
+// Un invariant avait été validé alors qu'une règle commune, relue à la même minute, gardait déjà une
+// exception contre lui : vu seulement au découpage (une question bloquante, une série, la spec et deux
+// tickets repris). Avant de faire valider un invariant, le cadrage le confronte aux règles et aux
+// invariants déjà écrits (les deux skills : consignes-coherentes.test.mjs).
+test('le cadrage confronte un invariant aux exceptions des règles et aux invariants déjà écrits avant de le faire valider', async ($, on) => {
+  mock.clock(on, { now: 57_000_000 })
+  mock.store(on)
+  world(on)
+  const confront = [
+    'the rules loaded in every session of the project (its CLAUDE.md, its rule files, the common rules)',
+    'the exceptions that touch the same object',
+    'the invariants already written that name it',
+    'that search (the command and its result)',
+    'a contradiction found goes into the question to the user, with the rule or the invariant quoted',
+  ]
+  // La relecture d'avant la validation (INVARIANT_REREAD), à /to-tickets et au découpage d'une rétro.
+  for (const skill of ['mattpocock-skills:to-tickets', 'mattpocock-skills:retro']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('before putting an invariant up for approval (or declaring that approval skipped), and before writing the invariant of a ticket that is only sensitive, confront it with what already holds on the same object')
+    expect(text).toContain('and the invariant is never put up for approval without it')
+    for (const part of confront) expect(text).toContain(part)
+  }
+  // La consigne de cadrage d'un ticket sensible (SENSITIVE_FRAMING), à /to-spec et à /to-tickets.
+  for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
+    const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
+    expect(text).toContain('Before the user validates an invariant, and before you write the invariant of a ticket that is only sensitive, search the exceptions that touch the same object')
+    for (const part of confront) expect(text).toContain(part)
   }
 })

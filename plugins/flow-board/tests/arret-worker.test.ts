@@ -6,8 +6,9 @@ import { memoryDisk } from './disque-memoire.ts'
 import { playStep, stepUsage, stoppedStep } from './flux-turn-step.ts'
 import { TOOL, start, world, writeBoard } from './monde-coordination.ts'
 
-import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
+import { applyReport, emptyBoard, factsRelayOf, newRun } from '../hooks/model.ts'
 import { applyRelay, workerStopOf, workerStopText } from '../hooks/relay.ts'
+import { silenceNote, silentWorkers } from '../hooks/silence.ts'
 import type { Board, Run, Ticket } from '../types'
 
 // Un worker arrêté par une erreur que réessayer ne résout pas le dit : un toast et une note à son relais ; le manager
@@ -339,4 +340,119 @@ test('une note ordinaire, un last hors forme ou une entrée hors du plan ne dise
   const shown = await paneTexts($)
   expect(shown).not.toContain('worker arrêté')
   expect(notices).toEqual([])
+})
+
+// ─── Le worker silencieux ─────────────────────────────────────────────────
+
+const MIN = 60_000
+
+/** Une mission à deux groupes, A en vol (envoyé à T0, la session « fille » notée ou non), C jamais envoyé. */
+const flying = (link: Record<string, unknown> = { at: T0, session: 'fille' }): Run => {
+  const run = { ...newRun('implement', T0 - 2_000, 'Boutique'), id: 'm1' } as Run
+  const base: Board = { ...emptyBoard('', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  const planned = applyReport(base, PLAN, T0 - 1_000).board.runs[0]!
+  return { ...planned, groups: planned.groups!.map(g => (g.id === 'A' ? ({ ...g, sends: 1, linked: link } as any) : g)) }
+}
+
+test('le silence : 30 minutes sans signal ni compte rendu ; avant, rien ; un nouveau signal le repousse', () => {
+  const relay = applyRelay(undefined, 'm1', 'fille', { kind: 'start', group: 'A' }, T0 + 1_000)!
+  expect(silentWorkers(flying(), relay, T0 + 1_000 + 29 * MIN)).toEqual([])
+  expect(silentWorkers(flying(), relay, T0 + 1_000 + 30 * MIN)).toEqual([{ group: 'A', lastAt: T0 + 1_000 }])
+  const signal = applyRelay(relay, 'm1', 'fille', { kind: 'tickets', changes: [{ id: 'a1', status: 'doing' }] }, T0 + 20 * MIN)!
+  expect(silentWorkers(flying(), signal, T0 + 1_000 + 30 * MIN)).toEqual([])
+  expect(silentWorkers(flying(), signal, T0 + 50 * MIN)).toEqual([{ group: 'A', lastAt: T0 + 20 * MIN }])
+})
+
+test('pas de silence pour un groupe revenu, au compte rendu relayé ou déposé, ou dont rien ne mesure le silence', () => {
+  const relay = applyRelay(undefined, 'm1', 'fille', { kind: 'start', group: 'A' }, T0 + 1_000)!
+  const late = T0 + 2 * 60 * MIN
+  // Revenu : plus de lien en vol.
+  const back = flying()
+  expect(silentWorkers({ ...back, groups: back.groups!.map(g => ({ ...g, linked: undefined, delegated: { at: T0 } }) as any) }, relay, late)).toEqual([])
+  // Compte rendu au relais, ou déposé par le manager.
+  expect(silentWorkers(flying(), applyRelay(relay, 'm1', 'fille', { kind: 'report', text: 'fini' } as any, T0 + 2_000)!, late)).toEqual([])
+  expect(silentWorkers(flying({ at: T0, session: 'fille', managerReport: { at: T0 + 3_000, length: 10 } }), relay, late)).toEqual([])
+  // Aucune entrée de relais : la session notée mesure depuis l'envoi (un worker sans outil flow) ; sans elle, rien.
+  // Le relais que lit le manager quand aucune session n'y a écrit (aucune source, rien d'illisible).
+  const empty = factsRelayOf(undefined, 0, 'm1')
+  expect(silentWorkers(flying(), empty, late)).toEqual([{ group: 'A', lastAt: T0 }])
+  expect(silentWorkers(flying({ at: T0 }), empty, late)).toEqual([])
+  // Relais illisible, date dans le futur ou hors forme : rien.
+  expect(silentWorkers(flying(), null, late)).toEqual([])
+  expect(silentWorkers(flying(), relay, T0)).toEqual([])
+  expect(silentWorkers(flying(), relay, Number.NaN)).toEqual([])
+})
+
+test('la note : ListAgents, au repos demander où il en est ; en auto, sans attendre', () => {
+  const manual = silenceNote([{ group: 'A', lastAt: Date.UTC(2026, 10, 17, 9, 5) }], false)
+  expect(manual).toContain('no signal for 30 minutes from the worker of group A (last signal 09:05 UTC)')
+  expect(manual).toContain('Check with ListAgents whether it still runs: if it is working, nothing to do.')
+  expect(manual).toContain('write to it by SendMessage to ask where it stands')
+  expect(manual).toContain('Then tell the user what you found.')
+  expect(manual).not.toContain('without waiting')
+  expect(silenceNote([{ group: 'A', lastAt: T0 }], true)).toContain('Auto mode: do it now, without waiting for the user.')
+})
+
+/** Chez le manager : sa mission, A envoyé à T0 (session notée), C jamais envoyé ; le relais posé par entrée de session. */
+const silentWorld = (on: any) => {
+  const w = world(on)
+  const run = newRun('implement', T0 - 9_000, 'Boutique')
+  const base: Board = { ...emptyBoard('', 'p'), session: 'session-A', deleted: [], runs: [run], activeId: run.id }
+  const planned = applyReport(base, PLAN, T0 - 8_000).board.runs[0] as Run
+  const sent: Run = { ...planned, status: 'active', owner: 'session-A', groups: planned.groups!.map(g => (g.id === 'A' ? { ...g, sends: 1, linked: { at: T0, session: 'abcd1234' } } : g)) }
+  writeBoard(w, b => ({ ...b, session: 'session-A', runs: [sent], activeId: sent.id }))
+  /** L'entrée de relais de la session du worker, à une date donnée (un nouveau signal la redate). */
+  const signal = (at: number) => {
+    const r = applyRelay(undefined, sent.id, 'abcd1234', { kind: 'start', group: 'A' }, at)!
+    w.mem[`relay:${sent.id}:abcd1234`] = { v: 1, run: sent.id, session: 'abcd1234', entry: r.sessions.abcd1234 }
+  }
+  const notes = () => w.prompts.filter(t => t.startsWith('flow-board: no signal for 30 minutes'))
+  return { w, run: sent, signal, notes }
+}
+
+test('chez le manager : la note part une fois par silence, le relais inchangé ; refusée, elle repart ; un nouveau signal la réarme', { timeoutMs: 120000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const { w, signal, notes } = silentWorld(on)
+  signal(T0 + 1_000)
+  await start($)
+  await clock.advance(25 * MIN)
+  expect(notes()).toEqual([])
+  // Passé 30 minutes : la première note est refusée par la discussion, rien n'est marqué ; la suivante entre.
+  w.submit.drop = true
+  await clock.advance(6 * MIN)
+  expect(notes()).toEqual([])
+  w.submit.drop = false
+  await clock.advance(10_000)
+  expect(notes()).toHaveLength(1)
+  expect(notes()[0]).toContain('group A')
+  // Le relais inchangé, longtemps après : pas de deuxième note.
+  await clock.advance(35 * MIN)
+  expect(notes()).toHaveLength(1)
+  // Le worker signale de nouveau : la note se réarme, et repart 30 minutes après ce signal.
+  signal(T0 + 67 * MIN)
+  await clock.advance(20 * MIN)
+  expect(notes()).toHaveLength(1)
+  await clock.advance(15 * MIN)
+  expect(notes()).toHaveLength(2)
+})
+
+test('chez le manager, aucune session n’a écrit au relais (worker sans outil flow) : la note part 30 minutes après l’envoi', { timeoutMs: 120000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const { notes } = silentWorld(on)
+  await start($)
+  await clock.advance(25 * MIN)
+  expect(notes()).toEqual([])
+  await clock.advance(10 * MIN)
+  expect(notes()).toHaveLength(1)
+})
+
+test('chez le manager, un relais lu en partie (une entrée illisible) : aucune note, même longtemps après', { timeoutMs: 120000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const { w, run, signal, notes } = silentWorld(on)
+  signal(T0 + 1_000)
+  // Une entrée illisible : elle peut être celle d'un worker qui signale.
+  w.mem[`relay:${run.id}:illisible`] = 'pas une entrée'
+  await start($)
+  await clock.advance(40 * MIN)
+  expect(notes()).toEqual([])
 })

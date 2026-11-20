@@ -87,6 +87,9 @@ test('supprimer une mission efface ses agents, ses workers fermés, son relais e
     // L'entrée d'un worker, sa clé à elle (un fichier par worker).
     [`relay:${run.id}:fille-fermee`]: { v: 1, run: run.id, session: 'fille-fermee', entry: { tickets: {}, commits: 1, startedAt: old, at: old } },
     [`agents:run-${run.id}:rebuilt`]: { v: 1, session: `run:${run.id}`, agents: [], rows: [{ key: 'vieux', name: 'Vieille ligne', isBackground: true, status: 'done', startedAt: 1, source: 'live', run: run.id }] },
+    // Les marques « discussion nommée par flow-board » : jamais effacées, ni avec la mission ni avec ses sessions.
+    'discussion-named:s-del': { title: 'Ici', at: 1 },
+    'discussion-named:fille-fermee': { title: 'Fille', at: 2 },
   })
   const before = JSON.stringify(mem['agents:fille-ouverte'])
   await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
@@ -104,6 +107,8 @@ test('supprimer une mission efface ses agents, ses workers fermés, son relais e
   expect(mem[`relay:${run.id}:fille-fermee`]).toBeUndefined()
   expect(mem[`agents:run-${run.id}:rebuilt`]).toBeUndefined()
   expect(mem['agents:fille-fermee']).toBeUndefined()
+  expect(mem['discussion-named:s-del']).toEqual({ title: 'Ici', at: 1 })
+  expect(mem['discussion-named:fille-fermee']).toEqual({ title: 'Fille', at: 2 })
   // L'ouverte n'est pas touchée : la trace de la mission la couvrira à sa prochaine écriture.
   expect(JSON.stringify(mem['agents:fille-ouverte'])).toBe(before)
   expect(parseRegistry(mem['agents:orch-ferme'])!.agents.map(a => a.name)).toEqual(['Orch, hors mission'])
@@ -128,6 +133,9 @@ test('« ✗ Oublier » une discussion : la confirmation dit ce qu’elle efface
     }),
     [`agents:${LINKED}`]: reg(LINKED, old, [{ key: 'l1', name: 'Trois' }], { title: 'Explorer le cache' }),
     'agents:par-titre': reg('par-titre', old, [{ key: 't1', name: 'Quatre' }], { title: 'Pistes de rétro' }),
+    // Les marques « discussion nommée par flow-board » des sessions oubliées : jamais effacées.
+    'discussion-named:vieille': { title: 'Vieille discussion', at: 1 },
+    [`discussion-named:${LINKED}`]: { title: 'Explorer le cache', at: 2 },
   })
   await $.session.start({ cwd: '', surface: null, isInteractive: true } as any)
   await settle(clock, 6)
@@ -142,6 +150,8 @@ test('« ✗ Oublier » une discussion : la confirmation dit ce qu’elle efface
   await settle(clock, 2)
   expect(mem['agents:vieille']).toBeUndefined()
   expect(mem[`agents:${LINKED}`]).toBeUndefined()
+  expect(mem['discussion-named:vieille']).toEqual({ title: 'Vieille discussion', at: 1 })
+  expect(mem[`discussion-named:${LINKED}`]).toEqual({ title: 'Explorer le cache', at: 2 })
   expect(parseRegistry(mem['agents:par-titre'])!.agents.map(a => a.name)).toEqual(['Quatre'])
   expect(traces(mem)).toEqual(expect.arrayContaining(['vieille', LINKED]))
   // Le sélecteur ne la liste plus, et l'onglet revient « ici ».

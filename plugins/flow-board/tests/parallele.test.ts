@@ -36,6 +36,92 @@ const plan3 = (opts: { files: [string, string, string]; blocked?: boolean; statu
   return groupPlan(out.board.runs[0] as Run)!
 }
 
+/** La réponse de l'outil à l'envoi d'un plan, et la mission qu'il laisse. */
+const sendPlan = (groups: { id: string; tickets: string[]; files?: string[]; resources?: string[] }[], blocked: Record<string, string[]> = {}) => {
+  const run = newRun('implement', 1_000)
+  const board: Board = { ...emptyBoard('c:/p', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  const ids = groups.flatMap(g => g.tickets)
+  return applyReport(
+    board,
+    { tickets: ids.map(id => ({ id, name: `Ticket ${id}`, status: 'todo', blockedBy: blocked[id] ?? [] })), groups: groups.map(g => ({ name: `Groupe ${g.id}`, ...g })) },
+    2_000,
+  )
+}
+
+// Piste « on peut lancer plusieurs groupes en parallèle ? » : un découpage dont tous les groupes
+// touchaient un même fichier ne se découvrait qu'au moment de les lancer.
+test('à l’envoi des groupes, la réponse nomme la première vague de groupes qui partent ensemble', () => {
+  const out = sendPlan([
+    { id: 'A', tickets: ['a1'], files: ['hooks/a.ts'] },
+    { id: 'B', tickets: ['b1'], files: ['hooks/b.ts'] },
+  ])
+  expect(out.text).toContain('groups: first wave, groups that can start together: A, B')
+  expect(out.text).not.toContain('no group can run with another')
+})
+
+test('à l’envoi des groupes, tout en série : la réponse le dit et nomme le fichier que le plus de groupes partagent', () => {
+  const out = sendPlan([
+    { id: 'A', tickets: ['a1'], files: ['hooks/register.tsx', 'hooks/a.ts'] },
+    { id: 'B', tickets: ['b1'], files: ['hooks/register.tsx'] },
+    { id: 'C', tickets: ['c1'], files: ['hooks/c.ts', 'hooks/register.tsx'] },
+  ])
+  expect(out.text).toContain('groups: no group can run with another: every group goes in series; the file or resource the most groups share is "hooks/register.tsx" (3 groups)')
+  expect(out.text).not.toContain('first wave')
+  // Une ressource compte comme un fichier, par le même recouvrement que le lancement.
+  const app = sendPlan([
+    { id: 'A', tickets: ['a1'], files: ['a.ts'], resources: ['PowerBI Desktop'] },
+    { id: 'B', tickets: ['b1'], files: ['b.ts'], resources: ['powerbi desktop'] },
+  ])
+  expect(app.text).toContain('the file or resource the most groups share is "PowerBI Desktop" (2 groups)')
+  // Des groupes en chaîne sans fichier commun : en série, sans fichier à nommer.
+  const chain = sendPlan([{ id: 'A', tickets: ['a1'], files: ['a.ts'] }, { id: 'B', tickets: ['b1'], files: ['b.ts'] }], { b1: ['a1'] })
+  expect(chain.text).toContain('groups: no group can run with another: every group goes in series, each waiting for a group before it')
+})
+
+test('plan renvoyé, un groupe dans un worker : la réponse ne promet ni lot ni série', () => {
+  const first = sendPlan([{ id: 'A', tickets: ['a1'], files: ['a.ts'] }, { id: 'B', tickets: ['b1'], files: ['b.ts'] }])
+  const run = first.board.runs[0] as Run
+  const sent: Board = { ...first.board, runs: [{ ...run, groups: run.groups!.map(g => (g.id === 'A' ? { ...g, linked: { at: 2_500 } } : g)) }] }
+  const again = applyReport(sent, { groups: [{ id: 'A', name: 'Groupe A', tickets: ['a1'], files: ['a.ts'] }, { id: 'B', name: 'Groupe B', tickets: ['b1'], files: ['b.ts'] }] }, 3_000)
+  expect(again.text).toContain('groups: no two groups can start together now (a group in a worker or started here, or a blocker, holds the others), but groups of a same wave that share no file can still run side by side')
+  expect(again.text).not.toContain('first wave')
+  expect(again.text).not.toContain('every group goes in series')
+})
+
+test('plan envoyé avec un ticket mis en cours dans le même appel : la vague dite attend ce groupe, commencé ici', () => {
+  const run = newRun('implement', 1_000)
+  const board: Board = { ...emptyBoard('c:/p', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }
+  const out = applyReport(
+    board,
+    {
+      tickets: ['a1', 'b1', 'c1'].map(id => ({ id, name: `Ticket ${id}`, status: 'todo' })),
+      groups: [
+        { id: 'A', name: 'Groupe A', tickets: ['a1'], files: ['a.ts'] },
+        { id: 'B', name: 'Groupe B', tickets: ['b1'], files: ['b.ts'] },
+        { id: 'C', name: 'Groupe C', tickets: ['c1'], files: ['c.ts'] },
+      ],
+      set: [{ id: 'a1', status: 'doing' }],
+    },
+    2_000,
+  )
+  // Le `set` du même appel compte : A est commencé ici, B et C partent une fois A fini.
+  expect(out.text).toContain('groups: next wave, groups that can start together once A (started here) is done: B, C')
+  expect(out.text).not.toContain('first wave')
+})
+
+test('à l’envoi des groupes, un plan d’un seul groupe ou refusé garde sa réponse, et rien de plus n’est enregistré', () => {
+  const one = sendPlan([{ id: 'A', tickets: ['a1', 'b1'], files: ['a.ts'] }])
+  expect(one.text).toContain('groups: one group only, so no groups')
+  expect(one.text).not.toContain('first wave')
+  expect(one.text).not.toContain('no group can run with another')
+  const refused = sendPlan([{ id: 'A!', tickets: ['a1'] }, { id: 'B', tickets: ['b1'] }])
+  expect(refused.text).toContain('plan refused, group ids out of form')
+  expect(refused.text).not.toContain('first wave')
+  // Le plan gardé est le même avec ou sans la phrase : aucun champ de vague dans les groupes.
+  const kept = sendPlan([{ id: 'A', tickets: ['a1'], files: ['a.ts'] }, { id: 'B', tickets: ['b1'], files: ['b.ts'] }])
+  for (const g of kept.board.runs[0]!.groups ?? []) expect(Object.keys(g).sort()).toEqual(['files', 'id', 'name', 'tickets'])
+})
+
 test('deux groupes qui partagent un fichier ne partent pas ensemble : le lot garde A et C', () => {
   const plan = plan3({ files: ['worker', 'worker/sc.py', 'data'] })
   expect(plan.parallelBatch).toEqual(['A', 'C'])
@@ -143,6 +229,9 @@ test('la consigne de /to-tickets décrit les deux sortes de groupes', async ($, 
   expect(note).toMatch(/its worker does them in a row with \/implement/)
   expect(note).toMatch(/a group of one ticket is fine when its context is its own/)
   expect(note).toMatch(/can later run at the same time, one worker per group\./)
+  // Un fichier très partagé : relevé avant le regroupement, ses tickets dans le moins de groupes possible.
+  expect(note).toContain('Before grouping, list the files the most tickets touch: the tickets that share such a widely shared file go into as few groups as possible')
+  expect(note).toContain('the breakdown you show says which groups can run together')
   // Ressources exclusives et fichiers par ticket.
   expect(note).toMatch(/"resources": what a group cannot share with another group working at the same time/)
   expect(note).toMatch(/"PowerBI Desktop"/)

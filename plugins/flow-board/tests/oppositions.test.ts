@@ -2,6 +2,8 @@ import { expect, test } from 'claude-code/testing'
 
 import { newRun } from '../hooks/model.ts'
 import { contradictionQuestion, markSeen, newDecisionsOf, parseSeen, seriesOf } from '../hooks/oppositions.ts'
+import { autoNote } from '../hooks/auto-consignes.ts'
+import { TOOL_SCHEMA } from '../hooks/tool-schema.ts'
 import type { Run } from '../types'
 
 // Les décisions opposées entre missions. Invariant : « Deux décisions opposées de deux missions ne passent
@@ -46,6 +48,7 @@ test('la question d’une contradiction cite les deux décisions mot pour mot, a
   expect(q).toContain('« SQLite » (choix déclaré)')
   expect(q).not.toContain('\n')
   expect(q).toMatch(/Laquelle garder \?/)
+  expect(q.startsWith("Claude du manager : ne la pose pas ici, dis à l'utilisateur de répondre chez le COO. ")).toBe(true)
 })
 
 test('seul ce qui a été montré se marque vu : une décision au-delà du plafond revient au relevé suivant', () => {
@@ -70,4 +73,11 @@ test('une série ajoutée après la dernière ne fait pas revenir celle-ci, mêm
   const before = '## Série 4 — cache\ntexte'
   const after = `${before}\n\n## Série 5 — base\nautre`
   expect(seriesOf(after)[0]!.print).toBe(seriesOf(before)[0]!.print)
+})
+
+test('la description de « waiting » et la consigne d’auto nomment les questions « opposition: » du mod : jamais posées ni retirées chez le manager', () => {
+  const waiting = String((TOOL_SCHEMA.properties as Record<string, { description?: string }>).waiting!.description)
+  expect(waiting).toContain('nor « opposition:… » (answered at COO)')
+  const note = autoNote('implement', newRun('implement', 1_000, 'M')).join('\n')
+  expect(note).toContain('A question whose id starts with « opposition: » is the mod\'s too (opposed decisions of two missions, raised by the COO): never ask it here, where an answer does not lift it, and never withdraw it; tell the user to answer it in the COO\'s discussion')
 })

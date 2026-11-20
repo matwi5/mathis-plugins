@@ -4,6 +4,20 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.13 — 2026-11-20
+
+### Ajouté
+- **`grilling` et `to-tickets`, invariant confronté** : avant sa validation, un invariant est confronté aux règles et aux invariants déjà écrits.
+
+### Modifié
+- **`implement`** : l'étape de revue renvoie aux consignes de flow-board.
+- **`grilling`** : une question reprend d'abord les mots de l'utilisateur.
+- **`to-spec` et `to-tickets`** : le cadrage nomme la fonction qui écrit, tous ses appelants et les lecteurs de consignes ; l'étape de vérification dit aussi où va un piège trouvé par un explorateur.
+- **`to-tickets`** : dit, à l'envoi des groupes, lesquels peuvent tourner ensemble.
+- **`triage`** : « rattachée à » porte le numéro court de la mission, vérifié par son titre.
+
+---
+
 ## 1.3.1-mathis.12 — 2026-11-16
 
 ### Ajouté

@@ -12,6 +12,6 @@ Call the Skill tool with "tdd" where possible, at pre-agreed seams.
 
 Run typechecking regularly, single test files regularly, and the full test suite once at the end.
 
-Once done, call the Skill tool with "code-review" to review the work.
+Once done, review the work. When a flow-board dashboard follows this skill, its instructions say which reviews run and how (the review of each ticket, then the review of the lot or of the group), and they win over this line. Otherwise, call the Skill tool with "code-review" (this plugin's two-axis review, mattpocock-skills:code-review).
 
 Commit your work to the current branch.

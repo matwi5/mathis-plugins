@@ -3220,7 +3220,8 @@ TICKET_CHECKED = re.compile(r"^\s*- \[x\] ")
 def new_tickets_written_done(paths, moves=None):
     """Les tickets indexés neufs écrits comme déjà faits : absents de `HEAD` à leur chemin et pas renommés
     depuis un fichier de `HEAD` (une copie compte comme neuve), dont la ligne `Status:` dit fait (« fait »,
-    « done ») ou qui portent une case cochée `- [x] ` hors bloc de code. Pendant une fusion, un ticket que
+    « done », ou une valeur du vocabulaire que le relais lit comme faite, « terminé », sous `Statut :` aussi)
+    ou qui portent une case cochée `- [x] ` hors bloc de code. Pendant une fusion, un ticket que
     la branche fusionnée (`MERGE_HEAD`) portait déjà passe. Un manager avait créé un ticket en copiant un
     ticket fait : « Status: fait » et six cases cochées de fausses preuves."""
     moves = moves or {}
@@ -3231,10 +3232,119 @@ def new_tickets_written_done(paths, moves=None):
                 or (merging and git_show(REPO, f"MERGE_HEAD:{path}") is not None):
             continue
         for n, line in lines_outside_code(git_show(REPO, f":{path}")):
-            if TICKET_DONE_STATUS.match(line) or TICKET_CHECKED.match(line):
+            status = TICKET_STATUS_LINE.match(line)
+            relayed_done = status is not None and STATUS_VOCABULARY.get(status_phrase(status.group(1).strip())) == "done"
+            if TICKET_DONE_STATUS.match(line) or relayed_done or TICKET_CHECKED.match(line):
                 problems.append(f"{path}:{n} : ticket neuf écrit comme déjà fait (« {line.strip()[:60]} ») ; un ticket "
                                 f"neuf s'écrit « Status: ready-for-agent », ses cases vides (« - [ ] »)")
     return problems
+
+
+TICKET_STATUS_LINE = re.compile(r"^\s*(?:\*\*)?Statu[st]\s*:\s*(?:\*\*)?\s*(.*)$", re.I)
+# Le vocabulaire de la ligne `Status:` d'un ticket et le statut que chaque valeur relaie au tableau de bord
+# (None : admise, sans effet) : celui de `TICKET_STATUS_VOCABULARY` (plugins/flow-board/hooks/relay.ts),
+# qu'un test compare à celui-ci, valeurs et ordre.
+STATUS_VOCABULARY = {
+    "en cours": "doing", "en attente": "doing", "doing": "doing",
+    "in progress": "doing", "in-progress": "doing", "in_progress": "doing",
+    "fait": "done", "done": "done", "terminé": "done",
+    "bloqué": "blocked", "blocked": "blocked",
+    "ready-for-agent": "todo", "à faire": "todo", "todo": "todo", "ready": "todo",
+    "retiré": None,
+}
+# Ce qui suit une valeur du vocabulaire : ni lettre, ni chiffre, ni `-`, ni `_` (« faite » n'est pas « fait »).
+STATUS_END = re.compile(r"[\w-]")
+# Les statuts qui ferment un ticket tout coché : il n'a plus à passer « fait ».
+CHECKED_STATUS_OK = {value for value, status in STATUS_VOCABULARY.items() if status in ("done", "blocked", None)}
+
+
+def status_line(text):
+    """La première ligne `Status:` (ou `Statut :`, gras permis) d'un ticket hors de ses blocs de code :
+    (son numéro, sa valeur sans blancs autour) ; None sans cette ligne."""
+    for n, line in lines_outside_code(text):
+        m = TICKET_STATUS_LINE.match(line)
+        if m:
+            return n, m.group(1).strip()
+    return None
+
+
+# La ligne que lit le relais de flow-board (`localTicketChange` de plugins/flow-board/hooks/relay.ts, même
+# motif, qu'un test compare) : la première de tout le texte, blocs de code compris, à l'une de ses formes.
+RELAY_STATUS_LINE = re.compile(r"^\s*(?:\*\*Status:\*\*|\*\*Statut\s*:\*\*|Statut\s*:)[ \t]*(.*)$", re.I | re.M)
+
+
+def relay_status_line(text):
+    """La ligne de statut que lit le relais : (son numéro, sa valeur sans blancs autour) ; None sans elle."""
+    m = RELAY_STATUS_LINE.search(text)
+    return None if m is None else (text.count("\n", 0, m.start(1)) + 1, m.group(1).strip())
+
+
+def statuses_unread_by_relay(paths):
+    """Les tickets indexés dont le relais de flow-board lit une autre ligne de statut que ce contrôle, ou
+    aucune : une forme qu'il ne lit pas (`Status:` sans gras, `**Status :**`) ou un exemple dans un bloc de
+    code plus haut. Le pre-commit passait, et le tableau de bord ne changeait pas."""
+    out = []
+    for path in paths:
+        text = git_show(REPO, f":{path}")
+        ours = status_line(text) if text is not None else None
+        if ours is None:
+            continue
+        theirs = relay_status_line(text)
+        if theirs is None or theirs[0] != ours[0]:
+            read = f"il lit la ligne {theirs[0]}, « {theirs[1][:40]} »" if theirs else "il n'en lit aucune"
+            out.append(f"{path}:{ours[0]} : le relais de flow-board ne lit pas cette ligne Status: ({read}) ; "
+                       f"écrire « **Status:** {ours[1][:40]} », hors bloc de code et avant tout exemple")
+    return out
+
+
+def status_phrase(value):
+    """La valeur du vocabulaire (`STATUS_VOCABULARY`) par laquelle commence une valeur de `Status:`, casse
+    ignorée ; None hors du vocabulaire."""
+    value = value.lower()
+    for phrase in STATUS_VOCABULARY:
+        if value.startswith(phrase) and not STATUS_END.match(value[len(phrase):]):
+            return phrase
+    return None
+
+
+def unknown_statuses(paths):
+    """Les tickets indexés dont la ligne `Status:` ne commence par aucune valeur du vocabulaire (une ligne
+    absente passe) : un worker avait écrit « in-progress », que le relais ne lisait pas, et le ticket était
+    resté « à faire » au tableau de bord. Pendant une fusion arrêtée, un ticket que la branche fusionnée
+    (`MERGE_HEAD`) portait déjà à la même valeur passe."""
+    merging = git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None
+    problems = []
+    for path in paths:
+        found = status_line(git_show(REPO, f":{path}"))
+        if found is None or status_phrase(found[1]) is not None:
+            continue
+        theirs = status_line(git_show(REPO, f"MERGE_HEAD:{path}")) if merging else None
+        if theirs is not None and theirs[1] == found[1]:
+            continue
+        problems.append(f"{path}:{found[0]} : Status « {found[1][:40]} » hors du vocabulaire ; écrire une valeur de : "
+                        f"{', '.join(STATUS_VOCABULARY)} (suivie au besoin d'une précision)")
+    return problems
+
+
+def checked_not_done(paths):
+    """Les tickets indexés, et les tickets indexés du même dossier `issues/`, dont toutes les cases hors
+    bloc de code sont cochées (au moins une) et dont la ligne `Status:` manque ou ne commence par aucun mot de
+    `CHECKED_STATUS_OK` : un ticket était resté « ready-for-agent » une heure et demie après son commit,
+    toutes ses cases cochées. Lus dans l'index ; triés."""
+    folders = sorted({path.rsplit("/", 1)[0] for path in paths})
+    listed = git(["ls-files", "-z", "--", *folders]) if folders else ""
+    tickets = sorted({*paths, *(p for p in (listed or "").split("\0") if TICKET_FILE.fullmatch(p))})
+    out = []
+    for path in tickets:
+        text = git_show(REPO, f":{path}")
+        if text is None:
+            continue
+        boxes = [line for _, line in lines_outside_code(text) if CHECKBOX_OK.match(line)]
+        status = status_line(text)
+        if boxes and all(TICKET_CHECKED.match(line) for line in boxes) \
+                and (status is None or status_phrase(status[1]) not in CHECKED_STATUS_OK):
+            out.append(path)
+    return out
 
 
 def check_tickets(paths, merging=False):
@@ -3255,6 +3365,12 @@ def check_tickets(paths, merging=False):
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} case(s) mal formée(s) : " + " ; ".join(problems))
     log("  ok")
+    # Un avertissement, jamais un refus : le point 9 de la procédure fait commiter un ticket hors zone
+    # sensible cases cochées avant sa revue, sa ligne `Status:` au commit suivant.
+    for path in checked_not_done(paths):
+        warn(f"{path} : toutes les cases cochées : écrire **Status:** fait")
+    for problem in statuses_unread_by_relay(paths):
+        warn(problem)
     if merging and git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is None:
         return
     log("→ tickets neufs écrits comme faits")
@@ -3262,6 +3378,12 @@ def check_tickets(paths, merging=False):
     if problems:
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} ligne(s) d'un ticket neuf écrit comme fait : " + " ; ".join(problems))
+    log("  ok")
+    log("→ vocabulaire de la ligne Status: des tickets")
+    problems = unknown_statuses(paths)
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} ligne(s) Status: hors du vocabulaire : " + " ; ".join(problems))
     log("  ok")
 
 

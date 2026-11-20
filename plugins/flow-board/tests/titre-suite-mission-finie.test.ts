@@ -23,7 +23,7 @@ const finished = (over: Partial<Run> = {}): Run => {
   const run = newRun('grill-me', NOW - 2 * HOUR, TITLE)
   run.phases[0]!.status = 'done'
   run.phases[0]!.finishedAt = NOW - HOUR
-  run.phases[1]!.status = 'skipped'
+  for (const p of run.phases.slice(1)) p.status = 'skipped'
   return { ...run, status: 'done', owner: 'Y', bornIn: 'Y', updatedAt: NOW - HOUR, finishedAt: NOW - HOUR, ...over }
 }
 
@@ -36,7 +36,9 @@ test('par le vrai chemin : un Grilling titré puis fini, et /to-spec dans la mê
   let board = applySkill(boardOf([], 'Y'), 'mattpocock-skills:grill-me', { now: t0, isMain: true })!.board
   board = applyReport(board, { title: TITLE }, t0 + 1_000).board
   board = applyReport(board, { complete: true }, t0 + 2_000).board
-  // La phase facultative /to-spec reste en attente : la mission se clôt (« ✓ Clore la mission »).
+  // La mission se clôt (`finishActive`, le chemin de « ✓ Clore la mission » et de `/flow done`) : ses phases encore
+  // à faire passent « sautées ». Depuis que la Réflexion va jusqu'à la PR, la carte ne propose plus ce bouton
+  // avant son Implémentation : la clôture reste celle qu'on demande soi-même.
   board = finishActive(board, t0 + 3_000)!.board
   const done = board.runs[0]!
   expect(done.status).toBe('done')

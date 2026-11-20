@@ -80,7 +80,8 @@ test('le panneau : ni revue finale ni Version et push avec des tickets ouverts, 
   mock.store(on)
   engine(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, tickets: [{ id: 'T1', name: 'Un' }] } as any)
+  // Deux tickets : un lot d'un seul ticket n'a pas de revue du lot.
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'T1', name: 'Un' }, { id: 'T2', name: 'Deux' }] } as any)
 
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'go-project:version' })).toBeUndefined()
@@ -89,7 +90,7 @@ test('le panneau : ni revue finale ni Version et push avec des tickets ouverts, 
   expect(await ui.find({ key: 'go-retro' })).toBeDefined()
   await ui.unmount()
 
-  await $.tool.call({ tool: TOOL, set: [{ id: 'T1', status: 'done' }] } as any)
+  await $.tool.call({ tool: TOOL, set: [{ id: 'T1', status: 'done' }, { id: 'T2', status: 'done' }] } as any)
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'go-final-review' })).toBeDefined()
   await ui.unmount()

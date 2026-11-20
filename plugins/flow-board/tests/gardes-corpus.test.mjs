@@ -30,27 +30,30 @@ const NOT_A_PREDICATE = 'pas un prédicat sur une valeur (il rend une liste, un 
 
 /** Les exports que le motif retient et qui ne sont pas des gardes de forme, chacun avec sa raison. */
 const NOT_FORM_GUARDS = {
+  sameRoadmapTitle: 'compare deux titres de mission sous la forme que le relevé du COO montre (pour « rattachée à » et le titre partagé) : il ne juge la forme d’aucune valeur, et rien de ce qu’il compare n’entre dans une commande ni dans un texte cité',
   isOwnBranch: 'compare une branche relue à celle que la fermeture attend (isSafeBranch, éprouvé, juge sa forme)',
   hasSendName: 'compose isGroupId et isNotedWorktree, éprouvés par la table, et les marques worktreeClash et sessionClash, sur un lien relu : un nom absent y vaut le recalcul depuis le titre, comme avant la note, et n’est donc pas un refus',
   isBackgroundLaunch: 'dit si une commande que Claude vient de lancer est un claude --bg, pour signaler une sortie sans ligne « backgrounded » : il ne laisse passer aucune valeur dans une commande ni dans un texte (l’id noté passe par relayShortId, éprouvé par le corpus)',
   isSettingMissing: 'dit si un fichier du poste est vraiment absent (le plus proche dossier listable sous celui de Claude ne le porte pas) : il ne juge la forme d’aucune valeur, et rien de ce qu’il lit n’entre dans une commande ni dans un texte cité',
   isOldCopied: 'lit la marque « copié » de l’ancien état des cartes de la discussion (un booléen de son état) : il ne juge la forme d’aucune valeur, et rien de ce qu’il lit n’entre dans une commande ni dans un texte cité',
+  isUnnamed: 'lit la marque « discussion nommée » de cette discussion dans son magasin (absente ou non) : il ne juge la forme d’aucune valeur, et rien de ce qu’il lit n’entre dans une commande ni dans un texte cité',
+  isCardTitle: 'compare le titre relevé de la discussion au titre d’une carte déjà relu (soundRecord) : ne juge la forme d’aucun des deux, et aucun n’entre dans une commande ni un chemin',
   isTranscriptPath: 'garde de confinement d’un chemin que le mod lit lui-même (sous <claude>/projects/, sans « .. ») : il n’entre dans aucune commande ni aucun texte cité, et un nom de dossier y garde tout caractère',
   ...Object.fromEntries(['isBoard', 'isRegistry', 'isRelay'].map(name => [name, STRUCTURE])),
   ...Object.fromEntries(['isTime', 'isSecurityCount', 'isBugCount', 'isSeries'].map(name => [name, NUMBER])),
   ...Object.fromEntries(
-    ['sameTicket', 'sameLabel', 'sameFolder', 'sameChoice', 'isSameRelayedChoice', 'isSameProject', 'isMainRefNewer', 'isSeatAhead', 'isSeatBehind', 'keepsItems', 'keepsEntries', 'keepsPistes', 'keepsOps', 'keepsNumbers', 'keepsCards', 'holdsWaitlist', 'unitsOverlap'].map(name => [name, COMPARE]),
+    ['sameTicket', 'sameLabel', 'sameFolder', 'sameChoice', 'isSameRelayedChoice', 'isSameProject', 'isMainRefNewer', 'isSeatAhead', 'isSeatBehind', 'keepsItems', 'keepsEntries', 'keepsPistes', 'keepsOps', 'keepsNumbers', 'keepsCards', 'holdsWaitlist', 'unitsOverlap', 'isShortLaunch', 'isLaunchReceived'].map(name => [name, COMPARE]),
   ),
   ...Object.fromEntries(['isModQuestion', 'hasSeparator', 'wentWrong', 'answerAwaitsPerson', 'isFableModelId', 'isFixedReason'].map(name => [name, MEANING])),
   ...Object.fromEntries(['isPersonOrigin', 'isTypedOrigin'].map(name => [name, ORIGIN])),
   isFramingSubSkill: 'dit si un skill chargé comme sous-skill d’une phase de cadrage reçoit les règles de cadrage (sorti de register.tsx, exporté pour lui) : il compare des ids à une liste fixe, et rien de ce qu’il lit n’entre dans une commande ni dans un texte cité',
-  ...Object.fromEntries(['isCardInLaunch', 'finishPlanHolds', 'backCardTaken', 'orphanCardHolds', 'isPairDead'].map(name => [name, ON_MISSION])),
-  ...Object.fromEntries(['seenAfter', 'setStep', 'needsRebuild', 'withoutGone', 'liveEntries', 'markClosesDone', 'stripRunAgents', 'markAutoStarted', 'projectPlan', 'closeOpen', 'parseSecuritySetting', 'orphanCardPlans'].map(name => [name, NOT_A_PREDICATE])),
+  ...Object.fromEntries(['isCardInLaunch', 'finishPlanHolds', 'backCardTaken', 'orphanCardHolds', 'isPairDead', 'isSingleTicketLot', 'isAutoReopenProposed'].map(name => [name, ON_MISSION])),
+  ...Object.fromEntries(['seenAfter', 'setStep', 'needsRebuild', 'withoutGone', 'liveEntries', 'markClosesDone', 'stripRunAgents', 'markAutoStarted', 'projectPlan', 'closeOpen', 'parseSecuritySetting', 'orphanCardPlans', 'clearLiveness'].map(name => [name, NOT_A_PREDICATE])),
   ...Object.fromEntries(
     [
       'isCooDiscussion', 'isRunComplete', 'isPhaseOptional', 'isRetroRun', 'isNoLogicGroup', 'isTicketReviewEnough', 'isGroupReviewed',
       'isSensitiveGroup', 'isLotReviewEnough', 'isLotToReview', 'isLotAdviceCurrent', 'isLotAdvicePrevious', 'isLotSecuritySettled',
-      'isLotSecurityDue', 'isClosedTurnedOff', 'isBugPass', 'isWaitingTicket', 'isDelegable', 'isCloseCandidate', 'isStoredPause', 'isAutoOn',
+      'isLotSecurityDue', 'isClosedTurnedOff', 'isBugPass', 'isWaitingTicket', 'isDelegable', 'isCloseCandidate', 'isStoredPause', 'isAutoOn', 'isAutoMission',
       'isAutoLitBy', 'isAutoPauseStored', 'isEndedPause', 'isRelaunchPause', 'isGroupDone', 'isCutDue', 'isAutoResumed', 'isGroupLotStuck', 'isBlocked', 'isPickable', 'isLotUnderway', 'isKeptForReport',
       'isDeliveredRun', 'isAwaitingArchive', 'isCloseDone', 'isDeliveryOver', 'isReportShipped', 'isOtherDiscussions', 'isWaitlistRetro',
       'needsReview', 'versionSet', 'hasWaitlistStep', 'hasUnsoundTombstones', 'canResumeStuck', 'isStuckResumable', 'relaunchStillDue',

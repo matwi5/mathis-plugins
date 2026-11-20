@@ -40,6 +40,8 @@ class ExportExclusTest(unittest.TestCase):
             staging.mkdir()
             export_public.build_snapshot("HEAD", staging)
             self.assertFalse((staging / "docs" / "check-sh.md").exists())
+            # Les faits sur les commandes claude du terminal : leurs preuves sont dans travail/, qui ne part pas.
+            self.assertFalse((staging / "docs" / "commandes-claude.md").exists())
             self.assertFalse((staging / ".claude" / "rules" / "pieges-des-mods.md").exists())
             # Où vivent les tickets de ce dépôt (des fichiers de travail/, qui ne part pas) : le CLAUDE.md public ne le dit pas.
             self.assertFalse((staging / "docs" / "agents").exists())

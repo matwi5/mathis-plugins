@@ -6,7 +6,7 @@ import { GROUP_ID_FORM } from './closing.ts'
 import { DISCUSSION_STATES } from './coordination.ts'
 import { UNMARKED_ANSWERS } from './discussions.ts'
 import { LAUNCH_STARTS } from './launch.ts'
-import { RELAUNCH_PREFIX, STALE_PREFIX, WAITING_MAX } from './model.ts'
+import { OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, WAITING_MAX } from './model.ts'
 
 export const TOOL_DESCRIPTION =
   'Live dashboard of the mattpocock-skills workflow (flow-board): silent bookkeeping, batched with your other tool calls. ' +
@@ -24,7 +24,7 @@ export const TOOL_DESCRIPTION =
 export const TOOL_SCHEMA = {
   type: 'object',
   properties: {
-    title: { type: 'string', description: "Your title for the whole work, 3 to 6 words, in the user's language, never their message; only the first one sent is kept (fix.title changes it); the discussion where the mission was born takes it unless another mission was born there" },
+    title: { type: 'string', description: "Your title for the whole work, 3 to 6 words, in the user's language, never their message; only the first one sent is kept (fix.title changes it); the discussion where the mission was born takes it only if flow-board never named it (the answer says)" },
     step: { type: 'string', description: 'Id of the step of the current skill that starts now' },
     items: {
       type: 'array',
@@ -212,7 +212,7 @@ export const TOOL_SCHEMA = {
     },
     group: {
       type: 'string',
-      description: 'With "delegate": this worker\'s group id, from the brief',
+      description: 'With "delegate": your group id, from the brief; manager: with "reportPath"',
     },
     model: {
       type: 'string',
@@ -224,7 +224,7 @@ export const TOOL_SCHEMA = {
     },
     reportPath: {
       type: 'string',
-      description: 'In a worker\'s main thread, instead of "report": the absolute path of the .md or .txt file that holds it, under your worktree or CLAUDE_JOB_DIR, 200 000 characters at most, relayed as "report"; any other path is refused, and a call with both relays neither',
+      description: 'A worker\'s main thread, instead of "report": absolute path of its .md or .txt file under your worktree or CLAUDE_JOB_DIR, 200 000 characters at most; other paths refused; with "report", neither. Manager: with "group", from its noted worktree',
     },
     main: {
       type: 'string',
@@ -247,7 +247,7 @@ export const TOOL_SCHEMA = {
       type: 'object',
       description: "Correct the active mission (the user's request or your mistake): its title, current phase (going back resets later phases), step; tickets and groups go through \"tickets\", \"set\", \"remove\", \"groups\"",
       properties: {
-        title: { type: 'string', description: 'New title; the discussion follows when the mission was born here and no worker launched yet' },
+        title: { type: 'string', description: 'New title of the mission only; this discussion keeps its name' },
         phase: { type: 'string', description: 'Skill id of a phase to make current (to-tickets, implement…)' },
         step: { type: 'string', description: 'Step id of the current (or fixed) phase to make current; later steps become pending' },
       },
@@ -255,20 +255,20 @@ export const TOOL_SCHEMA = {
     waiting: {
       type: 'array',
       description:
-        'Questions waiting for the user that hold back part of the mission (in auto mode, each decision left to the user): "id", exactly one of "phase", "group" or "ticket" it blocks, and "text" (dashboard only, never in a notification). Before asking, reread DECISIONS.md: a settled question is not asked again; an answered id never reopens (new question, new id). Send {"id", "answered": true} once answered; not the mod\'s own « ' + STALE_PREFIX + '… », nor « ' + RELAUNCH_PREFIX + '… » while its group waits for its relaunch. At most ' +
+        'Questions blocking part of the mission (in auto, each decision left to the user): "id", one of "phase", "group", "ticket" it blocks, "text" (dashboard only). Before asking, reread DECISIONS.md: a settled question is not asked again; an answered id never reopens (new question, new id). Partial answer (« b et c », no label): apply it, ask only the rest under a new id (its question, then the quote), never the whole question. Send {"id", "answered": true} once answered; not the mod\'s « ' + STALE_PREFIX + '… », nor « ' + RELAUNCH_PREFIX + '… » while its group awaits relaunch, nor « ' + OPPOSITION_PREFIX + '… » (answered at COO). At most ' +
         WAITING_MAX +
-        ' open at once. Not in a worker: SendMessage the manager',
+        ' open. Workers: message the manager',
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Your short id (Q1, invariant-totaux…), the same to withdraw it' },
-          phase: { type: 'string', description: 'Skill id of the phase it blocks (to-spec, implement…)' },
-          group: { type: 'string', description: 'Id of the group it blocks' },
-          ticket: { type: 'string', description: 'Id of the ticket it blocks' },
+          id: { type: 'string', description: 'Your short id (Q1…), the same to withdraw it' },
+          phase: { type: 'string', description: 'Skill id of the blocked phase' },
+          group: { type: 'string', description: 'Id of the blocked group' },
+          ticket: { type: 'string', description: 'Id of the blocked ticket' },
           text: { type: 'string', description: "The question, short, in the user's language" },
           answered: { type: 'boolean', description: 'true once answered (a user\'s answer: once in DECISIONS.md): it leaves the list' },
-          gesture: { type: 'string', enum: ['spend', 'external', 'flaw'], description: 'A click of the user in the COO\'s dashboard, applied here: allow or refuse a spending ("spend") or an external action ("external"), leave a kept security finding unfixed or fix it ("flaw", with "dismissed")' },
-          dismissed: { type: 'number', description: 'With "flaw": the total of kept findings left unfixed once the user agrees (its group\'s "security.dismissed")' },
+          gesture: { type: 'string', enum: ['spend', 'external', 'flaw'], description: 'A user\'s click in the COO\'s dashboard, applied here: allow or refuse a spending ("spend") or an external action ("external"), leave a kept security finding unfixed or fix it ("flaw", with "dismissed")' },
+          dismissed: { type: 'number', description: 'With "flaw": total kept findings left unfixed once agreed (its group\'s "security.dismissed")' },
         },
         required: ['id'],
       },

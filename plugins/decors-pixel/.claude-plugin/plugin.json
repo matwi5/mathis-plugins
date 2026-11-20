@@ -1,0 +1,10 @@
+{
+  "name": "decors-pixel",
+  "version": "0.1.0",
+  "description": "Décors en pixel art animé pour l'app desktop : « Morkie à Paris » (un petit chien sur un quai de Seine, de jour, de nuit ou selon l'heure) et « Frissons 80 » (une nuit des années 80). /decor choisit le décor et règle le voile et le flou.",
+  "author": {
+    "name": "Mathis"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

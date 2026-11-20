@@ -1077,3 +1077,21 @@ test('le relevé, état ou feuille de route illisible, ne dit ni l’endroit à 
   expect(text).not.toMatch(/the place of the roadmap is chosen again/)
   expect(text).toMatch(/copy back together what it held \(the entries seen\)/)
 })
+
+// « rattachée à » par le numéro court (depuis le 17/11/2026) : aucune entrée déjà écrite n'est réécrite par la lecture.
+test('le mod relit une feuille de route aux deux formes de « rattachée à » sans jamais réécrire son fichier', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  const text = FILE.replace(/^- \[R1\].*\n/m, '- [R1] rattachée à M5 - Mode auto · 2026-11-02 · COO · une chose numérotée\n- [R2] rattachée à Mode auto · 2026-11-02 · COO · une chose par le titre\n')
+  w.files[FILE_PATH] = text
+  await start($)
+  const opening = await openCoo($, clock)
+  expect(opening).not.toMatch(/out of format/)
+  const ui = await pane($)
+  await ui.press({ key: 'coo-page-pending' })
+  expect(await ui.find({ type: 'Text', text: /R1 · rattachée à M5 - Mode auto/ })).toBeDefined()
+  await ui.unmount()
+  await settle(clock, 12)
+  expect(w.files[FILE_PATH]).toBe(text)
+  expect(Object.keys(state(w)?.seen ?? {}).sort()).toEqual(['E1', 'I1', 'I2', 'J1', 'R1', 'R2'])
+})

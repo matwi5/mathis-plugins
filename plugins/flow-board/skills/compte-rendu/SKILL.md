@@ -40,7 +40,7 @@ Le rapport tient en un seul message, dans la langue de la personne, avec exactem
 ## Fait
 (Un sous-titre par groupe quand la mission en a plusieurs : « Groupe A · <nom> », puis ses tickets.)
 - <ticket ou changement> : ce qui change concrètement (comportement, données), pas le code. Commit <hash>. Vérifié par <commande> : <résultat>.
-- Revues (une ligne par groupe) : constats Standards et Spec, ceux des passes « bogues » et ceux de la relecture du fond et de la forme, chacun à part (les revues envoyées par cette discussion, que tu relis, et les comptes rendus des workers les donnent ; les faits plus bas ne citent du journal que ses alertes), et combien sont corrigés.
+- Revues (une ligne par groupe) : constats Standards et Spec, ceux des passes « bogues » et ceux de la relecture du fond et de la forme, chacun à part, et combien sont corrigés. Reprends tels quels les totaux de la ligne « Review totals by group » (ou « Review totals of the lot ») des faits plus bas, sommés sur ce que le relais garde de chaque envoi : un compte qu'elle dit absent reste absent, jamais 0, sauf les bogues d'un lot sans groupes, que la mission ne garde pas : prends-les des passes « bogues » que cette discussion a menées ; ajoute-y à part les revues que cette discussion a menées elle-même (la revue d'un groupe faite ici après son retour), que tu relis. Quand elle dit les totaux inconnus (relais illisible), prends-les des comptes rendus des workers ; les avertissements du journal, que les faits citent aussi, ne sont pas des totaux.
 - Sécurité (une ligne par groupe) : revue faite, avec ce qu'elle a trouvé et corrigé ; ou conseillée mais pas lancée, et pourquoi elle était conseillée ; ou, quand les faits le disent (revue désactivée pour le projet par son réglage du tableau de bord), « revue de sécurité désactivée pour ce projet ; le groupe touchait : <zone> » (« le lot touchait » pour une mission sans groupes) ; ou jugée inutile, et pourquoi.
 
 ## Entrées triées
@@ -101,7 +101,7 @@ Règles d'écriture :
 
 Ajoute le rapport, sous un titre « Compte rendu », au fichier de suivi de cette discussion s'il en a un, pour qu'il reste après elle.
 
-Donne-le aussi en entier à l'outil flow, `{"report": "<le rapport entier>"}` : le tableau de bord le garde pour le COO, qui l'affiche en entier et où la personne peut le valider. Après chaque changement, redonne-le en entier par le même champ : c'est la version gardée que la personne valide.
+Donne-le aussi en entier à l'outil flow, `{"report": "<le rapport entier>"}`, jamais par `reportPath` : l'outil ne lit un chemin que d'un worker (et, avec `group`, celui qu'un worker sans outil flow donne au manager), et le refuse ici, même pour un rapport déjà écrit dans un fichier. Le tableau de bord le garde pour le COO, qui l'affiche en entier et où la personne peut le valider. Après chaque changement, redonne-le en entier par le même champ : c'est la version gardée que la personne valide.
 
 ## 3. Attendre la validation
 

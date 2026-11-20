@@ -4,6 +4,35 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.89.0 — 2026-11-20
+
+Cinq missions : « Revue du lot du manager », « Titres stables, questions jamais reposées », « Signal de vie des discussions », « Pistes de rétro auto gardé » et les groupes F à J de « Pistes de rétro du 16/11 ».
+
+### Ajouté
+- **Signal de vie des discussions** : le tableau de bord dit si le processus d'une discussion tourne encore ; la vue du COO montre une discussion arrêtée ; un worker apprend que la session arrêtée de son manager est une fin prouvée, et le manager est prévenu d'un worker muet sans compte rendu final.
+- **Nuit** : la surveillance rouvre une mission en auto dont la discussion s'est arrêtée ; ses refus et les coupures du COO restent distincts.
+- **Questions jamais reposées** : une question qui répète, sous un autre id, une question déjà répondue est refusée ; une réponse partielle ne fait reposer que le reste.
+- **Titres stables** : une discussion n'est jamais nommée deux fois (marque durable), garde son nom quand le titre de la mission est corrigé, et son nom se revérifie à l'écriture.
+- **Revue du lot** : un lot d'un seul ticket n'a pas de revue du lot (l'avis de sécurité reste demandé en auto).
+- **Groupes** : l'outil flow dit, à l'envoi des groupes, lesquels peuvent tourner ensemble ; un groupe se fusionne par avance rapide seulement et se ferme par une seule ligne de suppressions enchaînées ; le manager dépose le compte rendu d'un worker privé de l'outil flow.
+- **Cadrage en auto** : il cite les invariants sur les données avant de trancher seul, nomme la fonction qui écrit, tous ses appelants et les lecteurs de consignes ; un choix d'expérience déclaré en auto est rappelé comme une question.
+- **Compte rendu** : les faits donnent les totaux de revue par groupe et les vraies durées des tickets ; les routes Recherche, Questionnaire et Réflexion vont jusqu'à la PR.
+- Le pre-commit lit « in-progress » comme « doing » et refuse un `Status:` de ticket inconnu ; « rattachée à » porte le numéro court de la mission, vérifié par son titre.
+
+### Modifié
+- La demande de lancement d'un groupe est plus courte et donne la référence connue du manager, jamais présentée comme sûre au worker ; le worker reçoit le nom du worktree noté à l'envoi.
+- Le brief des pistes remplace la ligne « geste du manager » sur `CLAUDE.md` ; le manager ne pose pas de question d'opposition du COO.
+- Le guide des fichiers d'une mission s'ouvre sur l'endroit où lire son état.
+
+### Corrigé
+- Des revendications de mission à la même heure se départagent par l'id du processus.
+- Un numéro que personne ne tient dans la table des numéros ne rattache rien.
+- La note des vagues ne promet plus de vague ultérieure ni de regroupement.
+- Les lignes de routes du README sont dérivées du code.
+- Correctifs issus des revues des groupes.
+
+---
+
 ## 0.88.0 — 2026-11-16
 
 La mission « Auto gardé en attente », et les groupes A à E de « Pistes de rétro du 16/11 » (la suite partira dans une prochaine version).

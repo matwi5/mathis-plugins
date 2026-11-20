@@ -325,6 +325,36 @@ test('un invariant en liste sous sa ligne est repris en entier', () => {
   }
 })
 
+
+test('--help imprime l’usage de l’en-tête, sort en 0 et n’écrit rien ; une autre option inconnue échoue toujours', () => {
+  const dir = project()
+  try {
+    const before = readdirSync(dir).sort()
+    const out = run(dir, '--help')
+    assert.equal(out.status, 0, out.stderr)
+    assert.equal(out.stderr, '')
+    // Les lignes d'usage imprimées sont exactement celles de l'en-tête du script (au commentaire près), dans les
+    // deux sens : une option ajoutée à l'en-tête sans l'être à `HELP` fait échouer ce test.
+    const usage = readFileSync(SCRIPT, 'utf8')
+      .split('\n')
+      .filter(l => /^\/\/ {3}node |^\/\/ {8}\[/.test(l))
+      .map(l => l.replace(/^\/\/ /, ''))
+    const printed = out.stdout.trimEnd().split('\n')
+    assert.ok(printed.some(l => l.includes('consignes.mjs --groupe <id du groupe>')))
+    assert.ok(printed.some(l => l.includes('consignes.mjs --securite <id du groupe>')))
+    assert.deepEqual(printed, usage)
+    assert.deepEqual(readdirSync(dir).sort(), before)
+    // Avec d'autres arguments, --help imprime aussi l'usage, sans rien écrire.
+    const mixed = run(dir, 'travail/chantier/issues/05-outil.md', 'a..b', 'c.md', '--help')
+    assert.equal(mixed.status, 0, mixed.stderr)
+    assert.equal(existsSync(join(dir, 'c.md')), false)
+    const other = run(dir, '--aide')
+    assert.equal(other.status, 1)
+    assert.match(other.stderr, /^ÉCHEC : option inconnue : --aide/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('un ticket absent, une cible sans plage ou une option inconnue : rien n’est écrit', () => {
   const dir = project()
   try {

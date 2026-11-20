@@ -138,7 +138,7 @@ test('un groupe fini ne clôt pas l’implémentation tant que des tickets du lo
   engine(on)
   const note = (await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })).text
   // Sans groupes, la ligne de fin attend aussi la revue du lot et sa sécurité (lot sans groupes).
-  expect(note).toMatch(/When every ticket of the lot is done, the lot review done and its security settled/)
+  expect(note).toMatch(/When every ticket of the lot is done, the lot review done \(none for a lot of a single ticket\) and its security settled/)
   await $.tool.call({
     tool: TOOL,
     tickets: [

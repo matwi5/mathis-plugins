@@ -73,7 +73,12 @@ _Avoid_: archiver une discussion, supprimer une discussion
 
 **Discussion arrêtée** :
 Une discussion dont le processus ne tourne plus, quelle qu'en soit la cause (arrêt au repos, mise à jour, processus tué, app quittée) ; sa mission reste à son nom, et elle la retrouve une fois relancée sous son id. Elle n'est pas fermée : rien ne l'a retirée de la liste des discussions.
+Ce que le mod peut en savoir (une fin propre, pas un processus tué), et quand le message d'une autre session la relance : `docs/evenements-moteur.md`, « Ce que le mod sait de l'état d'une discussion ».
 _Avoid_: discussion fermée, discussion morte
+
+**Signal de vie** :
+Ce qui dit, vu d'une autre discussion, si le processus d'une discussion tourne encore : « vivante », « arrêtée », ou « inconnu » quand rien ne le prouve. Il se lit à l'instant et ne se garde nulle part ; une discussion « inconnu » est traitée comme avant lui.
+_Avoid_: battement, heartbeat
 
 **Feuille de route** :
 La suite des jalons d'un projet, du jalon en cours aux suivants, que le COO tient pour mener l'utilisateur jusqu'à la fin ; le cap vient des objectifs du projet.
@@ -273,6 +278,10 @@ _Avoid_: lien, délégation, envoi (pour l'ensemble)
 Ce qu'un worker transmet à son manager pendant qu'il tourne : avancement, revues, compte rendu.
 _Avoid_: retour, remontée
 
+**Note d'arrêt** :
+Ce qu'un worker laisse au relais quand une erreur l'arrête : la ligne de son groupe la montre jusqu'à ce qu'il reparte. Lui seul la retire, à son premier tour réussi.
+_Avoid_: alerte, erreur du worker
+
 **Tâche de jugement** :
 Une tâche dont la difficulté est de comprendre ou de définir, pas de produire le changement. Deux sortes : le *jugement sur un existant* (intervenir dans ce qui marche déjà, en tenant compte de ses contraintes implicites : ce dont d'autres dépendent, ce qui ne doit pas bouger, ce que la demande ne dit pas) et l'*objectif ouvert* (le but est donné sans le chemin, et le résultat ne se vérifie pas tout de suite). Dans une mission flow-board, le ticket le dit sur sa ligne « Jugement : oui (…) », écrite au découpage, et la session qui le fait le traite en Opus xhigh le temps du ticket, imposé par son mod.
 _Avoid_: tâche difficile, tâche large
@@ -313,6 +322,18 @@ _Avoid_: revue de conformité, relecture du ticket
 **Axe Standards** :
 La vérification qu'un ticket respecte les règles de code écrites du projet.
 _Avoid_: revue de style, relecture du code
+
+**Revue du ticket** :
+La relecture des seuls changements d'un ticket par un relecteur unique, sur ses axes Standards et Spec, ou sur l'axe Spec seul avec une passe « bogues » pour un ticket sensible.
+_Avoid_: code-review du ticket, revue de Matt
+
+**Revue du groupe** :
+La relecture de tous les changements d'un groupe fini, tournée vers les interactions entre ses tickets, chacun ayant déjà eu sa revue du ticket.
+_Avoid_: revue finale, revue de branche
+
+**Revue du lot** :
+La revue du groupe d'un lot fait par le manager lui-même : la même relecture, sur tous les tickets du lot.
+_Avoid_: revue de la mission, revue du manager
 
 **Classe de défaut** :
 Une sorte de défaut qui peut se répéter à plusieurs endroits du code (par exemple une date relue sans borne) ; dès qu'un constat nomme d'autres endroits (« même défaut dans X »), ou quand elle revient une deuxième fois, elle se cherche par son motif et ses variantes et se corrige partout d'un coup.

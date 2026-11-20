@@ -96,6 +96,9 @@ test('En auto, le cadrage reçoit le bloc commun et celui d’un seul tour d’i
   expect(grill).toContain('one round only with the user, on intent (the goal, the scope, what is out of scope)')
   expect(grill).toContain('« acceptée en auto (reco) »')
   expect(grill).toContain('The final agreement is not asked')
+  // Avant une série tranchée seule, les invariants qui nomment la donnée, cités ; jamais fixés ni affaiblis seul.
+  expect(grill).toContain('Before writing a series you settle yourself, search the decision files of the project (every DECISIONS.md, or the files and the search tool its CLAUDE.md names) for the invariants that name the data each question touches, and quote them in the series (the file and the series)')
+  expect(grill).toContain('you never weaken nor rewrite an invariant you find: a recommendation that would do so stays a blocking question')
   // Les six catégories, dans l'ordre du premier clic sur « ⚡ Auto » : le chemin Fable, xhigh par la ligne « Jugement ».
   expect(grill).toMatch(/1\) an experience choice: .*2\) setting or weakening an invariant, or a design change that contradicts DECISIONS\.md.*3\) a deletion with no way back, or an exposure of the user's data outside this machine.*4\) leaving a security finding unfixed.*5\) the Fable path for a worker: never take it yourself; suggest it only for a bug Opus did not solve; xhigh comes from a ticket's « Jugement » line, declared at the split.*6\) a spending or an external action outside the mission/)
   // Une question en zone sensible se tranche seule à sa condition, déclarée comme une reco prise marquée « Zone sensible : ».
@@ -113,6 +116,7 @@ test('En auto, la spec, le découpage, l’implémentation et le compte rendu re
     expect(text).not.toContain('Framing in auto mode')
     expect(text.indexOf('Auto mode is on for this mission')).toBeGreaterThan(text.indexOf('Dashboard (flow-board)'))
     if (name === 'to-spec') expect(text).toContain('write them in the decision file as « acceptée en auto (reco) » and declare them ("origin": "recommendation")')
+    if (name === 'to-spec') expect(text).toContain('for the invariants that name the data each question touches, and quote them in the series (the file and the series); you never weaken nor rewrite an invariant you find')
     // Les lignes « Jugement » se déclarent en un seul choix, au libellé que Mathis a choisi le 12/11/2026, ou en
     // plusieurs au même libellé quand ce choix dépasserait 300 signes (un choix est coupé là).
     if (name === 'to-tickets') expect(text).toContain('declare the judgement tickets in a single choice, its "what" worded « Tickets de jugement, en xhigh le temps du ticket : <id> (<critère>), … »')

@@ -86,3 +86,24 @@ test('le relevé d’une mission de tri : le skill du COO porte l’invariant mo
   assert.ok(section.includes('sa section « Entrées triées »'), 'le skill du COO ne nomme pas la section')
   assert.ok(read('hooks/coo.ts').includes('also read its section « Entrées triées »'), 'la ligne du relevé ne nomme pas la section')
 })
+
+// « rattachée à » porte le numéro court de la mission, vérifié par son titre (depuis le 17/11/2026).
+// Invariant : un état « rattachée à » n'est jamais changé à partir d'une entrée dont le numéro et le titre désignent des
+// missions différentes, et aucune entrée déjà écrite n'est réécrite.
+test('le COO écrit « rattachée à M<n> - <titre> » d’après son relevé, recopie le numéro sans l’attribuer, et lit les deux formes', () => {
+  for (const part of [
+    'Tu n\'écris jamais un numéro toi-même, sauf dans l\'état « rattachée à M<n> - <titre> » d\'une entrée, où tu recopies celui que ton relevé met devant la mission',
+    'Quand ton relevé met un numéro M<n> devant la mission, l\'état s\'écrit « rattachée à M<n> - <titre> », le numéro recopié du relevé, jamais attribué par toi ; sans numéro, « rattachée à <titre> »',
+    'une entrée déjà écrite garde la sienne (jamais réécrite)',
+    'ton relevé nomme les entrées rattachées à cette mission, lues par le tableau de bord sous les deux formes',
+    'tu suis le sort qu\'il donne à chacune : tu ne changes que l\'état de celles qu\'il dit rattachées à cette mission, et toute autre qu\'il nomme (un désaccord : son numéro et son titre désignent deux missions ; une entrée ambiguë : un titre partagé, sans numéro qui le confirme ; une entrée rattachée à une mission archivée ; un numéro qui ne se vérifie pas) ne change pas',
+    'Ton relevé ne montre pas les missions archivées : ne juge jamais toi-même le sort d\'un numéro',
+    'une entrée « rattachée à M<n> - <titre> » ne compte que si M<n> est le numéro que ton relevé donne à cette mission (il ne montre pas ceux des missions archivées)',
+    'et, dans ce cas, quand ton relevé dit qu\'une autre mission du projet a le même titre',
+  ]) assert.ok(SKILL.includes(part), `absent : « ${part} »`)
+  const triage = readFileSync(new URL('../../mattpocock-skills/skills/engineering/triage/SKILL.md', import.meta.url), 'utf8')
+  for (const part of [
+    'plus every « À reprendre » entry whose state is already « rattachée à <this mission\'s title> » or « rattachée à M<n> - <this mission\'s title> »',
+    'recognize them by the title part only',
+  ]) assert.ok(triage.includes(part), `absent du tri : « ${part} »`)
+})

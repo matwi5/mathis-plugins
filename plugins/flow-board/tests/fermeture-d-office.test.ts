@@ -2,9 +2,10 @@ import { expect, mock, test } from 'claude-code/testing'
 import { memoryDisk } from './disque-memoire.ts'
 
 import { closingProcedure, closingScript, groupWorktree } from '../hooks/closing.ts'
-import { applyReport, emptyBoard, mergeBoards, newRun, relayedReportAt, startLinkedGroups } from '../hooks/model.ts'
+import { applyReport, emptyBoard, groupPlan, mergeBoards, newRun, relayedReportAt, startLinkedGroups } from '../hooks/model.ts'
 import { cancelLinkedGroup, closingReason } from '../hooks/link.ts'
 import { applyRelay } from '../hooks/relay.ts'
+import { resentWorktrees, withNotedGroups } from '../hooks/register.tsx'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, Relay } from '../types'
 
@@ -370,6 +371,11 @@ test('la ligne d’un groupe rendu et relu : rien tant que rien n’est tenté, 
   await u.unmount()
   const second = filled.at(-1)!
   expect(second).toContain('Worktree et branche de cet envoi : groupe-boutique-A-2 (2e envoi du groupe A : les noms des envois précédents restent pris), à la place de groupe-boutique-A ; titre : « Boutique > Groupe A (envoi 2) · <thème> »')
+  // Le nom que dit le brief est celui noté à cet envoi, que la fermeture cherchera (le board sauvé d'abord).
+  await clock.advance(1000)
+  const noted = (mem['board:'] as Board).runs.find(x => x.title === 'Boutique')!.groups!.find(g => g.id === 'A')!.linked!
+  expect(noted.worktreeName).toBe('groupe-boutique-A-2')
+  expect(second).toContain(`Worktree et branche de cet envoi : ${noted.worktreeName} (`)
 })
 
 test('les envois d’un groupe sont numérotés : le premier garde son nom, les suivants -2, -3 ; la procédure reconnaît le nom de chaque envoi', () => {
@@ -576,4 +582,39 @@ test('« ↻ Relancer » sur la session précédente d’un groupe confié de no
   relay = applyRelay(relay, runId, FULL, { kind: 'report', text: 'A refait' }, 7_500)!
   expect(relayedReportAt(relay, g, activeRun(b)!.groups, g.delegated)).toBe(7_500)
   expect(relayedReportAt(relay, g, activeRun(b)!.groups, g.delegated, 7_000)).toBeUndefined()
+})
+
+test('le renvoi d’un groupe dit au worker le nom noté à son envoi, même quand le titre a changé depuis ; sans nom noté en forme, le nom calculé', () => {
+  // Invariant : « Le nom de worktree donné au worker n'est jamais un autre nom que celui noté à l'envoi de son groupe, quand ce nom noté est en forme. »
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 3_000)!.board
+  const short = applyReport(sent, { returned: ['A'] }, 4_000, REPO).board
+  const again = startLinkedGroups(applyReport(short, { set: [{ id: 'a1', status: 'todo' }] }, 4_100, REPO).board, ['A'], 5_000)!.board
+  expect(groupOf(again, 'A').linked).toEqual({ at: 5_000, seq: 2, worktreeName: 'groupe-lot-A-2' })
+  // Le titre change après la note (une autre discussion, une fusion) : le brief garde le nom noté.
+  const renamed = { ...activeRun(again)!, title: 'Nouveau titre' }
+  const views = groupPlan(renamed)!.groups.filter(v => v.group.id === 'A')
+  expect(resentWorktrees(renamed, views)).toContain('Worktree et branche de cet envoi : groupe-lot-A-2 (2e envoi du groupe A')
+  // Sans nom noté (un envoi d'avant la note), ou un nom noté hors forme : le nom calculé, comme avant.
+  for (const worktreeName of [undefined, '../ailleurs', 'groupe-lot-B-2']) {
+    const linked = { ...groupOf(again, 'A').linked!, worktreeName }
+    if (worktreeName === undefined) delete linked.worktreeName
+    const bare = views.map(v => ({ ...v, group: { ...v.group, linked } }))
+    expect(resentWorktrees(renamed, bare)).toContain(`Worktree et branche de cet envoi : ${groupWorktree(renamed, 'A', 2)} (`)
+  }
+  expect(groupWorktree(renamed, 'A', 2)).toBe('groupe-nouveau-titre-A-2')
+  // Un premier envoi n'a pas de ligne de renvoi : le gabarit suffit.
+  expect(resentWorktrees(activeRun(sent)!, groupPlan(activeRun(sent)!)!.groups)).toBe('')
+})
+
+test('le brief ne prend d’une note que les groupes qu’elle a liés : un groupe lié avant elle, par un autre envoi, n’y part pas', () => {
+  // Invariant : « Le nom de worktree donné au worker n'est jamais un autre nom que celui noté à l'envoi de son groupe,
+  // quand ce nom noté est en forme. » Un groupe déjà lié n'a pas de second brief, sous un nom calculé.
+  const before = activeRun(boardWith(LOT))!
+  const views = groupPlan(before)!.groups
+  // A lié par un autre envoi (3 000), B par cette note (5 000).
+  const earlier = activeRun(startLinkedGroups(boardWith(LOT), ['A'], 3_000)!.board)!
+  const both = activeRun(startLinkedGroups({ ...boardWith(LOT), runs: [earlier], activeId: earlier.id }, ['B'], 5_000)!.board)!
+  const out = withNotedGroups(views, both, 5_000)
+  expect(out.map(v => v.group.id)).toEqual(['B'])
+  expect(out[0]!.group.linked).toMatchObject({ at: 5_000, worktreeName: 'groupe-lot-B' })
 })

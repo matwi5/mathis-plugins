@@ -52,7 +52,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sonde import SESSION_ID, project_dir_name, roots_of
+from sonde import IDENTITY, SESSION_ID, project_dir_name, roots_of
 
 PROMPTS = ("Réponds seulement : ok", "Réponds seulement : ok, encore")
 TURN_TIMEOUT = 120
@@ -62,11 +62,10 @@ PAUSE = 20
 SETTLE = 3
 EXIT_TIMEOUT = 15
 MODEL, EFFORT = "haiku", "low"
-# Les variables d'une session parente qui feraient de la session mesurée une session enfant, ou qui
-# déplaceraient son ~/.claude (celui que le nettoyage relit).
-INHERITED = ("CLAUDE_CONFIG_DIR", "CLAUDE_JOB_DIR", "CLAUDE_EFFORT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
-             "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_MESSAGING_SOCKET",
-             "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_PID")
+# Les variables d'une session parente qui feraient de la session mesurée une session enfant (les variables
+# d'identité, liste partagée avec la sonde), ou qui déplaceraient son ~/.claude (celui que le nettoyage
+# relit) ou fixeraient son effort.
+INHERITED = ("CLAUDE_CONFIG_DIR", "CLAUDE_EFFORT", *IDENTITY)
 COUNTERS = (("entree", "input_tokens"), ("cache_ecrit", "cache_creation_input_tokens"), ("cache_lu", "cache_read_input_tokens"))
 # Un compteur plausible : un entier positif, borné (au-delà, un fichier abîmé ou d'un autre format).
 MAX_TOKENS = 10_000_000

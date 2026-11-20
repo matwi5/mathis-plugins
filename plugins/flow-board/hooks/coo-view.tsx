@@ -126,7 +126,10 @@ const tagPart = (tag: string): CooPart[] => (tag ? [{ text: tag, bold: true }] :
 
 const missionParts = (m: CooMission, tag = ''): CooPart[] => {
   const def = SKILLS[m.phase]
-  const mode: CooPart = m.mode === 'auto' ? { text: `⚡${NB}Auto${m.resumed !== undefined ? ` · ${m.resumed}` : ''}`, color: C.teal, bold: true } : { text: `✋${NB}Manuel${m.pause !== undefined ? ` · ${neutralLine(m.pause)}` : ''}`, dim: true }
+  // Sa discussion d'arrière-plan arrêtée : « discussion arrêtée » à la place de « repris : … », ou d'un manuel sans pause écrite.
+  const autoTail = m.stopped ?? m.resumed
+  const manualTail = m.pause !== undefined ? neutralLine(m.pause) : m.stopped
+  const mode: CooPart = m.mode === 'auto' ? { text: `⚡${NB}Auto${autoTail !== undefined ? ` · ${autoTail}` : ''}`, color: C.teal, bold: true } : { text: `✋${NB}Manuel${manualTail !== undefined ? ` · ${manualTail}` : ''}`, dim: true }
   const status: CooPart[] = m.status === 'paused' ? [{ text: 'en pause, à reprendre', dim: true }] : m.status === 'done' ? [{ text: 'close', dim: true }] : []
   return [
     mode,

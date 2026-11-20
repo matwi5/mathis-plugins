@@ -7,12 +7,12 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { branchesNextStep, isDisposable, isQuotableDir, isRefLookalike, isSafeBranch, nextStep, parseArgs, parseBranchArgs, parsePorcelain, staleSessionLock, stopWaitMs } from '../scripts/fermeture.mjs'
+import { branchesNextStep, exitCode, isDisposable, isQuotableDir, isRefLookalike, isSafeBranch, isShortId, nextStep, parseArgs, parseBranchArgs, parsePorcelain, removalChain, staleSessionLock, stopWaitMs } from '../scripts/fermeture.mjs'
 import { ch, CORPUS, LINE_BREAKERS, NON_TEXT } from './corpus.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../scripts/fermeture.mjs', import.meta.url))
@@ -44,9 +44,10 @@ const setup = ({ isMerged = true } = {}) => {
   git(wt, 'add', 'b.txt')
   git(wt, 'commit', '-q', '-m', 'travail du groupe')
   if (isMerged) git(repo, 'merge', '-q', '--ff-only', `worktree-${NAME}`)
-  // Le faux claude : il imprime le fichier agents.json (ou agents-all.json avec --all), ou échoue s'il manque.
+  // Le faux claude : il imprime le fichier agents.json (ou agents-all.json avec --all), ou échoue s'il manque ;
+  // `claude rm …` ne fait que s'écrire dans rm.log (la ligne « en une fois » lancée pour de vrai).
   const bin = join(root, 'claude')
-  writeFileSync(bin, `#!/bin/sh\ncase "$*" in *--all*) f='${root}/agents-all.json';; *) f='${root}/agents.json';; esac\n[ -f "$f" ] || exit 7\ncat "$f"\n`)
+  writeFileSync(bin, `#!/bin/sh\nif [ "$1" = rm ]; then echo "$*" >> '${root}/rm.log'; exit 0; fi\ncase "$*" in *--all*) f='${root}/agents-all.json';; *) f='${root}/agents.json';; esac\n[ -f "$f" ] || exit 7\ncat "$f"\n`)
   chmodSync(bin, 0o755)
   const agents = (running, all = running) => {
     writeFileSync(join(root, 'agents.json'), JSON.stringify(running))
@@ -100,7 +101,7 @@ test('tout tient : SÛR avant l’arrêt, avec la commande d’arrêt ; puis, la
     assert.equal(head(after), 'SÛR')
     assert.match(after.stdout, /session : arrêtée \(sessionId 11111111-2222-3333-4444-555555555555\)/)
     assert.ok(after.stdout.includes(`commande : git worktree remove '${s.wt}' (sans option ; la branche worktree-groupe-essai-a reste)`))
-    assert.equal(last(after), nextStep('SÛR', true, 'stopped'))
+    assert.equal(last(after), nextStep('SÛR', true, 'stopped', { chain: 'plain' }))
     intact(s)
   }))
 
@@ -273,7 +274,253 @@ test('un verrou d’une autre origine arrête le retrait ; le verrou de la sessi
     out = run(s, '--apres-arret')
     assert.equal(out.status, 0, out.stdout)
     assert.ok(out.stdout.includes(`commande : git worktree unlock '${s.wt}', puis git worktree remove '${s.wt}'`))
+    assert.ok(chainOf(out).startsWith(`git worktree unlock '${s.wt}' && git worktree remove '${s.wt}' && node `), chainOf(out))
     intact(s)
+  }))
+
+// ─── La ligne « en une fois » : le retrait, son constat, et claude rm seulement sous --avec-rm ───
+
+/** La ligne « en une fois » imprimée (sans son libellé), ou undefined. */
+const chainOf = out => out.stdout.split('\n').find(l => l.startsWith('en une fois : '))?.slice('en une fois : '.length)
+
+/** La ligne lancée pour de vrai par un shell, dans le dossier de la mission, le faux claude et node dans le PATH. */
+const runChain = (s, line) =>
+  spawnSync('sh', ['-c', line], { cwd: s.repo, encoding: 'utf8', env: { ...process.env, FLOW_BOARD_CLAUDE: s.bin, PATH: `${s.root}:${dirname(process.execPath)}:${process.env.PATH}` } })
+
+/** Les appels de `claude rm` journalisés par le faux claude. */
+const rmCalls = s => (existsSync(join(s.root, 'rm.log')) ? readFileSync(join(s.root, 'rm.log'), 'utf8').trim().split('\n') : [])
+
+const stopped = s => ({ ...idle(s), pid: undefined, state: 'stopped' })
+
+test('le constat du retrait (--constat-retrait) : 0 sur DÉJÀ RETIRÉ seulement, un code non nul sur tout autre verdict ; sans lui, les codes d’aujourd’hui', () =>
+  within(s => {
+    // SÛR (le worktree encore là) : 64 avec le constat, 0 sans.
+    s.agents([], [stopped(s)])
+    assert.equal(run(s, '--session', 'abc12345', '--apres-arret').status, 0)
+    let out = run(s, '--session', 'abc12345', '--constat-retrait')
+    assert.equal(out.status, 64, out.stdout)
+    assert.equal(head(out), 'SÛR')
+    assert.equal(last(out), nextStep('SÛR', false, 'stopped', { isRemovalCheck: true }))
+    assert.match(last(out), /retrait non constaté.*ne lance pas claude rm/)
+    // ATTENDRE : 3, comme sans ; ÉCHEC : 1, avec la fin du constat.
+    s.agents([{ ...idle(s), status: 'busy', state: 'working' }])
+    assert.equal(run(s, '--session', 'abc12345', '--constat-retrait').status, 3)
+    rmSync(join(s.root, 'agents.json'))
+    out = run(s, '--session', 'abc12345', '--constat-retrait')
+    assert.equal(out.status, 1)
+    assert.match(last(out), /^suite : retrait non constaté/)
+    // DÉJÀ RETIRÉ, la session arrêtée ou absente : 0.
+    git(s.repo, 'worktree', 'remove', s.wt)
+    s.agents([], [stopped(s)])
+    out = run(s, '--session', 'abc12345', '--constat-retrait')
+    assert.equal(out.status, 0, out.stdout)
+    assert.equal(head(out), 'DÉJÀ RETIRÉ')
+    assert.equal(last(out), nextStep('DÉJÀ RETIRÉ', false, 'stopped', { isRemovalCheck: true }))
+    s.agents([], [])
+    assert.equal(run(s, '--constat-retrait').status, 0)
+    // DÉJÀ RETIRÉ, mais sa session de nouveau en marche : ARRÊT (code 2), la chaîne s'arrête avant claude rm ; sans le
+    // constat ni --apres-arret, le cas d'avant (DÉJÀ RETIRÉ, la session à arrêter), code 0.
+    s.agents([idle(s)])
+    out = run(s, '--session', 'abc12345', '--constat-retrait')
+    assert.equal(out.status, 2, out.stdout)
+    assert.match(head(out), /^ARRÊT : la session "abc12345" tourne de nouveau après le retrait : n’arrête rien, ne lance pas claude rm$/)
+    assert.match(last(out), /^suite : retrait non constaté/)
+    assert.equal(run(s, '--session', 'abc12345').status, 0)
+    // Avec --apres-arret seul (sans le constat), le cas d'avant : DÉJÀ RETIRÉ, la session à arrêter, code 0.
+    out = run(s, '--session', 'abc12345', '--apres-arret')
+    assert.equal(out.status, 0, out.stdout)
+    assert.match(out.stdout, /arrêt : claude stop 'abc12345'/)
+    // Sans le constat, une session absente de la liste en marche mais montrée par --all sans être arrêtée n'est jamais
+    // dite « déjà arrêtée » (le point 3 de la procédure le lit avant claude rm) : ATTENDRE.
+    s.agents([], [{ ...idle(s), state: 'working' }])
+    for (const extra of [[], ['--apres-arret']]) {
+      out = run(s, '--session', 'abc12345', ...extra)
+      assert.equal(out.status, 3, `${extra.join(' ')} : ${out.stdout}`)
+      assert.doesNotMatch(out.stdout, /déjà arrêtée/)
+    }
+    // Absente de la liste des sessions en marche, mais montrée par --all avec un pid ou un état qui n'est pas arrêté :
+    // ARRÊT, jamais 0 (la seule garde avant claude rm).
+    for (const live of [{ ...idle(s), state: 'working' }, { ...idle(s), state: 'stopped' }, { ...idle(s), pid: undefined, state: 'working' }]) {
+      s.agents([], [live])
+      out = run(s, '--session', 'abc12345', '--constat-retrait')
+      assert.equal(out.status, 2, `${JSON.stringify(live)} : ${out.stdout}`)
+    }
+  }))
+
+test('le constat sur un commit pas fusionné : ARRÊT, code 2, comme sans', () =>
+  within(
+    s => {
+      const out = run(s, '--constat-retrait')
+      assert.equal(out.status, 2, out.stdout)
+      assert.match(head(out), /^ARRÊT : /)
+      intact(s)
+    },
+    { isMerged: false },
+  ))
+
+test('les codes et la dernière ligne, verdict par verdict', () => {
+  for (const [verdict, plain, check] of [['SÛR', 0, 64], ['DÉJÀ RETIRÉ', 0, 0], ['ATTENDRE', 3, 3], ['ARRÊT', 2, 2], ['ÉCHEC', 1, 1], ['inconnu', 0, 64]]) {
+    assert.equal(exitCode(verdict), plain, verdict)
+    assert.equal(exitCode(verdict, true), check, `${verdict} --constat-retrait`)
+  }
+  // Le constat qui ne rend pas 0 : une seule fin, qui ne lance pas claude rm et fait relancer la vérification sans lui.
+  for (const verdict of ['SÛR', 'ATTENDRE', 'ARRÊT', 'ÉCHEC']) assert.match(nextStep(verdict, false, 'stopped', { isRemovalCheck: true }), /^suite : retrait non constaté .*ne lance pas claude rm ; relance la vérification avec --apres-arret, sans --constat-retrait.*"state": "stopped" avec elle, sans "worktree" \(la session est gardée\)$/)
+  // La ligne « en une fois » : la dernière ligne y renvoie, avec claude rm seulement quand elle le porte, et son repli
+  // commande par commande quand le garde-fou la refuse.
+  assert.match(nextStep('SÛR', true, 'stopped', { chain: 'plain' }), /^suite : lance la ligne « en une fois » ci-dessus telle quelle/)
+  assert.doesNotMatch(nextStep('SÛR', true, 'stopped', { chain: 'plain' }), /claude rm/)
+  assert.match(nextStep('SÛR', true, 'stopped', { chain: 'rm' }), /puis lance claude rm/)
+  assert.match(nextStep('SÛR', true, 'stopped', { chain: 'rm' }), /si ton garde-fou la refuse .*lance ses commandes une à une, dans l’ordre, chacune seulement si la précédente a rendu 0/)
+  // Le contrôle ListAgents d'une session de l'app ou absente passe toujours devant la ligne.
+  assert.match(nextStep('SÛR', true, 'app', { chain: 'plain' }), /^suite : vérifie d’abord par ListAgents que la session de l’app n’y est plus \(archivée\) ; puis lance la ligne « en une fois »/)
+  assert.match(nextStep('SÛR', true, 'absent', { chain: 'plain' }), /^suite : vérifie d’abord par ListAgents qu’aucune session de ce worker n’est encore là.* ; puis lance la ligne « en une fois »/)
+  assert.equal(isShortId('abc12345'), true)
+  for (const bad of ['ABC12345', 'abc1234', 'abc123456', '11111111-2222-3333-4444-555555555555', 'local_abc', undefined]) assert.equal(isShortId(bad), false, String(bad))
+  // L'id court du script est celui que le mod note (RELAY_SESSION_FORM de link.ts : ses 8 premiers signes hexadécimaux).
+  assert.match(readFileSync(new URL('../hooks/link.ts', import.meta.url), 'utf8'), /const RELAY_SESSION_FORM = \/\^\(\[0-9a-f\]\{8\}\)-/)
+})
+
+test('sur SÛR après l’arrêt : les deux lignes ; la ligne « en une fois » lancée retire le worktree, constate le retrait, et sans --avec-rm ne lance jamais claude rm', () =>
+  within(s => {
+    s.agents([], [stopped(s)])
+    const out = run(s, '--session', 'abc12345', '--apres-arret')
+    assert.equal(out.status, 0, out.stdout)
+    assert.ok(out.stdout.includes(`commande : git worktree remove '${s.wt}' (sans option ; la branche worktree-groupe-essai-a reste)`))
+    assert.equal(chainOf(out), `git worktree remove '${s.wt}' && node '${SCRIPT}' --worktree '${NAME}' --branche 'worktree-${NAME}' --branche '${NAME}' --session 'abc12345' --constat-retrait`)
+    intact(s)
+    const done = runChain(s, chainOf(out))
+    assert.equal(done.status, 0, done.stdout + done.stderr)
+    assert.equal(existsSync(s.wt), false, 'le worktree est retiré')
+    assert.equal(git(s.repo, 'rev-parse', '--verify', `refs/heads/worktree-${NAME}`).length, 40, 'la branche reste')
+    assert.match(done.stdout, /^DÉJÀ RETIRÉ$/m)
+    assert.deepEqual(rmCalls(s), [])
+  }))
+
+test('--avec-rm : la même chaîne finit par claude rm <id court> ; lancée, claude rm part une fois, après le retrait constaté', () =>
+  within(s => {
+    s.agents([], [stopped(s)])
+    const out = run(s, '--session', 'abc12345', '--apres-arret', '--avec-rm')
+    assert.equal(out.status, 0, out.stdout)
+    assert.equal(chainOf(out), `git worktree remove '${s.wt}' && node '${SCRIPT}' --worktree '${NAME}' --branche 'worktree-${NAME}' --branche '${NAME}' --session 'abc12345' --constat-retrait --avec-rm && claude rm 'abc12345'`)
+    assert.equal(out.stdout.split('\n').filter(l => l.startsWith('en une fois : ')).length, 1, 'une seule ligne « en une fois »')
+    assert.equal(last(out), nextStep('SÛR', true, 'stopped', { chain: 'rm' }))
+    const done = runChain(s, chainOf(out))
+    assert.equal(done.status, 0, done.stdout + done.stderr)
+    assert.equal(existsSync(s.wt), false)
+    assert.deepEqual(rmCalls(s), ['rm abc12345'])
+  }))
+
+for (const [what, later] of [['retirée entre-temps', () => []], ['montrée sous un autre id', s => [{ ...stopped(s), id: 'abc12345-autre' }]]])
+  test(`--avec-rm : une session qui n’est plus montrée arrêtée sous l’id court exact au constat (${what}) arrête la chaîne avant claude rm`, () =>
+    within(s => {
+      s.agents([], [stopped(s)])
+      const out = run(s, '--session', 'abc12345', '--apres-arret', '--avec-rm')
+      assert.equal(out.status, 0, out.stdout)
+      // Entre le tirage de la ligne et son lancement, la session change dans claude agents --all : claude rm, qui
+      // accepte une partie d'un nom, viserait peut-être une autre session.
+      s.agents([], later(s))
+      const done = runChain(s, chainOf(out))
+      assert.equal(done.status, 2, done.stdout + done.stderr)
+      assert.match(done.stdout, /^ARRÊT : la session n’est plus montrée arrêtée par claude agents --all sous l’id court exact reçu par --session : ne lance pas claude rm$/m)
+      assert.deepEqual(rmCalls(s), [], 'aucun claude rm')
+      // Sans claude rm au bout (un constat sans --avec-rm), une session absente garde le DÉJÀ RETIRÉ d'avant, code 0.
+      if (what === 'retirée entre-temps') assert.equal(run(s, '--session', 'abc12345', '--constat-retrait').status, 0)
+    }))
+
+test('--avec-rm : un retrait raté (un fichier non suivi posé entre-temps) arrête la chaîne avant claude rm ; rien n’est perdu', () =>
+  within(s => {
+    s.agents([], [stopped(s)])
+    const out = run(s, '--session', 'abc12345', '--apres-arret', '--avec-rm')
+    writeFileSync(join(s.wt, 'tardif.txt'), 'x\n')
+    const done = runChain(s, chainOf(out))
+    assert.notEqual(done.status, 0)
+    assert.equal(readFileSync(join(s.wt, 'tardif.txt'), 'utf8'), 'x\n', 'le fichier reste')
+    intact(s)
+    assert.deepEqual(rmCalls(s), [])
+  }))
+
+test('--avec-rm : un retrait non constaté (la session relancée dans le dossier retiré) arrête la chaîne avant claude rm', () =>
+  within(s => {
+    s.agents([], [stopped(s)])
+    const out = run(s, '--session', 'abc12345', '--apres-arret', '--avec-rm')
+    // La session relancée entre la vérification et la ligne : le constat la voit en marche, ARRÊT (code 2).
+    s.agents([idle(s)])
+    const done = runChain(s, chainOf(out))
+    assert.equal(done.status, 2, done.stdout + done.stderr)
+    assert.equal(existsSync(s.wt), false, 'le worktree est retiré, mais claude rm ne part pas')
+    assert.deepEqual(rmCalls(s), [])
+  }))
+
+test('--avec-rm : jamais de claude rm pour une session de l’app, sans session connue, absente de claude agents, sous un id qui n’est pas l’id court exact, ni sur un autre verdict', () =>
+  within(s => {
+    // Aucune commande claude rm imprimée (la dernière ligne d'un DÉJÀ RETIRÉ nomme claude rm sans le faire lancer).
+    const noRm = (out, why) => {
+      assert.doesNotMatch(out.stdout, /claude rm '/, why)
+      assert.doesNotMatch(chainOf(out) ?? '', /claude rm/, why)
+      assert.doesNotMatch(last(out), /puis lance claude rm/, why)
+    }
+    // Sans session connue : la ligne « en une fois » sans claude rm.
+    s.agents([], [])
+    let out = run(s, '--apres-arret', '--avec-rm')
+    assert.equal(out.status, 0, out.stdout)
+    assert.ok(chainOf(out)?.endsWith('--constat-retrait'), out.stdout)
+    noRm(out, 'sans --session')
+    assert.match(out.stdout, /^claude rm : pas dans la ligne \(aucune session connue\)$/m)
+    // Une session connue mais absente de claude agents --all.
+    out = run(s, '--session', 'abc12345', '--apres-arret', '--avec-rm')
+    assert.equal(out.status, 0, out.stdout)
+    noRm(out, 'absente de claude agents')
+    assert.match(out.stdout, /^claude rm : pas dans la ligne \(session absente de claude agents --all\)$/m)
+    // L'id complet reçu par --session : la session est retrouvée par son sessionId, mais claude rm ne vise que l'id court exact.
+    s.agents([], [stopped(s)])
+    out = run(s, '--session', '11111111-2222-3333-4444-555555555555', '--apres-arret', '--avec-rm')
+    assert.equal(out.status, 0, out.stdout)
+    noRm(out, 'id complet')
+    assert.match(out.stdout, /^claude rm : pas dans la ligne \(l’id reçu par --session n’est pas celui sous lequel claude agents --all la montre\)$/m)
+    // Un id noté qui n'a pas la forme d'un id court (6 signes, que la ligne « backgrounded » peut donner), montré tel quel.
+    s.agents([], [{ ...stopped(s), id: 'abc123' }])
+    out = run(s, '--session', 'abc123', '--apres-arret', '--avec-rm')
+    assert.equal(out.status, 0, out.stdout)
+    noRm(out, 'id de 6 signes')
+    assert.match(out.stdout, /^claude rm : pas dans la ligne \(l’id reçu par --session n’a pas la forme d’un id court \(8 signes hexadécimaux\)\)$/m)
+    s.agents([], [stopped(s)])
+    // Une session de l'app.
+    out = run(s, '--session', 'local_abc', '--apres-arret', '--avec-rm')
+    assert.equal(out.status, 0, out.stdout)
+    noRm(out, 'session de l’app')
+    assert.match(out.stdout, /^claude rm : pas dans la ligne \(session de l’app\)$/m)
+    // SÛR avant l'arrêt : aucune ligne « en une fois ».
+    s.agents([idle(s)])
+    out = run(s, '--session', 'abc12345', '--avec-rm')
+    assert.equal(head(out), 'SÛR')
+    assert.equal(chainOf(out), undefined)
+    noRm(out, 'avant l’arrêt')
+    // DÉJÀ RETIRÉ : aucune ligne « en une fois ».
+    git(s.repo, 'worktree', 'remove', s.wt)
+    s.agents([], [stopped(s)])
+    out = run(s, '--session', 'abc12345', '--apres-arret', '--avec-rm')
+    assert.equal(head(out), 'DÉJÀ RETIRÉ')
+    noRm(out, 'déjà retiré')
+    assert.deepEqual(rmCalls(s), [])
+  }))
+
+test('la ligne « en une fois » : un chemin de script qui ne se cite pas sûrement n’en donne aucune ; les valeurs passent par la mise entre guillemets', () => {
+  const args = { worktree: NAME, branches: [`worktree-${NAME}`], session: 'abc12345' }
+  assert.equal(removalChain({ worktree: '/d/.claude/worktrees/x', unlock: false, args, script: "/a/b'c/fermeture.mjs" }), null)
+  assert.equal(removalChain({ worktree: '/d/.claude/worktrees/x', unlock: false, args, script: `/a/b${String.fromCodePoint(0x2028)}c/fermeture.mjs` }), null)
+  assert.equal(
+    removalChain({ worktree: '/d/.claude/worktrees/x', unlock: true, args, rmId: 'abc12345', script: '/a/fermeture.mjs' }),
+    `git worktree unlock '/d/.claude/worktrees/x' && git worktree remove '/d/.claude/worktrees/x' && node '/a/fermeture.mjs' --worktree '${NAME}' --branche 'worktree-${NAME}' --session 'abc12345' --constat-retrait --avec-rm && claude rm 'abc12345'`,
+  )
+})
+
+test('--branches refuse les deux options neuves : ÉCHEC, rien de supprimable', () =>
+  within(s => {
+    for (const opt of ['--avec-rm', '--constat-retrait']) {
+      const out = spawnSync(process.execPath, [SCRIPT, '--branches', opt, 'x'], { cwd: s.repo, encoding: 'utf8' })
+      assert.equal(out.status, 1, opt)
+      assert.match(head(out), /^ÉCHEC : argument inconnu en mode --branches/)
+    }
   }))
 
 /**

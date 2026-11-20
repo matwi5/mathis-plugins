@@ -23,11 +23,21 @@ le dossier `journaux/` du dossier jetable de la session (avec --dir, un dossier 
 dépôt, dont le chemin s'affiche ; copier dans travail/ ce qui doit rester. Mode d'emploi et résultats :
 docs/evenements-moteur.md.
 
+Lancée depuis une session Claude Code, la sonde ne prend jamais son identité : les variables d'identité
+(`IDENTITY`) sont retirées, une session neuve prend un `--session-id` tiré ici (une reprise garde
+`--continue`), et l'id de la session qui la lance part au mod (`SONDE_LANCEUR`), qui refuse sous cet id
+chaque envoi, compaction, changement de modèle et titre ; un `--env` qui pose une variable d'identité ou
+porte cet id, et une `--reprise` dans un dossier où le lanceur a son transcript, sont refusés avant toute
+écriture.
+
 Le journal de la sonde (`journaux/sonde.log`) porte `claude --version` du binaire essayé, au lancement et
 à la sortie de Claude Code. À cette sortie (`/exit`), dans un dossier jetable neuf, la sonde supprime
 sous `~/.claude` ce que ce lancement a laissé, et rien d'autre, ses sessions lues dans le journal de la
-sonde (`sid`) : d'abord les registres d'agents de flow-board de ses sessions (`flow-board/agents/<id>.N.json`
-puis `<id>.json`, la tête ayant ce dossier pour racine), puis les traces rangées par id des sessions qu'il
+sonde (`sid`), jamais la session qui l'a lancée (son id, noté dans la marque du lancement, en sort avant
+toute famille ; une marque d'avant cette note, un id hors forme, ou « inconnu » pour une sonde lancée depuis
+une session dont l'id ne se lit pas : rien n'est supprimé, et c'est dit) : d'abord les registres d'agents
+de flow-board de ses sessions (`flow-board/agents/<id>.N.json` puis `<id>.json`, la tête ayant ce dossier
+pour racine), puis les traces rangées par id des sessions qu'il
 a ouvertes (un `classic.SessionStart` au démarrage ou par `/clear`, pas une reprise) : `session-env/<id>/`
 (sans lien, entrée illisible ni sous-dossier non effaçable) et les relevés de stats-board
 `stats-board/requetes/<id>_<heure en ms>.json` (de vrais fichiers), nés dans la fenêtre du lancement (de
@@ -70,14 +80,28 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from check import desktop_claude
 
 SONDE = Path(__file__).resolve().parent / "sonde"
-# Les variables qu'une session Claude Code passe à ses commandes et qui lient la sonde à elle.
-INHERITED = ("CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_SESSION_ATTENDED")
+# Les variables d'identité qu'une session Claude Code passe à ses commandes (et que l'environnement global
+# d'un serveur tmux démarré depuis une session garde) : elles lient la session lancée à celle qui la lance.
+# Liste partagée avec `scripts/mesure-depart.py`, qui l'importe.
+IDENTITY = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED",
+            "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_PID", "CLAUDE_JOB_DIR")
+# La variable par laquelle la sonde passe à son mod l'id de la session qui la lance : égal au sien, le mod
+# refuse ses commandes (`scripts/sonde/hooks/register.tsx`).
+LAUNCHER_VAR = "SONDE_LANCEUR"
+# La longueur au-delà de laquelle Claude Code coupe le nom encodé d'un dossier de transcripts et lui ajoute
+# `-<empreinte>` (lu dans le binaire 2.1.326 le 17/11/2026).
+ENCODED_MAX = 200
+# Ce que la marque note quand la sonde est lancée depuis une session dont l'id ne se lit pas : hors forme,
+# le nettoyage ne supprime alors rien.
+UNKNOWN_LAUNCHER = "inconnu"
 # Une affectation `--env CLE=VALEUR`.
 ENV_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.S)
 # Le nom d'un dossier jetable de la sonde, tel que `mkdtemp(prefix="sonde-")` le donne (huit signes de
@@ -194,17 +218,19 @@ def launch_folder(ref, tmp=None):
     return folder
 
 
-def mark_launch(folder, claude, model=None):
-    """Pose dans le dossier jetable la marque de ce lancement : le dossier réel, le Claude Code essayé et,
-    quand il est donné, l'état de la clé `model` du poste au lancement (`note_model`). Elle est fermée aux
-    autres (0600), quel que soit l'umask : `launch_folder` refuse une marque ouverte en écriture au groupe ou
-    aux autres."""
+def mark_launch(folder, claude, model=None, launcher=None):
+    """Pose dans le dossier jetable la marque de ce lancement : le dossier réel, le Claude Code essayé, la
+    session qui lance la sonde (`lanceur` : son id, `UNKNOWN_LAUNCHER` quand le lancement vient d'une session
+    dont l'id ne se lit pas, null hors d'une session : `launcher_mark`), que le nettoyage retire des sessions
+    du lancement (`launch_launcher`), et, quand il est donné, l'état de la clé `model` du poste au lancement
+    (`note_model`). Elle est fermée aux autres (0600), quel que soit l'umask :
+    `launch_folder` refuse une marque ouverte en écriture au groupe ou aux autres."""
     # Dans le dossier neuf de `mkdtemp` : une marque déjà là (ou un lien à sa place) fait échouer le lancement.
     fd = os.open(folder / MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         if hasattr(os, "fchmod"):
             os.fchmod(f.fileno(), 0o600)
-        data = {"dossier": os.path.realpath(folder), "claude": str(claude)}
+        data = {"dossier": os.path.realpath(folder), "claude": str(claude), "lanceur": launcher}
         if model is not None:
             data["modele"] = model
         f.write(json.dumps(data) + "\n")
@@ -397,6 +423,35 @@ def mark_reused(folder):
         (folder / REUSED).write_text("lancement --dir\n", encoding="utf-8")
 
 
+# Les états du lanceur de la marque (`launch_launcher`) où le nettoyage ne supprime rien, et ce qu'il en dit.
+REFUSED_LAUNCHERS = {
+    "hors forme": "lanceur de la marque hors forme ou inconnu (ou marque illisible) : rien n'est supprimé, ses "
+                  "fichiers pourraient être ceux de ce lancement",
+    "ancien": "marque d'avant la note du lanceur (un lancement d'avant la garde, qui a pu partager l'identité de "
+              "son lanceur) : rien n'est supprimé",
+}
+
+
+def launch_launcher(folder):
+    """La session qui a lancé la sonde, lue dans la marque du lancement (`mark_launch`) : ("valide", id) ;
+    ("aucun", None) pour un lancement hors d'une session (`lanceur` null) ; ("ancien", None) pour une marque
+    d'avant cette note (sans la clé : un lancement d'avant la garde, qui a pu partager l'identité de son
+    lanceur) ; ("hors forme", None) pour une valeur qui n'est pas un id en forme (`UNKNOWN_LAUNCHER` compris :
+    lancée d'une session dont l'id ne se lisait pas), ou une marque illisible. « ancien » et « hors forme » :
+    rien ne se supprime (`plan`)."""
+    marker = read_json(folder / MARKER)
+    if not isinstance(marker, dict):
+        return "hors forme", None
+    if "lanceur" not in marker:
+        return "ancien", None
+    value = marker["lanceur"]
+    if value is None:
+        return "aucun", None
+    if isinstance(value, str) and SESSION_ID.fullmatch(value):
+        return "valide", value
+    return "hors forme", None
+
+
 def launch_sessions(folder):
     """Les sessions de ce lancement : les `sid` que le journal de la sonde (`journaux/*.jsonl` du dossier
     jetable) a notés, en forme d'id. Une session lancée ensuite dans le dossier, sans la sonde, n'y est pas."""
@@ -444,7 +499,8 @@ def launch_window(folder):
     première session), et la dernière écriture d'un journal de la sonde (`journaux/*.jsonl`, réécrit à
     chaque événement de ses sessions) ; None si l'une manque. Une trace rangée par id hors de cette fenêtre
     n'est pas de ce lancement : la même session reprise ensuite hors de la sonde (`claude --continue` dans
-    le dossier jetable), ou un id hérité d'une autre session (`--env CLAUDE_CODE_SESSION_ID=…`)."""
+    le dossier jetable), ou un id hérité d'une autre session (une sonde d'avant le 17/11/2026, qui laissait
+    passer `--env CLAUDE_CODE_SESSION_ID=…`, refusé depuis)."""
     try:
         start = os.lstat(folder / MARKER).st_mtime_ns
     except OSError:
@@ -717,8 +773,14 @@ def plan(folder, home):
     """Ce que ce lancement a laissé sous `home` : [(chemin, est un dossier)] à supprimer, dans l'ordre
     (registres, traces rangées par id des sessions qu'il a ouvertes, fichier de mission, dossier de projet
     en dernier : une reprise relit ses transcripts), et [raisons] de ce qui reste."""
+    state, launcher = launch_launcher(folder)
+    if state in REFUSED_LAUNCHERS:
+        # Un lanceur qu'on ne peut pas exclure : ses fichiers pourraient être pris pour ceux du lancement.
+        return [], [REFUSED_LAUNCHERS[state]]
     roots = roots_of(folder)
-    sessions = launch_sessions(folder)
+    # Le lanceur sort des sessions du lancement avant toute famille : même si le journal porte son id
+    # (identité partagée), rien de lui n'est pris.
+    sessions = launch_sessions(folder) - {launcher}
     todo, kept = [], []
     project_ok, doubtful = [], False
     for project in [home / "projects" / name for name in sorted({project_dir_name(r) for r in roots})]:
@@ -816,14 +878,95 @@ def clean_target(folder, given_dir, env):
     return folder
 
 
+def launcher_id(environ):
+    """L'id de la session Claude Code qui lance la sonde (`CLAUDE_CODE_SESSION_ID` de cet environnement), en
+    minuscules, s'il a la forme d'un id ; sinon None (lancée hors d'une session, ou un id hors forme)."""
+    value = environ.get("CLAUDE_CODE_SESSION_ID")
+    if isinstance(value, str) and SESSION_ID.fullmatch(value.lower()):
+        return value.lower()
+    return None
+
+
+def launcher_mark(environ):
+    """Ce que la marque du lancement note du lanceur : son id (`launcher_id`) ; `UNKNOWN_LAUNCHER` quand
+    `CLAUDECODE` ou `CLAUDE_CODE_SESSION_ID` dit que la sonde est lancée depuis une session dont l'id ne se
+    lit pas (le nettoyage ne supprime alors rien) ; None hors d'une session (les autres variables
+    d'identité, seules, ne décident pas)."""
+    launcher = launcher_id(environ)
+    if launcher:
+        return launcher
+    return UNKNOWN_LAUNCHER if environ.get("CLAUDECODE") or environ.get("CLAUDE_CODE_SESSION_ID") else None
+
+
+def env_refusal(env, launcher):
+    """La raison de refuser les `--env` donnés, ou None : une clé de `IDENTITY` (posée après les `-u`, elle
+    relierait la session à une autre, lanceur connu ou non), ou une valeur qui porte l'id du lanceur, quelle
+    que soit la clé (casse et tirets ignorés), qui donnerait à la session l'identité de celle qui la lance."""
+    keys = [a.split("=", 1)[0] for a in env if a.split("=", 1)[0] in IDENTITY]
+    if keys:
+        return (f"--env {', '.join(keys)} : variable d'identité d'une session Claude Code, que la sonde retire ; "
+                "rien n'est lancé ni écrit")
+    if not launcher:
+        return None
+    bare = launcher.replace("-", "")
+    found = [a.split("=", 1)[0] for a in env if bare in a.split("=", 1)[-1].lower().replace("-", "")]
+    if found:
+        return (f"--env {', '.join(found)} porte l'id de la session qui lance la sonde (le lanceur) : la sonde "
+                "tournerait sous son identité ; rien n'est lancé ni écrit")
+    return None
+
+
+def resume_refusal(folder, launcher, config):
+    """La raison de refuser une reprise (`--reprise`, soit `claude --continue`) dans `folder`, ou None : le
+    transcript de la session qui lance la sonde (`<lanceur>.jsonl`) est dans le dossier de transcripts de
+    `folder` (l'une de ses écritures, `roots_of`) sous `config`, le dossier de réglages du lanceur ;
+    `--continue`, qui reprend la dernière session du dossier, reprendrait alors la sienne, sous son id.
+    Claude Code coupe un nom encodé de plus de `ENCODED_MAX` signes et lui ajoute `-<empreinte>` : ses
+    dossiers se cherchent alors par ce début. Seuls des noms (`lstat`, liste de `projects/`) sont lus, rien
+    n'est ouvert ; une lecture ratée refuse."""
+    if not launcher:
+        return None
+    projects = Path(config) / "projects"
+    for root in sorted(roots_of(folder)):
+        name = project_dir_name(root)
+        try:
+            if len(name) <= ENCODED_MAX:
+                dirs = [projects / name]
+            else:
+                # Sans la casse : sur un disque qui l'ignore (APFS), Claude Code encode la casse du disque.
+                head = (name[:ENCODED_MAX] + "-").casefold()
+                dirs = [projects / n for n in os.listdir(projects) if n.casefold().startswith(head)] \
+                    if projects.exists() else []
+            found = []
+            for folder_of in dirs:
+                try:
+                    os.lstat(folder_of / f"{launcher}.jsonl")
+                    found.append(folder_of)
+                except FileNotFoundError:
+                    pass
+        except OSError as err:
+            return (f"{projects} illisible ({err.strerror or err}) : la reprise pourrait être celle du lanceur ; "
+                    "rien n'est lancé ni écrit")
+        if found:
+            return (f"--reprise dans {folder} : la session qui lance la sonde (le lanceur) y a son transcript, et "
+                    "--continue la reprendrait sous son id ; rien n'est lancé ni écrit")
+    return None
+
+
 def session_command(tmux, name, folder, journals, claude, plugins, env, model, effort, resume, clean_name, keep,
-                    model_before=None):
+                    model_before=None, session_id=None, launcher=None):
     """La commande tmux de la session : Claude Code avec la sonde, puis, à sa sortie, l'étape de fin de
     `sonde.py` (version après l'essai, et le nettoyage du dossier jetable `clean_name`, chemin absolu,
-    sauf `keep`), dont le volet reste ouvert jusqu'à Entrée pour qu'on lise ce qu'elle a fait."""
-    session = ["env", *[a for v in INHERITED for a in ("-u", v)], f"SONDE_JOURNAUX={journals}", *env,
+    sauf `keep`), dont le volet reste ouvert jusqu'à Entrée pour qu'on lise ce qu'elle a fait. Les variables
+    d'identité (`IDENTITY`) et `LAUNCHER_VAR` sont retirées de l'environnement hérité ; une session neuve
+    prend l'id `session_id` (une reprise garde `--continue`) ; l'id du lanceur, s'il est en forme, part au mod
+    dans `LAUNCHER_VAR`, après les `--env`, qu'aucun ne masque donc."""
+    passed = [f"{LAUNCHER_VAR}={launcher}"] if isinstance(launcher, str) and SESSION_ID.fullmatch(launcher) else []
+    session = ["env", *[a for v in (*IDENTITY, LAUNCHER_VAR) for a in ("-u", v)], f"SONDE_JOURNAUX={journals}",
+               *env, *passed,
                str(claude), "--plugin-dir", str(SONDE), *[a for p in plugins for a in ("--plugin-dir", str(p))],
-               "--model", model, "--effort", effort, *(["--continue"] if resume else [])]
+               "--model", model, "--effort", effort,
+               *(["--continue"] if resume else (["--session-id", session_id] if session_id else []))]
     end = [sys.executable, str(Path(__file__).resolve()), "--apres-session", "--claude", str(claude),
            "--journaux", str(journals), *(["--nettoyer", str(clean_name)] if clean_name else []),
            *(["--garder"] if keep else []),
@@ -968,7 +1111,7 @@ def main():
     parser.add_argument("--garder", action="store_true",
                         help="au lancement : ne rien supprimer sous ~/.claude à la fin de l'essai, ni remettre le modèle par défaut du poste (la liste de ce qui reste et la valeur d'avant vont au journal)")
     parser.add_argument("--nettoyer", metavar="NOM",
-                        help="nettoie sous ~/.claude ce qu'a laissé l'essai du dossier jetable NOM (sonde-xxxxxxxx), interrompu, et remet le modèle par défaut du poste qu'un /model de l'essai a changé")
+                        help="nettoie sous ~/.claude ce qu'a laissé l'essai du dossier jetable NOM (sonde-xxxxxxxx), interrompu, et remet le modèle par défaut du poste qu'un /model de l'essai a changé ; un dossier d'avant le 17/11/2026 (marque sans lanceur) n'est plus nettoyé")
     # L'étape de fin, que la session tmux lance à la sortie de Claude Code : pas pour la main.
     parser.add_argument("--apres-session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--claude", help=argparse.SUPPRESS)
@@ -990,6 +1133,24 @@ def main():
     bad = [a for a in args.env if not ENV_ASSIGN.fullmatch(a)]
     if bad:
         sys.exit(f"--env attend CLE=VALEUR : {', '.join(bad)}")
+    # L'id de la session qui lance la sonde, relevé avant que la commande de la session ne le retire ; un
+    # `--env` qui le redonnerait est refusé ici, avant toute écriture (titre, dossier jetable, marque, journal).
+    launcher = launcher_id(os.environ)
+    # Ce que la marque en notera : l'id, « inconnu » (une session dont l'id ne se lit pas) ou rien.
+    mark = launcher_mark(os.environ)
+    refusal = env_refusal(args.env, launcher)
+    if refusal is None and args.reprise and args.dir:
+        # Le dossier de réglages du lanceur : le sien hérité, sinon ~/.claude.
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+        # La forme donnée (absolue) : `roots_of` y ajoute la forme réelle.
+        refusal = resume_refusal(args.dir.expanduser().absolute(), launcher, config)
+    elif refusal is None and args.reprise:
+        refusal = "--reprise demande --dir (le dossier de la session à reprendre)"
+    if refusal is None and args.reprise and mark == UNKNOWN_LAUNCHER:
+        refusal = ("--reprise depuis une session dont l'id ne se lit pas : --continue pourrait reprendre cette "
+                   "session sans que la sonde le sache ; rien n'est lancé ni écrit")
+    if refusal:
+        sys.exit(f"ÉCHEC : {refusal}")
     # Résolus ici : la session tourne dans un autre dossier.
     plugins = [p.expanduser().resolve() for p in args.plugin]
     missing = [str(p) for p in plugins if not (p / ".claude-plugin" / "plugin.json").is_file()]
@@ -1014,8 +1175,6 @@ def main():
         title_file.unlink()
     folder = args.dir.expanduser().resolve() if args.dir else Path(tempfile.mkdtemp(prefix="sonde-"))
     folder.mkdir(parents=True, exist_ok=True)
-    if args.reprise and not args.dir:
-        sys.exit("--reprise demande --dir (le dossier de la session à reprendre)")
     # Les journaux, hors du dépôt : des journaux bruts restés dans scripts/sonde/ avaient arrêté la
     # fermeture d'un groupe. Un dossier donné par --dir peut être un dépôt : ils vont alors à part.
     journals = folder / "journaux" if not args.dir else Path(tempfile.mkdtemp(prefix="sonde-journaux-"))
@@ -1033,7 +1192,7 @@ def main():
         # Noté pour le rapport, jamais écrit (`restore_model` s'arrête sur « ailleurs »).
         model_before = {**model_before, "ailleurs": True}
     if clean_name:
-        mark_launch(folder, claude, model_before)
+        mark_launch(folder, claude, model_before, launcher=mark)
     if not valid_noted(model_before):
         model_line = "modèle par défaut du poste au lancement : illisible, la sonde ne l'écrira pas"
     elif config_moved:
@@ -1043,11 +1202,21 @@ def main():
         model_line = f"modèle par défaut du poste au lancement : {model_label(model_before)}"
     log_line(journals, model_line)
     log_version(journals, claude, "avant")
-    # Lancée depuis une session Claude Code, la sonde hériterait de son id de session (et de son
-    # titre, qui passait devant `sessionTitle` : constaté le 28/10/2026) : ces variables sont retirées.
+    # Lancée depuis une session Claude Code, la sonde hériterait de son identité (son titre passait devant
+    # `sessionTitle`, constaté le 28/10/2026 ; un `/rename` envoyé par la sonde a renommé la discussion qui
+    # l'avait lancée, le 02/11/2026) : les variables d'identité sont retirées, et une session neuve prend un
+    # id tiré ici.
     command = session_command(tmux, args.name, folder, journals, claude, plugins, args.env, args.model, args.effort,
-                              args.reprise, clean_name, args.garder, model_before)
-    res = subprocess.run(command, capture_output=True, text=True, timeout=30)
+                              args.reprise, clean_name, args.garder, model_before,
+                              session_id=None if args.reprise else str(uuid.uuid4()), launcher=launcher)
+    log_line(journals, f"session de la sonde : {'reprise (--continue)' if args.reprise else 'id neuf'} ; lanceur : "
+                       + (launcher or ("inconnu (lancée depuis une session dont l'id ne se lit pas : le nettoyage "
+                                       "ne supprimera rien)" if mark == UNKNOWN_LAUNCHER
+                                       else "aucun (pas lancée depuis une session)")))
+    # Le client tmux aussi, sans les variables d'identité : s'il démarre le serveur, l'environnement global de
+    # celui-ci les garderait pour toutes ses sessions (l'étape de fin, une fenêtre ouverte à la main).
+    res = subprocess.run(command, capture_output=True, text=True, timeout=30,
+                         env={k: v for k, v in os.environ.items() if k not in IDENTITY and k != LAUNCHER_VAR})
     if res.returncode != 0:
         sys.exit(f"tmux : {res.stderr.strip()} (une session « {args.name} » existe déjà ? --name pour en ouvrir une autre)")
     if args.dir:
@@ -1063,6 +1232,9 @@ def main():
     print(f"  tmux kill-session -t {args.name}  fermer sans l'étape de fin")
     if clean_name and args.garder:
         print("À la sortie de Claude Code : rien n'est supprimé (--garder) ; la liste de ce qui reste va au journal.")
+    elif clean_name and mark == UNKNOWN_LAUNCHER:
+        print("À la sortie de Claude Code : rien n'est supprimé (lancée depuis une session dont l'id ne se lit pas : "
+              "ses fichiers pourraient être pris pour ceux du lancement) ; la liste de ce qui reste va au journal.")
     elif clean_name:
         print(f"À la sortie de Claude Code : ce que ce lancement a laissé sous ~/.claude est supprimé, la liste au journal ;"
               f" après un kill-session : python3 scripts/sonde.py --nettoyer {folder}")

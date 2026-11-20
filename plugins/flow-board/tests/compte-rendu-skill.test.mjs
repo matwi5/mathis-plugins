@@ -146,3 +146,13 @@ test('le compte rendu a une section « Entrées triées », après « Fait », a
   assert.ok(blocked.includes('Les entrées « pour toi » et « question ouverte » de « Entrées triées » y paraissent aussi'), '« Bloqué par moi » ne reprend pas les entrées en attente')
   assert.ok(skill.includes('Les lignes de « Entrées triées » ne comptent pas dans ces 60 lignes'), 'la borne compte les entrées triées')
 })
+
+// Au compte rendu d'une mission sans groupes, le rapport déjà écrit dans un fichier avait été donné par `reportPath`,
+// que l'outil refuse au manager, puis recollé en entier dans `report` : le skill dit d'avance de passer par `report`.
+test('le compte rendu se donne par « report », jamais par « reportPath », que l’outil refuse ici', () => {
+  const at = skill.indexOf('{"report": "<le rapport entier>"}')
+  assert.ok(at > 0, 'l’envoi par report manque')
+  const sentence = skill.slice(at, skill.indexOf('.', skill.indexOf('le refuse ici', at)))
+  assert.ok(sentence.includes('jamais par `reportPath` : l\'outil ne lit un chemin que d\'un worker'), 'pas de reportPath au compte rendu : absent')
+  assert.ok(sentence.includes('le refuse ici, même pour un rapport déjà écrit dans un fichier'), 'le refus de l’outil n’est pas dit')
+})

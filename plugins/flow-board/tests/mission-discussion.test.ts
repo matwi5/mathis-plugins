@@ -258,6 +258,24 @@ test('deux processus d’une même discussion : le dernier qui la prend tient la
   expect(mergeBoards(retaken, p2).activeId).toBe(id)
 })
 
+test('deux processus d’une même discussion qui la prennent à la même milliseconde : toutes les copies gardent la même prise, et un seul la tient', () => {
+  const { board, id } = managerBoard()
+  // P2 et P3 chargent le même fichier à la même milliseconde : chacun prend la mission à son nom.
+  const p2 = detachOnLoad(asSeenBy(board, 'session-A'), T0 + 5 * MIN, 'session-A', 'boot-P2')
+  const p3 = detachOnLoad(asSeenBy(board, 'session-A'), T0 + 5 * MIN, 'session-A', 'boot-P3')
+  // À date égale, le plus grand `boot` dans l'ordre des chaînes gagne, quel que soit l'ordre de la fusion.
+  const seenByP2 = mergeBoards(p2, p3)
+  const seenByP3 = mergeBoards(p3, p2)
+  expect(seenByP2.runs.find(x => x.id === id)?.claim).toEqual({ boot: 'boot-P3', at: T0 + 5 * MIN })
+  expect(seenByP3.runs.find(x => x.id === id)?.claim).toEqual({ boot: 'boot-P3', at: T0 + 5 * MIN })
+  // Un seul processus garde la mission : P3 ; P2 la laisse.
+  expect(seenByP2.activeId).toBeNull()
+  expect(seenByP3.activeId).toBe(id)
+  // Deux prises identiques restent une prise : P3 qui relit sa propre écriture la garde.
+  expect(mergeBoards(p3, p3).runs.find(x => x.id === id)?.claim).toEqual({ boot: 'boot-P3', at: T0 + 5 * MIN })
+  expect(mergeBoards(p3, p3).activeId).toBe(id)
+})
+
 test('le même processus qui revient au fichier (changement de racine) garde sa mission telle quelle, auto compris', () => {
   const { board, id } = managerBoard()
   const lit: Board = { ...board, runs: board.runs.map(r => ({ ...r, auto: { onAt: T0 + 1000, onBy: 'session-A' } })) }

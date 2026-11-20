@@ -320,7 +320,11 @@ test('une revue du lot refusée devient la question « envoi resté sans suite �
 
 test('une fin de ticket datée dans le futur se relit maintenant : la revue suivante relit le lot, l’auto ne la renvoie pas', () => {
   const run = { ...newRun('implement', 1_000, 'Lot'), owner: 's' }
-  run.tickets = [{ id: 'c1', name: 'Un', status: 'done', finishedAt: 9_000_000, ...CODE } as Run['tickets'][number]]
+  // Deux tickets : un lot d'un seul ticket n'a pas de revue du lot.
+  run.tickets = [
+    { id: 'c1', name: 'Un', status: 'done', finishedAt: 9_000_000, ...CODE },
+    { id: 'c0', name: 'Zéro', status: 'done', finishedAt: 2_000, ...CODE },
+  ] as Run['tickets']
   const read = activeRun(clampFuture({ ...emptyBoard('/w/p', 'p'), session: 's', deleted: [], runs: [run], activeId: run.id }, 10_000))!
   expect(read.tickets[0]!.finishedAt).toBe(10_000)
   expect(needsReview(read)).toBe(true)
@@ -373,7 +377,11 @@ test('une marque de sécurité d’un passage précédent, même datée dans le 
 
 test('deux copies fusionnées : aucune marque du lot perdue, et la revue ne repart pas', () => {
   const base = { ...newRun('implement', 1_000, 'Lot'), owner: 's' }
-  base.tickets = [{ id: 'c1', name: 'Un', status: 'done', finishedAt: 2_000, ...CODE } as Run['tickets'][number]]
+  // Deux tickets : un lot d'un seul ticket n'a pas de revue du lot, et sa clé de sécurité suit son passage.
+  base.tickets = [
+    { id: 'c1', name: 'Un', status: 'done', finishedAt: 2_000, ...CODE },
+    { id: 'c0', name: 'Zéro', status: 'done', finishedAt: 1_800, ...CODE },
+  ] as Run['tickets']
   base.auto = { onAt: 1_500, onBy: 's' } as Run['auto']
   const mine: Run = { ...base, reviewedAt: 3_000, autoSent: [{ key: 'review:lot@0', at: 2_500, startedAt: 2_500 }], updatedAt: 3_000 }
   const theirs: Run = { ...base, reviewedAt: 3_000, security: { isAdvised: true, at: 3_100 }, autoSent: [{ key: 'review:lot@0', at: 2_500, startedAt: 2_500 }, { key: 'security:lot@3000', at: 3_200, startedAt: 3_200 }], updatedAt: 3_200 }
@@ -387,7 +395,11 @@ test('deux copies fusionnées : aucune marque du lot perdue, et la revue ne repa
 
 test('une revue du lot datée dans le futur se relit à refaire : la revue repart sous une clé neuve, et les marques lot@0 d’avant ne la couvrent pas', () => {
   const run = { ...newRun('implement', 1_000, 'Lot'), owner: 's' }
-  run.tickets = [{ id: 'c1', name: 'Un', status: 'done', finishedAt: 2_000, ...CODE } as Run['tickets'][number]]
+  // Deux tickets : un lot d'un seul ticket n'a pas de revue du lot.
+  run.tickets = [
+    { id: 'c1', name: 'Un', status: 'done', finishedAt: 2_000, ...CODE },
+    { id: 'c0', name: 'Zéro', status: 'done', finishedAt: 1_800, ...CODE },
+  ] as Run['tickets']
   run.auto = { onAt: 1_500, onBy: 's' } as Run['auto']
   // Un passage d'avant, sans revue lisible, a déjà ses marques lot@0 ; puis une revue datée dans le futur.
   const marks = [{ key: 'review:lot@0~2000', at: 2_500, startedAt: 2_500 }, { key: 'security:lot@0', at: 2_600, startedAt: 2_600 }, { key: 'security:lot@99000000', at: 2_700, startedAt: 2_700 }]

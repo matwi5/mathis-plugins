@@ -7,6 +7,8 @@ import { GROUP_ID_FORM, isGroupId } from '../hooks/closing.ts'
 import { TOOL_SCHEMA } from '../hooks/tool-schema.ts'
 import type { Board } from '../types'
 import { withItemsLink } from './lien-pistes.ts'
+import { pistesBriefText } from '../hooks/pistes-brief.ts'
+import { emptyWaitlist, type Piste } from '../hooks/pistes.ts'
 
 // Le bouton des pistes d'une rétro demande leur découpage en tickets au lieu de lancer une session
 // liée. Invariant de l'ancien chemin : un lien de pistes déjà enregistré n'est jamais effacé ni
@@ -117,6 +119,8 @@ test('le bouton des pistes met la demande de découpage dans le prompt, n’enre
   expect(text).toMatch(/une piste qui touche une zone sensible \([^)]*\) fait un ticket à elle seule/)
   expect(text).toMatch(/5 tickets au plus par groupe/)
   expect(text).toMatch(/un fichier ou une ressource en commun \(leurs champs files et resources\) s'enchaînent/)
+  // Un fichier très partagé : ses tickets dans le moins de groupes possible, comme au découpage d'une mission.
+  expect(text).toContain('avant de grouper, relève les fichiers que le plus de tickets touchent et mets les tickets qui partagent un tel fichier dans le moins de groupes possible')
   // Sans ticket, ni tickets ni groupes : un plan vide serait refusé.
   expect(text).toMatch(/Sans aucun ticket \(toutes hors dépôt ou écartées\), envoie seulement la liste des pistes et \{"complete": true\}, sans tickets ni groupes/)
   expect(text).toMatch(/un lot de rétro peut n'avoir qu'un seul groupe, qui part quand même dans un worker/)
@@ -143,8 +147,8 @@ test('le bouton des pistes met la demande de découpage dans le prompt, n’enre
   // Rétro de la mission « Coordinateur de parcours » : l'index des décisions en vigueur, et la phrase utile recopiée.
   expect(text).toContain('starts with a short index « Décisions en vigueur »')
   expect(text).toMatch(/logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path/)
-  // La règle « un worker ne touche pas à CLAUDE.md » de /to-tickets n'y est pas : les pistes ont la leur.
-  expect(text).not.toContain('A write to CLAUDE.md never goes into the done criteria')
+  // Les pistes ont leur règle de CLAUDE.md (celle de /to-tickets, « un geste du manager », n'y est pas : cas
+  // « le brief d'une mission de pistes … » plus bas, qui lit la consigne du découpage d'une rétro et le brief).
   expect(text).toMatch(/fichier chargé dans toutes mes sessions \(mes règles communes, un CLAUDE\.md\).*la session l'écrit.*cite dans son compte rendu chaque phrase ajoutée ou retirée.*je relis avant la fusion/)
   // Où écrire.
   expect(text).toMatch(/dans le suivi que \/to-tickets utilise pour ce projet/)
@@ -293,6 +297,28 @@ test('les consignes de /to-tickets disent « Logique : oui » pour un texte qui 
   expect(note.text).toMatch(/« Logique : oui\/non » \(no logic: a visual asset, a document; logic as soon as its text makes Claude act: a rule, a procedure or a skill that has Claude run a command or build a path\)/)
   // La règle de CLAUDE.md propre aux groupes ordinaires y reste.
   expect(note.text).toContain('A write to CLAUDE.md never goes into the done criteria')
+})
+
+// Deux managers d'une mission de pistes avaient écrit un fichier de « gestes du manager » pour CLAUDE.md, à défaire :
+// la règle « Pistes d'une rétro » fait écrire CLAUDE.md par le worker. Le brief des pistes le dit, en citant la ligne
+// exacte de la consigne du découpage (relue ici) ; le découpage d'une rétro ne la reçoit pas.
+test('le brief d’une mission de pistes remplace la ligne « CLAUDE.md : un geste du manager » de la consigne du découpage', async ($, on) => {
+  mock.clock(on, { now: 60_000_000 })
+  world(on)
+  const piste: Piste = { id: 'retroA/p1', retro: 'retroA', text: 'Texte', files: [], state: 'validated', card: 'kpistes01', by: 'retroA', at: 1_000, history: [], comments: [] }
+  const brief = pistesBriefText({ state: 'read', list: { ...emptyWaitlist(''), pistes: [piste] } }, 'kpistes01', null)
+  expect(brief).toContain('does not hold: a piste ticket that changes CLAUDE.md or a common rule (config/rules) has it written by its worker, who quotes in its report each sentence added or removed, and the user rereads it before the merge')
+  // Rien à découper : pas de phrase sur CLAUDE.md.
+  expect(pistesBriefText({ state: 'read', list: emptyWaitlist('') }, 'kpistes01', null)).not.toContain('CLAUDE.md')
+  // Le découpage d'une rétro (son étape de consignes) n'a pas la ligne des groupes ordinaires.
+  const retro = await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })
+  expect(retro.text).toContain('Logique')
+  expect(retro.text).not.toContain('A write to CLAUDE.md never goes into the done criteria')
+  // La ligne que le brief cite est bien celle de la consigne du découpage : chaque fragment cité s'y trouve.
+  const quoted = /« (A write to CLAUDE\.md[^»]*) »/.exec(brief)![1]!.split(' … ')
+  expect(quoted.length).toBe(2)
+  const split = await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  for (const part of quoted) expect(split.text).toContain(part)
 })
 
 // Un bouton retiré avait laissé des textes périmés que seules les revues avaient vus.

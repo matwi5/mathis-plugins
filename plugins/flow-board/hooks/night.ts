@@ -11,7 +11,7 @@
 // aucun geste ne part sans son clic ; pendant la surveillance, seul un geste de la liste fermée part, une
 // seule fois, et une lecture ratée de la surveillance vaut éteinte. »
 
-import type { CooSeat } from '../types'
+import type { CooSeat, Liveness } from '../types'
 import { isTime } from './basics.ts'
 import { isSafeId, isSessionId, shellQuote } from './closing.ts'
 import { isSeatAhead, soundSeat, seatHolder } from './seat.ts'
@@ -349,9 +349,10 @@ export type NightBlockAct = 'wave' | 'resend' | 'relaunch' | 'reopen' | 'force'
 
 /**
  * Un blocage d'une mission en auto et le geste de nuit qui le lève : le groupe visé (`group`), la question
- * du mod (`question`, pour `resend` et `relaunch`), les groupes des autres missions qui le retiennent, tous (`awaited`, pour `force`).
+ * du mod (`question`, pour `resend` et `relaunch`), les groupes des autres missions qui le retiennent, tous (`awaited`, pour `force`),
+ * et pour `reopen` d'une mission dont l'auto est allumé et la discussion dite arrêtée par le signal de vie, `isAuto`.
  */
-export type NightBlock = { mission: string; title: string; act: NightBlockAct; group?: string; question?: string; awaited?: { mission: string; group: string; on?: 'plan' }[] }
+export type NightBlock = { mission: string; title: string; act: NightBlockAct; group?: string; question?: string; awaited?: { mission: string; group: string; on?: 'plan' }[]; isAuto?: true }
 
 /** Un worker se tient pour fini quand, après un signe sûr de fin (fin de session, compte rendu), sa dernière date relayée a plus que ce délai. */
 export const NIGHT_DEAD_MS = 30 * 60_000
@@ -378,6 +379,11 @@ export type NightMissionView = {
   isRelaunchPause: boolean
   /** Les groupes qu'une question de la personne bloque (pas une question du mod) : aucun geste de nuit ne les lance. */
   heldByUser: readonly string[]
+  /**
+   * Le verdict du signal de vie de sa discussion (`liveness.ts`), lu à l'instant ; absent : « inconnu ». « Arrêtée » fait
+   * proposer « à rouvrir » une mission en auto ; « vivante » ne le propose jamais, même en pause.
+   */
+  liveness?: Liveness
   hasOpenGroups: boolean
   questions: readonly { id: string; group?: string }[]
   waveDue: readonly string[]
@@ -388,7 +394,8 @@ export type NightMissionView = {
  * Les blocages des missions en auto, dans l'ordre des missions : un groupe de la vague en cours qui ne part pas
  * (`wave`, l'auto allumé), une question « sans-suite: » (`resend`, l'auto allumé) ou « relance: » d'un groupe (`relaunch`),
  * celle-ci l'auto allumé ou dans la pause d'un groupe revenu trop de fois, une mission en auto arrêtée avec des groupes
- * ouverts, ouverte nulle part ou en pause « discussion fermée » (`reopen`), un groupe d'une mission dont l'auto est allumé dont chaque retenue (8 au
+ * ouverts, ouverte nulle part ou en pause « discussion fermée », ou l'auto allumé et sa discussion dite arrêtée, jamais
+ * une discussion dite vivante (`reopen`), un groupe d'une mission dont l'auto est allumé dont chaque retenue (8 au
  * plus) est tenue par un groupe d'une mission ouverte nulle part dont le worker a fini depuis plus de 30 minutes
  * (`force`, un blocage pour toutes ses retenues). `deadSince` : pour le groupe d'une mission, la date relayée la plus
  * récente après un signe sûr de fin, absente sans signe sûr (une supposition ne force rien).
@@ -408,7 +415,12 @@ export const nightBlocks = (missions: readonly NightMissionView[], deadSince: (m
       if (q.id.startsWith('sans-suite:') && m.isAuto) out.push({ ...at, act: 'resend', question: q.id, ...(q.group !== undefined ? { group: q.group } : {}) })
       else if (q.id.startsWith('relance:') && q.group !== undefined && isFree(q.group) && (m.isAuto || m.isRelaunchPause)) out.push({ ...at, act: 'relaunch', question: q.id, group: q.group })
     }
-    if (m.isPaused && (!m.isOpen || m.isEnded) && m.hasOpenGroups) out.push({ ...at, act: 'reopen' })
+    // À rouvrir : en pause, ouverte nulle part ou « discussion fermée », ou en auto dont la discussion est dite arrêtée ;
+    // jamais une discussion dite vivante (lancer la copie d'une discussion qui tourne) ; « inconnu » ne change rien.
+    if (m.hasOpenGroups && m.liveness !== 'alive') {
+      if (m.isPaused && (!m.isOpen || m.isEnded)) out.push({ ...at, act: 'reopen' })
+      else if (m.isAuto && m.liveness === 'stopped') out.push({ ...at, act: 'reopen', isAuto: true })
+    }
     // Forcer fait partir un groupe d'une mission dont l'auto est allumé, comme la vague.
     if (!m.isAuto) continue
     // Une paire retenue par le plan et par un fichier n'est qu'un blocage : son forçage lève les deux (`on` absent).

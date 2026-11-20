@@ -12,6 +12,10 @@
 // l'environnement, une note ajoutée au contexte de chaque message (`SONDE_CONTEXTE`) et l'effort de chaque
 // requête réécrit (`SONDE_EFFORT`). `/sonde-modele <alias>` envoie les requêtes suivantes du fil principal sur
 // ce modèle, `/sonde-modele` seul les ramène sur celui de la session (essai de Fable 5.2).
+// Sous l'id de la session qui l'a lancée (`SONDE_LANCEUR`, posé par `scripts/sonde.py`), la sonde refuse
+// `/sonde-envoi` (avec ou sans `--commande`), `/sonde-envoyer-a`, `/sonde-compacte`, le modèle imposé par
+// `/sonde-modele` et son titre (`launcherRefusal`) ; `/sonde-envoyer-a` refuse aussi l'id du lanceur pour
+// cible. La note de `SONDE_CONTEXTE` et l'effort de `SONDE_EFFORT` ne sont pas gardés.
 //
 // La sonde fait elle-même des `await` dans ses hooks : l'ordre qu'elle note entre deux événements
 // très proches (moins d'une milliseconde) peut différer de celui d'un plugin sans attente.
@@ -95,8 +99,35 @@ export function splitCommand(text: string): { command: string; args: string } {
   return { command: m?.[1] ?? "", args: m?.[2] ?? "" };
 }
 
+// La garde du lanceur (le 02/11/2026, un `/rename` envoyé par la sonde a renommé la discussion qui
+// l'avait lancée). `scripts/sonde.py` passe l'id de la session qui la lance dans `SONDE_LANCEUR` ; quand la
+// sonde tourne sous cet id, elle n'envoie rien à cette session : ni message, ni commande, ni compaction, ni
+// changement de modèle, ni titre. L'id de la sonde se relit à chaque appel (`/clear` et `/resume` le
+// changent) ; lanceur connu et id illisible : refus. Rend la raison du refus, ou null.
+let lanceur: Promise<string | null> | null = null;
+async function launcherRefusal($: any, what: string): Promise<string | null> {
+  if (!lanceur) {
+    lanceur = $.env.get("SONDE_LANCEUR").then((v: string | undefined) => (typeof v === "string" && SESSION_ID.test(v) ? v.toLowerCase() : null));
+  }
+  const launcher = await lanceur;
+  if (!launcher) return null;
+  let sid: unknown = null;
+  try {
+    sid = await $.session.id();
+  } catch {
+    // illisible : refus ci-dessous
+  }
+  const own = typeof sid === "string" && SESSION_ID.test(sid) ? sid.toLowerCase() : null;
+  if (own !== null && own !== launcher) return null;
+  const why = own === null ? "id de la sonde illisible, lanceur connu" : "la sonde tourne sous l'id de la session qui l'a lancée";
+  await log($, "lanceur:refus", { what, why });
+  return `sonde : ${what} refusé (${why} : rien n'est envoyé à la session qui l'a lancée)`;
+}
+
 // L'envoi au nom du mod, sans `asUser`, et ce que le moteur en a fait (entré, mis en file, retiré, refusé).
 async function submit($: any, envoi: Envoi) {
+  // Relu à l'échéance : l'id a pu changer depuis la commande.
+  if (await launcherRefusal($, envoi.viaCommand ? "envoi --commande (à l'échéance)" : "envoi (à l'échéance)")) return;
   await log($, "envoi", { viaCommand: envoi.viaCommand, text: short(envoi.text) });
   try {
     if (envoi.viaCommand) {
@@ -156,6 +187,8 @@ let modeleDes: number | null = null;
 
 // La compaction lancée par le mod (`$.session.compact`), et ce que le moteur en a fait.
 async function compacte($: any, instructions: string) {
+  // Relu à l'échéance : l'id a pu changer depuis la commande.
+  if (await launcherRefusal($, "compaction (à l'échéance)")) return;
   await log($, "compacte", { instructions: short(instructions) });
   try {
     const r = await $.session.compact(instructions ? { instructions } : {});
@@ -198,7 +231,8 @@ export const register = (on: any) => {
     if (asked !== e) await log($, "effort:réécrit", { de: e.effort, vers: effort, index: e.index });
     // Essai 8 : le modèle de la requête du fil principal réécrit (`/sonde-modele <alias>`) ; jamais celui
     // d'un spécialiste ou d'un fork (`agentId` posé). Le journal dit aussi ce que rend `$.session.model()`.
-    if (modele && e.agentId === undefined && (modelePas === null || e.index < modelePas) && (modeleDes === null || e.index >= modeleDes)) {
+    if (modele && e.agentId === undefined && (modelePas === null || e.index < modelePas) && (modeleDes === null || e.index >= modeleDes)
+      && !(await launcherRefusal($, "modèle imposé"))) {
       asked = { ...asked, model: modele };
       let sessionModel: unknown = null;
       try {
@@ -301,6 +335,14 @@ export const register = (on: any) => {
   on("command.run", { command: ENVOI_A }, async ($: any, e: any) => {
     const { to, text } = parseEnvoiA(e.args);
     if (!text) return { text: `usage : /${ENVOI_A} <id de session ou nom> <texte>` };
+    const refused = await launcherRefusal($, `/${ENVOI_A}`);
+    if (refused) return { text: refused };
+    // Vers l'id du lanceur, quel que soit l'id de la sonde.
+    const launcher = await lanceur;
+    if (launcher && typeof to === "object" && to.sessionId.toLowerCase() === launcher) {
+      await log($, "lanceur:refus", { what: `/${ENVOI_A}`, why: "cible : la session qui a lancé la sonde" });
+      return { text: `sonde : /${ENVOI_A} refusé (la cible est la session qui a lancé la sonde)` };
+    }
     await log($, "envoi-a", { to, text: short(text) });
     try {
       const r = await $.session.send({ to, text });
@@ -314,6 +356,8 @@ export const register = (on: any) => {
   // Essais 5 et 7 : une compaction lancée par le mod, au repos (après <s> secondes), et ce qui la suit.
   on("command.run", { command: COMPACTE }, async ($: any, e: any) => {
     const { delayS, text } = parseEnvoi(e.args);
+    const refused = await launcherRefusal($, `/${COMPACTE}`);
+    if (refused) return { text: refused };
     await log($, "compacte:programmé", { delayS, instructions: short(text) });
     timers.push($.clock.after(delayS * 1000, () => void compacte($, text)));
     return { text: `sonde : compaction par $.session.compact dans ${delayS} s` };
@@ -321,6 +365,9 @@ export const register = (on: any) => {
   // Essai 8 : bascule la réécriture du modèle du fil principal (`turn.step`).
   on("command.run", { command: MODELE }, async ($: any, e: any) => {
     const [asked, pas] = String(e.args ?? "").trim().split(/\s+/);
+    // Ramener les requêtes sur le modèle de la session n'envoie rien : jamais refusé.
+    const refused = asked ? await launcherRefusal($, `/${MODELE}`) : null;
+    if (refused) return { text: refused };
     modele = asked || null;
     modelePas = modele && pas && /^\d+$/.test(pas) ? Number(pas) : null;
     modeleDes = modele && pas && /^\+\d+$/.test(pas) ? Number(pas.slice(1)) : null;
@@ -337,6 +384,8 @@ export const register = (on: any) => {
   on("command.run", { command: ENVOI }, async ($: any, e: any) => {
     const envoi = parseEnvoi(e.args);
     if (!envoi.text) return { text: `usage : /${ENVOI} [<secondes>] [--commande] <texte>` };
+    const refused = await launcherRefusal($, envoi.viaCommand ? `/${ENVOI} --commande` : `/${ENVOI}`);
+    if (refused) return { text: refused };
     await log($, "envoi:programmé", { delayS: envoi.delayS, viaCommand: envoi.viaCommand, text: short(envoi.text) });
     timers.push($.clock.after(envoi.delayS * 1000, () => void submit($, envoi)));
     return { text: `sonde : « ${short(envoi.text)} » part dans ${envoi.delayS} s par ${envoi.viaCommand ? "$.command.run" : "$.prompt.submit"}` };
@@ -387,6 +436,8 @@ async function titled($: any, ev: string, result: any) {
     }
   }
   if (!pendingTitle) return result;
+  // Sous l'id du lanceur, le titre renommerait la session qui a lancé la sonde : gardé pour le hook suivant.
+  if (await launcherRefusal($, `titre (${ev})`)) return result;
   const title = pendingTitle;
   pendingTitle = null;
   await log($, `${ev}:sessionTitle`, { title });

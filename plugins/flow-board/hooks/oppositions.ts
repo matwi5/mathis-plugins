@@ -5,9 +5,10 @@
 // Invariant : « Deux décisions opposées de deux missions ne passent jamais sans question à l'utilisateur ;
 // une décision n'est marquée "remplacée" que sur sa réponse. »
 
-import type { Run } from '../types'
-import { neutralLine } from './closing.ts'
+import type { Run, GestureKind } from '../types'
+import { neutralLine, asciiJson } from './closing.ts'
 import { OPPOSITION_PREFIX } from './model.ts'
+import { type CoordAnswer, type CoordGesture } from './coordination.ts'
 
 /** Une série du `DECISIONS.md` d'une mission : son numéro, son titre, sa ligne et l'empreinte de son contenu. */
 export type DecisionSeries = { n: number; title: string; line: number; print: string }
@@ -101,10 +102,35 @@ export type OpposedSide = { mission: string; ref: string; text: string }
 
 /**
  * La question que le mod de la mission qui a décidé en second pose sur sa phase en cours : les deux
- * décisions mot pour mot, avec leur source, les titres et les textes neutralisés (une ligne chacun).
+ * décisions mot pour mot, avec leur source, les titres et les textes neutralisés (une ligne chacun). Elle dit
+ * d'abord au Claude du manager, nommé (le relevé du COO et la vue Coordination reprennent le même texte, et c'est chez
+ * le COO qu'elle se pose), de ne pas la poser chez lui, où une réponse ne la lève pas (seule l'application par
+ * le COO la retire, `withdrawOpposition`), mais d'envoyer l'utilisateur répondre chez le COO : en tête, parce que
+ * la question relue est coupée à `TEXT_MAX` signes (`readQuestion` de `model.ts`), et courte, pour laisser aux
+ * décisions le plus de ces signes : avec un titre et un sujet longs, la décision de l'autre mission, et la fin de
+ * celle d'ici, n'y tiennent pas.
  */
 export const contradictionQuestion = (mine: OpposedSide, theirs: OpposedSide & { title: string }, subject: string): string =>
-  `Décision opposée à celle de la mission « ${neutralLine(theirs.title).slice(0, 60)} » sur ${neutralLine(subject).slice(0, 80)} : ici « ${neutralLine(mine.text).slice(0, 300)} » (${neutralLine(mine.ref).slice(0, 120)}) ; là-bas « ${neutralLine(theirs.text).slice(0, 300)} » (${neutralLine(theirs.ref).slice(0, 120)}). Laquelle garder ? Ta réponse s'écrit chez le COO dans les deux DECISIONS.md, et la décision non gardée y est marquée « remplacée le … ».`
+  `Claude du manager : ne la pose pas ici, dis à l'utilisateur de répondre chez le COO. Décision opposée à celle de la mission « ${neutralLine(theirs.title).slice(0, 60)} » sur ${neutralLine(subject).slice(0, 80)} : ici « ${neutralLine(mine.text).slice(0, 300)} » (${neutralLine(mine.ref).slice(0, 120)}) ; là-bas « ${neutralLine(theirs.text).slice(0, 300)} » (${neutralLine(theirs.ref).slice(0, 120)}). Laquelle garder ? Ta réponse s'écrit chez le COO dans les deux DECISIONS.md, et la décision non gardée y est marquée « remplacée le … ».`
 
 /** L'id de la question bloquante d'une contradiction : il nomme son entrée, une seule question par entrée. */
 export const contradictionQuestionId = (entryId: string): string => `${OPPOSITION_PREFIX}${entryId}`
+
+/**
+ * Ce que Claude fait d'une réponse qui ne tranche qu'une partie de sa question : il applique ce qu'elle tranche et ne
+ * pose que le reste, sous un id neuf, en citant la réponse ; jamais la question entière (l'outil la refuse, posée après
+ * le retrait ou dans son appel, quand elle a une phrase de tête : pas une question du mod, comme une opposition, ni un
+ * texte de moins de trois mots).
+ */
+const PARTIAL_ANSWER_FR =
+  "Si ma réponse ne tranche qu'une partie de la question, applique ce qu'elle tranche et ne pose que ce qui reste, sous un id neuf : son texte commence par la question restante, puis cite ma réponse (« Quel libellé pour la bascule ? Tu as répondu « b et c ». ») ; jamais la question entière."
+
+/** Le message que le mod compose pour son Claude : la réponse relayée, sans autre valeur que l'id de la question, le chemin contrôlé et la série. */
+export const relayMessage = (e: CoordGesture | CoordAnswer, gesture: GestureKind | undefined): string => {
+  const withdraw = e.question.startsWith(OPPOSITION_PREFIX) ? 'puis dis-moi ce que tu changes ; le tableau de bord retire la question lui-même.' : `puis retire la question : {"waiting": [{"id": ${asciiJson(e.question)}, "answered": true}]}.`
+  if (e.kind === 'answer') return `Le COO a écrit ma réponse à ta question bloquante ${asciiJson(e.question)} dans ${e.file}, série ${e.series} (la question et ma phrase exacte). Relis cette série, applique-la, ${withdraw} ${PARTIAL_ANSWER_FR}`
+  const head = `Le COO relaie ma réponse à ta question bloquante ${asciiJson(e.question)}, donnée d'un clic dans son tableau de bord :`
+  if (gesture === 'flaw') return `${head} je ne laisse pas cette faille sans correctif. Corrige-la (applique, teste, commite, puis envoie "fixed"), ${withdraw}`
+  const what = gesture === 'spend' ? 'la dépense' : "l'action externe"
+  return e.answer === 'yes' ? `${head} ${what} est autorisée. Fais-la, ${withdraw}` : `${head} ${what} est refusée. Continue sans elle et dis-moi ce que ça change, ${withdraw}`
+}

@@ -158,8 +158,12 @@ test('la question d’une opposition : son Claude ne la retire pas, le mod la re
   // Retirée par son Claude sans réponse : refusé, la question reste.
   const said = JSON.stringify(await $.tool.call({ tool: TOOL, waiting: [{ id, answered: true }] } as any))
   expect(said).toMatch(/do not withdraw it/)
+  // Le refus dit aussi de ne pas la poser ici, et d'envoyer l'utilisateur répondre chez le COO.
+  expect(said).toContain("do not ask it here (an answer here does not lift it): tell the user to answer it in the COO's discussion")
   const q = openQuestions(stored(w).runs.find(r => r.id === runId)!).find(x => x.id === id)!
   expect(q).toBeDefined()
+  // Dès sa création, le texte de la question le dit au Claude du manager.
+  expect(q.text.startsWith("Claude du manager : ne la pose pas ici, dis à l'utilisateur de répondre chez le COO. Décision opposée")).toBe(true)
   // La réponse écrite chez le COO : relayée, puis la question retirée par le mod, sa trace gardée.
   w.coord.text = coordFile([contradiction, { id: 'cdef5678', kind: 'answer', run: runId, at: T0 + 1, question: id, print: questionPrint(q), file: 'travail/b/DECISIONS.md', series: 4 }])
   await settle(clock, 8)

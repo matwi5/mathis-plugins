@@ -147,9 +147,9 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   // commande qui n'affiche qu'elle, avant d'écrire que le geste est fait. La fusion d'une branche de
   // travail qui a bougé se teste dans un dépôt : lots-sessions-liees.test.ts.
   expect(text).toContain('chacune par le titre de son entrée, jamais par une date')
-  // Pour un groupe, la commande est celle de la section 3 de la procédure, que le brief cite : recopiée, elle
+  // Pour un groupe, la commande est celle de la suite de la section 3 de la procédure (procedure-groupe-cas.md), que le brief cite : recopiée, elle
   // portait le brief au-delà de son plafond (les autres lancements la gardent : bug, pistes).
-  expect(text).toContain("avant de dire que c'est fait, lis cette seule valeur par la commande de la section 3 de la procédure, jamais le fichier entier, qui peut porter des jetons")
+  expect(text).toContain("avant de dire que c'est fait, lis cette seule valeur par la commande de la suite de la section 3 de la procédure (procedure-groupe-cas.md), jamais le fichier entier, qui peut porter des jetons")
   expect(text).not.toContain(TRUST_COMMAND)
   // Seule la valeur s'imprime ; sous Windows, la clé peut être écrite avec des « / ».
   expect(TRUST_COMMAND).toContain('print((p.get(r) or p.get(r.replace(os.sep, "/")) or {}).get("hasTrustDialogAccepted"))')

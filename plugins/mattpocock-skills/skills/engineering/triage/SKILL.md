@@ -121,11 +121,11 @@ Use this section when the mission's first message names entries of the project r
 
 The mission's first message names the entries to triage by id (`R12`, for instance) and gives the path of the roadmap next to them. Read the roadmap with the file-reading tool, at that path only: never search for it elsewhere, never guess it, never build a shell command on it. If the path is missing from the message, or the file at that path cannot be read or parsed, stop the triage and say so: nothing is guessed. Never write the roadmap: its owner writes it, from what the triage reports.
 
-The entries are each id the first message names, read back in the roadmap for its full text and its state, plus every « À reprendre » entry whose state is already « rattachée à <this mission's title> ». Each id the message names falls into one of these forms:
+The entries are each id the first message names, read back in the roadmap for its full text and its state, plus every « À reprendre » entry whose state is already « rattachée à <this mission's title> » or « rattachée à M<n> - <this mission's title> ». You do not know this mission's short number M<n> (only the COO's statement shows it): recognize them by the title part only, under both forms, each « · » of the title written « - »; the number is checked by the COO, not here. Each id the message names falls into one of these forms:
 
 | Form received | What happens |
 |---|---|
-| Id of an « À reprendre » entry in state « à décider », « plus tard » or « rattachée à <this mission's title> » | triaged |
+| Id of an « À reprendre » entry in state « à décider », « plus tard » or « rattachée à <this mission's title> » (with or without « M<n> - » before the title) | triaged |
 | Id absent from the roadmap | not triaged; told to the user |
 | Id of an entry in another section (an idea, a milestone, a next step) | not triaged; read as context only |
 | Id out of form (not a capital letter followed by one to four digits) | not triaged; told to the user |

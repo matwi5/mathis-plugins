@@ -207,6 +207,13 @@ const MERGE_MATRIX = {
     'valeur abîmée': covered('nom-du-worktree-note.test.mjs', 'fusion de deux copies, une valeur abîmée'),
     'deux ordres': covered('nom-du-worktree-note.test.mjs', 'fusion de deux copies, dans les deux ordres'),
   },
+  keepManagerReports: {
+    'date illisible': covered('depot-manager.test.ts', 'une marque hors forme n’est pas reprise'),
+    'date future': why('sans objet : le plus ancien des deux dépôts reste, une date future ne l’emporte donc jamais sur une date en forme ; au-delà de la borne de isTime, la marque est hors forme (testé avec les dates illisibles)'),
+    'valeur absente': covered('depot-manager.test.ts', 'la fusion de deux copies garde le dépôt présent'),
+    'valeur abîmée': covered('depot-manager.test.ts', 'une marque hors forme n’est pas reprise'),
+    'deux ordres': covered('depot-manager.test.ts', 'le plus ancien des deux, dans les deux ordres'),
+  },
   keepSessions: {
     'date illisible': why(NO_DATE + ' (le même envoi se retrouve par l’égalité de sa date d’envoi, at, jamais comparée en ordre)'),
     'date future': why(NO_DATE + ' (aucune date ramenée par clampFuture : at n’y sert qu’à apparier un envoi)'),

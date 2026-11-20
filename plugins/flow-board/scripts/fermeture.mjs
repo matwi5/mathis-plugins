@@ -3,7 +3,7 @@
 // la réponse de l'outil flow cite cette commande au lieu de recopier sa procédure de 11 000 caractères,
 // que la discussion de la mission exécutait commande par commande.
 //
-//   node <dossier de flow-board>/scripts/fermeture.mjs --worktree <nom> [--branche <nom>]… [--session <id>] [--apres-arret]
+//   node <dossier de flow-board>/scripts/fermeture.mjs --worktree <nom> [--branche <nom>]… [--session <id>] [--apres-arret] [--avec-rm] [--constat-retrait]
 //
 // à lancer depuis le dossier de la mission (le clone ou le worktree où la branche de travail est sortie).
 // `--worktree` : le nom attendu du worktree de l'envoi (sous <dépôt>/.claude/worktrees/), `--branche` : les
@@ -22,6 +22,20 @@
 //                 finit de s'arrêter : relancer la même commande (code 3)
 //   ARRÊT : …     quelque chose n'est pas sûr : ne rien arrêter ni retirer, le dire (code 2)
 //   ÉCHEC : …     argument hors forme, git ou claude en échec : rien n'est sûr (code 1)
+//
+// Sur SÛR après l'arrêt, en plus de la ligne « commande : » (le déverrouillage s'il en faut un, puis le retrait), une
+// ligne « en une fois : » lie par `&&` ces commandes et ce script relancé avec `--constat-retrait`, le constat du
+// retrait : avec lui, le code ne vaut 0 que sur DÉJÀ RETIRÉ, la session de ce worker montrée arrêtée (sans pid, en
+// stopped ou done) ou absente, comme après l'arrêt ; 64 sur SÛR (ARRÊT, ATTENDRE et ÉCHEC gardent leurs codes). Avec
+// `--avec-rm`, que la réponse de l'outil flow ne donne qu'avec le compte rendu du worker au relais, la même ligne finit
+// par `&& claude rm <id court>`, seulement pour une session du CLI montrée arrêtée par `claude agents --json --all`
+// sous l'id court exact reçu par `--session` : jamais pour une session de l'app, sans session connue ni sur un autre
+// verdict ; retenu, une ligne « claude rm : pas dans la ligne (<raison>) » le dit. Le constat de cette ligne-là reçoit
+// aussi `--avec-rm` : il redemande la session montrée arrêtée sous l'id court exact (absente ou sous un autre id
+// entre-temps : ARRÊT), `claude rm` acceptant une partie d'un nom. La chaîne s'arrête à la première
+// commande en échec : un retrait raté ou non constaté ne mène jamais à `claude rm`. Le script ne lance toujours aucune
+// de ces commandes : il les imprime, et la discussion lance la ligne telle quelle (ou, si son garde-fou la refuse, ses
+// commandes une à une, chacune seulement si la précédente a rendu 0).
 //
 // Juste après l'arrêt (--apres-arret), le verrou du worktree posé par sa session (« claude session … (pid N … »)
 // peut encore nommer un processus vivant, alors que claude agents ne la montre plus en marche : la session finit de s'arrêter (une session de l'app, que claude agents ne montre jamais, n'attend pas : ARRÊT ; une autre session en marche dans le worktree : ARRÊT, jamais à arrêter). Le script attend alors sa fin, au plus
@@ -261,7 +275,7 @@ const isAppBranch = (branch, name) => branch.startsWith(`claude/${name}-`) && /^
 
 /** Lit les arguments ; une valeur hors forme : ÉCHEC, aucune commande lancée. */
 export const parseArgs = argv => {
-  const out = { branches: [], isAfterStop: false }
+  const out = { branches: [], isAfterStop: false, isRemovalCheck: false, withRm: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     const value = () => {
@@ -269,6 +283,8 @@ export const parseArgs = argv => {
       return argv[++i]
     }
     if (arg === '--apres-arret') out.isAfterStop = true
+    else if (arg === '--constat-retrait') out.isRemovalCheck = true
+    else if (arg === '--avec-rm') out.withRm = true
     else if (arg === '--worktree') {
       const v = value()
       if (!isSafeWorktreeName(v)) throw new ClosingError(`nom de worktree hors forme : ${JSON.stringify(v)}`)
@@ -359,12 +375,20 @@ const verdict = (args, cwd, lines) => {
       lines.push(`branche : ${branch}`)
       merged(cwd, branch, work, lines)
     }
-    const session = sessionState(args, running, expected, isApp, lines, false)
+    // Pour le constat du retrait (la seule garde avant claude rm), la session se juge comme après l'arrêt : montrée
+    // arrêtée (sans pid, en stopped ou done) ou absente ; encore en marche, ou listée par --all sans être arrêtée : ARRÊT.
+    const seen = {}
+    const session = sessionState(args, running, expected, isApp, lines, args.isRemovalCheck, seen)
+    // Le constat d'une ligne qui finit par claude rm (`--avec-rm`, que la ligne lui passe) : la session encore montrée
+    // arrêtée sous l'id court exact, comme au tirage de la ligne ; absente ou montrée sous un autre id (retirée entre-temps),
+    // claude rm viserait peut-être une autre session (il accepte une partie d'un nom) : ARRÊT, la chaîne s'arrête avant lui.
+    if (args.isRemovalCheck && args.withRm && rmChoice(args, isApp, session, seen.id).rmId === undefined)
+      throw new Stop('la session n’est plus montrée arrêtée par claude agents --all sous l’id court exact reçu par --session : ne lance pas claude rm')
     return { verdict: 'DÉJÀ RETIRÉ', lines, session }
   }
   const worktree = block.path
   lines.push(`worktree : ${worktree}`, `branche : ${block.branch}`)
-  if (!isInside(worktree, join(repo, '.claude', 'worktrees')) || samePath(worktree, join(repo, '.claude', 'worktrees')) || /['\u0000-\u001f\u007f-\u009f\u2018-\u201b\u2028\u2029]/.test(worktree)) throw new Stop(`le worktree ${JSON.stringify(worktree)} n'est pas un worktree de worker (<dépôt>/.claude/worktrees/<nom>, sans apostrophe, droite ou typographique, ni caractère de contrôle ou séparateur de ligne)`)
+  if (!isInside(worktree, join(repo, '.claude', 'worktrees')) || samePath(worktree, join(repo, '.claude', 'worktrees')) || !isQuotableDir(worktree)) throw new Stop(`le worktree ${JSON.stringify(worktree)} n'est pas un worktree de worker (<dépôt>/.claude/worktrees/<nom>, sans apostrophe, droite ou typographique, ni caractère de contrôle, séparateur de ligne ou marque bidirectionnelle)`)
   if (samePath(worktree, cwd) || isInside(cwd, worktree)) throw new Stop('le worktree à fermer est ce dossier')
   if (block.branch === work) throw new Stop('la branche du worktree est la branche de travail de ce dossier')
   // Après l'arrêt, le verrou d'une session dont le processus vit encore, alors que claude agents ne montre plus aucune
@@ -388,11 +412,62 @@ const verdict = (args, cwd, lines) => {
   cleanTree(worktree, lines)
   snapshots(cwd, worktree, work, lines)
   const unlock = lockState(block, args.isAfterStop, lines)
-  const session = sessionState(args, running, worktree, isApp, lines, args.isAfterStop)
-  if (args.isAfterStop) {
-    lines.push(`commande : ${unlock ? `git worktree unlock ${shellQuote(worktree)}, puis ` : ''}git worktree remove ${shellQuote(worktree)} (sans option ; la branche ${block.branch} reste)`)
+  const seen = {}
+  const session = sessionState(args, running, worktree, isApp, lines, args.isAfterStop, seen)
+  if (!args.isAfterStop) return { verdict: 'SÛR', lines, session }
+  lines.push(`commande : ${unlock ? `git worktree unlock ${shellQuote(worktree)}, puis ` : ''}git worktree remove ${shellQuote(worktree)} (sans option ; la branche ${block.branch} reste)`)
+  // claude rm seulement sous --avec-rm, pour une session du CLI connue, montrée arrêtée par claude agents --all sous
+  // l'id court exact qu'a reçu --session (claude rm accepte une partie d'un nom : jamais une autre forme).
+  const { rmId, withheld } = rmChoice(args, isApp, session, seen.id)
+  const chain = removalChain({ worktree, unlock, args, rmId })
+  if (chain === null) {
+    if (args.withRm) lines.push(`claude rm : pas de ligne « en une fois » (chemin du script ou du worktree qu’elle ne citerait pas sûrement)`)
+    return { verdict: 'SÛR', lines, session }
   }
-  return { verdict: 'SÛR', lines, session }
+  lines.push(`en une fois : ${chain}`)
+  if (withheld !== '') lines.push(`claude rm : pas dans la ligne (${withheld})`)
+  return { verdict: 'SÛR', lines, session, chain: rmId !== undefined ? 'rm' : 'plain' }
+}
+
+/**
+ * claude rm dans la ligne « en une fois » : seulement sous `--avec-rm`, pour une session du CLI connue, montrée arrêtée
+ * par claude agents --all (`shownId`, l'id sous lequel elle y est) sous l'id court exact qu'a reçu `--session` (claude rm
+ * accepte une partie d'un nom : jamais une autre forme). Sinon, sous `--avec-rm`, la raison qui le retient, que la
+ * sortie dit : la discussion ne le croit pas lancé par la ligne, et ne le lance pas à part.
+ */
+export const rmChoice = (args, isApp, session, shownId) => {
+  if (!args.withRm) return { rmId: undefined, withheld: '' }
+  if (isApp) return { rmId: undefined, withheld: 'session de l’app' }
+  if (args.session === undefined) return { rmId: undefined, withheld: 'aucune session connue' }
+  if (session !== 'stopped') return { rmId: undefined, withheld: 'session absente de claude agents --all' }
+  if (shownId !== args.session) return { rmId: undefined, withheld: 'l’id reçu par --session n’est pas celui sous lequel claude agents --all la montre' }
+  if (!isShortId(args.session)) return { rmId: undefined, withheld: 'l’id reçu par --session n’a pas la forme d’un id court (8 signes hexadécimaux)' }
+  return { rmId: args.session, withheld: '' }
+}
+
+/** L'id court d'une session du CLI, celui que `claude rm` reçoit (`relayShortId` côté mod) : 8 signes hexadécimaux. */
+export const isShortId = value => typeof value === 'string' && /^[0-9a-f]{8}$/.test(value)
+
+/** Le chemin de ce script, que la ligne « en une fois » relance pour constater le retrait. */
+const SELF = fileURLToPath(import.meta.url)
+
+/**
+ * La ligne « en une fois », sur SÛR après l'arrêt : le déverrouillage s'il en faut un, le retrait, puis ce script
+ * relancé avec `--constat-retrait` (code 0 seulement sur DÉJÀ RETIRÉ), et, avec `rmId`, `claude rm` ; liés par `&&`,
+ * la chaîne s'arrête à la première commande en échec : jamais `claude rm` sans retrait constaté. Les valeurs y
+ * passent par `shellQuote`, après les gardes de forme de `parseArgs` ; un chemin de script ou de worktree qui ne se
+ * cite pas sûrement (apostrophe, contrôle, séparateur de ligne, marque bidirectionnelle) : aucune ligne (null).
+ */
+export const removalChain = ({ worktree, unlock, args, rmId, script = SELF }) => {
+  if (!isQuotableDir(script) || !isQuotableDir(worktree)) return null
+  // Avec claude rm au bout, le constat le sait (`--avec-rm`) : il redemande la session arrêtée sous l'id court exact.
+  const check = ['--worktree', shellQuote(args.worktree), ...args.branches.flatMap(b => ['--branche', shellQuote(b)]), ...(args.session !== undefined ? ['--session', shellQuote(args.session)] : []), '--constat-retrait', ...(rmId !== undefined ? ['--avec-rm'] : [])]
+  return [
+    ...(unlock ? [`git worktree unlock ${shellQuote(worktree)}`] : []),
+    `git worktree remove ${shellQuote(worktree)}`,
+    `node ${shellQuote(script)} ${check.join(' ')}`,
+    ...(rmId !== undefined ? [`claude rm ${shellQuote(rmId)}`] : []),
+  ].join(' && ')
 }
 
 /**
@@ -482,7 +557,7 @@ const lockState = (block, isAfterStop, lines) => {
  * la discussion la vérifie par ListAgents. Rend ce que la discussion doit encore faire pour elle
  * (`nextStep`) : `idle` (claude stop imprimé), `app` ou `absent` (le contrôle ListAgents d'abord), `stopped`.
  */
-const sessionState = (args, running, worktree, isApp, lines, isAfterStop) => {
+const sessionState = (args, running, worktree, isApp, lines, isAfterStop, seen = {}) => {
   // Une autre session dans le worktree arrête tout ; pour l'app, toute session que montre claude agents en est une autre.
   const inside = running.filter(a => typeof a.cwd === 'string' && isInside(a.cwd, worktree))
   const strangers = inside.filter(a => !(args.session && isSession(a, args.session)))
@@ -495,16 +570,24 @@ const sessionState = (args, running, worktree, isApp, lines, isAfterStop) => {
   }
   const own = args.session ? running.find(a => isSession(a, args.session)) : inside[0]
   if (isAfterStop) {
+    // Au constat du retrait, la session a déjà été arrêtée puis s'est relancée : elle ne s'arrête plus d'ici.
+    if ((own || inside.length > 0) && args.isRemovalCheck) throw new Stop(`la session ${JSON.stringify(own?.id ?? inside[0].id)} tourne de nouveau après le retrait : n’arrête rien, ne lance pas claude rm`)
     if (own || inside.length > 0) throw new Stop(`la session ${JSON.stringify(own?.id ?? inside[0].id)} tourne encore : arrête-la d'abord (claude stop), puis relance cette vérification`)
     const all = agents(true)
     const shown = args.session ? all.find(a => isSession(a, args.session)) : all.find(a => typeof a.cwd === 'string' && isInside(a.cwd, worktree))
     if (shown && !isShownStopped(shown)) throw new Stop(`la session ${JSON.stringify(shown.id)} n'est pas montrée arrêtée (state ${JSON.stringify(shown.state)})`)
     lines.push(`session : ${shown ? `arrêtée (sessionId ${shown.sessionId ?? '?'})` : 'absente de claude agents'}`)
+    // L'id sous lequel claude agents --all la montre arrêtée : la forme avec claude rm ne vise que lui.
+    if (shown) seen.id = shown.id
     return shown ? 'stopped' : 'absent'
   }
   if (!own) {
     const all = agents(true)
     const shown = args.session ? all.find(a => isSession(a, args.session)) : all.find(a => typeof a.cwd === 'string' && isInside(a.cwd, worktree))
+    // Absente de la liste des sessions en marche mais montrée par --all sans être arrêtée (un pid, un état qui n'est
+    // pas stopped ni done) : elle démarre ou s'arrête à l'instant ; jamais « déjà arrêtée », que le point 3 de la
+    // procédure lit avant claude rm.
+    if (shown && !isShownStopped(shown)) throw new Stop(`la session ${JSON.stringify(shown.id)} est montrée par claude agents --all sans être arrêtée (state ${JSON.stringify(shown.state)}) : remets la fermeture à plus tard`, 'wait')
     lines.push(shown ? `session : déjà arrêtée (sessionId ${shown.sessionId ?? '?'})` : 'session : absente de claude agents')
     return shown ? 'stopped' : 'absent'
   }
@@ -634,6 +717,13 @@ const mainBranches = argv => {
 /** La fin d'un arrêt de la fermeture : ce que la discussion dit et renvoie. */
 const STOPPED = 'suite : ne ferme rien (n’arrête aucune session, ne retire aucun worktree) ; dis la raison à la personne, puis envoie "state": "stopped" avec elle'
 
+/**
+ * La fin d'un constat du retrait qui ne rend pas 0 (`--constat-retrait`), quel que soit son verdict : la ligne « en une
+ * fois » s'arrête avant claude rm, et le worktree est peut-être déjà retiré ; la vérification relancée sans le constat
+ * dit l'état du moment, et le rapport nomme le worktree quand il est retiré.
+ */
+const REMOVAL_UNCHECKED = 'suite : retrait non constaté (code non nul : la ligne « en une fois » s’arrête ici, avant claude rm) : ne lance pas claude rm ; relance la vérification avec --apres-arret, sans --constat-retrait : sur DÉJÀ RETIRÉ, suis la réponse de l’outil flow (son point 3) ; sinon, n’arrête ni ne retire rien de plus, dis la raison à la personne et envoie "state": "stopped" avec elle, sans "worktree" (la session est gardée)'
+
 /** Les contrôles que le script laisse à la discussion, par ListAgents, avant tout geste. */
 const LIST_AGENTS = {
   app: 'vérifie d’abord par ListAgents que la session de l’app y est au repos (busy : n’arrête rien, remets la fermeture à plus tard ; absente : déjà archivée, rien à arrêter)',
@@ -645,11 +735,16 @@ const LIST_AGENTS = {
  * La dernière ligne de la sortie : le seul geste à faire sur ce verdict, la réponse de l'outil flow renvoyant
  * à elle au lieu de recopier chaque cas. `session` : ce que la vérification de la session a laissé
  * (`sessionState`) : le contrôle ListAgents d'une session de l'app ou absente de claude agents passe avant tout geste ;
- * sans valeur, le cas le plus prudent (absente).
+ * sans valeur, le cas le plus prudent (absente). `chain` : la ligne « en une fois » imprimée, sans (`plain`) ou avec
+ * `claude rm` (`rm`) ; `isRemovalCheck` : le constat du retrait (`--constat-retrait`), dont le code arrête la chaîne.
  */
-export const nextStep = (verdict, isAfterStop, session = 'absent') => {
+export const nextStep = (verdict, isAfterStop, session = 'absent', { chain, isRemovalCheck = false } = {}) => {
+  if (isRemovalCheck && verdict === 'DÉJÀ RETIRÉ') return 'suite : retrait constaté (code 0) : la ligne « en une fois » continue d’elle-même (claude rm quand elle le porte), n’y ajoute rien ; la branche reste : ne la supprime pas'
+  if (isRemovalCheck) return REMOVAL_UNCHECKED
   if (verdict === 'SÛR' && isAfterStop) {
     const check = session === 'app' ? `${LIST_AGENTS.appAfter} ; puis ` : session === 'absent' ? `${LIST_AGENTS.absent} ; puis ` : ''
+    if (chain === 'plain' || chain === 'rm')
+      return `suite : ${check}lance la ligne « en une fois » ci-dessus telle quelle, une seule fois, sans rien y ajouter ni retirer : elle retire le worktree, puis constate le retrait (cette vérification relancée, qui ne rend 0 que sur DÉJÀ RETIRÉ)${chain === 'rm' ? ', puis lance claude rm' : ''} ; si ton garde-fou la refuse (une suite de commandes qui cite git, dans un worktree), lance ses commandes une à une, dans l’ordre, chacune seulement si la précédente a rendu 0 ; elle s’arrête à la première commande en échec : relance alors cette même vérification, qui redonne le verdict du moment ; la branche reste : ne la supprime pas`
     return `suite : ${check}lance la commande de retrait ci-dessus, sans option ; la branche reste : ne la supprime pas`
   }
   if (verdict === 'SÛR') {
@@ -675,25 +770,47 @@ const main = argv => {
   // Le verdict des branches à supprimer : son propre mode, sa propre dernière ligne (jamais celle d'une fermeture).
   if (argv.includes('--branches')) return mainBranches(argv)
   const isAfterStop = argv.includes('--apres-arret')
+  const isRemovalCheck = argv.includes('--constat-retrait')
   try {
     const out = check(argv)
     console.log(out.reason ? `${out.verdict} : ${out.reason}` : out.verdict)
     for (const line of out.lines) console.log(line)
-    console.log(nextStep(out.verdict, isAfterStop, out.session))
-    return out.verdict === 'ARRÊT' ? 2 : out.verdict === 'ATTENDRE' ? 3 : 0
+    console.log(nextStep(out.verdict, isAfterStop, out.session, { chain: out.chain, isRemovalCheck }))
+    return exitCode(out.verdict, isRemovalCheck)
   } catch (err) {
     console.log(`ÉCHEC : ${err instanceof ClosingError ? err.message : String(err.message)} ; rien n'est sûr : n'arrête rien, ne retire rien`)
-    console.log(nextStep('ÉCHEC', isAfterStop))
+    console.log(nextStep('ÉCHEC', isAfterStop, 'absent', { isRemovalCheck }))
     return 1
   }
 }
 
-/** Lancé lui-même (pas importé par un test). */
+/**
+ * Le code de sortie d'un verdict de fermeture : 2 pour ARRÊT, 3 pour ATTENDRE, 0 sinon (ÉCHEC : 1, dans `main`).
+ * Avec le constat du retrait (`--constat-retrait`), que la ligne « en une fois » enchaîne par `&&` avant `claude rm` :
+ * 0 seulement sur DÉJÀ RETIRÉ (la session de ce worker montrée arrêtée ou absente, `sessionState` après l'arrêt), 64
+ * sur SÛR (le worktree encore là) et sur un verdict inconnu, hors des codes que Node se réserve ; ARRÊT, ATTENDRE et
+ * ÉCHEC gardent leurs codes.
+ */
+export const exitCode = (verdict, isRemovalCheck = false) => {
+  if (verdict === 'ÉCHEC') return 1
+  if (verdict === 'ARRÊT') return 2
+  if (verdict === 'ATTENDRE') return 3
+  if (!isRemovalCheck) return 0
+  return verdict === 'DÉJÀ RETIRÉ' ? 0 : 64
+}
+
+/** Lancé lui-même (pas importé par un test) ; null : impossible à dire (un chemin qui ne se résout plus). */
 const isMain = (() => {
   try {
     return process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
   } catch {
-    return false
+    return null
   }
 })()
-if (isMain) process.exitCode = main(process.argv.slice(2))
+if (isMain === true) process.exitCode = main(process.argv.slice(2))
+// Lancé sous un nom à lui sans pouvoir le prouver : jamais un code 0 sans vérification, que la ligne « en une fois »
+// prendrait pour un retrait constaté.
+else if (isMain === null && /(?:^|[\\/])fermeture\.mjs$/.test(process.argv[1] ?? '')) {
+  console.log("ÉCHEC : le script n'a pas pu vérifier qu'il est lancé lui-même ; rien n'est sûr : n'arrête rien, ne retire rien")
+  process.exitCode = 1
+}

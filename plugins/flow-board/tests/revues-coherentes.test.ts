@@ -17,7 +17,13 @@ const lotBoard = (tickets: object[], groups?: object[]): Board => {
 }
 
 test('un lot sans groupes dont la date de revue est hors forme attend encore sa revue', () => {
-  const run = activeRun(lotBoard([{ id: 'a1', name: 'Un', status: 'done' }]))!
+  // Deux tickets : un lot d'un seul ticket n'a pas de revue du lot.
+  const run = activeRun(
+    lotBoard([
+      { id: 'a1', name: 'Un', status: 'done' },
+      { id: 'b1', name: 'Deux', status: 'done' },
+    ]),
+  )!
   expect(needsReview(run)).toBe(true)
   for (const reviewedAt of ['hier', -5, 1e300, null]) expect(needsReview({ ...run, reviewedAt } as unknown as Run)).toBe(true)
   expect(needsReview({ ...run, reviewedAt: T0 + 2 })).toBe(false)

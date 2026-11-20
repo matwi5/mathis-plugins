@@ -70,7 +70,9 @@ const world = (on: any) => {
     return { text: '' }
   })
   // `refusals` : les prochaines demandes du mod que le moteur ne fait pas entrer (un hook rend `drop`).
-  const flags = { refusals: 0 }
+  const flags = { refusals: 0, isRepo: false }
+  // `isRepo` : un dossier de dépôt, où le brief donne un worktree par groupe.
+  on('session.repo', () => ({ value: flags.isRepo ? { root: '/proj', remote: null, internal: false, name: null } : null }))
   on('prompt.submit', (_$: unknown, e: { text: string; origin: any }) => {
     // La consigne de l'allumage, que le mod envoie à Claude au repos : à part des demandes qu'il soumet.
     if (e.text.startsWith(BRIEF)) return { text: e.text }
@@ -136,10 +138,11 @@ const LOT_A2 = {
  * (ou non), la phase des tickets finie (`questions` : déclarées avant la fin du tour) : la carte « Ensuite »
  * propose les groupes, que l'auto lance à la fin du tour.
  */
-const implementing = async ($: any, on: any, lot: Record<string, unknown> = LOT, o: { isAuto?: boolean; questions?: unknown[]; refusals?: number } = {}) => {
+const implementing = async ($: any, on: any, lot: Record<string, unknown> = LOT, o: { isAuto?: boolean; questions?: unknown[]; refusals?: number; isRepo?: boolean } = {}) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
   w.flags.refusals = o.refusals ?? 0
+  w.flags.isRepo = o.isRepo === true
   await $.session.start({ cwd: '', surface: null, isInteractive: true })
   await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
   await $.tool.call({ tool: TOOL, title: 'Boutique', ...lot } as any)
@@ -255,8 +258,14 @@ test('Au retour d’un groupe d’un seul ticket, aucune revue du groupe ne part
 
 test('Un groupe rendu avec des tickets ouverts repart une fois ; au troisième envoi qu’il faudrait, une question le bloque et l’auto se met en pause', { timeoutMs: 40000 }, async ($, on) => {
   const lot = { tickets: LOT.tickets.slice(0, 2), groups: LOT.groups.slice(0, 2) }
-  const { clock, ...w } = await implementing($, on, lot)
+  const { clock, ...w } = await implementing($, on, lot, { isRepo: true })
   expect(w.texts.length).toBe(1)
+  // Dans un dépôt, le gabarit du brief, l'id du groupe mis, est le nom noté à l'envoi de chaque groupe (celui que la
+  // fermeture cherchera), sur le chemin de l'auto comme au clic.
+  const template = /-w '([^']+)'/.exec(w.texts[0]!.text)?.[1] ?? ''
+  expect(template).toContain('<id>')
+  expect(template.replace('<id>', 'A')).toBe(String(groupOf(w, 'A').linked!.worktreeName))
+  expect(template.replace('<id>', 'B')).toBe(String(groupOf(w, 'B').linked!.worktreeName))
   // B fini et clos ; A revient sans avoir fini.
   await $.tool.call({ tool: TOOL, set: [{ id: 'b1', status: 'done' }], returned: ['B'], reviewed: ['B'], security: { group: 'B', advised: false, why: 'rien' } } as any)
   await $.tool.call({ tool: TOOL, returned: ['A'] } as any)
@@ -264,6 +273,9 @@ test('Un groupe rendu avec des tickets ouverts repart une fois ; au troisième e
   expect(w.texts.length).toBe(2)
   expect(w.texts[1]!.text).toContain('Groupe A (Worker)')
   expect(w.texts[1]!.text).toContain('Le groupe A repart après un envoi revenu avec des tickets ouverts')
+  // Le renvoi dit le nom noté à cet envoi.
+  expect(groupOf(w, 'A').linked!.worktreeName).toBe('groupe-boutique-A-2')
+  expect(w.texts[1]!.text).toContain('Worktree et branche de cet envoi : groupe-boutique-A-2 (2e envoi du groupe A')
   // Il revient encore sans avoir fini : pas de troisième envoi, une question, et la pause.
   await $.tool.call({ tool: TOOL, returned: ['A'] } as any)
   await turnEnd($, clock)

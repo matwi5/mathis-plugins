@@ -111,7 +111,8 @@ test('sans groupes, le lot fini propose une revue, puis, sa sécurité tranchée
   mock.store(on)
   world(on)
   await $.skill.prompt({ skill: 'mattpocock-skills:implement', text: 'x' })
-  await $.tool.call({ tool: TOOL, tickets: [{ id: 'T1', name: 'Seul', status: 'done' }] } as any)
+  // Deux tickets : un lot d'un seul ticket n'a pas de revue du lot.
+  await $.tool.call({ tool: TOOL, tickets: [{ id: 'T1', name: 'Un', status: 'done' }, { id: 'T2', name: 'Deux', status: 'done' }] } as any)
   let ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   expect(await ui.find({ key: 'go-final-review' })).toBeDefined()
   expect(await ui.find({ key: 'go-compte-rendu' })).toBeUndefined()
@@ -189,7 +190,7 @@ test('avec git, les revues partent du commit d’avant le ticket ou de la base d
   // p12 : la commande exacte, plage comprise ; un pathspec quand d'autres missions commitent sur la branche.
   expect(group).toContain("its exact command is /code-review high --fix <group base>..HEAD consignes : <path> (high without --fix for a sensitive group; <group base>: the commit before the group's first ticket; when launched without a target, review that range)")
   expect(group).toContain('the scope is then limited to this mission\'s paths, given in the file as a pathspec, git diff <base>..HEAD -- <paths>')
-  expect(group).toContain('Then read the diff of its fixes, rerun the checks and commit them.')
+  expect(group).toContain('Then read the diff of its fixes, rerun the checks, the full suite included, and commit them.')
   expect(group).toContain('git diff <group base>..<launch>')
   for (const text of [implement, bug, group]) expect(text).not.toMatch(/Without git|copy/)
 })

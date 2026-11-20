@@ -96,7 +96,10 @@ test('sans groupes, Claude lance lui-même la revue du lot, et la ligne de fin a
   expect(text).toContain('its security advice in the same message (section 5), sent without "group"')
   // L'avis daté avant le chargement de la revue du lot ne compte pas : il part après lui.
   expect(text).toContain('send the advice only once /code-review has loaded, never before it: an advice dated before the lot review counts for no pass')
-  expect(text).toContain('When every ticket of the lot is done, the lot review done and its security settled (or the lot dispensed: every ticket sent with "sensitive": false and "logic": false): {"complete": true}')
+  expect(text).toContain('When every ticket of the lot is done, the lot review done (none for a lot of a single ticket) and its security settled (or the lot dispensed: every ticket sent with "sensitive": false and "logic": false): {"complete": true}')
+  // Un lot d'un seul ticket, rattachés compris : pas de revue du lot, comme un groupe d'un seul ticket ; son avis de sécurité reste dû.
+  expect(text).toContain('- The lot review, for a lot of two tickets or more: launch the lot review yourself (section 4)')
+  expect(text).toContain('A lot of a single ticket, attached ones included, has no lot review (section 4: it counts as a group of a single ticket): its ticket review is its review; unless dispensed, its security advice is still due, sent without "group" once that ticket is done. A ticket attached later brings the lot review back.')
   // Seuls les constats antérieurs de gravité moyenne ou plus, ou qui violent un invariant ; les autres vont au journal.
   expect(text).toContain('propose those of medium severity or more, or that break an invariant, to the user as a « durcissement » group')
   expect(text).toContain('the others go to the journal, under « À reprendre »')
@@ -108,6 +111,8 @@ test('sans groupes, les étapes de ticket gardent leurs ids et renvoient aux poi
   expect(steps).toContain('read (procedure, section 2, points 1 and 2')
   expect(steps).toContain('tdd (procedure, section 2, point 3')
   expect(steps).toContain('checks (procedure, section 2, point 3')
+  // R171 (b) : l'étape « Contrôles » d'un lot sans groupes est le renvoi à la procédure, jamais le texte des groupes.
+  expect(steps).not.toContain('at the end of the group')
   expect(steps).toContain('review (procedure, section 2, points 4 to 8')
   // Un ticket sensible n'a que l'axe Spec : l'étape ne dit plus « les deux axes » pour tout ticket.
   expect(steps).toContain('the reviewer of the ticket (both axes outside sensitive areas, the Spec axis alone for a sensitive ticket)')
@@ -142,7 +147,7 @@ test('la même mission, sans puis avec des groupes : seules changent les lignes 
     '- Steps of implement, in order',
     '- This lot has no groups: you ',
     '- Five exceptions, and no othe',
-    '- The lot review: launch the l',
+    '- The lot review, for a lot of',
     '- When every ticket of the lot',
   ])
 })

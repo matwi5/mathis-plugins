@@ -84,10 +84,10 @@ test('open : un point de départ inconnu ou qui n’en est pas un retombe sur /i
     expect(activeRun(out.board)!.entry).toBe('implement')
     expect(out.text).toMatch(/is not a starting skill: the mission follows \/implement/)
   }
-  // Sans titre : le nom du flux, et Claude est invité à le nommer par `fix`.
+  // Sans titre : le nom du flux, et Claude est invité à le nommer par `title` (`fix.title` ne nomme plus la discussion).
   const untitled = applyReport(board, { open: {} }, 2_000)
   expect(activeRun(untitled.board)!.isTitled).toBe(false)
-  expect(untitled.text).toMatch(/fix/)
+  expect(untitled.text).toContain('Send {"title": "..."} to name it.')
 })
 
 test('fix.title remplace un titre posé ; un simple title ne le fait pas', () => {

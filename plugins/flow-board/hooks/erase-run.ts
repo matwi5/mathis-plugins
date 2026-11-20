@@ -18,6 +18,7 @@ import { autoOnKey } from './launch.ts'
 import { type HistoryShown, appliedKey, resumeKey, buildShown, commit, decidedPath, delegateKey, historyHeads, historyShown, clearHistoryShown, mainRefKey, mainRefPath, missionReportKey, missionReportPath, otherHeads, otherRegistries, quietly, readAllHeads, readRelay, rebuiltIds, refreshHistory, registryFiles, relayEntryFilesOf, relayEntryKey, relayEntryKeysOf, relayEntryPath, relayKey, relayPath, reportPath } from './register.tsx'
 import { commitRegistry, readRegistry, registryDir, registryKey, registryPath, writeRegistry } from './registry-file.ts'
 import { relayFileSlug } from './closing.ts'
+import { managerReportSessions } from './depot-manager.ts'
 
 /** Les atomes lus ou mis à jour ici : le moteur veut leur déclaration dans le fichier qui les lit. */
 const boardAtom = atom({ plugin: 'flow-board', key: 'board' } as const, null)
@@ -200,7 +201,7 @@ export async function reportFilesOf($: any, runId: string): Promise<string[]> {
  * Efface un fichier (S4) : réécrit vide, puis supprimé par `rm` (`del` sous Windows) ; sans
  * commande, le fichier vide reste. Faux quand il n'a pas pu être vidé.
  */
-async function eraseFile($: any, path: string | null): Promise<boolean> {
+export async function eraseFile($: any, path: string | null): Promise<boolean> {
   if (!path) return true
   let isThere = false
   try {
@@ -538,6 +539,9 @@ async function eraseRunNow($: any, run: Run): Promise<boolean> {
       if (key) await eraseKey($, key)
     }
   }
+  // Les comptes rendus déposés par le manager (depot-manager.ts) : par leur chemin calculé d'après les marques de la
+  // mission, même quand le dossier du relais ne se liste pas.
+  for (const session of managerReportSessions(run)) await eraseFile($, reportPath($, run.id, session))
   for (const path of await reportFilesOf($, run.id)) await eraseFile($, path)
   for (const path of await relayEntryFilesOf($, run.id)) await eraseFile($, path)
   for (const key of await relayEntryKeysOf($, run.id)) await eraseKey($, key)

@@ -6,6 +6,7 @@ un faux `~/.claude` et un faux dossier temporaire : python3 -m unittest discover
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -17,6 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import sonde  # noqa: E402
+from test_journal_mission import DOTS, PIECES  # noqa: E402  (le corpus hostile commun des tests Python)
 
 SESSION = "0a1b2c3d-1111-2222-3333-444455556666"
 OTHER = "9f8e7d6c-1111-2222-3333-444455556666"
@@ -505,7 +507,8 @@ class SessionTracesTest(Essai):
         self.assertTrue(env_a.is_dir())
 
     def test_un_session_env_qui_porte_une_entree_d_avant_le_lancement_reste(self):
-        # Un id hérité d'une session existante (`--env CLAUDE_CODE_SESSION_ID=…`) : son session-env/<id>
+        # Un id hérité d'une session existante (une identité partagée ; `--env CLAUDE_CODE_SESSION_ID=…`, refusé
+        # depuis le 17/11/2026) : son session-env/<id>
         # porte déjà des fichiers d'avant la marque, puis la sonde y écrit (le dossier du haut change de date).
         self.opened(A)
         env = self.env(A)
@@ -707,6 +710,195 @@ class CommandTest(unittest.TestCase):
             text = (Path(d) / sonde.LOG_NAME).read_text(encoding="utf-8")
             self.assertIn("avant", text)
             self.assertIn("2.1.316 (Claude Code)", text)
+
+
+LANCEUR = "1a2b3c4d-1111-2222-3333-444455556666"
+
+
+class LauncherCleanTest(Essai):
+    """Le nettoyage ne supprime jamais un fichier de la session qui a lancé la sonde (invariant du ticket 09),
+    même quand le journal de la sonde porte son id (identité partagée, comme le 02/11/2026) : l'id du lanceur, noté dans la
+    marque de lancement, sort de l'ensemble des sessions du lancement avant toute famille."""
+
+    def setUp(self):
+        super().setUp()
+        self.remark(LANCEUR)
+
+    def remark(self, launcher, raw=False):
+        """Repose la marque du lancement, avec cet id du lanceur ; `raw` : la valeur écrite telle quelle."""
+        (self.folder / sonde.MARKER).unlink()
+        sonde.mark_launch(self.folder, "/bin/claude", launcher=None if raw else launcher)
+        if raw:
+            marker = self.folder / sonde.MARKER
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            data["lanceur"] = launcher
+            marker.write_text(json.dumps(data) + "\n", encoding="utf-8")
+        self.ms = os.lstat(self.folder / sonde.MARKER).st_mtime_ns // 1_000_000 + 1
+
+    def journal(self, *lines):
+        self.write(self.folder / "journaux" / "essai.jsonl", "".join(json.dumps(line) + "\n" for line in lines))
+
+    def settle(self):
+        later = time.time_ns() + 1_000_000_000
+        os.utime(self.folder / "journaux" / "essai.jsonl", ns=(later, later))
+
+    def env(self, sid):
+        path = self.home / "session-env" / sid
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def req(self, name):
+        return self.write(self.home / "stats-board" / "requetes" / name, "{}")
+
+    def shared_identity(self):
+        """Le journal d'une sonde qui a tourné sous l'id du lanceur, puis ouvert A par /clear ; SESSION, la session
+        du lancement que pose `Essai`, y est aussi : sans le lanceur, son dossier de projet partirait."""
+        self.journal({"ev": "session.start", "sid": SESSION},
+                     {"ev": "classic.SessionStart", "sid": LANCEUR, "source": "startup"},
+                     {"ev": "turn.start", "sid": LANCEUR},
+                     {"ev": "classic.SessionStart", "sid": A, "source": "clear"})
+
+    def test_le_lanceur_est_note_dans_la_marque(self):
+        marker = json.loads((self.folder / sonde.MARKER).read_text(encoding="utf-8"))
+        self.assertEqual(marker["lanceur"], LANCEUR)
+        self.remark(None)
+        marker = json.loads((self.folder / sonde.MARKER).read_text(encoding="utf-8"))
+        self.assertIn("lanceur", marker)
+        self.assertIsNone(marker["lanceur"])
+
+    def test_les_releves_du_lanceur_restent_ceux_d_une_session_ouverte_par_la_sonde_partent(self):
+        self.shared_identity()
+        launcher_reqs = [self.req(f"{LANCEUR}_{self.ms}.json"), self.req(f"{LANCEUR}_{self.ms + 5}.json")]
+        mine = self.req(f"{A}_{self.ms}.json")
+        self.settle()
+        report = sonde.clean(self.folder, self.home)
+        self.assertIsNone(report.error)
+        for path in launcher_reqs:
+            self.assertTrue(path.is_file(), f"{path} supprimé")
+            self.assertNotIn(str(path), report.deleted)
+        self.assertFalse(mine.exists())
+        self.assertIn(str(mine), report.deleted)
+
+    def test_le_registre_et_le_session_env_du_lanceur_restent(self):
+        self.shared_identity()
+        # Tels que la session du lanceur les laisse : son registre a pour racine son vrai projet, son
+        # session-env porte des fichiers d'avant le lancement (et la sonde y a écrit pendant lui).
+        registry = self.write(self.agents / f"{LANCEUR}.json", json.dumps({"session": LANCEUR, "root": "/Users/moi/projet"}))
+        part = self.write(self.agents / f"{LANCEUR}.1.json", json.dumps({"v": 1, "session": LANCEUR, "part": 1, "agents": []}))
+        env = self.env(LANCEUR)
+        old_file = env / "ancien"
+        old_file.write_text("du lanceur", encoding="utf-8")
+        old = 1_000_000_000
+        os.utime(old_file, ns=(old, old))
+        (env / "neuf").write_text("x", encoding="utf-8")
+        # Même un session-env du lanceur né dans la fenêtre reste : son id est retiré avant toute famille.
+        self.settle()
+        report = sonde.clean(self.folder, self.home)
+        for path in (registry, part, old_file, env / "neuf"):
+            self.assertTrue(path.exists(), f"{path} supprimé")
+        self.assertFalse([p for p in report.deleted if LANCEUR in p], report.deleted)
+        # Le registre du lanceur sous la racine du dossier jetable (une sonde qui aurait son identité) reste aussi.
+        self.write(self.agents / f"{LANCEUR}.json", json.dumps({"session": LANCEUR, "root": str(self.folder)}))
+        report = sonde.clean(self.folder, self.home)
+        self.assertTrue((self.agents / f"{LANCEUR}.json").is_file())
+
+    def test_le_session_env_du_lanceur_ne_avant_ou_dans_la_fenetre_reste(self):
+        # Né avant la fenêtre, tel que la session du lanceur le laisse : la marque est reposée après lui.
+        before = self.env(LANCEUR)
+        (before / "x").write_text("x", encoding="utf-8")
+        time.sleep(0.01)
+        self.remark(LANCEUR)
+        self.shared_identity()
+        self.settle()
+        sonde.clean(self.folder, self.home)
+        self.assertTrue((before / "x").is_file())
+        # Né entièrement dans la fenêtre (identité partagée) : seule l'exclusion du lanceur le garde, quand
+        # celui de A, né de même, part.
+        shutil.rmtree(before)
+        inside, mine = self.env(LANCEUR), self.env(A)
+        (inside / "x").write_text("x", encoding="utf-8")
+        (mine / "x").write_text("x", encoding="utf-8")
+        self.settle()
+        known = sonde.birth_ns(os.lstat(mine)) is not None
+        report = sonde.clean(self.folder, self.home)
+        if not known:
+            self.skipTest("date de création inconnue sur ce système : aucun session-env n'y est jamais pris, l'exclusion du lanceur ne s'y éprouve pas")
+        self.assertFalse(mine.exists())  # contrôle positif : A, né de même, part
+        self.assertTrue((inside / "x").is_file())
+        self.assertFalse([p for p in report.deleted if LANCEUR in p], report.deleted)
+
+    def test_le_transcript_du_lanceur_dans_le_dossier_de_projet_le_garde(self):
+        self.shared_identity()
+        # Sans le transcript du lanceur, le dossier de projet (celui de SESSION) part : contrôle positif.
+        todo, _ = sonde.plan(self.folder, self.home)
+        self.assertIn(self.project, [p for p, _ in todo])
+        transcript = self.write(self.project / f"{LANCEUR}.jsonl", json.dumps({"cwd": str(self.folder)}) + "\n")
+        self.settle()
+        report = sonde.clean(self.folder, self.home)
+        self.assertTrue(transcript.is_file())
+        self.assertTrue(self.project.is_dir())
+        self.assertIn(str(self.project), " ".join(report.remaining()))
+
+    def test_le_lanceur_de_la_marque_passe_le_corpus_hostile(self):
+        pieces = [*PIECES, DOTS, chr(0x661), "é"]
+        hostile = [*pieces, *(LANCEUR + p for p in pieces), *(LANCEUR[:8] + p + LANCEUR[9:] for p in pieces),
+                   LANCEUR.upper(), sonde.UNKNOWN_LAUNCHER, "x" * 10_000, "", [], {}, 42, True]
+        for value in hostile:
+            with self.subTest(value=repr(value)[:60]):
+                self.remark(value, raw=True)
+                self.assertEqual(sonde.launch_launcher(self.folder), ("hors forme", None))
+        self.remark(LANCEUR)
+        self.assertEqual(sonde.launch_launcher(self.folder), ("valide", LANCEUR))
+
+    def test_un_rapport_vide_dit_rien_sous_claude(self):
+        self.assertEqual(sonde.Report().lines(), ["rien sous ~/.claude pour ce dossier"])
+        self.assertEqual(sonde.Report(deleted=["p"]).lines(), ["supprimé : p"])
+
+    def test_une_marque_d_avant_sans_id_du_lanceur_ne_supprime_rien_et_le_dit(self):
+        # Un lancement d'avant la garde a pu partager l'identité de son lanceur (constaté le 02/11/2026) ; son journal
+        # porte alors l'id du lanceur, dont les relevés nés dans la fenêtre restent.
+        (self.folder / sonde.MARKER).unlink()
+        sonde.mark_launch(self.folder, "/bin/claude")
+        marker = self.folder / sonde.MARKER
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        data.pop("lanceur", None)
+        marker.write_text(json.dumps(data) + "\n", encoding="utf-8")
+        self.ms = os.lstat(marker).st_mtime_ns // 1_000_000 + 1
+        self.assertEqual(sonde.launch_launcher(self.folder), ("ancien", None))
+        self.shared_identity()
+        launcher_reqs = [self.req(f"{LANCEUR}_{self.ms}.json"), self.req(f"{LANCEUR}_{self.ms + 5}.json")]
+        mine = self.req(f"{A}_{self.ms}.json")
+        self.settle()
+        report = sonde.clean(self.folder, self.home)
+        self.assertEqual(report.deleted, [])
+        for path in (*launcher_reqs, mine, self.agents / f"{SESSION}.json", self.mission):
+            self.assertTrue(path.is_file(), f"{path} supprimé")
+        self.assertTrue(self.project.is_dir())
+        self.assertTrue(any("lanceur" in line and "avant" in line and "rien" in line for line in report.lines()),
+                        report.lines())
+
+    def test_une_marque_dont_l_id_du_lanceur_est_hors_forme_ne_supprime_rien_et_le_dit(self):
+        for value in ("pas-un-id", 42, LANCEUR.upper() + "x", ["x"], ""):
+            with self.subTest(value=value):
+                self.remark(value, raw=True)
+                self.journal({"ev": "classic.SessionStart", "sid": A, "source": "startup"})
+                mine = self.req(f"{A}_{self.ms}.json")
+                self.settle()
+                report = sonde.clean(self.folder, self.home)
+                self.assertEqual(report.deleted, [])
+                self.assertTrue(mine.is_file())
+                self.assertTrue((self.agents / f"{SESSION}.json").is_file())
+                self.assertTrue(self.project.is_dir())
+                self.assertTrue(any("lanceur" in line and "hors forme" in line for line in report.lines()), report.lines())
+
+    def test_sans_lanceur_le_nettoyage_est_celui_d_avant(self):
+        self.remark(None)
+        self.journal({"ev": "classic.SessionStart", "sid": A, "source": "startup"})
+        mine = self.req(f"{A}_{self.ms}.json")
+        self.settle()
+        report = sonde.clean(self.folder, self.home)
+        self.assertFalse(mine.exists())
+        self.assertFalse(any("lanceur" in line for line in report.lines()), report.lines())
 
 
 if __name__ == "__main__":

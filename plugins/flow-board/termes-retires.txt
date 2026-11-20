@@ -104,3 +104,10 @@
 0.88.0	in manual, their auto off
 # La règle « Mode auto » dit deux reprises sans clic (pause « plus rien ne peut avancer sans toi », pause « discussion arrêtée » relancée) :
 0.88.0	sauf la reprise d'une pause
+# /flow rename et fix.title ne renomment plus la discussion (elle n'est nommée qu'au premier titre) :
+0.89.0	renomment aussi la discussion
+# La fusion d'un groupe n'est plus qu'une avance rapide (le geste de fin du worker amène la branche de travail dans celle du groupe) :
+0.89.0	git merge --no-ff
+# Après les correctifs de la revue du groupe ou du lot, la consigne dit que la suite complète tourne (R171 (a)) :
+0.89.0	rerun the checks and commit them
+0.89.0	relancer les contrôles du projet et commiter ;

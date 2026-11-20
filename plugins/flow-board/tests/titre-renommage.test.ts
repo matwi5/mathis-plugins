@@ -51,7 +51,7 @@ test('une autre mission déjà né ici, même fini ou archivé : seul la nouvell
   }
 })
 
-test('une mission supprimée, ou d’avant ce changement (sans discussion de naissance), ne bloque pas le renommage', () => {
+test('au niveau du modèle, sans marque : une mission supprimée, ou d’avant ce changement (sans discussion de naissance), ne bloque pas le renommage', () => {
   const old: Run = { ...newRun('implement', 500, 'Ancien'), status: 'paused' }
   expect(old.bornIn).toBeUndefined()
   const board = opened({ ...empty(), runs: [old] })
@@ -84,15 +84,21 @@ test('une suite garde « <libellé> · <titre du parent> » et ne renomme pas la
   expect(out.fx.discussionTitle).toBeUndefined()
 })
 
-test('fix.title et /flow rename renomment la discussion avant un worker, pas après', () => {
+test('fix.title et /flow rename changent le titre de la mission, jamais celui de la discussion, avant un worker comme après', () => {
+  // Une discussion nommée par flow-board ne l'est qu'une fois : au premier titre de la mission née chez elle.
   const groups = { tickets: [{ id: 'a1', name: 'Un' }, { id: 'b1', name: 'Deux' }], groups: [{ id: 'A', name: 'Un', tickets: ['a1'] }, { id: 'B', name: 'Deux', tickets: ['b1'] }] }
-  let board = applyReport(opened(empty(), 'mattpocock-skills:implement'), { title: 'Lot', ...groups }, 2_000).board
+  const first = applyReport(opened(empty(), 'mattpocock-skills:implement'), { title: 'Lot', ...groups }, 2_000)
+  expect(first.fx.discussionTitle).toBe('Lot')
+  let board = first.board
   const fixed = applyReport(board, { fix: { title: 'Lot corrigé' } }, 3_000)
-  expect(fixed.text).toContain(NAME('Lot corrigé'))
-  expect(fixed.fx.discussionTitle).toBe('Lot corrigé')
+  expect(runOf(fixed.board)).toMatchObject({ title: 'Lot corrigé', isTitled: true })
+  expect(fixed.text).toContain(KEEPS)
+  expect(fixed.text).not.toContain('name this discussion')
+  expect(fixed.fx.discussionTitle).toBeUndefined()
   const renamed = renameRun(fixed.board, runOf(fixed.board).id, 'Lot renommé', 3_500)!
-  expect(renamed.fx.discussionTitle).toBe('Lot renommé')
-  // Un worker lancé : le nom donné dans son brief ne bouge plus.
+  expect(runOf(renamed.board)).toMatchObject({ title: 'Lot renommé', isTitled: true })
+  expect(renamed.fx.discussionTitle).toBeUndefined()
+  // Un worker lancé : rien ne change non plus.
   board = startLinkedGroups(renamed.board, ['A'], 4_000)!.board
   const late = applyReport(board, { fix: { title: 'Trop tard' } }, 5_000)
   expect(runOf(late.board).title).toBe('Trop tard')
@@ -101,15 +107,26 @@ test('fix.title et /flow rename renomment la discussion avant un worker, pas apr
   expect(renameRun(board, runOf(board).id, 'Encore', 6_000)!.fx.discussionTitle).toBeUndefined()
 })
 
-test('un worker lancé pour des éléments bloque le renommage, même quand ils reviennent à faire', () => {
-  let board = applyReport(opened(empty(), 'mattpocock-skills:retro'), { title: 'Rétro', items: [{ id: 'r1', label: 'Piste' }] }, 2_000).board
+test('un worker lancé pour des éléments bloque le premier titre, même quand ils reviennent à faire', () => {
+  let board = applyReport(opened(empty(), 'mattpocock-skills:retro'), { items: [{ id: 'r1', label: 'Piste' }] }, 2_000).board
   board = withItemsLink(board, ['r1'], 3_000)
   board = linkSession(board, 'local_pistes', 3_500)!.board
   // Les éléments reviennent à faire : la phase ne suit plus la session, la mission s'en souvient.
   board = { ...board, runs: board.runs.map(r => ({ ...r, phases: r.phases.map(p => ({ ...p, linked: undefined })) })) }
-  const late = applyReport(board, { fix: { title: 'Rétro corrigée' } }, 4_000)
+  const late = applyReport(board, { title: 'Rétro' }, 4_000)
+  expect(runOf(late.board).title).toBe('Rétro')
   expect(late.text).toContain(KEEPS)
   expect(late.fx.discussionTitle).toBeUndefined()
+})
+
+test('open sans titre : la consigne demande un title, qui nomme la mission et la discussion une fois', () => {
+  const open = applyReport(empty(), { open: {} }, 2_000)
+  expect(open.text).toContain('Send {"title": "..."} to name it.')
+  expect(open.text).not.toContain('"fix"')
+  const titled = applyReport(open.board, { title: 'Requêtes PowerBI' }, 3_000)
+  expect(runOf(titled.board)).toMatchObject({ title: 'Requêtes PowerBI', isTitled: true })
+  expect(titled.text).toContain(NAME('Requêtes PowerBI'))
+  expect(titled.fx.discussionTitle).toBe('Requêtes PowerBI')
 })
 
 test('le premier titre ne renomme pas la discussion une fois un worker demandée ; « Annuler » la libère', () => {
@@ -120,10 +137,14 @@ test('le premier titre ne renomme pas la discussion une fois un worker demandée
   const late = applyReport(board, { title: 'Lot' }, 4_000)
   expect(late.text).toContain(KEEPS)
   expect(late.fx.discussionTitle).toBeUndefined()
-  // La demande annulée sans session lancée : plus rien ne nomme la discussion.
-  const cancelled = cancelLinkedGroup(late.board, 'A', 5_000)!.board
-  const renamed = renameRun(cancelled, runOf(cancelled).id, 'Lot renommé', 6_000)!
-  expect(renamed.fx.discussionTitle).toBe('Lot renommé')
+  // La demande annulée sans session lancée, avant le premier titre : ce premier titre nomme la discussion.
+  const fresh = startLinkedGroups(applyReport(opened(empty(), 'mattpocock-skills:implement'), groups, 2_000).board, ['A'], 3_000)!.board
+  const cancelled = cancelLinkedGroup(fresh, 'A', 5_000)!.board
+  const titled = applyReport(cancelled, { title: 'Lot' }, 6_000)
+  expect(titled.text).toContain(NAME('Lot'))
+  expect(titled.fx.discussionTitle).toBe('Lot')
+  // /flow rename ensuite : la mission seule change de titre.
+  expect(renameRun(titled.board, runOf(titled.board).id, 'Lot renommé', 7_000)!.fx.discussionTitle).toBeUndefined()
 })
 
 test('un worker (delegate) ne prend jamais de titre', () => {
@@ -166,6 +187,28 @@ test('le titre part une fois dans sessionTitle, au prochain message', async ($, 
   await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
   expect(String((await $.tool.call({ tool: TOOL, title: 'Export CSV' } as any)).result)).toContain(NAME('Export CSV'))
   expect(await prompt($, 'Session tools start')).toMatchObject({ sessionTitle: 'Export CSV' })
+  expect((await prompt($, 'Export CSV')).sessionTitle).toBeUndefined()
+})
+
+test('la commande /flow rename renomme la mission sans promettre ni poser de titre pour la discussion', async ($, on) => {
+  mock.clock(on, { now: 101_500_000 })
+  memoryDisk(on)
+  mock.store(on)
+  world(on)
+  on('ui.toast', () => ({ value: undefined }))
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-spec', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Export CSV' } as any)
+  expect(await prompt($, 'Session tools start')).toMatchObject({ sessionTitle: 'Export CSV' })
+  const out: any = await $.command.run({ command: 'flow', args: 'rename Export CSV et JSON' } as any)
+  const text = JSON.stringify(out)
+  expect(text).toContain('Mission renommée : Export CSV et JSON')
+  expect(text).not.toMatch(/discussion|rename this|set_session_title/)
+  // Aucun titre en attente : rien ne part au prochain message ni à la reprise.
+  expect((await prompt($, 'Export CSV')).sessionTitle).toBeUndefined()
+  const start = await ($ as any).classic.SessionStart({ session_id: 's-titre', transcript_path: '/t/s-titre.jsonl', cwd: '/p', hook_event_name: 'SessionStart', source: 'resume', session_title: 'Export CSV' })
+  expect(start?.sessionTitle).toBeUndefined()
+  // Et l'outil le dit pour fix.title.
+  expect(String((await $.tool.call({ tool: TOOL, fix: { title: 'Export CSV corrigé' } } as any)).result)).toContain(KEEPS)
   expect((await prompt($, 'Export CSV')).sessionTitle).toBeUndefined()
 })
 

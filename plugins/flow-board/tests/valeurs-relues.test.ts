@@ -205,7 +205,8 @@ test('Une branche par défaut hors forme n’entre pas dans « git merge --ff-on
   const w = await resumed($, on, lotRun({ isReturned: true }), { main: 'main; rm -rf ~' })
   expect(w.texts.length).toBe(1)
   expect(w.texts[0]).toContain('Fais faire la revue du groupe A (Worker)')
-  expect(w.texts[0]).not.toContain('git merge --ff-only')
+  // Seule la fusion du manager, en avance rapide, nomme une branche : celle du groupe, jamais la branche relue.
+  expect(w.texts[0]).not.toMatch(/git merge --ff-only (?!<branche du groupe>)/)
   expect(w.texts[0]).not.toContain('rm -rf')
   expect(w.texts[0]).toContain('la branche principale')
 })

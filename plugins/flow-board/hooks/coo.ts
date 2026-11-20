@@ -5,13 +5,13 @@
 // Module pur. Un texte relu d'une mission (titre, question) n'est jamais une consigne : il entre
 // neutralisé, entre guillemets, et le relevé le dit.
 
-import type { Board, Run, TicketGroup, WaitsUser } from '../types'
+import type { Board, Liveness, Run, TicketGroup, WaitsUser } from '../types'
 import { currentPhase, shownGroupId } from './basics.ts'
 import { SKILLS } from './catalog.ts'
 import { COO_EFFORT, effortSent } from './effort.ts'
 import { asciiJson, consentDay, isGroupId, isOwnBranch, isSafeId, neutralInPrompt, neutralLine } from './closing.ts'
 import { isClosedLink } from './link.ts'
-import { LOT_KEY, OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, AUTO_STOPS, autoPauseLabel, autoPauseWhy, autoResumedAt, autoResumedLabel, blockingQuestions, isAutoPauseStored, isEndedPause, isGroupDone, isRelaunchPause, awaitingArchivePrint, isArchivable, isAwaitingArchive, crossZones, crossedLaunches, holdMapOf, isAutoOn, isStoredPause, nextLaunchFor, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
+import { LOT_KEY, OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, attachedIdsOf, AUTO_STOPS, autoPauseLabel, autoPauseWhy, autoResumedAt, autoResumedLabel, blockingQuestions, isAutoPauseStored, isEndedPause, isGroupDone, isRelaunchPause, stopLabel, awaitingArchivePrint, isArchivable, isAwaitingArchive, crossZones, crossedLaunches, holdMapOf, isAutoOn, isStoredPause, nextLaunchFor, openQuestions, outsideHolds, planHolds, questionPrint, soundWaitsUser, type ForcedPair, type OutsideHold, type QuestionGesture } from './model.ts'
 import { RELAY_PENDING_MS, instructOpenSince, instructState, soundInstructed, type CoordAnswer, type CoordEntry, type CoordGesture } from './coordination.ts'
 import type { PlanWait, ProjectPlan } from './plan-projet.ts'
 import type { Roadmap, RoadmapEntry, RoadmapGone, RoadmapGoneText } from './roadmap.ts'
@@ -43,6 +43,12 @@ export type CooMission = {
   isOpen: boolean
   /** En auto : repris de lui-même, le libellé de la reprise (« repris : questions répondues » ou « repris : discussion relancée »). */
   resumed?: string
+  /**
+   * Sa discussion d'arrière-plan ne tourne plus (le verdict « arrêtée » du signal de vie, `liveness.ts`, relu à la
+   * veille du siège) : le libellé « discussion arrêtée », que la marque montre à la place de « repris : … », ou d'un
+   * manuel sans pause écrite.
+   */
+  stopped?: string
   /** La date de son dernier allumage quand il est une reprise d'elle-même, l'auto allumé ou éteint depuis (`autoResumedAt`) : le résumé du matin la compare à la réouverture de nuit. */
   resumedAt?: number
   done: number
@@ -221,6 +227,11 @@ export type CooStatement = {
    * cartes (par id de carte) ; absente avant sa première relecture. Aucun numéro hors d'une table lue.
    */
   numbers?: CooNumbers
+  /**
+   * Le titre des missions archivées qui gardent un numéro dans la table (par id), pour vérifier un état « rattachée à
+   * M<n> - <titre> » (`attachmentOf`) ; jamais montré au relevé ; absent quand il n'y en a aucune.
+   */
+  archivedTitles?: Record<string, string>
 }
 
 /** Le numéro court d'une mission, « M12 » ; vide quand la table n'en donne pas. */
@@ -330,17 +341,55 @@ export type CooSetAside = { id: string; source: string; text: string; fixEntry?:
 export type CooGlean = { id: string; title: string; reports: string[]; untaken: { id: string; label: string }[]; report?: string; reportValidated?: boolean; reportRound?: string; titleShared?: boolean; reportUnread?: boolean; reportOtherRound?: boolean }
 
 /** La ligne du relevé sur la section « Entrées triées » d'une mission close qui a son propre compte rendu. */
-const sortedEntriesLine = (g: CooGlean): string => {
+const sortedEntriesLine = (g: CooGlean, att: GleanAttached | null, tag: string): string => {
   const before = ' Before sending « gleaned »:'
-  if (g.titleShared)
+  // Feuille de route lisible : le mod a résolu les entrées (`attachedFor`) et la ligne les nomme ; sinon, la règle des deux formes.
+  const still = att ? 'which entries this line lists as attached to this mission stay so' : "which entries are still « rattachée à » this mission's title"
+  const listed = att ? attachedLines(att, tag) : ''
+  if (g.titleShared && !att)
     return `${before} another mission of this project has the same title, so « rattachée à » its title does not tell which one: change no state of the roadmap from its section « Entrées triées », and tell the user, naming the entries still « rattachée à » that title.`
   if (g.reportUnread)
-    return `${before} its own report could not be read: change no state of the roadmap from it, and do not send « gleaned » for this mission yet: the next statement reads it again (what you already showed or added from this mission stays as it is: do not add it again).`
+    return `${before} its own report could not be read: change no state of the roadmap from it, and do not send « gleaned » for this mission yet: the next statement reads it again (what you already showed or added from this mission stays as it is: do not add it again).${listed}`
   if (g.reportOtherRound)
-    return `${before} its own report is validated, but its file does not carry the validated round (rewritten since, or kept without it): change no state of the roadmap from it; tell the user which entries are still « rattachée à » this mission's title.`
+    return `${before} its own report is validated, but its file does not carry the validated round (rewritten since, or kept without it): change no state of the roadmap from it; tell the user ${still}.${listed}`
   if (!g.reportValidated || !g.reportRound)
-    return `${before} its own report is not validated (or was reopened after its validation): change no state of the roadmap from its section « Entrées triées », since a state « faite : » is written only from a validated report; tell the user which entries are still « rattachée à » this mission's title.`
-  return `${before} its own report is validated: also read its section « Entrées triées » (absent or « Rien. »: nothing changes; a file whose first line « <!-- flow-board report round … --> » does not carry the validated round ${neutralQuoted(g.reportRound, 40)} is not the validated version: nothing changes; write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated) and update only the « À reprendre » entries at « rattachée à » this mission's title (each « · » of it written « - »), as section « Les choses à reprendre » of your instructions says (write « faite : … » for an entry said done; propose « écartée : <raison> » or « à décider » and write them only with the user's agreement; every « · » of a title or a reason put in a state written « - »); send « gleaned » only once those states are written or refused by the user, and tell the user which entries stay « rattachée à ».`
+    return `${before} its own report is not validated (or was reopened after its validation): change no state of the roadmap from its section « Entrées triées », since a state « faite : » is written only from a validated report; tell the user ${still}.${listed}`
+  const which = att
+    ? 'update only the « À reprendre » entries attached to this mission that this line lists (never another one)'
+    : `update only the « À reprendre » entries at « rattachée à » this mission's title (each « · » of it written « - »; ${tag ? `an entry « rattachée à M<n> - <its title> » counts only when M<n> is ${tag}, this mission's number` : 'it has no number, so an entry « rattachée à M<n> - <its title> » never counts'}; any other number changes nothing from that entry and is told to the user, since this statement does not show archived missions' numbers)`
+  return `${before} its own report is validated: also read its section « Entrées triées » (absent or « Rien. »: nothing changes; a file whose first line « <!-- flow-board report round … --> » does not carry the validated round ${neutralQuoted(g.reportRound, 40)} is not the validated version: nothing changes; write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated) and ${which}, as section « Les choses à reprendre » of your instructions says (write « faite : … » for an entry said done; propose « écartée : <raison> » or « à décider » and write them only with the user's agreement; every « · » of a title or a reason put in a state written « - »); send « gleaned » only once those states are written or refused by the user, and tell the user which entries stay « rattachée à ».${listed}`
+}
+
+/** Pourquoi le numéro d'une entrée ne se vérifie pas, dit pareil dans le relevé d'une mission close et dans la ligne à part. */
+const unverifiableWhy = (u: { tag: string; why: 'unread' | 'unheld' }): string =>
+  u.why === 'unheld'
+    ? `no mission holds ${u.tag} in the numbers table (a table started again or deleted, or another machine's)`
+    : 'the numbers table is not read (not read yet, not created yet on this machine, or unreadable)'
+
+/** Les entrées rattachées que le mod a résolues pour une mission close : les siennes, les ambiguës, les désaccords. */
+const attachedLines = (att: GleanAttached, tag: string): string => {
+  const ids = (list: readonly string[]) => list.map(id => neutralQuoted(id, 8)).join(', ')
+  const out = [` The « À reprendre » entries attached to this mission, as the dashboard reads them (${tag ? `« rattachée à ${tag} - <its title> » or ` : ''}« rattachée à <its title> »): ${att.mine.length === 0 ? 'none' : ids(att.mine)}.`]
+  if (att.shared.length > 0)
+    out.push(` Entries ${ids(att.shared)} name this mission's title without a number that confirms it, and that title is also another mission's: change no state from these entries (the others listed above still change), and tell the user, naming them.`)
+  for (const a of att.archived)
+    out.push(
+      ` Entry ${neutralQuoted(a.entry, 8)} reads ${neutralQuoted(`rattachée à ${a.tag} - ${a.written}`, 120)}: ${a.tag} is an archived mission of that title, not this one, and the entry stays attached to it: change no state from it, and tell the user, naming the entry and ${a.tag}.`,
+    )
+  for (const u of att.unverifiable)
+    out.push(
+      ` Entry ${neutralQuoted(u.entry, 8)} reads ${neutralQuoted(`rattachée à ${u.tag} - ${u.written}`, 120)}, but ${unverifiableWhy(u)}, so ${u.tag} cannot be checked: change no state from it, and tell the user, naming the entry and ${u.tag}.`,
+    )
+  for (const m of att.mismatch) {
+    const holder =
+      m.current === null
+        ? 'given by the numbers table to a mission no longer in the missions file'
+        : `${neutralQuoted(m.current, 80)}${m.isArchived ? ' (an archived mission, not in this statement)' : ' in this statement'}`
+    out.push(
+      ` Entry ${neutralQuoted(m.entry, 8)} reads ${neutralQuoted(`rattachée à ${m.tag} - ${m.written}`, 120)}, but ${m.tag} is ${holder}: its number and its title name two different missions (a mission renamed since, or archived or deleted with a title another mission now has): change no state from it, and tell the user, naming the entry, ${m.tag} and both titles.`,
+    )
+  }
+  return out.join('')
 }
 
 /** Le fichier de coordination vu du COO. */
@@ -567,12 +616,16 @@ export const cooStatement = (
     morning?: NightMorning
     /** La table des numéros courts, telle que le titulaire l'a relue ou écrite en dernier. */
     numbers?: CooNumbers
+    /** Le verdict du signal de vie de chaque mission, relu à la veille du siège (`livenessOf`) ; absent : « inconnu » partout. */
+    liveness?: (runId: string) => Liveness
   },
 ): CooStatement => {
   const runs = board.runs.filter(r => r.archivedAt === undefined).sort((x, y) => RANK[x.status] - RANK[y.status] || y.updatedAt - x.updatedAt)
   const missions = runs.map(run => {
     const isAuto = isAutoOn(run)
-    const resumed = autoResumedLabel(run)
+    // « Arrêtée » seulement : « vivante » et « inconnu » ne changent rien à la ligne.
+    const isStopped = ctx.liveness?.(run.id) === 'stopped'
+    const resumed = isStopped ? undefined : autoResumedLabel(run)
     const resumedAt = autoResumedAt(run)
     return {
       id: run.id,
@@ -585,6 +638,7 @@ export const cooStatement = (
       // « repris : … » seulement tant qu'aucune question nouvelle n'attend, comme le bandeau.
       ...(resumed !== undefined && openQuestions(run).length === 0 ? { resumed } : {}),
       ...(resumedAt !== undefined ? { resumedAt } : {}),
+      ...(isStopped ? { stopped: stopLabel(AUTO_STOPS.ended) } : {}),
       done: run.tickets.filter(t => t.status === 'done').length,
       total: run.tickets.length,
       workers: workersOf(run, ctx.reported?.(run.id) ?? []),
@@ -681,7 +735,7 @@ export const cooStatement = (
   })
   const delivered = awaiting.length > 0 ? { delivered: { list: awaiting, print: awaitingArchivePrint(board.runs, scope) } } : {}
   const launch = { ...delivered, ...(cards.length > 0 ? { cards } : {}), ...(ctx.cardsUnread ? { cardsUnread: ctx.cardsUnread } : {}), ...(ctx.askMatt !== undefined ? { askMatt: ctx.askMatt } : {}), ...(ctx.plan ? { plan: ctx.plan } : {}), ...(ctx.wave ? { wave: ctx.wave } : {}), ...(ctx.archive !== undefined ? { archive: ctx.archive } : {}) }
-  return { ...extra, ...launch, at: ctx.now, missions, waits, relays, ...(instructs.length > 0 ? { instructs } : {}), ...(ctx.reports && ctx.reports.length > 0 ? { reports: ctx.reports } : {}), ...(ctx.delivery ? { delivery: ctx.delivery } : {}), ...(ctx.decisions ? { decisions: ctx.decisions } : {}), ...(ctx.retroPicks && ctx.retroPicks.length > 0 ? { retroPicks: ctx.retroPicks } : {}), waiting, ...(waitingHeld.length > 0 ? { waitingHeld } : {}), holds, crossed: crossedLaunches(board, ctx.forces), ...(ctx.outside && ctx.outside.length > 0 ? { outside: ctx.outside } : {}), effort: ctx.effort ?? null, hasBrief: ctx.hasBrief ?? null, ...(ctx.roadmap ? { roadmap: ctx.roadmap } : {}), ...(ctx.coordination ? { coordination: ctx.coordination } : {}), ...(ctx.night ? { night: ctx.night } : {}), ...(ctx.morning ? { morning: ctx.morning } : {}), ...(ctx.numbers ? { numbers: ctx.numbers } : {}) }
+  return { ...extra, ...launch, at: ctx.now, missions, waits, relays, ...(instructs.length > 0 ? { instructs } : {}), ...(ctx.reports && ctx.reports.length > 0 ? { reports: ctx.reports } : {}), ...(ctx.delivery ? { delivery: ctx.delivery } : {}), ...(ctx.decisions ? { decisions: ctx.decisions } : {}), ...(ctx.retroPicks && ctx.retroPicks.length > 0 ? { retroPicks: ctx.retroPicks } : {}), waiting, ...(waitingHeld.length > 0 ? { waitingHeld } : {}), holds, crossed: crossedLaunches(board, ctx.forces), ...(ctx.outside && ctx.outside.length > 0 ? { outside: ctx.outside } : {}), effort: ctx.effort ?? null, hasBrief: ctx.hasBrief ?? null, ...(ctx.roadmap ? { roadmap: ctx.roadmap } : {}), ...(ctx.coordination ? { coordination: ctx.coordination } : {}), ...(ctx.night ? { night: ctx.night } : {}), ...(ctx.morning ? { morning: ctx.morning } : {}), ...(ctx.numbers ? { numbers: ctx.numbers } : {}), ...archivedTitlesOf(board, ctx.numbers) }
 }
 
 /**
@@ -689,7 +743,7 @@ export const cooStatement = (
  * mis en pause par le mod (pas une coupure du COO, qui l'a voulue ; `isEnded` pour la pause « discussion fermée »), ses questions, ses groupes ouverts, les
  * groupes que sa vague propose sans qu'ils partent (`waveDue`), et ses retenues, comptées comme dans le relevé.
  */
-export const nightViewsOf = (board: Board, ctx: { waveDue: (runId: string) => readonly string[]; forces?: (runId: string) => ForcedPair[]; plans?: (runId: string) => PlanWait[] }): NightMissionView[] =>
+export const nightViewsOf = (board: Board, ctx: { waveDue: (runId: string) => readonly string[]; forces?: (runId: string) => ForcedPair[]; plans?: (runId: string) => PlanWait[]; liveness?: (runId: string) => Liveness }): NightMissionView[] =>
   board.runs
     .filter(run => run.archivedAt === undefined && run.status !== 'done')
     .map(run => {
@@ -704,6 +758,7 @@ export const nightViewsOf = (board: Board, ctx: { waveDue: (runId: string) => re
         isEnded: isEndedPause(run),
         isRelaunchPause: isRelaunchPause(run),
         heldByUser: (run.groups ?? []).filter(g => blockingQuestions(run, { kind: 'group', id: g.id }).some(q => !isModQuestion(q.id))).map(g => g.id),
+        ...(ctx.liveness ? { liveness: ctx.liveness(run.id) } : {}),
         hasOpenGroups: (run.groups ?? []).some(g => !isGroupDone(run, g)),
         questions: openQuestions(run).map(q => ({ id: q.id, ...(q.blocks?.kind === 'group' ? { group: q.blocks.id } : {}) })),
         waveDue: ctx.waveDue(run.id),
@@ -808,7 +863,8 @@ export const failedPlaceWrite = (read: 'repo' | 'poste' | 'unread' | undefined, 
 /**
  * Ce que la vue et le relevé montrent de la feuille de route : jalons en cours, prochaines étapes, idées et choses à
  * reprendre ouvertes (`pending`, que lisent aussi le relevé et le point d'ouverture du COO) ; à part, les choses à
- * reprendre « rattachée à <mission> » (`attached`), que seule la vue montre, après les ouvertes.
+ * reprendre « rattachée à <mission> » (`attached`), que la vue montre après les ouvertes et que le relevé d'une mission
+ * close résout (`attachedFor`).
  */
 export const roadmapNow = (r: CooRoadmap) => ({
   milestones: entriesOf(r.read, 'Jalons', ['en cours']),
@@ -817,6 +873,152 @@ export const roadmapNow = (r: CooRoadmap) => ({
   pending: entriesOf(r.read, 'À reprendre', ['à décider', 'plus tard']),
   attached: entriesOf(r.read, 'À reprendre', ['rattachée à ']),
 })
+
+const ATTACHED_PREFIX = 'rattachée à '
+
+/**
+ * Un titre de mission tel que le Claude du COO l'a reçu puis recopié dans un état « rattachée à » : la forme que le
+ * relevé montre (`neutralQuoted`, coupée à 80 signes), chaque « · » écrit « - » (séparateur des champs d'une ligne),
+ * les blancs resserrés. Les deux côtés d'une comparaison passent par elle : titre de mission et titre écrit.
+ */
+const roadmapTitleKey = (title: string): string => {
+  const shown = neutralInPrompt(title)
+  const cut = shown.length > TITLE_SHOWN_MAX ? `${shown.slice(0, TITLE_SHOWN_MAX - 1)}…` : shown
+  return cut.replace(/·/g, '-').replace(/\s+/g, ' ').trim()
+}
+
+/** La longueur à laquelle le relevé coupe le titre d'une mission (`neutralQuoted(m.title, 80)`). */
+const TITLE_SHOWN_MAX = 80
+
+/** Deux titres que le COO ne distingue pas, au sens de `roadmapTitleKey`. */
+export const sameRoadmapTitle = (a: string, b: string): boolean => roadmapTitleKey(a) === roadmapTitleKey(b)
+
+/**
+ * La mission que désigne un état « rattachée à … » : `mission` (par son numéro court quand `byNumber`, sinon par
+ * son titre), `shared` (un titre sans numéro qui le confirme, porté par plusieurs missions), `mismatch` (la table des
+ * numéros donne M<n> à une autre mission que celle du titre écrit : `id` est celle de M<n>, `current` son titre, null
+ * quand elle n'est plus dans le fichier des missions, `isArchived` quand elle est archivée), `archived` (M<n> tenu par
+ * une archivée de ce titre), `unverifiable` (un numéro qui ne se vérifie pas : `why` « unread », table illisible ou
+ * absente ; « unheld », M<n> que la table ne donne à personne) ou `unknown` (aucune mission de ce titre) ; null pour
+ * un autre état.
+ */
+export type Attachment =
+  | { kind: 'mission'; id: string; byNumber: boolean }
+  | { kind: 'archived'; id: string; tag: string; written: string }
+  | { kind: 'shared'; title: string }
+  | { kind: 'mismatch'; id: string; tag: string; written: string; current: string | null; isArchived?: true }
+  | { kind: 'unverifiable'; tag: string; written: string; why: 'unread' | 'unheld' }
+  | { kind: 'unknown'; title: string }
+
+/**
+ * Lit un état « rattachée à M<n> - <titre> » ou « rattachée à <titre> » (forme choisie par Mathis le
+ * 17/11/2026 : « - » et non « · », séparateur des champs d'une ligne ; numéro tenu par une mission absente du relevé,
+ * ou par aucune, tranché le 18/11/2026), dans cet ordre : (1) la table des numéros donne M<n> à une mission qui porte ce titre : elle
+ * (`archived` quand elle est archivée, jamais une autre) ; (2) sinon le texte entier est le titre d'une mission (un
+ * titre qui commence lui-même par « M<n> - ») : par le titre ; (3) sinon, table illisible (`numbers` null) :
+ * `unverifiable`, rien ne change ; (4) sinon la table donne M<n> à une mission, du relevé ou non (archivée :
+ * `archived`, ou absente du fichier des missions) : désaccord, rien ne change ; (5) sinon (M<n> à personne : table
+ * refaite, effacée ou d'un autre poste) : `unverifiable` (`why` « unheld »), rien ne change. Une entrée sans numéro se lit
+ * toujours par son titre. `missions` : celles que le titre peut désigner (le relevé). Invariant : un numéro et un titre qui
+ * désignent deux missions ne rattachent jamais l'entrée. Lecture seule : rien n'est réécrit.
+ */
+export const attachmentOf = (
+  status: string,
+  missions: readonly { id: string; title: string }[],
+  numbers: Readonly<Record<string, number>> | null,
+  archived: Readonly<Record<string, string>> = {},
+): Attachment | null => {
+  if (!status.startsWith(ATTACHED_PREFIX)) return null
+  const text = status.slice(ATTACHED_PREFIX.length).trim()
+  const byTitle = (title: string): Attachment => {
+    const hits = missions.filter(m => sameRoadmapTitle(m.title, title))
+    if (hits.length === 0) return { kind: 'unknown', title }
+    return hits.length === 1 ? { kind: 'mission', id: hits[0]!.id, byNumber: false } : { kind: 'shared', title }
+  }
+  // Un numéro court s'écrit sans zéro en tête, comme le relevé le montre.
+  const m = /^M([1-9]\d{0,5}) - (.+)$/.exec(text)
+  if (!m) return byTitle(text)
+  const tag = `M${m[1]}`
+  const written = m[2]!.trim()
+  const holder = numbers === null ? undefined : Object.keys(numbers).find(id => numbers[id] === Number(m[1]))
+  const shown = holder === undefined ? undefined : missions.find(x => x.id === holder)
+  const current = holder === undefined ? null : (shown?.title ?? archived[holder] ?? null)
+  if (holder !== undefined && current !== null && sameRoadmapTitle(current, written))
+    return shown ? { kind: 'mission', id: holder, byNumber: true } : { kind: 'archived', id: holder, tag, written }
+  const whole = byTitle(text)
+  if (whole.kind !== 'unknown') return whole
+  if (numbers === null) return { kind: 'unverifiable', tag, written, why: 'unread' }
+  if (holder !== undefined) return { kind: 'mismatch', id: holder, tag, written, current, ...(!shown && current !== null ? { isArchived: true as const } : {}) }
+  // Un numéro que la table ne donne à personne (table refaite, effacée, ou d'un autre poste) ne se vérifie pas.
+  return { kind: 'unverifiable', tag, written, why: 'unheld' }
+}
+
+/** La table des numéros telle que `attachmentOf` la lit : null quand elle ne se lit pas (pas encore relue, illisible, mal formée). */
+const numbersRead = (n: CooNumbers | undefined): Readonly<Record<string, number>> | null => (n?.state === 'read' ? n.runs : null)
+
+/**
+ * Les entrées « À reprendre » que le relevé nomme à part, quelle que soit la mission close : celles rattachées, par leur
+ * numéro, à une mission archivée, et celles dont le numéro ne se vérifie pas (`unverifiable`). Une mission
+ * archivée encore à relever (`toGlean`) n'en fait pas partie : son relevé de clôture lui donne ses entrées.
+ */
+const attachedAside = (
+  s: Pick<CooStatement, 'roadmap' | 'missions' | 'numbers' | 'archivedTitles' | 'toGlean'>,
+): { archived: { entry: string; tag: string; written: string }[]; unverifiable: { entry: string; tag: string; written: string; why: 'unread' | 'unheld' }[] } => {
+  const out = { archived: [] as { entry: string; tag: string; written: string }[], unverifiable: [] as { entry: string; tag: string; written: string; why: 'unread' | 'unheld' }[] }
+  const r = s.roadmap
+  if (!r || r.read === null || r.read === 'unread' || !r.read.ok) return out
+  const gleaning = new Set((s.toGlean ?? []).map(g => g.id))
+  const gleanTitles = (s.toGlean ?? []).filter(g => g.report).map(g => g.title)
+  for (const e of roadmapNow(r).attached) {
+    const a = attachmentOf(e.status, s.missions, numbersRead(s.numbers), s.archivedTitles)
+    if (a?.kind === 'archived' && !gleaning.has(a.id)) out.archived.push({ entry: e.id, tag: a.tag, written: a.written })
+    // Celle qu'une mission close du titre écrit relève est déjà dite par son relevé.
+    else if (a?.kind === 'unverifiable' && !gleanTitles.some(t => sameRoadmapTitle(t, a.written))) out.unverifiable.push({ entry: e.id, tag: a.tag, written: a.written, why: a.why })
+  }
+  return out
+}
+
+/** Le titre des missions archivées qui gardent un numéro dans la table (`archivedTitles` du relevé). */
+const archivedTitlesOf = (board: Board, numbers: CooNumbers | undefined): { archivedTitles?: Record<string, string> } => {
+  const kept = board.runs.filter(r => r.archivedAt !== undefined && numbers?.runs[r.id] !== undefined)
+  return kept.length === 0 ? {} : { archivedTitles: Object.fromEntries(kept.map(r => [r.id, r.title])) }
+}
+
+/** Les entrées « rattachée à » qu'un relevé d'une mission close lui donne (`mine`), tient pour ambiguës (`shared`) ou en désaccord (`mismatch`). */
+export type GleanAttached = {
+  mine: string[]
+  shared: string[]
+  mismatch: { entry: string; tag: string; written: string; current: string | null; isArchived?: true }[]
+  archived: { entry: string; tag: string; written: string }[]
+  unverifiable: { entry: string; tag: string; written: string; why: 'unread' | 'unheld' }[]
+}
+
+/**
+ * Les entrées « À reprendre » rattachées à une mission close, d'après la feuille de route et la table des numéros du
+ * relevé ; null quand la feuille de route ne se lit pas. Un titre partagé (`titleShared`, qui compte aussi les missions
+ * archivées) ne bloque que les entrées lues par le titre ; un désaccord touche la mission quand la table lui donne M<n>
+ * ou que le titre écrit est le sien ; une entrée rattachée par son numéro à une archivée du même titre, ou dont le
+ * numéro ne se vérifie pas (table illisible ou absente, ou M<n> à personne), se dit à la mission dont elle écrit le
+ * titre, sans jamais lui revenir ; hors d'un relevé de clôture qui les dit ainsi, la ligne à part (`attachedAside`) les
+ * nomme.
+ */
+const attachedFor = (s: Pick<CooStatement, 'roadmap' | 'missions' | 'numbers' | 'archivedTitles'>, g: Pick<CooGlean, 'id' | 'title' | 'titleShared'>): GleanAttached | null => {
+  const r = s.roadmap
+  if (!r || r.read === null || r.read === 'unread' || !r.read.ok) return null
+  const missions = s.missions.some(m => m.id === g.id) ? s.missions : [...s.missions, { id: g.id, title: g.title }]
+  const out: GleanAttached = { mine: [], shared: [], mismatch: [], archived: [], unverifiable: [] }
+  for (const e of roadmapNow(r).attached) {
+    const a = attachmentOf(e.status, missions, numbersRead(s.numbers), s.archivedTitles)
+    if (!a) continue
+    if (a.kind === 'mission' && a.id === g.id) (a.byNumber || !g.titleShared ? out.mine : out.shared).push(e.id)
+    else if (a.kind === 'shared' && sameRoadmapTitle(a.title, g.title)) out.shared.push(e.id)
+    else if (a.kind === 'archived' && sameRoadmapTitle(a.written, g.title)) out.archived.push({ entry: e.id, tag: a.tag, written: a.written })
+    else if (a.kind === 'unverifiable' && sameRoadmapTitle(a.written, g.title)) out.unverifiable.push({ entry: e.id, tag: a.tag, written: a.written, why: a.why })
+    else if (a.kind === 'mismatch' && (a.id === g.id || sameRoadmapTitle(a.written, g.title)))
+      out.mismatch.push({ entry: e.id, tag: a.tag, written: a.written, current: a.current, ...(a.isArchived ? { isArchived: true as const } : {}) })
+  }
+  return out
+}
 
 const GESTURE_EN: Record<QuestionGesture['kind'], string> = { spend: 'a spending to allow or refuse', external: 'an external action to allow or refuse', flaw: 'a security finding to leave unfixed or have fixed' }
 
@@ -870,7 +1072,7 @@ export const statementText = (s: CooStatement): string => {
     const phase = SKILLS[m.phase]?.label ?? 'unknown phase'
     const workers = m.workers.length === 0 ? '' : `, workers: ${m.workers.map(w => `group ${neutralQuoted(w.group, 12)} ${w.done}/${w.total} (${WORKER_EN[w.state]})`).join(', ')}`
     const waiting = m.waiting > 0 ? `, waiting for the user: ${m.waiting} blocking question(s)` : ''
-    lines.push(`- ${runTag(s, m.id) ? `${runTag(s, m.id)} ` : ''}${neutralQuoted(m.title, 80)}: ${STATUS_EN[m.status]}, phase ${phase}, mode ${m.mode}${m.pause !== undefined ? ` (auto paused by the dashboard: ${neutralQuoted(m.pause, 80)})` : ''}, tickets ${m.done}/${m.total} done${workers}${waiting}; mission id ${neutralQuoted(m.id, 40)}.`)
+    lines.push(`- ${runTag(s, m.id) ? `${runTag(s, m.id)} ` : ''}${neutralQuoted(m.title, 80)}: ${STATUS_EN[m.status]}, phase ${phase}, mode ${m.mode}${m.pause !== undefined ? ` (auto paused by the dashboard: ${neutralQuoted(m.pause, 80)})` : ''}${m.stopped !== undefined ? ', its discussion no longer runs (its background session has no process)' : ''}, tickets ${m.done}/${m.total} done${workers}${waiting}; mission id ${neutralQuoted(m.id, 40)}.`)
   }
   lines.push(`Waiting for the user, blocking questions of missions in auto (${s.waits.length}):`)
   if (s.waits.length === 0) lines.push('- none')
@@ -952,6 +1154,18 @@ export const statementText = (s: CooStatement): string => {
   lines.push(`BRIEF.md at the project root: ${s.hasBrief === null ? 'unknown' : s.hasBrief ? 'present' : 'missing (offer to write it with the user, never invent a goal)'}.`)
   lines.push(archiveLine(s.archive))
   if (s.roadmap) lines.push(...roadmapLines(s.roadmap))
+  // Une entrée rattachée par son numéro à une mission archivée, ou dont le numéro ne se vérifie pas, et qu'aucun relevé de
+  // clôture de ce message ne dit : elle se dit ici.
+  const aside = attachedAside(s)
+  const toArchived = aside.archived
+  if (aside.unverifiable.length > 0)
+    lines.push(
+      `- Set aside, attached by a number that cannot be checked (${aside.unverifiable.length}): ${aside.unverifiable.map(u => `${neutralQuoted(u.entry, 8)} (${neutralQuoted(`rattachée à ${u.tag} - ${u.written}`, 120)}, ${unverifiableWhy(u)})`).join('; ')}. No state of theirs changes from any mission's report: tell the user once; their fate is the user's (« Plus tard » or « Écarter » in the Coordination view).`,
+    )
+  if (toArchived.length > 0)
+    lines.push(
+      `- Set aside, attached to an archived mission (${toArchived.length}): ${toArchived.map(a => `${neutralQuoted(a.entry, 8)} (${neutralQuoted(`rattachée à ${a.tag} - ${a.written}`, 120)})`).join('; ')}. They stay attached to it: change no state from another mission's report; their fate is the user's (« Plus tard » or « Écarter » in the Coordination view).`,
+    )
   if (s.coordination) lines.push(coordinationLine(s.coordination))
   lines.push(...setAsideLines(s))
   if (s.waitlist) lines.push(...waitlistLines(s.waitlist))
@@ -1059,7 +1273,7 @@ const nightBlockText = (b: NightBlock, title: (id: string) => string, watch: str
     case 'relaunch':
       return `${group} came back from its worker with open tickets (question ${neutralQuoted(b.question ?? '', 40)}); night gesture: relaunch (once per group and per watch)`
     case 'reopen':
-      return `auto paused by the dashboard with open groups, the mission open in no discussion or its discussion ended; night gesture: reopen, ${reopenText(b.mission, watch, reopen)}`
+      return `${b.isAuto ? 'auto on with open groups, but its background discussion no longer runs (its session has no process)' : 'auto paused by the dashboard with open groups, the mission open in no discussion or its discussion ended'}; night gesture: reopen, ${reopenText(b.mission, watch, reopen)}`
     case 'force':
       return `${group} held by ${(b.awaited ?? []).map(a => `group ${neutralQuoted(a.group, 12)} of mission ${title(a.mission)}`).join(' and ')}, each open in no discussion, whose worker ended more than 30 minutes ago; night gesture: force (lifts these holds for one launch)`
   }
@@ -1419,8 +1633,9 @@ const setAsideLines = (s: CooStatement): string[] => {
       `A set-aside box, or the kept copy of one that could not be read (a cut write, or edited by hand): ${neutralQuoted(path, 300)}. Its declarations do not reach you by themselves: read it with the user, copy into « À reprendre » what is not there yet, and never delete it (a key of the dashboard's storage, not a file, is told to the user only).`,
     )
   for (const g of s.toGlean ?? []) {
+    const sorted = g.report ? sortedEntriesLine(g, attachedFor(s, g), runTag(s, g.id)) : ''
     lines.push(
-      `Closed mission ${neutralQuoted(g.title, 80)} (mission id ${neutralQuoted(g.id, 40)}) is not gleaned yet: read the « Pistes » sections of its workers' reports${g.reports.length > 0 ? ` (${g.reports.map(p => neutralQuoted(p, 300)).join(', ')})` : ' (none kept)'}${g.report ? `, the sections « Trouvé » and « Bloqué par moi » of its own report (${neutralQuoted(g.report, 300)})` : ''}${g.untaken.length > 0 ? ` and its retro pistes not chosen (${g.untaken.map(u => `${neutralQuoted(u.id, 12)} ${neutralQuoted(u.label, 120)}`).join('; ')})` : ''}; glean it yourself, without showing anything first: add what was not declared yet to « À reprendre » as new « à décider » entries with their source; then, unless what follows says to wait, send {"coordinate": {"gleaned": ["<mission id>"]}} and tell the user in one line what you added (nothing to add: send it all the same and say so in one line).${g.report ? sortedEntriesLine(g) : ''}`,
+      `Closed mission ${neutralQuoted(g.title, 80)} (mission id ${neutralQuoted(g.id, 40)}) is not gleaned yet: read the « Pistes » sections of its workers' reports${g.reports.length > 0 ? ` (${g.reports.map(p => neutralQuoted(p, 300)).join(', ')})` : ' (none kept)'}${g.report ? `, the sections « Trouvé » and « Bloqué par moi » of its own report (${neutralQuoted(g.report, 300)})` : ''}${g.untaken.length > 0 ? ` and its retro pistes not chosen (${g.untaken.map(u => `${neutralQuoted(u.id, 12)} ${neutralQuoted(u.label, 120)}`).join('; ')})` : ''}; glean it yourself, without showing anything first: add what was not declared yet to « À reprendre » as new « à décider » entries with their source; then, unless what follows says to wait, send {"coordinate": {"gleaned": ["<mission id>"]}} and tell the user in one line what you added (nothing to add: send it all the same and say so in one line).${sorted}`,
     )
   }
   if (s.existingGleaned === false)

@@ -30,7 +30,7 @@ const reportPathIn = (text: string): string | undefined => text.match(/~\/\.clau
 
 const SESSION_LINE = 'se reprend par claude --resume <sessionId>, lu sur une ligne « session : » du script qui le donne (« sessionId <id> », avant ou après l’arrêt) ; aucune ne le donne (« sessionId ? », pas de sessionId) : dis-le tel quel, sans le chercher par claude agents --json'
 /** Le plafond du texte court d'une session du CLI, le même que `SHORT_MAX` de fermeture-courte.test.ts. */
-const SHORT_MAX = 2_200
+const SHORT_MAX = 2_600
 const OLD_RESUME = 'le champ sessionId de claude agents --json, à relever avant l’arrêt'
 
 test('avec le script : le sessionId se lit sur la ligne « session : », et le compte rendu reste au relais, au préfixe de la mission', () => {

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Affiche une plage d'un fichier, à partir de la première ligne qui contient un motif ; ou chaque
-occurrence du motif, avec un extrait borné ; ou une déclaration de premier niveau entière.
+occurrence du motif, avec un extrait borné ; ou une déclaration de premier niveau entière ; ou chaque
+emploi d'un nom, avec la déclaration qui l'englobe.
 
     python3 scripts/show.py <fichier> <motif> [+N]
     python3 scripts/show.py --liste <fichier> <motif>
     python3 scripts/show.py --decl <fichier> <nom>
+    python3 scripts/show.py --appelants <fichier> <nom>
 
 Le motif est un texte littéral (ni expression régulière, ni joker) : la plage commence à la première
 ligne qui le contient et compte N lignes de plus (30 sans `+N`), chacune précédée de son numéro et
@@ -46,6 +48,18 @@ nom absent sont pris parmi ses `def` et `class`. Les fichiers JavaScript et Type
 `.py` ; une autre extension est refusée (code 2), le message renvoyant à la lecture d'une plage par
 motif. Une marque d'ordre des octets en tête d'un `.py` ne l'empêche pas de se lire en Python, et un
 octet nul le fait lire par lignes, comme une erreur de syntaxe.
+
+`--appelants` donne chaque emploi du nom dans ce fichier, hors de sa propre déclaration de premier niveau
+(quand il en a une ici) : une ligne par ligne qui l'emploie, son numéro, une tabulation, « dans <nom> (ligne
+<n>) », la déclaration de premier niveau qui l'englobe et la ligne de son mot-clé (« au premier niveau »
+hors de toute déclaration : un import, par exemple), une tabulation, puis la ligne elle-même. Pour savoir
+qui appelle une fonction, et depuis quelle déclaration, sans boucle écrite à la main. Les déclarations
+sont celles de `--decl`, et un emploi est le nom entier (ni `launchCards` pour `launchCard`) : dans un
+fichier JavaScript ou TypeScript, lu dans le masque de `deplace.py` (ni commentaire, ni chaîne, ni texte
+d'un gabarit, mais ses `${…}`), sinon (un littéral laissé ouvert) dans les lignes qui ne sont pas de
+commentaire ; dans un fichier `.py`, un nom (`Name`), un attribut (`.nom`, à la ligne qui le porte) ou un nom importé (ou son alias) de l'arbre syntaxique, sinon
+(erreur de syntaxe) dans les lignes qui ne commencent pas par `#`. Seul ce fichier est lu : les appelants
+d'un autre module se cherchent dans ce module. Un nom sans emploi le dit, en code 0.
 Sans dépendance hors de la bibliothèque standard.
 """
 
@@ -56,13 +70,14 @@ import sys
 from pathlib import Path
 
 # `deplace.py`, à côté de ce script, donne l'expression d'une déclaration de premier niveau et son
-# lecteur : importés par `--decl` d'un fichier JavaScript ou TypeScript seulement (`declarations`), pour que la plage, `--liste` et les
+# lecteur : importés par `--decl` et `--appelants` d'un fichier JavaScript ou TypeScript seulement (`declarations`,
+# `uses`), pour que la plage, `--liste` et les
 # messages que `patch.py` importe d'ici marchent même quand `deplace.py` ne se charge pas ; chemin ajouté
 # à la main (un lancement par `python3 -I` n'ajoute pas le dossier du script).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 DEFAULT_AFTER = 30
-# Les formes de la commande, lues dans la docstring, dans son ordre : la plage, `--liste`, puis `--decl`.
+# Les formes de la commande, lues dans la docstring, dans son ordre : la plage, `--liste`, `--decl`, puis `--appelants`.
 USAGE = [line.strip() for line in __doc__.splitlines() if line.strip().startswith("python3 scripts/")]
 # Les caractères gardés de part et d'autre du motif dans un extrait de `--liste`.
 AROUND = 100
@@ -76,7 +91,7 @@ STATEMENT = re.compile(r"[A-Za-z_$@]")
 # Le groupe de `DECL` (deplace.py) qui porte le nom déclaré.
 DECL_NAME = 4
 COMMENT = ("//", "/*", "*")
-# Les extensions que lit `--decl` : JavaScript et TypeScript par le lecteur de deplace.py, Python par `ast`.
+# Les extensions que lisent `--decl` et `--appelants` : JavaScript et TypeScript par le lecteur de deplace.py, Python par `ast`.
 JS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
 PY_SUFFIXES = {".py"}
 # La marque d'ordre des octets qu'un éditeur Windows met en tête d'un fichier UTF-8.
@@ -333,6 +348,81 @@ def decl(argv):
     return 0
 
 
+def uses(path, lines, name):
+    """Les numéros (depuis 1) des lignes qui emploient `name` en entier, hors commentaires et chaînes
+    (voir la docstring : masque de deplace.py ou arbre syntaxique, sinon lecture par lignes)."""
+    word = re.compile(rf"(?<![\w$]){re.escape(name)}(?![\w$])")
+    if Path(path).suffix.lower() in PY_SUFFIXES:
+        try:
+            tree = ast.parse("\n".join(lines).removeprefix(BOM) + "\n")
+        except (SyntaxError, ValueError):
+            return [n for n, line in enumerate(lines, 1) if not line.lstrip().startswith("#") and word.search(line)]
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == name:
+                found.add(node.lineno)
+            elif isinstance(node, ast.Attribute) and node.attr == name:
+                # Le nom d'un attribut est à la fin de l'expression, peut-être sur une ligne de suite.
+                found.add(node.end_lineno)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                # `from x import nom`, `import nom`, `import x as nom` : le nom lié, son alias ; `import a.b` ne lie
+                # que `a`, `from x import a.b` n'existe pas.
+                for alias in node.names:
+                    bound = alias.asname or (alias.name if isinstance(node, ast.ImportFrom) else alias.name.split(".")[0])
+                    if bound == name:
+                        # La ligne de l'alias (Python 3.10 et plus), sinon celle de l'import.
+                        found.add(getattr(alias, "lineno", node.lineno))
+        return sorted(found)
+    from deplace import Module
+
+    module = Module(Path(path), "\n".join(lines) + "\n")
+    if module.unclosed == 0:
+        return [k + 1 for k in range(len(lines)) if word.search(module.mlines[k])]
+    return [n for n, line in enumerate(lines, 1) if not line.lstrip().startswith(COMMENT) and word.search(line)]
+
+
+def callers(path, name):
+    """Chaque emploi de `name` hors de sa propre déclaration de premier niveau : [(ligne, déclaration
+    englobante ou None, ligne de son mot-clé ou None, texte de la ligne)]."""
+    lines = read_lines(path)
+    if Path(path).suffix.lower() in PY_SUFFIXES:
+        decls, _ = py_declarations(lines)
+    else:
+        decls = declarations(path, lines)
+    own = [(first, last) for decl_name, first, _, last, _ in decls if decl_name == name]
+    found = []
+    for n in uses(path, lines, name):
+        if any(first <= n <= last for first, last in own):
+            continue
+        around = next(((d[0], d[2]) for d in decls if d[1] <= n <= d[3]), (None, None))
+        found.append((n, around[0], around[1], lines[n - 1]))
+    return found
+
+
+def appelants(argv):
+    """`--appelants <fichier> <nom>` : chaque emploi du nom et la déclaration qui l'englobe."""
+    if len(argv) != 2 or argv[1] == "":
+        print(USAGE[3], file=sys.stderr)
+        return 2
+    path, name = argv
+    if not Path(path).is_file():
+        print(f"ÉCHEC : fichier introuvable : {path}", file=sys.stderr)
+        return 1
+    if Path(path).suffix.lower() not in JS_SUFFIXES | PY_SUFFIXES:
+        print(f"ÉCHEC : --appelants lit les fichiers JavaScript, TypeScript et Python "
+              f"({', '.join(sorted(JS_SUFFIXES) + sorted(PY_SUFFIXES))}), pas « {Path(path).suffix or 'sans extension'} » : chercher par "
+              f'python3 scripts/show.py --liste {path} "<motif>"', file=sys.stderr)
+        return 2
+    found = callers(path, name)
+    if not found:
+        print(f"aucun emploi de « {name} » dans {path} hors de sa propre déclaration")
+        return 0
+    for n, around, at, line in found:
+        where = f"dans {around} (ligne {at})" if around is not None else "au premier niveau"
+        print(f"{n}\t{where}\t{line}")
+    return 0
+
+
 def liste(argv):
     """`--liste <fichier> <motif>` : une ligne par occurrence, son numéro et son extrait."""
     if len(argv) != 2 or argv[1] == "":
@@ -357,9 +447,15 @@ def main(argv):
         return liste(argv[1:])
     if argv[:1] == ["--decl"]:
         return decl(argv[1:])
+    if argv[:1] == ["--appelants"]:
+        return appelants(argv[1:])
     after = DEFAULT_AFTER
     if len(argv) == 3 and argv[2].startswith("+") and argv[2][1:].isdigit() and int(argv[2][1:]) > 0:
         after = int(argv[2][1:])
+    elif len(argv) == 3 and argv[2].startswith("-") and argv[2][1:].isdigit() and int(argv[2][1:]) > 0:
+        print(f"ÉCHEC : « {argv[2]} » refusé : seul +N est accepté (les N lignes qui suivent le motif, +{argv[2][1:]} ici)", file=sys.stderr)
+        print(USAGE[0], file=sys.stderr)
+        return 2
     elif len(argv) != 2:
         print(USAGE[0], file=sys.stderr)
         return 2

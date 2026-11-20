@@ -3,6 +3,7 @@
 
     python3 scripts/journal-mission.py <titre ou id de la mission>
     python3 scripts/journal-mission.py --modeles <titre ou id de la mission>
+    python3 scripts/journal-mission.py --relances <titre ou id de la mission>
 
 Pour trouver pourquoi une mission s'est détachée de sa discussion, il fallait croiser à la main le journal
 de la mission (le fichier des missions de flow-board) et les fins et reprises des sessions, lues dans leurs
@@ -31,8 +32,9 @@ transcripts. Le script le fait, en lecture seule :
    dans la discussion <id> », jamais comme une reprise ; un id hors forme s'y cite sans entrer dans un
    chemin, et la discussion où elle continue n'est pas lue). Un processus tué n'écrit pas de fin : sa
    reprise ne se voit alors pas ;
-4. il sort une ligne par événement, triée par date (UTC) : les lignes du journal de la mission et,
-   entrelacés, les événements de ses discussions, chacun avec le début de l'id de sa discussion ;
+4. il sort une ligne par événement, triée par date : les lignes du journal de la mission et, entrelacés,
+   les événements de ses discussions, chacun avec le début de l'id de sa discussion ; les dates sont en
+   UTC, et la dernière ligne de l'en-tête (juste avant la ligne vide, avec chaque option) le dit ;
 5. un journal au plafond (`LOG_CAP` entrées ou plus, lisibles ou non : le mod n'en garde que les plus
    récentes) le dit en tête, après la ligne « Mission … » : la date de la plus ancienne entrée gardée (ce
    qui précède est perdu ; avec des entrées sans date lisible, celle de la plus ancienne entrée datée, et
@@ -50,6 +52,17 @@ réponse) ; et, à leur place, les bascules : le modèle annoncé à la session 
 commandes `/model`, `/effort` et `/reload-plugins` tapées (leurs arguments seulement quand ils sont un mot
 court de lettres, chiffres, `.`, `_` et `-` ; un autre argument se dit « (argument masqué) »). Les lignes du
 journal de la mission n'y sont pas.
+
+Avec `--relances`, il sort à la place du journal, pour les mêmes discussions, une ligne par reprise (la date de
+la ligne « reprise » du journal) avec ce qui l'a relancée : l'origine (clé `origin`) de la première entrée
+`user` du fil principal, hors résultat d'outil, qui en porte une sous forme d'objet, de la reprise à la fin
+suivante. Seul son genre en sort : « utilisateur » (`human`), « mod » (`plugin`, suivi de son nom quand il a
+la forme d'un nom de plugin), « autre session » (`peer` ; « autre session, par le mod » et le nom quand elle
+porte une clé `plugin`), « fin d'une tâche de fond » (`task-notification`), sinon « autre » (suivi du genre
+quand il est un mot court), suivi de « (après N entrée(s) sans origine) » quand des entrées `user` sans origine
+la précèdent (l'origine lue n'est alors peut-être pas ce qui a relancé la discussion) ; sans origine objet, « origine non notée », et sans message, « aucun message avant
+la fin suivante » (ou « avant la fin du transcript »). Jamais `body`, `from` ni le `name` d'une autre session,
+ni le texte d'un message. Comme pour le journal, un processus tué n'écrit pas de fin : sa reprise ne se voit pas.
 
 Une date hors de 2020 à 2100, sans fuseau, ou qui ne se lit pas, est écartée à la lecture, comme une ligne
 de transcript illisible. Codes : 0 journal sorti, 1 mission introuvable ou désignée plusieurs fois,
@@ -73,6 +86,8 @@ SHORT = 8
 # Le plafond du journal d'une mission : `LIMITS.log` de plugins/flow-board/hooks/basics.ts (le mod y garde les
 # entrées les plus récentes). Un test compare les deux valeurs.
 LOG_CAP = 80
+# La dernière ligne de l'en-tête : les dates sorties (`shown`) sont en UTC, jamais à l'heure locale.
+UTC_LINE = "heures en UTC (temps universel, pas l'heure locale)"
 
 
 def base_dir():
@@ -152,12 +167,64 @@ def pick(found, wanted):
     return []
 
 
-def transcript_events(path, session):
+# Un nom de plugin montré par `--relances` (`flow-board`) ; un genre d'origine inconnu (`cron-tick`).
+PLUGIN_NAME = re.compile(r"[a-z0-9-]{1,40}", re.ASCII)
+KIND_WORD = re.compile(r"[A-Za-z0-9-]{1,40}", re.ASCII)
+ORIGINS = {"human": "utilisateur", "task-notification": "fin d'une tâche de fond"}
+
+
+def named(value, form):
+    """`value` précédé d'une espace s'il est une chaîne en `form`, sinon rien."""
+    return f" {value}" if isinstance(value, str) and form.fullmatch(value) else ""
+
+
+def origin_said(origin):
+    """Le genre d'une origine (la clé `origin` d'une entrée `user`, un objet), sans aucun texte : jamais `body`,
+    `from` ni le `name` d'une autre session ; seuls un nom de plugin ou un genre en forme en sortent."""
+    kind = origin.get("kind")
+    if not isinstance(kind, str):
+        return "autre"
+    if kind in ORIGINS:
+        return ORIGINS[kind]
+    if kind == "plugin":
+        return "mod" + named(origin.get("name"), PLUGIN_NAME)
+    if kind == "peer":
+        return ("autre session, par le mod" + named(origin.get("plugin"), PLUGIN_NAME) if "plugin" in origin
+                else "autre session")
+    return "autre" + named(kind, KIND_WORD)
+
+
+def is_message(entry):
+    """Une entrée `user` du fil principal qui n'est pas un résultat d'outil."""
+    if entry.get("type") != "user" or entry.get("isSidechain") or "toolUseResult" in entry:
+        return False
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    return not (isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "tool_result"
+                                                  for p in content))
+
+
+def transcript_events(path, session, relances=False):
     """Les événements d'un transcript : (ms, discussion, texte), sans le texte d'aucun message. Une fin est
     datée de la dernière activité avant elle, une reprise de la première entrée datée après elle ; des
     `cost-state` de suite sans entrée datée entre elles, aux totaux différents, sont autant de processus
-    rouverts puis refermés sans rien écrire de daté : ils se comptent sur la ligne de la fin."""
+    rouverts puis refermés sans rien écrire de daté : ils se comptent sur la ligne de la fin.
+
+    Avec `relances`, seulement les reprises, chacune avec l'origine de la première entrée `user` du fil principal
+    (hors résultat d'outil) qui porte une origine objet, de la reprise à la fin suivante (`origin_said`), suivie du
+    nombre d'entrées `user` sans origine qui la précèdent, quand il y en a ; à défaut,
+    « origine non notée » quand des entrées `user` n'en portaient pas, sinon « aucun message avant la fin suivante »
+    (ou « avant la fin du transcript » quand aucune fin ne suit)."""
     events, last, ended, quiet, seen, fin = [], None, False, 0, None, None
+    resumes, pending = [], None
+
+    def close(next_end):
+        # La reprise en cours n'a trouvé aucune origine objet avant la fin suivante (ou celle du transcript).
+        if pending is not None:
+            resumes.append((pending[0], session, "reprise — origine : " + (
+                "origine non notée" if pending[1] else
+                "aucun message avant la fin suivante" if next_end else "aucun message avant la fin du transcript")))
+
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             try:
@@ -167,6 +234,8 @@ def transcript_events(path, session):
             if not isinstance(entry, dict):
                 continue
             if entry.get("type") == "cost-state":
+                close(True)
+                pending = None
                 totals = (entry.get("totalDuration"), entry.get("totalCostUSD"))
                 if not ended:
                     fin = None
@@ -200,13 +269,24 @@ def transcript_events(path, session):
                 events.append([ms, session, "démarrage"])
             elif ended:
                 events.append([ms, session, "reprise (première entrée datée)"])
+                pending = [ms, 0]
+            if pending is not None and is_message(entry):
+                origin = entry.get("origin")
+                if isinstance(origin, dict):
+                    # Des entrées `user` sans origine avant elle : l'origine lue peut ne pas être ce qui a relancé.
+                    before = f" (après {pending[1]} entrée(s) sans origine)" if pending[1] else ""
+                    resumes.append((pending[0], session, f"reprise — origine : {origin_said(origin)}{before}"))
+                    pending = None
+                else:
+                    pending[1] += 1
             ended = False
             last = ms
             if entry.get("type") == "system" and entry.get("subtype") == "compact_boundary":
                 meta = entry.get("compactMetadata")
                 trigger = meta.get("trigger") if isinstance(meta, dict) else None
                 events.append([ms, session, "compaction" + (f" ({trigger})" if trigger in ("manual", "auto") else "")])
-    return [tuple(event) for event in events]
+    close(False)
+    return resumes if relances else [tuple(event) for event in events]
 
 
 # Un argument de commande montré : un mot court (`opus`, `claude-fable-5-2`, `high`), jamais un texte libre.
@@ -338,9 +418,11 @@ def capped(run, events, count):
     return lines
 
 
-def journal(wanted, base=None, models=False):
+def journal(wanted, base=None, models=False, relances=False):
     """Les lignes à sortir, et le code de sortie ; avec `models`, les requêtes et bascules de modèle des
-    discussions (`model_events`) à la place du journal et des événements de session."""
+    discussions (`model_events`) à la place du journal et des événements de session ; avec `relances`, les
+    reprises des discussions et leur origine (`transcript_events`), sans les lignes du journal."""
+    detail = models or relances
     base = base or base_dir()
     chosen = pick(missions(base), wanted)
     if not chosen:
@@ -357,7 +439,7 @@ def journal(wanted, base=None, models=False):
         lines.append(f"aussi dans : {', '.join(others)} (mise à jour plus tôt)")
     events = []
     log = run.get("log")
-    for item in log if isinstance(log, list) and not models else []:
+    for item in log if isinstance(log, list) and not detail else []:
         ms = as_ms(item.get("at")) if isinstance(item, dict) else None
         if ms is not None:
             glyph = clean(item.get("glyph", ""), 4) if isinstance(item.get("glyph"), str) else ""
@@ -380,12 +462,15 @@ def journal(wanted, base=None, models=False):
         lines.append(f"{label} : {', '.join(str(p) for p in found)}")
         for transcript in found:
             try:
-                events += (model_events if models else transcript_events)(transcript, session)
+                events += (model_events(transcript, session) if models
+                           else transcript_events(transcript, session, relances=relances))
             except OSError as err:
                 lines.append(f"{label} : transcript illisible ({err})")
-    if isinstance(log, list) and len(log) >= LOG_CAP and not models:
+    if isinstance(log, list) and len(log) >= LOG_CAP and not detail:
         lines[1:1] = capped(run, events, len(log))
-    lines.append("")
+    lines += [UTC_LINE, ""]
+    if relances and not events:
+        lines.append("aucune reprise dans les transcripts lus")
     for ms, session, text in sorted(events, key=lambda e: e[0]):
         who = "mission" if session is None else f"discussion {session[:SHORT]}"
         lines.append(f"{shown(ms)}  {who:<19}  {text}")
@@ -396,13 +481,14 @@ def main(argv):
     if argv[:1] in (["--aide"], ["-h"], ["--help"]):
         print(__doc__)
         return 0
-    models = argv[:1] == ["--modeles"]
-    rest = argv[1:] if models else argv
-    if len(rest) != 1 or not rest[0].strip():
+    models, relances = argv[:1] == ["--modeles"], argv[:1] == ["--relances"]
+    rest = argv[1:] if models or relances else argv
+    if len(rest) != 1 or not rest[0].strip() or rest[0] in ("--modeles", "--relances"):
         print("python3 scripts/journal-mission.py <titre ou id de la mission>\npython3 scripts/journal-mission.py --modeles "
-              "<titre ou id de la mission>", file=sys.stderr)
+              "<titre ou id de la mission>\npython3 scripts/journal-mission.py --relances <titre ou id de la mission>",
+              file=sys.stderr)
         return 2
-    lines, code = journal(rest[0].strip(), models=models)
+    lines, code = journal(rest[0].strip(), models=models, relances=relances)
     print("\n".join(lines), file=sys.stdout if code == 0 else sys.stderr)
     return code
 

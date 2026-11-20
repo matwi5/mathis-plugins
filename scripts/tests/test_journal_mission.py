@@ -17,6 +17,17 @@ SCRIPT = Path(__file__).resolve().parent.parent / "journal-mission.py"
 OWNER = "81ab9a05-66d2-45d2-b6f0-343d57428d17"
 BORN = "2c190b55-d06a-4134-bd9a-73351fa5b9ce"
 SECRET = "Texte privé d'un message"
+# Une phrase témoin en forme de nom de plugin : un garde de forme la laisserait passer, seul le code peut l'écarter.
+WITNESS = "phrase-temoin"
+UTC_LINE = "heures en UTC (temps universel, pas l'heure locale)"
+# Le corpus hostile commun de ces tests (règle « Un garde de forme passe le corpus hostile commun » ; celui de
+# flow-board, `tests/corpus.mjs`, n'est pas lisible depuis Python) : une entrée ajoutée ici vaut pour chaque garde.
+# Les caractères invisibles s'écrivent par leur point de code (`chr`), jamais bruts dans la source. « .. » est à part :
+# le mot court des modèles (`WORD`) admet le point, qu'un nom de modèle porte (`claude-opus-5.5`).
+PIECES = ["\n", "\x00", "\t", "\x1b", "\x7f", "\x0b", "\x0c", "\r", chr(0x80), chr(0x85), chr(0x9F), chr(0x2028),
+          chr(0x2029), chr(0x212A), chr(0xFF11), chr(0x200B), chr(0x200D), chr(0x202E), chr(0xAD), chr(0xFEFF),
+          chr(0xA0), chr(0x435), "'", chr(0x2018), chr(0x2019), chr(0x2BC), '"', "$(x)", ";", "*", " ", "/"]
+DOTS = ".."
 
 
 def ms(text):
@@ -279,9 +290,7 @@ class JournalMissionTest(unittest.TestCase):
         # Règle « Un garde de forme passe le corpus hostile commun » (celui de flow-board, `tests/corpus.mjs`, n'est pas
         # lisible depuis Python) : chaque valeur, seule ou glissée après un id valide, est refusée, sans lever.
         # Les caractères invisibles s'écrivent par leur point de code (`chr`), jamais bruts dans la source.
-        pieces = ["\n", "\x00", "\t", "\x1b", "\x7f", "\x0b", "\x0c", "\r", chr(0x80), chr(0x85), chr(0x9F), chr(0x2028),
-                  chr(0x2029), chr(0x212A), chr(0xFF11), chr(0x200B), chr(0x200D), chr(0x202E), chr(0xAD), chr(0xFEFF),
-                  chr(0xA0), chr(0x435), "'", chr(0x2018), chr(0x2019), chr(0x2BC), '"', "$(x)", ";", "*", " ", "/", ".."]
+        pieces = [*PIECES, DOTS]
         hostile = [*pieces, *(OWNER + p for p in pieces), *("a" + p + "b" for p in pieces), "x" * 101, "", [], {}, 42, 4.2,
                    True]
         spec = importlib.util.spec_from_file_location("journal_mission", SCRIPT)
@@ -382,9 +391,7 @@ class JournalMissionTest(unittest.TestCase):
         # Règle « Un garde de forme passe le corpus hostile commun » : WORD (arguments de commande, noms de modèle et
         # d'effort) et ATTRIBUTED (le modèle d'un remote_session_change) ne laissent sortir ni contrôle, ni séparateur
         # de ligne, ni caractère invisible ou hors ASCII.
-        pieces = ["\n", "\x00", "\t", "\x1b", "\x7f", "\x0b", "\x0c", "\r", chr(0x80), chr(0x85), chr(0x9F), chr(0x2028),
-                  chr(0x2029), chr(0x212A), chr(0xFF11), chr(0x200B), chr(0x200D), chr(0x202E), chr(0xAD), chr(0xFEFF),
-                  chr(0xA0), chr(0x435), "'", chr(0x2018), chr(0x2019), chr(0x2BC), '"', "$(x)", ";", "*", " ", "/"]
+        pieces = PIECES
         hostile = [*pieces, *("opus" + p for p in pieces), *("a" + p + "b" for p in pieces), "x" * 41]
         spec = importlib.util.spec_from_file_location("journal_mission", SCRIPT)
         module = importlib.util.module_from_spec(spec)
@@ -399,6 +406,173 @@ class JournalMissionTest(unittest.TestCase):
                 self.assertTrue(module.model_name(value).isprintable())
                 named = module.ATTRIBUTED.search(f"Co-Authored-By: Claude Opus{value}5")
                 self.assertTrue(named is None or (named[1].isascii() and named[1].isprintable()))
+
+    def test_la_sortie_dit_en_tete_que_ses_heures_sont_en_utc_avec_ou_sans_option(self):
+        # La ligne vient en dernier de l'en-tête, juste avant la ligne vide : la forme des dates ne change pas.
+        self.mission()
+        self.transcript(OWNER, [{"type": "user", "timestamp": "2026-11-10T09:55:00Z"}])
+        for args in (["mwawyzj5-3nf4"], ["--modeles", "mwawyzj5-3nf4"], ["--relances", "mwawyzj5-3nf4"]):
+            with self.subTest(args=args):
+                out = self.run_script(*args)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                head = out.stdout.split("\n\n", 1)[0].splitlines()
+                self.assertEqual(head[-1], UTC_LINE)
+                self.assertEqual(out.stdout.count(UTC_LINE), 1)
+
+    def resumed(self, *after):
+        """Un transcript qui démarre, finit, puis reprend à 11:00 sur les entrées `after` (la première datée 11:00)."""
+        return [{"type": "user", "timestamp": "2026-11-10T09:00:00Z", "origin": {"kind": "human"}},
+                {"type": "cost-state", "totalDuration": 10, "totalCostUSD": 1.0}, *after]
+
+    def relances(self, entries):
+        self.mission()
+        path = self.transcript(OWNER, entries)
+        before = path.read_bytes()
+        out = self.run_script("--relances", "mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(path.read_bytes(), before)
+        return [" ".join(line.split()) for line in self.body(out)]
+
+    def test_relances_dit_l_origine_de_chaque_forme_du_tableau(self):
+        at = "2026-11-10T11:00:00Z"
+        cases = [
+            ({"kind": "human"}, "utilisateur"),
+            ({"kind": "plugin", "name": "flow-board"}, "mod flow-board"),
+            ({"kind": "plugin", "name": "Flow Board"}, "mod"),
+            ({"kind": "peer", "body": SECRET, "from": "x", "name": "y"}, "autre session"),
+            ({"kind": "peer", "plugin": "flow-board", "body": SECRET}, "autre session, par le mod flow-board"),
+            ({"kind": "peer", "plugin": "pas un nom"}, "autre session, par le mod"),
+            ({"kind": "task-notification", "producer": "x"}, "fin d'une tâche de fond"),
+            ({"kind": "cron-tick"}, "autre cron-tick"),
+            ({"kind": "pas un mot"}, "autre"),
+            ({}, "autre"),
+        ]
+        for origin, said in cases:
+            with self.subTest(origin=origin):
+                lines = self.relances(self.resumed({"type": "user", "timestamp": at, "origin": origin}))
+                self.assertEqual(lines, [f"2026-11-10 11:00:00 discussion 81ab9a05 reprise — origine : {said}"])
+                (self.base / "flow-board" / "parcours" / "depot.json").unlink()
+
+    def test_relances_sans_origine_ou_sans_message_avant_la_fin_suivante(self):
+        cases = [
+            ([{"type": "user", "timestamp": "2026-11-10T11:00:00Z"},
+              {"type": "user", "timestamp": "2026-11-10T11:01:00Z", "origin": "pas un objet"}], "origine non notée"),
+            ([{"type": "queue-operation", "timestamp": "2026-11-10T11:00:00Z"},
+              {"type": "assistant", "timestamp": "2026-11-10T11:01:00Z"}], "aucun message avant la fin suivante"),
+        ]
+        for after, said in cases:
+            with self.subTest(said=said):
+                end = {"type": "cost-state", "totalDuration": 20, "totalCostUSD": 2.0}
+                lines = self.relances(self.resumed(*after, end))
+                self.assertEqual(lines, [f"2026-11-10 11:00:00 discussion 81ab9a05 reprise — origine : {said}"])
+                (self.base / "flow-board" / "parcours" / "depot.json").unlink()
+
+    def test_relances_lit_la_premiere_entree_qui_porte_une_origine_hors_fil_secondaire_et_resultat_d_outil(self):
+        # La forme relevée le 16/11/2026 : deux `queue-operation`, puis une entrée `isMeta` d'origine `peer`. Avant
+        # elle, un résultat d'outil et une entrée d'un fil secondaire ne comptent pas.
+        lines = self.relances(self.resumed(
+            {"type": "queue-operation", "timestamp": "2026-11-10T11:00:00Z"},
+            {"type": "queue-operation", "timestamp": "2026-11-10T11:00:01Z"},
+            {"type": "user", "timestamp": "2026-11-10T11:00:03Z", "origin": {"kind": "human"},
+             "message": {"content": [{"type": "tool_result", "content": SECRET}]}},
+            {"type": "user", "timestamp": "2026-11-10T11:00:04Z", "isSidechain": True, "origin": {"kind": "human"}},
+            {"type": "user", "timestamp": "2026-11-10T11:00:05Z", "isMeta": True,
+             "origin": {"kind": "peer", "body": SECRET, "from": "x", "name": "y"}},
+            {"type": "user", "timestamp": "2026-11-10T11:00:06Z", "origin": {"kind": "human"}},
+        ))
+        self.assertEqual(lines, ["2026-11-10 11:00:00 discussion 81ab9a05 reprise — origine : autre session"])
+
+    def test_relances_dit_les_entrees_sans_origine_qui_precedent_l_origine_lue(self):
+        # La forme relevée le 16/11/2026 à 02:35 : la reprise s'ouvre sur deux entrées `user` sans origine et une commande
+        # locale, et le message d'origine `plugin` n'arrive que 7 minutes plus tard : la ligne le dit, pour qu'il ne soit
+        # pas pris pour ce qui a relancé la discussion.
+        lines = self.relances(self.resumed(
+            {"type": "user", "timestamp": "2026-11-10T11:00:00Z", "isMeta": True},
+            {"type": "user", "timestamp": "2026-11-10T11:00:00Z"},
+            {"type": "system", "subtype": "local_command", "timestamp": "2026-11-10T11:00:00Z"},
+            {"type": "user", "timestamp": "2026-11-10T11:07:00Z", "origin": {"kind": "plugin", "name": "flow-board"}},
+        ))
+        self.assertEqual(lines, ["2026-11-10 11:00:00 discussion 81ab9a05 reprise — origine : mod flow-board (après 2 "
+                                 "entrée(s) sans origine)"])
+
+    def test_relances_une_ligne_par_reprise_a_la_date_du_journal_dans_l_ordre_du_temps(self):
+        # Deux discussions, trois reprises : la date est celle de la ligne « reprise » du journal ; une continuation
+        # n'est pas une reprise ; le démarrage n'en est pas une.
+        self.mission()
+        entries = self.resumed(
+            {"type": "user", "timestamp": "2026-11-10T11:00:00Z", "origin": {"kind": "task-notification"}},
+            {"type": "cost-state", "totalDuration": 20, "totalCostUSD": 2.0},
+            {"type": "continued-in", "continuedInSessionId": BORN, "timestamp": "2026-11-10T11:30:00Z"},
+            {"type": "user", "timestamp": "2026-11-10T13:00:00Z", "origin": {"kind": "human"}},
+        )
+        self.transcript(OWNER, entries)
+        self.transcript(BORN, [{"type": "user", "timestamp": "2026-11-10T08:00:00Z"},
+                               {"type": "cost-state", "totalDuration": 1, "totalCostUSD": 0},
+                               {"type": "user", "timestamp": "2026-11-10T12:00:00Z", "origin": {"kind": "plugin",
+                                                                                                "name": "flow-board"}}],
+                        folder="-autre")
+        out = self.run_script("--relances", "mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        lines = [" ".join(line.split()) for line in self.body(out)]
+        self.assertEqual(lines, [
+            "2026-11-10 11:00:00 discussion 81ab9a05 reprise — origine : fin d'une tâche de fond",
+            "2026-11-10 12:00:00 discussion 2c190b55 reprise — origine : mod flow-board",
+            "2026-11-10 13:00:00 discussion 81ab9a05 reprise — origine : utilisateur",
+        ])
+        journal = [" ".join(line.split()) for line in self.body(self.run_script("mwawyzj5-3nf4"))]
+        reprises = [line.split(" reprise")[0] for line in journal if "reprise (première entrée datée)" in line]
+        self.assertEqual(reprises, [line.split(" reprise")[0] for line in lines])
+        self.assertNotIn("mission ouverte", out.stdout)
+
+    def test_relances_une_reprise_sans_fin_suivante_ni_message_le_dit(self):
+        lines = self.relances(self.resumed({"type": "assistant", "timestamp": "2026-11-10T11:00:00Z"}))
+        self.assertEqual(lines, ["2026-11-10 11:00:00 discussion 81ab9a05 reprise — origine : aucun message avant la fin "
+                                 "du transcript"])
+
+    def test_relances_sans_reprise_le_dit(self):
+        self.mission()
+        self.transcript(OWNER, [{"type": "user", "timestamp": "2026-11-10T09:00:00Z"}])
+        out = self.run_script("--relances", "mwawyzj5-3nf4")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.body(out), ["aucune reprise dans les transcripts lus"])
+
+    def test_relances_ne_sort_aucun_texte_d_un_message_ni_d_une_autre_session(self):
+        # La phrase témoin a la forme d'un nom de plugin : seul le code, pas un garde de forme, peut l'écarter.
+        secret = {"body": WITNESS, "from": WITNESS, "name": WITNESS, "handbackReportText": WITNESS}
+        # Liste blanche : la ligne entière est attendue, rien d'autre ne sort.
+        for origin, said in (({"kind": "peer", **secret}, "autre session"),
+                             ({"kind": "peer", "plugin": "flow-board", **secret}, "autre session, par le mod flow-board")):
+            with self.subTest(origin=origin):
+                lines = self.relances(self.resumed(
+                    {"type": "user", "timestamp": "2026-11-10T11:00:00Z", "origin": origin,
+                     "message": {"content": f"{WITNESS} {SECRET}"}}))
+                self.assertEqual(lines, [f"2026-11-10 11:00:00 discussion 81ab9a05 reprise — origine : {said}"])
+                self.assertNotIn(WITNESS, "\n".join(lines))
+                (self.base / "flow-board" / "parcours" / "depot.json").unlink()
+
+    def test_les_gardes_de_relances_passent_le_corpus_hostile(self):
+        # Règle « Un garde de forme passe le corpus hostile commun » : un `kind`, un `name` ou un `plugin` hors forme
+        # (ou qui n'est pas une chaîne) ne sort pas, sans lever.
+        pieces = [*PIECES, DOTS]
+        hostile = [*pieces, *("flow" + p for p in pieces), *("a" + p + "b" for p in pieces), "x" * 41, "", [], {},
+                   [[1]], 42, 4.2, True, None]
+        spec = importlib.util.spec_from_file_location("journal_mission", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for value in hostile:
+            with self.subTest(value=repr(value)):
+                said = [module.origin_said({"kind": "plugin", "name": value}),
+                        module.origin_said({"kind": "peer", "plugin": value}),
+                        module.origin_said({"kind": value})]
+                self.assertIn(said[0], ("mod",))
+                self.assertIn(said[1], ("autre session, par le mod",))
+                self.assertIn(said[2], ("autre",))
+
+    def test_relances_et_modeles_ensemble_sont_refuses(self):
+        self.mission()
+        self.assertEqual(self.run_script("--relances", "--modeles", "mwawyzj5-3nf4").returncode, 2)
+        self.assertEqual(self.run_script("--relances").returncode, 2)
+        self.assertEqual(self.run_script("--relances", "inconnue").returncode, 1)
 
     def test_modeles_sans_mission_ou_sans_argument(self):
         self.assertEqual(self.run_script("--modeles").returncode, 2)

@@ -274,27 +274,41 @@ export const workerStopOf = (last: unknown): { text: string; at: number } | null
 }
 
 /**
- * Le statut d'un ticket en fichier local, d'après sa ligne `**Status:**` (ou « Statut : »).
- * Son id est le numéro du fichier (`03-vue.md` → `03`). Null hors d'un dossier `issues`, ou
- * sans ligne de statut lisible. « en attente (porteur) » reste « en cours » : le ticket attend
- * un geste prévu par son groupe, pas un blocage externe.
+ * Le vocabulaire de la ligne `Status:` d'un fichier de ticket : chaque valeur et le statut qu'elle
+ * relaie (null : la valeur est admise mais ne change rien). Une valeur compte quand le texte de la
+ * ligne commence par elle, suivie d'autre chose qu'une lettre, un chiffre, `-` ou `_` (« faite »,
+ * « terminée » ou « en revue » ne sont pas du vocabulaire). `scripts/check.py` refuse au pre-commit
+ * une ligne hors de ce vocabulaire (`STATUS_VOCABULARY`), qu'un test compare à celui-ci.
+ */
+export const TICKET_STATUS_VOCABULARY: readonly (readonly [string, TicketStatus | null])[] = [
+  ['en cours', 'doing'], ['en attente', 'doing'], ['doing', 'doing'],
+  ['in progress', 'doing'], ['in-progress', 'doing'], ['in_progress', 'doing'],
+  ['fait', 'done'], ['done', 'done'], ['terminé', 'done'],
+  ['bloqué', 'blocked'], ['blocked', 'blocked'],
+  ['ready-for-agent', 'todo'], ['à faire', 'todo'], ['todo', 'todo'], ['ready', 'todo'],
+  ['retiré', null],
+]
+/** Ce qui ne peut pas suivre une valeur du vocabulaire : une lettre, un chiffre, `-` ou `_`. */
+const STATUS_WORD_GOES_ON = /^[\p{L}\p{N}_-]/u
+
+/**
+ * Le statut d'un ticket en fichier local, d'après sa ligne `**Status:**` (ou « Statut : ») et le
+ * vocabulaire `TICKET_STATUS_VOCABULARY`. Son id est le numéro du fichier (`03-vue.md` → `03`).
+ * Null hors d'un dossier `issues`, sans ligne de statut, quand la ligne est vide (la valeur ne se
+ * lit que sur la ligne même) ou que sa valeur n'est pas du vocabulaire, ou pour « retiré » :
+ * le statut gardé reste alors tel quel. « en attente (porteur) » reste « en cours » : le ticket
+ * attend un geste prévu par son groupe, pas un blocage externe.
  */
 export const localTicketChange = (path: string, text: string): StatusChange | null => {
   const file = /(?:^|[\\/])issues[\\/](\d+)-[^\\/]+\.md$/.exec(path)
-  const line = /^\s*(?:\*\*Status:\*\*|\*\*Statut\s*:\*\*|Statut\s*:)\s*(.+)$/im.exec(text)
+  const line = /^\s*(?:\*\*Status:\*\*|\*\*Statut\s*:\*\*|Statut\s*:)[ \t]*(.*)$/im.exec(text)
   if (!file || !line) return null
   const value = line[1]!.trim().toLowerCase()
-  const status: TicketStatus | null = /^(fait|done|terminé)/.test(value)
-    ? 'done'
-    : /^(en cours|en attente|doing|in progress)/.test(value)
-      ? 'doing'
-      : /^(bloqué|blocked)/.test(value)
-        ? 'blocked'
-        : /^(ready-for-agent|à faire|todo|ready)/.test(value)
-          ? 'todo'
-          : null
-  if (!status) return null
-  const why = status === 'blocked' ? clip(line[1]!.trim().replace(/^(bloqué|blocked)\s*[:(—-]?\s*/i, '').replace(/\)$/, ''), TEXT_MAX) : ''
+  const word = TICKET_STATUS_VOCABULARY.find(([v]) => value.startsWith(v) && !STATUS_WORD_GOES_ON.test(value.slice(v.length)))
+  const status = word ? word[1] : null
+  if (!word || !status) return null
+  // La raison d'un blocage : ce qui suit la valeur du vocabulaire, sans le séparateur.
+  const why = status === 'blocked' ? clip(line[1]!.trim().slice(word[0].length).replace(/^\s*[:(—-]?\s*/, '').replace(/\)$/, ''), TEXT_MAX) : ''
   return why ? { id: file[1]!, status, why } : { id: file[1]!, status }
 }
 
@@ -410,6 +424,42 @@ export const reportedDecisions = (input: Readonly<Record<string, unknown>>): { w
     .map(d => ({ what: clip(str(d.what) || str(d.text), TEXT_MAX), why: clip(str(d.why), TEXT_MAX) || undefined, origin: originOf(d.origin) }))
     .filter(d => d.what !== '')
     .map(d => ({ what: d.what, ...(d.why ? { why: d.why } : {}), ...(d.origin ? { origin: d.origin } : {}) }))
+
+/**
+ * Les mots qui font ressembler un choix déclaré à un choix d'expérience (ce que la personne voit et fait), en
+ * français et en anglais, lus en début de mot, casse ignorée (pluriels compris). Étalonnés le 20/11/2026 sur les
+ * fichiers des choix de `~/.claude/flow-board/choix/` : 185 choix sur 2 460, presque tous des libellés, boutons,
+ * toasts ou notifications. « texte », « message » ou « titre » seuls n'y sont pas : dans ce dépôt, ils nomment
+ * surtout des consignes.
+ */
+const EXPERIENCE_WORDS: readonly string[] = [
+  'libellé', 'libelle', 'bouton', 'texte montré', 'textes montrés', 'texte affiché', 'textes affichés', 'message montré', 'message affiché',
+  'emplacement', 'mise en page', 'mises en page', 'maquette', 'notification', 'toast', 'alerte',
+  'label', 'button', 'shown text', 'displayed text', 'shown message', 'displayed message', 'placement', 'layout', 'mockup', 'wording',
+]
+const EXPERIENCE_RE = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${EXPERIENCE_WORDS.map(w => w.replace(/ /g, '\\s+')).join('|')})`, 'iu')
+/** « question à boutons » : le geste qui fait valider un texte, pas un bouton de l'interface. */
+const BUTTON_QUESTION_RE = /questions?\s+à\s+boutons?/giu
+
+/** Le texte d'un choix déclaré ressemble à un choix d'expérience (`EXPERIENCE_WORDS`). Un indice, jamais un refus. */
+const isExperienceChoice = (what: string): boolean => EXPERIENCE_RE.test(what.replace(BUTTON_QUESTION_RE, ''))
+
+/**
+ * La ligne de la réponse de l'outil, en auto, quand des choix déclarés par l'appel ressemblent à des choix
+ * d'expérience : un tel choix revient à la personne, en question bloquante (`"waiting"` chez le manager, par
+ * SendMessage au manager dans un worker). Elle ne refuse rien (le texte libre ne se juge pas à coup sûr) et dit le
+ * choix enregistré : l'appelant ne lui donne que les choix gardés (ni ceux refusés au plafond chez le manager, ni ceux
+ * que le relais n'a pas gardés dans un worker), et ne la demande qu'en auto. Vide sans tel choix.
+ */
+export const experienceChoiceNotice = (items: readonly { what: string }[], isWorker: boolean): string => {
+  const hits = items.filter(d => isExperienceChoice(d.what))
+  if (hits.length === 0) return ''
+  const named = `${hits.slice(0, 3).map(d => `"${clip(d.what, 60)}"`).join(', ')}${hits.length > 3 ? ` and ${hits.length - 3} more` : ''}`
+  const ask = isWorker
+    ? 'send it to your manager by SendMessage as a blocking question (options, the recommended one first), which declares it there; meanwhile code your recommendation so that it changes easily'
+    : 'ask it in your message (options, the recommended one first) and declare it as a blocking question: {"waiting": [{"id": "<short id>", "phase" | "group" | "ticket": "<what it blocks>", "text": "<the question>"}]}'
+  return ` · decided: ${named} ${hits.length === 1 ? 'reads' : 'read'} like an experience choice (a label, a button, a shown text, a placement, a layout or a notification). In auto mode an experience choice stays with the user, never a declared choice: the choice is recorded as sent; if it is one, ${ask}.`
+}
 
 /** Les origines envoyées que l'outil ne connaît pas : le choix est gardé sans elle, et la réponse le dit. */
 export const ignoredOrigins = (input: Readonly<Record<string, unknown>>): string[] =>

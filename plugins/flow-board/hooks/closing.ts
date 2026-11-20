@@ -199,13 +199,15 @@ export type CloseInput = {
   /**
    * Le compte rendu de la session d'un groupe est au relais, entier ou coupé avec son fichier, et déposé par cette
    * session même (son entrée de relais, dont l'id commence par l'id court de son lancement ; jamais pour un id
-   * inconnu ou de l'app) : à calculer par `relayedReportAt` de model.ts, jamais d'après le seul compte rendu du
-   * groupe. Sans lui, la
+   * inconnu ou de l'app), ou, à défaut, déposé pour elle par le manager (`isReportByManager`) : à calculer par
+   * `relayedReportAt` ou `groupReportOf` de model.ts, jamais d'après le seul compte rendu du groupe. Sans lui, la
    * fermeture ne lance jamais `claude rm`, qui effacerait le dossier de job de la session, peut-être le seul
    * exemplaire du compte rendu. Requis, pour qu'un appelant oublié ne vaille jamais « présent ». Sans effet pour la
    * session des pistes, qui ne dépose pas de compte rendu au relais et n'a donc jamais `claude rm`.
    */
   hasReport: boolean
+  /** Le compte rendu qui compte (`hasReport`) est celui que le manager a déposé pour le worker (`groupReportOf` de model.ts) : la note le dit. */
+  isReportByManager?: boolean
   /** La fermeture déjà notée pour cet envoi (`closing` de son lien) : gardée faute de compte rendu, elle rend `claude rm` à la suivante. */
   noted?: Closing | null
   /**
@@ -357,7 +359,7 @@ export const isSafeBranch = (value: unknown): value is string =>
   !/^[0-9a-f]{7,40}$/i.test(value)
 
 /** Le dossier du dépôt d'une racine de projet : celle d'un worktree est sous `<dépôt>/.claude/worktrees/`. */
-const repoDir = (root: string): string => {
+export const repoDir = (root: string): string => {
   const norm = root.replace(/\\/g, '/').replace(/\/+$/, '')
   const at = norm.toLowerCase().indexOf('/.claude/worktrees/')
   return at >= 0 ? norm.slice(0, at) : norm
@@ -471,9 +473,13 @@ const SCRIPT_RESUME =
  * `relayFileSlug` (`[a-z0-9-]` seulement), suivi d'un joker ; un slug vide (un id sans lettre ni chiffre) donne le
  * dossier seul, et dit qu'aucun fichier n'y garde le compte rendu entier (`reportPath` ne l'écrit pas sans slug). Le
  * nom entier n'est pas composé : l'id de session qui le nomme est celui que le worker lit chez lui, pas celui noté ici.
+ * `isByManager` : le compte rendu déposé par le manager pour le worker (depot-manager.ts), au préfixe `<parcours>.manager-`.
  */
-export const relayReportNote = (runId: unknown): string => {
+export const relayReportNote = (runId: unknown, isByManager = false, groupId: unknown = undefined): string => {
   const slug = typeof runId === 'string' ? relayFileSlug(runId) : ''
+  // Déposé par le manager (depot-manager.ts) : la mission en garde la marque, le texte entier est dans son fichier du relais.
+  if (isByManager)
+    return `son compte rendu, que tu as déposé pour lui (l’outil flow lui manquait), reste au relais (claude rm ne l’efface pas) : ne le recopie nulle part ; ${slug !== '' ? `il est entier dans ~/.claude/flow-board/relais/${slug}.manager-${isGroupId(groupId) ? `${relayFileSlug(groupId)}-` : ''}*.report.md` : 'aucun fichier de ~/.claude/flow-board/relais/ ne le garde pour cette mission'}`
   const whole = slug !== '' ? `, et entier dans ~/.claude/flow-board/relais/${slug}.*.report.md (* : l’id de session que le worker lit chez lui) s’il a pu s’écrire` : ' (aucun fichier de ~/.claude/flow-board/relais/ ne le garde entier pour cette mission)'
   return `son compte rendu reste au relais (claude rm ne l’efface pas) : ne le recopie nulle part ; il est dans le champ « report » de l’entrée de sa session${whole}`
 }
@@ -972,12 +978,18 @@ const knownBranches = (target: CloseTarget, worktree: string, seq?: number): str
  * La procédure d'une fermeture dans un dépôt, quand le script de vérification est là (`closingScript`) : la
  * commande qui vérifie (lecture seule) et les gestes à faire sur son verdict, au lieu des 11 000 caractères de
  * la procédure entière. Les mêmes gardes : rien d'arrêté sans « SÛR », rien de retiré sans « SÛR » de la même
- * commande relancée après l'arrêt (`--apres-arret`), la branche jamais supprimée, `claude rm` selon la session notée et le relais.
+ * commande relancée après l'arrêt (`--apres-arret`), la branche jamais supprimée, `claude rm` selon la session notée et le relais,
+ * au bout de la ligne « en une fois » que le script imprime sous `--avec-rm`, après le retrait constaté (`--constat-retrait`) ;
+ * une ligne qui ne le porte pas ou s'arrête après le retrait, et une session gardée faute de compte rendu à la fermeture
+ * précédente (worktree déjà retiré : aucune ligne), le lancent à part, sur un DÉJÀ RETIRÉ constaté.
  * Le point 4 fait lire le sessionId sur la ligne « session : » du script (`SCRIPT_RESUME`), et, quand le relais a le
  * compte rendu, dit qu'il y reste (`relayReportNote`, `runId` : l'id de la mission, qui n'y entre que réduit).
  */
-const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, script: string, session: string | undefined, seq: number | undefined, isApp: boolean, isKept: boolean, hasReport: boolean, runId: unknown): string => {
-  const cmd = `node ${shellQuote(script)} --worktree ${shellQuote(d.worktree)} ${knownBranches(target, d.worktree, seq).map(b => `--branche ${shellQuote(b)}`).join(' ')}${session ? ` --session ${shellQuote(session)}` : ''}`
+const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, script: string, session: string | undefined, seq: number | undefined, isApp: boolean, isKept: boolean, hasReport: boolean, runId: unknown, isByManager = false): string => {
+  // --avec-rm (claude rm au bout de la ligne « en une fois », après le retrait constaté) : seulement là où la
+  // fermeture lance claude rm, une session du CLI notée pour l'envoi, son compte rendu au relais.
+  const withRm = !isApp && target.kind !== 'items' && session !== undefined && hasReport
+  const cmd = `node ${shellQuote(script)} --worktree ${shellQuote(d.worktree)} ${knownBranches(target, d.worktree, seq).map(b => `--branche ${shellQuote(b)}`).join(' ')}${session ? ` --session ${shellQuote(session)}` : ''}${withRm ? ' --avec-rm' : ''}`
   const id = session !== undefined ? shellQuote(session) : "'<id>'"
   const gone = isKept
     ? 'retiré par la fermeture précédente, gardée faute de compte rendu (il est maintenant au relais) : passe au point 3'
@@ -990,7 +1002,9 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
         ? `3) ${NO_SESSION_KEPT} ; `
         : !hasReport
           ? `3) pas de claude rm : le relais n’a pas son compte rendu ; demande-le-lui (SendMessage), la session est gardée ; rapporte "state": "stopped", "why": "compte rendu absent du relais : session gardée", avec "worktree" et "sessionId" ; `
-          : `3) seulement une fois le retrait constaté (la même commande relancée rend DÉJÀ RETIRÉ) : claude rm ${id}, sans aucune option ; s’il refuse pour des commits non poussés, ne force rien et dis-le-moi ; `
+          : isKept
+            ? `3) seulement une fois le retrait constaté (la même commande relancée rend DÉJÀ RETIRÉ) : claude rm ${id}, sans aucune option ; s’il refuse pour des commits non poussés, ne force rien et dis-le-moi ; `
+            : `3) claude rm ${id}, sans aucune option, seulement après le retrait constaté : au bout de la ligne qui le porte ; une telle ligne arrêtée après le retrait : seulement quand la même commande relancée avec --apres-arret rend DÉJÀ RETIRÉ, sa ligne « session : » la disant arrêtée ; « claude rm : pas dans la ligne », ou pas de ligne : pas de claude rm, rapporte "state": "stopped" sans "worktree" (session gardée) ; s’il refuse pour des commits non poussés, ne force rien et dis-le-moi ; `
   return (
     `Ferme ${d.what} et son worktree par le script de vérification, qui ne fait que lire ; rien n’est forcé, la fermeture ne fusionne jamais. ` +
     `0) si une question de son compte rendu attend encore une réponse, ne ferme rien et dis-le-moi ; ` +
@@ -998,9 +1012,9 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
     (isApp
       ? `2) seulement quand sa dernière ligne le demande (sur SÛR, ou sur DÉJÀ RETIRÉ) et une fois ListAgents la montrant au repos (busy : n’arrête rien, remets la fermeture à plus tard), arrêter une session de l’app, c’est l’archiver : si l’app te donne l’outil archive_session, ${appArchive(d.title)} ; sinon, demande-moi en clair de l’archiver (titre qui commence par ${d.titles}) et de te dire « archivée », sans attendre pour le reste de la mission ; puis `
       : '2) après l’arrêt fait sur SÛR, ') +
-    `la même commande avec --apres-arret : seulement sur SÛR, la commande de retrait qu’il imprime ; sur ATTENDRE, la relancer comme le dit sa dernière ligne ; la branche reste : ne la supprime pas ; ` +
+    `la même commande avec --apres-arret : seulement sur SÛR, la ligne « en une fois » qu’il imprime, telle quelle (le retrait, puis son constat${withRm ? ', puis claude rm' : ''} ; sans elle, sa commande de retrait) ; sur ATTENDRE, la relancer comme le dit sa dernière ligne ; la branche reste : ne la supprime pas ; ` +
     removal +
-    `4) dis-moi ce qui a été fermé et ce qui reste, avec la ligne ${COMMITS_LINE} ; ${isApp ? APP_RESUME : SCRIPT_RESUME}${hasReport ? ` ; ${relayReportNote(runId)}` : ''}.`
+    `4) dis-moi ce qui a été fermé et ce qui reste, avec la ligne ${COMMITS_LINE} ; ${isApp ? APP_RESUME : SCRIPT_RESUME}${hasReport ? ` ; ${relayReportNote(runId, isByManager, target.kind === 'group' ? target.id : undefined)}` : ''}.`
   )
 }
 
@@ -1013,7 +1027,7 @@ const scriptProcedure = (d: ReturnType<typeof describe>, target: CloseTarget, sc
  * par la fermeture précédente, gardée faute de compte rendu (`isKeptForReport`). Sans git : vérifier, puis arrêter
  * la session seulement.
  */
-export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport, noted, send }: CloseInput): string => {
+export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport, isReportByManager, noted, send }: CloseInput): string => {
   // Un id de groupe hors forme : le titre de sa session, le nom de son worktree et de sa branche en
   // seraient tirés. Rien n'en est écrit, pas même l'id : la fermeture s'arrête, avec git comme sans
   // (invariant : aucun worktree ni branche tiré de lui).
@@ -1059,7 +1073,7 @@ export const closingProcedure = ({ run, target, isRepo, session, seq, hasReport,
   }
   // Le script des vérifications là (le plugin installé) : sa commande et les gestes, pas la procédure entière.
   const script = closingScript.path
-  if (isScriptPath(script)) return scriptProcedure(d, target, script, session, seq, isApp, !isApp && hasReport && isKeptForReport(run, target, seq, noted, send), hasReport, run.id)
+  if (isScriptPath(script)) return scriptProcedure(d, target, script, session, seq, isApp, !isApp && hasReport && isKeptForReport(run, target, seq, noted, send), hasReport, run.id, isReportByManager === true)
   // L'entrée de la session dans claude agents --json n'est retenue que si son cwd est le worktree vérifié.
   const entry = `son entrée dans claude agents --json (${session ? `id ${session}` : `son name commence par ${d.titles}`}), retenue seulement si son cwd est <worktree> ; une autre entrée dont le cwd est dans <worktree> (une autre session au travail dedans) arrête la fermeture`
   const idle = isApp

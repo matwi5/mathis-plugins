@@ -44,7 +44,8 @@ test('« waiting » ajoute une question qui bloque un ticket, un groupe ou une p
   expect(asked.text).toContain('3 question(s) waiting for the user')
   const answered = ask(asked.board, [{ id: 'q1', answered: true }], T0 + 3)
   expect(openIds(answered.board)).toEqual(['q2', 'q3'])
-  expect(runOf(answered.board).answered).toEqual([{ id: 'q1', at: T0 + 3 }])
+  // Sa trace garde sa phrase de tête (trois mots et plus) : une question neuve qui la reprend sera refusée.
+  expect(runOf(answered.board).answered).toEqual([{ id: 'q1', at: T0 + 3, head: 'quel invariant pour les totaux' }])
   // Une question déjà retirée, ou inconnue : rien ne change, et la réponse le dit.
   const again = ask(answered.board, [{ id: 'q1', answered: true }], T0 + 4)
   expect(openIds(again.board)).toEqual(['q2', 'q3'])

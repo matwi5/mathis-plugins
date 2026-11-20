@@ -3,8 +3,16 @@ import { expect, mock, test } from 'claude-code/testing'
 import { parseEnvoi, parseEnvoiA, splitCommand } from '../hooks/register.tsx'
 
 // Le moteur sous la sonde : la session, la commande enregistrée, et les envois du mod consignés.
-const engine = (on: any, env: Record<string, string> = { SONDE_JOURNAUX: '/j' }) => {
+// `sid`, quand il est donné : l'id de session que rend le moteur, changeable en cours de test (`/clear`,
+// `/resume`) ; `null` : un id illisible.
+const engine = (on: any, env: Record<string, string> = { SONDE_JOURNAUX: '/j' }, sid?: { current: string | null }) => {
   const clock = mock.clock(on, { now: 1_000_000 })
+  if (sid) {
+    on('session.id', () => {
+      if (sid.current === null) throw new Error('id illisible')
+      return { value: sid.current } as any
+    })
+  }
   const submitted: { text: string; origin?: { kind?: string; asUser?: boolean } }[] = []
   const commands: { command: string; args: string; origin?: { kind?: string } }[] = []
   const journal: string[] = []
@@ -279,4 +287,155 @@ test('un changement de modèle se journalise avec le modèle d\'avant, celui d\'
   const found = lines.filter(l => l.ev === 'classic.PostModelSwitch')
   expect(found).toHaveLength(1)
   expect(found[0]).toMatchObject({ from_model: 'claude-opus-5-5', to_model: 'claude-fable-5-2', requested_model: 'fable', source: 'command' })
+})
+
+// La garde du lanceur (le 02/11/2026, un /rename de la sonde a renommé la session qui l'avait lancée) : `scripts/sonde.py` passe au mod l'id de la session qui l'a lancée
+// (`SONDE_LANCEUR`) ; sous cet id, le mod n'envoie rien à cette session : ni message, ni commande, ni
+// compaction, ni changement de modèle, ni titre.
+
+const LANCEUR = '0a1b2c3d-1111-2222-3333-444455556666'
+const AUTRE = '9f8e7d6c-aaaa-4bbb-8ccc-ddddeeeeffff'
+const envLanceur = { SONDE_JOURNAUX: '/j', SONDE_LANCEUR: LANCEUR }
+const lignes = (journal: string[]) => journal.at(-1)!.trim().split('\n').map(l => JSON.parse(l))
+
+// Le monde complet d'une garde : envois, envois à une autre discussion, compactions et modèles demandés.
+const garde = (on: any, sid: { current: string | null }, env: Record<string, string> = envLanceur) => {
+  const w = engine(on, env, sid)
+  const sent: unknown[] = []
+  on('session.send', (_$: unknown, e: any) => {
+    sent.push(e.to)
+    return { isDelivered: true } as any
+  })
+  const compacted: unknown[] = []
+  on('session.compact', (_$: unknown, e: any) => {
+    compacted.push(e.instructions)
+    return { skip: 'essai' } as any
+  })
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as any)
+  const asked = stepEngine(on)
+  return { ...w, sent, compacted, asked }
+}
+
+test('sous l’id du lanceur, chaque commande de la sonde est refusée, dit pourquoi et le note au journal', async ($, on) => {
+  const { clock, submitted, commands, journal, sent, compacted, asked } = garde(on, { current: LANCEUR })
+  await start($)
+  const runs = [
+    ['sonde-envoi', 'Bonjour'],
+    ['sonde-envoi', '--commande /rename Essai renommage sonde'],
+    ['sonde-envoyer-a', `${AUTRE} Bonjour`],
+    ['sonde-compacte', '0 garde tout'],
+    ['sonde-modele', 'fable'],
+  ]
+  for (const [command, args] of runs) {
+    const r = await $.command.run({ command, args } as any)
+    expect(r.text).toMatch(/refus.*lanc/i)
+  }
+  await clock.advance(60_000)
+  await clock.settle()
+  await step($, 0)
+  expect(submitted).toHaveLength(0)
+  expect(commands.filter(c => !c.command.startsWith('sonde-'))).toHaveLength(0)
+  expect(sent).toHaveLength(0)
+  expect(compacted).toHaveLength(0)
+  expect(asked.map(a => a.model)).toEqual(['claude-opus-5-5'])
+  expect(lignes(journal).filter(l => l.ev === 'lanceur:refus')).toHaveLength(5)
+})
+
+test('sous un autre id, les commandes marchent comme avant', async ($, on) => {
+  const { clock, submitted, commands, sent, compacted, asked } = garde(on, { current: AUTRE })
+  await start($)
+  await $.command.run({ command: 'sonde-envoi', args: 'Bonjour' } as any)
+  await $.command.run({ command: 'sonde-envoi', args: '--commande /sonde-essai:reserve x' } as any)
+  await $.command.run({ command: 'sonde-envoyer-a', args: 'sonde-b Bonjour' } as any)
+  await $.command.run({ command: 'sonde-compacte', args: '0 garde tout' } as any)
+  await $.command.run({ command: 'sonde-modele', args: 'fable' } as any)
+  await clock.settle()
+  await step($, 0)
+  expect(submitted.map(s => s.text)).toEqual(['Bonjour'])
+  expect(commands.filter(c => c.command === 'sonde-essai:reserve')).toHaveLength(1)
+  expect(sent).toEqual(['sonde-b'])
+  expect(compacted).toEqual(['garde tout'])
+  expect(asked.map(a => a.model)).toEqual(['fable'])
+})
+
+test('un envoi programmé sous un autre id ne part pas si la sonde a pris l’id du lanceur avant l’échéance', async ($, on) => {
+  const sid = { current: AUTRE as string | null }
+  const { clock, submitted, compacted, journal } = garde(on, sid)
+  await start($)
+  const r = await $.command.run({ command: 'sonde-envoi', args: '20 --commande /rename X' } as any)
+  expect(r.text).toMatch(/part dans 20 s/)
+  await $.command.run({ command: 'sonde-compacte', args: '20 garde tout' } as any)
+  await $.command.run({ command: 'sonde-modele', args: 'fable' } as any)
+  sid.current = LANCEUR
+  await clock.advance(20_000)
+  await clock.settle()
+  expect(submitted).toHaveLength(0)
+  expect(compacted).toHaveLength(0)
+  expect(lignes(journal).filter(l => l.ev === 'lanceur:refus').length).toBeGreaterThanOrEqual(2)
+})
+
+test('le modèle imposé n’est plus réécrit quand la sonde a pris l’id du lanceur', async ($, on) => {
+  const sid = { current: AUTRE as string | null }
+  const { asked } = garde(on, sid)
+  await start($)
+  await $.command.run({ command: 'sonde-modele', args: 'fable' } as any)
+  await step($, 0)
+  sid.current = LANCEUR
+  await step($, 1)
+  expect(asked.map(a => a.model)).toEqual(['fable', 'claude-opus-5-5'])
+})
+
+test('lanceur connu et id de la sonde illisible : refus', async ($, on) => {
+  const { clock, submitted } = garde(on, { current: null })
+  await start($)
+  const r = await $.command.run({ command: 'sonde-envoi', args: 'Bonjour' } as any)
+  expect(r.text).toMatch(/refus/i)
+  await clock.settle()
+  expect(submitted).toHaveLength(0)
+})
+
+test('/sonde-envoyer-a vers l’id du lanceur est refusé quel que soit l’id de la sonde, casse comprise', async ($, on) => {
+  const { sent, journal } = garde(on, { current: AUTRE })
+  await start($)
+  for (const to of [LANCEUR, LANCEUR.toUpperCase()]) {
+    const r = await $.command.run({ command: 'sonde-envoyer-a', args: `${to} Bonjour` } as any)
+    expect(r.text).toMatch(/refus.*lanc/i)
+  }
+  expect(sent).toHaveLength(0)
+  expect(lignes(journal).filter(l => l.ev === 'lanceur:refus')).toHaveLength(2)
+})
+
+test('sans SONDE_LANCEUR (sonde lancée hors d’une session), rien n’est gardé', async ($, on) => {
+  const { clock, submitted } = garde(on, { current: LANCEUR }, { SONDE_JOURNAUX: '/j' })
+  await start($)
+  await $.command.run({ command: 'sonde-envoi', args: 'Bonjour' } as any)
+  await clock.settle()
+  expect(submitted.map(s => s.text)).toEqual(['Bonjour'])
+})
+
+test('sous l’id du lanceur, le titre de --titre n’est pas renvoyé ; sous un autre id, il l’est', async ($, on) => {
+  const sid = { current: LANCEUR as string | null }
+  garde(on, sid)
+  on('fs.read', () => ({ value: 'Titre essai' }) as any)
+  on('classic.SessionStart', () => ({}))
+  await start($)
+  const event = { session_id: 's', transcript_path: '/t', cwd: '', hook_event_name: 'SessionStart', source: 'startup' }
+  const refused: any = await ($ as any).classic.SessionStart(event)
+  expect(refused?.sessionTitle).toBeUndefined()
+  sid.current = AUTRE
+  const given: any = await ($ as any).classic.SessionStart(event)
+  expect(given?.sessionTitle).toBe('Titre essai')
+})
+
+test('/sonde-modele sans argument ramène le modèle même sous l’id du lanceur : rien n’est envoyé', async ($, on) => {
+  const sid = { current: AUTRE as string | null }
+  const { asked } = garde(on, sid)
+  await start($)
+  await $.command.run({ command: 'sonde-modele', args: 'fable' } as any)
+  sid.current = LANCEUR
+  const r = await $.command.run({ command: 'sonde-modele', args: '' } as any)
+  expect(r.text).toMatch(/modèle de la session/)
+  sid.current = AUTRE
+  await step($, 0)
+  expect(asked.map(a => a.model)).toEqual(['claude-opus-5-5'])
 })

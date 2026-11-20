@@ -8,6 +8,12 @@
 export type FlowStatus = 'active' | 'paused' | 'done'
 /** Le chemin d'un archivage qui vaut accord pour fermer la discussion de la mission (`Run.archivedBy`). */
 export type ArchivePath = 'clic' | 'retro'
+/**
+ * Le signal de vie d'une discussion (`hooks/liveness.ts`) : son processus tourne, s'est arrêté (session d'arrière-plan
+ * seulement), ou on ne sait pas. Ici plutôt que dans `liveness.ts`, qui importe `model.ts` : `night.ts` le lit sans
+ * l'atteindre.
+ */
+export type Liveness = 'alive' | 'stopped' | 'unknown'
 
 export type PhaseStatus = 'pending' | 'active' | 'done' | 'skipped'
 
@@ -139,10 +145,21 @@ export type GroupLink = {
    * valeur relue compte : la fermeture de cet envoi ne ferme rien (ni `claude stop` ni `claude rm`) et le dit.
    */
   sessionClash?: true
+  /**
+   * Le compte rendu de cet envoi déposé par le manager pour son worker, quand l'outil flow manquait à celui-ci
+   * (`depositTarget`, `depositReport` de depot-manager.ts) : sa date et sa longueur, jamais son texte, gardé
+   * entier dans le fichier du relais que nomme `managerReportSession`. Écrit par le manager seul, une fois par
+   * envoi ; recopié avec le lien quand il devient `delegated` puis une entrée de `earlier` ; à la fusion, le
+   * plus ancien des deux (`keepManagerReports`) ; effacé seulement avec le lien ou la mission.
+   */
+  managerReport?: ManagerReport
 }
 
+/** Le dépôt d'un compte rendu par le manager (`GroupLink.managerReport`) : sa date et la longueur du texte. */
+export type ManagerReport = { at: number; length: number }
+
 /** Un worker dont un nouvel envoi a pris la place : son lien (envoi, id, nom de son worktree) et sa fermeture, si elle en a une. */
-export type ClosedLink = { at: number; session?: string; seq?: number; closing?: Closing; worktreeName?: string; worktreeClash?: true; sessionClash?: true }
+export type ClosedLink = { at: number; session?: string; seq?: number; closing?: Closing; worktreeName?: string; worktreeClash?: true; sessionClash?: true; managerReport?: ManagerReport }
 
 /** La fermeture d'un worker rendu (un groupe, ou la session des pistes d'une phase). */
 export type Closing = {
@@ -774,8 +791,14 @@ export type Run = {
    * faire revenir une). 50 ouvertes au plus : au-delà, une nouvelle est refusée.
    */
   waiting?: WaitingQuestion[]
-  /** La trace des questions retirées (`answered`), les 100 plus récentes : une copie en retard ne les fait pas revenir. */
-  answered?: { id: string; at: number }[]
+  /**
+   * La trace des questions retirées (`answered`), les 100 plus récentes : une copie en retard ne les fait pas revenir.
+   * `head` : la phrase de tête normalisée de la question retirée (absente pour une question du mod, à geste, de moins
+   * de trois mots, ou d'une trace écrite avant ce champ, sauf celle héritée d'une trace plus ancienne du même id) ; une
+   * question neuve qui la reprend est refusée, sous tout id. `earlier` : les phrases de tête plus anciennes du même id
+   * (rouvert puis répondu de nouveau), toutes, en ordre lexical, comparées de même.
+   */
+  answered?: { id: string; at: number; isUndated?: true; head?: string; earlier?: string[] }[]
   /**
    * Les actions que le mode auto a envoyées (une phase, une vague, une revue), une marque par action, posée
    * avant l'envoi : une action marquée ne repart jamais. Fusionnées marque par marque entre deux copies,

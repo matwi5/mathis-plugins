@@ -17,7 +17,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, ToolCallInput } from 'claude-code'
 
-import type { GestureKind, WaitsUser } from '../types'
+import type { WaitsUser } from '../types'
 import type { AgentLane, AgentMark, AgentsWindow, AgentSegment, AgentType, Board, FlowItem, FlowPhase, Relay, RelayEntry, RelayEntryFile, Run, SentRequest, SessionRegistry, SyncState, Tab, VersionUnit } from '../types'
 import {
   CODE_SKILLS,
@@ -35,7 +35,7 @@ import {
   applyAnswer,
   applyAsana,
   askCloseLinkedGroup,
-  relayedReportAt,
+  groupReportOf,
   reloadText,
   restoreDelegate,
   applyCommand,
@@ -96,6 +96,7 @@ import {
   focusOf,
   clampFuture,
   groupPlan,
+  keepNameText,
   groupTicketsOf,
   groupReviewArgs,
   noActiveFrench,
@@ -130,6 +131,7 @@ import {
   RELAUNCH_PREFIX,
   stopActiveAuto,
   unmarkAutoSent,
+  isAutoMission,
   isAutoOn,
   autoResumedAt,
   autoResumedLabel,
@@ -184,6 +186,7 @@ import {
   markCleanupSent,
   cancelLinked,
   cancelLinkedGroup,
+  earlierOf,
   linkGroupSession,
   linkRelaySessions,
   unnotedLaunchNotice,
@@ -229,6 +232,7 @@ import {
   mainRefAskText,
   newestMainRef,
   type MainRef,
+  experienceChoiceNotice,
   reportedDecisions,
   type RelayEvent,
   type RelayLoss,
@@ -282,7 +286,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { GROUP_ID_FORM_FR, OLD_SEPARATORS, archiveConsent, asciiJson, closingRepo, closingScript, isSessionId, consentAt, consentDay, plainArgs, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, hasSendName, sendRefusalFr, isGroupId, isSafeBranch, isSafeId, isVersionForm, itemsWorktree, missionSessionsArchiveText, unmarkedAskText, tempDirForm, briefFileName, neutralInPrompt, neutralLine, neutralRelayed, linkedPrefix, linkedTitles, shellQuote, type ReopenText, relayFileSlug } from './closing.ts'
+import { GROUP_ID_FORM_FR, OLD_SEPARATORS, archiveConsent, asciiJson, closingRepo, closingScript, isSessionId, consentAt, consentDay, plainArgs, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, hasSendName, isNotedWorktree, sendRefusalFr, isGroupId, isSafeBranch, isSafeId, isVersionForm, itemsWorktree, missionSessionsArchiveText, unmarkedAskText, tempDirForm, briefFileName, neutralInPrompt, neutralLine, neutralRelayed, linkedPrefix, linkedTitles, shellQuote, type ReopenText, relayFileSlug } from './closing.ts'
 import {
   COMPACT_FIRST_TOAST,
   COO_COMPACT_TOKENS,
@@ -304,20 +308,23 @@ import {
 import { applyTraces } from './erase.ts'
 import { applyOrphanCards, applyPistesFinish, backCardTaken, finishedLinesOf, isCardInLaunch, orphanCardHolds, orphanCardPlans, orphanLinesOf, pistesFinishCandidates, pistesMissionEnd, finishPlanHolds, planPistesFinish, type PistesFinishResult } from './pistes-fin.ts'
 import { holdsPick, pickedOf, picksPrint, retroCommandArgs, retroRequestRefusal, retroTarget, retroTranscripts, isRetroRequestStale, isRetroResumeUseful, retroResumeUntil, type RetroRequestRefusal } from './retro-coo.ts'
-import { NEW_MAX, contradictionQuestion, contradictionQuestionId, markSeen, newDecisionsOf, parseSeen, seriesOf, type DecisionsSeen, type NewDecision } from './oppositions.ts'
+import { NEW_MAX, contradictionQuestion, contradictionQuestionId, markSeen, newDecisionsOf, parseSeen, seriesOf, type DecisionsSeen, type NewDecision, relayMessage } from './oppositions.ts'
 import { DELIVERY_COMMAND, DELIVERY_FR, DELIVERY_KEYS, abandonDelivery, deliveryWaits, failedStep, isDelivered, isDeliveryOpen, newDelivery, nextStep, parseDelivery, reportStep, retryStep, runningStep, startStep, type Delivery, type DeliveryKey } from './delivery.ts'
-import { REPORT_CHANGED, REPORT_PAUSED, cooStatement, cutStateWhere, failedPlaceWrite, wherePlaceRefusal, isModQuestion, nightViewsOf, isRetroCardRemovable, readyRetroOf, isOpenMission, isSha, retroWaitlistText, pistesWaitingOf, outsideCommitCounts, parseLoggedCommits, statementText, watchedGroups, watchedKey, type LoggedCommit, type OutsideCommits, type CooGlean, type CooDecisions, type CooRetroPicks, type CooDelivery, type CooReport, type CooRoadmap, type CooSetAside, type CooStatement, type CooWaitlist } from './coo.ts'
+import { REPORT_CHANGED, REPORT_PAUSED, cooStatement, sameRoadmapTitle, cutStateWhere, failedPlaceWrite, wherePlaceRefusal, isModQuestion, nightViewsOf, isRetroCardRemovable, readyRetroOf, isOpenMission, isSha, retroWaitlistText, pistesWaitingOf, outsideCommitCounts, parseLoggedCommits, statementText, watchedGroups, watchedKey, type LoggedCommit, type OutsideCommits, type CooGlean, type CooDecisions, type CooRetroPicks, type CooDelivery, type CooReport, type CooRoadmap, type CooSetAside, type CooStatement, type CooWaitlist } from './coo.ts'
 import type { CooDo, CooShow } from './coo-view.tsx'
 import { RETRO_START, cardRoadmapIds, hasIntentTurn, launchFirstLine, LAUNCH_GRACE_MS, LAUNCH_TTL_MS, CLOCK_SKEW_MS, isOrdinaryCard, isPistesCard, pistesCard, soundRunLaunch, askMattCandidates, LAUNCH_CLAIM_SETTLE_MS, LAUNCH_KEY_PREFIX, LAUNCH_STALE, LAUNCH_STARTS, cardStateOf, consumeRefusal, liveLaunchOf, otherCarrierOf, runOfCard, sameFolder, isLaunchId, isRecordStale, launchKey, newLaunchId, AUTO_ON_KEY_PREFIX, autoOnKey, autoOnRefusal, soundAutoOnRecord, type AutoOnRecord, parseCard, runOfLaunch, soundRecord, type LaunchCard, type LaunchMode, type LaunchRecord, type LaunchStart, hasRetro, retroOf } from './launch.ts'
+import { claimName, isCardTitle, isUnnamed, markNamed, markState, shellSafeTitle } from './named-mark.ts'
 import { cardWriteWhy, cardWriteWhyEn } from './cards-list.ts'
 import { cardsCtx, cardsHere, cardsOrNull, isOldCopied, offerDueRetros, surveyCards, offerRetros, orphanCardsOf, readCards, readCardsAt, writeCards } from './cards-store.ts'
 import { assignNumbers, emptyNumberTable, freshNumberTable, keepsNumbers, numbersView, parseNumberTable, type CooNumbers, type NumberRead, type NumberTable } from './numbers.ts'
 import { COO_AUTHOR, PISTE_BOX_MAX, applyBoxedOps, releaseCardPistes, validatePistes, type Piste, type PisteMoveState, type PistePick, emptyWaitlist, keepsOps, keepsPistes, viaTicketOf, chainsOf, missingSeen, newPisteOpId, opMark, parsePisteBox, parsePisteChange, parseWaitlist, isPisteId, pisteMoves, parsePistesLine, pistesOf, type TicketLink, releasableMarks, seenAfter, soundPisteOp, withoutApplied, missionChangeRefusal, missionDropsSaid, type BoxedOp, type PisteAuthor, type PisteBoxRead, type PisteMove, type PisteOp, type PisteOutcome, type Waitlist, type WaitlistRead, WAITLIST_REPO_FILE, WAITLIST_REPO_ROOT, holdsWaitlist, type WaitlistWhere } from './pistes.ts'
 import { pistesBriefText } from './pistes-brief.ts'
-import { attachLaunch, isWakeable, reopenNotice, wakeTargets, isEndedPause, RETRO_REFUSED_TEXT, noteRetroRefused, noteAutoHold, untitledStepRefusal, FABLE_WORKER_TEXT, isFableMark, isRetroRun, autoMarksOf, isDelegable, liveWaits, loseLaunch, openQuestions, planHolds, PLAN_UNREAD_TEXT, projectUnits, questionPrint, unitsNamedInArgs, unitsOverlap, type ProjectUnit } from './model.ts'
+import { attachLaunch, factsRelayOf, isWakeable, managerReachOf, reopenNotice, wakeTargets, isEndedPause, type ManagerReach, RETRO_REFUSED_TEXT, noteRetroRefused, noteAutoHold, untitledStepRefusal, FABLE_WORKER_TEXT, isFableMark, isRetroRun, autoMarksOf, isDelegable, liveWaits, loseLaunch, openQuestions, planHolds, PLAN_UNREAD_TEXT, projectUnits, questionPrint, unitsNamedInArgs, unitsOverlap, type ProjectUnit } from './model.ts'
 import { hasWaitCycle, projectPlan, waitsKey, type PlanWait, type ProjectPlan } from './plan-projet.ts'
 import { RELAY_PENDING_MS, ROUND_FORM, WAVE_TTL_MS, isOneLine, isRound, PICK_MAX, type CoordCompatible, type CoordContradiction, entryRun, isDecisionsPath, isPlanEntry, isPlanUnreadFor, isPrint, isQuestionRef, isReportPrint, isSeries, isCutDated, pendingCutsFor, pendingRelaysFor, pendingWavesFor, pendingInstructsFor, isInstructReceived, isInstructSent, instructOpenSince, instructOriginClash, soundInstructed, planWaitsOf, reportPrint, type CoordInstruct, type CoordAnswer, type CoordGesture, type CoordRelay, type CoordValidate } from './coordination.ts'
 import type { CooPlan, CooWave } from './coo.ts'
+import { clearLiveness, isAutoReopenProposed, livenessNowOf, livenessOf, noteAutoReopens, refreshLiveness } from './coo-liveness.ts'
+import { ownerVerdictOf } from './liveness.ts'
 import type { RunLaunch } from '../types'
 import { isRoadmapId, parseRoadmap, partialSeen, roadmapTextPrint, unionSeen, watchRoadmap, type Roadmap, type RoadmapSeen } from './roadmap.ts'
 import { parseSecuritySetting, securitySettingRecord, type SecurityReview, type SecuritySettingRead, type SecurityStored } from './security-setting.ts'
@@ -336,9 +343,11 @@ import { pricesFromCcusage, type UnitPrices } from './cost.ts'
 import { drawBand, drawPane, drawWelcomeBand, kitOf, type Actions, type Caps, type View } from './view.tsx'
 import { commitRegistry, ensureRegistry, ownAgent, readPiece, readRegistry, registryDir, registryKey, registryQueue, registrySaveTimer, saveRegistryNow } from './registry-file.ts'
 import { catchUpAgent, catchUpOwn, catchUpShown, claudeDir, needsRebuild, readRebuilt, readTranscript, transcriptAgents, updateRebuilt } from './catch-up.ts'
-import { eraseRun, erasedRuns, erasingNow, forgetSession, readTraces, reconcileErased, reportFilesOf } from './erase-run.ts'
+import { eraseFile, eraseRun, erasedRuns, erasingNow, forgetSession, readTraces, reconcileErased, reportFilesOf } from './erase-run.ts'
+import { type Deposit, depositTarget, managerReportSession, withDeposit } from './depot-manager.ts'
+import { silenceNote, silentWorkers } from './silence.ts'
 import { AUTO_BRIEF_IN_TURN, autoOnNotice, AUTO_BRIEF_HEAD, autoBriefText } from './auto-consignes.ts'
-import { TOOL, projectName, SECURITY_METHOD_FILE, READING_METHOD_FILE, securityMethod, readingMethod, setMethodPaths, SENSITIVE_AREAS_FR, INSTRUCTIONS_IN_PROMPT_FR, linkedSecurityReview, securityMethodFr, decidedList, LINKED_GROUP_REVIEW, isFramingSubSkill, framingSubSkillNote, REVIEW_NOTES, coachingNote, ticketList, launchHow, BACKGROUND, briefText, itemList, splitRequest, adviceText } from './decoupage.ts'
+import { TOOL, projectName, SECURITY_METHOD_FILE, READING_METHOD_FILE, securityMethod, readingMethod, setMethodPaths, SENSITIVE_AREAS_FR, INSTRUCTIONS_IN_PROMPT_FR, linkedSecurityReview, securityMethodFr, decidedList, LINKED_GROUP_REVIEW, isFramingSubSkill, framingSubSkillNote, REVIEW_NOTES, coachingNote, ticketList, launchHow, BACKGROUND, briefText, itemList, splitRequest, adviceText, type LaunchParts, isLaunchReceived, isShortLaunch, shortLaunchHow, SHORT_LAUNCH_FOLLOW, lotAdviceText } from './decoupage.ts'
 import type { InFlightNote, LotProcedure, BriefParts } from './decoupage.ts'
 
 const PANE = 'flow-board'
@@ -706,18 +715,41 @@ const loadStored = async ($: any, root: string): Promise<{ value: unknown; isUnr
 /**
  * Une mission absente du board d'ici (racine `here`), lue dans celui du dépôt principal : une session
  * lancée dans un worktree a sa propre racine, donc son propre fichier. Lecture seule (pas de
- * versement de l'ancien stockage) ; rien quand la session n'est pas dans un worktree.
+ * versement de l'ancien stockage) ; rien quand la session n'est pas dans un worktree. `isFileOnly` : un fichier
+ * commun qui ne se lit pas (écriture en cours, lecture refusée) ne se remplace pas par la copie de `$.store`, peut-être
+ * périmée : rien n'est rendu (la relecture d'un worker, `managerReachOf`, la dit alors illisible).
  */
-const mainRepoRun = async ($: any, runId: string, here: string): Promise<Run | undefined> => {
+const mainRepoRun = async ($: any, runId: string, here: string, isFileOnly = false): Promise<Run | undefined> => {
   if (runId === '') return undefined
   let root = ''
   await quietly(async () => {
     root = String((await $.session.repo())?.root ?? '')
   })
   if (root === '' || normRoot(root).toLowerCase() === normRoot(here).toLowerCase()) return undefined
-  const shared = await readShared($, root)
+  const shared = isFileOnly ? await readSharedTwice($, root) : await readShared($, root)
+  if (!shared.ok && isFileOnly && sharedPath($, root) !== null) return undefined
   const stored = shared.ok ? shared.value : await legacyGet($, root)
   return isBoard(stored) ? stored.runs.find(r => r.id === runId) : undefined
+}
+
+/** Le fichier commun lu, relu une fois quand la première lecture rate (une écriture d'une autre discussion en cours). */
+const readSharedTwice = async ($: any, root: string): Promise<{ ok: boolean; value: unknown }> => {
+  const first = await readShared($, root)
+  return first.ok ? first : await readShared($, root)
+}
+
+/**
+ * La mission que relit un worker pour dire la référence de son manager (`managerReachOf`), à chaque appel : dans le
+ * fichier commun de sa racine, relu à l'instant, sinon dans celui du dépôt principal (`mainRepoRun`). Un fichier commun
+ * qui ne se lit pas, même relu une fois, ne se remplace jamais par une copie peut-être périmée (`$.store`, le board en
+ * mémoire) : rien n'est rendu, et la réponse dit la mission illisible. Sans fichier commun (mode `$.store`), le board en
+ * mémoire de cette discussion. Lecture seule.
+ */
+const reachRunOf = async ($: any, board: Board, runId: string): Promise<Run | undefined> => {
+  if (sharedPath($, board.root) === null) return board.runs.find(r => r.id === runId) ?? (await mainRepoRun($, runId, board.root, true))
+  const here = await readSharedTwice($, board.root)
+  if (!here.ok) return undefined
+  return (isBoard(here.value) ? here.value.runs.find(r => r.id === runId) : undefined) ?? (await mainRepoRun($, runId, board.root, true))
 }
 
 /** Le titre d'une mission absente du board d'ici, lu dans celui du dépôt principal (`mainRepoRun`). */
@@ -840,7 +872,7 @@ export function relayPath($: any, runId: string): string | null {
   return home && slug ? `${home}/flow-board/relais/${slug}.json` : null
 }
 
-/** Le compte rendu entier d'un worker, à côté du relais ; écrit par lui seul. */
+/** Le compte rendu entier d'un worker, à côté du relais ; écrit par lui seul, ou, pour un worker sans outil flow, par le manager sous un nom de dépôt (`managerReportSession`). */
 export function reportPath($: any, runId: string, session: string): string | null {
   const home = claudeHome($)
   return home && runSlug(runId) && relayFileSlug(session) ? `${home}/flow-board/relais/${reportFileName(runId, session)}` : null
@@ -906,6 +938,21 @@ const reportRoots = async ($: any): Promise<string[]> => {
   return real
 }
 
+/** Le worktree noté d'un groupe, seule racine d'un dépôt du manager : résolu, un dossier, et encore un worktree une fois résolu. */
+const reportRoot = async ($: any, worktree: string): Promise<string[]> => {
+  try {
+    const stat = await $.fs.stat(worktree, { resolve: true })
+    const resolved = stat?.kind === 'dir' && typeof stat.realPath === 'string' ? tempDirForm(stat.realPath) : null
+    // Résolu, il reste ce même worktree : le dossier des worktrees du dépôt, résolu lui aussi, suivi du nom noté, à la casse
+    // près (un lien vers le worktree d'un autre groupe, d'un autre dépôt ou d'un nom qui ne diffère que par la casse ne vaut pas).
+    const parent = await $.fs.stat(worktree.slice(0, worktree.lastIndexOf('/')), { resolve: true })
+    const parentReal = parent?.kind === 'dir' && typeof parent.realPath === 'string' ? tempDirForm(parent.realPath) : null
+    return resolved && parentReal && resolved === `${parentReal}/${worktree.split('/').pop()}` ? [resolved] : []
+  } catch {
+    return []
+  }
+}
+
 /**
  * Le compte rendu d'un worker donné par le chemin de son fichier (`reportPath`), lu une fois : un
  * chemin absolu, un fichier ordinaire `.md` ou `.txt` (le nom donné comme le nom résolu), sous son
@@ -913,9 +960,10 @@ const reportRoots = async ($: any): Promise<string[]> => {
  * casse comprise), sans segment en `.` sous ce dossier, 800 000 octets et 200 000 signes au plus, pas
  * vide, et le même fichier relu après la lecture (même chemin résolu, pas un lien, même taille et même
  * date). Un lien physique garde son propre nom : la garde par le chemin résolu ne le voit pas (un
- * fichier du même compte). Rend son texte, ou la raison du refus, en mots, sans le chemin.
+ * fichier du même compte). Rend son texte, ou la raison du refus, en mots, sans le chemin. `worktree` : pour un
+ * dépôt du manager (depot-manager.ts), la seule racine, le worktree noté du groupe, résolu et encore un worktree.
  */
-const readReportPath = async ($: any, raw: unknown): Promise<{ text: string } | { why: string }> => {
+const readReportPath = async ($: any, raw: unknown, worktree?: string): Promise<{ text: string; real: string } | { why: string }> => {
   if (typeof raw !== 'string' || raw.trim() === '' || raw.length > 1000) return { why: 'not a path' }
   const path = raw.trim().replace(/\\/g, '/')
   if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(path) || !/^(?:\/(?!\/)|[A-Za-z]:\/)/.test(path)) return { why: 'not an absolute path' }
@@ -929,8 +977,8 @@ const readReportPath = async ($: any, raw: unknown): Promise<{ text: string } | 
   }
   const real = typeof before?.realPath === 'string' ? before.realPath.replace(/\\/g, '/') : ''
   if (before?.kind !== 'file' || real === '') return { why: 'not a regular file' }
-  const roots = (await reportRoots($)).filter(r => real.startsWith(`${r}/`))
-  if (roots.length === 0) return { why: 'outside your worktree and your temporary folder (CLAUDE_JOB_DIR)' }
+  const roots = (worktree === undefined ? await reportRoots($) : await reportRoot($, worktree)).filter(r => real.startsWith(`${r}/`))
+  if (roots.length === 0) return { why: worktree === undefined ? 'outside your worktree and your temporary folder (CLAUDE_JOB_DIR)' : 'outside the worktree noted for this send of the group' }
   // Un dossier temporaire sous le worktree : il suffit qu'une des deux racines accepte le chemin.
   if (roots.every(r => real.slice(r.length + 1).split('/').some(part => part.startsWith('.')))) return { why: 'under a hidden folder or a hidden file' }
   // Un lien au nom en .md qui mène à un fichier d'un autre type : refusé comme ce fichier, une fois sous une racine
@@ -950,7 +998,68 @@ const readReportPath = async ($: any, raw: unknown): Promise<{ text: string } | 
   }
   if (text.length > REPORT_PATH_MAX) return { why: `over ${REPORT_PATH_MAX} characters` }
   if (text.trim() === '') return { why: 'the file is empty' }
-  return { text }
+  return { text, real }
+}
+
+/**
+ * Le dépôt du compte rendu d'un groupe par le manager (`{"reportPath", "group"}`, depot-manager.ts) : gardes de
+ * `depositTarget` (relais relu en entier), fichier lu sous le seul worktree noté de l'envoi, texte entier écrit dans un
+ * fichier neuf du relais (jamais sur un fichier qui existe, jamais pour une mission effacée). La marque se pose
+ * ensuite, dans l'écriture du board (`withDeposit`) ; refusé, rien n'est écrit.
+ */
+const depositCall = async ($: any, rawPath: unknown, rawGroup: unknown, now: number): Promise<{ deposit?: Deposit; text: string }> => {
+  const refused = (why: string) => ({ text: ` · "reportPath" with "group" refused: ${neutralInPrompt(why)}; nothing was deposited.` })
+  // Relu d'abord : une reprise de la mission par une autre discussion se voit avant le dépôt.
+  if (!(await pull($))) return refused('the missions file could not be re-read')
+  const board: Board | null = await read($, boardAtom)
+  const run = activeRun(board)
+  // Menée ici : la mission active de cette discussion, qu'elle tient (une autre discussion qui l'a reprise la mène).
+  if (!board || board.delegate || !run || run.owner !== board.session) return refused('no mission is led in this discussion')
+  // Aucun segment « . » ou « .. » : le chemin ne remonte jamais hors du worktree, quel que soit le chemin résolu que rend le moteur.
+  if (typeof rawPath === 'string' && rawPath.replace(/\\/g, '/').split('/').some(part => part === '.' || part === '..')) return refused('a path with a . or .. segment is not read')
+  const gaps = { count: 0 }
+  const relay = await readRelay($, run.id, gaps)
+  // La racine du dépôt principal, telle que le moteur la donne, sinon (aucune, ou « error » quand le moteur lève) celle du board.
+  const repo = await mainRepoRoot($)
+  const target = depositTarget(run, rawGroup, isRelay(relay, run.id) ? relay : null, gaps.count === 0, typeof repo === 'string' && repo !== 'error' ? repo : board.root)
+  if ('why' in target) return refused(target.why)
+  const outcome = await readReportPath($, rawPath, target.worktree)
+  if ('why' in outcome) return refused(outcome.why)
+  const session = managerReportSession(target.group.id, now)
+  const path = reportPath($, run.id, session)
+  if (!path) return refused('the Claude folder is unknown, so the whole report could not be kept')
+  let isThere = true
+  try {
+    isThere = await $.fs.exists(path)
+  } catch {
+    // Dans le doute, le fichier est là : rien ne le remplace.
+  }
+  if (isThere) return refused('a deposit file of that name already exists, and nothing replaces it')
+  if (!(await writeReportFile($, run.id, session, outcome.text))) return refused('the mission was erased, or the whole report could not be written')
+  return { deposit: { runId: run.id, groupId: target.group.id, linkAt: target.link.at, worktreeName: String(target.link.worktreeName), mark: { at: now, length: outcome.text.length }, read: outcome.real }, text: '' }
+}
+
+/** Le dépôt en cours dans ce processus (son jeton et sa date ; null : aucun) ; passé ce délai, un appel resté en route ne bloque plus. */
+let depositBusy: { at: number } | null = null
+const DEPOSIT_BUSY_MS = 60_000
+
+/**
+ * Après l'écriture du board : la marque posée par cette écriture (`isWritten`, l'issue de la boucle d'écriture, jamais
+ * une relecture), la réponse le dit ; sinon, le fichier écrit pour elle s'efface, rien n'est déposé.
+ */
+const depositOutcome = async ($: any, d: Deposit, isWritten: boolean): Promise<string> => {
+  const run = ((await read($, boardAtom)) as Board | null)?.runs.find(r => r.id === d.runId)
+  const g = run?.groups?.find(x => x.id === d.groupId)
+  const link = [g?.linked, g?.delegated, ...earlierOf(g?.delegated)].find(l => l?.at === d.linkAt)
+  const file = reportFileName(d.runId, managerReportSession(d.groupId, d.mark.at))
+  if (isWritten) {
+    // La fermeture ne le compte qu'avec une session du CLI notée pour l'envoi, comme un compte rendu du worker.
+    const isCounted = run !== undefined && g !== undefined && link !== undefined && groupReportOf(null, g, run.groups, link) !== undefined
+    return ` · final report of group ${shownGroupId(d.groupId)} deposited by you (the manager) for its worker, which lacked the flow tool: kept with its send, whole in ~/.claude/flow-board/relais/${file}; ${isCounted ? 'its closing counts it' : 'its closing does not count it (no CLI session noted for this send): it keeps the session'}, and a report its worker leaves later prevails. Now, only if git status in its worktree shows it untracked, delete the file it was read from, ${JSON.stringify(neutralInPrompt(d.read))} (its text is kept): an untracked file there stops the closing; a committed one stays.`
+  }
+  // Le fichier n'est effacé que s'il n'est pas celui d'une marque posée (un autre dépôt du même instant).
+  if (link?.managerReport?.at !== d.mark.at) await eraseFile($, reportPath($, d.runId, managerReportSession(d.groupId, d.mark.at)))
+  return ` · "reportPath" with "group": nothing was deposited (the send of group ${shownGroupId(d.groupId)} changed, or another deposit arrived, while it was recorded); send it again.`
 }
 
 /**
@@ -964,6 +1073,23 @@ const mainRefWritten = new Set<string>()
 
 /** Les tentatives ratées (fichier des missions illisible, aucune copie écrite) par mission, depuis le démarrage. */
 const mainRefFailures = new Map<string, number>()
+
+/**
+ * La référence « [ref] » de cette discussion, par mission, que ce processus a écrite à côté du relais (réponse
+ * « written ») depuis son démarrage, son dernier rechargement ou /clear (`session.start` la vide) et la dernière
+ * reprise ici : la demande de lancement la donne au lieu de faire rappeler ListAgents. Seulement en mémoire : le
+ * moteur ne donne pas la référence à un mod, et après un redémarrage elle a pu changer.
+ */
+const mainRefKnown = new Map<string, string>()
+
+/**
+ * Les parties communes de la dernière demande entière de lancement écrite (`launchOffered`), et celles que Claude a
+ * reçues (`launchReceived`, posées au début du tour dont le texte les porte) : la demande suivante aux mêmes parties
+ * prend la forme courte (`isShortLaunch`). En mémoire seulement : `session.start` (démarrage, rechargement, /clear)
+ * et toute compaction les effacent, et la demande entière revient.
+ */
+let launchOffered: LaunchParts | null = null
+let launchReceived: LaunchParts | null = null
 
 /** Au-delà de ce nombre de tentatives ratées, la demande s'arrête : chaque reprise recite les comptes rendus. */
 const MAIN_REF_TRIES = 3
@@ -1428,7 +1554,10 @@ const pullRelay = async ($: any, board: Board) => {
   const run = activeRun(board)
   const isWatching = run?.groups?.some(g => g.linked !== undefined) ?? false
   const before: Relay | null = await read($, relayAtom)
-  const stored = run && isWatching ? await readRelay($, run.id) : undefined
+  const gaps = { count: 0 }
+  const stored = run && isWatching ? await readRelay($, run.id, gaps) : undefined
+  // Comment s'est passée cette lecture, pour le guet des workers silencieux (`watchSilentWorkers`), avant tout retour.
+  relayReadNow = run && isWatching ? { run: run.id, gaps: gaps.count, isAbsent: stored === undefined } : null
   const next = stored !== null && typeof stored === 'object' && (stored as Relay).run === run?.id ? (stored as Relay) : null
   if (JSON.stringify(next) === JSON.stringify(before)) return
   await update($, relayAtom, () => next)
@@ -1737,10 +1866,11 @@ let seatWasMine = false
  */
 const watchSeat = async ($: any, isRead: boolean) => {
   await restoreCooHere($)
+  if (isRead) await quietly(() => markNamedOnLoad($))
   const board: Board | null = await read($, boardAtom)
   if (!board || board.delegate) {
     numbersNow = null
-    if (clearDeadSince()) $.ui.invalidate('ui.render')
+    if (clearSeatReads()) $.ui.invalidate('ui.render')
     return
   }
   const now = await $.clock.now()
@@ -1765,13 +1895,15 @@ const watchSeat = async ($: any, isRead: boolean) => {
       // La date de fin des workers qui retiennent, relue au relais comme la nuit : la marque « à forcer » et ses minutes.
       const deadBefore = deadPrint
       await readDeadSince($, fresh)
-      if (JSON.stringify(roadmapNowCache) !== before || JSON.stringify(numbersNow) !== numbersBefore || deadPrint !== deadBefore) $.ui.invalidate('ui.render')
-    } else if (clearDeadSince()) $.ui.invalidate('ui.render')
+      // Le signal de vie de chaque mission ouverte, relu à la même veille (la marque « discussion arrêtée »).
+      const isLivenessChanged = await refreshLiveness($, claudeHome($), fresh, await $.clock.now())
+      if (JSON.stringify(roadmapNowCache) !== before || JSON.stringify(numbersNow) !== numbersBefore || deadPrint !== deadBefore || isLivenessChanged) $.ui.invalidate('ui.render')
+    } else if (clearSeatReads()) $.ui.invalidate('ui.render')
     return
   }
   numbersNow = null
   // Sans relecture, une date gardée vieillirait jusqu'à « à forcer » : le siège perdu ou le fichier illisible l'effacent.
-  if (clearDeadSince()) $.ui.invalidate('ui.render')
+  if (clearSeatReads()) $.ui.invalidate('ui.render')
   // Sans le siège, une confirmation de « Changer l'endroit » ne reste jamais en attente : elle se redemande au retour.
   whereAsk = false
   // Une mission ouverte ici alors que le siège est ailleurs : la discussion ne demande plus le siège.
@@ -1824,6 +1956,26 @@ const restoreCooHere = async ($: any) => {
     kept = await $.store.get(cooHereKey(here))
   })
   if (kept === true) await commit($, b => (b.cooHere !== undefined ? null : { board: { ...b, cooHere: here }, fx: noFx() }))
+}
+
+/** Les discussions dont la marque « nommée par flow-board » a déjà été posée ou vérifiée au chargement, dans ce processus. */
+const namedChecked = new Set<string>()
+
+/**
+ * Au chargement : une discussion dont le tableau montre une mission titrée née chez elle reçoit sa marque si elle ne
+ * l'a pas (`claimName` ne réécrit jamais une marque déjà là) ; une fois par discussion et par processus, une fois la
+ * marque posée ou lue présente (une lecture ratée se refait à la relecture suivante), à partir de la première
+ * relecture qui montre une telle mission (une relecture qui n'en montre pas encore, le fichier pas encore rattrapé,
+ * laisse revérifier à la suivante, sans rien lire du magasin). Jamais dans un worker.
+ */
+const markNamedOnLoad = async ($: any) => {
+  const board: Board | null = await read($, boardAtom)
+  const session = board?.session
+  if (!board || board.delegate || !session || namedChecked.has(session)) return
+  const titled = board.runs.find(r => r.bornIn === session && r.isTitled)
+  if (!titled) return
+  // Vérifiée une fois la marque posée (ou déjà là, de ce titre ou d'un autre) : une lecture ratée se refait à la relecture suivante.
+  if ((await claimName($, session, titled.title, await $.clock.now())) || (await markState($, session)) === 'present') namedChecked.add(session)
 }
 
 /**
@@ -2165,6 +2317,12 @@ const readDeadSince = async ($: any, board: Board) => {
   }
 }
 
+/** Efface les dates de fin et les verdicts du signal de vie gardés pour la vue ; vrai quand il y en avait. */
+const clearSeatReads = (): boolean => {
+  const hadDead = clearDeadSince()
+  return clearLiveness() || hadDead
+}
+
 /** Efface les dates gardées ; vrai quand il y en avait. */
 const clearDeadSince = (): boolean => {
   const had = deadPrint !== ''
@@ -2274,8 +2432,8 @@ export const roadmapAsk = (d: CooDo, r: CooRoadmap | null): string | null => {
   if (d.kind === 'idea-launch') return `◆ COO : je veux lancer l'idée ${id} de la feuille de route. Relis ask-matt, puis propose-moi sa carte de lancement par le champ "card" de l'outil flow (idea "${id}") ; je lancerai la mission d'un clic sur la carte.${guard}`
   if (d.kind === 'drop') return `◆ COO : je veux écarter l'idée ${id} de la feuille de route. Demande-moi d'abord ma raison, puis donne-lui le statut « écartée : <ma raison> » (elle reste dans le fichier)${commit}.${guard}`
   // Une chose « À reprendre » : la décision de la personne, seule à la faire sortir de la liste (elle reste dans le fichier).
-  if (d.kind === 'pending-launch') return `◆ COO : je veux lancer une mission pour la chose à reprendre ${id}. Regarde d'abord son statut : à un autre statut que « à décider » ou « plus tard » (déjà « lancée », rattachée ailleurs, écartée ou faite), ne la touche pas, ne la cite pas dans une carte et dis-le-moi. Encore ouverte, propose-moi sa carte de lancement, son titre commençant par ${id} et tenant en 70 signes au plus ; au premier tour où ton relevé montre la mission lancée, et une seule fois, passe l'entrée au statut « rattachée à <titre de la mission> », chaque « · » du titre écrit « - », si elle est encore « à décider » ou « plus tard », sans changer son id ni son texte${commit}.${guard}`
-  if (d.kind === 'pending-attach') return `◆ COO : je veux rattacher la chose à reprendre ${id} à une mission. Demande-moi laquelle, puis passe l'entrée au statut « rattachée à <son titre> », chaque « · » du titre écrit « - »${commit}.${guard}`
+  if (d.kind === 'pending-launch') return `◆ COO : je veux lancer une mission pour la chose à reprendre ${id}. Regarde d'abord son statut : à un autre statut que « à décider » ou « plus tard » (déjà « lancée », rattachée ailleurs, écartée ou faite), ne la touche pas, ne la cite pas dans une carte et dis-le-moi. Encore ouverte, propose-moi sa carte de lancement, son titre commençant par ${id} et tenant en 70 signes au plus ; au premier tour où ton relevé montre la mission lancée, et une seule fois, passe l'entrée au statut « rattachée à M<n> - <titre de la mission> » quand ton relevé met un numéro M<n> devant la mission, « rattachée à <titre de la mission> » sinon (le numéro recopié du relevé, jamais attribué par toi), chaque « · » du titre écrit « - », si elle est encore « à décider » ou « plus tard », sans changer son id ni son texte${commit}.${guard}`
+  if (d.kind === 'pending-attach') return `◆ COO : je veux rattacher la chose à reprendre ${id} à une mission. Demande-moi laquelle, puis passe l'entrée au statut « rattachée à M<n> - <son titre> » quand ton relevé met un numéro M<n> devant elle, « rattachée à <son titre> » sinon (le numéro recopié du relevé, jamais attribué par toi), chaque « · » du titre écrit « - »${commit}.${guard}`
   if (d.kind === 'pending-later') return `◆ COO : passe la chose à reprendre ${id} au statut « plus tard », sans rien changer d'autre${commit} ; elle reviendra dans ton point d'ouverture.${guard}`
   if (d.kind === 'pending-drop') return `◆ COO : je veux écarter la chose à reprendre ${id}. Demande-moi d'abord ma raison, puis donne-lui le statut « écartée : <ma raison> » (elle reste dans le fichier)${commit}.${guard}`
   const gone = r.gone.find(g => g.id === id)
@@ -3146,7 +3304,12 @@ const nightReopensNow = async ($: any, board: Board, blocks: readonly NightBlock
     // Cette discussion tient une autre mission (la reprendre la mettrait en pause, sans geste de la personne), ou c'est
     // celle du COO, qui tourne.
     const isBusy = session !== undefined && (session === here || board.runs.some(r => r.id !== b.mission && r.status === 'active' && r.owner === session))
-    const isDone = reopenedHere.has(`${watch}:${b.mission}`) || (lines !== null && isReopenLogged(lines, b.mission, false))
+    // Une mission en auto proposée sur « arrêtée » : toute ligne de réouverture de la surveillance, refusée comprise
+    // (une note refusée après un /reload-plugins qui a vidé la mémoire), suffit : jamais une seconde commande ; sauf les
+    // refus « sa session tourne encore » et « pour le matin » de l'app, que leurs propres cas disent plus bas.
+    const isAutoTried =
+      b.isAuto === true && lines !== null && lines.some(l => l.act === 'reopen' && l.mission === b.mission && l.why !== NIGHT_RUNNING && l.why !== NIGHT_APP_MORNING)
+    const isDone = reopenedHere.has(`${watch}:${b.mission}`) || (lines !== null && isReopenLogged(lines, b.mission, false)) || isAutoTried
     // Sa session tournait encore quand le Claude du COO l'a vérifiée : plus reproposée pendant cette surveillance.
     const isRunning = runningHere.has(`${watch}:${b.mission}`) || (lines !== null && isRunningLogged(lines, b.mission))
     out[b.mission] =
@@ -3173,7 +3336,9 @@ const nightReopensNow = async ($: any, board: Board, blocks: readonly NightBlock
  * `coordinate.night` avec `reopen` (décision R38) : le Claude du COO a lancé la commande du relevé ; le mod le note
  * au journal, une fois par surveillance et mission, seulement dans le CLI et pour une mission présente, pas
  * archivée, en pause du mod (pas coupée par le COO) : un blocage relevé (ouverte nulle part, ou en pause « discussion
- * fermée »), ou tout juste rouverte (son auto déjà reparti de lui-même, d'une pause « discussion fermée », depuis l'allumage de la surveillance compris). Avec `running` (le Claude du COO a trouvé sa session en marche) : refusée, pour
+ * fermée »), ou tout juste rouverte (son auto déjà reparti de lui-même, d'une pause « discussion fermée », depuis l'allumage de la surveillance compris) ;
+ * ou une mission en auto, sans pause, que ce mod du COO a proposée « à rouvrir » pendant cette surveillance sur une
+ * discussion dite arrêtée (`isAutoReopenProposed`). Le blocage s'y relit sans le verdict : la note ne refuse jamais sur lui. Avec `running` (le Claude du COO a trouvé sa session en marche) : refusée, pour
  * le matin, notée une fois et plus reproposée de la surveillance. Dans l'app : refusée, pour le matin. Rien d'autre ne
  * s'écrit : la mission rouverte voit son auto repartir de lui-même quand sa reprise à la relance vaut encore, sinon
  * elle reste en manuel ; le COO ne l'allume jamais.
@@ -3195,8 +3360,13 @@ const recordReopen = async ($: any, o: { root: string; now: number; watch: strin
   // fermée » (le blocage « à rouvrir », la reprise à la relance : la discussion relancée a pu reprendre avant cet
   // appel) : la réouverture se note aussi ; rien ne s'allume ici.
   const isJustResumed = isJustReopened && isAutoOn(run) && (autoResumedAt(run) ?? -1) >= o.watchAt && autoResumedLabel(run) === AUTO_RESUMED_RELAUNCH
-  const isBlock = !isJustReopened && (await nightBlocksNow($, o.board, o.now)).some(b => b.mission === o.mission && b.act === 'reopen')
-  if (!isJustResumed && (!isPaused || (!isBlock && !isJustReopened))) return refuse('pas une mission à rouvrir', 'it is not a mission in auto paused by its dashboard with open groups.')
+  // Le blocage sans le verdict : la discussion relancée a déjà son fichier de session quand la note arrive.
+  const isBlock = !isJustReopened && (await nightBlocksNow($, o.board, o.now, false, true)).some(b => b.mission === o.mission && b.act === 'reopen')
+  // Une mission en auto que ce mod a proposée « à rouvrir » pendant cette surveillance, sur une discussion dite arrêtée,
+  // et dont l'auto est encore allumé, sans coupure du COO depuis.
+  const isProposed = isAutoReopenProposed(o.watch, o.mission) && isAutoOn(run) && !(isAutoPauseStored(run) && autoPauseWhy(run) === AUTO_STOPS.coo)
+  if (!isJustResumed && !isProposed && (!isPaused || (!isBlock && !isJustReopened)))
+    return refuse('pas une mission à rouvrir', 'it is not a mission in auto paused by its dashboard with open groups, nor a mission in auto proposed for reopening during this night watch because its background discussion no longer ran.')
   // Le Claude du COO a trouvé sa session encore en marche (un « pid ») : rien n'est lancé ; un seul refus au journal par
   // surveillance et mission, et le relevé ne la repropose plus de la surveillance.
   if (o.isRunning) {
@@ -3259,7 +3429,8 @@ const recordNight = async ($: any, one: unknown): Promise<string> => {
   const board = seat.stored ?? seat.local
   const title = neutralQuoted(board.runs.find(r => r.id === mission)?.title ?? mission)
   // Le blocage que nomme l'appel ; à défaut, un « resend » sans groupe désigne celui d'un groupe, quand il est seul pour la mission.
-  const all = (await nightBlocksNow($, board, now)).filter(b => b.mission === mission && b.act === act)
+  // Un geste autre que la réouverture (traitée plus haut) : son blocage ne dépend pas du verdict, qui ne se lit pas.
+  const all = (await nightBlocksNow($, board, now, false, true)).filter(b => b.mission === mission && b.act === act)
   const exact = all.filter(b => b.group === group)
   const blocks = exact.length > 0 || act !== 'resend' || group !== undefined ? exact : all
   if (blocks.length !== 1) {
@@ -3506,9 +3677,14 @@ const deadSinceOf = async ($: any, board: Board, ids: readonly string[], isStric
   return (mission, group) => found.get(JSON.stringify([mission, group]))
 }
 
-/** Les blocages des missions en auto relevés à l'instant, chacun avec le geste de nuit qui le lève. */
-const nightBlocksNow = async ($: any, board: Board, now: number, isTick = false): Promise<NightBlock[]> => {
-  const views = nightViewsOf(board, { waveDue: nightWaveDue(board, now, isTick), forces: id => forcesFor(coordLive, id), plans: id => planWaitsOf(coordLive, id) })
+/**
+ * Les blocages des missions en auto relevés à l'instant, chacun avec le geste de nuit qui le lève ; le verdict du
+ * signal de vie de chaque mission lu à l'instant (`livenessNowOf`), sauf `isBlind` (la note d'une réouverture, qui ne
+ * refuse jamais sur le verdict : les blocages d'avant le signal de vie).
+ */
+const nightBlocksNow = async ($: any, board: Board, now: number, isTick = false, isBlind = false): Promise<NightBlock[]> => {
+  const liveness = isBlind ? undefined : await livenessNowOf($, claudeHome($), board, now)
+  const views = nightViewsOf(board, { waveDue: nightWaveDue(board, now, isTick), forces: id => forcesFor(coordLive, id), plans: id => planWaitsOf(coordLive, id), ...(liveness ? { liveness } : {}) })
   return nightBlocks(views, await nightDeadSince($, board, views), now)
 }
 
@@ -3541,6 +3717,7 @@ const watchNight = async ($: any, board: Board) => {
   if (watch === null) nightWaveSeen = []
   if (watch === null || isTurnOpen) return
   const blocks = await nightBlocksNow($, board, now, true)
+  noteAutoReopens(watch, blocks)
   // Dans l'app (une surface vue, hors du CLI), une mission à rouvrir reste pour le matin : le journal le note, une
   // fois par surveillance et mission, pour le résumé du matin. Avant tout dessin, la surface n'est pas connue : rien.
   if (lastSurface !== undefined && !isCliHere()) {
@@ -4091,31 +4268,34 @@ const launchCooGroups = async (
   }
   const now = await $.clock.now()
   const ids = ready.map(g => g.group.id)
-  if (!(await commit($, b => startLinkedGroups(b, ids, now)))) return 'retry'
+  // Une autre mission devenue active avant la note n'est pas touchée : rien n'est lié, et la relecture suivante réessaie.
+  const noted = await linkGroups($, runId, ids, now)
+  if (!noted) return 'retry'
   // Un groupe lié entre-temps (l'auto, « ↗ Worker ») ferait deux sessions : seuls partent les groupes que ce lien a posés,
   // tous ; sinon les liens posés ici s'annulent, et la relecture suivante recalcule sans lui.
-  const linkedNow = activeRun(await read($, boardAtom))?.groups?.filter(g => ids.includes(g.id) && g.linked?.at === now).map(g => g.id) ?? []
+  const linkedNow = (noted.groups ?? []).filter(g => ids.includes(g.id) && g.linked?.at === now).map(g => g.id)
   if (linkedNow.length !== ids.length) {
-    for (const id of linkedNow) await commit($, b => cancelLinkedGroup(b, id, now))
+    for (const id of linkedNow) await cancelNotedLink($, runId, id, now)
     return 'retry'
   }
-  const text = await delegationText($, run, ready, await writeDecidedFile($, await read($, boardAtom)), undefined, await isAutoHere($, await read($, boardAtom)))
+  // Le texte d'après la mission écrite par la note de l'envoi : le gabarit et les noms du brief sont ceux que la fermeture cherchera.
+  const text = await delegationText($, noted, withNotedGroups(ready, noted, now), await writeDecidedFile($, await read($, boardAtom)), undefined, await isAutoHere($, await read($, boardAtom)))
   if (isUnsafe(text)) {
-    for (const id of ids) await commit($, b => cancelLinkedGroup(b, id, now))
+    for (const id of ids) await cancelNotedLink($, runId, id, now)
     await mark()
     return 'none'
   }
   // Un message de la personne arrivé pendant la préparation : rien ne part derrière lui, les liens s'annulent, et la
   // relecture suivante réessaie.
   if (isTurnOpen) {
-    for (const id of ids) await commit($, b => cancelLinkedGroup(b, id, now))
+    for (const id of ids) await cancelNotedLink($, runId, id, now)
     return 'retry'
   }
   // Un geste de nuit dont la surveillance s'est arrêtée pendant la préparation : rien ne part, les liens s'annulent ;
   // une lecture ratée, ou un message de la personne arrivé pendant cette relecture : rien ne part, réessayé.
   const still = isStillOn ? await isStillOn() : true
   if (still !== true || isTurnOpen) {
-    for (const id of ids) await commit($, b => cancelLinkedGroup(b, id, now))
+    for (const id of ids) await cancelNotedLink($, runId, id, now)
     if (still !== false) return 'retry'
     await mark()
     return 'stopped'
@@ -4135,7 +4315,7 @@ const launchCooGroups = async (
   })
   if (isIn) return 'sent'
   if (autoLaunch?.text === text) autoLaunch = null
-  for (const id of ids) await commit($, b => cancelLinkedGroup(b, id, now))
+  for (const id of ids) await cancelNotedLink($, runId, id, now)
   return { dropped: ids }
 }
 
@@ -6019,8 +6199,7 @@ const cooSetAsideCtx = async ($: any, board: Board): Promise<{ setAside: CooSetA
     // rapport réécrit après la validation ne vaut pas. Seule source des états « faite : » au relevé.
     const round = own && hasOwn === true ? validatedRoundOf(run) : null
     const kept = round ? await readMissionReport($, run.id) : null
-    const sameTitle = (t: string) => t.replace(/·/g, '-').trim() === run.title.replace(/·/g, '-').trim()
-    const titleShared = board.runs.some(r => r.id !== run.id && sameTitle(r.title))
+    const titleShared = board.runs.some(r => r.id !== run.id && sameRoadmapTitle(r.title, run.title))
     // Validé, mais le fichier ne se relit pas ou ne porte pas ce tour : dit tel quel, jamais « pas validé ».
     const fileState = hasOwn === 'unread' || (isReportValidated(run) && kept === 'unread') ? { reportUnread: true } : !isReportValidated(run) ? {} : round === null || kept === null || kept === 'unread' || kept.round !== round ? { reportOtherRound: true } : {}
     toGlean.push({ id: run.id, title: run.title, reports, untaken, ...(own && hasOwn ? { report: own, reportValidated: round !== null && kept !== null && kept !== 'unread' && kept.round === round, ...(round ? { reportRound: round } : {}), ...(titleShared ? { titleShared } : {}), ...fileState } : {}) })
@@ -6417,16 +6596,6 @@ const unnoteApplied = async ($: any, runId: string, id: string) => {
     const before = soundApplied(await $.store.get(appliedKey(runId)))
     await $.store.set(appliedKey(runId), before.filter(x => x !== id))
   })
-}
-
-/** Le message que le mod compose pour son Claude : la réponse relayée, sans autre valeur que l'id de la question, le chemin contrôlé et la série. */
-const relayMessage = (e: CoordGesture | CoordAnswer, gesture: GestureKind | undefined): string => {
-  const withdraw = e.question.startsWith(OPPOSITION_PREFIX) ? 'puis dis-moi ce que tu changes ; le tableau de bord retire la question lui-même.' : `puis retire la question : {"waiting": [{"id": ${asciiJson(e.question)}, "answered": true}]}.`
-  if (e.kind === 'answer') return `Le COO a écrit ma réponse à ta question bloquante ${asciiJson(e.question)} dans ${e.file}, série ${e.series} (la question et ma phrase exacte). Relis cette série, applique-la, ${withdraw}`
-  const head = `Le COO relaie ma réponse à ta question bloquante ${asciiJson(e.question)}, donnée d'un clic dans son tableau de bord :`
-  if (gesture === 'flaw') return `${head} je ne laisse pas cette faille sans correctif. Corrige-la (applique, teste, commite, puis envoie "fixed"), ${withdraw}`
-  const what = gesture === 'spend' ? 'la dépense' : "l'action externe"
-  return e.answer === 'yes' ? `${head} ${what} est autorisée. Fais-la, ${withdraw}` : `${head} ${what} est refusée. Continue sans elle et dis-moi ce que ça change, ${withdraw}`
 }
 
 /**
@@ -7782,7 +7951,8 @@ const cutPistes = async ($: any, print: string): Promise<string> => {
  * validée », puis la carte part. Seulement si, relus à l'instant, aucune mission (fichier des missions compris,
  * archivées comprises) ne porte la carte ou son dossier et aucun lancement gardé encore valable (pas périmé) ne la
  * nomme, toutes les lectures réussies ; sinon rien ne change. La carte qui ne part pas ensuite (liste des cartes pas
- * écrite) reste prête, sans piste : elle ne se lance pas, et le clic suivant la retire.
+ * écrite) reste prête, sans piste : elle ne se lance pas, et le clic suivant la retire. Appelée seulement par `cooDo`,
+ * qui vérifie que Claude est au repos, puis le siège du COO.
  */
 const removePistesCard = async ($: any, id: string): Promise<string> => {
   if (launchingNow.has(id)) return '◆ Rien n’est retiré : la carte est en train de partir ; relis-la.'
@@ -8046,7 +8216,8 @@ const archiveShown = async ($: any, ids: readonly string[], print: string): Prom
  * quitte la vue, sans rien écrire sur la mission ; rien quand la carte n'est plus prête, que sa mission attend
  * « ✓ Archiver » sur le board d'ici (le bouton qui archive la mission et retire la carte) ou qu'elle a encore droit à
  * sa carte (retirée, elle reviendrait au relevé suivant) ; rien non plus quand la liste des cartes ne s'écrit pas (le
- * siège repris ailleurs depuis le dessin, la liste changée ou pas écrite), et le toast dit pourquoi.
+ * siège repris ailleurs depuis le dessin, la liste changée ou pas écrite), et le toast dit pourquoi. Appelée seulement
+ * par `cooDo`, qui vérifie que Claude est au repos, puis le siège du COO.
  */
 const removeRetroCard = async ($: any, id: string): Promise<string> => {
   const board: Board | null = await read($, boardAtom)
@@ -8066,6 +8237,7 @@ const removeRetroCard = async ($: any, id: string): Promise<string> => {
  * (`launchingNow`, `removingNow` : ce dernier, pris pendant le retrait, fait refuser un clic de lancement avec son propre
  * message) et qu'aucun lancement gardé encore valable ne la nomme, les lancements relus (un lancement gardé illisible :
  * rien) ; sinon rien. Rien n'est écrit sur la feuille de route : l'idée que portait la carte garde son statut.
+ * Appelée seulement par `cooDo`, qui vérifie que Claude est au repos, puis le siège du COO.
  */
 const removeLaunchCard = async ($: any, id: string, shownAt: number | undefined): Promise<string> => {
   const late = '◆ Rien n’est retiré : relis la carte.'
@@ -8374,7 +8546,10 @@ const cardCall = async ($: any, input: unknown): Promise<string> => {
   return `Launch card ${parsed.card.id} ${same ? 'updated' : 'shown'} in the Coordination view: « ${neutralInPrompt(parsed.card.title)} », /${parsed.card.start}, ${parsed.card.mode}, ${parsed.card.effort}, travail/${parsed.card.folder}/. The user launches it with its button; never launch a mission without that click.`
 }
 
-/** « → /<départ> » sur une carte prête : un autre départ, choisi par la personne avant de lancer. */
+/**
+ * « → /<départ> » sur une carte prête : un autre départ, choisi par la personne avant de lancer. Appelée seulement par
+ * `cooDo`, qui vérifie que Claude est au repos, puis le siège du COO.
+ */
 const changeCardStart = async ($: any, id: string, start: LaunchStart): Promise<string> => {
   const board: Board | null = await read($, boardAtom)
   const now = await $.clock.now()
@@ -8445,7 +8620,8 @@ const pruneLaunches = async ($: any) => {
  * texte de lancement va dans le prompt du COO ; pour une carte de rétro dont la discussion du manager se désigne
  * (`retroTarget`), une demande de rétro va à sa place dans le fichier de coordination (sans prise, le repli vient
  * ensuite : `watchRetroAsked`). Rien quand la carte n'est plus
- * prête (un second clic, une mission déjà lancée) ou que l'écriture rate.
+ * prête (un second clic, une mission déjà lancée) ou que l'écriture rate. Appelée seulement par `cooDo`, qui vérifie
+ * que Claude est au repos, puis le siège du COO.
  */
 const launchCard = async ($: any, id: string, mode: LaunchMode, shownAt: number): Promise<string> => {
   if (removingNow.has(id)) return '◆ Rien n’est lancé : la carte est en train d’être retirée ; relis-la.'
@@ -8890,7 +9066,7 @@ export const retroFallbackText = (o: { plain: string; command: string; session: 
 export const launchText = (card: LaunchCard, launch: string, mode: LaunchMode, command: string): string => {
   const title = neutralInPrompt(card.title)
   // Le titre qui entre dans la commande du shell : lettres, chiffres, espaces et ponctuation simple, rien d'autre.
-  const shellTitle = card.title.normalize('NFC').replace(/[^\p{L}\p{N} .,:_-]/gu, ' ').replace(/\s+/g, ' ').trim() || 'Mission'
+  const shellTitle = shellSafeTitle(card.title)
   const firstLine = launchFirstLine(launch)
   // Les entrées de la feuille de route que cite la carte : leur fichier part avec elles, sans quoi la nouvelle discussion le cherchait.
   // Pas pour une rétro : son premier message n'a « rien d'autre », la mission close est sa demande (son titre en reprend les ids).
@@ -8917,6 +9093,24 @@ export const launchText = (card: LaunchCard, launch: string, mode: LaunchMode, c
         : `Lance-la tout de suite, sans me poser d'autre question d'abord (le lancement ne vaut que 10 minutes) : ${card.of ? 'une rétro' : 'un découpage de pistes de rétro'} n'a pas de tour d'intention. `) +
     `Ensuite, ne la suis pas activement : elle paraît dans ton relevé ; ${mode === 'auto' ? 'en auto, ses questions bloquantes paraissent ici' : 'en manuel, tu me préviens quand elle m’attend'}.`
   )
+}
+
+/**
+ * Le champ `launch` d'un appel, avant que son titre décide du nom : l'enregistrement de lancement relu (le même que
+ * `consumeLaunch` relit), en forme, dont le titre est celui que les hooks ont relevé pour la discussion
+ * (`hookTitle`, tel quel ou tel que l'app ou le terminal l'a reçu) pose la marque « discussion nommée » avec ce
+ * titre : la discussion porte déjà le titre de la carte, que le lancement se consomme ou non ensuite. Titre relevé
+ * différent ou inconnu, id hors forme, enregistrement absent ou lecture ratée : rien ; le premier titre de la mission
+ * la nommera, une fois. Le titre n'est que comparé, jamais écrit dans un chemin ni une commande.
+ */
+const markFromLaunch = async ($: any, raw: unknown, session: string) => {
+  if (!isLaunchId(raw) || session === '' || hookTitle === undefined) return
+  let record: LaunchRecord | null = null
+  await quietly(async () => {
+    record = soundRecord(await $.store.get(launchKey(raw)))
+  })
+  const rec = record as LaunchRecord | null
+  if (rec && isCardTitle(hookTitle, rec.title)) await markNamed($, session, rec.title, await $.clock.now())
 }
 
 /**
@@ -10046,11 +10240,19 @@ const stopAgentHere = async ($: any, agentId: string) => {
 const returnedAgentOf = (text: string): string | null =>
   /^\s*<agent-message\s+from="([^"]+)"/.exec(text)?.[1] ?? /<task-notification>[\s\S]*?<task-id>([^<]+)<\/task-id>/.exec(text)?.[1] ?? null
 
+/**
+ * Le dernier titre de la discussion que les hooks classiques ont porté (`session_title`), dans ce processus ;
+ * inconnu tant qu'aucun ne l'a porté. Jamais le titre de la mission en repli (celui du registre l'est) : seul
+ * ce relevé dit le titre que la discussion porte, comparé au titre d'une carte au rattachement.
+ */
+let hookTitle: string | undefined
+
 /** Le chemin du transcript de la session, tel que les hooks classiques le donnent. */
 const noteTranscript = async ($: any, e: any) => {
   const transcript = typeof e?.transcript_path === 'string' ? e.transcript_path : undefined
   // Le titre de la discussion, quand le hook le porte (SessionStart, UserPromptSubmit).
   const title = typeof e?.session_title === 'string' && e.session_title.trim() !== '' ? e.session_title.trim() : undefined
+  if (title !== undefined) hookTitle = title
   if (transcript === undefined && title === undefined) return
   await quietly(() => commitRegistry($, reg => withHeader(reg, { transcript, title })))
   if (needsRebuild && transcript !== undefined) await quietly(() => catchUpOwn($, true))
@@ -10632,15 +10834,21 @@ export const quietly = async (effect: () => unknown) => {
   }
 }
 
-const afterChange = async ($: any, fx: Effects, board: Board) => {
+/** Rend `refused` quand le nom décidé (`fx.discussionTitle`) n'a pas été posé : la réponse de l'outil le dit alors. */
+const afterChange = async ($: any, fx: Effects, board: Board): Promise<'refused' | undefined> => {
   scheduleSave($)
+  let named: 'refused' | undefined
   if (fx.discussionTitle !== undefined && board.session) {
     const title = fx.discussionTitle
-    await quietly(() => $.store.set(discussionTitleKey(board.session!), title))
+    // Le nom décidé, revérifié dans la file des poses de la marque, qui le retient : une marque posée entre-temps (un
+    // lancement, un appel parallèle) ou une lecture ratée l'emporte, et la discussion garde son nom.
+    if (await claimName($, board.session, title, await $.clock.now())) await quietly(() => $.store.set(discussionTitleKey(board.session!), title))
+    else named = 'refused'
   }
   for (const text of fx.toasts.slice(0, 2)) await quietly(() => $.ui.toast(text))
   if (fx.openPane) await quietly(() => openUnasked($))
   await quietly(() => syncStatus($, board))
+  return named
 }
 
 /**
@@ -11375,7 +11583,7 @@ const sendAutoAction = ($: any, action: AutoAction, run: Run, text: string) => {
  * Le texte d'une action de l'auto, construit à l'instant de l'envoi comme le bouton l'aurait mis dans
  * le prompt : les groupes d'une vague (« ⇉ en parallèle », « ↗ Worker », en mode auto), la revue
  * d'un groupe rendu (« ◆ Revue du groupe · worker »), sa revue de sécurité (« ⛨ Revue de
- * sécurité »). Vide pour une commande, et quand il n'y a rien à demander (rien ne part alors) ;
+ * sécurité »), l'avis de sécurité d'un lot d'un seul ticket (`lotAdviceText`). Vide pour une commande, et quand il n'y a rien à demander (rien ne part alors) ;
  * `Unsafe` quand une valeur relue du fichier partagé qu'il porterait est hors forme (l'auto se met
  * alors en pause « lecture de la mission ratée »).
  */
@@ -11383,13 +11591,38 @@ const autoActionText = async ($: any, run: Run, action: AutoAction): Promise<str
   if (action.kind === 'command') return ''
   if (action.kind === 'review') return (await linkedReviewText($, run, action.group)) ?? ''
   if (action.kind === 'security') return (await securityReviewText($, run, action.group)) ?? ''
+  if (action.kind === 'advice') return lotAdviceText((await securityReviewNow($)) === 'off')
   if (action.kind === 'compact') return ''
+  const checked = waveCheck(run, action)
+  if (!Array.isArray(checked)) return checked
+  return delegationText($, run, checked, await writeDecidedFile($, await read($, boardAtom)), undefined, true)
+}
+
+/**
+ * Les vues d'une vague (ses groupes qui ont un ticket ouvert), ou ce qui l'arrête, sans rien écrire : vide quand aucun
+ * n'a de ticket ouvert, hors forme pour un id de mission ou de groupe que le texte refuserait (`delegationText`).
+ * Le même contrôle avant la marque (`autoTurn`, rien d'écrit) et au calcul du texte, d'après la mission de la note.
+ */
+const waveCheck = (run: Run, action: Extract<AutoAction, { kind: 'groups' }>): GroupView[] | '' | Unsafe => {
   const plan = groupPlan(run)
   const views = plan ? plan.groups.filter(g => action.groups.includes(g.group.id) && g.open.length > 0) : []
   if (views.length === 0) return ''
   // Refusé avant d'écrire le fichier des choix : un id hors forme ne fait rien écrire.
   if (!isSafeId(run.id)) return { unsafe: 'l’id de la mission' }
-  return delegationText($, run, views, await writeDecidedFile($, await read($, boardAtom)), undefined, true)
+  if (!views.every(v => isGroupId(v.group.id))) return { unsafe: 'l’id d’un groupe' }
+  return views
+}
+
+/** Le contrôle d'une vague avant sa marque : `waveCheck`, une valeur non vide (qui ne part jamais) quand elle peut partir. */
+const autoGroupsGate = (run: Run, action: Extract<AutoAction, { kind: 'groups' }>): string | Unsafe => {
+  const checked = waveCheck(run, action)
+  return Array.isArray(checked) ? 'ok' : checked
+}
+
+/** L'auto en pause sur une valeur relue hors forme, rien n'étant parti, et le toast qui dit laquelle. */
+const pauseUnsafe = async ($: any, text: Unsafe, now: number) => {
+  await afterAutoPause($, await commit($, b => stopActiveAuto(b, AUTO_STOPS.unreadable, now)))
+  await quietly(() => $.ui.toast(`⚡ Auto en pause : ${text.unsafe} est hors forme dans le fichier de mission (relu, peut-être retouché) ; rien n’est parti.`))
 }
 
 /**
@@ -11407,9 +11640,21 @@ const markAutoAction = (board: Board, action: AutoAction, now: number): Outcome 
 }
 
 /** Défait la marque d'une action qui n'est pas partie ; pour une vague, ses groupes reviennent à lancer. */
-const unmarkAutoAction = async ($: any, action: AutoAction, at: number) => {
+const unmarkAutoAction = async ($: any, action: AutoAction, at: number, runId: string, linkedAt: number) => {
   await commit($, b => unmarkAutoSent(b, action.key, at))
-  if (action.kind === 'groups') for (const id of action.groups) await commit($, b => cancelLinkedGroup(b, id, at))
+  if (action.kind === 'groups') for (const id of action.groups) await cancelNotedLink($, runId, id, linkedAt, at)
+}
+
+/**
+ * Annule le lien d'un groupe que la note de `linkedAt` a posé sur la mission `runId` (« worker à lancer » redevient
+ * « à lancer »), relu à l'instant d'écrire : rien quand une autre mission est devenue active, ni pour un lien d'un
+ * autre envoi (une autre date), qu'un worker attend peut-être déjà. `at` date la ligne du journal.
+ */
+async function cancelNotedLink($: any, runId: string, id: string, linkedAt: number, at: number = linkedAt): Promise<void> {
+  await commit($, b => {
+    const run = activeRun(b)
+    return run?.id === runId && run.groups?.find(g => g.id === id)?.linked?.at === linkedAt ? cancelLinkedGroup(b, id, at) : null
+  })
 }
 
 /**
@@ -11486,16 +11731,40 @@ const autoTurn = async ($: any, isGesture = false) => {
     if (decision.kind === 'none' && decision.note !== undefined) await commit($, b => noteAutoHold(b, decision.note!, now))
     if (decision.kind !== 'send') return
     const action = decision.action
-    // Le texte d'abord, sur la mission telle qu'elle est : il fige la liste des groupes, leur effort et leur numéro d'envoi.
-    const text = await autoActionText($, run, action)
+    // Le texte d'abord, sur la mission telle qu'elle est ; pour une vague, son seul contrôle ici (rien d'écrit) : son
+    // texte se calcule sur la mission écrite par la note de l'envoi, plus bas.
+    const text = action.kind === 'groups' ? autoGroupsGate(run, action) : await autoActionText($, run, action)
     // Une valeur relue hors forme n'entre pas dans le texte : rien ne part, l'auto se met en pause, et un toast dit laquelle.
     if (isUnsafe(text)) {
-      await afterAutoPause($, await commit($, b => stopActiveAuto(b, AUTO_STOPS.unreadable, now)))
-      await quietly(() => $.ui.toast(`⚡ Auto en pause : ${text.unsafe} est hors forme dans le fichier de mission (relu, peut-être retouché) ; rien n’est parti.`))
+      await pauseUnsafe($, text, now)
       return
     }
     if (action.kind !== 'command' && text === '') return
-    if (!(await commit($, b => markAutoAction(b, action, now)))) return
+    // La mission telle que la marque l'a écrite : pour une vague, avec le nom de worktree noté à l'envoi de chaque groupe.
+    // Seulement sur la mission décidée, relue à l'instant d'écrire : une autre devenue active entre-temps n'est pas touchée.
+    const noted = await commitRun($, run.id, b => markAutoAction(b, action, now))
+    if (!noted) return
+    // Le texte d'une vague, d'après cette mission-là : le brief donne le gabarit et les noms de cette note, jamais ceux
+    // d'un titre lu avant elle. Hors forme ou vide : rien ne part, la marque se retire.
+    // Un texte qui lève (une écriture du fichier des choix ou d'un brief) : la marque se retire et l'auto se met en pause
+    // (« écriture ratée »), sans quoi chaque nouvel essai consommerait un numéro d'envoi en silence.
+    let sent: string | Unsafe = text
+    let isThrown = false
+    if (action.kind === 'groups') {
+      try {
+        sent = await autoActionText($, noted, action)
+      } catch {
+        sent = ''
+        isThrown = true
+      }
+    }
+    if (isUnsafe(sent) || (action.kind === 'groups' && sent === '')) {
+      const at = await $.clock.now()
+      await unmarkAutoAction($, action, at, run.id, now)
+      if (isUnsafe(sent)) await pauseUnsafe($, sent, now)
+      else if (isThrown) await afterAutoPause($, await commit($, b => stopActiveAuto(b, AUTO_STOPS.unwritten, at)))
+      return
+    }
     // La marque est dans le fichier avant l'envoi : une reprise après un plantage ne le refait pas.
     saveTimer?.cancel()
     const isWritten = await saveNow($)
@@ -11507,11 +11776,11 @@ const autoTurn = async ($: any, isGesture = false) => {
     // Le plan du projet relu illisible entre-temps (une relecture des 5 s) : rien ne part, la marque se retire.
     if (!isWritten || !marked || !isStillMarked || isTurnOpen || coordSeen?.state === 'unread' || isPlanUnreadHere(after) || !(await isAutoHere($, after))) {
       const at = await $.clock.now()
-      await unmarkAutoAction($, action, at)
+      await unmarkAutoAction($, action, at, run.id, now)
       if (!isWritten) await afterAutoPause($, await commit($, b => stopActiveAuto(b, AUTO_STOPS.unwritten, at)))
       return
     }
-    sendAutoAction($, action, marked, text)
+    sendAutoAction($, action, marked, sent)
   } finally {
     isAutoDeciding = false
     const again = autoAgain
@@ -11857,6 +12126,8 @@ const workerCompactCheck = async ($: any) => {
     // Les consignes du rôle « groupe » entre deux tickets, données à l'appel : `$.session.compact` saute le hook de
     // compaction de ce mod, et refuse pendant un tour (rien ne se met en file derrière un tour qui commencerait un ticket).
     const role = compactionRoleOf(board, await read($, registryAtom), await $.clock.now(), { done: ask.ticket, ...(next ? { next } : {}) })
+    // `$.session.compact` saute le hook de compaction : la demande entière de lancement reçue plus haut revient.
+    launchReceived = null
     let isCompacted = false
     let timer: { cancel: () => void } | null = null
     try {
@@ -12218,6 +12489,40 @@ const notifyWorkerStops = async ($: any, run: Run, relay: Relay): Promise<void> 
   }
 }
 
+/** Le dernier silence signalé ici pour chaque groupe (clé mission et groupe ; valeur, la date du dernier signal), en mémoire du mod. */
+const notifiedSilences = new Map<string, number>()
+
+/** La dernière lecture du relais par `pullRelay` : sa mission, ses sources illisibles, et s'il n'y avait aucun relais. */
+let relayReadNow: { run: string; gaps: number; isAbsent: boolean } | null = null
+
+/**
+ * Chez le manager qui tient la mission active, toutes les 5 s, hors du retour anticipé de `pullRelay` (un relais qui se
+ * tait ne change plus) : les groupes dont le worker se tait depuis 30 minutes sans compte rendu (`silentWorkers`)
+ * reçoivent une note, une fois par silence (un nouveau signal du worker la réarme). Rien ne part pendant un tour ouvert ;
+ * une note qui n'entre pas ne marque pas le silence, la relecture suivante la renvoie. Rien n'est écrit sur le disque.
+ */
+const watchSilentWorkers = async ($: any): Promise<void> => {
+  if (isTurnOpen) return
+  const board: Board | null = await read($, boardAtom)
+  const run = board ? activeRun(board) : undefined
+  if (!board || !run || board.delegate || run.owner !== board.session) return
+  // La lecture de `pullRelay` à ce passage : un relais lu en partie (une entrée illisible peut être celle d'un worker qui
+  // signale) ne mesure rien ; aucun relais (des workers sans outil flow) vaut un relais vide, la session notée mesurant
+  // alors depuis l'envoi.
+  const got = relayReadNow
+  if (got === null || got.run !== run.id || got.gaps > 0) return
+  const relay: Relay | null = got.isAbsent ? factsRelayOf(undefined, 0, run.id) : await read($, relayAtom)
+  const key = (s: { group: string }) => [run.id, s.group].join(':')
+  const silent = silentWorkers(run, relay, await $.clock.now()).filter(s => notifiedSilences.get(key(s)) !== s.lastAt)
+  if (silent.length === 0) return
+  let isIn = false
+  await quietly(async () => {
+    const r = await modSubmit($, { text: silenceNote(silent, await isAutoHere($, board)) })
+    isIn = r !== null && typeof r === 'object' && typeof r.text === 'string' && r.drop === undefined
+  })
+  if (isIn) for (const s of silent) notifiedSilences.set(key(s), s.lastAt)
+}
+
 /**
  * Envoie au worker Fable arrêté par le repli son message de reprise, en file derrière le tour : noté envoyé
  * seulement une fois entré (un résultat sans `drop`) ; refusé, un toast le dit : la personne relance le worker. Un
@@ -12426,9 +12731,13 @@ const quotaWindows = async ($: any): Promise<readonly QuotaWindow[]> => {
 const FOLLOW = (isRepo: boolean): string =>
   `pour savoir où en est une session, lire ${isRepo ? "l'état git de son worktree (git -C <worktree> log --oneline et git -C <worktree> status)" : 'les fichiers modifiés dans ce dossier'}, le tracker (statuts des tickets) et ListAgents (la session est-elle encore là), jamais claude logs (illisible)`
 
-/** La fusion d'un groupe quand la branche de travail a bougé depuis son départ : aucune consigne ne le disait. */
+/**
+ * La fusion d'un groupe : toujours en avance rapide, le geste de fin du worker (`procedure-groupe-fin.md`) ayant amené
+ * la branche de travail dans celle du groupe et passé la suite dans son worktree. Une fusion faite ici restait en cours
+ * dans le clone principal pendant que la suite tournait (une autre mission demandait si une fusion était en cours).
+ */
 const MERGE_MOVED =
-  "si la branche de travail a bougé : git merge --no-ff, conflits d'un fichier généré (l'arbre « Architecture » d'un README, par exemple) résolus comme le projet l'écrit (son CLAUDE.md ou la doc qu'il cite), les autres en gardant les deux côtés, contrôles relancés"
+  "seulement en avance rapide, dans le clone principal : git merge --ff-only <branche du groupe> ; refusée (la branche de travail a bougé depuis le geste de fin du worker), refaire ce geste dans le worktree du groupe, encore là avant sa fermeture, tel que le dit la procédure d'un worker (son « Geste de fin », dans procedure-groupe-fin.md : la branche de travail amenée par une fusion, ou par un rebase quand elle a été réécrite depuis, par un /project:sync par exemple, jamais fusionnée alors ; la suite complète passée là), puis recommencer l'avance rapide : jamais une fusion laissée en cours dans le clone principal pendant qu'une suite tourne"
 
 /** Ce qui sert de note de fin au manager, selon que la session a été lancée par l'app ou par le CLI. */
 const atEnd = (whose: string): string => `À la note de fin de ${whose} (dans le CLI : son message reçu par SendMessage)`
@@ -12559,7 +12868,8 @@ const writeBriefs = async ($: any, run: Run, views: readonly GroupView[], o: Bri
  * reste ici (un seul écrivain) : chaque session se déclare (`delegate`), suit la procédure de
  * `reference/procedure-groupe.md` (citée par son chemin, jamais recopiée) selon le CLAUDE.md du
  * projet, puis rend compte ; Claude rend les statuts ici. Le prompt ne porte que ce qui varie. Hors
- * forme, l'id de la mission ou d'un groupe n'y entre pas : la demande ne s'écrit pas (`Unsafe`).
+ * forme, l'id de la mission ou d'un groupe n'y entre pas : la demande ne s'écrit pas (`Unsafe`). Ses parties communes déjà
+ * reçues à l'identique dans cette discussion se remplacent par un renvoi à la demande entière (`isShortLaunch`).
  */
 const delegationText = async ($: any, run: Run, views: readonly GroupView[], decidedAt: string | null = null, imposed?: ImposedEffort, isAuto = false): Promise<string | Unsafe> => {
   if (!isSafeId(run.id)) return { unsafe: 'l’id de la mission' }
@@ -12632,7 +12942,7 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   // Les phrases sur Sonnet et sur Opus suivent la consigne d'effort, séparées d'une espace (celle hors auto finit sur un
   // point) : Opus pour tout groupe qui n'est ni « Sonnet high » ni lancé par « ↗ Fable » (le worker Fable part aussi sur Opus, que `FABLE_LAUNCH` écrit).
   const models = [views.some(isSonnet) ? SONNET_LAUNCH_FR : '', imposed !== 'fable' && views.some(v => !isSonnet(v)) ? OPUS_LAUNCH_FR : ''].join('')
-  const how = { many, isRepo, ownFolder: true, trustInProcedure: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: models !== '' ? `${effortRule.trimEnd()} ${models}` : effortRule }
+  const how = { many, isRepo, ownFolder: true, trustInProcedure: true, title: `${prefix}Groupe <id> · <thème>`, worktree: groupWorktreeTemplate(run), effort: models !== '' ? `${effortRule.trimEnd()} ${models}` : effortRule, ref: mainRefKnown.get(run.id) ?? null }
   const resent = (isRepo ? resentWorktrees(run, views) : '') + (isAuto ? resentFindings(views) : '')
   const root = await sessionRoot($)
   // Le brief de chaque groupe, écrit par flow-board dans le dossier temporaire du système : Claude le
@@ -12649,21 +12959,25 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
   const managerPart =
     `Ici : garder la mission (pas de nouvelle mission) et suivre ${many ? 'les sessions sans les ' : "la session sans l'"}attendre activement : ${FOLLOW(isRepo)}. ` +
     `Le compte rendu complet d'une session est dans le relais, son message n'en porte qu'une ligne. ` +
-    `Si l'app ou cette discussion redémarre, la mission reste à cette discussion et lui revient seule (flow-board redemande alors ta référence du moment, que les workers relisent par leur outil flow) ; si le tableau de bord la dit suivie dans une autre discussion, ne pas la reprendre : me le dire. Puis rendre les statuts des tickets faits pendant l'arrêt d'après Asana. ` +
+    `Si l'app ou cette discussion redémarre, la mission reste à cette discussion et lui revient seule (flow-board redemande alors ta référence du moment, que les workers relisent par leur outil flow) ; si le tableau de bord la dit suivie dans une autre discussion, ne pas la reprendre : me le dire. Puis rendre les statuts des tickets faits pendant l'arrêt d'après le suivi des tickets. ` +
     `${atEnd(many ? 'chacune' : 'la session')}, vérifier son travail ; avant d'appliquer ici un correctif que son compte rendu propose, lire ${isRepo ? 'sa branche (git log et git diff de son worktree)' : 'ses fichiers'} : elle l'a peut-être déjà fait ; une question de son compte rendu se tranche ici, et la session n'applique rien d'autre sans un message d'ici ; vérifier aussi, dans son compte rendu, que la revue du groupe a tourné (sinon, la lui demander par SendMessage avant tout ; pas de revue du groupe pour un groupe d'un seul ticket ; ni revue du groupe ni revue de sécurité sans logique ni zone sensible)${isRepo ? `, fusionner sa branche (${MERGE_MOVED})` : ''}, puis envoyer à l'outil flow les statuts de ses tickets dans "set"${isAuto ? " (un ticket dont les contrôles ont échoué reste à faire, en todo : l'auto renvoie le groupe une fois)" : ''}, avec {"returned": ["<id du groupe>"]} et, si son compte rendu dit que la revue du groupe a tourné, {"reviewed": ["<id du groupe>"]} (le tableau de bord ne la voit pas toujours : sans cela, il la proposerait encore), ` +
     `et, d'après son compte rendu, {"security": {"group": "<id du groupe>", "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; ${isAuto ? AUTO_FINDINGS_FR : 'me dire les failles trouvées : je décide de leur correction'} ; ${isAuto ? FIXED_LATER_AUTO : FIXED_LATER}. ` +
     `Enfin, un groupe clos (« Close now » dans la réponse de l’outil) se ferme selon sa procédure, puis {"closed": [...]}.`
   if (briefs.paths) {
     // Un seul brief par groupe : le Fable sous « ↗ Fable », l'Opus sinon.
     const list = briefs.paths.map(b => `${b.isFable ? 'brief Fable' : 'brief'} du groupe ${b.group} : ${shellQuote(b.path)}`).join(' ; ')
+    // Les parties communes déjà reçues à l'identique dans cette discussion : la forme courte, qui y renvoie.
+    const parts: LaunchParts = { how: launchHow({ ...how, brief: true }), follow: managerPart }
+    const isShort = isShortLaunch(launchReceived, parts)
+    if (!isShort) launchOffered = parts
     return (
       head +
       versionsNote +
-      launchHow({ ...how, brief: true }) +
+      (isShort ? shortLaunchHow(many) : parts.how) +
       resent +
       `Briefs écrits par flow-board (un par groupe, à passer tels quels) : ${list}. ` +
       (decidedAt ? '' : "Ajoute aussi à ce qui varie la liste des choix déjà déclarés (ceux envoyés dans decided) : leur fichier est hors d'atteinte. ") +
-      managerPart
+      (isShort ? SHORT_LAUNCH_FOLLOW : managerPart)
     )
   }
   // Dit là où commence ce que Claude rédige : le début de la demande reste celui d'avant.
@@ -12682,15 +12996,53 @@ const delegationText = async ($: any, run: Run, views: readonly GroupView[], dec
 }
 
 /**
- * Un groupe confié de nouveau a son worktree à lui, numéroté (`-2`, `-3`…) : la branche gardée d'un
- * envoi précédent porte le nom sans numéro. Rien pour un premier envoi.
+ * Lie les groupes `ids` (« worker à lancer »), et rend la mission telle que cette écriture l'a posée, avec le nom de
+ * worktree noté à l'envoi de chacun ; null quand rien n'est écrit. Le brief se calcule d'après elle, jamais d'après la
+ * mission lue avant la note : un titre changé entre-temps donnerait un autre nom que celui que la fermeture cherchera.
  */
-const resentWorktrees = (run: Run, views: readonly GroupView[]): string =>
+async function linkGroups($: any, runId: string, ids: readonly string[], now: number): Promise<Run | null> {
+  return commitRun($, runId, b => startLinkedGroups(b, ids, now))
+}
+
+/**
+ * Applique `change` (comme `commit`) seulement quand la mission active, relue à l'instant d'écrire, est `runId`, et rend
+ * cette mission telle que l'écriture réussie l'a posée ; null quand rien n'est écrit (une autre mission devenue active
+ * entre-temps n'est jamais touchée). Chaque nouvel essai de `commit` repart du board relu et remplace la mission rendue.
+ */
+async function commitRun($: any, runId: string, change: (board: Board) => Outcome): Promise<Run | null> {
+  const written: { run: Run | null } = { run: null }
+  const isWritten = await commit($, b => {
+    if (activeRun(b)?.id !== runId) return null
+    const out = change(b)
+    written.run = out ? activeRun(out.board) : null
+    return out
+  })
+  return isWritten ? written.run : null
+}
+
+/**
+ * Les vues d'avant la note réduites aux groupes que cette note a liés, chacune avec son groupe tel qu'elle l'a écrit
+ * (son lien, son nom noté) : un groupe qu'elle n'a pas lié (lié avant elle par un autre envoi, ou plus délégable) ne
+ * part pas dans le brief, où il aurait un autre nom que celui noté à son envoi en cours, et une seconde session.
+ */
+export const withNotedGroups = (views: readonly GroupView[], run: Run, now: number): GroupView[] =>
+  views.flatMap(v => {
+    const g = run.groups?.find(x => x.id === v.group.id)
+    return g && g.linked?.at === now ? [{ ...v, group: g }] : []
+  })
+
+/**
+ * Un groupe confié de nouveau a son worktree à lui, numéroté (`-2`, `-3`…) : la branche gardée d'un
+ * envoi précédent porte le nom sans numéro : le nom noté à cet envoi (`linked.worktreeName`) quand il est en forme,
+ * sinon le nom calculé depuis le titre, comme avant. Rien pour un premier envoi.
+ */
+export const resentWorktrees = (run: Run, views: readonly GroupView[]): string =>
   views
-    .map(v => ({ id: v.group.id, seq: groupSendSeq(v.group) }))
+    .map(v => ({ id: v.group.id, seq: groupSendSeq(v.group), noted: v.group.linked?.worktreeName }))
     // Un id hors forme n'a pas de nom de worktree (`groupWorktree` rend null) : rien ne se lance pour lui.
     .filter(x => x.seq > 1 && isGroupId(x.id))
-    .map(x => `Worktree et branche de cet envoi : ${groupWorktree(run, x.id, x.seq) ?? ''} (${x.seq}e envoi du groupe ${x.id} : les noms des envois précédents restent pris), à la place de ${groupWorktree(run, x.id) ?? ''} ; titre : « ${linkedPrefix(run)}${groupTitle(x.id, x.seq)}<thème> », qui le distingue de la session précédente. `)
+    // Le nom noté à cet envoi, celui que la fermeture cherchera, quand il est en forme ; sinon le nom calculé, comme avant.
+    .map(x => `Worktree et branche de cet envoi : ${isNotedWorktree(x.noted, x.id, x.seq) ? x.noted : (groupWorktree(run, x.id, x.seq) ?? '')} (${x.seq}e envoi du groupe ${x.id} : les noms des envois précédents restent pris), à la place de ${groupWorktree(run, x.id) ?? ''} ; titre : « ${linkedPrefix(run)}${groupTitle(x.id, x.seq)}<thème> », qui le distingue de la session précédente. `)
     .join('')
 
 /**
@@ -12740,19 +13092,31 @@ const delegateGroups = async ($: any, ids0: readonly string[], imposed?: Imposed
   const bad = ids.filter(id => !isGroupId(id))
   const refusal = [heldNote, bad.length > 0 ? unsafeGroupToast(bad) : ''].filter(x => x !== '').join(' — ')
   const fine = ids.filter(id => isGroupId(id))
-  if (fine.length === 0 || !(await commit($, b => startLinkedGroups(b, fine, now)))) {
+  // Une autre mission devenue active entre la lecture et la note n'est pas touchée : rien n'est lié, rien ne part.
+  const noted = fine.length > 0 ? await linkGroups($, run.id, fine, now) : null
+  if (!noted) {
     if (refusal) await quietly(() => $.ui.toast(refusal))
     return
   }
-  const views = plan.groups.filter(g => fine.includes(g.group.id) && g.open.length > 0)
+  const views = withNotedGroups(
+    plan.groups.filter(g => fine.includes(g.group.id) && g.open.length > 0),
+    noted,
+    now,
+  )
+  if (views.length === 0) {
+    if (refusal) await quietly(() => $.ui.toast(refusal))
+    return
+  }
   await update($, uiAtom, ui => ({ ...ui, selection: [] }))
   // Le brief cite le fichier des choix : il existe avant que la session le lise, sinon le brief n'en cite pas le chemin.
   const decidedAt = await writeDecidedFile($, await read($, boardAtom))
   // Dans une mission en auto, le bouton confie le groupe avec la demande du mode auto (worker autonome, sans question xhigh).
-  const text = await delegationText($, run, views, decidedAt, imposed, await isAutoHere($, await read($, boardAtom)))
+  // La mission écrite par la note de l'envoi : le gabarit et les noms du brief sont ceux que la fermeture cherchera.
+  const text = await delegationText($, noted, views, decidedAt, imposed, await isAutoHere($, await read($, boardAtom)))
   // Contrôlés avant le lien : ce cas ne se voit pas ; s'il se voyait, les groupes redeviennent à lancer.
   if (isUnsafe(text)) {
-    for (const id of fine) await commit($, b => cancelLinkedGroup(b, id, now))
+    // Les seuls liens que cette note a posés, sur cette mission : un lien d'un autre envoi reste.
+    for (const v of views) await cancelNotedLink($, run.id, v.group.id, now)
     await quietly(() => $.ui.toast(unsafeToast(text)))
     return
   }
@@ -12808,11 +13172,11 @@ const linkedReviewText = async ($: any, run: Run, groupId: string, isAuto = true
         : '1) remettre sa branche au niveau de la branche principale par une avance rapide, pour que les correctifs portent sur le code actuel ; '
       : '1) travailler sur le code actuel ; ') +
     `2) lancer elle-même la revue, ${LINKED_GROUP_REVIEW} ; la revue est /${slashOf('final-review')} ${args} (outil Skill « ${slashOf('final-review')} », arguments « ${args} ${isRepo ? '<plage> ' : ''}consignes : <chemin> ») ${isRepo ? "sur les seuls commits du groupe, lus sur le code actuel, avec pour cible leur plage <commit d'avant le premier du groupe>..<dernier commit du groupe> (une revue sans cible n'y verrait aucun changement, et un hash seul ne relirait qu'un commit)" : `sur les seuls changements du groupe, lus sur le code actuel (${LINKED_NO_GIT_GROUP_POINT} : sa session a pris ces copies dans son dossier temporaire)`}, en lui donnant ${decidedList(await writeDecidedFile($, await read($, boardAtom)))} et la consigne des relecteurs (section 7 de la procédure des workers de groupe, ${procedurePath}), par son fichier de consignes, et en lui demandant de se concentrer sur les interactions entre les tickets ; ${SENSITIVE_NO_FIX_FR} ; ${NO_ARBITRATION} ; ` +
-    `3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet et commiter ; un correctif qui contredit une série en vigueur du fichier de décisions se défait avant le commit et devient une question (--fix l'a appliqué avant toute recherche) ; ` +
+    `3) au retour de la revue, relire le diff de ses correctifs, relancer les contrôles du projet, suite complète comprise, et commiter ; un correctif qui contredit une série en vigueur du fichier de décisions se défait avant le commit et devient une question (--fix l'a appliqué avant toute recherche) ; ` +
     `4) juger si une revue de sécurité vaut la peine (les changements du groupe touchent : ${SECURITY_AREAS}) et, si oui, ${(await securityReviewNow($)) === 'off' ? LINKED_SECURITY_OFF_FR : linkedSecurityReview(isRepo ? 'les commits du groupe' : `les changements du groupe (${LINKED_NO_GIT_GROUP_POINT})`)} ; ` +
     `5) envoyer son compte rendu par SendMessage : constats et corrigés, commits, contrôles, avis et failles de sécurité. ` +
     `Si la session n'existe plus ou si l'outil Skill refuse la revue, ${isAuto ? 'déclare-le en question bloquante sur le groupe ("waiting")' : 'dis-le-moi'} : je la lancerai moi-même. ` +
-    `Au compte rendu : vérifier son travail${isRepo ? ', fusionner sa branche' : ''}, puis envoyer à l'outil flow {"reviewed": [${asciiJson(group.id)}]} et {"security": {"group": ${asciiJson(group.id)}, "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; ${isAuto ? AUTO_FINDINGS_FR : 'me dire les failles trouvées : je décide de leur correction'} ; ${isAuto ? FIXED_LATER_AUTO : FIXED_LATER}.`
+    `Au compte rendu : vérifier son travail${isRepo ? `, fusionner sa branche (${MERGE_MOVED})` : ''}, puis envoyer à l'outil flow {"reviewed": [${asciiJson(group.id)}]} et {"security": {"group": ${asciiJson(group.id)}, "advised": true|false, "why": "<raison>"}}, avec "findings" et "fixed" si la revue de sécurité a tourné ; ${isAuto ? AUTO_FINDINGS_FR : 'me dire les failles trouvées : je décide de leur correction'} ; ${isAuto ? FIXED_LATER_AUTO : FIXED_LATER}.`
   )
 }
 
@@ -12918,12 +13282,16 @@ const closeLinkedGroup = async ($: any, groupId: string) => {
   if (!(await commit($, b => askCloseLinkedGroup(b, groupId, now)))) return
   const isRepo = await measureRepo($)
   const target = { kind: 'group', id: group.id, name: group.name } as const
-  // Le compte rendu de sa session, relu au relais à l'instant : absent, ou relais illisible, pas de claude rm (session gardée).
+  // Le compte rendu de sa session, relu au relais à l'instant, ou, sans aucun compte rendu de lui au relais, le dépôt du
+  // manager pour cet envoi : absent des deux, pas de claude rm (session gardée) ; relais lu en partie ou illisible, le dépôt
+  // ne compte pas (une entrée illisible peut cacher le compte rendu du worker).
   // Sa fenêtre s'arrête au nouvel envoi du groupe, s'il y en a un : le compte rendu de la nouvelle session ne vaut pas pour elle.
-  const stored = await readRelay($, run.id)
+  const gaps = { count: 0 }
+  const stored = await readRelay($, run.id, gaps)
   const relay = isRelay(stored, run.id) ? stored : null
-  const hasReport = relayedReportAt(relay, group, run.groups, group.delegated, group.linked?.at ?? Infinity) !== undefined
-  const text = `${closingProcedure({ run, target, isRepo, ...(group.delegated.session ? { session: group.delegated.session } : {}), ...(group.delegated.seq !== undefined ? { seq: group.delegated.seq } : {}), hasReport, noted: group.delegated.closing, send: group.delegated })} ${closedHint(target, undefined, group.delegated)}`
+  const report = groupReportOf(relay, group, run.groups, group.delegated, group.linked?.at ?? Infinity, gaps.count === 0)
+  const hasReport = report !== undefined
+  const text = `${closingProcedure({ run, target, isRepo, ...(group.delegated.session ? { session: group.delegated.session } : {}), ...(group.delegated.seq !== undefined ? { seq: group.delegated.seq } : {}), hasReport, isReportByManager: report?.isByManager === true, noted: group.delegated.closing, send: group.delegated })} ${closedHint(target, undefined, group.delegated)}`
   await fillRequest(
     $,
     text,
@@ -13323,6 +13691,7 @@ const actionsFor = ($: any): Actions => ({
     // Reprise ici : la référence du moment se redemande au tour suivant (une autre discussion a pu l'écrire entre-temps).
     mainRefWritten.delete(id)
     mainRefFailures.delete(id)
+    mainRefKnown.delete(id)
     await update($, uiAtom, ui => ({ ...ui, tab: 'flow' as const }))
   },
   cancelResume: async () => {
@@ -13799,7 +14168,7 @@ const cooView = async ($: any, board: Board): Promise<CooStatement | null> => {
   // Le quota de la discussion, montré sous une carte prête en xhigh.
   const quota = quotaText(await quotaWindows($), now)
   const night = nightShown(board, now)
-  return { ...cooStatement(board, { now, ...(await numbersCtx($)), reported: await cooReportedOf($, board), ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(cooWaitlistOf() ? { waitlist: cooWaitlistOf(), pistesTicks } : {}) }), ...(quota ? { quota } : {}), ...(cooAutoAsk !== null && board.runs.some(r => r.id === cooAutoAsk) ? { autoAsk: cooAutoAsk } : {}), ...(night ? { night } : nightAsk ? { nightAsk: true as const } : {}), ...(whereAsk ? { whereAsk: true as const } : {}) }
+  return { ...cooStatement(board, { now, ...(await numbersCtx($)), reported: await cooReportedOf($, board), ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, liveness: livenessOf, plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(cooWaitlistOf() ? { waitlist: cooWaitlistOf(), pistesTicks } : {}) }), ...(quota ? { quota } : {}), ...(cooAutoAsk !== null && board.runs.some(r => r.id === cooAutoAsk) ? { autoAsk: cooAutoAsk } : {}), ...(night ? { night } : nightAsk ? { nightAsk: true as const } : {}), ...(whereAsk ? { whereAsk: true as const } : {}) }
 }
 
 
@@ -13843,7 +14212,8 @@ const cooStatementFor = async ($: any, board: Board, isPerson = false): Promise<
   // n'attend pas la veille ; la vue se redessine si elles changent (la veille suivante n'y verrait plus de changement).
   const deadBefore = deadPrint
   await readDeadSince($, board)
-  if (deadPrint !== deadBefore) $.ui.invalidate('ui.render')
+  const isLivenessChanged = await refreshLiveness($, claudeHome($), board, await $.clock.now())
+  if (deadPrint !== deadBefore || isLivenessChanged) $.ui.invalidate('ui.render')
   // L'accord d'archivage relu à l'instant ; une lecture ratée le laisse « pas relu », jamais deviné.
   let archive: number | null | undefined
   try {
@@ -13856,13 +14226,14 @@ const cooStatementFor = async ($: any, board: Board, isPerson = false): Promise<
   const nightAt = await $.clock.now()
   const shown = nightShown(board, nightAt)
   const blocks = shown && nightNow?.state === 'read' ? await nightBlocksNow($, board, nightAt) : []
+  if (nightNow?.state === 'read') noteAutoReopens(nightNow.watch.id, blocks)
   const night = shown && nightNow?.state === 'read' ? { until: shown.until, id: nightNow.watch.id, blocks, reopens: await nightReopensNow($, board, blocks, board.root, nightNow.watch.id) } : undefined
   // Le résumé de la nuit, au premier message de la personne qui suit l'arrêt.
   const morning = isPerson && !night ? await morningDue($, board.root) : null
   // Les pistes rendues par le relevé (mission finie), dites une fois : retirées du stockage une fois le relevé composé.
   const finished = await peekFinishedLines(board.root, $)
   const waitlist = cooWaitlistOf()
-  const said = statementText(cooStatement(board, { ...(night ? { night } : {}), ...(morning ? { morning } : {}), now: await $.clock.now(), reported: await cooReportedOf($, board), ...(archive !== undefined ? { archive } : {}), ...(await numbersCtx($)), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), askMatt: await askMattPath($), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, await $.clock.now()), effort: (await sessionEffort($)) ?? null, hasBrief, roadmap, ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, taken: id => { const r = board.runs.find(x => x.id === id); return new Set(takenFor(coordLive, id, r ? retroItems(r) : undefined).keys()) }, relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, await $.clock.now()), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board, true), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(waitlist || finished.length > 0 ? { waitlist: { ...(waitlist ?? { state: 'absent' as const, pistes: [], refused: [], boxesUnread: [] }), ...(finished.length > 0 ? { finished } : {}) }, pistesTicks } : {}), ...(await cooSetAsideCtx($, board)), toClose: await cooToCloseText($, board), unmarked: await cooUnmarkedText($, board) }))
+  const said = statementText(cooStatement(board, { ...(night ? { night } : {}), ...(morning ? { morning } : {}), now: await $.clock.now(), reported: await cooReportedOf($, board), ...(archive !== undefined ? { archive } : {}), ...(await numbersCtx($)), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), askMatt: await askMattPath($), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, await $.clock.now()), effort: (await sessionEffort($)) ?? null, hasBrief, roadmap, ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, liveness: livenessOf, taken: id => { const r = board.runs.find(x => x.id === id); return new Set(takenFor(coordLive, id, r ? retroItems(r) : undefined).keys()) }, relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, await $.clock.now()), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board, true), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(waitlist || finished.length > 0 ? { waitlist: { ...(waitlist ?? { state: 'absent' as const, pistes: [], refused: [], boxesUnread: [] }), ...(finished.length > 0 ? { finished } : {}) }, pistesTicks } : {}), ...(await cooSetAsideCtx($, board)), toClose: await cooToCloseText($, board), unmarked: await cooUnmarkedText($, board) }))
   await dropFinishedLines(board.root, $, finished)
   return said
 }
@@ -13919,6 +14290,7 @@ const tick = async ($: any) => {
     await pullRelay($, (await read($, boardAtom)) ?? board)
     // Hors du retour anticipé de pullRelay (relais inchangé) : un envoi peut attendre sa session alors que le relais ne bouge plus.
     await quietly(() => noteRelaySessions($))
+    await quietly(() => watchSilentWorkers($))
     await quietly(async () => watchAwaited($, (await read($, boardAtom)) ?? board))
     await quietly(() => loadArchiveConsent($))
     await quietly(() => refreshLinked($))
@@ -14128,6 +14500,11 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
   // ensuite le chemin de `report` (fichier du relais, extrait, avis au manager). Refusé, ou envoyé avec `report`
   // (partout : worker, spécialiste, manager), rien du compte rendu ne part.
   let reportPathText = ''
+  // Le dépôt du compte rendu d'un groupe par le manager (`reportPath` avec `group`), lu et gardé avant l'écriture du board ;
+  // un seul à la fois dans ce processus (deux appels parallèles écriraient le même fichier).
+  let deposit: Deposit | undefined
+  let isDepositWritten = false
+  let depositToken: { at: number } | null = null
   if (input.reportPath !== undefined && input.reportPath !== null) {
     const isWorker = Boolean(cutBoard?.delegate) || typeof input.delegate === 'string'
     const { reportPath: _path, ...rest } = input
@@ -14135,10 +14512,23 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
       const { report: _report, ...others } = rest
       input = others
       reportPathText = ' · "report" and "reportPath" came together: neither was read, nothing of your report was relayed; send one of them.'
+    } else if (!isWorker && e.agentId === undefined && input.group !== undefined && input.group !== null) {
+      const { group: _group, ...others } = rest
+      input = others
+      // L'âge du verrou se juge à l'horloge relue maintenant ; seul l'appel qui l'a pris le rend (son jeton).
+      const lockAt = await $.clock.now()
+      if (depositBusy !== null && lockAt - depositBusy.at < DEPOSIT_BUSY_MS) reportPathText = ' · "reportPath" with "group" refused: another deposit is being recorded in this discussion; nothing was deposited: send it again once it answered.'
+      else {
+        depositToken = { at: lockAt }
+        depositBusy = depositToken
+        const outcome = await depositCall($, _path, _group, now)
+        deposit = outcome.deposit
+        reportPathText = outcome.text
+      }
     } else if (!isWorker || e.agentId !== undefined) {
       // Hors du fil principal d'un worker, le chemin n'est jamais lu ; le reste de l'appel suit son cours.
       input = rest
-      reportPathText = ` · "reportPath" not read: ${!isWorker ? 'only the worker of a group gives its final report by a path; here, the report goes by "report"' : 'a subagent does not send the final report: the worker does'}.`
+      reportPathText = ` · "reportPath" not read: ${!isWorker ? 'only the worker of a group gives its final report by a path (here, a path is read only with "group": the report of a worker that lacks the flow tool, deposited for its group); your own report goes by "report"' : 'a subagent does not send the final report: the worker does'}.`
     } else {
       const outcome = await readReportPath($, input.reportPath)
       if ('text' in outcome) input = { ...rest, report: outcome.text }
@@ -14175,10 +14565,45 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     moved = await followMainRef($)
   })
   const board0: Board | null = await read($, boardAtom)
+  // Un worker relit à chaque appel la mission de son manager, ici ou dans le dépôt principal, sans rien écrire : ce que
+  // la réponse dit de sa référence (`managerReachOf`), avec le signal de vie de son titulaire (`ownerVerdictOf`). Une
+  // lecture qui lève : rien de relu, la réponse le traite ainsi.
+  // La mission que l'appel déclare passe avant une délégation déjà gardée : la réponse décrit celle de l'appel.
+  const reachRunId = (typeof input.delegate === 'string' ? input.delegate.trim() : '') || (board0?.delegate?.run ?? '')
+  let managerReach: ManagerReach | undefined
+  // La même mission relue dit aussi si le worker travaille pour une mission en auto (`experienceChoiceNotice`).
+  let isReachAuto = false
+  if (board0 && reachRunId !== '') {
+    await quietly(async () => {
+      const run = await reachRunOf($, board0, reachRunId)
+      isReachAuto = run !== undefined && isAutoMission(run)
+      managerReach = managerReachOf(run, await ownerVerdictOf($, claudeHome($), run, now))
+    })
+  }
   const relayRun = board0?.delegate ? '' : typeof input.resume === 'string' && input.resume.trim() !== '' ? input.resume.trim() : (activeRun(board0)?.id ?? '')
-  const relay = relayRun !== '' ? await readRelay($, relayRun) : undefined
+  const relayGaps = { count: 0 }
+  const relay = relayRun !== '' ? await readRelay($, relayRun, relayGaps) : undefined
   // La procédure de fermeture d'un groupe clos dépend du dépôt : sans git, l'arrêt seul.
   const isRepo = await measureRepo($)
+  // Une mission lancée par le COO. La discussion qui porte déjà le titre de la carte compte comme nommée : la marque
+  // se pose d'après l'enregistrement relu, avant que le titre de l'appel décide du nom, que le lancement se consomme
+  // ou non (refus, nouvel essai). Puis le lancement se consomme avant l'écriture, seulement quand une mission est déjà
+  // ouverte ici et que l'appel ne change pas de mission active : sans mission, ou avec `open` ou `resume` dans le même
+  // appel, après l'écriture, comme avant (la carte va à la mission ouverte ou reprise).
+  const hasLaunch = input.launch !== undefined && input.launch !== null && e.agentId === undefined
+  const namedSession = board0 && !board0.delegate ? (board0.session ?? '') : ''
+  if (hasLaunch) await markFromLaunch($, input.launch, namedSession)
+  const isMissionChange = (input.open !== undefined && input.open !== null && input.open !== false) || (typeof input.resume === 'string' && input.resume.trim() !== '')
+  const isLaunchFirst = hasLaunch && board0 !== null && !board0.delegate && activeRun(board0) !== null && !isMissionChange
+  const launchFirstText = isLaunchFirst ? await consumeLaunch($, input.launch) : ''
+  // La marque relue ensuite : présente, illisible ou hors forme, la discussion garde son nom. Seulement pour un appel
+  // qui peut nommer (une ouverture, ou un titre pour une mission encore sans titre) : les autres ne lisent rien de plus.
+  const isOpening = input.open !== undefined && input.open !== null && input.open !== false
+  // La mission que le titre vise : celle que l'appel reprend, sinon l'active.
+  const resumeId = typeof input.resume === 'string' ? input.resume.trim() : ''
+  const titledRun = resumeId !== '' ? board0?.runs.find(r => r.id === resumeId) : activeRun(board0)
+  const canName = isOpening || (input.title !== undefined && input.title !== null && titledRun?.isTitled !== true)
+  const isNamed = !canName || namedSession === '' ? true : !(await isUnnamed($, namedSession))
 
   // À la reprise, les comptes rendus déposés se citent de nouveau en entier ; une reprise refusée les garde vus (plus bas).
   const unseen = relayRun !== '' && typeof input.resume === 'string' && input.resume.trim() !== '' ? [...seenReports].filter(key => key.startsWith(`${relayRun}:`)) : []
@@ -14195,7 +14620,9 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     // Le réglage « revue de sécurité », relu à chaque essai d'écriture : la marque d'un avis et la fermeture
     // « désactivée » ne se posent que sur ce qu'il dit à l'instant de l'écriture.
     const security = await securityReviewNow($)
-    const out = applyReport(value, input, now, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false, isVersionSet: (await read($, syncAtom)).isVersionSet, delegateTitle, fableFirst, relay, seenReports, isRepo, security })
+    // La marque du dépôt posée avant le reste de l'appel : la fermeture que la réponse décrit la compte déjà.
+    const deposited = deposit ? withDeposit(value, deposit, now) : null
+    const out = applyReport(deposited ?? value, input, now, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false, isVersionSet: (await read($, syncAtom)).isVersionSet, delegateTitle, fableFirst, relay, seenReports, isRepo, security, isNamed, isRelayWhole: relayGaps.count === 0, managerReach })
     text = out.text
     const shown = activeRun(out.board)
     if (shown && !out.board.delegate && relay !== null && typeof relay === 'object' && (relay as Relay).run === shown.id) for (const key of relayedReportKeys(shown, relay as Relay)) seenReports.add(key)
@@ -14206,13 +14633,16 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     const written = await $.state.set(BOARD_REF, out.board, { ifVersion: version })
     if (written.isSet) {
       fate = 'written'
+      isDepositWritten = deposited !== null
       // La délégation de cet appel écrite dans l'état : le verrou du premier appel se ferme tout de suite, avant
       // toute attente, pour qu'aucun appel parallèle ne le trouve encore ouvert.
       if (isDelegateCall && out.board.delegate) {
         fable.isWritten = true
         closeFableFirst()
       }
-      await afterChange($, out.fx, out.board)
+      // Le nom refusé au moment de l'écrire (une marque posée entre-temps, une lecture ratée) : la réponse ne demande
+      // pas à Claude de renommer la discussion, elle dit qu'elle garde son nom.
+      if ((await afterChange($, out.fx, out.board)) === 'refused' && out.fx.discussionTitle !== undefined) text = keepNameText(text, out.fx.discussionTitle)
       // Une question retirée par Claude ici : sa trace est gardée ici.
       await quietly(() => recordOwnTraces($, value, out.board))
       await afterAuto($, value, out.board)
@@ -14221,6 +14651,8 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     }
   }
 
+  if (deposit) reportPathText = await depositOutcome($, deposit, isDepositWritten)
+  if (depositToken !== null && depositBusy === depositToken) depositBusy = null
   // Un appel `delegate` dont rien ne s'est écrit (l'état a bougé à chaque essai, ou n'est plus là) et sans délégation
   // en mémoire : sa réponse ne dit ni une délégation ni une marque, qui ne sont pas enregistrées. Avec une délégation
   // en mémoire, sa réponse reste (ce qui est parti au relais n'est pas à renvoyer) ; l'outil dit la marque non posée.
@@ -14231,7 +14663,7 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
   // (la déclaration prend la mission active d'après l'appel) ; la réponse le dit à la fin.
   const asideText = input.setAside !== undefined && input.setAside !== null ? await setAsideCall($, input.setAside, typeof input.delegate === 'string') : ''
   // Une mission lancée par le COO : son lancement, consommé une fois, la rattache à sa carte.
-  const launchText = input.launch !== undefined && input.launch !== null && e.agentId === undefined ? await consumeLaunch($, input.launch) : ''
+  const launchText = !hasLaunch ? '' : isLaunchFirst ? launchFirstText : await consumeLaunch($, input.launch)
   const resumed = typeof input.resume === 'string' ? input.resume.trim() : ''
   // Ce que la réponse dit de la référence du moment envoyée avec `resume` (vide sans `main`).
   let mainRefText = ''
@@ -14244,6 +14676,7 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
   if (isResumedHere && (typeof input.main !== 'string' || input.main.trim() === '')) {
     mainRefWritten.delete(resumed)
     mainRefFailures.delete(resumed)
+    mainRefKnown.delete(resumed)
   }
   if (isResumedHere && typeof input.main === 'string' && input.main.trim() !== '') {
     const ref = parseMainRef({ run: resumed, main: input.main, at: now }, resumed)
@@ -14259,6 +14692,10 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
       const failures = outcome === 'written' || outcome === 'older' || outcome === 'refused' ? 0 : (mainRefFailures.get(resumed) ?? 0) + 1
       mainRefFailures.set(resumed, failures)
       if (failures === 0 || failures >= MAIN_REF_TRIES) mainRefWritten.add(resumed)
+      // La référence que la demande de lancement donne : seulement celle que ce processus vient d'écrire.
+      const known = outcome === 'written' ? refOf(ref.main) : null
+      if (known) mainRefKnown.set(resumed, known)
+      else mainRefKnown.delete(resumed)
     }
     mainRefText = !ref
       ? ` Your reference was not written: "main" must end with your [ref] as ListAgents shows it (4 to 12 lowercase letters or digits between brackets), not ${asciiJson(clip(input.main, 40))}.`
@@ -14308,9 +14745,12 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
       if (kept.isKept && e.agentId === undefined) closureText = await workerClosureNotice($, kept.closed ?? [])
     }
     const decided = reportedDecisions(input)
-    if (decided.length > 0) await send(['decided'], { kind: 'decided', items: decided })
+    const isDecidedKept = decided.length > 0 && (await send(['decided'], { kind: 'decided', items: decided })).isKept
     const withdrawn = reportedWithdrawals(input)
-    if (withdrawn.length > 0) await send(['withdrawn'], { kind: 'withdrawn', items: withdrawn })
+    const isWithdrawnKept = withdrawn.length > 0 && (await send(['withdrawn'], { kind: 'withdrawn', items: withdrawn })).isKept
+    // Les choix gardés par le relais, remplaçants (`replacedBy`) compris : le rappel des choix d'expérience les lit.
+    const replacing = isWithdrawnKept ? withdrawn.flatMap(w => (w.replacedBy ? [{ what: w.replacedBy }] : [])) : []
+    if (isReachAuto) text += experienceChoiceNotice([...(isDecidedKept ? decided : []), ...replacing], true)
     const counts = reportedCounts(input)
     if (counts.review && !counts.security) await send(['review'], counts)
     else if (counts.security && !counts.review) await send(['security'], counts)
@@ -14406,6 +14846,9 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // Le titre relevé par les hooks se relève de nouveau dans cette discussion : remis à zéro avant toute attente, pour
+    // ne pas effacer celui qu'un SessionStart classique arrivé pendant ce démarrage a déjà porté.
+    hookTitle = undefined
     // Un enregistrement refusé ne doit pas empêcher la minuterie (durées, relecture du stockage).
     await quietly(() => $.tool.register({ name: 'flow', description: TOOL_DESCRIPTION, inputSchema: TOOL_SCHEMA }))
     await quietly(() => loadArchiveConsent($))
@@ -14435,6 +14878,10 @@ export const register: Register = on => {
     // ici avec des groupes confiés la redemande à Claude (`mainRefAsk`).
     mainRefWritten.clear()
     mainRefFailures.clear()
+    mainRefKnown.clear()
+    // La demande entière de lancement reçue plus haut n'est plus sûre d'être dans la conversation : elle revient.
+    launchOffered = null
+    launchReceived = null
     // Une écriture restée en suspens (une lecture du moteur qui ne rend jamais la main) ne bloque pas les suivantes.
     mainRefChain = Promise.resolve()
     isAfterClear = false
@@ -14668,9 +15115,12 @@ export const register: Register = on => {
     const lot = run && noteId === 'implement' && (run.groups ?? []).length === 0 ? await lotProcedure($) : null
     // Le compte rendu d'une mission à groupes : les fichiers où les workers ont déposé le leur.
     const reports = run && noteId === 'compte-rendu' && (run.groups ?? []).length > 0 ? relayReportsPattern($, run.id) : null
+    // Le compte rendu : le relais entier, pour les totaux de revue de chaque groupe (lu en partie : inconnus).
+    const factsGaps = { count: 0 }
+    const factsRelay = run && noteId === 'compte-rendu' ? factsRelayOf(await readRelay($, run.id, factsGaps), factsGaps.count, run.id) : undefined
     // Une phase de code : les groupes en cours des autres missions, que le travail d'ici pourrait recouper.
     const inFlight = run ? await inFlightFor($, noteId, run.id) : null
-    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null, isAuto, lot, reports, noteId === 'to-tickets' ? otherMissionFiles(await read($, boardAtom), run.id) : [], inFlight, SKILLS[noteId]?.isGrilling ? await askMattPath($) : null, await securityReviewNow($))}${brief}${tail}` } : withTail(result, tail)
+    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null, isAuto, lot, reports, noteId === 'to-tickets' ? otherMissionFiles(await read($, boardAtom), run.id) : [], inFlight, SKILLS[noteId]?.isGrilling ? await askMattPath($) : null, await securityReviewNow($), factsRelay)}${brief}${tail}` } : withTail(result, tail)
   })
 
   // Ce qui se passe pendant une mission : spécialistes, fichiers, commandes, Asana, questions.
@@ -14947,6 +15397,8 @@ export const register: Register = on => {
   // Le repère suit le résultat : une compaction refusée (`skip`) ou ratée n'en pose pas.
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
+    // Une compaction (même rejetée, dans le doute) : la demande entière de lancement reçue plus haut revient.
+    launchReceived = null
     // Chaque lecture à part : un registre illisible ne retire que le chemin du transcript.
     let board: Board | null = null
     let reg: SessionRegistry | null = null
@@ -14999,6 +15451,8 @@ export const register: Register = on => {
     typedTurn = typedTurn?.phase === 'submitted' && e.text === typedTurn.text ? { text: typedTurn.text, phase: 'started' } : null
     // Le tour de la vague que l'auto vient de soumettre commence : sa fin effacera la demande gardée.
     if (e.agentId === undefined && autoLaunch !== null && !autoLaunch.isStarted && (e.text === autoLaunch.text || e.text === autoLaunch.turnText)) autoLaunch.isStarted = true
+    // Le tour qui porte la dernière demande entière de lancement : Claude l'a reçue, la suivante peut être courte.
+    if (isLaunchReceived(e.text, launchOffered)) launchReceived = launchOffered
     // Le travail de la mission reprend : elle n'attend plus la personne.
     await quietly(() => commit($, b => (b.delegate ? null : clearWaitsUser(b, at))))
     await reconcileAgents($)
@@ -15234,6 +15688,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     saveTimer?.cancel()
     hereCache = null
+    hookTitle = undefined
     isAfterClear = e.reason === 'clear'
     // Le verdict de la reprise à la relance ne survit pas à la fin de la discussion (ni à un /clear) : le même processus
     // revenu à sa discussion n'en a aucun ; un effacement de la preuve encore à refaire reste.

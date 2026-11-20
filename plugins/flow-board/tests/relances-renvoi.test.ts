@@ -792,6 +792,38 @@ test('Le ticket mis de côté par son worker : la ligne de statut que dit la pro
   expect(localTicketChange('travail/x/issues/05-un-ticket.md', text)).toEqual({ id: '05', status: 'blocked', why: 'bute après trois approches' })
 })
 
+/**
+ * Le vocabulaire de la ligne `Status:` d'un fichier de ticket (`TICKET_STATUS_VOCABULARY`) : une valeur
+ * du vocabulaire change le statut relayé, toute autre valeur et une ligne absente ou vide le laissent tel quel.
+ */
+test('La ligne Status: d’un fichier de ticket : chaque valeur du vocabulaire donne son statut, toute autre le laisse tel quel', () => {
+  const at = (line: string) => localTicketChange('travail/x/issues/07-essai.md', `# 07: Essai\n\n${line}\n\n- [ ] critère\n`)
+  const table: [string, string | null][] = [
+    ['en cours', 'doing'], ['en attente (porteur)', 'doing'], ['doing', 'doing'], ['in progress', 'doing'],
+    ['in-progress', 'doing'], ['in_progress', 'doing'], ['In-Progress', 'doing'],
+    ['fait', 'done'], ['done', 'done'], ['terminé', 'done'], ['fait (03/11/2026)', 'done'], ['done.', 'done'],
+    ['bloqué', 'blocked'], ['blocked', 'blocked'],
+    ['ready-for-agent', 'todo'], ['à faire', 'todo'], ['todo', 'todo'], ['ready', 'todo'],
+    ['retiré', null], ['retiré (doublon)', null],
+    ['en revue', null], ['in review', null], ['faite', null], ['terminée', null], ['bloquée', null], ['readyish', null],
+    ['doings', null], ['à voir', null], ['encours', null],
+  ]
+  for (const [value, status] of table) {
+    for (const marker of ['**Status:**', '**Statut :**', 'Statut :']) {
+      const got = at(`${marker} ${value}`)
+      expect([value, marker, got ? got.status : null]).toEqual([value, marker, status])
+    }
+  }
+  // La raison d'un blocage : ce qui suit la valeur, sans le séparateur.
+  expect(at('**Status:** blocked (attend 01)')).toEqual({ id: '07', status: 'blocked', why: 'attend 01' })
+  expect(at('**Status:** Bloqué — attend la réponse')).toEqual({ id: '07', status: 'blocked', why: 'attend la réponse' })
+  expect(at('**Status:** bloqué')).toEqual({ id: '07', status: 'blocked' })
+  // Une ligne absente, ou vide suivie d'une ligne qui commence par un mot du vocabulaire : rien.
+  expect(at('Pas de statut.')).toBe(null)
+  expect(localTicketChange('travail/x/issues/07-essai.md', '# 07: Essai\n\n**Status:**\n\nfait plus tard\n')).toBe(null)
+  expect(localTicketChange('travail/x/issues/07-essai.md', '# 07: Essai\n\n**Status:**   \nfait\n')).toBe(null)
+})
+
 test('Un groupe revenu avec un ticket qui bute et sa question de relance : l’auto ne le relance pas et ne pose aucune question de relance', { timeoutMs: 60000 }, async ($, on) => {
   const w = await stuckGroup($, on)
   // L'effet d'abord : rien n'est relancé, et la seule question est celle du manager, sans « relance: » du mod.

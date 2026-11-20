@@ -87,9 +87,16 @@ test('le Diagnostic écrit le correctif comme un ticket, qui passe en Implément
   ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   shown = await texts(ui)
   expect(shown).toMatch(/^1\/1$/m)
-  // Ensuite, comme un lot classique sans groupes dont le ticket a de la logique : la revue du lot, plus de phase « Revue ».
-  expect(await ui.find({ key: 'go-final-review' })).toBeDefined()
+  // Ensuite, comme un lot classique sans groupes d'un seul ticket, avec de la logique : pas de revue du lot (son
+  // ticket relu suffit, comme un groupe d'un seul ticket), plus de phase « Revue » ; son avis de sécurité est attendu.
+  expect(await ui.find({ key: 'go-final-review' })).toBeUndefined()
   expect(await ui.find({ key: 'go-code-review' })).toBeUndefined()
+  expect(await ui.find({ key: 'go-compte-rendu' })).toBeUndefined()
+  expect(await texts(ui)).toMatch(/avis de sécurité attendu/)
+  await ui.unmount()
+  await $.tool.call({ tool: TOOL, security: { advised: false, why: 'un cache local' } } as any)
+  ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await ui.find({ key: 'go-compte-rendu' })).toBeDefined()
   await ui.unmount()
 })
 

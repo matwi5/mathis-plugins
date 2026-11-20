@@ -2,7 +2,7 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { AUTO_STOPS, RELAUNCH_WINDOW_MS, applyReport, autoTurnedOffOnLoad, detachOnLoad, emptyBoard, isAutoOn, newRun, parkActive, relaunchStillDue, relaunchVerdict, retakenPaused, resumeRun, setAsideActive, openRun, switchOnAuto } from '../hooks/model.ts'
+import { AUTO_STOPS, RELAUNCH_WINDOW_MS, applyReport, autoTurnedOffOnLoad, detachOnLoad, emptyBoard, isAutoOn, mergeBoards, newRun, parkActive, relaunchStillDue, relaunchVerdict, retakenPaused, resumeRun, setAsideActive, openRun, switchOnAuto } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
 import { findAllAny, pressAny } from './page-coo.ts'
 import { settle } from './horloge.ts'
@@ -217,6 +217,27 @@ test('la pause du verdict : la prise de ce chargement inchangée, la même pause
   // Un auto allumé (mis en pause par l'ouverture d'une autre mission, puis revenu) n'est pas concerné.
   const litAgain = switchOnAuto(loadedEnded, 'sa', at + 1)!.board
   expect(retakenPaused(openRun(litAgain, { title: 'Autre' }, at + 2).board, resumeRun(openRun(litAgain, { title: 'Autre' }, at + 2).board, id, at + 3)!.board, 'boot-P2')).toEqual([])
+})
+
+test('deux processus d’une même discussion relancés à la même milliseconde : après fusion, un seul tient la prise et voit son auto repartir, dans les deux ordres', () => {
+  const { board, id } = litByP1()
+  const ended = endedByP1(board, T0 + 2000)
+  const at = T0 + HOUR
+  // P2 et P3 chargent le même fichier à la même milliseconde : chacun a son verdict « due », à sa prise.
+  const v2 = relaunchVerdict(ended, at, 'sa', 'boot-P2')
+  const v3 = relaunchVerdict(ended, at, 'sa', 'boot-P3')
+  if (v2.kind !== 'due' || v3.kind !== 'due') throw new Error('due attendu')
+  const p2 = detachOnLoad(ended, at, 'sa', 'boot-P2')
+  const p3 = detachOnLoad(ended, at, 'sa', 'boot-P3')
+  // Chacun relit la copie de l'autre : la même prise partout, celle de P3 (le plus grand `boot`).
+  const seenByP2 = mergeBoards(p2, p3)
+  const seenByP3 = mergeBoards(p3, p2)
+  expect(seenByP2.runs.find(r => r.id === id)?.claim).toEqual({ boot: 'boot-P3', at })
+  expect(seenByP3.runs.find(r => r.id === id)?.claim).toEqual({ boot: 'boot-P3', at })
+  // Seul P3 voit sa reprise toujours due ; P2 laisse la mission et n'allume rien.
+  expect(relaunchStillDue(seenByP3, 'sa', v3)).toBe(true)
+  expect(relaunchStillDue(seenByP2, 'sa', v2)).toBe(false)
+  expect(seenByP2.activeId).toBeNull()
 })
 
 // ─── Les formes, dans le monde d'une discussion relancée ─────────────────

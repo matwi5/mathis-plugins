@@ -49,8 +49,10 @@ const SURFACES = {
   'hooks/link.ts': read('hooks/link.ts'),
   'skills/compte-rendu/SKILL.md': read('skills/compte-rendu/SKILL.md'),
   'skills/coo/SKILL.md': read('skills/coo/SKILL.md'),
+  'commands/flow.md': read('commands/flow.md'),
   'to-spec/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-spec/SKILL.md'),
   'to-tickets/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/to-tickets/SKILL.md'),
+  'implement/SKILL.md': repoFile('plugins/mattpocock-skills/skills/engineering/implement/SKILL.md'),
   'grilling/SKILL.md': repoFile('plugins/mattpocock-skills/skills/productivity/grilling/SKILL.md'),
   'docs/evenements-moteur.md': repoFile('docs/evenements-moteur.md'),
   'asana-board/suivi-asana/SKILL.md': repoFile('plugins/asana-board/skills/suivi-asana/SKILL.md'),
@@ -69,6 +71,14 @@ const CONSIGNES = [
     surfaces: ['config/rules/flow-board.md', 'config/reference/revues.md', 'config/rules/agents.md', 'reference/procedure-groupe.md', 'README.md'],
   },
   { name: "le relecteur de l'axe Spec seul, en anglais", keywords: ['the Spec axis alone'], surfaces: ['hooks/catalog.ts'] },
+  {
+    // Une mission était restée arrêtée onze heures, l'outil flow disparu après une livraison : la commande, la règle
+    // commune et le README disent la même reprise et la même notification, une fois par absence.
+    name: 'l’outil flow absent en mission : la reprise et la notification',
+    keywords: ['/reload-plugins', '« reprends »', 'Mission <titre> : outil flow absent', 'une fois par absence', 'Outil flow absent en mission'],
+    surfaces: ['config/rules/flow-board.md', 'commands/flow.md', 'README.md'],
+  },
+  { name: 'les discussions à reprendre après la synchro d’une livraison', keywords: ['/reload-plugins', '« reprends »', 'mission en cours'], surfaces: ['skills/coo/SKILL.md'] },
   {
     // Un lancement filtré par « | tail -2 » avait retiré la ligne « backgrounded », et quatre envois
     // étaient restés sans session. La consigne de lancement du CLI et sa copie du README disent la même chose.
@@ -214,9 +224,9 @@ const CONSIGNES = [
   { name: 'le manager relit la preuve d’une question de worker', keywords: ['relit la preuve qu\'elle cite', 'ne relance jamais telle quelle une commande qu\'un worker cite'], surfaces: ['reference/effort-workers.md'] },
   // Les correctifs de la revue du groupe s'appliquent à la fin du groupe : la même exception, et un --fix relu.
   { name: 'un correctif de la revue du groupe contre une série du fichier de décisions', keywords: ['sauf un correctif qui contredit une série en vigueur du fichier de décisions, qui devient une question (point 8 de la section 2)', 'un correctif qui contredit une série en vigueur du fichier de décisions se défait avant le commit et devient une question'], surfaces: ['reference/procedure-groupe-fin.md'] },
-  { name: 'un correctif de la revue du groupe contre une série du fichier de décisions, en anglais', keywords: ['rerun the checks and commit them. A fix that contradicts a series in force of the decisions file is undone before the commit and raised as a question (--fix applied it before any lookup)'], surfaces: ['hooks/catalog.ts', 'hooks/register.tsx'] },
+  { name: 'un correctif de la revue du groupe contre une série du fichier de décisions, en anglais', keywords: ['rerun the checks, the full suite included, and commit them. A fix that contradicts a series in force of the decisions file is undone before the commit and raised as a question (--fix applied it before any lookup)'], surfaces: ['hooks/catalog.ts', 'hooks/register.tsx'] },
   // La demande « Revue du groupe · worker » (groupe revenu sans revue) recopie l'étape des correctifs en français.
-  { name: 'un correctif de la revue du groupe contre une série du fichier de décisions, demande au worker', keywords: ['relancer les contrôles du projet et commiter ; un correctif qui contredit une série en vigueur du fichier de décisions se défait avant le commit et devient une question'], surfaces: ['hooks/register.tsx'] },
+  { name: 'un correctif de la revue du groupe contre une série du fichier de décisions, demande au worker', keywords: ['relancer les contrôles du projet, suite complète comprise, et commiter ; un correctif qui contredit une série en vigueur du fichier de décisions se défait avant le commit et devient une question'], surfaces: ['hooks/register.tsx'] },
   {
     // Le groupe « durcissement » proposé attend la réponse : la consigne de fin de lot et le README disent la même chose.
     name: 'le groupe « durcissement » proposé attend la réponse, en anglais',
@@ -493,6 +503,14 @@ const CONSIGNES = [
     surfaces: ['to-tickets/SKILL.md', 'hooks/catalog.ts'],
   },
   {
+    // Un invariant validé alors qu'une règle commune gardait déjà une exception contre lui, vu seulement au
+    // découpage : les deux skills de cadrage et les deux copies du mod (INVARIANT_REREAD de catalog.ts,
+    // SENSITIVE_FRAMING de decoupage.ts, lu ici avec register.tsx) le confrontent avant la validation.
+    name: 'l’invariant confronté aux exceptions des règles et aux invariants déjà écrits',
+    keywords: ['the exceptions that touch the same object', 'the rules loaded in every session of the project (its CLAUDE.md, its rule files, the common rules)', 'the invariants already written that name it', '(the command and its result)', 'a contradiction found goes into the question to the user, with the rule or the invariant quoted'],
+    surfaces: ['to-tickets/SKILL.md', 'grilling/SKILL.md', 'hooks/catalog.ts', 'hooks/register.tsx'],
+  },
+  {
     // Un critère « les tests existants passent sans changer leurs attentes », écrit sans recherche, était faux.
     name: 'le critère sur les tests existants appuyé d’une recherche',
     keywords: ['criterion about the existing tests', 'in any ticket', 'the tests that read the function the ticket changes', 'the command and its result'],
@@ -744,6 +762,16 @@ const CONSIGNES = [
     name: 'le ticket qui bute dans un lot sans groupes en auto',
     keywords: ['stop on it and ask a blocking question on that ticket ({"waiting": [{"id": "bute-<id>", "ticket": "<id>"'],
     surfaces: ['hooks/register.tsx'],
+  },
+  {
+    // « Once done, call the Skill tool with "code-review" » ne disait pas laquelle des deux revues de ce nom
+    // (celle de Claude Code, celle de Matt) : la dernière étape de /implement renvoie aux consignes du tableau
+    // de bord, qui l'emportent, et nomme la revue de Matt sans lui ; la citation de la règle commune
+    // (config/rules/flow-board.md, « Un commit par ticket ») reste mot pour mot.
+    name: 'la revue à la fin de /implement',
+    keywords: ['its instructions say which reviews run and how', 'and they win over this line', 'mattpocock-skills:code-review', 'call the Skill tool with "code-review"'],
+    surfaces: ['implement/SKILL.md'],
+    old: ['Once done, call the Skill tool with "code-review" to review the work.'],
   },
 ]
 

@@ -576,6 +576,8 @@ export const returnGroups = (run: Run, value: unknown, now: number, stored?: unk
                   ...(g.delegated.worktreeClash !== undefined ? { worktreeClash: g.delegated.worktreeClash } : {}),
                   // De même la marque d'un id de session qui n'a pas pu être noté sûrement : la fermeture garde la session.
                   ...(g.delegated.sessionClash !== undefined ? { sessionClash: g.delegated.sessionClash } : {}),
+                  // Le compte rendu déposé par le manager pour cet envoi (depot-manager.ts) : il reste avec son envoi.
+                  ...(g.delegated.managerReport !== undefined ? { managerReport: g.delegated.managerReport } : {}),
                 },
               ].filter((x, i, all) => x.closing?.state !== 'closed' || all.length - i <= EARLIER_MAX),
             }
@@ -633,6 +635,20 @@ export const earlierOf = (link: GroupLink | undefined): ClosedLink[] => {
   // Relue du tableau de bord : une entrée d'un autre type n'est pas une session.
   return (Array.isArray(e) ? e : e ? [e] : []).filter(x => x !== null && typeof x === 'object')
 }
+
+/**
+ * Les envois gardés d'un groupe, du plus ancien au plus récent (`earlier`, le lien rendu, le lien en vol), et la fin de
+ * la fenêtre de chacun : le relais d'un envoi ne se lit que jusqu'à l'envoi qui a pris sa place. Seule définition de
+ * cette fenêtre, que la fermeture (`closingText`) et les faits du compte rendu (`reportFacts`) partagent.
+ */
+export const sendsOf = (g: TicketGroup): { link: ClosedLink; until: number }[] => {
+  const links = [...earlierOf(g.delegated), ...(g.delegated ? [g.delegated as ClosedLink] : []), ...(g.linked ? [g.linked as ClosedLink] : [])]
+  const ats = links.map(l => l.at)
+  return links.map(link => ({ link, until: ats.filter(x => x > link.at).sort((x, y) => x - y)[0] ?? Infinity }))
+}
+
+/** La fin de la fenêtre d'un envoi du groupe parti à `at` (`sendsOf`) : l'envoi suivant, sinon jamais. */
+export const nextSendOf = (g: TicketGroup, at: number): number => sendsOf(g).map(s => s.link.at).filter(x => x > at).sort((x, y) => x - y)[0] ?? Infinity
 
 /** Une fermeture arrêtée redevient à faire quand un appel a touché le groupe depuis, ou sur « ↻ Relancer la fermeture ». */
 export const isRetried = (link: GroupLink): boolean => isRetriedSince(link.closing, link.touchedAt, link.closeAskedAt)

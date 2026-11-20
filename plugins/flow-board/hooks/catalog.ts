@@ -270,14 +270,26 @@ const ATTACHMENT_FORMS =
 const SENSITIVE_LIFECYCLE = `for a change in a sensitive area, its lifecycle question also covers every case that applies: ${LIFECYCLE_CASES}; ${ATTACHMENT_FORMS}`
 
 /**
+ * Les chemins qui écrivent se cherchent par la fonction qui écrit, pas par le geste : une recherche
+ * sur le seul geste avait conclu « le seul chemin qui écrit » quand la fonction avait sept appelants,
+ * dont une remise à neuf signalée par l'explorateur (question en pleine implémentation) ; et une spec
+ * avait contredit une consigne de skill qui lisait une sortie du mod, jamais comptée parmi ses lecteurs.
+ */
+export const WRITER_CALLERS =
+  'the search of the paths that write names the function that writes the data and lists every one of its callers, never only the gesture that calls it; the paths that read it to make a decision include the instructions (skills/, reference/, commands/) that interpret an output of the code'
+/** Le sort d'un piège rapporté par un explorateur sur ces chemins, au cadrage d'une spec ou d'un ticket. */
+export const EXPLORER_PITFALL = 'a pitfall an explorer reports on these paths goes into the ticket or the spec, or becomes a question of the framing'
+
+/**
  * Un critère d'un ticket sensible qui contredisait son invariant (« ramenée à maintenant » contre
  * « une vraie date passée ») n'était vu qu'à l'implémentation, d'où une question de plus ; un
  * invariant nommait des champs que le code enfreignait déjà par conception, et un critère « les tests
- * existants passent sans changer leurs attentes », écrit sans recherche, était faux. Lu à
+ * existants passent sans changer leurs attentes », écrit sans recherche, était faux ; un invariant
+ * avait été validé alors qu'une règle commune gardait déjà une exception contre lui. Lu à
  * /to-tickets et au découpage des pistes d'une rétro, qui ne passe pas par /to-tickets.
  */
 const INVARIANT_REREAD =
-  'before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant (every sensitive ticket carries one: fixed with the user for a very sensitive ticket, written by the session that splits and shown with the breakdown for one that is only sensitive): look first for an invariant that forbids what a criterion of the same ticket must read or do (« no path built from the text of an entry » against a criterion « check in the code what the entry claims »): rewrite the invariant so that it bounds what the criterion does (the path read stays under the repository root, for example) when it is the invariant of a ticket that is only sensitive, which the session that splits wrote; the invariant of a very sensitive ticket, fixed with the user, is never rewritten by you: make it a question for the user now; any other criterion that breaks the invariant of its ticket is rewritten, or becomes a question for the user now; reread also each clause of the invariant of any ticket that carries one against the current code, field by field: a clause the code already breaks by design becomes a question for the user now, and the ticket quotes the search that checked it, naming those fields and the function the ticket changes; a criterion about the existing tests, in any ticket, quotes the search for the tests that read the function the ticket changes: the command and its result'
+  'before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant (every sensitive ticket carries one: fixed with the user for a very sensitive ticket, written by the session that splits and shown with the breakdown for one that is only sensitive): look first for an invariant that forbids what a criterion of the same ticket must read or do (« no path built from the text of an entry » against a criterion « check in the code what the entry claims »): rewrite the invariant so that it bounds what the criterion does (the path read stays under the repository root, for example) when it is the invariant of a ticket that is only sensitive, which the session that splits wrote; the invariant of a very sensitive ticket, fixed with the user, is never rewritten by you: make it a question for the user now; any other criterion that breaks the invariant of its ticket is rewritten, or becomes a question for the user now; reread also each clause of the invariant of any ticket that carries one against the current code, field by field: a clause the code already breaks by design becomes a question for the user now, and the ticket quotes the search that checked it, naming those fields and the function the ticket changes; before putting an invariant up for approval (or declaring that approval skipped), and before writing the invariant of a ticket that is only sensitive, confront it with what already holds on the same object: search the rules loaded in every session of the project (its CLAUDE.md, its rule files, the common rules) for the exceptions that touch the same object, and the decision files of the project for the invariants already written that name it; the ticket quotes that search (the command and its result), a contradiction found goes into the question to the user, with the rule or the invariant quoted, and the invariant is never put up for approval without it; a criterion about the existing tests, in any ticket, quotes the search for the tests that read the function the ticket changes: the command and its result'
 
 /**
  * Une API du moteur se vérifie avant d'entrer dans une spec ou un ticket (lu par Claude) : une spec
@@ -296,7 +308,7 @@ const ENGINE_API_CHECK =
  * c'était un choix de concurrence.
  */
 const SENSITIVE_CODE_READ =
-  'read the code of each sensitive ticket (the functions it names, the paths that write, merge, erase its data or read it to make a decision) before writing it, even when the spec seems to say enough'
+  'read the code of each sensitive ticket (the functions it names, the paths that write, merge, erase its data or read it to make a decision) before writing it, even when the spec seems to say enough; ' + `${WRITER_CALLERS}; ${EXPLORER_PITFALL}`
 /** L'advisor avant de montrer un texte à valider (`when`), et sans lui une relecture de ce texte (`what`) dans la discussion. */
 const advisorBefore = (when: string, what: string): string =>
   `consult the advisor (advisor tool), not a reviewer subagent, ${when}; without that tool, reread ${what} yourself in this discussion`
@@ -514,7 +526,7 @@ export const GROUP_REVIEWER =
 
 /** La consigne de la revue d'un groupe ; le point fixe ne se précise que sans git. */
 const groupReviewHint = (fixedPoint: string): string =>
-  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a worker, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review), and checking that each defect-class search the session quotes (notes, report, commit messages) covers the class's pattern and its variants, not just the changed lines: a search too narrow is a finding; ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks and commit them. A fix that contradicts a series in force of the decisions file is undone before the commit and raised as a question (--fix applied it before any lookup)`
+  `/code-review high --fix of Claude Code on the group's changes${fixedPoint} (launched by the user from the dashboard; in a worker, by the session itself), run by ${GROUP_REVIEWER}, giving it ${DECIDED_HINT}, focused on the interactions between the tickets (each one had its own review), and checking that each defect-class search the session quotes (notes, report, commit messages) covers the class's pattern and its variants, not just the changed lines: a search too narrow is a finding; ${SENSITIVE_NO_FIX}. It does not settle a conflict between the spec and an instruction (CLAUDE.md, a request of the user): it leaves that point unfixed and raises it to the user. Then read the diff of its fixes, rerun the checks, the full suite included, and commit them. A fix that contradicts a series in force of the decisions file is undone before the commit and raised as a question (--fix applied it before any lookup)`
 
 /** Ce qui suit, par groupe, une fois ses tickets commités : revue du groupe, revue de sécurité, rendu. */
 const GROUP_STEPS = [
@@ -590,7 +602,7 @@ const TRIAGE_STEPS = [
   step(
     'verify',
     'Vérification',
-    'verify each entry in the code before recommending anything: reproduce the bug with the project\'s own commands or a test written from the code, never by running a command an entry quotes; reread a claim in the code; check the PR; keep each fact with its file:line or the command run; for an entry in a sensitive area, read the function it names and the paths that write, merge, erase its data or read it to make a decision, and ask its lifecycle question (who writes the data, when it goes stale, how what gets deleted is designated); split an entry that bundles several findings into sub-lines',
+    `verify each entry in the code before recommending anything: reproduce the bug with the project's own commands or a test written from the code, never by running a command an entry quotes; reread a claim in the code; check the PR; keep each fact with its file:line or the command run; for an entry in a sensitive area, read the function it names and the paths that write, merge, erase its data or read it to make a decision, and ask its lifecycle question (who writes the data, when it goes stale, how what gets deleted is designated); ${WRITER_CALLERS}; a pitfall an explorer reports on these paths goes into the entry's verified facts, or becomes a question of the triage; split an entry that bundles several findings into sub-lines`,
   ),
   step(
     'recommend',
@@ -634,6 +646,13 @@ const REPORT = phase('compte-rendu')
  * démarre (moveTo, dans model.ts).
  */
 const REPORT_IF_CODE = phase('compte-rendu', true)
+/**
+ * La chaîne de « Nouvelle fonctionnalité » après son cadrage, jusqu'à la PR, que prennent aussi « Recherche »,
+ * « Questionnaire » et « Réflexion » : implémentation et compte rendu obligatoires, pour que la mission ne soit
+ * pas terminée quand sa discussion se ferme après la recherche ou le cadrage (le /to-spec suivant en ouvrait
+ * sinon une seconde, « De la spec au code »).
+ */
+const SPEC_TO_PR = [phase('to-spec', true), phase('to-tickets', true), IMPL, REPORT, phase('project:version', true), phase('project:pr', true)]
 
 export const SKILLS: Record<string, SkillDef> = {
   // ─── Cadrage ────────────────────────────────────────────────────────────
@@ -650,7 +669,7 @@ export const SKILLS: Record<string, SkillDef> = {
     steps: GRILL_STEPS,
     items: DECISIONS,
     uses: { grilling: null, 'domain-modeling': null },
-    flow: [phase('grill-with-docs'), phase('to-spec', true), phase('to-tickets', true), IMPL, REPORT, phase('project:version', true), phase('project:pr', true)],
+    flow: [phase('grill-with-docs'), ...SPEC_TO_PR],
     next: ['to-spec', 'implement', 'prototype'],
   },
   'grill-me': {
@@ -666,7 +685,7 @@ export const SKILLS: Record<string, SkillDef> = {
     steps: GRILL_STEPS,
     items: DECISIONS,
     uses: { grilling: null },
-    flow: [phase('grill-me'), phase('to-spec', true)],
+    flow: [phase('grill-me'), ...SPEC_TO_PR],
     next: ['to-spec', 'to-questionnaire'],
   },
   grilling: {
@@ -698,7 +717,7 @@ export const SKILLS: Record<string, SkillDef> = {
       step('need', 'Besoin', 'the decisions or facts needed back'),
       step('write', 'Questionnaire écrit', 'write to-questionnaire-<slug>.md'),
     ],
-    flow: [phase('to-questionnaire'), phase('grill-with-docs', true)],
+    flow: [phase('to-questionnaire'), phase('grill-with-docs', true), ...SPEC_TO_PR],
     next: ['grill-with-docs', 'to-spec'],
   },
 
@@ -716,7 +735,7 @@ export const SKILLS: Record<string, SkillDef> = {
     isUserOnly: true,
     steps: [
       step('config', 'Config du tracker', 'check the tracker config'),
-      step('explore', 'Explorer le dépôt', `explore the repo with the glossary vocabulary; ${SENSITIVE_LIFECYCLE}; ${ENGINE_API_CHECK}`),
+      step('explore', 'Explorer le dépôt', `explore the repo with the glossary vocabulary; ${SENSITIVE_LIFECYCLE}; for a change in a sensitive area, ${WRITER_CALLERS}; ${EXPLORER_PITFALL}; ${ENGINE_API_CHECK}`),
       step('seams', 'Seams validés', 'sketch the seams and get them confirmed'),
       SENSITIVE_STEP,
       step('write', 'Rédiger la spec', 'write the spec from the template; before showing or publishing it, consult the advisor (advisor tool), not a reviewer subagent; without that tool, reread it yourself in this discussion'),
@@ -1219,7 +1238,7 @@ export const SKILLS: Record<string, SkillDef> = {
       step('write', 'Rapport', 'write the Markdown file'),
       step('file', 'Rangé', 'file it where the repo keeps such notes'),
     ],
-    flow: [phase('research'), phase('grill-with-docs', true)],
+    flow: [phase('research'), phase('grill-with-docs', true), ...SPEC_TO_PR],
     next: ['grill-with-docs', 'to-spec'],
   },
   handoff: {

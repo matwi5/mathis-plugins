@@ -29,6 +29,7 @@ Les mods (panneaux et bandeaux) demandent Claude Code 2.1.286 ou plus récent, 2
 | [`files-board`](plugins/files-board/README.md) | Navigateur de fichiers dans le terminal | `/files` | 0.3.3 |
 | [`stats-board`](plugins/stats-board/README.md) | Statistiques d'usage, de coût et de durée de Claude Code, partagées entre postes si on le souhaite | `/ccstats`, `/stats-board:recap` | 0.10.0 |
 | [`session-tools`](plugins/session-tools/README.md) | Pied du prompt (chrono de la requête, tokens/s, cache, heure) et boutons Réécrire, Effort auto, Fichiers, Diff | `/session-tools:start` | 0.22.0 |
+| [`decors-pixel`](plugins/decors-pixel/README.md) | Décors en pixel art animé pour l'app desktop (Morkie à Paris, Frissons 80) | `/decor` | 0.1.0 |
 
 ## Spécialistes routés par coût
 
@@ -70,7 +71,7 @@ Une exception assumée : `stats-board` pousse lui-même ses relevés d'usage dan
 
 ```
 mathis-plugins/
-├── .claude-plugin/marketplace.json   la marketplace : 10 plugins, version de chacun
+├── .claude-plugin/marketplace.json   la marketplace : 11 plugins, version de chacun
 ├── plugins/<plugin>/                 un plugin : manifeste, skills, agents ou mod (hooks/), tests, README, CHANGELOG
 ├── config/
 │   ├── rules/                        règles par plugin, à importer dans un CLAUDE.md
