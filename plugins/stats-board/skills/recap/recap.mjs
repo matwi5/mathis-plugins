@@ -3,6 +3,10 @@
 // - Lancé par Claude : `node recap.mjs [<id de la discussion>]`. Écrit le récap en Markdown sur stdout.
 // - Récap d'une mission : `node recap.mjs --parcours "<préfixe de titre>" | --worktrees <dossier du projet>
 //   [<id du manager>] [--since AAAA-MM-JJ] [--until AAAA-MM-JJ]` (60 jours par défaut).
+//   Ou désignée par ses discussions : `node recap.mjs --discussions <rôle>:<id>,… [--since …] [--until …]`
+//   (rôle manager, diagnostic ou worker-<groupe> ; id uuid ou ses 8 premiers chiffres). Il finit par le bloc
+//   « Contexte et coût » : le contexte de chaque session (départ, maximum, fin, compactions), lu dans son
+//   transcript (types, dates et nombres seulement, jamais le texte d'un message, en lecture seule).
 // - Les chiffres viennent de ccusage (`npx ccusage@latest claude daily|session|blocks --json`),
 //   comme le panneau ; les autres postes, de `~/.claude/claude-usage/machines/*.json`, et les noms
 //   d'affichage des projets, de `~/.claude/claude-usage/names.json`.
@@ -428,6 +432,245 @@ export function titleOf(text) {
   return t.custom ?? t.ai
 }
 
+// ─── Mesure d'un transcript ─────────────────────────────────────────────────
+
+/**
+ * Le seuil de compaction d'un worker (`WORKER_COMPACT_TOKENS` de `plugins/flow-board/hooks/compaction.ts`),
+ * repère « hors norme » d'un worker : à garder aligné à la main.
+ */
+export const WORKER_CONTEXT_TOKENS = 450_000
+
+/** Plafond d'une taille de contexte plausible : au-delà, la valeur lue est écartée (fichier abîmé). */
+const MAX_CONTEXT_TOKENS = 100_000_000
+
+/** Les entrées qui suivent une borne de compaction où chercher la commande `/compact` (relevé du 21/11/2026). */
+const COMPACT_COMMAND_WINDOW = 7
+
+const COMPACT_COMMAND = '<command-name>/compact</command-name>'
+
+/** Un nombre de tokens lu d'un transcript : fini, positif ou nul et plausible, sinon `null`. */
+const tokensOf = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_CONTEXT_TOKENS ? v : null)
+
+/** La taille du contexte d'une réponse du fil principal : entrée + cache lu + cache écrit ; `null` si écartée. */
+function contextOf(entry) {
+  if (entry.type !== 'assistant' || entry.isSidechain === true) return null
+  const whole = entry.message?.usage
+  if (!whole || typeof whole !== 'object') return null
+  // Une réponse en plusieurs passes (un appel de l'advisor entre deux) somme leurs usages : la taille du
+  // contexte est celle de sa dernière passe du fil principal (`type` « message »), pas leur somme.
+  const passes = Array.isArray(whole.iterations) ? whole.iterations.filter((p) => p && typeof p === 'object' && p.type === 'message') : []
+  const usage = passes.length ? passes[passes.length - 1] : whole
+  const parts = [usage.input_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens].map((v) => (v === undefined ? 0 : tokensOf(v)))
+  if (parts.some((v) => v === null)) return null
+  const total = parts[0] + parts[1] + parts[2]
+  return total > 0 && total <= MAX_CONTEXT_TOKENS ? total : null
+}
+
+/**
+ * Une entrée de la commande `/compact` (tapée, ou envoyée par flow-board à un manager) : une entrée `user` dont
+ * le texte commence par la balise de la commande. Un texte qui ne fait que la citer (le résumé de la compaction,
+ * un message collé) n'en est pas une.
+ */
+function isCompactCommand(entry) {
+  if (entry.type !== 'user' || entry.isCompactSummary === true) return false
+  const content = entry.message?.content
+  const text = typeof content === 'string' ? content : Array.isArray(content) && typeof content[0]?.text === 'string' ? content[0].text : ''
+  return text.trimStart().startsWith(COMPACT_COMMAND)
+}
+
+/**
+ * La mesure du contexte d'une discussion, d'après les lignes de son transcript (un itérable de chaînes) :
+ * `{ start, max, end, compactions: [{ before, after, kind }] }`, des nombres de tokens et des genres seulement,
+ * jamais le texte d'un message. La taille d'une réponse du fil principal est entrée + cache lu + cache écrit
+ * (réponses des spécialistes et réponses à zéro écartées) ; départ, la première ; fin, la dernière ; maximum,
+ * la plus grande, tailles « avant » des compactions comprises. Sans réponse retenue, `start`, `max` et `end`
+ * valent `null` (transcript vide). Genre d'une compaction : « automatique » (déclencheur `auto`), « plugin »
+ * (`manual` sans entrée de commande `/compact` dans les 7 entrées qui suivent : flow-board compacte un worker
+ * sans la commande), « voulue » sinon (commande tapée, ou envoyée par flow-board à un manager, ou déclencheur
+ * illisible). Une ligne illisible (la dernière d'un transcript en cours d'écriture) est sautée.
+ */
+export function measureTranscript(lines) {
+  let start = null
+  let end = null
+  let max = null
+  const compactions = []
+  // Les compactions dont on cherche encore la commande, avec les entrées qui restent à voir.
+  let pending = []
+  const settle = (c) => ({ before: c.before, after: c.after, kind: c.kind })
+  for (const line of lines) {
+    let entry
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      // Ligne coupée ou abîmée : sautée, sans recopier le message d'erreur (il cite la ligne).
+      continue
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    if (pending.length) {
+      // Une commande ne règle que la dernière compaction en attente : celle qu'elle a lancée.
+      const settled = isCompactCommand(entry) ? pending[pending.length - 1] : null
+      if (settled) settled.kind = 'voulue'
+      for (const c of pending) c.left -= 1
+      pending = pending.filter((c) => c.left > 0 && c !== settled)
+    }
+    if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+      const meta = entry.compactMetadata && typeof entry.compactMetadata === 'object' ? entry.compactMetadata : {}
+      const trigger = meta.trigger === 'auto' || meta.trigger === 'manual' ? meta.trigger : null
+      const c = { before: tokensOf(meta.preTokens), after: tokensOf(meta.postTokens), kind: trigger === 'auto' ? 'automatique' : trigger === 'manual' ? 'plugin' : 'voulue', trigger, left: COMPACT_COMMAND_WINDOW }
+      compactions.push(c)
+      if (trigger === 'manual') pending.push(c)
+      if (c.before !== null && (max === null || c.before > max)) max = c.before
+      continue
+    }
+    const size = contextOf(entry)
+    if (size === null) continue
+    if (start === null) start = size
+    end = size
+    if (max === null || size > max) max = size
+  }
+  // Sans réponse retenue, le maximum d'une compaction seule ne fait pas une mesure.
+  if (start === null) return { start: null, max: null, end: null, compactions: compactions.map(settle) }
+  return { start, max, end, compactions: compactions.map(settle) }
+}
+
+/** Taille d'un bloc de lecture d'un transcript. */
+const READ_CHUNK = 1 << 20
+
+/**
+ * Les lignes d'un fichier, lues par blocs depuis le début, sans charger le fichier entier en une chaîne : une
+ * ligne coupée entre deux blocs (ou un caractère sur plusieurs octets) est recollée avant d'être décodée.
+ */
+function* fileLines(file) {
+  const fd = openSync(file, 'r')
+  try {
+    // Les morceaux de la ligne en cours, recollés à sa fin : une ligne de plusieurs Mo n'est copiée qu'une fois.
+    let parts = []
+    for (;;) {
+      const buf = Buffer.alloc(READ_CHUNK)
+      const n = readSync(fd, buf, 0, buf.length, null)
+      if (n <= 0) break
+      let chunk = buf.subarray(0, n)
+      let at
+      while ((at = chunk.indexOf(0x0a)) !== -1) {
+        parts.push(chunk.subarray(0, at))
+        yield Buffer.concat(parts).toString('utf8')
+        parts = []
+        chunk = chunk.subarray(at + 1)
+      }
+      if (chunk.length) parts.push(chunk)
+    }
+    if (parts.length) yield Buffer.concat(parts).toString('utf8')
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Un nom de dossier de projet ou un id de session de ccusage qui ne sort pas de son dossier : ni séparateur, ni « . », ni « .. ». */
+const SAFE_NAME = /^[A-Za-z0-9._-]+$/
+const isSafeName = (s) => typeof s === 'string' && SAFE_NAME.test(s) && s !== '.' && s !== '..'
+
+/**
+ * Le chemin d'un fichier d'une session sous le dossier des projets, d'après le projet et l'id de sa ligne de
+ * ccusage, ou `null` quand l'un d'eux sortirait de ce dossier. Il construit les chemins de la mesure, du dossier
+ * `subagents/` et du titre d'une discussion donnée par `--discussions` ; la lecture du titre de la recherche par
+ * titre ou par worktrees (comme avant le bloc « Contexte et coût ») ne passe pas par lui, et `projectPath`
+ * refuse lui-même une clé de projet hors de cette forme.
+ */
+export function sessionPath(projectsDir, project, id, ...rest) {
+  if (!isSafeName(project) || !isSafeName(id)) return null
+  return join(projectsDir, project, ...(rest.length ? [id, ...rest] : [`${id}.jsonl`]))
+}
+
+/** La mesure du transcript d'une session (`measureTranscript`), ou `null` s'il est absent ou illisible. */
+export function measureSession(projectsDir, info) {
+  const file = sessionPath(projectsDir, info.project, info.id)
+  if (!file) return null
+  try {
+    return measureTranscript(fileLines(file))
+  } catch {
+    return null
+  }
+}
+
+/** Le nombre de spécialistes d'une session : les transcripts `agent-*.jsonl` de son dossier `subagents/`, listé sans être ouverts. */
+export function countSpecialists(projectsDir, info) {
+  const dir = sessionPath(projectsDir, info.project, info.id, 'subagents')
+  if (!dir) return 0
+  try {
+    return readdirSync(dir).filter((f) => /^agent-.*\.jsonl$/.test(f)).length
+  } catch {
+    return 0
+  }
+}
+
+/** L'id de groupe d'un titre de worker de flow-board, « … > Groupe X · … » (« › » ou « ' » avant la 0.61.0). */
+const WORKER_TITLE = /\s[>›']\s+Groupe\s+([A-Za-z0-9]{1,12})(?![A-Za-z0-9])/
+
+/** Le libellé d'un rôle de `--discussions` : « Manager », « Diagnostic », « Worker <id du groupe> ». */
+const roleLabel = (role) => (role === 'manager' ? 'Manager' : role === 'diagnostic' ? 'Diagnostic' : `Worker ${String(role).slice('worker-'.length)}`)
+
+/** Le rôle d'une session retrouvée sans liste de discussions : un worker (son worktree `groupe-*` ou son titre), sinon le manager. */
+function roleOf(r, title) {
+  const group = String(title ?? '').match(WORKER_TITLE)?.[1]
+  if (group) return { label: `Worker ${group}`, isWorker: true }
+  if (r.project.includes(GROUP_WORKTREES)) return { label: 'Worker', isWorker: true }
+  return { label: 'Manager', isWorker: false }
+}
+
+/**
+ * Le bloc « Contexte et coût » d'un récap de mission : une ligne par discussion (`lines`, dans l'ordre du temps :
+ * `{ label, title, isWorker, isGroupWorker, measure, specialists, cost }` : `isWorker` pour le repère de taille,
+ * `isGroupWorker` (par défaut `isWorker`) pour le genre « plugin » ; puis celles d'une discussion donnée mais pas
+ * retrouvée, `{ label, missing }` : « non mesurée (<raison>) », sans coût), la ligne Total, puis « Hors norme : … » ou
+ * « Rien hors norme. ». `measure` : celle de `measureTranscript`, ou `null` pour un transcript absent ou illisible.
+ * Hors d'un worker de groupe (`isGroupWorker`, par défaut `isWorker`), une compaction « plugin » se dit « voulue » :
+ * le genre « plugin » n'est sûr que chez un worker de groupe
+ * (décision du cadrage de cette mesure). Sans aucune discussion mesurée (transcript absent, illisible ou vide),
+ * le total des compactions est « — » quand aucune n'est relevée, et la dernière ligne dit qu'il n'y a rien à juger,
+ * sauf une compaction automatique relevée, toujours nommée.
+ */
+function contextBlock(lines) {
+  const cell = (s) => String(s).replace(/\|/g, '\\|')
+  const out = ['## Contexte et coût', 'Coût équivalent API, spécialistes compris.', '', '| Discussion | Départ | Maximum | Fin | Compactions | Coût |', '|---|---:|---:|---:|---|---:|']
+  const size = (n) => (n === null ? '—' : fmtTokens(n))
+  let count = 0
+  let measured = 0
+  const autos = []
+  const big = []
+  for (const l of lines) {
+    const name = cell(l.title ? `${l.label} · ${l.title}` : l.label)
+    if (l.missing) {
+      out.push(`| ${name} | non mesurée (${l.missing}) | | | | — |`)
+      continue
+    }
+    const cost = `${fmtCost(l.cost)}${l.specialists ? ` · ${plural(l.specialists, 'spécialiste')}` : ''}`
+    const m = l.measure
+    if (!m) {
+      out.push(`| ${name} | non mesuré | non mesuré | non mesuré | — | ${cost} |`)
+      continue
+    }
+    count += m.compactions.length
+    for (const c of m.compactions) if (c.kind === 'automatique') autos.push(`compaction automatique à ${size(c.before)} chez ${l.label}`)
+    // « plugin » n'est sûr que chez un worker de groupe, que flow-board compacte sans la commande.
+    const kindOf = (c) => (c.kind === 'plugin' && !(l.isGroupWorker ?? l.isWorker) ? 'voulue' : c.kind)
+    const compactions = m.compactions.length ? `${m.compactions.length} : ${m.compactions.map((c) => `${size(c.before)} → ${size(c.after)} (${kindOf(c)})`).join(', ')}` : '0'
+    if (m.start === null) {
+      out.push(`| ${name} | non mesurée (transcript vide) | | | ${compactions} | ${cost} |`)
+      continue
+    }
+    measured += 1
+    if (l.isWorker && m.max > WORKER_CONTEXT_TOKENS) big.push(`à ${size(m.max)} chez ${l.label}`)
+    out.push(`| ${name} | ${size(m.start)} | ${size(m.max)} | ${size(m.end)} | ${compactions} | ${cost} |`)
+  }
+  // Sans aucune ligne retrouvée, le coût n'a pas été relevé : « — », jamais « 0 $ ».
+  const costs = lines.filter((l) => !l.missing)
+  out.push(`| **Total** | | | | ${measured || count ? count : '—'} | ${costs.length ? `**${fmtCost(sum(costs, (l) => l.cost))}**` : '—'} |`, '')
+  const notes = [...autos, ...(big.length ? [`contexte ${big.join(' et ')} (repère : ${fmtTokens(WORKER_CONTEXT_TOKENS)} pour un worker)`] : [])]
+  // Sans aucune mesure, « Rien hors norme. » dirait vérifié ce qui ne l'a pas été.
+  out.push(notes.length ? `Hors norme : ${notes.join(' ; ')}.` : measured ? 'Rien hors norme.' : 'Hors norme : rien à juger, aucune discussion mesurée.')
+  return out
+}
+
 const dayClock = (ms, tz) => new Intl.DateTimeFormat('fr-FR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(ms))
 
 /** Le marqueur des dossiers de projet des worktrees de groupe : `<clé du projet>--claude-worktrees-groupe-<id>`. */
@@ -457,11 +700,17 @@ const inParcours = (r, title, { prefix, worktreesKey, sessionId }) =>
 
 /**
  * Le récap d'une mission en Markdown, spécialistes compris : les sessions dont le titre commence par `prefix`,
- * et celles des worktrees `groupe-*` du projet `worktreesKey` avec le manager `sessionId`.
+ * et celles des worktrees `groupe-*` du projet `worktreesKey` avec le manager `sessionId` ; ou, avec
+ * `discussions` (de `attachDiscussions`), les seules lignes rattachées, sous leur rôle donné, puis une ligne
+ * « non mesurée (raison) » par discussion donnée mais pas retrouvée.
  * La durée d'une session va de sa première à sa dernière activité ; son temps actif et celui de la mission
  * viennent des fichiers de relevé (`requestLogs`), sans double compte entre sessions qui tournent en même temps.
+ * Il finit par le bloc « Contexte et coût » (`contextBlock`), d'après `measures` : sans mesure donnée pour une
+ * session, ses colonnes de contexte disent « non mesuré ».
  * data : { tz, since, until (AAAA-MM-JJ, facultatif), prefix, worktreesKey, sessionId, sessions, titles, projectNames, requestLogs,
- *          unreadable (noms des fichiers de relevé illisibles) }
+ *          unreadable (noms des fichiers de relevé illisibles),
+ *          measures ({ [id de session]: { measure (de `measureTranscript`, ou null), specialists (nombre) } }),
+ *          discussions (facultatif : le rattachement de `--discussions`, qui remplace prefix et worktreesKey) }
  */
 export function renderParcours(data) {
   const { tz } = data
@@ -470,19 +719,29 @@ export function renderParcours(data) {
   const prefix = String(data.prefix ?? '').trim()
   const wt = !!data.worktreesKey
   const rows = (data.sessions ?? []).map(sessionInfo)
-  const picked = rows.filter((r) => !r.parent && inParcours(r, titles[r.id], { prefix, worktreesKey: data.worktreesKey, sessionId: data.sessionId }))
+  // Désignée par ses discussions : les seules lignes que le rattachement a rendues, sous leur rôle.
+  const given = Array.isArray(data.discussions) ? data.discussions : null
+  const roles = new Map((given ?? []).filter((d) => d.row).map((d) => [d.row.id, d.role]))
+  const picked = given
+    ? rows.filter((r) => !r.parent && roles.has(r.id))
+    : rows.filter((r) => !r.parent && inParcours(r, titles[r.id], { prefix, worktreesKey: data.worktreesKey, sessionId: data.sessionId }))
   const ids = new Set(picked.map((r) => r.id))
   // ccusage 20 compte déjà les spécialistes dans leur session ; une ligne `<projet>/<session>/subagents`
   // (versions plus anciennes) s'ajoute à sa session.
   const subs = rows.filter((r) => r.parent && ids.has(r.parent))
   const all = [...picked, ...subs]
   const cost = sum(all, (r) => r.cost)
-  const what = [prefix && `« ${prefix} »`, wt && `worktrees groupe-* de ${names[data.worktreesKey] ?? data.worktreesKey}`].filter(Boolean).join(' et ')
+  const what = given
+    ? plural(given.length, 'discussion donnée', 'discussions données')
+    : [prefix && `« ${prefix} »`, wt && `worktrees groupe-* de ${names[data.worktreesKey] ?? data.worktreesKey}`].filter(Boolean).join(' et ')
   const frDate = (d) => String(d).split('-').reverse().join('/')
   const period = data.until ? `du ${frDate(data.since)} au ${frDate(data.until)}` : `depuis le ${frDate(data.since)}`
-  const out = [`## Récap de la mission${prefix ? ' ' : ' · '}${what}`, '']
+  const out = [`## Récap de la mission${prefix && !given ? ' ' : ' · '}${what}`, '']
+  // Les discussions données que le rattachement n'a pas retrouvées : nommées par leur rôle et le début de leur id.
+  const unfound = (given ?? []).filter((d) => !d.row).map((d) => ({ label: `${roleLabel(d.role)} (${d.id.slice(0, 8)})`, missing: d.reason }))
   if (!picked.length) {
-    out.push(`Aucune session retrouvée ${period}.`)
+    out.push(`Aucune ${given ? 'discussion' : 'session'} retrouvée ${period}.`)
+    if (given) out.push('', ...contextBlock(unfound))
     return out.join('\n')
   }
   out.push(`Coût équivalent API d'après ccusage, spécialistes compris, sessions retrouvées ${period}.`, '')
@@ -508,6 +767,16 @@ export function renderParcours(data) {
     const ownLogs = logs.filter((l) => l.session === r.id)
     out.push(`| ${cell(titles[r.id] ?? '(sans titre)')} | ${cell(names[r.project] ?? r.project)} | ${dayClock(first, tz)} → ${dayClock(last, tz)} | ${fmtDuration(last - first)} | ${ownLogs.length ? fmtSeconds(durationsOf(ownLogs).activeMs) : '—'} | ${fmtCost(sum(own, (s) => s.cost))} |`)
   }
+  // Le contexte de chaque session, d'après son transcript (`measures`, lu au lancement), et son coût.
+  const measures = data.measures ?? {}
+  const lines = picked.map((r) => ({
+    ...(given ? { label: roleLabel(roles.get(r.id)), isWorker: roles.get(r.id) !== 'manager', isGroupWorker: roles.get(r.id).startsWith('worker-') } : roleOf(r, titles[r.id])),
+    title: titles[r.id] ?? null,
+    measure: measures[r.id]?.measure ?? null,
+    specialists: measures[r.id]?.specialists ?? 0,
+    cost: sum([r, ...subs.filter((s) => s.parent === r.id)], (s) => s.cost),
+  }))
+  out.push('', ...contextBlock([...lines, ...unfound]))
   return out.join('\n')
 }
 
@@ -595,6 +864,8 @@ export function labelOf(path, labels) {
  * commencer ailleurs (un brouillon du desktop) : son premier `cwd` seul ne suffit pas.
  */
 function projectPath(projectsDir, key) {
+  // Une clé qui sortirait du dossier des projets (« .. », un séparateur) n'ouvre rien.
+  if (!isSafeName(key)) return null
   try {
     const dir = join(projectsDir, key)
     for (const f of readdirSync(dir).filter((x) => x.endsWith('.jsonl')).slice(0, 10)) {
@@ -747,14 +1018,58 @@ const readMachineName = (usageDir) => {
   }
 }
 
-/** Les options du récap d'une mission, ou `null` sans `--parcours` ni `--worktrees` (récap de la discussion). */
-function parcoursArgs(argv) {
-  const out = { prefix: null, worktrees: null, since: null, until: null, sessionId: null }
+/** La forme d'un couple de `--discussions`, citée par chaque refus. */
+const DISCUSSIONS_FORM =
+  'attendu : <rôle>:<id>, couples séparés par des virgules sans espace ; rôle manager, diagnostic ou worker-<id du groupe> (1 à 12 lettres ASCII ou chiffres) ; id en forme d\'uuid, ou ses 8 premiers chiffres hexadécimaux'
+
+/** Le rôle d'un couple : `manager`, `diagnostic`, ou `worker-<id du groupe>` (la forme de `isGroupId` de flow-board). */
+const DISCUSSION_ROLE = /^(?:manager|diagnostic|worker-[A-Za-z0-9]{1,12})$/
+
+/** L'id d'un couple : un uuid entier, ou ses 8 premiers chiffres hexadécimaux, sans la casse. */
+const DISCUSSION_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{8})$/i
+
+/** Un id de session entier, en forme d'uuid. */
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Une valeur reçue citée dans un refus, 80 signes au plus : ses caractères de contrôle C0 et C1, ses séparateurs
+ * de ligne, ses invisibles et ses caractères de direction échappés en `\uXXXX`.
+ */
+const quoted = (s) =>
+  JSON.stringify(String(s).slice(0, 80)).replace(/[\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/**
+ * La liste de `--discussions` : des couples `<rôle>:<id>` séparés par des virgules, sans espace. Un seul couple
+ * hors forme refuse toute la valeur, en le nommant : aucun id hors forme n'entre jamais dans la suite.
+ */
+function parseDiscussions(value) {
+  return value.split(',').map((pair, i) => {
+    const parts = pair.split(':')
+    if (parts.length !== 2 || !DISCUSSION_ROLE.test(parts[0]) || !DISCUSSION_ID.test(parts[1])) {
+      throw new Error(`--discussions : couple ${i + 1} hors forme, ${quoted(pair)} (${DISCUSSIONS_FORM})`)
+    }
+    return { role: parts[0], id: parts[1].toLowerCase() }
+  })
+}
+
+/**
+ * Les options du récap d'une mission, ou `null` sans `--parcours`, `--worktrees` ni `--discussions` (récap de
+ * la discussion). `--discussions` ne se combine ni avec `--parcours`, ni avec `--worktrees`, ni avec un id de
+ * manager ; une forme fautive refuse toute la commande, en nommant l'argument, avant tout appel à ccusage.
+ */
+export function parcoursArgs(argv) {
+  const out = { prefix: null, worktrees: null, since: null, until: null, sessionId: null, discussions: null }
   const unknown = []
   let isParcours = false
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a === '--parcours' || a === '--worktrees' || a === '--since' || a === '--until') {
+    if (a === '--discussions') {
+      // La valeur n'est pas rognée : une espace ou un saut de ligne la rend hors forme.
+      const v = argv[++i] ?? ''
+      if (!v) throw new Error(`--discussions attend une valeur (${DISCUSSIONS_FORM})`)
+      if (out.discussions) throw new Error(`--discussions donnée deux fois : une seule liste (${DISCUSSIONS_FORM})`)
+      out.discussions = parseDiscussions(v)
+    } else if (a === '--parcours' || a === '--worktrees' || a === '--since' || a === '--until') {
       const v = (argv[++i] ?? '').trim()
       if (!v) throw new Error(`${a} attend une valeur`)
       if (a === '--parcours') out.prefix = v
@@ -765,9 +1080,47 @@ function parcoursArgs(argv) {
     } else if (/^[0-9a-f-]{36}$/i.test(a.trim())) out.sessionId = a.trim()
     else if (a.trim()) unknown.push(a)
   }
-  if (!isParcours) return null
+  if (out.discussions) {
+    const other = out.prefix !== null ? '--parcours' : out.worktrees !== null ? '--worktrees' : out.sessionId !== null ? 'un id de manager' : null
+    if (other) throw new Error(`--discussions ne se combine pas avec ${other} : la mission est désignée par ses seules discussions (${DISCUSSIONS_FORM})`)
+  } else if (!isParcours) {
+    // `--discussions=…` n'est pas l'option : refusé, plutôt que de rendre le récap de la discussion à la place ;
+    // avec une autre option de mission, le refus d'un argument inconnu d'avant reste.
+    const glued = unknown.find((a) => a.trim().toLowerCase().startsWith('--discussions'))
+    if (glued !== undefined) throw new Error(`argument inconnu : ${quoted(glued)} (--discussions suivie d'une espace, puis la liste ; ${DISCUSSIONS_FORM})`)
+    return null
+  }
   // Un préfixe sans guillemets ou une option mal écrite (`--since=…`) changerait la mission sans rien dire.
+  if (unknown.length && out.discussions) throw new Error(`argument inconnu : ${quoted(unknown[0])} (une seule valeur après --discussions ; ${DISCUSSIONS_FORM})`)
   if (unknown.length) throw new Error(`argument inconnu : ${unknown[0]} (préfixe entre guillemets, dates en « --since AAAA-MM-JJ »)`)
+  return out
+}
+
+/**
+ * Le rattachement des discussions données à leurs lignes de ccusage (`rows`, de `sessionInfo`) : pour chaque
+ * couple, `{ role, id, row }`, ou `{ role, id, reason }` sans ligne (« id ambigu », « discussion introuvable »).
+ * Un id entier désigne la ligne de cet id, un id court la seule ligne qui commence par lui ; une ligne de
+ * spécialiste (`subagents`) n'est jamais une discussion. Deux couples qui désignent la même ligne n'en font
+ * qu'un, sous le premier rôle donné. Sans ligne, rien n'est à ouvrir : le transcript d'une discussion ne
+ * s'ouvre que par le projet et l'id de sa ligne, jamais par l'id reçu.
+ */
+export function attachDiscussions(discussions, rows) {
+  const out = []
+  const seen = new Set()
+  for (const d of discussions) {
+    // Seule une ligne dont l'id a lui-même la forme d'un uuid peut être rattachée : aucun autre id n'entre dans un chemin.
+    const found = rows.filter((r) => !r.parent && SESSION_UUID.test(r.id) && (d.id.length === 8 ? r.id.toLowerCase().startsWith(d.id) : r.id.toLowerCase() === d.id))
+    if (found.length !== 1) {
+      // Deux couples du même id non retrouvé n'en font qu'un, comme deux couples d'une même ligne.
+      if (seen.has(d.id)) continue
+      seen.add(d.id)
+      out.push({ role: d.role, id: d.id, reason: found.length ? 'id ambigu' : 'discussion introuvable' })
+      continue
+    }
+    if (seen.has(found[0].id)) continue
+    seen.add(found[0].id)
+    out.push({ role: d.role, id: d.id, row: found[0] })
+  }
   return out
 }
 
@@ -784,14 +1137,34 @@ async function mainParcours(opts, { home, projectsDir, tz, now }) {
   const match = { prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId }
   // Seuls les projets de la mission sont nommés : chaque nom manquant coûte des lectures de transcriptions.
   const keys = new Set(worktreesKey ? [worktreesKey] : [])
+  // Le contexte et les spécialistes des seules sessions retenues : leur transcript (mesure) et leur dossier
+  // `subagents/` ne s'ouvrent que par le projet et l'id de leur ligne de ccusage, passés par `sessionPath`. Avec
+  // `--discussions`, le titre y passe aussi ; la recherche par titre ou par worktrees lit le titre comme avant ce
+  // bloc, par le même projet et le même id, sans ce garde.
+  const measures = {}
+  // Désignée par ses discussions : seules les lignes rattachées sont lues, par leur projet et leur id de ccusage.
+  const discussions = opts.discussions ? attachDiscussions(opts.discussions, sessions.map(sessionInfo)) : null
+  const attached = new Set((discussions ?? []).filter((d) => d.row).map((d) => d.row.id))
   for (const s of sessions) {
     const info = sessionInfo(s)
     if (info.parent) continue
+    if (discussions) {
+      if (!attached.has(info.id)) continue
+      // Le titre aussi passe par le garde : l'id vient de la ligne de ccusage, jamais de la liste reçue.
+      const file = sessionPath(projectsDir, info.project, info.id)
+      const title = file ? readTitle(file) : null
+      if (title !== null) titles[info.id] = title
+      if (file) keys.add(info.project)
+      measures[info.id] = { measure: measureSession(projectsDir, info), specialists: countSpecialists(projectsDir, info) }
+      continue
+    }
     // Sans préfixe, seuls les titres des sessions des worktrees et du manager servent.
     if (!opts.prefix && !inParcours(info, null, match)) continue
     const title = readTitle(join(projectsDir, info.project, `${info.id}.jsonl`))
     if (title !== null) titles[info.id] = title
-    if (inParcours(info, title, match)) keys.add(info.project)
+    if (!inParcours(info, title, match)) continue
+    keys.add(info.project)
+    measures[info.id] = { measure: measureSession(projectsDir, info), specialists: countSpecialists(projectsDir, info) }
   }
   const usageDir = join(home, '.claude', 'claude-usage')
   const labels = labelsOf(readJson(join(usageDir, 'names.json')))
@@ -801,7 +1174,7 @@ async function mainParcours(opts, { home, projectsDir, tz, now }) {
   // Les relevés modifiés depuis le début de la mission : ceux de ses sessions en font partie.
   const from = Date.parse(`${since}T00:00:00Z`) - DAY_MS
   const { logs, unreadable } = readRequestLogs(requestsDir(home), (_, mtimeMs) => mtimeMs >= from)
-  process.stdout.write(`${renderParcours({ tz, since, until: opts.until, prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId, sessions, titles, projectNames, requestLogs: logs, unreadable })}\n`)
+  process.stdout.write(`${renderParcours({ tz, since, until: opts.until, prefix: opts.prefix, worktreesKey, sessionId: opts.sessionId, discussions, sessions, titles, measures, projectNames, requestLogs: logs, unreadable })}\n`)
 }
 
 async function main() {

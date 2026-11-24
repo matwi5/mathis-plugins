@@ -172,10 +172,10 @@ test('le numéro précède le titre dans la vue (missions, cartes, ce qui t’at
   const run = mission('run-1', NOW - 1_000, { title: 'Le titre', launch: launchOf('lance', launched.id, NOW - 2_500) as any, waitsUser: { kind: 'step', since: NOW - 500 } as any })
   const t = table({ next: 3, cards: [{ folder: 'lance', n: 1 }, { folder: 'pret', n: 2 }], runs: [{ run: 'run-1', n: 1 }] })
   const s = cooStatement({ ...emptyBoard('', 'p'), runs: [run] }, { now: NOW, cards: [ready, launched], numbers: numbersView({ state: 'read', table: t }, [ready, launched]) })
-  const missions = coordinationRows(s, { page: 'missions' })
+  const missions = coordinationRows(s, { page: 'overview' })
   expect(textOf(missions.find(r => r.key === 'coo-mission-run-1'))).toContain('M1 Le titre')
   expect(textOf(missions.find(r => r.key === 'coo-card-kaaaaaa1'))).toContain('▶ L2 Carte kaaaaaa1')
-  const todo = coordinationRows(s, { page: 'todo' })
+  const todo = coordinationRows(s, { page: 'overview' })
   expect(textOf(todo.find(r => r.key === 'coo-waiting-0'))).toContain('La mission M1 « Le titre » t’attend')
   const said = statementText(s)
   expect(said).toContain('- M1 « Le titre »')
@@ -193,7 +193,7 @@ test('le numéro précède aussi le titre dans le plan du projet, les pistes d�
     retroPicks: [{ retro: 'run-2', title: 'Deux', items: [{ id: 'p1', label: 'piste', isTicked: false }], taken: [], print: 'p' }],
     decisions: { items: [], more: 0, earlier: [], contradictions: [{ question: 'q', mission: 'Un', missionId: 'run-1', other: 'Autre', subject: 'le sujet', isOtherArchived: false, isOpen: true }] },
   } as any
-  const all = ['missions', 'pistes', 'todo'].flatMap(page => coordinationRows(s, { page }).map(textOf)).join('\n')
+  const all = ['overview', 'pistes'].flatMap(page => coordinationRows(s, { page }).map(textOf)).join('\n')
   expect(all).toContain('Vague 1 M1 « Un » : A')
   expect(all).toContain('une livraison : M1 « Un »')
   expect(all).toContain('Pistes de la rétro M2 « Deux » · 1')
@@ -203,7 +203,7 @@ test('sans table lue, aucun numéro : les lignes gardent leur texte d’avant, e
   const run = mission('run-1', NOW - 1_000, { title: 'Le titre' })
   for (const state of ['unread', 'bad', 'absent'] as const) {
     const s = cooStatement({ ...emptyBoard('', 'p'), runs: [run] }, { now: NOW, numbers: numbersView({ state } as any, []) })
-    expect(textOf(coordinationRows(s, { page: 'missions' }).find(r => r.key === 'coo-mission-run-1'))).not.toMatch(/M\d/)
+    expect(textOf(coordinationRows(s, { page: 'overview' }).find(r => r.key === 'coo-mission-run-1'))).not.toMatch(/M\d/)
     const said = statementText(s)
     expect(said).toContain('- « Le titre »')
     if (state === 'unread') expect(said).toContain('the table could not be read')
@@ -211,13 +211,13 @@ test('sans table lue, aucun numéro : les lignes gardent leur texte d’avant, e
   }
 })
 
-test('table hors forme : sur « À faire », sous « Alertes », la ligne et le bouton « Repartir d’une table neuve »', () => {
+test('table hors forme : sur « Vue d’ensemble », dans le bloc « Projet », la ligne et le bouton « Repartir d’une table neuve »', () => {
   const s = cooStatement({ ...emptyBoard('', 'p'), runs: [] }, { now: NOW, numbers: numbersView({ state: 'bad' }, []) })
-  const rows = coordinationRows(s, { page: 'todo' })
+  const rows = coordinationRows(s, { page: 'overview' })
   const row = rows.find(r => r.key === 'coo-numbers-bad')
   expect(textOf(row)).toBe('⚠ Table des numéros illisible : aucun numéro n’est montré')
   expect(row?.actions?.map(a => [a.label, a.act])).toEqual([['Repartir d’une table neuve', { kind: 'numbers-fresh' }]])
-  expect(rows.findIndex(r => r.key === 'coo-alerts')).toBeLessThan(rows.findIndex(r => r.key === 'coo-numbers-bad'))
+  expect(rows.findIndex(r => r.key === 'coo-project')).toBeLessThan(rows.findIndex(r => r.key === 'coo-numbers-bad'))
 })
 
 // ─── Le panneau monté : l'écriture par le titulaire du siège ──────────────
@@ -264,7 +264,7 @@ test('le titulaire du siège attribue à sa veille et écrit la table ; le numé
   expect(tableIn(w)?.runs).toEqual([{ run: 'run-1', n: 1 }])
   expect(isStore() ? w.mem[NUMBERS_KEY] !== undefined : Object.keys(w.files).some(isNumbersFile)).toBe(true)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'coo-page-missions' })
+  await pane.press({ key: 'coo-page-overview' })
   await pane.unmount()
   const again = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
   expect(await again.find({ type: 'Text', text: /^M1$/ })).toBeDefined()
@@ -337,24 +337,24 @@ test('écriture ratée : aucun numéro montré, puis l’attribution se refait �
   const { clock, w } = await seated($, on, [mission('run-1', NOW - 60_000)], w => refuseTable(w, () => isRefused))
   await settle(clock, 6)
   expect(tableIn(w)).toBeUndefined()
-  expect(await pageHas($, 'missions', /^M\d+$/)).toBe(false)
+  expect(await pageHas($, 'overview', /^M\d+$/)).toBe(false)
   isRefused = false
   await settle(clock, 6)
   expect(tableIn(w)?.runs).toEqual([{ run: 'run-1', n: 1 }])
-  expect(await pageHas($, 'missions', /^M1$/)).toBe(true)
+  expect(await pageHas($, 'overview', /^M1$/)).toBe(true)
 })
 
 test('lecture ratée : aucun numéro montré, rien d’écrit ; relue, la table revient telle quelle', { timeoutMs: 20000 }, async ($, on) => {
   const { clock, w } = await seated($, on, [mission('run-1', NOW - 60_000)])
   await settle(clock, 6)
-  expect(await pageHas($, 'missions', /^M1$/)).toBe(true)
+  expect(await pageHas($, 'overview', /^M1$/)).toBe(true)
   const before = JSON.stringify(tableIn(w))
   let isRefused = true
   w.probe.refuseRead = key => isRefused && (key === NUMBERS_KEY || isNumbersFile(key))
   writeBoard(w, b => ({ ...b, runs: [...b.runs, mission('run-2', NOW)] }))
   await settle(clock, 6)
   expect(JSON.stringify(tableIn(w))).toBe(before)
-  expect(await pageHas($, 'missions', /^M\d+$/)).toBe(false)
+  expect(await pageHas($, 'overview', /^M\d+$/)).toBe(false)
   isRefused = false
   await settle(clock, 6)
   expect(tableIn(w)?.runs).toEqual([{ run: 'run-1', n: 1 }, { run: 'run-2', n: 2 }])
@@ -370,7 +370,7 @@ test('table forgée (numéro en double) : aucun numéro, rien d’écrit par-des
   else w.mem[NUMBERS_KEY] = JSON.parse(forged)
   await settle(clock, 6)
   expect(path ? w.files[path] : JSON.stringify(w.mem[NUMBERS_KEY])).toBe(path ? forged : JSON.stringify(JSON.parse(forged)))
-  expect(await pageHas($, 'todo', /Table des numéros illisible/)).toBe(true)
+  expect(await pageHas($, 'overview', /Table des numéros illisible/)).toBe(true)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pane.press({ key: 'coo-numbers-fresh' })
   await pane.unmount()

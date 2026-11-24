@@ -125,10 +125,18 @@ export const contradictionQuestionId = (entryId: string): string => `${OPPOSITIO
 const PARTIAL_ANSWER_FR =
   "Si ma réponse ne tranche qu'une partie de la question, applique ce qu'elle tranche et ne pose que ce qui reste, sous un id neuf : son texte commence par la question restante, puis cite ma réponse (« Quel libellé pour la bascule ? Tu as répondu « b et c ». ») ; jamais la question entière."
 
+/**
+ * Ce que Claude fait d'une réponse qui fixe ou change un invariant : des recommandations prises seul avant elle, et un
+ * critère de ticket, l'avaient contredit sans que rien ne les relise (vu seulement à la revue d'un groupe). Le mod ne sait
+ * pas si la question portait sur un invariant : la phrase le dit au conditionnel.
+ */
+const INVARIANT_ANSWER_FR =
+  'Si cette réponse fixe ou change un invariant, relis contre lui, avant de reprendre, les séries de recommandations déjà prises et les critères des tickets qu\'il régit, corrige ou pose en question ce qui le contredit, et mets à jour la ligne « Invariant relu : » de chaque ticket très sensible qu\'il régit (contre quoi, et quand).'
+
 /** Le message que le mod compose pour son Claude : la réponse relayée, sans autre valeur que l'id de la question, le chemin contrôlé et la série. */
 export const relayMessage = (e: CoordGesture | CoordAnswer, gesture: GestureKind | undefined): string => {
   const withdraw = e.question.startsWith(OPPOSITION_PREFIX) ? 'puis dis-moi ce que tu changes ; le tableau de bord retire la question lui-même.' : `puis retire la question : {"waiting": [{"id": ${asciiJson(e.question)}, "answered": true}]}.`
-  if (e.kind === 'answer') return `Le COO a écrit ma réponse à ta question bloquante ${asciiJson(e.question)} dans ${e.file}, série ${e.series} (la question et ma phrase exacte). Relis cette série, applique-la, ${withdraw} ${PARTIAL_ANSWER_FR}`
+  if (e.kind === 'answer') return `Le COO a écrit ma réponse à ta question bloquante ${asciiJson(e.question)} dans ${e.file}, série ${e.series} (la question et ma phrase exacte). Relis cette série, applique-la, ${withdraw} ${INVARIANT_ANSWER_FR} ${PARTIAL_ANSWER_FR}`
   const head = `Le COO relaie ma réponse à ta question bloquante ${asciiJson(e.question)}, donnée d'un clic dans son tableau de bord :`
   if (gesture === 'flaw') return `${head} je ne laisse pas cette faille sans correctif. Corrige-la (applique, teste, commite, puis envoie "fixed"), ${withdraw}`
   const what = gesture === 'spend' ? 'la dépense' : "l'action externe"

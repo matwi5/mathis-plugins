@@ -14,7 +14,7 @@ import { archiveMarkOf } from './model.ts'
  * Au plus, les discussions que nomme la section « discussions à fermer » d'un relevé ; un contrôle juge sur la liste sans
  * plafond, mais n'en reçoit que `UNMARKED_MAX` ids par appel.
  */
-const TO_CLOSE_MAX = 30
+export const TO_CLOSE_MAX = 30
 
 /**
  * Au plus, les discussions de missions archivées sans marque que nomme la demande unique (le constat du 13/11/2026 en

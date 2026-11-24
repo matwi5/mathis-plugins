@@ -24,7 +24,6 @@ import {
   PLUGIN,
   SECURITY_AREAS,
   SECURITY_OFF_REPLY,
-  TRUST_COMMAND,
   SKILLS,
   skillIdOf,
   slashOf,
@@ -133,6 +132,9 @@ import {
   unmarkAutoSent,
   isAutoMission,
   isAutoOn,
+  hasSettingChoice,
+  isExperienceSetting,
+  withoutRefusedSettings,
   autoResumedAt,
   autoResumedLabel,
   AUTO_RESUMED_RELAUNCH,
@@ -203,6 +205,9 @@ import {
   asanaChanges,
   localTicketChange,
   ticketFilesIn,
+  LOCAL_TICKET_FILE,
+  unsureTicketFilesIn,
+  unsureTicketNotice,
   reportedReport,
   decidedFileText,
   relayedReportKeys,
@@ -230,6 +235,10 @@ import {
   isMainRefNewer,
   mainRefAsk,
   mainRefAskText,
+  ownRefIn,
+  WORKER_REF_ASK,
+  WORKER_REF_ASKS,
+  workerRefSessions,
   newestMainRef,
   type MainRef,
   experienceChoiceNotice,
@@ -237,7 +246,9 @@ import {
   type RelayEvent,
   type RelayLoss,
   type RelayPart,
+  reportKeptText,
 } from './relay.ts'
+import { isTicketReadHeld, liftableTickets, liftByTickets, readNamedTicketsWithin, ticketReadsText, ticketsToRead } from './externes.ts'
 import {
   activeRun,
   countTickets,
@@ -286,7 +297,7 @@ import {
 import type { LinkedLaunch } from '../types'
 import { isSameProject, linkedSessions, type JobInfo, type LinkedSession } from './linked.ts'
 import { laneFromTranscript } from './transcript.ts'
-import { GROUP_ID_FORM_FR, OLD_SEPARATORS, archiveConsent, asciiJson, closingRepo, closingScript, isSessionId, consentAt, consentDay, plainArgs, branchCleanup, closedHint, closingProcedure, groupTitle, groupWorktree, groupWorktreeTemplate, hasSendName, isNotedWorktree, sendRefusalFr, isGroupId, isSafeBranch, isSafeId, isVersionForm, itemsWorktree, missionSessionsArchiveText, unmarkedAskText, tempDirForm, briefFileName, neutralInPrompt, neutralLine, neutralRelayed, linkedPrefix, linkedTitles, shellQuote, type ReopenText, relayFileSlug } from './closing.ts'
+import { GROUP_ID_FORM_FR, OLD_SEPARATORS, POSTPONED_STATE, archiveConsent, asciiJson, closingRepo, closingScript, isSessionId, consentAt, consentDay, plainArgs, closedHint, closingProcedure, shownRelayPath, groupTitle, groupWorktree, groupWorktreeTemplate, hasSendName, isNotedWorktree, sendRefusalFr, isGroupId, isSafeBranch, isSafeId, isVersionForm, itemsWorktree, missionSessionsArchiveText, unmarkedAskText, tempDirForm, briefFileName, neutralInPrompt, neutralLine, neutralRelayed, linkedPrefix, linkedTitles, shellQuote, type ReopenText, relayFileSlug, systemTempDir, reportValidated } from './closing.ts'
 import {
   COMPACT_FIRST_TOAST,
   COO_COMPACT_TOKENS,
@@ -297,6 +308,7 @@ import {
   compactionInstructions,
   compactionMoment,
   compactionRoleOf,
+  resumeAfterDrop,
   retroTranscriptNote,
   suggestsCompaction,
   withCompactionInstructions,
@@ -309,12 +321,13 @@ import { applyTraces } from './erase.ts'
 import { applyOrphanCards, applyPistesFinish, backCardTaken, finishedLinesOf, isCardInLaunch, orphanCardHolds, orphanCardPlans, orphanLinesOf, pistesFinishCandidates, pistesMissionEnd, finishPlanHolds, planPistesFinish, type PistesFinishResult } from './pistes-fin.ts'
 import { holdsPick, pickedOf, picksPrint, retroCommandArgs, retroRequestRefusal, retroTarget, retroTranscripts, isRetroRequestStale, isRetroResumeUseful, retroResumeUntil, type RetroRequestRefusal } from './retro-coo.ts'
 import { NEW_MAX, contradictionQuestion, contradictionQuestionId, markSeen, newDecisionsOf, parseSeen, seriesOf, type DecisionsSeen, type NewDecision, relayMessage } from './oppositions.ts'
-import { DELIVERY_COMMAND, DELIVERY_FR, DELIVERY_KEYS, abandonDelivery, deliveryWaits, failedStep, isDelivered, isDeliveryOpen, newDelivery, nextStep, parseDelivery, reportStep, retryStep, runningStep, startStep, type Delivery, type DeliveryKey } from './delivery.ts'
-import { REPORT_CHANGED, REPORT_PAUSED, cooStatement, sameRoadmapTitle, cutStateWhere, failedPlaceWrite, wherePlaceRefusal, isModQuestion, nightViewsOf, isRetroCardRemovable, readyRetroOf, isOpenMission, isSha, retroWaitlistText, pistesWaitingOf, outsideCommitCounts, parseLoggedCommits, statementText, watchedGroups, watchedKey, type LoggedCommit, type OutsideCommits, type CooGlean, type CooDecisions, type CooRetroPicks, type CooDelivery, type CooReport, type CooRoadmap, type CooSetAside, type CooStatement, type CooWaitlist } from './coo.ts'
+import { DELIVERY_COMMAND, DELIVERY_FR, DELIVERY_KEYS, TIDY_STEP, abandonDelivery, deliveryWaits, failedStep, finishUntidied, isDelivered, isDeliveryOpen, isShipped, newDelivery, nextStep, parseDelivery, reportStep, retryStep, runningStep, startStep, type Delivery, type DeliveryKey } from './delivery.ts'
+import { REPORT_CHANGED, REPORT_PAUSED, cooStatement, roadmapEntriesOf, sameRoadmapTitle, cutStateWhere, failedPlaceWrite, wherePlaceRefusal, isModQuestion, nightViewsOf, isRetroCardRemovable, readyRetroOf, isOpenMission, isSha, retroWaitlistText, pistesWaitingOf, outsideCommitCounts, parseLoggedCommits, statementText, watchedGroups, watchedKey, type LoggedCommit, type OutsideCommits, type CooDecisions, type CooRetroPicks, type CooDelivery, type CooReport, type CooRoadmap, type CooSetAside, type CooStatement, type CooWaitlist } from './coo.ts'
 import type { CooDo, CooShow } from './coo-view.tsx'
-import { RETRO_START, cardRoadmapIds, hasIntentTurn, launchFirstLine, LAUNCH_GRACE_MS, LAUNCH_TTL_MS, CLOCK_SKEW_MS, isOrdinaryCard, isPistesCard, pistesCard, soundRunLaunch, askMattCandidates, LAUNCH_CLAIM_SETTLE_MS, LAUNCH_KEY_PREFIX, LAUNCH_STALE, LAUNCH_STARTS, cardStateOf, consumeRefusal, liveLaunchOf, otherCarrierOf, runOfCard, sameFolder, isLaunchId, isRecordStale, launchKey, newLaunchId, AUTO_ON_KEY_PREFIX, autoOnKey, autoOnRefusal, soundAutoOnRecord, type AutoOnRecord, parseCard, runOfLaunch, soundRecord, type LaunchCard, type LaunchMode, type LaunchRecord, type LaunchStart, hasRetro, retroOf } from './launch.ts'
-import { claimName, isCardTitle, isUnnamed, markNamed, markState, shellSafeTitle } from './named-mark.ts'
-import { cardWriteWhy, cardWriteWhyEn } from './cards-list.ts'
+import { INTENT_SENT, PROPOSE_ASK, PROPOSE_SENT, intentAskFor, intentKey, liftAllAsks, noteTurnEnded, noteTurnStarting, sendMarkedAsk, turnStarting } from './coo-asks.ts'
+import { RETRO_START, LAUNCH_GRACE_MS, LAUNCH_TTL_MS, CLOCK_SKEW_MS, isOrdinaryCard, isPistesCard, pistesCard, soundRunLaunch, askMattCandidates, LAUNCH_CLAIM_SETTLE_MS, LAUNCH_KEY_PREFIX, LAUNCH_STALE, LAUNCH_STARTS, cardStateOf, consumeRefusal, liveLaunchOf, otherCarrierOf, runOfCard, sameFolder, isLaunchId, isRecordStale, launchKey, newLaunchId, AUTO_ON_KEY_PREFIX, autoOnKey, autoOnRefusal, soundAutoOnRecord, type AutoOnRecord, parseCard, runOfLaunch, soundRecord, type LaunchCard, type LaunchMode, type LaunchRecord, type LaunchStart, hasRetro, retroOf, withEntries, entriesToCheck, entriesRefusal, entriesCitedElsewhere, LAUNCH_ASK_START, launchText } from './launch.ts'
+import { claimName, isCardTitle, isUnnamed, markNamed, markState } from './named-mark.ts'
+import { cardWriteWhy, cardWriteWhyEn, orderWriteWhyEn, parseCardsOrder } from './cards-list.ts'
 import { cardsCtx, cardsHere, cardsOrNull, isOldCopied, offerDueRetros, surveyCards, offerRetros, orphanCardsOf, readCards, readCardsAt, writeCards } from './cards-store.ts'
 import { assignNumbers, emptyNumberTable, freshNumberTable, keepsNumbers, numbersView, parseNumberTable, type CooNumbers, type NumberRead, type NumberTable } from './numbers.ts'
 import { COO_AUTHOR, PISTE_BOX_MAX, applyBoxedOps, releaseCardPistes, validatePistes, type Piste, type PisteMoveState, type PistePick, emptyWaitlist, keepsOps, keepsPistes, viaTicketOf, chainsOf, missingSeen, newPisteOpId, opMark, parsePisteBox, parsePisteChange, parseWaitlist, isPisteId, pisteMoves, parsePistesLine, pistesOf, type TicketLink, releasableMarks, seenAfter, soundPisteOp, withoutApplied, missionChangeRefusal, missionDropsSaid, type BoxedOp, type PisteAuthor, type PisteBoxRead, type PisteMove, type PisteOp, type PisteOutcome, type Waitlist, type WaitlistRead, WAITLIST_REPO_FILE, WAITLIST_REPO_ROOT, holdsWaitlist, type WaitlistWhere } from './pistes.ts'
@@ -323,18 +336,24 @@ import { attachLaunch, factsRelayOf, isWakeable, managerReachOf, reopenNotice, w
 import { hasWaitCycle, projectPlan, waitsKey, type PlanWait, type ProjectPlan } from './plan-projet.ts'
 import { RELAY_PENDING_MS, ROUND_FORM, WAVE_TTL_MS, isOneLine, isRound, PICK_MAX, type CoordCompatible, type CoordContradiction, entryRun, isDecisionsPath, isPlanEntry, isPlanUnreadFor, isPrint, isQuestionRef, isReportPrint, isSeries, isCutDated, pendingCutsFor, pendingRelaysFor, pendingWavesFor, pendingInstructsFor, isInstructReceived, isInstructSent, instructOpenSince, instructOriginClash, soundInstructed, planWaitsOf, reportPrint, type CoordInstruct, type CoordAnswer, type CoordGesture, type CoordRelay, type CoordValidate } from './coordination.ts'
 import type { CooPlan, CooWave } from './coo.ts'
+import { dueTasks, freshOf, gleanAnswer, gleanVerdicts, isGleanDue, recordedOf, taskText, tidyUpOf, toCopyOf, type Due, type GleanDue, type HeadFresh, type RangementState, type TidyUp } from './rangement.ts'
+import { armStepper, compactionStarted, decisionKey, deliveryWaiting, disarmStepper, dueLeft, isCompacting, isPromptPending, jalonsProven, judged, promptEntered, sendCancelled, sendResult, stepAt, stepDue, stepLabel, stepMissing, stepperNow, stepTaskOf, stepVerdict, stopStepper, turnEnded, type StepPick } from './pas-a-pas.ts'
+import { headedNow, headSnapshot, holdSeat, judgeHead, liftPostponed, postponedNow, postponeMission, postponeSessions, tidyUpShown, type HeadSnapshot } from './rangement-memoire.ts'
 import { clearLiveness, isAutoReopenProposed, livenessNowOf, livenessOf, noteAutoReopens, refreshLiveness } from './coo-liveness.ts'
-import { ownerVerdictOf } from './liveness.ts'
+import { clearCooAgents, cooAgentInfoOf, refreshCooAgents } from './coo-agents.ts'
+import { ownerVerdictOf, workerRefVerdicts } from './liveness.ts'
+import type { Liveness } from '../types'
 import type { RunLaunch } from '../types'
-import { isRoadmapId, parseRoadmap, partialSeen, roadmapTextPrint, unionSeen, watchRoadmap, type Roadmap, type RoadmapSeen } from './roadmap.ts'
+import { parseRoadmap, partialSeen, unionSeen, watchRoadmap, type Roadmap, type RoadmapSeen } from './roadmap.ts'
 import { parseSecuritySetting, securitySettingRecord, type SecurityReview, type SecuritySettingRead, type SecurityStored } from './security-setting.ts'
+import { autonomyCasesNow, autonomyClick, autonomyView, dropAutonomyAsk } from './autonomy-store.ts'
 import { AUTO_GROUP_EFFORT, COO_EFFORT, FABLE_MODEL, FABLE_OFF_WORKER_EFFORT, FABLE_WORKER_EFFORT, EFFORT_LEVELS, GROUP_EFFORT, OPUS_CLI_ALIAS, OPUS_LAUNCH_FR, SONNET_LAUNCH_FR, effortSent, groupLaunchNote, isFableModelId, isFableStuck, leadEffort, modelName, quotaText, sentNote, withOpusBack, workerTicketEffort, type ImposedEffort, type LeadEffort, type QuotaWindow } from './effort.ts'
 import { DISCUSSION_STATES, sameLabel, soundEntry, takenFor, takenLabels, unreadTakenFor, type CoordTaken, type DiscussionState } from './coordination.ts'
 import { UNMARKED_ANSWERS, UNMARKED_MAX, discussionsToClose, discussionsToCloseBoth, mergeToClose, type ToClose, type UnmarkedAnswer } from './discussions.ts'
 import { TOOL_DESCRIPTION, TOOL_SCHEMA } from './tool-schema.ts'
 import { partialTitles, planTitles, TITLES_MAX, untitledIds, type RoadmapTitles } from './titles.ts'
 import { BOX_MAX, SET_ASIDE_SOURCE_MAX, SET_ASIDE_TEXT_MAX, SET_ASIDE_UNWRITTEN, copiedIn, copiesOf, keepsItems, roadmapText, newSetAsideId, parseBox, soundSetAside, withoutCopied, type BoxRead, type SetAside } from './a-reprendre.ts'
-import { CLOSE_KIND, COORD_MAX, COORD_UNREAD, DAY_WAKE_TEXT, NIGHT_ENTRY_ACTS, WAKE_TEXT, copiedDecls, gleanedRuns, isReleasedMark, isEntryGone, keepsEntries, liveEntries, forcesFor, markClosesDone, newEntryId, parseCoordination, pendingFor, pendingNightFor, refOf, soundApplied, withoutGone, type CoordClose, type CoordEntry, type CoordNight, type CoordRead, type CoordRetro } from './coordination.ts'
+import { CLOSE_KIND, COORD_MAX, COORD_UNREAD, DAY_WAKE_TEXT, NIGHT_ENTRY_ACTS, WAKE_TEXT, wakeTarget, copiedDecls, gleanedRuns, isReleasedMark, isEntryGone, keepsEntries, liveEntries, forcesFor, markClosesDone, newEntryId, parseCoordination, pendingFor, pendingNightFor, refOf, soundApplied, withoutGone, type CoordClose, type CoordEntry, type CoordNight, type CoordRead, type CoordRetro } from './coordination.ts'
 import { NIGHT_DEAD_MS, NIGHT_MS, NIGHT_WAKE_TEXT, nightCutsWritten, nightLogOf, reopenCommand, retroResumeCommand, type NightMorning, type NightReopen, nightLogEntries, nightResultsText, parseNightResults, type NightRefusal, appendNightLog, isNightWakeDue, withNightWake, type NightWakes, isSeatGap, isPersonOrigin, isTypedOrigin, newNightId, newNightWatch, nightBlocks, nightBlocksPrint, nightOff, nightValidity, parseNight, parseNightLog, type NightBlock, type NightMissionView, type NightLogLine, type NightRead, type NightStop, type NightWatch } from './night.ts'
 import { SEAT_REFRESH_MS, SEAT_UNREAD, isSeatBehind, mergeSeat, refreshSeat, releaseSeat, seatState, soundSeat, takeSeat } from './seat.ts'
 import { agentsOfRun, applyRebuilt, carriedRunAt, clipLane, historyEntries, runFileId, runRegistry, runWindow, unionRebuilt, withRun, type HistoryEntry } from './history.ts'
@@ -346,9 +365,11 @@ import { catchUpAgent, catchUpOwn, catchUpShown, claudeDir, needsRebuild, readRe
 import { eraseFile, eraseRun, erasedRuns, erasingNow, forgetSession, readTraces, reconcileErased, reportFilesOf } from './erase-run.ts'
 import { type Deposit, depositTarget, managerReportSession, withDeposit } from './depot-manager.ts'
 import { silenceNote, silentWorkers } from './silence.ts'
-import { AUTO_BRIEF_IN_TURN, autoOnNotice, AUTO_BRIEF_HEAD, autoBriefText } from './auto-consignes.ts'
+import { autoBriefInTurn, autoOnNotice, AUTO_BRIEF_HEAD, autoBriefText, tickedBoxes } from './auto-consignes.ts'
+import { autonomyChangeNotice, markAutonomySaid } from './autonomy-notice.ts'
 import { TOOL, projectName, SECURITY_METHOD_FILE, READING_METHOD_FILE, securityMethod, readingMethod, setMethodPaths, SENSITIVE_AREAS_FR, INSTRUCTIONS_IN_PROMPT_FR, linkedSecurityReview, securityMethodFr, decidedList, LINKED_GROUP_REVIEW, isFramingSubSkill, framingSubSkillNote, REVIEW_NOTES, coachingNote, ticketList, launchHow, BACKGROUND, briefText, itemList, splitRequest, adviceText, type LaunchParts, isLaunchReceived, isShortLaunch, shortLaunchHow, SHORT_LAUNCH_FOLLOW, lotAdviceText } from './decoupage.ts'
 import type { InFlightNote, LotProcedure, BriefParts } from './decoupage.ts'
+import { roadmapAsk, roadmapMoveAsk } from './roadmap-asks.ts'
 
 const PANE = 'flow-board'
 /** Le nom de ce mod, tel que le moteur le met dans l'origine de ses envois (`origin.name`) ; pas `PLUGIN`, celui des skills. */
@@ -860,6 +881,12 @@ const saveStored = async ($: any, root: string, board: Board): Promise<boolean> 
 
 const runSlug = relayFileSlug
 
+/** Le dossier du relais, absolu, pour les chemins que l'outil nomme au manager (`relayedReportsText`) ; rien quand le dossier de Claude est inconnu. */
+const relayDirOpt = ($: any): { relayDir?: string } => {
+  const home = claudeHome($)
+  return home ? { relayDir: `${home}/flow-board/relais` } : {}
+}
+
 /**
  * Les comptes rendus entiers des workers d'une mission, dits à Claude (`<id>` : l'id de la
  * session). L'id de la mission n'y entre que réduit à [a-z0-9-] (runSlug), comme le nom des fichiers du relais.
@@ -1051,11 +1078,12 @@ const depositOutcome = async ($: any, d: Deposit, isWritten: boolean): Promise<s
   const run = ((await read($, boardAtom)) as Board | null)?.runs.find(r => r.id === d.runId)
   const g = run?.groups?.find(x => x.id === d.groupId)
   const link = [g?.linked, g?.delegated, ...earlierOf(g?.delegated)].find(l => l?.at === d.linkAt)
-  const file = reportFileName(d.runId, managerReportSession(d.groupId, d.mark.at))
+  // Le chemin que le mod calcule (`reportPath`), jamais la forme courte `~/.claude/…`, qui nommerait un autre fichier.
+  const file = shownRelayPath(reportPath($, d.runId, managerReportSession(d.groupId, d.mark.at)))
   if (isWritten) {
     // La fermeture ne le compte qu'avec une session du CLI notée pour l'envoi, comme un compte rendu du worker.
     const isCounted = run !== undefined && g !== undefined && link !== undefined && groupReportOf(null, g, run.groups, link) !== undefined
-    return ` · final report of group ${shownGroupId(d.groupId)} deposited by you (the manager) for its worker, which lacked the flow tool: kept with its send, whole in ~/.claude/flow-board/relais/${file}; ${isCounted ? 'its closing counts it' : 'its closing does not count it (no CLI session noted for this send): it keeps the session'}, and a report its worker leaves later prevails. Now, only if git status in its worktree shows it untracked, delete the file it was read from, ${JSON.stringify(neutralInPrompt(d.read))} (its text is kept): an untracked file there stops the closing; a committed one stays.`
+    return ` · final report of group ${shownGroupId(d.groupId)} deposited by you (the manager) for its worker, which lacked the flow tool: kept with its send, whole in ${file ?? 'its relay file (a path this answer cannot show as is)'}; ${isCounted ? 'its closing counts it' : 'its closing does not count it (no CLI session noted for this send): it keeps the session'}, and a report its worker leaves later prevails. Now, only if git status in its worktree shows it untracked, delete the file it was read from, ${JSON.stringify(neutralInPrompt(d.read))} (its text is kept): an untracked file there stops the closing; a committed one stays.`
   }
   // Le fichier n'est effacé que s'il n'est pas celui d'une marque posée (un autre dépôt du même instant).
   if (link?.managerReport?.at !== d.mark.at) await eraseFile($, reportPath($, d.runId, managerReportSession(d.groupId, d.mark.at)))
@@ -1073,6 +1101,13 @@ const mainRefWritten = new Set<string>()
 
 /** Les tentatives ratées (fichier des missions illisible, aucune copie écrite) par mission, depuis le démarrage. */
 const mainRefFailures = new Map<string, number>()
+
+/** Dans un worker : sa référence lue dans un ListAgents et gardée au relais depuis ce démarrage, rechargement ou /clear. */
+let workerRefSeen = false
+/** Combien de tours ont demandé ce ListAgents depuis (`WORKER_REF_ASKS` au plus). */
+let workerRefAsks = 0
+/** La délégation (mission et groupe) pour laquelle valent les deux précédents : une autre les remet à zéro. */
+let workerRefFor = ''
 
 /**
  * La référence « [ref] » de cette discussion, par mission, que ce processus a écrite à côté du relais (réponse
@@ -1467,14 +1502,21 @@ const relaySignalNow = async ($: any, event: RelayEvent): Promise<RelayOutcome> 
 /**
  * Dans un worker, rien ne s'écrit sur la mission : ses mises à jour Asana (tickets), ses
  * commits et ses tests partent au relais, que le manager affiche. Au résultat de l'outil s'ajoutent
- * l'annonce de compaction d'un ticket clos (`workerClosureNotice`) et le rappel du ticket en cours
- * (`workerStartNotice`).
+ * l'annonce de compaction d'un ticket clos (`workerClosureNotice`), le rappel du ticket en cours
+ * (`workerStartNotice`) et les fichiers de tickets nommés par un chemin relatif dans une commande qui peut changer de
+ * dossier ou dans celle d'un spécialiste, non relayés (`unsureTicketNotice`). Un ListAgents du fil principal garde la
+ * référence et l'adresse de la session (`ownRefIn`), pour la réponse du manager.
  */
 const relayTool = async ($: any, e: any, next: (e: any) => Promise<any>) => {
   const ran = await next(e)
   if (ran.deny !== undefined) return ran
+  const isOk = ran.isError !== true
+  const command = String(e.command ?? '')
+  // Des fichiers de tickets nommés par un chemin relatif dans une commande qui peut changer de dossier, ou d'un spécialiste
+  // (peut-être dans son worktree) : rien de relayé pour eux, dit dans le résultat de l'outil (un calcul pur, avant tout
+  // relais : dit même si le relais lève).
+  const unsure = isOk && (e.tool === 'Bash' || e.tool === 'PowerShell') ? unsureTicketNotice(unsureTicketFilesIn(command, e.agentId === undefined)) : ''
   try {
-    const isOk = ran.isError !== true
     // Les tickets que cet outil a fait passer « done » au relais.
     let closed: readonly string[] = []
     if (e.tool === 'Bash' || e.tool === 'PowerShell') {
@@ -1485,10 +1527,20 @@ const relayTool = async ($: any, e: any, next: (e: any) => Promise<any>) => {
         // Ni commit ni tests : pas de lecture du relais pour rien.
         if (signals.commit !== undefined || signals.test !== undefined) await relaySignal($, { kind: 'command', ...signals })
       }
-      if (isOk) closed = await relayTicketFiles($, ticketFilesIn(String(e.command ?? '')))
+      // Un spécialiste travaille peut-être dans un autre dossier (son worktree) : seuls ses chemins absolus se relisent.
+      if (isOk) closed = await relayTicketFiles($, ticketFilesIn(command, e.agentId === undefined))
     } else if (String(e.tool).endsWith('__update_tasks') && isOk) {
       const kept = await relaySignal($, { kind: 'tickets', changes: asanaChanges(e.tasks) })
       if (kept.isKept) closed = kept.closed ?? []
+    } else if (e.tool === 'ListAgents' && isOk && e.agentId === undefined) {
+      // Sa propre référence et son adresse, sur la première ligne : gardées dans son entrée de relais, pour le manager.
+      const own = ownRefIn(ran.result, ran.text)
+      if (own !== null && (await relaySignal($, { kind: 'ref', ref: own.ref, address: own.address })).isKept) {
+        workerRefSeen = true
+        // Vue pour la délégation d'à présent : une autre la redemandera (`prompt.submit`).
+        const b: Board | null = await read($, boardAtom)
+        workerRefFor = b?.delegate ? JSON.stringify([b.delegate.run, b.delegate.group ?? '']) : ''
+      }
     } else if ((e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'MultiEdit') && isOk && typeof e.file_path === 'string') {
       // Write porte le texte entier : pas de relecture du fichier.
       closed = await relayTicketFiles($, [e.file_path], e.tool === 'Write' && typeof e.content === 'string' ? e.content : undefined)
@@ -1502,16 +1554,15 @@ const relayTool = async ($: any, e: any, next: (e: any) => Promise<any>) => {
       await quietly(async () => {
         start = await workerStartNotice($, e.file_path)
       })
-    const notices = [notice, start].filter(n => n !== '')
+    const notices = [notice, start, unsure].filter(n => n !== '')
     if (notices.length > 0) return { ...ran, context: [...(ran.context ?? []), ...notices] }
   } catch {
-    // Un signal mal lu ne doit jamais gêner l'outil.
+    // Un signal mal lu ne doit jamais gêner l'outil ; les fichiers non relayés se disent quand même.
+    if (unsure !== '') return { ...ran, context: [...(ran.context ?? []), unsure] }
   }
   return ran
 }
 
-/** Un fichier de ticket local, `…/issues/<NN>-<nom>.md`, sous `travail/` ou ailleurs (`.scratch/`, par exemple). */
-const LOCAL_TICKET_FILE = /(?:^|[\\/])issues[\\/]\d+-[^\\/]+\.md$/
 
 /**
  * Dans un worker, un tracker en fichiers locaux (`…/issues/<NN>-<nom>.md`) n'a pas d'appel
@@ -1897,15 +1948,18 @@ const watchSeat = async ($: any, isRead: boolean) => {
       await readDeadSince($, fresh)
       // Le signal de vie de chaque mission ouverte, relu à la même veille (la marque « discussion arrêtée »).
       const isLivenessChanged = await refreshLiveness($, claudeHome($), fresh, await $.clock.now())
-      if (JSON.stringify(roadmapNowCache) !== before || JSON.stringify(numbersNow) !== numbersBefore || deadPrint !== deadBefore || isLivenessChanged) $.ui.invalidate('ui.render')
+      // Les registres de la liste des agents, relus à la même veille, sous les seuls noms du dossier (`coo-agents.ts`).
+      const isAgentsChanged = await refreshCooAgents($, fresh).catch(() => false)
+      if (JSON.stringify(roadmapNowCache) !== before || JSON.stringify(numbersNow) !== numbersBefore || deadPrint !== deadBefore || isLivenessChanged || isAgentsChanged) $.ui.invalidate('ui.render')
     } else if (clearSeatReads()) $.ui.invalidate('ui.render')
     return
   }
   numbersNow = null
   // Sans relecture, une date gardée vieillirait jusqu'à « à forcer » : le siège perdu ou le fichier illisible l'effacent.
   if (clearSeatReads()) $.ui.invalidate('ui.render')
-  // Sans le siège, une confirmation de « Changer l'endroit » ne reste jamais en attente : elle se redemande au retour.
+  // Sans le siège, une confirmation de « Changer l'endroit » ou d'une case d'autonomie ne reste jamais en attente.
   whereAsk = false
+  dropAutonomyAsk()
   // Une mission ouverte ici alors que le siège est ailleurs : la discussion ne demande plus le siège.
   if (board.cooHere !== undefined && activeRun(board)) await leaveCooHere($)
   if (!seatWasMine) return
@@ -2150,7 +2204,7 @@ const securityRootKey = (root: string): string => normRoot(root).toLowerCase()
  * Claude Code sous Windows, et de `claudeDir`), chaque variable lue à part ; null quand aucune ne se lit (le
  * réglage vaut alors « activée » et le clic refuse).
  */
-const securityHome = async ($: any): Promise<string | null> => {
+export async function securityHome($: any): Promise<string | null> {
   // `$.env.get` veut un nom littéral : chaque variable a son appel, et une variable qui lève n'emporte pas l'autre.
   const env = async (read: () => Promise<unknown>): Promise<string | undefined> => {
     try {
@@ -2196,7 +2250,7 @@ export async function isSettingMissing($: any, dir: string, path: string): Promi
 }
 
 /** La racine du dépôt principal, clé du réglage ; null pour un projet hors git, `error` quand le moteur ne répond pas. */
-const mainRepoRoot = async ($: any): Promise<string | null | 'error'> => {
+export async function mainRepoRoot($: any): Promise<string | null | 'error'> {
   try {
     const root = String((await $.session.repo())?.root ?? '')
     return root === '' ? null : root
@@ -2320,7 +2374,8 @@ const readDeadSince = async ($: any, board: Board) => {
 /** Efface les dates de fin et les verdicts du signal de vie gardés pour la vue ; vrai quand il y en avait. */
 const clearSeatReads = (): boolean => {
   const hadDead = clearDeadSince()
-  return clearLiveness() || hadDead
+  const hadAgents = clearCooAgents()
+  return clearLiveness() || hadDead || hadAgents
 }
 
 /** Efface les dates gardées ; vrai quand il y en avait. */
@@ -2409,55 +2464,17 @@ const readRoadmapFile = async ($: any, board: Board, isMine: boolean): Promise<C
   return { where, path, read, gone: watched.gone, ...(watched.goneTexts.length > 0 ? { goneTexts: watched.goneTexts } : {}), ...(known ? { known } : {}), ...(previous ? { previous } : {}), ...(committed ? { committed } : {}), ...(isRepoLeft ? { isRepoLeft } : {}), ...(state.titles ? { titles: state.titles } : {}) }
 }
 
-/**
- * Les demandes au Claude du COO que font les boutons de la vue : textes fixes, l'id d'une entrée contrôlé,
- * sa section (une liste fermée), sa dernière version en chaîne JSON ; le commit seulement quand la feuille
- * de route vit dans le projet.
- */
-export const roadmapAsk = (d: CooDo, r: CooRoadmap | null): string | null => {
-  if (d.kind === 'security' || d.kind === 'where' || d.kind === 'where-ask' || d.kind === 'where-cancel' || d.kind === 'where-confirm' || d.kind === 'coord-fresh' || d.kind === 'numbers-fresh' || d.kind === 'force' || d.kind === 'launch' || d.kind === 'card-start' || d.kind === 'plan-validate' || d.kind === 'wave' || d.kind === 'gesture' || d.kind === 'answer-fill' || d.kind === 'report-read' || d.kind === 'report-validate' || d.kind === 'report-redo' || d.kind === 'deliver' || d.kind === 'deliver-step' || d.kind === 'deliver-drop' || d.kind === 'retro-tick' || d.kind === 'retro-tick-all' || d.kind === 'retro-pick' || d.kind === 'piste-tick' || d.kind === 'pistes-tick-all' || d.kind === 'pistes-cut' || d.kind === 'pistes-where' || d.kind === 'archive' || d.kind === 'card-remove' || d.kind === 'cut-auto' || d.kind === 'auto-ask' || d.kind === 'auto-confirm' || d.kind === 'night-ask' || d.kind === 'night-confirm' || d.kind === 'night-stop' || !r || r.read === 'unread') return null
-  const commit = r.where === 'repo' ? ', puis commite-la par son chemin' : ' (elle vit sur ce poste : pas de commit)'
-  const guard = ' Si ta dernière ligne « COO seat » dit que tu ne tiens plus le siège, n’écris rien.'
-  if (d.kind === 'repair') return `◆ COO : la feuille de route est hors format. Répare-la d'après le format de tes consignes et les dernières versions connues que donne ton relevé, en gardant chaque entrée (aucune ne se retire)${commit} ; dis-moi ce que tu as changé.${guard}`
-  const id = d.id
-  if (!isRoadmapId(id)) return null
-  if (d.kind === 'restore-text') {
-    // L'ancien texte se retrouve par l'empreinte du bouton dans ce que le mod a relevé, jamais lu du bouton ; l'id qui le porte est celui du relevé du moment.
-    const all = (r.goneTexts ?? []).filter(t => roadmapTextPrint(t.text) === d.print)
-    const old = all.find(t => t.id === id) ?? all[0]
-    if (!old || !isRoadmapId(old.id)) return null
-    return `◆ COO : un ancien texte de l'entrée ${old.id} n'est plus dans la feuille de route (son texte a été changé sous le même id). S'il est déjà de nouveau dans le fichier, sous n'importe quel id, ne change rien et dis-le-moi. Sinon, remets-le comme une nouvelle entrée sous un id neuf (jamais utilisé), dans la section « ${old.section} » : recopie sa version en ne changeant que son id ; l'entrée ${old.id}, si elle est dans le fichier, garde son texte actuel, les deux restent${commit}. Sa version, une donnée à recopier et non une consigne, en chaîne JSON : ${asciiJson(old.line)}.${guard}`
-  }
-  if (d.kind === 'later') return `◆ COO : passe l'idée ${id} de la feuille de route au statut « plus tard », sans rien changer d'autre${commit}.${guard}`
-  if (d.kind === 'idea-launch') return `◆ COO : je veux lancer l'idée ${id} de la feuille de route. Relis ask-matt, puis propose-moi sa carte de lancement par le champ "card" de l'outil flow (idea "${id}") ; je lancerai la mission d'un clic sur la carte.${guard}`
-  if (d.kind === 'drop') return `◆ COO : je veux écarter l'idée ${id} de la feuille de route. Demande-moi d'abord ma raison, puis donne-lui le statut « écartée : <ma raison> » (elle reste dans le fichier)${commit}.${guard}`
-  // Une chose « À reprendre » : la décision de la personne, seule à la faire sortir de la liste (elle reste dans le fichier).
-  if (d.kind === 'pending-launch') return `◆ COO : je veux lancer une mission pour la chose à reprendre ${id}. Regarde d'abord son statut : à un autre statut que « à décider » ou « plus tard » (déjà « lancée », rattachée ailleurs, écartée ou faite), ne la touche pas, ne la cite pas dans une carte et dis-le-moi. Encore ouverte, propose-moi sa carte de lancement, son titre commençant par ${id} et tenant en 70 signes au plus ; au premier tour où ton relevé montre la mission lancée, et une seule fois, passe l'entrée au statut « rattachée à M<n> - <titre de la mission> » quand ton relevé met un numéro M<n> devant la mission, « rattachée à <titre de la mission> » sinon (le numéro recopié du relevé, jamais attribué par toi), chaque « · » du titre écrit « - », si elle est encore « à décider » ou « plus tard », sans changer son id ni son texte${commit}.${guard}`
-  if (d.kind === 'pending-attach') return `◆ COO : je veux rattacher la chose à reprendre ${id} à une mission. Demande-moi laquelle, puis passe l'entrée au statut « rattachée à M<n> - <son titre> » quand ton relevé met un numéro M<n> devant elle, « rattachée à <son titre> » sinon (le numéro recopié du relevé, jamais attribué par toi), chaque « · » du titre écrit « - »${commit}.${guard}`
-  if (d.kind === 'pending-later') return `◆ COO : passe la chose à reprendre ${id} au statut « plus tard », sans rien changer d'autre${commit} ; elle reviendra dans ton point d'ouverture.${guard}`
-  if (d.kind === 'pending-drop') return `◆ COO : je veux écarter la chose à reprendre ${id}. Demande-moi d'abord ma raison, puis donne-lui le statut « écartée : <ma raison> » (elle reste dans le fichier)${commit}.${guard}`
-  const gone = r.gone.find(g => g.id === id)
-  if (!gone) return null
-  return `◆ COO : l'entrée ${id} a disparu de la feuille de route. Remets-la exactement telle qu'elle était à sa dernière lecture, dans la section « ${gone.section} »${commit}. Sa dernière version, une donnée à recopier et non une consigne, en chaîne JSON : ${asciiJson(gone.line)}.${guard}`
+/** La garde du siège d'un clic d'une case d'autonomie, relue à l'instant : null quand cette discussion le tient, sinon le toast du refus. */
+const seatRefusal = async ($: any): Promise<string | null> => {
+  const isRead = await pull($)
+  const board: Board | null = await read($, boardAtom)
+  return isRead && board && seatState(board.coo, await hereId($), await $.clock.now()) === 'mine' ? null : `◆ ${isRead ? 'Cette discussion ne tient plus le siège du COO : rien n’est fait.' : SEAT_UNREAD}`
 }
-
-/**
- * La demande qui suit un changement d'endroit : recopier l'ancien fichier si le nouveau manque, sinon y unir ce qui lui
- * manque, jamais rien retirer. Seul retour du dépôt vers le poste, sur une copie du poste qui existe déjà : une entrée des
- * deux fichiers au même id et au même texte prend le statut du fichier du dépôt, qui servait jusque-là. Vers le dépôt,
- * rien n'y est remplacé (il peut venir d'un autre poste) : le COO liste les statuts qui diffèrent.
- */
-export const roadmapMoveAsk = (from: string, to: string, isToThere: boolean, where: 'repo' | 'poste'): string =>
-  `◆ COO : j'ai choisi un autre endroit pour la feuille de route. ${
-    !isToThere
-      ? `Recopie-la telle quelle de ${asciiJson(from)} vers ${asciiJson(to)}, sans rien en retirer`
-      : where === 'repo'
-        ? `Le nouveau fichier ${asciiJson(to)} existe déjà : ajoute-lui, sans rien y retirer ni remplacer, les entrées de l'ancien ${asciiJson(from)} qui lui manquent ; une entrée de l'ancien dont l'id est déjà pris par une autre entrée garde son texte et prend un id neuf (jamais utilisé), les deux restent ; puis liste-moi les entrées présentes dans les deux fichiers avec le même id et le même texte dont le statut diffère, sans en changer aucun`
-        : `Le fichier du poste ${asciiJson(to)} existe déjà : ajoute-lui, sans rien y retirer, les entrées du fichier du dépôt ${asciiJson(from)} qui lui manquent ; une entrée présente dans les deux avec le même id et le même texte prend le statut qu'elle a dans le fichier du dépôt, qui servait jusqu'ici, et rien d'autre n'y est remplacé ; une entrée du dépôt dont l'id est déjà pris par une autre entrée garde son texte et prend un id neuf (jamais utilisé), les deux restent`
-  }, et laisse l'ancien fichier en place${where === 'repo' ? ', puis commite la nouvelle par son chemin' : ''}. Si ta dernière ligne « COO seat » dit que tu ne tiens plus le siège, n’écris rien.`
 
 /** Un geste de la vue Coordination, par le seul titulaire du siège, relu juste avant ; seulement quand Claude est au repos. */
 const cooDo = async ($: any, d: CooDo) => {
+  // Les cases d'autonomie : décocher vaut pendant un tour, cocher non ; un clic qui ouvre ou écrit relit le siège (autonomy-store.ts).
+  if (d.kind === 'autonomy-ask' || d.kind === 'autonomy-confirm' || d.kind === 'autonomy-off' || d.kind === 'autonomy-cancel') return autonomyClick($, d, () => isTurnOpen, () => seatRefusal($), async () => (await seatForWrite($)).ok)
   // La bascule de la revue de sécurité n'écrit que son réglage : ni tour fermé ni siège requis.
   if (d.kind === 'security') {
     await securityToggle($, d.to)
@@ -2469,10 +2486,17 @@ const cooDo = async ($: any, d: CooDo) => {
     $.ui.invalidate('ui.render')
     return
   }
+  // « ✕ Finir sans ranger » vaut aussi pendant un tour : le rangement se désarme aussitôt, la livraison finit à la fin du tour.
+  if (d.kind === 'deliver-finish') {
+    $.ui.toast(await finishTidy($))
+    $.ui.invalidate('ui.render')
+    return
+  }
   if (isTurnOpen) {
     $.ui.toast('◆ Claude travaille : reclique quand il a fini son tour.')
     return
   }
+  // Le board relu pour le siège est celui des gestes qui suivent.
   const isRead = await pull($)
   const board: Board | null = await read($, boardAtom)
   if (!isRead || !board || seatState(board.coo, await hereId($), await $.clock.now()) !== 'mine') {
@@ -2569,7 +2593,8 @@ const cooDo = async ($: any, d: CooDo) => {
     return
   }
   // La liste des cartes illisible : un clic sur une carte ou un découpage ne fait rien, et le dit (C3, C8).
-  if ((d.kind === 'launch' || d.kind === 'card-start' || d.kind === 'card-remove' || d.kind === 'pistes-cut') && !(await cardsOrNull($))) return void $.ui.toast('◆ Rien n’est fait : la liste des cartes ne se lit pas.')
+  if ((d.kind === 'launch' || d.kind === 'card-start' || d.kind === 'card-remove' || d.kind === 'pistes-cut' || d.kind === 'propose') && !(await cardsOrNull($))) return void $.ui.toast('◆ Rien n’est fait : la liste des cartes ne se lit pas.')
+  if (d.kind === 'propose') return void $.ui.toast(await sendSeatedAsk($, 'propose', PROPOSE_ASK, PROPOSE_SENT))
   if (d.kind === 'launch') {
     $.ui.toast(await launchCard($, d.card, d.mode, d.at))
     $.ui.invalidate('ui.render')
@@ -2650,7 +2675,7 @@ const cooDo = async ($: any, d: CooDo) => {
     return
   }
   if (d.kind === 'where' || d.kind === 'where-confirm') {
-    // Le premier choix (page « À faire ») reste à un clic, et seulement lui ; un changement ne vaut qu'au second clic,
+    // Le premier choix (page « Vue d'ensemble ») reste à un clic, et seulement lui ; un changement ne vaut qu'au second clic,
     // « Confirmer » après « Changer l'endroit », et vers l'autre endroit. Une lecture ou une écriture ratée laisse la
     // confirmation en attente ; elle ne se consomme qu'au changement fait ou refusé. Un seul choix à la fois : deux clics
     // en vol décidaient tous deux sur le même état d'avant.
@@ -2672,6 +2697,19 @@ const cooDo = async ($: any, d: CooDo) => {
     return
   }
   submitCooAsk($, text)
+}
+
+/**
+ * Une demande au COO gardée contre un second clic (`coo-asks.ts`) : le siège et la garde du tour se relisent juste avant
+ * l'envoi, les lectures d'avant (celles de `cooDo`, de `launchCard`) ayant pu durer. Rend le message à montrer.
+ */
+const sendSeatedAsk = async ($: any, key: string, text: string, sent: string): Promise<string> => {
+  const isRead = await pull($)
+  const fresh: Board | null = isRead ? await read($, boardAtom) : null
+  const here = await hereId($)
+  const now = await $.clock.now()
+  if (!fresh || seatState(fresh.coo, here, now) !== 'mine') return `◆ ${isRead ? 'Cette discussion ne tient plus le siège du COO : rien n’est fait.' : SEAT_UNREAD}`
+  return sendMarkedAsk($, key, text, sent, () => isTurnOpen, now)
 }
 
 /** Le choix d'endroit de la feuille de route, un seul à la fois (`whereBusy`) : sa garde, son écriture, la demande de recopie. */
@@ -3887,6 +3925,7 @@ const watchCoordination = async ($: any, board: Board, isTick = false) => {
   // Les commits hors mission sur les fichiers des groupes en cours (décision R6 (a) de la rétro « Coordinateur de parcours »).
   await quietly(() => measureOutsideCommits($, board))
   if (isTick) await quietly(() => continueDelivery($))
+
   // Son contexte lourd et rien n'attend la personne : le COO se compacte, sur le fichier relu à l'instant (illisible,
   // on ne sait pas si une vague se lance : jamais) ; seulement à la relecture des 5 s, jamais pendant l'envoi d'un
   // message (le tour n'est pas encore ouvert, Claude n'est déjà plus au repos).
@@ -3896,7 +3935,10 @@ const watchCoordination = async ($: any, board: Board, isTick = false) => {
   // Les boîtes « À reprendre » : marques des déclarations recopiées, libération de celles qu'aucune boîte ne porte plus.
   await quietly(async () => {
     boxesNow = await watchBoxes($, board, coordLive)
+    boxesNowAt = await $.clock.now()
   })
+  // Le pas à pas du rangement, au repos, sur les boîtes relues juste avant : la tâche suivante, ou le jugement de la précédente relu de nouveau.
+  if (isTick) void quietly(() => stepNow($))
   // Les clôtures ratées de la dernière livraison poussée : reprises à chaque relevé, jusqu'à ce qu'elles tiennent.
   await quietly(() => withDeliveryLock(() => catchUpCloses($, board)))
   if (entries.length === 0) return
@@ -4003,6 +4045,14 @@ const archiveHeldOf = async ($: any, board: Board, isFresh = false): Promise<Set
     return d !== null && (isDeliveryOpen(d) || (isPushed(d) && run !== undefined && !isDeliveryOver(run))) ? [m.id] : []
   })
   return new Set([...closes, ...delivering, ...shown])
+}
+
+/** Les missions d'une livraison encore ouverte, son rangement compris (`ArchiveScope.open`) : livrées, pas de « ✓ Archiver » tant qu'elle n'est pas finie. */
+const archiveOpenOf = async ($: any, board: Board): Promise<Set<string>> => {
+  const d = await readDelivery($, board.root ?? '')
+  // Dans le doute (l'état de la livraison illisible), toutes les missions du board.
+  if (d === 'unread') return new Set(board.runs.map(r => r.id))
+  return new Set(d && isDeliveryOpen(d) ? d.missions.map(m => m.id) : [])
 }
 
 /** Une demande de clôture qui ne s'applique plus : sa mission, relue dans `runs`, est archivée ou close comme elle le demande. */
@@ -4890,10 +4940,10 @@ const watchBoxes = async ($: any, board: Board, entries: readonly CoordEntry[]):
   }
   boxesUnread = boxes.unread
   boxesAside = boxes.asides
-  // Ni vue dans la feuille de route, ni notée recopiée (une feuille de route illisible ne la fait pas recopier deux fois) ;
+  // Ni vue dans la feuille de route, ni notée recopiée (`toCopyOf`, la règle que le jugement de fin de tour relit aussi) ;
   // déjà recopiée sous un autre texte, l'entrée se corrige (le relevé le dit) au lieu d'en ajouter une autre.
   const copies = roadmap && roadmap !== 'unread' && roadmap.ok ? copiesOf(roadmap.entries) : new Map<string, { entry?: string; text: string }>()
-  return boxes.items.filter(d => !inRoadmap.has(d.id) && !marked.has(d.id)).map(d => ({ ...d, ...(copies.get(d.id)?.entry ? { fixEntry: copies.get(d.id)!.entry } : {}) }))
+  return toCopyOf(boxes.items, roadmap && roadmap !== 'unread' && roadmap.ok ? roadmap.entries : null, marked).map(d => ({ ...d, ...(copies.get(d.id)?.entry ? { fixEntry: copies.get(d.id)!.entry } : {}) }))
 }
 
 /** Les copies des boîtes illisibles, gardées à côté, vues à la dernière relecture du COO. */
@@ -4917,6 +4967,8 @@ const ungleanedReports = async ($: any, board: Board, runId: string): Promise<nu
 
 /** Les déclarations encore à recopier, vues à la dernière relecture du COO. */
 let boxesNow: (SetAside & { session: string; fixEntry?: string })[] = []
+/** L'heure de la dernière surveillance des boîtes (`boxesNow`) : la ligne « Rangement » de la vue la compare au dernier jugement. */
+let boxesNowAt = 0
 
 // ─── Liste d'attente des rétros ───────────────────────────────────────────
 //
@@ -5165,7 +5217,7 @@ let waitlistNow: WaitlistNow | null = null
  * Où vit la liste, à la dernière relecture du COO, la copie du poste laissée derrière un passage au projet, et
  * (sans choix ici) une liste déjà commitée dans le projet depuis un autre poste.
  */
-let waitlistWhereNow: { where: WaitlistWhere; former?: string; committed?: true } | null = null
+let waitlistWhereNow: { where: WaitlistWhere; path?: string | null; former?: string; committed?: true } | null = null
 /**
  * Les commandes du shell (Bash, PowerShell) qui tournent dans cette discussion, spécialistes compris : tant qu'il y en
  * a une, le mod n'écrit pas la liste dans le projet (un `git pull` ou un commit du COO ne croise jamais une écriture).
@@ -5240,7 +5292,7 @@ const applyWaitlist = ($: any, click?: (list: Waitlist, now: number, ctx: Waitli
     const boxes = await readAllPisteBoxes($, root)
     waitlistChoiceBroken = undefined
     const got = await readWaitlist($, root)
-    waitlistWhereNow = got.at ? { where: got.at.where, ...(got.at.where === 'repo' ? { former: await formerWaitlist($, root) } : {}), ...(got.at.where === 'unasked' && (await fileExists($, waitlistRepoPath(root))) === true ? { committed: true as const } : {}) } : null
+    waitlistWhereNow = got.at ? { where: got.at.where, path: got.at.path, ...(got.at.where === 'repo' ? { former: await formerWaitlist($, root) } : {}), ...(got.at.where === 'unasked' && (await fileExists($, waitlistRepoPath(root))) === true ? { committed: true as const } : {}) } : null
     if (got.state === 'unread' || !got.at) {
       const aside = await keepWaitlistAside($, root, got.text)
       waitlistNow = { state: 'unread', ...((aside ?? waitlistAside?.place) ? { aside: aside ?? waitlistAside?.place } : {}), boxesUnread: boxes.unread }
@@ -5422,7 +5474,7 @@ const cooWaitlistOf = (): CooWaitlist | undefined => {
   if (!w || (w.state === 'absent' && w.boxesUnread.length === 0 && !w.seenUnread && !waitlistWhereNow?.committed)) return undefined
   const where = waitlistWhereNow
   const broken = waitlistChoiceBroken
-  return { ...(broken ? { choiceBroken: broken } : {}), state: w.state, pistes: w.list ? pistesOf(w.list) : [], refused: w.list?.refused ?? [], ...(w.aside ? { aside: w.aside } : {}), ...(w.missing ? { missing: w.missing } : {}), boxesUnread: w.boxesUnread, ...(w.unproven ? { unproven: w.unproven } : {}), ...(w.seenUnread ? { seenUnread: true as const } : {}), ...(where ? { where: where.where, ...(where.former ? { former: where.former } : {}), ...(where.committed ? { committed: true as const } : {}) } : {}), ...(pistesLeftNow.length > 0 ? { left: pistesLeftNow } : {}) }
+  return { ...(broken ? { choiceBroken: broken } : {}), state: w.state, pistes: w.list ? pistesOf(w.list) : [], refused: w.list?.refused ?? [], ...(w.aside ? { aside: w.aside } : {}), ...(w.missing ? { missing: w.missing } : {}), boxesUnread: w.boxesUnread, ...(w.unproven ? { unproven: w.unproven } : {}), ...(w.seenUnread ? { seenUnread: true as const } : {}), ...(where ? { where: where.where, ...(where.path !== undefined ? { path: where.path } : {}), ...(where.former ? { former: where.former } : {}), ...(where.committed ? { committed: true as const } : {}) } : {}), ...(pistesLeftNow.length > 0 ? { left: pistesLeftNow } : {}) }
 }
 
 /** Ce que la ligne « Pistes : » des tickets n'a pas rattaché, déjà dit au manager (une fois par avertissement et par mission). */
@@ -5458,6 +5510,35 @@ const readLotLinks = async ($: any, root: string, folder: string): Promise<{ lin
     return null
   }
   return { links, isComplete }
+}
+
+/**
+ * Toutes les 5 s, dans la discussion qui porte la mission : le fichier du ticket que nomme un bloqueur externe à faire
+ * (`readNamedTickets`, sous la racine de la mission), et « fait » le lève, revérifié sur le board à l'instant d'écrire
+ * (`liftByTickets`). Le seul moment où le fichier lève un bloqueur ; la réponse d'un appel qui envoie un ticket nommé
+ * relit aussi sa ligne `Status:`, sans rien lever (`namedTicketsText`).
+ */
+const liftNamedTickets = async ($: any, board: Board) => {
+  const run = activeRun(board)
+  const tickets = liftableTickets(board)
+  if (!run || tickets.length === 0) return
+  const reads = await readNamedTicketsWithin($, board.root, tickets)
+  if (reads === null) return
+  const now = await $.clock.now()
+  await commit($, b => liftByTickets(b, run.id, reads, now))
+}
+
+/**
+ * La réponse de l'outil sur les tickets nommés que cet appel envoie (`externals[].ticket`), relus aussitôt : seulement
+ * ceux qu'un bloqueur de la mission porte après l'appel (un ticket refusé n'est pas lu).
+ */
+const namedTicketsText = async ($: any, sent: unknown): Promise<string> => {
+  const board: Board | null = await read($, boardAtom)
+  const run = board && !board.delegate ? activeRun(board) : null
+  const tickets = ticketsToRead(run, sent)
+  if (!run || tickets.length === 0) return ''
+  const reads = await readNamedTicketsWithin($, board!.root, tickets)
+  return ticketReadsText(run, tickets, reads ?? [], reads === null && isTicketReadHeld())
 }
 
 /**
@@ -5681,12 +5762,9 @@ const wakeManager = async ($: any, runId: string): Promise<string> => {
   } catch {
     reason = 'the engine refused the send'
   }
-  return `The dashboard could not wake its manager (${neutralInPrompt(clip(reason, 120))}): send with SendMessage, to ${wakeTarget(to)}, exactly this text and nothing else: « ${WAKE_TEXT} ». If no session matches, tell the user the mission waits until its discussion is opened.`
+  return `The dashboard could not wake its manager (${neutralInPrompt(clip(reason, 120))}): send with SendMessage, to ${wakeTarget(to)}, exactly this text and nothing else: « ${WAKE_TEXT} ». If no session matches either way, or the send is refused, tell the user the mission waits until its discussion is opened.`
 }
 const neutralQuoted = (text: string): string => `« ${neutralInPrompt(clip(text, 80))} »`
-/** La cible d'un réveil que Claude envoie lui-même par SendMessage : la référence du manager relue, sinon le titre neutralisé. */
-const wakeTarget = (to: { ref: string | null; title: string }): string =>
-  to.ref !== null ? `the session whose [ref] is ${to.ref} in ListAgents` : `the session of ListAgents titled ${neutralQuoted(to.title)} (never a session whose title starts with it followed by « > »)`
 
 // ─── Réveil de jour ───────────────────────────────────────────────────────
 //
@@ -5726,7 +5804,7 @@ const wakeWaitingRun = async ($: any, runId: string): Promise<string | null> => 
   } catch {
     reason = 'the engine refused the send'
   }
-  return `The dashboard could not wake the manager of mission ${neutralQuoted(to.title)}, which waited for a group of your mission that just finished (${neutralInPrompt(clip(reason, 120))}): send with SendMessage, to ${wakeTarget(to)}, exactly this text and nothing else: « ${DAY_WAKE_TEXT} ». If no session matches, or the send is refused, send one PushNotification (a deferred tool: load it with ToolSearch, select:PushNotification) with exactly this text and nothing else: « ${reopenNotice(to.title)} ». Launch nothing else for that mission.`
+  return `The dashboard could not wake the manager of mission ${neutralQuoted(to.title)}, which waited for a group of your mission that just finished (${neutralInPrompt(clip(reason, 120))}): send with SendMessage, to ${wakeTarget(to)}, exactly this text and nothing else: « ${DAY_WAKE_TEXT} ». If no session matches either way, or the send is refused, send one PushNotification (a deferred tool: load it with ToolSearch, select:PushNotification) with exactly this text and nothing else: « ${reopenNotice(to.title)} ». Launch nothing else for that mission.`
 }
 
 /**
@@ -5771,7 +5849,7 @@ const recordTitles = async ($: any, raw: unknown): Promise<string> => {
   const refused = plan.refused.length > 0 ? ` Refused: ${plan.refused.map(x => `${neutralInPrompt(x.id)} (${neutralInPrompt(x.why)})`).join(', ')}.` : ''
   const leftLine = (titles: RoadmapTitles | undefined): string => {
     const n = untitledIds((r.read as Roadmap & { ok: true }).entries, titles).length
-    return ` ${n} open « À reprendre » entr${n === 1 ? 'y has' : 'ies have'} no title yet.`
+    return ` ${n} « À reprendre » entr${n === 1 ? 'y to title (open, or a complement) has' : 'ies to title (open, or a complement) have'} no title yet.`
   }
   if (Object.keys(plan.kept).length === 0) return `No title recorded.${refused}${leftLine(r.titles)}`
   if (!(await saveRoadmapState($, seat.local.root, { titles: plan.kept }))) return 'Titles refused, nothing recorded: the roadmap state could not be read or written; try again.'
@@ -5784,10 +5862,34 @@ const recordTitles = async ($: any, raw: unknown): Promise<string> => {
 }
 
 /**
+ * L'ordre de priorité des cartes prêtes, envoyé par le COO (`coordinate.order`, seul dans son appel) : le rang 1 à n des
+ * cartes nommées, retiré de toute autre carte, en une écriture de la liste des cartes qui ne change rien d'autre ; tout
+ * l'envoi refusé sur un id en cause (`parseCardsOrder`), ou quand une carte nommée est lancée ou retirée entre la lecture
+ * et l'écriture. Une carte en lancement se range comme une carte prête.
+ */
+const orderCall = async ($: any, raw: unknown): Promise<string> => {
+  const seat = await seatForWrite($)
+  if (!seat.ok) return `Nothing is written: ${cardWriteWhyEn(seat.why === 'unread' ? 'board-unread' : 'not-seat')}`
+  const now = await $.clock.now()
+  const runs = [...seat.local.runs, ...(seat.stored?.runs ?? [])]
+  const got = await readCards($)
+  if (got.state === 'unread') return `Nothing is written: ${cardWriteWhyEn('unread')}`
+  const isLaunched = (c: LaunchCard, among: readonly Run[]) => cardStateOf(c, among, now).kind === 'launched'
+  const order = parseCardsOrder(raw, got.cards, c => isLaunched(c, runs))
+  if ('refused' in order) return `Order refused: ${order.refused}.`
+  const out = await writeCards($, { kind: 'rank', ids: order.ids, expect: (fresh, among) => order.ids.every(id => fresh.some(c => c.id === id && !isLaunched(c, among))) })
+  if (out.state === 'stale') return 'Nothing is written: a card of the order was launched or removed meanwhile; send the order again.'
+  if (out.state !== 'ok' && out.state !== 'none') return `Nothing is written: ${orderWriteWhyEn(out.state)}`
+  $.ui.invalidate('ui.render')
+  const unranked = got.cards.filter(c => isOrdinaryCard(c) && !order.ids.includes(c.id) && !isLaunched(c, runs)).map(c => c.id)
+  return `Order of the launch cards ${out.state === 'ok' ? 'written' : 'unchanged'}: ${order.ids.map((id, i) => `${i + 1} ${id}`).join(', ')}.${unranked.length > 0 ? ` Without a rank now: ${unranked.join(', ')}.` : ''}`
+}
+
+/**
  * Le champ `coordinate` de l'outil `flow`, dans la discussion du COO seulement : les consignes qu'il
  * écrit. `close` : demander la clôture d'une mission, sans archivage ni marque de livraison ; une mission en
  * pause est close tout de suite par le mod du COO, une mission ouverte reçoit une entrée et un réveil. `toClose`
- * (le contrôle à l'instant des discussions à fermer) et `discussionsClosed` (leur compte rendu) vont chacun seul. `titles` : les
+ * (le contrôle à l'instant des discussions à fermer), `discussionsClosed` (leur compte rendu) et `order` (l'ordre des cartes, `orderCall`) vont chacun seul. `titles` : les
  * titres des entrées « À reprendre » (`recordTitles`).
  */
 const coordinateCall = async ($: any, input: unknown, isAgent = false): Promise<string> => {
@@ -5796,7 +5898,7 @@ const coordinateCall = async ($: any, input: unknown, isAgent = false): Promise<
   const x = input !== null && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : {}
   const close = Array.isArray(x.close) ? x.close : []
   const cuts = Array.isArray(x.cutAuto) ? x.cutAuto.slice(0, 20) : []
-  const gleaned = Array.isArray(x.gleaned) ? x.gleaned.filter(isSafeId).slice(0, 20) : []
+  const gleaned: unknown[] = Array.isArray(x.gleaned) ? x.gleaned.slice(0, 20) : []
   const isExisting = x.gleanedExisting === true
   const isTitles = x.titles !== undefined
   const taken = Array.isArray(x.taken) ? x.taken.slice(0, 40) : []
@@ -5825,13 +5927,18 @@ const coordinateCall = async ($: any, input: unknown, isAgent = false): Promise<
       return 'Refused, nothing of this call applied: send "toClose" first, alone in its call, then "discussionsClosed", alone in another call; send any other instruction in a call of its own.'
     return x.toClose !== undefined ? await checkToClose($, toClose, isAgent) : await recordClosed($, closedDiscussions, isAgent)
   }
+  // L'ordre des cartes : seul dans son appel, une écriture de la liste des cartes faite ou refusée en entier.
+  if (x.order !== undefined) {
+    if (Object.keys(x).some(k => k !== 'order')) return 'Refused, nothing of this call applied: send "order" alone in its call; send any other instruction in a call of its own.'
+    return await orderCall($, x.order)
+  }
   // La fin de la demande unique : seule dans son appel, comme le contrôle.
   if (x.unmarked !== undefined) {
     if (Object.keys(x).some(k => k !== 'unmarked')) return 'Refused, nothing of this call applied: send "unmarked" alone in its call; send any other instruction in a call of its own.'
     return await recordUnmarked($, x.unmarked, isAgent)
   }
   if (!isNightOn && nights.length === 0 && close.length === 0 && cuts.length === 0 && gleaned.length === 0 && !isExisting && !isTitles && taken.length === 0 && answers.length === 0 && redos.length === 0 && instructs.length === 0 && oppositions.length === 0 && compatibles.length === 0 && !isSeenAsked && notTaken.length === 0)
-    return 'Nothing to coordinate: "coordinate" takes {"close": [{"mission": "<mission id>"}]}, {"cutAuto": [{"mission": "<mission id>"}]}, {"gleaned": ["<mission id>"]}, {"gleanedExisting": true}, {"titles": [{"id", "title"}]}, {"taken": [{"mission", "item", "by": {"mission", "ticket"}}]}, {"answer": [{"mission", "question", "seen", "file", "series"}]}, {"redo": [{"mission", "file", "series"}]}, {"instruct": [{"mission", "file", "series", "origin"}]}, {"contradiction": [{"first", "second", "subject"}]}, {"compatible": [{"missions", "subject"}]}, {"night": [{"mission", "watch", "act", "group"}]}, {"toClose": ["<session id>"]}, {"discussionsClosed": [{"session", "state", "why"}]}, {"unmarked": "yes" | "no" | "none"} or {"decisionsSeen": true}.'
+    return 'Nothing to coordinate: "coordinate" takes {"close": [{"mission": "<mission id>"}]}, {"cutAuto": [{"mission": "<mission id>"}]}, {"gleaned": [{"mission", "added", "attached"}]}, {"gleanedExisting": true}, {"titles": [{"id", "title"}]}, {"taken": [{"mission", "item", "by": {"mission", "ticket"}}]}, {"answer": [{"mission", "question", "seen", "file", "series"}]}, {"redo": [{"mission", "file", "series"}]}, {"instruct": [{"mission", "file", "series", "origin"}]}, {"contradiction": [{"first", "second", "subject"}]}, {"compatible": [{"missions", "subject"}]}, {"night": [{"mission", "watch", "act", "group"}]}, {"toClose": ["<session id>"]}, {"discussionsClosed": [{"session", "state", "why"}]}, {"unmarked": "yes" | "no" | "none"}, {"order": ["<card id>", …]} or {"decisionsSeen": true}.'
   const out: string[] = []
   if (isNightOn) out.push(await recordNightOn($))
   for (const one of nights) out.push(await recordNight($, one))
@@ -5864,7 +5971,7 @@ const coordinateCall = async ($: any, input: unknown, isAgent = false): Promise<
   // reviendraient sans question.
   if (isSeenAsked) out.push(decisionsFailed.size === 0 ? await markReviewedDecisions($) : 'Not marked as reviewed: an opposition or a compatible subject was not recorded since your last statement; send each of them again (the same content), then {"decisionsSeen": true}.')
   if (taken.length > 0) out.push(await markTaken($, taken))
-  if (gleaned.length > 0) out.push(await markGleaned($, gleaned))
+  if (gleaned.length > 0) out.push(await markGleaned($, gleaned, (x.gleaned as unknown[]).length, x.postponed !== undefined))
   if (isExisting) {
     const seat = await seatForWrite($)
     out.push(!seat.ok ? 'The first gleaning was not recorded: this discussion does not hold the COO seat, or the missions file could not be read.' : (await saveRoadmapState($, seat.local.root, { gleanedAt: await $.clock.now() })) ? 'The first gleaning of the existing journal and reports is recorded: it is not asked again.' : 'The first gleaning could not be recorded (what the dashboard keeps could not be read or written); send it again.')
@@ -5933,21 +6040,38 @@ const markTaken = async ($: any, list: readonly unknown[]): Promise<string> => {
   return `Marked taken elsewhere: ${fresh.length} piste(s); the retro shows them so and leaves them out of its cut.${refused.length > 0 ? ` Refused: ${refused.join(', ')} (unknown mission, piste not « todo » in its retro, or a ticket id out of form).` : ''}`
 }
 
-/** Des missions closes relevées par le COO : une entrée « gleaned » chacune (partie avec sa mission). */
-const markGleaned = async ($: any, ids: readonly string[]): Promise<string> => {
+/**
+ * Des missions closes relevées par le COO : une entrée « gleaned » chacune (partie avec sa mission), seulement sur une
+ * déclaration prouvée (`gleanVerdict`) contre la feuille de route relue à l'instant, sans rien écrire de ce qu'elle garde ;
+ * une déclaration refusée ou remise n'écrit rien (une remise contrôlée se note en mémoire : la mission quitte la tête du
+ * relevé, `postponeMission`). `total` : combien l'appel en portait (20 lues au plus).
+ * `isStrayPostponed` : un « postponed » envoyé à côté de « gleaned », hors des éléments : la remise voulue ne se lit pas,
+ * chaque élément est refusé et rien n'est écrit.
+ */
+const markGleaned = async ($: any, items: readonly unknown[], total: number, isStrayPostponed: boolean): Promise<string> => {
   // Le fichier des missions relu d'abord : une mission reprise puis close de nouveau depuis le relevé n'est pas notée relevée.
   if (!(await pull($))) return `Gleaned missions not recorded: ${SEAT_UNREAD}`
   const board: Board | null = await read($, boardAtom)
+  if (!board) return `Gleaned missions not recorded: ${SEAT_UNREAD}`
+  // Les entrées vues gardées avant cet appel, puis la feuille de route relue sans rien écrire (`isMine` faux).
+  const state = await loadRoadmapState($, board.root)
+  // Un état gardé en partie mis de côté (`aside`) a perdu des entrées vues : il ne prouve plus qu'une entrée est neuve.
+  const seen = state === 'unread' || 'broken' in state || state.aside !== undefined ? null : state.seen
+  const roadmap = await readRoadmapFile($, board, false)
+  const statement = cooStatement(board, { now: await $.clock.now(), roadmap, ...(await numbersCtx($)) })
+  const verdicts = gleanVerdicts(items, { statement, seen, runs: board.runs }, isStrayPostponed)
+  // Un relevé remis, contrôlé comme une déclaration juste : rien n'est noté, la mission sort de la tête du relevé (en mémoire).
+  for (const v of verdicts) if (v.kind === 'postponed') postponeMission(v.mission)
   // Seulement une mission close : relevée à sa clôture (une mission reprise puis close de nouveau se relève encore).
-  const known = ids.filter(id => board?.runs.some(r => r.id === id && r.status === 'done'))
-  if (known.length === 0) return 'No gleaned mission recorded: none of these ids is a closed mission of the missions file.'
+  const known = recordedOf(verdicts)
+  if (known.length === 0) return gleanAnswer(verdicts, total, null)
   const now = await $.clock.now()
   const written = await writeCoordination($, entries => {
     const already = gleanedRuns(liveEntries(entries, () => false))
     const fresh = known.filter(id => (already.get(id) ?? -1) < (board?.runs.find(r => r.id === id)?.finishedAt ?? 0))
     return fresh.length === 0 ? null : [...entries, ...fresh.map((run, i) => ({ id: newEntryId(now + i, Math.random()), kind: 'gleaned', run, at: now }))]
   })
-  return written === 'ok' || written === 'none' ? `Gleaned: ${known.length} mission(s) recorded; they are not listed again.` : `Gleaned missions not recorded: ${coordWriteWhy(written)}`
+  return gleanAnswer(verdicts, total, written === 'ok' || written === 'none' ? null : coordWriteWhy(written))
 }
 
 
@@ -6030,7 +6154,8 @@ const checkToClose = async ($: any, asked: readonly string[], isAgent: boolean):
  * `coordinate.discussionsClosed` : le compte rendu du Claude du COO. Chaque discussion encore à fermer à l'instant
  * (`toCloseNow`) et rendue avec un état connu reçoit une trace par mission qui la désigne ; un état hors liste, ou un
  * id que le contrôle ne rendrait pas, est refusé et rien ne s'écrit pour lui. Écriture refusée : rien n'est écrit, la
- * discussion revient au relevé suivant.
+ * discussion revient au relevé suivant. L'état « remise » (`POSTPONED_STATE`) n'écrit aucune trace : la discussion
+ * reste à fermer, notée remise en mémoire (`postponeSessions`), hors de la tête du relevé.
  */
 const recordClosed = async ($: any, items: readonly unknown[], isAgent: boolean): Promise<string> => {
   // Le tour du oui à la demande unique, jugé à l'entrée pour le tour d'écriture (le contrôle, `toCloseNow`, le rejuge après
@@ -6040,6 +6165,7 @@ const recordClosed = async ($: any, items: readonly unknown[], isAgent: boolean)
   if (!now) return 'Nothing is written: the missions file or the coordination file could not be read, or this discussion does not hold the COO seat; these discussions come back at the next statement.'
   const refused: string[] = []
   const traced: { run: string; session: string; state: DiscussionState }[] = []
+  const later: string[] = []
   const seen = new Set<string>()
   for (const raw of items.slice(0, UNMARKED_MAX)) {
     const x = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
@@ -6048,6 +6174,12 @@ const recordClosed = async ($: any, items: readonly unknown[], isAgent: boolean)
     const found = typeof session === 'string' ? now.list.find(d => d.session === session) : undefined
     if (found && seen.has(found.session)) {
       refused.push(`"${found.session}" (sent twice: the first one counts)`)
+      continue
+    }
+    // Remise : jamais une trace (un état hors `DISCUSSION_STATES` rendrait l'entrée mal formée), la discussion reste due.
+    if (found && state === POSTPONED_STATE) {
+      seen.add(found.session)
+      later.push(found.session)
       continue
     }
     if (!found || !DISCUSSION_STATES.includes(state as DiscussionState)) {
@@ -6059,7 +6191,9 @@ const recordClosed = async ($: any, items: readonly unknown[], isAgent: boolean)
   }
   // Au-delà du plafond d'un appel : dit, jamais tu (ces discussions reviennent par un autre compte rendu).
   const unread = items.length > UNMARKED_MAX ? ` Not read: entries ${UNMARKED_MAX + 1}-${items.length} (${UNMARKED_MAX} per call at most); send them in another call.` : ''
-  const tail = `${refused.length > 0 ? ` Refused, nothing written for them (a state outside ${DISCUSSION_STATES.join(', ')}, a discussion that is not to close any more, or one sent twice): ${refused.join(', ')}.` : ''}${unread}`
+  postponeSessions(later)
+  const laterTail = later.length > 0 ? ` Postponed, nothing written: ${later.map(s => `"${s}"`).join(', ')}; each stays to close, out of the head of your statement until the user's next message.` : ''
+  const tail = `${laterTail}${refused.length > 0 ? ` Refused, nothing written for them (a state outside ${[...DISCUSSION_STATES, POSTPONED_STATE].join(', ')}, a discussion that is not to close any more, or one sent twice): ${refused.join(', ')}.` : ''}${unread}`
   if (traced.length === 0) return `Nothing is written.${tail}`
   const clock = await $.clock.now()
   const here = await hereId($)
@@ -6089,15 +6223,13 @@ const recordClosed = async ($: any, items: readonly unknown[], isAgent: boolean)
   return `Recorded: ${kept.length} discussion(s); they are not listed again.${droppedTail}${tail}`
 }
 
-/** Le relevé du siège : la procédure de fermeture des discussions encore à fermer, sur le fichier relu au relevé ; rien quand le fichier de coordination n'est pas bien relu. */
-const cooToCloseText = async ($: any, board: Board): Promise<string | null> => {
-  if (coordNow?.state !== 'read' && coordNow?.state !== 'absent') return null
-  const list = discussionsToClose(board.runs, coordLive, await hereId($))
-  return missionSessionsArchiveText(
-    list.flatMap(d => d.runs.map(r => ({ title: neutralQuoted(r.title), id: d.session, ...(r.by === 'retro' ? { byRetro: true } : {}) }))),
-    closingRepo(board.root),
-  )
-}
+/**
+ * Le relevé du siège : toutes les discussions encore à fermer, sans plafond (`headedNow` plafonne celles du texte de la
+ * tâche, après les remises), sur le fichier relu au relevé, jamais celle d'ici ; null quand le fichier de coordination
+ * n'est pas bien relu. Un seul appel par relevé : deux lectures de `coordNow` pourraient se contredire.
+ */
+const cooToCloseList = async ($: any, board: Board): Promise<ToClose[] | null> =>
+  coordNow?.state !== 'read' && coordNow?.state !== 'absent' ? null : discussionsToClose(board.runs, coordLive, await hereId($), false, undefined, Number.POSITIVE_INFINITY)
 /**
  * Le relevé du siège : la demande unique pour les discussions des missions archivées sans marque, tant que son repère
  * n'est pas posé (`RoadmapState.unmarkedAt`). Ce que le mod garde illisible, ou le fichier de coordination pas bien relu :
@@ -6169,18 +6301,21 @@ const recordUnmarked = async ($: any, value: unknown, isAgent: boolean): Promise
   return yesOpen
 }
 
-/** Ce que le relevé du COO ajoute pour « À reprendre » : les déclarations à recopier, les missions closes à relever, le relevé unique de l'existant. */
-const cooSetAsideCtx = async ($: any, board: Board): Promise<{ setAside: CooSetAside[]; boxesUnread: string[]; toGlean: CooGlean[]; existingGleaned: boolean | null }> => {
+/**
+ * Ce que le relevé du COO ajoute pour « À reprendre » : les déclarations à recopier, les missions closes à relever (toutes,
+ * chacune avec l'heure de sa clôture), le relevé unique de l'existant.
+ */
+const cooSetAsideCtx = async ($: any, board: Board): Promise<{ setAside: CooSetAside[]; boxesUnread: string[]; toGlean: GleanDue[]; existingGleaned: boolean | null; isRead: boolean }> => {
   const state = await loadRoadmapState($, board.root)
   const isRead = state !== 'unread' && !('broken' in state)
   const since = isRead ? (state.gleanedAt ?? 0) : 0
   // Sans fichier de coordination bien relu, on ne sait ni ce qui est recopié ni ce qui est relevé : rien n'est redemandé.
-  if (coordNow?.state !== 'read' && coordNow?.state !== 'absent') return { setAside: [], boxesUnread: [...boxesUnread, ...boxesAside], toGlean: [], existingGleaned: isRead ? state.gleanedAt !== undefined : null }
+  if (coordNow?.state !== 'read' && coordNow?.state !== 'absent') return { setAside: [], boxesUnread: [...boxesUnread, ...boxesAside], toGlean: [], existingGleaned: isRead ? state.gleanedAt !== undefined : null, isRead: false }
   const gleaned = gleanedRuns(coordLive)
-  const toGlean: CooGlean[] = []
-  for (const run of board.runs) {
-    if (toGlean.length >= 10) break
-    if (run.status !== 'done' || (gleaned.get(run.id) ?? -1) >= (run.finishedAt ?? 0) || !isSafeId(run.id) || (run.finishedAt ?? run.updatedAt) < since) continue
+  const toGlean: GleanDue[] = []
+  // L'état gardé de la feuille de route illisible : aucune mission à relever (le contrôle refuserait toute déclaration).
+  for (const run of isRead ? board.runs : []) {
+    if (!isGleanDue(run, gleaned, since)) continue
     const reports = await reportFilesOf($, run.id)
     const markedAway = takenFor(coordLive, run.id, retroItems(run))
     // Une piste d'une rétro qui relit la liste, relue dans la liste d'attente, y vit déjà : pas recopiée dans « À reprendre ».
@@ -6202,9 +6337,67 @@ const cooSetAsideCtx = async ($: any, board: Board): Promise<{ setAside: CooSetA
     const titleShared = board.runs.some(r => r.id !== run.id && sameRoadmapTitle(r.title, run.title))
     // Validé, mais le fichier ne se relit pas ou ne porte pas ce tour : dit tel quel, jamais « pas validé ».
     const fileState = hasOwn === 'unread' || (isReportValidated(run) && kept === 'unread') ? { reportUnread: true } : !isReportValidated(run) ? {} : round === null || kept === null || kept === 'unread' || kept.round !== round ? { reportOtherRound: true } : {}
-    toGlean.push({ id: run.id, title: run.title, reports, untaken, ...(own && hasOwn ? { report: own, reportValidated: round !== null && kept !== null && kept !== 'unread' && kept.round === round, ...(round ? { reportRound: round } : {}), ...(titleShared ? { titleShared } : {}), ...fileState } : {}) })
+    // Le titre partagé vaut aussi sans compte rendu propre : la tâche donne alors les entrées rattachées que le contrôle compare.
+    toGlean.push({ id: run.id, title: run.title, reports, untaken, closedAt: run.finishedAt ?? run.updatedAt, ...(titleShared ? { titleShared } : {}), ...(own && hasOwn ? { report: own, reportValidated: round !== null && kept !== null && kept !== 'unread' && kept.round === round, ...(round ? { reportRound: round } : {}), ...fileState } : {}) })
   }
-  return { setAside: boxesNow.map(d => ({ id: d.id, source: d.source, text: roadmapText(d.text), ...(d.fixEntry ? { fixEntry: d.fixEntry } : {}) })), boxesUnread: [...boxesUnread, ...boxesAside.map(p => `${p} (copy of an unreadable box, kept)`)], toGlean, existingGleaned: isRead ? state.gleanedAt !== undefined : null }
+  // L'état gardé de la feuille de route illisible : le relevé se compose comme avant, mais rien n'en est noté en mémoire.
+  return { setAside: boxesNow.map(d => ({ id: d.id, source: d.source, text: roadmapText(d.text), ...(d.fixEntry ? { fixEntry: d.fixEntry } : {}) })), boxesUnread: [...boxesUnread, ...boxesAside.map(p => `${p} (copy of an unreadable box, kept)`)], toGlean, existingGleaned: isRead ? state.gleanedAt !== undefined : null, isRead }
+}
+
+/**
+ * La fin d'un tour du COO : la tête du dernier relevé bien relu (`snap`, copiée à l'entrée du tour fini avec les remises
+ * de ce moment ; un relevé à la lecture ratée n'en note aucune), jugée sur une relecture fraîche, sans rien écrire ni
+ * envoyer : le fichier des missions relu sans le réenregistrer (`readStored`, jamais `pull`, qui peut le réécrire), le
+ * fichier de coordination, la feuille de route sans garder ses entrées vues, les boîtes ; les listes sans plafond, sur
+ * les deux copies du fichier des missions (`freshOf` : due dès qu'une copie la montre due). Une lecture ratée : pas de
+ * jugement. Le siège perdu, ou pris entre-temps par une autre discussion (vu dans la copie d'ici ou dans le fichier
+ * relu) : rien.
+ */
+const judgeHeadNow = async ($: any, snap: HeadSnapshot): Promise<void> => {
+  const got = await freshNow($, snap.postponed)
+  if (got === 'unread') return void judgeHead(snap, { toCopy: null, toClose: null, toGlean: null }, null)
+  if (got !== null) judgeHead(snap, got.fresh, got.tidy, await $.clock.now())
+}
+
+/**
+ * La relecture fraîche de la fin d'un tour (`judgeHeadNow`, le pas à pas), sans rien écrire : null quand le siège est
+ * perdu ou pris entre-temps, `unread` quand une lecture rate ; `local` : la copie d'ici du fichier des missions.
+ */
+const freshNow = async ($: any, postponed: RangementState['postponed']): Promise<{ fresh: HeadFresh; tidy: TidyUp | null; local: Board } | 'unread' | null> => {
+  const local: Board | null = (await $.state.get(BOARD_REF)).value ?? null
+  const here = await hereId($)
+  const now = await $.clock.now()
+  if (!local || seatState(local.coo, here, now) !== 'mine') return null
+  const { board: stored, isUnread } = await readStored($, local.root)
+  if (isUnread) return 'unread'
+  const seat = mergeSeat(local.coo, stored?.coo)
+  if (seatState(seat, here, now) !== 'mine') return null
+  holdSeat(`${seat?.by}@${seat?.at}`)
+  const coord = await readCoordination($, local.root)
+  const entries = coord.state === 'read' ? coord.file.entries.flatMap(raw => soundEntry(raw) ?? []) : coord.state === 'absent' ? [] : null
+  if (entries === null) return 'unread'
+  const roadmapRead = roadmapEntriesOf({ roadmap: await readRoadmapFile($, local, false) })
+  const boxes = await readAllBoxes($, local.root)
+  const state = await loadRoadmapState($, local.root)
+  const since = state !== 'unread' && !('broken' in state) ? (state.gleanedAt ?? 0) : null
+  const toCopy = roadmapRead === null || !boxes.isWhole ? null : toCopyOf(boxes.items, roadmapRead, copiedDecls(entries))
+  const copies = stored === null ? [local.runs] : [local.runs, stored.runs]
+  return { ...freshOf({ copies, entries, here, gleaned: gleanedRuns(entries), since, toCopy, isBoxesNow: await isBoxesNowOf($) }, postponed), local }
+}
+
+/**
+ * Les boîtes sont dues sans attendre seulement dans un projet qui ne peut pas livrer (sans dépôt distant relevé) ;
+ * ailleurs, elles attendent l'étape « rangement » de la livraison.
+ */
+const isBoxesNowOf = async ($: any): Promise<boolean> => (await read($, syncAtom)).hasRemote !== true
+
+/** Le rangement dû hors d'une livraison, d'après les listes que la surveillance tient à jour ; null quand le fichier de coordination ou l'état de la feuille de route ne se relit pas. */
+const tidyUpLive = async ($: any, board: Board): Promise<TidyUp | null> => {
+  if (coordNow?.state !== 'read' && coordNow?.state !== 'absent') return null
+  const state = await loadRoadmapState($, board.root)
+  if (state === 'unread' || 'broken' in state) return null
+  const gleaned = gleanedRuns(coordLive)
+  return tidyUpOf({ boxes: boxesNow, isBoxesNow: await isBoxesNowOf($), toClose: discussionsToClose(board.runs, coordLive, await hereId($), false, undefined, Number.POSITIVE_INFINITY), toGlean: board.runs.filter(r => isGleanDue(r, gleaned, state.gleanedAt ?? 0)), postponed: postponedNow() })
 }
 
 // ─── Plan des vagues du projet, chez le COO ───────────────────────────────
@@ -6286,7 +6479,7 @@ const validatePlan = async ($: any, key: string): Promise<string> => {
   return out === 'ok' ? '◆ Plan du projet validé : les missions le suivent.' : out === 'none' ? '◆ Ce plan est déjà celui du projet.' : `◆ Rien n’est validé : ${coordWriteWhy(out)}`
 }
 
-/** Relit le fichier de coordination pour le seul plan du COO (après une validation), sans rien appliquer d'autre. */
+/** Relit le fichier de coordination sans rien appliquer (après une validation du plan, avant un pas du rangement). */
 const refreshCooPlanRead = async ($: any, board: Board) => {
   const got = await readCoordination($, board.root)
   if (got.state !== 'read') return
@@ -7184,8 +7377,11 @@ const writeDelivery = async ($: any, root: string, d: Delivery): Promise<boolean
 /** Une mission dont la discussion livre ou a livré elle-même (une phase de livraison en cours ou faite) : le COO ne la livre pas. */
 const isDeliveringHere = (run: Run): boolean => run.phases.some(p => DELIVERY.has(p.skill) && (p.status === 'active' || p.status === 'done'))
 
-/** Une livraison finie dont le push a réussi (livrée en entier, ou abandonnée après le push) : ses missions sont parties. */
-const isPushed = (d: Delivery): boolean => d.finishedAt !== undefined && d.steps.some(s => s.key === 'push' && s.status === 'done')
+/**
+ * Une livraison dont le push a réussi, finie (livrée en entier, ou abandonnée après le push) ou au rangement (ses étapes
+ * qui livrent faites) : ses missions sont parties.
+ */
+const isPushed = (d: Delivery): boolean => (d.finishedAt !== undefined || isShipped(d)) && d.steps.some(s => s.key === 'push' && s.status === 'done')
 
 /**
  * Les missions à livrer : rapport validé, ni close ni archivée, pas en train de livrer dans leur discussion,
@@ -7322,28 +7518,32 @@ const cooOutsideOf = (board: Board): OutsideCommits[] => (outsideLog ? outsideCo
  * relais, relus à l'instant (seules les missions qui ont un groupe confié se lisent) : le relevé du COO les dit
  * « reported », pas « working ». Un relais qui ne se lit pas n'en signale aucun. Gardé 5 secondes tant que les
  * envois en cours ne changent pas (un groupe rendu puis confié de nouveau se relit) : la vue se redessine souvent,
- * et chaque relecture parcourt le dossier du relais ; les missions se relisent en parallèle.
+ * et chaque relecture parcourt le dossier du relais ; les missions se relisent en parallèle. La même lecture rend
+ * le relais relu de chaque mission (`relayOf`), pour les comptes relayés du relevé, à l'affichage seulement.
  */
-const cooReportedOf = async ($: any, board: Board): Promise<(runId: string) => readonly string[]> => {
+const cooReportedOf = async ($: any, board: Board): Promise<{ reported: (runId: string) => readonly string[]; relayOf: (runId: string) => Relay | null }> => {
   const now = await $.clock.now()
   const runs = board.runs.filter(run => run.archivedAt === undefined && (run.groups ?? []).some(g => g.linked !== undefined))
   const key = JSON.stringify(runs.map(run => [run.id, (run.groups ?? []).filter(g => g.linked !== undefined).map(g => [g.id, g.linked!.at])]))
   if (reportedSeen && reportedSeen.key === key && now >= reportedSeen.at && now - reportedSeen.at < REPORTED_TTL_MS) return reportedSeen.of
   const found = new Map<string, string[]>()
+  const read = new Map<string, Relay>()
   await Promise.all(
     runs.map(async run => {
       const stored = await readRelay($, run.id)
-      const ids = relayedReports(run, isRelay(stored, run.id) ? stored : null).map(x => x.g.id)
+      const relay = isRelay(stored, run.id) ? stored : null
+      if (relay) read.set(run.id, relay)
+      const ids = relayedReports(run, relay).map(x => x.g.id)
       if (ids.length > 0) found.set(run.id, ids)
     }),
   )
-  const of = (id: string): readonly string[] => found.get(id) ?? []
+  const of = { reported: (id: string): readonly string[] => found.get(id) ?? [], relayOf: (id: string) => read.get(id) ?? null }
   reportedSeen = { at: now, key, of }
   return of
 }
 
-/** La dernière relecture des comptes rendus déposés au relais, pour le relevé et la vue du COO, avec les envois qu'elle a vus. */
-let reportedSeen: { at: number; key: string; of: (runId: string) => readonly string[] } | null = null
+/** La dernière relecture des relais (comptes rendus déposés, relais relus), pour le relevé et la vue du COO, avec les envois qu'elle a vus. */
+let reportedSeen: { at: number; key: string; of: Awaited<ReturnType<typeof cooReportedOf>> } | null = null
 const REPORTED_TTL_MS = 5_000
 
 /** Ce que la carte montrait au clic « ▶ Livrer » : ses missions (et leur validation) et la branche relevée. */
@@ -7357,15 +7557,21 @@ const cooDeliveryOf = async ($: any, board: Board): Promise<CooDelivery | undefi
     const failed = failedStep(d)
     const running = runningStep(d)
     const next = nextStep(d)
+    const isTidy = (failed ?? running ?? next)?.key === TIDY_STEP
+    const st = stepperNow()
+    const tidyAt = st?.owner === d.id && st.label !== '' ? st.label : null
     return {
       state: failed ? 'failed' : running ? 'running' : 'paused',
       missions: d.missions.map(m => m.title),
       commits: [],
       waitFor: [],
       waitCommits: [],
-      steps: d.steps.map(s => ({ label: DELIVERY_FR[s.key], status: s.status, ...(s.detail ? { detail: s.detail } : {}) })),
+      // Le rangement en cours dit où il en est : la tâche du pas à pas (« boîtes », « relevé de « M » (2 sur 7) »).
+      steps: d.steps.map(s => ({ label: DELIVERY_FR[s.key], status: s.status, ...(s.key === TIDY_STEP && s.status === 'running' && tidyAt ? { detail: tidyAt } : s.detail ? { detail: s.detail } : {}) })),
       ...(failed ? { step: DELIVERY_FR[failed.key] } : running ? { step: DELIVERY_FR[running.key] } : next ? { step: DELIVERY_FR[next.key] } : {}),
-      isArmed: chainArmed === d.id,
+      ...(isTidy ? { isTidy: true } : {}),
+      // Le rangement mené par le pas à pas, ou sur le point de partir (l'étape du projet tout juste rendue, la chaîne armée).
+      isArmed: isTidy ? stepperNow()?.owner === d.id || (!running && !failed && chainArmed === d.id) : chainArmed === d.id,
     }
   }
   // Sans fichier de coordination lisible, on ne sait pas quelles missions ont déjà leur clôture : rien n'est proposé.
@@ -7392,17 +7598,255 @@ const launchNextStep = async ($: any): Promise<string> => {
   const started = startStep(d, step.key, now)
   // L'étape notée lancée avant de partir : un rechargement ne la relance jamais d'elle-même.
   if (!started || !(await writeDelivery($, root, started))) return '◆ Rien ne part : l’état de la livraison ne s’écrit pas.'
+  // Le rangement : mené par le tableau de bord lui-même, qui en rend l'issue.
+  if (step.key === TIDY_STEP) return tidyStep($, root, started)
   const command = DELIVERY_COMMAND[step.key]
   // Sans l'attendre : une commande ou un message mis en file attendent la fin d'un tour, et le verrou ne se garde pas jusque-là.
   if (command) void quietly(() => $.command.run({ command, args: commandArgsOf(null, command) }))
   else
     void quietly(() =>
       $.prompt.submit({
-        text: `Livraison lancée chez le COO, dernière étape : fais les étapes que le CLAUDE.md de ce projet ajoute après une livraison (lis-le ; il dit lesquelles et ce qu'il réserve à l'utilisateur), l'une après l'autre, chacune seulement si la précédente a réussi, et laisse-moi ce que le projet me réserve en me le disant. Puis rends l'issue par l'outil flow : {"delivery": {"step": "project", "ok": true ou false, "detail": "<ce qui est fait, ou ce qui a échoué>"}} (ok true s'il n'y a rien à faire).`,
+        text: `Livraison lancée chez le COO, dernière étape que tu mènes : fais les étapes que le CLAUDE.md de ce projet ajoute après une livraison (lis-le ; il dit lesquelles et ce qu'il réserve à l'utilisateur), l'une après l'autre, chacune seulement si la précédente a réussi, et laisse-moi ce que le projet me réserve en me le disant. Puis rends l'issue par l'outil flow : {"delivery": {"step": "project", "ok": true ou false, "detail": "<ce qui est fait, ou ce qui a échoué>"}} (ok true s'il n'y a rien à faire).`,
       }),
     )
   return `◆ Livraison : ${DELIVERY_FR[step.key]} lancé.`
 }
+
+/**
+ * Ce qui est dû au rangement d'une livraison (`dueTasks`, moment `delivery`), d'après les listes que la relecture du COO
+ * tient à jour, la ligne « Jalons » quand `jalons` porte le résultat à noter ; null quand le fichier de coordination ou
+ * l'état gardé de la feuille de route ne se relisent pas.
+ */
+const tidyDueNow = async ($: any, board: Board, jalons: { result: string } | null): Promise<Due | null> => {
+  const toClose = await cooToCloseList($, board)
+  const { setAside, toGlean, isRead } = await cooSetAsideCtx($, board)
+  if (toClose === null || !isRead) return null
+  return dueTasks({ boxes: setAside, isBoxesNow: true, decisions: cooDecisionsOf(board), toClose, toGlean, postponed: postponedNow(), ...(jalons ? { delivered: jalons } : {}) }, 'delivery')
+}
+
+/**
+ * L'étape « rangement » d'une livraison, notée en cours (`d`) : rien de dû (ou seulement des choses remises, ou des missions
+ * dont le compte rendu ne se lit pas, nommées dans son détail), aucune mission de la livraison encore à clore, le tableau
+ * de bord la rend faite lui-même, et la livraison finit ; sinon elle reste en cours et le pas à pas du rangement s'arme
+ * (`armStepper`), que la surveillance mène au repos (`stepLocked`) jusqu'à l'issue. Sous le verrou.
+ */
+const tidyStep = async ($: any, root: string, d: Delivery): Promise<string> => {
+  chainArmed = null
+  const seat = await seatForWrite($)
+  const board = seat.ok ? seat.local : null
+  const due = board && isShipped(d) ? await tidyDueNow($, board, await jalonsDue($, board, d)) : null
+  if (due === null || due.tasks.length > 0 || deliveryWaiting(board!.runs, d.missions).length > 0) {
+    // Le pas à pas des tâches dues, mené au repos par la surveillance (`stepNow`), qui rend l'issue de l'étape.
+    if (seat.ok && isShipped(d)) armStepper('delivery', d.id, seatKeyOf(seat))
+    return '◆ Livraison : rangement en cours.'
+  }
+  const out = reportStep(d, TIDY_STEP, true, dueLeft(due) || 'rien à ranger', await $.clock.now())
+  if (!out || !(await writeDelivery($, root, out))) return '◆ Rien ne part : l’état de la livraison ne s’écrit pas.'
+  return '◆ Livraison finie : rangement fait.'
+}
+
+/** Claude pas au repos pour le pas à pas : un tour ouvert ou en train de commencer, ou une compaction en cours à l'heure `now`. */
+const isBusyAt = (now: number): boolean => isTurnOpen || turnStarting() || isPromptPending(now) || isCompacting(now)
+
+/** Le siège tel qu'il est tenu (`by@at`, les deux copies du fichier des missions fusionnées) : un pas à pas armé sous un autre siège se désarme. */
+const seatKeyOf = (seat: { local: Board; stored: Board | null }): string => {
+  const coo = mergeSeat(seat.local.coo, seat.stored?.coo)
+  return `${coo?.by}@${coo?.at}`
+}
+
+/**
+ * Le pas à pas du rangement au repos (`pas-a-pas.ts`) : sous le verrou de la livraison, siège relu, Claude au repos, hors
+ * d'une compaction, il juge la tâche dont le tour est fini, ou choisit la suivante d'après ce qui est dû à l'instant (un
+ * clic d'archivage : les fermetures seules ; une livraison : tout, ses missions encore à clore attendues, bornées) et
+ * rend son texte, que l'appelant envoie hors du verrou ; plus rien de dû, ou arrêté, il se désarme, et pour une
+ * livraison rend l'issue de son étape « rangement » (`endTidy`). Il ne ferme ni n'archive rien lui-même.
+ */
+const stepLocked = async ($: any): Promise<{ text: string | null; toast: string; decisions?: NewDecision[] }> => {
+  const none = { text: null, toast: '' }
+  const st = stepperNow()
+  if (st === null || isBusyAt(await $.clock.now())) return none
+  const seat = await seatForWrite($)
+  // La livraison de ce pas à pas, relue : finie, changée ou ailleurs qu'à son rangement, il se désarme.
+  // Le fichier des missions qui ne se relit pas une fois : le pas suivant réessaie, rien ne se désarme.
+  if (!seat.ok && seat.why === 'unread') return none
+  const root = seat.ok ? (seat.local.root ?? '') : ''
+  const d = st.source === 'delivery' && seat.ok ? await readDelivery($, root) : null
+  if (d === 'unread') return none
+  if (st.source === 'delivery' && (!d || d.id !== st.owner || runningStep(d)?.key !== TIDY_STEP)) {
+    disarmStepper()
+    return none
+  }
+  // Arrêté : l'issue d'abord, sans dépendre des lectures qui suivent.
+  if (st.phase === 'stopped') return { text: null, toast: d ? await endTidy($, root, d, false, st.why) : stoppedToast(st.why) }
+  if (!seat.ok || seatKeyOf(seat) !== st.seat) {
+    disarmStepper()
+    return none
+  }
+  if (st.phase === 'ended') {
+    await judgeStepNow($)
+    return none
+  }
+  const board = seat.local
+  // Le fichier de coordination relu à l'instant : un clic ou une fin de tour avant le tick ne redonne pas une discussion déjà fermée.
+  await quietly(() => refreshCooPlanRead($, board))
+  // Un clic d'archivage : les fermetures seules, qui ne dépendent pas de l'état de la feuille de route. Une liste qui ne
+  // se relit pas désarme le clic : rien n'est dit, la tête du relevé porte ce qui reste dû une fois le fichier relu ; une
+  // livraison attend la relecture suivante.
+  const toClose = st.source === 'archive' ? await cooToCloseList($, board) : null
+  const due = st.source === 'archive' ? (toClose === null ? null : dueTasks({ boxes: [], isBoxesNow: false, toClose, toGlean: [], postponed: postponedNow() }, 'now')) : await tidyDueNow($, board, d ? await jalonsDue($, board, d) : null)
+  if (due === null) {
+    if (st.source === 'archive') disarmStepper()
+    return none
+  }
+  // Les décisions que le texte de leur tâche montre, prises avec lui (`cooDecisionsOf` de `tidyDueNow`).
+  const shown = decisionsNow.items
+  const tasks = due.tasks.filter(t => st.source !== 'archive' || t.kind === 'close')
+  // La feuille de route relue sans rien en garder (`isMine` faux) : le pas à pas n'écrit rien.
+  const ctx = { ...cooStatement(board, { now: await $.clock.now(), roadmap: await readRoadmap($, board, false), ...(await numbersCtx($)) }), root: board.root }
+  const gleans = tasks.filter(t => t.kind === 'glean').length
+  let pick: StepPick | null = null
+  let skipped = ''
+  for (const due of tasks) {
+    const t = stepDue(due)
+    const text = taskText(t, ctx)
+    const task = stepTaskOf(t, roadmapEntriesOf(ctx))
+    const label = stepLabel(task, t.kind === 'glean' ? t.mission.title : '', st.gleaned + 1, st.gleaned + gleans)
+    if (text === null) {
+      skipped ||= label
+      continue
+    }
+    pick = { task, text, label }
+    break
+  }
+  // Des tâches dues dont aucun texte ne se compose : jamais « rien à ranger », l'arrêt le dit (rendu au pas suivant).
+  if (pick === null && skipped !== '') {
+    stopStepper(`tâche « ${skipped} » : son texte ne se compose pas`)
+    return none
+  }
+  // Le repos relu juste avant le pas : un tour ou une compaction a pu commencer pendant les lectures.
+  const now = await $.clock.now()
+  if (isBusyAt(now)) return none
+  const act = stepAt(pick, d ? deliveryWaiting(board.runs, d.missions) : [], dueLeft(due), now)
+  if (act.kind === 'send') return { text: act.text, toast: '', ...(pick?.task.kind === 'decisions' ? { decisions: shown } : {}) }
+  if (act.kind !== 'done' && act.kind !== 'stop') return none
+  if (d) return { text: null, toast: await endTidy($, root, d, act.kind === 'done', act.why) }
+  disarmStepper()
+  return { text: null, toast: act.kind === 'stop' ? stoppedToast(act.why) : '' }
+}
+
+/** Le toast d'un pas à pas arrêté : sa raison, et où reste ce qui est dû. */
+const stoppedToast = (why: string): string => {
+  disarmStepper()
+  return `◆ Rangement arrêté : ${clip(neutralLine(why), 300)}. « Rangement » dans le bloc « Projet » garde ce qui reste dû.`
+}
+
+/**
+ * L'issue de l'étape « rangement » d'une livraison, rendue par le tableau de bord (sous le verrou) : faite, son détail
+ * nomme ce qui reste (choses remises, missions à relever) ; arrêtée, la tâche et ce qui manque ; le pas à pas se désarme.
+ */
+const endTidy = async ($: any, root: string, d: Delivery, ok: boolean, why: string): Promise<string> => {
+  disarmStepper()
+  const out = reportStep(d, TIDY_STEP, ok, why || 'rien à ranger', await $.clock.now())
+  if (!out || !(await writeDelivery($, root, out))) return '◆ Rien ne part : l’état de la livraison ne s’écrit pas.'
+  return ok ? '◆ Livraison finie : rangement fait.' : `◆ Rangement arrêté : ${clip(neutralLine(why), 300)}. La carte de livraison propose « ↻ Réessayer » ou « ✕ Finir sans ranger ».`
+}
+
+/**
+ * La tâche « Jalons » d'une livraison, due tant qu'aucune entrée de la section « Jalons » n'a été vue pour la première
+ * fois, ou changée, depuis son début (`jalonsProven`) : son résultat, ou null quand elle est faite.
+ */
+const jalonsDue = async ($: any, board: Board, d: Delivery): Promise<{ result: string } | null> =>
+  (await jalonsProof($, board, d)) === true ? null : { result: deliveredText(deliveredResultOf(d)) }
+
+/** La preuve de la ligne « Jalons » d'une livraison, sur la feuille de route et son état gardé relus sans rien écrire ; null : pas relue. */
+const jalonsProof = async ($: any, board: Board, d: Delivery): Promise<boolean | null> => {
+  const roadmap = await readRoadmap($, board, false)
+  // Nulle part où garder une feuille de route sur ce poste : rien à écrire, la tâche n'a pas lieu d'être.
+  if (roadmap.path === '' && roadmap.read !== 'unread') return true
+  // Pas de feuille de route : aucune entrée, la ligne n'est pas écrite ; illisible ou hors format : pas relue.
+  const entries = roadmap.read === null ? [] : roadmapEntriesOf({ roadmap })
+  const state = await loadRoadmapState($, board.root ?? '')
+  return entries === null || state === 'unread' || 'broken' in state ? null : jalonsProven(entries, state.seen, d.startedAt)
+}
+
+/** Le pas à pas au repos : son pas sous le verrou, puis l'envoi de la tâche, dont le résultat est lu (refusé : réessayé au repos). */
+const stepNow = async ($: any): Promise<'in' | 'refused' | 'none'> => {
+  const out = await withDeliveryLock(() => stepLocked($))
+  if (out.toast !== '') await quietly(() => $.ui.toast(out.toast))
+  if (out.text === null) return 'none'
+  // Le repos et la compaction relus juste avant l'envoi, sans attente entre la garde et l'envoi : les lectures du pas ont
+  // pu laisser commencer un tour ou une compaction.
+  const now = await $.clock.now()
+  if (isBusyAt(now)) {
+    sendCancelled()
+    return 'none'
+  }
+  let isIn = false
+  await quietly(async () => {
+    const r = await $.prompt.submit({ text: out.text })
+    isIn = r !== null && typeof r === 'object' && typeof r.text === 'string' && r.drop === undefined
+  })
+  sendResult(isIn)
+  // Pas parti : aucun tour ne vient, le repos ne l'attend pas.
+  if (!isIn) promptEntered(null)
+  // La liste des décisions montrées par la tâche, notée une fois son message entré : la réponse marque celle-là vue.
+  if (isIn && out.decisions) {
+    decisionsShown = out.decisions
+    decisionsFailed.clear()
+  }
+  return isIn ? 'in' : 'refused'
+}
+
+/**
+ * La tâche du pas à pas dont le tour vient de finir, jugée sur une relecture fraîche (`freshNow`, les décisions relevées
+ * de nouveau, la preuve des « Jalons »), sans rien écrire.
+ */
+const judgeStepNow = async ($: any): Promise<void> => {
+  const st = stepperNow()
+  if (st === null || st.phase !== 'ended' || st.task === null) return
+  const got = await freshNow($, postponedNow())
+  if (got === null) return disarmStepper()
+  if (got === 'unread') return judged(null, '', await $.clock.now())
+  // Les décisions relevées de nouveau (la réponse les a marquées vues) ; la preuve des « Jalons » relue ; null : pas relues.
+  let decisions: number | null = null
+  // Les décisions que la tâche a montrées encore nouvelles, elles seules (une décision arrivée depuis n'y compte pas).
+  if (st.task.kind === 'decisions') {
+    const keys = new Set(st.task.keys)
+    await quietly(() => watchDecisions($, got.local))
+    decisions = decisionsNow.unread ? null : decisionsNow.items.filter(x => keys.has(decisionKey(x))).length
+  }
+  const d = st.task.kind === 'jalons' ? await readDelivery($, got.local.root ?? '') : null
+  const fresh = { ...got.fresh, decisions, jalons: d && d !== 'unread' && d.id === st.owner ? await jalonsProof($, got.local, d) : null }
+  judged(stepVerdict(st.task, fresh, postponedNow()), stepMissing(st.task, fresh, postponedNow()), await $.clock.now())
+}
+
+/** La livraison à finir sans ranger à la fin du tour en cours (« ✕ Finir sans ranger » cliqué pendant un tour). */
+let finishAfterTurn: string | null = null
+
+/**
+ * « ✕ Finir sans ranger » : les étapes qui livrent faites, la livraison se finit sans le rangement, rien de livré ne
+ * change (`finishUntidied`). Accepté pendant un tour : le rangement se désarme aussitôt, et la livraison finit à la fin du
+ * tour (`at` : l'id de la livraison cliquée, revérifié sous le verrou avec la marque, qu'un geste accepté entre-temps a
+ * pu retirer ; la marque tombe à chaque appel, et ne se repose que si un nouveau tour est déjà ouvert).
+ */
+const finishTidy = ($: any, at: string | null = null): Promise<string> =>
+  withDeliveryLock(async () => {
+    if (at !== null && finishAfterTurn !== at) return ''
+    finishAfterTurn = null
+    const seat = await seatForWrite($)
+    if (!seat.ok) return '◆ Rien n’est fait : cette discussion ne tient plus le siège du COO, ou le fichier des missions ne se lit pas.'
+    const root = seat.local.root ?? ''
+    const d = await readDelivery($, root)
+    const out = d && d !== 'unread' && (at === null || d.id === at) ? finishUntidied(d, await $.clock.now()) : null
+    if (!out) return '◆ Rien à finir : la livraison a changé depuis l’affichage ; relis la carte.'
+    chainArmed = null
+    // Son rangement se désarme aussitôt : plus rien ne part, même avant la fin du tour.
+    if (stepperNow()?.owner === out.id) disarmStepper()
+    finishAfterTurn = isTurnOpen ? out.id : null
+    if (isTurnOpen) return '◆ Rangement arrêté : la livraison finit à la fin du tour de Claude.'
+    if (!(await writeDelivery($, root, out))) return '◆ Rien n’est fait : l’état de la livraison ne s’écrit pas.'
+    return '◆ Livraison finie sans ranger : ce qui reste dû revient en tête du relevé.'
+  })
 
 /** « ▶ Livrer » : la livraison naît de ce clic seul, sur la carte que la personne a vue, une à la fois, et sa première étape part. */
 const requestDelivery = ($: any, key: string): Promise<string> =>
@@ -7449,7 +7893,8 @@ const deliveryGesture = ($: any, gesture: DeliveryGesture): Promise<string> =>
     const failed = failedStep(d)
     const running = runningStep(d)
     if (gesture === 'check') {
-      if (!running) return '◆ Rien n’est fait : l’étape a rendu son issue depuis ; relis la carte.'
+      // Le rangement : le tableau de bord en rend l'issue, jamais Claude.
+      if (!running || running.key === TIDY_STEP) return '◆ Rien n’est fait : l’étape a rendu son issue depuis ; relis la carte.'
       // Une vérification seulement : l'enchaînement se désarme, et l'étape suivante attend « ▶ Reprendre ».
       chainArmed = null
       void quietly(() =>
@@ -7459,11 +7904,15 @@ const deliveryGesture = ($: any, gesture: DeliveryGesture): Promise<string> =>
       )
       return `◆ Claude vérifie l’issue de ${DELIVERY_FR[running.key]}.`
     }
-    if (gesture === 'retry' ? !failed : failed || running) return '◆ Rien ne part : la livraison a changé depuis l’affichage ; relis la carte.'
+    // « ▶ Reprendre à rangement » vaut aussi sur le rangement en cours (interrompu par un rechargement) : son état ne change pas.
+    const isTidyRunning = gesture === 'resume' && running?.key === TIDY_STEP && isShipped(d)
+    if (gesture === 'retry' ? !failed : failed || (running && !isTidyRunning)) return '◆ Rien ne part : la livraison a changé depuis l’affichage ; relis la carte.'
+    // Un geste accepté après la sortie demandée pendant un tour : la personne a changé d'avis, la marque tombe.
+    finishAfterTurn = null
     const again = gesture === 'retry' ? retryStep(d) : d
-    if (!again || !(await writeDelivery($, root, again))) return '◆ Rien ne part : l’état de la livraison ne s’écrit pas.'
+    if (!again || (again !== d && !(await writeDelivery($, root, again)))) return '◆ Rien ne part : l’état de la livraison ne s’écrit pas.'
     chainArmed = again.id
-    return launchNextStep($)
+    return isTidyRunning ? tidyStep($, root, again) : launchNextStep($)
   })
 
 /** « ✕ Abandonner » une livraison arrêtée : elle se ferme, sans clore aucune mission. */
@@ -7481,7 +7930,7 @@ const dropDelivery = ($: any): Promise<string> =>
     const result = deliveredResultOf(out)
     for (const m of out.missions) await requestDeliveredClose($, m.id, result, m.validatedAt)
     const offered = await offerRetros($, out.missions.map(m => m.id))
-    return `◆ Livraison arrêtée après le push : les missions sont closes avec ce qui est fait.${offered > 0 ? ` La rétro des missions livrées qui ne sont pas des rétros est proposée dans « Lancements », page « Missions ».` : ''}`
+    return `◆ Livraison arrêtée après le push : les missions sont closes avec ce qui est fait.${offered > 0 ? ` La rétro des missions livrées qui ne sont pas des rétros est proposée sous « Au départ », page « Vue d'ensemble ».` : ''}`
   })
 
 /**
@@ -7492,6 +7941,7 @@ const deliveryCall = ($: any, raw: unknown): Promise<string> =>
   withDeliveryLock(async () => {
     const x = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
     const key = x.step
+    if (key === TIDY_STEP) return '"delivery" refused: the « rangement » step is run by the dashboard itself, which renders its outcome; never report it.'
     if (typeof key !== 'string' || !(DELIVERY_KEYS as readonly string[]).includes(key) || typeof x.ok !== 'boolean') return '"delivery" refused: it needs "step" (version, push, pr or project) and "ok" (true or false).'
     const seat = await seatForWrite($)
     if (!seat.ok) return '"delivery" refused: this discussion does not hold the COO seat.'
@@ -7506,16 +7956,19 @@ const deliveryCall = ($: any, raw: unknown): Promise<string> =>
       chainArmed = null
       return `Delivery stopped at ${DELIVERY_FR[key as DeliveryKey]}: nothing after it runs. Tell the user which step failed and why; the delivery card offers « ↻ Réessayer » (this step only) or « ✕ Abandonner ».`
     }
-    if (!isDelivered(out))
+    if (!isShipped(out))
       return chainArmed === out.id
         ? `Step ${key} recorded as done; the dashboard runs the next one (${DELIVERY_FR[nextStep(out)!.key]}) at the end of this turn.`
         : `Step ${key} recorded as done; the next one (${DELIVERY_FR[nextStep(out)!.key]}) waits for the user's « ▶ Reprendre » on the delivery card.`
-    chainArmed = null
+    // Les étapes qui livrent faites : les clôtures et les cartes de rétro partent, sans attendre le rangement qui suit.
+    if (isDelivered(out)) chainArmed = null
+    // Une livraison gardée d'avant l'étape « rangement » : la ligne « Jalons » se demande ici, comme avant.
+    const tidy = isDelivered(out) ? ' Add a « Jalons » line to the roadmap with this result.' : `${chainArmed === out.id ? ' Its last step, « rangement », is run by the dashboard itself from the end of this turn: it sends you its tasks one at a time (boxes, decisions, the « Jalons » line with this result, closes, gleaning of each closed mission), each checked at the end of your turn; do each fully, and never report its outcome.' : ' Its last step, « rangement », waits for the user’s « ▶ Reprendre à rangement » on the delivery card; never report its outcome.'} Until that step is over (done, or the user’s « ✕ Finir sans ranger »), the delivery stays open: « ✓ Archiver » of its missions shows only then.`
     const result = deliveredResultOf(out)
     const notes: string[] = []
     for (const m of out.missions) notes.push(await requestDeliveredClose($, m.id, result, m.validatedAt))
     const offered = await offerRetros($, out.missions.map(m => m.id))
-    return `Delivery done (${deliveredText(result)}). ${notes.join(' ')} Add a « Jalons » line to the roadmap with this result.${offered > 0 ? ` The Coordination view now offers the retro of each delivered mission that is not itself a retro (${offered} card(s) « Rétrospective · … »; a delivered retro gets none, only its « livrée » line and « ✓ Archiver »; recommended or not, launched by the user's click, which also archives the mission it studies, or « ✓ Archiver », which archives the mission without a retro): tell the user, never launch one yourself.` : ''}`
+    return `Delivery done (${deliveredText(result)}). ${notes.join(' ')}${tidy}${offered > 0 ? ` The Coordination view now offers the retro of each delivered mission that is not itself a retro (${offered} card(s) « Rétrospective · … »; a delivered retro gets none, only its « livrée » line and « ✓ Archiver »; recommended or not, launched by the user's click, which also archives the mission it studies, or « ✓ Archiver », which archives the mission without a retro): tell the user, never launch one yourself.` : ''}`
   })
 
 /** Le résultat de chaque étape faite, pour la mission et le journal (« faite » quand Claude n'en a rien dit). */
@@ -7925,19 +8378,19 @@ const cutPistes = async ($: any, print: string): Promise<string> => {
     // Relue ratée : l'écriture a peut-être eu lieu ; la carte reste (une carte sans piste ne perd rien, des pistes sans carte si).
     if (held === null) {
       for (const p of picks) pistesTicks.delete(p.id)
-      return `◆ La liste d’attente ne se relit pas : la carte « ${neutralLine(card.title)} » reste dans « Lancements », page « Missions » ; si aucune piste ne la porte, retire-la.`
+      return `◆ La liste d’attente ne se relit pas : la carte « ${neutralLine(card.title)} » reste sous « Au départ », page « Vue d'ensemble » ; si aucune piste ne la porte, retire-la.`
     }
     if (held.length === 0) {
       const gone = await writeCards($, { kind: 'remove', which: c => c.id === card.id })
       const accepted = picks.length - refused.length
       const said = `${refused.length > 0 ? ` Refusées : ${refusedText(refused)}.` : ''}${accepted > 0 ? ' La liste n’a pas pu s’écrire (siège, lecture ou écriture) ; reclique dans un instant.' : ''}`
       // La carte n'a pas pu repartir : elle reste, sans piste (elle ne se lance pas), et se retire d'un clic.
-      const stays = gone.state === 'ok' || gone.state === 'none' ? '' : ` La carte « ${neutralLine(card.title)} » reste dans « Lancements » (${cardWriteWhy(gone.state)}) : aucune piste ne la porte, retire-la.`
+      const stays = gone.state === 'ok' || gone.state === 'none' ? '' : ` La carte « ${neutralLine(card.title)} » reste sous « Au départ », page « Vue d'ensemble » (${cardWriteWhy(gone.state)}) : aucune piste ne la porte, retire-la.`
       return '◆ Rien n’est découpé.' + said + stays
     }
     for (const p of held) pistesTicks.delete(p.id)
     const shownRefused = refused.filter(r => !held.some(p => p.id === r.id))
-    return `✂ ${held.length} piste(s) validée(s), portée(s) par la carte « ${neutralLine(card.title)} » dans « Lancements », page « Missions » : lance-la d’un clic.${shownRefused.length > 0 ? ` Retirées de la sélection : ${refusedText(shownRefused)}.` : ''}`
+    return `✂ ${held.length} piste(s) validée(s), portée(s) par la carte « ${neutralLine(card.title)} » sous « Au départ », page « Vue d'ensemble » : lance-la d’un clic.${shownRefused.length > 0 ? ` Retirées de la sélection : ${refusedText(shownRefused)}.` : ''}`
     } finally {
       launchingNow.delete(card.id)
     }
@@ -8031,7 +8484,7 @@ const addFinishedLines = (root: string, $: any, lines: readonly string[]): Promi
  * missions candidates (`pistesFinishCandidates`), leur fin lue d'abord sans les traces (seule une mission finie ou
  * absente des deux copies demande les autres lectures), puis les traces, les lancements gardés et les fichiers de
  * tickets de chaque mission finie, lus en dernier ; le plan (`planPistesFinish`) ; la carte de chaque plan posée
- * d'abord dans « Lancements » ; puis, dans la même écriture que les boîtes, appliquées d'abord, les plans revérifiés
+ * d'abord sous « Au départ » ; puis, dans la même écriture que les boîtes, appliquées d'abord, les plans revérifiés
  * (`applyPistesFinish`, et `finishPlanHolds` sur le fichier relu juste avant l'écriture). Le relevé dit une fois ce qui a
  * changé, et à chaque relevé ce qui reste et pourquoi. Une carte posée qu'aucune piste ne porte après l'écriture repart ;
  * son retrait pas écrit, ou la liste d'attente pas relue, elle reste, et le relevé dit de la retirer.
@@ -8123,7 +8576,7 @@ const finishPistesMissions = async ($: any): Promise<void> => {
         const out = kept === null ? null : await writeCards($, { kind: 'remove', which: c => c.id === card })
         if (out?.state !== 'ok' && out?.state !== 'none') stuck.push(card)
       }
-      if (stuck.length > 0) await addFinishedLines(root, $, [`Launch cards « Pistes de rétro » ${stuck.map(c => `« ${c} »`).join(', ')}, posted by this statement, may carry no piste and could not be removed: tell the user in one line to remove each that carries no piste with « ✕ Retirer » (page « Missions »).`])
+      if (stuck.length > 0) await addFinishedLines(root, $, [`Launch cards « Pistes de rétro » ${stuck.map(c => `« ${c} »`).join(', ')}, posted by this statement, may carry no piste and could not be removed: tell the user in one line to remove each that carries no piste with « ✕ Retirer » (« Au départ », page « Vue d'ensemble »).`])
       $.ui.invalidate('ui.render')
     } finally {
       for (const c of holds) launchingNow.delete(c)
@@ -8139,7 +8592,7 @@ const retroSkillPath = async ($: any): Promise<string | null> => {
   return p?.endsWith('/skills/engineering/retro/SKILL.md') && (await fileExists($, p)) === true ? p : null
 }
 /** Le brief de la mission lancée par une carte « Pistes de rétro », d'après la liste relue à l'instant (`pistesBriefText`). */
-const pistesBrief = async ($: any, root: string, card: string): Promise<string> => pistesBriefText(await readWaitlist($, root), card, await retroSkillPath($))
+const pistesBrief = async ($: any, root: string, card: string, isAuto = false): Promise<string> => pistesBriefText(await readWaitlist($, root), card, await retroSkillPath($), isAuto)
 
 /** Le toast d'un clic d'archivage sur une liste qui a changé depuis l'affichage, mot pour mot comme la personne l'a décidé. */
 const ARCHIVE_LIST_CHANGED = "La liste a changé depuis : rien n'est archivé, regarde-la de nouveau"
@@ -8168,9 +8621,10 @@ const archiveShown = async ($: any, ids: readonly string[], print: string): Prom
   const pulled: Board | null = await read($, boardAtom)
   // Sans board relu (`pulled` null) : dans le doute, toutes les missions retenues.
   const heldIds = pulled ? await archiveHeldOf($, pulled, true) : null
+  const openIds = pulled ? await archiveOpenOf($, pulled) : null
   let archived: Run[] = []
   const fx = await commit($, b => {
-    const scope = { carded: readyRetroOf(cards.map(c => ({ ...(c.of !== undefined ? { of: c.of } : {}), state: cardStateOf(c, b.runs, now) }))), held: heldIds ?? new Set(b.runs.map(r => r.id)) }
+    const scope = { carded: readyRetroOf(cards.map(c => ({ ...(c.of !== undefined ? { of: c.of } : {}), state: cardStateOf(c, b.runs, now) }))), held: heldIds ?? new Set(b.runs.map(r => r.id)), open: openIds ?? new Set(b.runs.map(r => r.id)) }
     const out = archiveAwaiting(b, ids, print, now, undefined, 'clic', scope)
     archived = out ? out.board.runs.filter(r => ids.includes(r.id)) : []
     return out
@@ -8354,9 +8808,17 @@ const finishRetros = async ($: any, board: Board): Promise<void> => {
 const archiveDelivered = async ($: any, ids: readonly string[], print: string): Promise<string> => {
   // Le clic de la personne : la marque « clic » part avec la date (son accord pour fermer la discussion de la mission).
   const out = await archiveShown($, ids, print)
-  // Une seule demande pour toutes les discussions (« ✓ Tout archiver (n) ») ; `cooDo` a vérifié que Claude est au repos.
-  // Refusée à l'envoi, rien n'est perdu : la section « discussions à fermer » du relevé suivant la porte ; le toast le dit, sans « reclique ».
-  if (out.ask) submitCooAsk($, out.ask, `◆ La demande de fermer ${(out.unasked ?? 0) > 1 ? 'leurs discussions' : 'sa discussion'} n’est pas partie.${unaskedText(out.unasked ?? 0)}`)
+  // Le pas à pas des fermetures, aussitôt (`cooDo` a vérifié que Claude est au repos) : un seul à la fois, et sa tâche
+  // envoyée est vérifiée à la fin du tour. Refusée à l'envoi, elle est réessayée au repos ; le toast le dit, sans « reclique ».
+  const seat = out.ask ? await seatForWrite($) : null
+  // Armé sous le verrou du pas : un pas en cours (qui désarme un pas à pas arrêté) ne retire jamais celui du clic.
+  const arm = (): Promise<boolean> => withDeliveryLock(async () => seat?.ok === true && armStepper('archive', 'archive', seatKeyOf(seat)))
+  let isArmed = await arm()
+  let sent = seat?.ok ? await stepNow($) : 'none'
+  // Refusé par un rangement de livraison arrêté, dont ce pas vient de rendre l'issue : le clic s'arme alors à sa place.
+  if (seat?.ok && !isArmed && stepperNow() === null && (isArmed = await arm())) sent = await stepNow($)
+  // Le toast ne parle que de la demande du clic, jamais d'une tâche du rangement d'une livraison.
+  if (isArmed && sent === 'refused') await quietly(() => $.ui.toast(`◆ La demande de fermer ${(out.unasked ?? 0) > 1 ? 'leurs discussions' : 'sa discussion'} n’est pas partie.${unaskedText(out.unasked ?? 0)}`))
   return out.toast
 }
 
@@ -8530,6 +8992,16 @@ const cardCall = async ($: any, input: unknown): Promise<string> => {
   // Reproposée sous le même id, elle prend une date plus récente que la carte remplacée, même si l'horloge recule ou se
   // répète : un clic sur un dessin d'avant (lancement, « ✕ Retirer ») se reconnaît à sa date et ne vise pas la nouvelle.
   if (same && parsed.card.at <= same.at) parsed.card = { ...parsed.card, at: same.at + 1 }
+  // Ses entrées : celles de l'envoi, sinon celles de la carte d'avant (invariant B2 : seul un envoi qui la vise les change).
+  parsed.card = withEntries(parsed.card, input, same)
+  // Les entrées que l'envoi donne : ouvertes dans la feuille de route relue à l'instant, citées par aucune autre carte
+  // prête ou en lancement ; ce dernier contrôle est rejugé sur la liste relue à l'écriture. Rien à contrôler sans elles.
+  const toCheck = entriesToCheck(input)
+  const others = (list: readonly LaunchCard[]) => list.filter(c => c.id !== parsed.card.id && cardStateOf(c, runs, now).kind !== 'launched')
+  if (toCheck.length > 0) {
+    const why = entriesRefusal(toCheck, (await readRoadmapFile($, seat.local, false)).read, others(cards))
+    if (why) return `No card shown: ${why}.`
+  }
   // Une mission lancée par une carte porte déjà ce dossier (carte d'origine retirée depuis, ou perdue avec l'ancien état
   // d'une discussion) : la carte serait lancée
   // dès sa pose, donc cachée de la vue ; refusée comme la carte gardée d'un dossier lancé.
@@ -8540,10 +9012,10 @@ const cardCall = async ($: any, input: unknown): Promise<string> => {
   // sinon rien n'est écrit (un clic de lancement entre-temps ne perd pas sa marque).
   const onFolder = (list: readonly LaunchCard[]): string => JSON.stringify(list.filter(c => sameFolder(c.folder, parsed.card.folder)).map(c => [c.id, c.at, c.launch?.id ?? null]))
   const judged = onFolder(cards)
-  const out = await writeCards($, { kind: 'put', cards: [parsed.card], expect: fresh => onFolder(fresh) === judged })
+  const out = await writeCards($, { kind: 'put', cards: [parsed.card], expect: fresh => onFolder(fresh) === judged && entriesCitedElsewhere(toCheck, others(fresh)).length === 0 })
   if (out.state !== 'ok') return `No card shown: ${cardWriteWhyEn(out.state)}`
   $.ui.invalidate('ui.render')
-  return `Launch card ${parsed.card.id} ${same ? 'updated' : 'shown'} in the Coordination view: « ${neutralInPrompt(parsed.card.title)} », /${parsed.card.start}, ${parsed.card.mode}, ${parsed.card.effort}, travail/${parsed.card.folder}/. The user launches it with its button; never launch a mission without that click.`
+  return `Launch card ${parsed.card.id} ${same ? 'updated' : 'shown'} in the Coordination view: « ${neutralInPrompt(parsed.card.title)} », /${parsed.card.start}, ${parsed.card.mode}, ${parsed.card.effort}, travail/${parsed.card.folder}/${parsed.card.entries ? `, covering ${parsed.card.entries.length} ${parsed.card.entries.length > 1 ? 'entries' : 'entry'} of the roadmap` : ''}. The user launches it with its button; never launch a mission without that click.`
 }
 
 /**
@@ -8619,7 +9091,8 @@ const pruneLaunches = async ($: any) => {
  * Le bouton « Lancer en manuel » (ou en auto) d'une carte prête : l'enregistrement de lancement s'écrit, puis le
  * texte de lancement va dans le prompt du COO ; pour une carte de rétro dont la discussion du manager se désigne
  * (`retroTarget`), une demande de rétro va à sa place dans le fichier de coordination (sans prise, le repli vient
- * ensuite : `watchRetroAsked`). Rien quand la carte n'est plus
+ * ensuite : `watchRetroAsked`) ; en auto, pour une carte dont le tour d'intention manque (`intentAskFor`), rien ne
+ * s'écrit ni ne va dans le prompt : la demande du tour d'intention part au COO (`sendSeatedAsk`). Rien quand la carte n'est plus
  * prête (un second clic, une mission déjà lancée) ou que l'écriture rate. Appelée seulement par `cooDo`, qui vérifie
  * que Claude est au repos, puis le siège du COO.
  */
@@ -8654,6 +9127,9 @@ const launchCard = async ($: any, id: string, mode: LaunchMode, shownAt: number)
     const live = await launchRecords($, true)
     if (live.unread > 0) return '◆ Rien n’est lancé : un lancement gardé ne se lit pas ; réessaie.'
     if (live.records.some(r => r.root === normRoot(board.root) && sameFolder(r.folder, card.folder))) return '◆ Rien n’est lancé : un lancement de ce dossier est déjà en cours (valable 10 minutes depuis son clic).'
+    // En auto, le tour d'intention absent (`intentAskFor`) : rien n'est marqué ni gardé, la demande part au COO.
+    const intent = await intentAskFor($, board.root, card, mode)
+    if (intent !== null) return await sendSeatedAsk($, intentKey(card.id), intent, INTENT_SENT)
     const here = await hereId($)
     // Une carte de rétro : la discussion du manager de la mission étudiée, désignée sur le fichier relu à l'instant.
     const target = card.of === undefined ? null : await retroTargetNow($, card.of, here)
@@ -8695,9 +9171,6 @@ const launchCard = async ($: any, id: string, mode: LaunchMode, shownAt: number)
     launchingNow.delete(id)
   }
 }
-
-/** Le début de la demande de lancement d'une carte : il la reconnaît dans le prompt du COO. */
-const LAUNCH_ASK_START = '◆ COO : lance maintenant la mission'
 
 /** Les ids de lancement que porte un texte (la ligne `{"launch": "<id>"}` d'une demande de lancement). */
 const launchIdsIn = (text: string): string[] => [...text.matchAll(/\{"launch": "(l[0-9a-z]{1,24})"\}/g)].map(m => m[1]!)
@@ -9062,39 +9535,6 @@ export const retroFallbackText = (o: { plain: string; command: string; session: 
   `4. Seulement si la reprise n’a pas eu lieu (heure dépassée, discussion absente de la liste ou qui tourne, ou commande qui n’a pas répondu « backgrounded ») : ${o.plain}\n` +
   `Fin de la demande de rétro : une autre demande de lancement qui la suit dans ce message en est indépendante, lance-la quand même.`
 
-/** Le texte de `missionLaunchText`, la commande du départ déjà lue (`/<skill>` tel que ce poste le nomme). */
-export const launchText = (card: LaunchCard, launch: string, mode: LaunchMode, command: string): string => {
-  const title = neutralInPrompt(card.title)
-  // Le titre qui entre dans la commande du shell : lettres, chiffres, espaces et ponctuation simple, rien d'autre.
-  const shellTitle = shellSafeTitle(card.title)
-  const firstLine = launchFirstLine(launch)
-  // Les entrées de la feuille de route que cite la carte : leur fichier part avec elles, sans quoi la nouvelle discussion le cherchait.
-  // Pas pour une rétro : son premier message n'a « rien d'autre », la mission close est sa demande (son titre en reprend les ids).
-  const ids = card.of ? [] : cardRoadmapIds(card)
-  const roadmap = ids.length > 0 ? `La carte cite ${ids.join(', ')} de la feuille de route : dans le premier message, écris à côté de ${ids.length > 1 ? 'ces entrées' : 'cette entrée'} le chemin de la feuille de route que donne ton relevé, pour que la nouvelle discussion la lise sans la chercher. ` : ''
-  const xhigh =
-    card.effort === 'xhigh'
-      ? "Effort xhigh : si tu as start_session (l'app), demande-moi d'abord de taper /effort xhigh dans cette discussion (l'app ne donne jamais à la session un effort plus haut que le sien), attends que ce soit fait, lance, puis rappelle-moi de redescendre cette discussion en high. "
-      : ''
-  return (
-    `${LAUNCH_ASK_START} « ${title} » dans une nouvelle discussion (je viens de cliquer « ${mode === 'auto' ? 'Lancer en auto' : 'Lancer en manuel'} » sur sa carte ; le lancement vaut 10 minutes). ` +
-    (card.of
-      ? `Son premier message : ${command} Rétrospective de la mission livrée « ${neutralInPrompt(card.title.replace(/^Rétrospective · /, ''))} », proposée par le COO à sa livraison (son dossier est travail/${card.folder}/), puis cette ligne telle quelle : « ${firstLine} » Rien d'autre : le tableau de bord de la nouvelle discussion lui donne la mission close et ses transcripts ; l'effort part au lancement, ci-dessous. `
-      : `Son premier message : ${command} suivi du sujet de la mission en quelques phrases (ce que je t'ai demandé, dans mes mots ; son dossier est travail/${card.folder}/), puis cette ligne telle quelle : « ${firstLine} » Rien d'autre sur le mode : le tableau de bord de la nouvelle discussion le lit lui-même ; l'effort part au lancement, ci-dessous. `) +
-    roadmap +
-    xhigh +
-    `Dans l'app (tu as l'outil start_session) : start_session avec initiation user_asked, context "fresh", effort "${card.effort}", use_worktree false, titre « ${title} ». ` +
-    `Dans le CLI (pas de start_session) : par le shell, au premier plan, claude --bg -n ${shellQuote(shellTitle)} --effort ${card.effort} "<premier message>" (sans -w : elle travaille dans ce dossier ; le premier message écrit dans un fichier temporaire passé par "$(cat <fichier>)") ; ajoute --permission-mode au mode de cette discussion si tu le connais. S'il répond « Workspace not trusted », demande-moi de lancer claude une fois dans ce dossier, puis lis cette seule valeur par ${TRUST_COMMAND} (python sous Windows), jamais le fichier entier, qui peut porter des jetons. ` +
-    `La nouvelle discussion tourne dans le même mode que celle-ci (app ou terminal) : l'enregistrement du lancement est dans le stockage du tableau de bord, propre à chacun. ` +
-    (mode !== 'auto'
-      ? ''
-      : hasIntentTurn(card)
-        ? `Avant de lancer, vérifie que travail/${card.folder}/demande.md existe et est commité (git log -1 -- travail/${card.folder}/demande.md ; dans un projet sans git, qu'il existe), et qu'il porte le tour d'intention de cette carte, pas celui d'une mission précédente du même dossier : le tour d'intention se recueille avant le clic. S'il manque, ne lance pas : dis-le-moi en une ligne (le tour d'intention à recueillir et à commiter, puis un nouveau clic). S'il y est, lance-la tout de suite, sans me poser d'autre question d'abord (le lancement ne vaut que 10 minutes). `
-        : `Lance-la tout de suite, sans me poser d'autre question d'abord (le lancement ne vaut que 10 minutes) : ${card.of ? 'une rétro' : 'un découpage de pistes de rétro'} n'a pas de tour d'intention. `) +
-    `Ensuite, ne la suis pas activement : elle paraît dans ton relevé ; ${mode === 'auto' ? 'en auto, ses questions bloquantes paraissent ici' : 'en manuel, tu me préviens quand elle m’attend'}.`
-  )
-}
-
 /**
  * Le champ `launch` d'un appel, avant que son titre décide du nom : l'enregistrement de lancement relu (le même que
  * `consumeLaunch` relit), en forme, dont le titre est celui que les hooks ont relevé pour la discussion
@@ -9195,7 +9635,7 @@ const consumeLaunch = async ($: any, raw: unknown): Promise<string> => {
   await quietly(() => $.store.delete(launchKey(rec.id)))
   const intent = `the COO gathers the intent round (the goal, the scope, what is out of scope) before the click, in travail/${rec.folder}/demande.md: read that file first when it exists, it is the user's intent (never rewrite it)`
   // Une rétro lancée par le COO : la mission close et ses transcripts, trouvés ici.
-  const retro = rec.of ? await retroBrief($, settled, rec.of, settled.runs.find(r => r.id === run.id), here) : isPistesCard({ id: rec.card, start: rec.start, folder: rec.folder }) ? await pistesBrief($, settled.root, rec.card) : ''
+  const retro = rec.of ? await retroBrief($, settled, rec.of, settled.runs.find(r => r.id === run.id), here) : isPistesCard({ id: rec.card, start: rec.start, folder: rec.folder }) ? await pistesBrief($, settled.root, rec.card, auto === 'on') : ''
   if (auto === 'on') return `Launch: consumed. This mission was launched by the COO and is attached to its launch card; its folder is travail/${rec.folder}/. Auto mode is ON, switched on in the name of this discussion by the user's click « Lancer en auto » on the COO's card; ${intent}.${retro}`
   if (auto !== null) return `Launch: consumed, and this mission is attached to its launch card (folder travail/${rec.folder}/), but auto mode was not switched on (${auto}): it runs in manual; tell the user, in these words: « Auto non allumé : ${auto === LAUNCH_EXPIRED ? 'le lancement a dépassé ses 10 minutes' : 'il n’a pas pu s’allumer ici'} ; allume l’auto ici si tu veux »${retro}`
   return `Launch: consumed. This mission was launched by the COO and is attached to its launch card; its folder is travail/${rec.folder}/. It runs in manual: the user follows it here, and the COO tells them when it waits for them.${retro}`
@@ -11441,9 +11881,11 @@ const sendBrief = ($: any, run: Run, at: number, isGesture: boolean) => {
       isReminder = await canRemind($, run)
     })
     try {
-      const result = await $.prompt.submit({ text: isReminder ? autoAgainText() : autoBriefText(run) })
+      const cases = await autonomyCasesNow($)
+      const result = await $.prompt.submit({ text: isReminder ? autoAgainText() : autoBriefText(run, cases) })
       // Entré : un texte rendu, sans `drop` (absent ou `undefined`, que le type permet à un message entré).
       isEntered = result !== null && typeof result === 'object' && typeof result.text === 'string' && result.drop === undefined
+      if (isEntered && !isReminder) markAutonomySaid(run.id, cases)
     } catch {
       isEntered = false
     }
@@ -11487,6 +11929,11 @@ let autoTimer: { cancel: () => void } | null = null
  * même quand la discussion attend la réponse à une question à boutons (`live` dit alors « waiting »).
  */
 let isTurnOpen = false
+
+/** Le dernier tour du fil principal dont le mod a vu le début : son id et l'heure de son début (la reprise d'un worker, `workerTurnSignal`). */
+let mainTurnSeen: { id: string; at: number } | null = null
+/** La relance de ce worker (`revive`) a été gardée par le relais depuis le chargement du mod : plus besoin de la renvoyer. */
+let isRevived = false
 
 /**
  * La demande de lancement d'une vague que l'auto vient de soumettre au nom du mod, gardée pour son tour :
@@ -11868,7 +12315,8 @@ const watchCooCompaction = async ($: any, board: Board) => {
 const cooCompactIfDue = async ($: any, board: Board) => {
   const now = await $.clock.now()
   const here = await hereId($)
-  if (isTurnOpen || isAnswerAsking || board.delegate || activeRun(board) || !isSafeId(here) || seatState(board.coo, here, now) !== 'mine') return
+  // Jamais pendant un pas à pas du rangement : sa tâche suivante attend la fin d'une compaction.
+  if (isTurnOpen || isAnswerAsking || stepperNow() !== null || board.delegate || activeRun(board) || !isSafeId(here) || seatState(board.coo, here, now) !== 'mine') return
   const last = await $.store.get(cooCompactKey(here))
   if (typeof last === 'number' && now - last < COO_COMPACT_RETRY_MS) return
   const usage = await $.session.usage()
@@ -12036,7 +12484,7 @@ const workerStartNotice = async ($: any, filePath: string): Promise<string> => {
  * Relance le worker une fois sa compaction faite (ou pas faite), par un message simple, jamais en `/` ; un refus se dit.
  * Un tour ouvert entre-temps (un message de la personne) : le worker travaille déjà, rien ne part derrière ce tour.
  */
-const resumeWorker = async ($: any, ask: { run: string; ticket: string }, next: string | undefined, isCompacted: boolean) => {
+const resumeWorker = async ($: any, ask: { run: string; ticket: string }, next: string | null | undefined, isCompacted: boolean) => {
   // Un tour ouvert : rien derrière lui ; l'annonce reste, et la fin de ce tour relance (le worker attend ce message).
   if (isTurnOpen) {
     workerCompactAsk = { run: ask.run, ticket: ask.ticket, isCompacted }
@@ -12088,6 +12536,7 @@ const workerCompactCheck = async ($: any) => {
     const isMarked = await isWorkerCompactMarked($, session, ask.run, ask.ticket)
     const now = await $.clock.now()
     let step = workerCompactStep({ tokens: await contextTokens($), isTurnOpen, hasBackgroundWork: isBusy, doing, isMarked })
+    let isTimedOut = false
     // Une tâche de fond qui dure : revérifié au repos sans attendre de tour (le worker s'est arrêté), puis abandonné.
     if (step === 'wait' && !isTurnOpen) {
       const since = ask.at ?? now
@@ -12097,14 +12546,18 @@ const workerCompactCheck = async ($: any) => {
         return
       }
       step = 'drop'
+      isTimedOut = true
     }
     if (step === 'wait') return
     workerCompactAsk = null
     const mission = await workerMission($, board, ask.run)
     const next = nextGroupTicket(mission, delegate.group, relayed ?? {}, ask.ticket)
-    // Le ticket suivant déjà commencé : le worker travaille, rien ne le relance.
+    // Pas de compaction : un tour fini sans tâche de fond attend un message ; un ticket « en cours » se reprend là où il
+    // en est (au 18/11, un ticket remis en cours après l'annonce l'avait laissé au repos). Une tâche de fond encore là au
+    // bout de l'attente, avec un ticket « en cours » : rien ne part, sa notification réveillera le worker.
     if (step === 'drop') {
-      if (doing === null || doing.length === 0) await resumeWorker($, ask, next, ask.isCompacted === true)
+      const target = resumeAfterDrop(doing, next, isTimedOut)
+      if (target !== false) await resumeWorker($, ask, target, ask.isCompacted === true)
       return
     }
     // La marque avant l'envoi : écrite, puis relue ; sinon rien ne part.
@@ -12454,8 +12907,9 @@ const FABLE_RESUME_TEXT = 'Fable indisponible : reprends sur Opus là où tu t�
 const FABLE_RESUME_REFUSED_TOAST = 'Fable indisponible : le message de reprise n’est pas entré, le worker reste arrêté ; dis-lui de reprendre sur Opus'
 
 /**
- * Un worker de groupe (`delegate`) dont le tour échoue sur une erreur de la liste fermée (`workerStopText`) : un toast,
- * puis le dépôt d'une note au même texte à sa propre entrée du relais, par le signal de note existant, que le manager
+ * Un worker de groupe (`delegate`) dont le tour échoue sur une erreur de la liste fermée (`workerStopText`) : le dépôt
+ * d'une note à sa propre entrée du relais, mis en file avant le toast au même texte (l'ordre avec la reprise du même
+ * tour n'est pas garanti, et n'a pas d'effet : une note du tour n'est pas plus ancienne que lui), par le signal de note existant, que le manager
  * montre sur la ligne du groupe et notifie (`notifyWorkerStops`). Les deux sont indépendants : un dépôt refusé ou raté
  * n'empêche pas le toast, ne lève pas et n'écrit rien d'autre. Le texte ne porte que le nom de l'erreur, jamais son
  * détail (`error_details`). Rien hors d'un worker, ni pour une erreur hors de la liste.
@@ -12465,8 +12919,20 @@ const workerStopped = async ($: any, error: unknown, isResumed: boolean): Promis
   if (text === null) return
   const board: Board | null = await read($, boardAtom)
   if (!board?.delegate) return
+  const deposit = quietly(() => relaySignal($, { kind: 'note', text }))
   await quietly(() => $.ui.toast(text))
-  await quietly(() => relaySignal($, { kind: 'note', text }))
+  await deposit
+}
+
+/**
+ * Un signal de tour d'un worker (`delegate`), par la file des signaux : la relance au début d'un tour du fil principal
+ * (sa fin gardée retirée), la reprise à la fin normale d'un tour dont le mod a vu le début (sa note d'arrêt plus
+ * ancienne que ce tour remplacée) ; `applyRelay` décide. La reprise part à chaque tour, sans mémoire ; la relance, jusqu'à
+ * ce que le relais l'ait gardée, réarmée à chaque fin de session (`isRevived`). Sans effet, refusé ou raté, il ne dit rien. Hors d'un worker, rien. Rend vrai quand le relais l'a gardé (écrit, ou rien à changer).
+ */
+const workerTurnSignal = async ($: any, event: Extract<RelayEvent, { kind: 'resume' | 'revive' }>): Promise<boolean> => {
+  const board: Board | null = await read($, boardAtom)
+  return board?.delegate ? (await relaySignal($, event)).isKept : false
 }
 
 /** Les arrêts de worker déjà notifiés ici (mission, groupe et date de la note), en mémoire du mod. */
@@ -12765,39 +13231,6 @@ const isUnsafe = (x: unknown): x is Unsafe => x !== null && typeof x === 'object
 
 /** Le toast d'un bouton dont la demande ne s'écrit pas : la valeur hors forme n'y est pas recopiée. */
 const unsafeToast = (u: Unsafe): string => `Rien n’est mis dans le prompt : ${u.unsafe} est hors forme dans le fichier de mission (relu, peut-être retouché).`
-
-/**
- * Le dossier temporaire du système où s'écrivent les briefs : `TMPDIR`, sinon `TEMP`, sinon `TMP`
- * (un appel par nom : `$.env.get` veut un nom littéral ; la première variable posée décide), en forme
- * (`tempDirForm`) et déjà là comme dossier (le mod n'en crée jamais un). Rendu tel que le disque le
- * nomme (`realPath`, à barres obliques) : sous Windows, un `/tmp` d'un shell POSIX se résout en chemin
- * à lettre de lecteur, que le shell de Claude relit au même endroit. Null quand aucun ne convient : le
- * brief ne s'écrit pas, la demande d'avant prend le relais.
- */
-const systemTempDir = async ($: any): Promise<string | null> => {
-  const env = async (ask: () => Promise<unknown>): Promise<string | null> => {
-    try {
-      const value = await ask()
-      return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
-    } catch {
-      return null
-    }
-  }
-  const value = (await env(() => $.env.get('TMPDIR'))) ?? (await env(() => $.env.get('TEMP'))) ?? (await env(() => $.env.get('TMP')))
-  // Aucune variable : pas de repli sur un `/tmp` partagé entre utilisateurs ; la demande d'avant prend le relais.
-  const dir = value === null ? null : tempDirForm(value)
-  if (!dir) return null
-  try {
-    // Le dossier nommé lui-même n'est pas un lien (un TMPDIR=/tmp de macOS mène au /private/tmp partagé) ; puis son chemin résolu.
-    const own = await $.fs.stat(dir)
-    if (own?.kind !== 'dir' || own.isLink === true) return null
-    const stat = await $.fs.stat(dir, { resolve: true })
-    const real = typeof stat?.realPath === 'string' ? tempDirForm(stat.realPath) : null
-    return stat?.kind === 'dir' && real ? real : null
-  } catch {
-    return null
-  }
-}
 
 /**
  * Écrit le brief d'un groupe dans le dossier temporaire du système (`dir`, déjà résolu), à un nom
@@ -13291,7 +13724,7 @@ const closeLinkedGroup = async ($: any, groupId: string) => {
   const relay = isRelay(stored, run.id) ? stored : null
   const report = groupReportOf(relay, group, run.groups, group.delegated, group.linked?.at ?? Infinity, gaps.count === 0)
   const hasReport = report !== undefined
-  const text = `${closingProcedure({ run, target, isRepo, ...(group.delegated.session ? { session: group.delegated.session } : {}), ...(group.delegated.seq !== undefined ? { seq: group.delegated.seq } : {}), hasReport, isReportByManager: report?.isByManager === true, noted: group.delegated.closing, send: group.delegated })} ${closedHint(target, undefined, group.delegated)}`
+  const text = `${closingProcedure({ run, target, isRepo, ...(group.delegated.session ? { session: group.delegated.session } : {}), ...(group.delegated.seq !== undefined ? { seq: group.delegated.seq } : {}), hasReport, isReportByManager: report?.isByManager === true, noted: group.delegated.closing, send: group.delegated, ...relayDirOpt($) })} ${closedHint(target, undefined, group.delegated)}`
   await fillRequest(
     $,
     text,
@@ -13420,28 +13853,6 @@ const itemsRequest = async ($: any, run: Run, phase: FlowPhase, ids: readonly st
     `Ici : garder la mission (pas de resume ni de nouvelle mission) et suivre la session sans l'attendre activement : ${FOLLOW(isRepo)}. ` +
     `${atEnd('la session')}, vérifier son travail (diff, commits, contrôles${isRepo ? ', fusion de sa branche' : ''}), puis envoyer à l'outil flow la liste complète des items avec le statut de chacun : ${ITEM_VERDICTS}, puis, si la session est close (la réponse de l’outil la liste « Close now »), la fermer selon la procédure qu’elle donne et envoyer {"closed": [...]}, et enfin {"complete": true} si aucune n'est revenue à todo : la rétro ne se clôt qu'une fois la fermeture de la session tentée.`
   )
-}
-
-/**
- * Le message que « ✓ Valider le rapport » envoie à Claude : la validation, la suite qu'elle ouvre,
- * et, dans un dépôt git, ce qu'elle fait des branches des workers (`branchCleanup`), avec les
- * branches que vise sa consigne. Avec elles, le titre de la mission, du texte libre, n'y entre pas : il
- * ne peut pas se glisser parmi les commandes.
- */
-const reportValidated = (run: Run | undefined, isRepo: boolean, root: unknown): { text: string; branches: string[] } => {
-  let cleanup: { text: string; branches: string[] } | null = null
-  let isBroken = false
-  // Une consigne qui ne s'écrit pas (un tableau de bord mal formé) ne fait perdre ni la validation, ni le dire.
-  try {
-    cleanup = run ? branchCleanup({ run, isRepo, root }) : null
-  } catch {
-    isBroken = true
-  }
-  const suite = "dis-moi la suite en une ligne, d'après la réponse de l'outil flow."
-  if (cleanup) return { text: `J'ai validé le compte rendu depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas. ${cleanup.text} Puis ${suite}`, branches: cleanup.branches }
-  const head = `J'ai validé le compte rendu${run?.title ? ` de la mission « ${neutralInPrompt(run.title)} »` : ''} depuis le tableau de bord (✓ Valider le rapport). Ne me le redemande pas`
-  const text = isBroken ? `${head}. La consigne des branches des workers n’a pas pu s’écrire : aucune n’est supprimée ; dis-le-moi. Puis ${suite}` : `${head} ; ${suite}`
-  return { text, branches: [] }
 }
 
 /**
@@ -14135,6 +14546,7 @@ const readView = async ($: any): Promise<View> => {
     now: await $.clock.now(),
     here: await hereId($),
     autoConfirmedAt: await autoConfirmedHere($, board),
+    autoTicked: (await read($, uiAtom)).confirmAuto !== undefined ? tickedBoxes(await autonomyCasesNow($)) : [],
     relay: await read($, relayAtom),
     agents: await read($, registryAtom),
     workerEffort: board?.delegate ? workerEffortNow : null,
@@ -14160,7 +14572,10 @@ const readView = async ($: any): Promise<View> => {
   }
 }
 
-/** Le relevé que montre la vue Coordination : seulement dans la discussion qui tient le siège du COO, sans mission ici. */
+/** Le champ `tidyUp` du relevé de la vue, absent sans compte. */
+const withTidyUp = (t: TidyUp | null): { tidyUp?: TidyUp } => (t === null ? {} : { tidyUp: t })
+
+/** Le relevé que montre la vue Coordination : seulement dans la discussion qui tient le siège du COO, sans mission ici ; le rangement dû (`tidyUpLive`, ou le dernier jugement quand il est plus récent : `tidyUpShown`). */
 const cooView = async ($: any, board: Board): Promise<CooStatement | null> => {
   if (board.delegate || activeRun(board)) return null
   const now = await $.clock.now()
@@ -14168,7 +14583,7 @@ const cooView = async ($: any, board: Board): Promise<CooStatement | null> => {
   // Le quota de la discussion, montré sous une carte prête en xhigh.
   const quota = quotaText(await quotaWindows($), now)
   const night = nightShown(board, now)
-  return { ...cooStatement(board, { now, ...(await numbersCtx($)), reported: await cooReportedOf($, board), ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, liveness: livenessOf, plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(cooWaitlistOf() ? { waitlist: cooWaitlistOf(), pistesTicks } : {}) }), ...(quota ? { quota } : {}), ...(cooAutoAsk !== null && board.runs.some(r => r.id === cooAutoAsk) ? { autoAsk: cooAutoAsk } : {}), ...(night ? { night } : nightAsk ? { nightAsk: true as const } : {}), ...(whereAsk ? { whereAsk: true as const } : {}) }
+  return { ...cooStatement(board, { now, ...(await numbersCtx($)), ...(await cooReportedOf($, board)), ...(roadmapNowCache ? { roadmap: roadmapNowCache } : {}), ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, liveness: livenessOf, agents: cooAgentInfoOf, plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, now), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), archiveOpen: await archiveOpenOf($, board), relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, now), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(cooWaitlistOf() ? { waitlist: cooWaitlistOf(), pistesTicks } : {}) }), ...withTidyUp(tidyUpShown(await tidyUpLive($, board), boxesNowAt)), ...(quota ? { quota } : {}), ...(cooAutoAsk !== null && board.runs.some(r => r.id === cooAutoAsk) ? { autoAsk: cooAutoAsk } : {}), ...(night ? { night } : nightAsk ? { nightAsk: true as const } : {}), ...(whereAsk ? { whereAsk: true as const } : {}), autonomy: await autonomyView($) }
 }
 
 
@@ -14194,10 +14609,13 @@ const morningDue = async ($: any, root: string): Promise<NightMorning | null> =>
 }
 
 /**
- * Le relevé d'état que lit le Claude du COO, recalculé à chaque tour : missions, attentes, effort actif, `BRIEF.md`.
- * `isPerson` : un message de la personne, le seul qui porte le résumé de la nuit.
+ * Le relevé d'état que lit le Claude du COO, recalculé à chaque tour : la tâche de rangement due en tête (`headedNow`,
+ * qui la note pour le jugement de fin de tour, oublie les remises plus dues, et lève les remises après un message tapé
+ * par la personne), missions, attentes, effort actif, `BRIEF.md`.
+ * `isPerson` : un message de la personne, le seul qui porte le résumé de la nuit. `isModTurn` : un tour envoyé par un mod
+ * (le pas à pas d'un clic) ; lui, comme tout tour pendant une livraison, n'a pas de tâche en tête.
  */
-const cooStatementFor = async ($: any, board: Board, isPerson = false): Promise<string> => {
+const cooStatementFor = async ($: any, board: Board, isPerson = false, isModTurn = false): Promise<string> => {
   let hasBrief: boolean | null = null
   if (board.root !== '') {
     await quietly(async () => {
@@ -14233,7 +14651,15 @@ const cooStatementFor = async ($: any, board: Board, isPerson = false): Promise<
   // Les pistes rendues par le relevé (mission finie), dites une fois : retirées du stockage une fois le relevé composé.
   const finished = await peekFinishedLines(board.root, $)
   const waitlist = cooWaitlistOf()
-  const said = statementText(cooStatement(board, { ...(night ? { night } : {}), ...(morning ? { morning } : {}), now: await $.clock.now(), reported: await cooReportedOf($, board), ...(archive !== undefined ? { archive } : {}), ...(await numbersCtx($)), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), askMatt: await askMattPath($), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, await $.clock.now()), effort: (await sessionEffort($)) ?? null, hasBrief, roadmap, ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, liveness: livenessOf, taken: id => { const r = board.runs.find(x => x.id === id); return new Set(takenFor(coordLive, id, r ? retroItems(r) : undefined).keys()) }, relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, await $.clock.now()), delivery: await cooDeliveryOf($, board), decisions: cooDecisionsOf(board, true), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(waitlist || finished.length > 0 ? { waitlist: { ...(waitlist ?? { state: 'absent' as const, pistes: [], refused: [], boxesUnread: [] }), ...(finished.length > 0 ? { finished } : {}) }, pistesTicks } : {}), ...(await cooSetAsideCtx($, board)), toClose: await cooToCloseText($, board), unmarked: await cooUnmarkedText($, board) }))
+  const { setAside, toGlean, isRead, ...aside } = await cooSetAsideCtx($, board)
+  const toClose = await cooToCloseList($, board)
+  const delivery = await cooDeliveryOf($, board)
+  // Un autre siège depuis la mémoire (une autre discussion l'a pris entre-temps) : elle repart à vide. Un message tapé par
+  // la personne : sa réponse attendue a pu arriver, les choses remises reviennent en tête.
+  holdSeat(`${board.coo?.by}@${board.coo?.at}`)
+  if (isPerson) liftPostponed()
+  // La tâche de rangement due sans attendre, en tête (`headedNow`, notée pour la fin du tour) ; les boîtes n'attendent pas de livraison tant que la livraison ne les prend pas.
+  const said = statementText(headedNow(cooStatement(board, { ...(night ? { night } : {}), ...(morning ? { morning } : {}), now: await $.clock.now(), ...(await cooReportedOf($, board)), ...(archive !== undefined ? { archive } : {}), ...(await numbersCtx($)), ...(await cardsCtx($)), archiveHeld: await archiveHeldOf($, board), archiveOpen: await archiveOpenOf($, board), askMatt: await askMattPath($), plans: id => planWaitsOf(coordLive, id), plan: cooPlanOf(board), wave: cooWaveOf(board, await $.clock.now()), effort: (await sessionEffort($)) ?? null, hasBrief, roadmap, ...(coordNow ? { coordination: coordNow } : {}), forces: id => forcesFor(coordLive, id), deadSince: deadSinceNow, liveness: livenessOf, taken: id => { const r = board.runs.find(x => x.id === id); return new Set(takenFor(coordLive, id, r ? retroItems(r) : undefined).keys()) }, relays: relaysLive(), entries: coordLive, reports: cooReportsOf(board, await $.clock.now()), delivery, decisions: cooDecisionsOf(board, true), retroPicks: cooRetroPicksOf(board), outside: cooOutsideOf(board), ...(waitlist || finished.length > 0 ? { waitlist: { ...(waitlist ?? { state: 'absent' as const, pistes: [], refused: [], boxesUnread: [] }), ...(finished.length > 0 ? { finished } : {}) }, pistesTicks } : {}), ...aside, unmarked: await cooUnmarkedText($, board) }), { boxes: setAside, isBoxesNow: await isBoxesNowOf($), toClose: toClose ?? [], toGlean }, board.root, isRead && toClose !== null, await $.clock.now(), isModTurn || delivery !== undefined).statement)
   await dropFinishedLines(board.root, $, finished)
   return said
 }
@@ -14286,6 +14712,7 @@ const tick = async ($: any) => {
       await quietly(() => pruneOwnBox($, fresh))
       await quietly(() => prunePisteBox($, fresh))
       await quietly(() => watchPistesMission($, fresh))
+      await quietly(() => liftNamedTickets($, fresh))
     }
     await pullRelay($, (await read($, boardAtom)) ?? board)
     // Hors du retour anticipé de pullRelay (relais inchangé) : un envoi peut attendre sa session alors que le relais ne bouge plus.
@@ -14573,16 +15000,24 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
   let managerReach: ManagerReach | undefined
   // La même mission relue dit aussi si le worker travaille pour une mission en auto (`experienceChoiceNotice`).
   let isReachAuto = false
+  let isReachOn = false
   if (board0 && reachRunId !== '') {
     await quietly(async () => {
       const run = await reachRunOf($, board0, reachRunId)
       isReachAuto = run !== undefined && isAutoMission(run)
+      isReachOn = run !== undefined && isAutoOn(run)
       managerReach = managerReachOf(run, await ownerVerdictOf($, claudeHome($), run, now))
     })
   }
+  // Un worker : ses choix « Réglage : » refusés tombent avant le relais (cases relues à cet appel, auto de sa mission).
+  let settingText = ''
+  if ((board0?.delegate || typeof input.delegate === 'string') && hasSettingChoice(input)) ({ input, text: settingText } = withoutRefusedSettings(input, await autonomyCasesNow($), isReachOn, true))
   const relayRun = board0?.delegate ? '' : typeof input.resume === 'string' && input.resume.trim() !== '' ? input.resume.trim() : (activeRun(board0)?.id ?? '')
   const relayGaps = { count: 0 }
   const relay = relayRun !== '' ? await readRelay($, relayRun, relayGaps) : undefined
+  // Le signal de vie des workers dont la réponse donne l'adresse gardée (`workerRefsText`) ; une lecture qui lève : rien de prouvé.
+  let workerVerdicts: ReadonlyMap<string, Liveness> | undefined
+  if (relay) await quietly(async () => { workerVerdicts = await workerRefVerdicts($, claudeHome($), workerRefSessions(board0?.runs, relay), now) })
   // La procédure de fermeture d'un groupe clos dépend du dépôt : sans git, l'arrêt seul.
   const isRepo = await measureRepo($)
   // Une mission lancée par le COO. La discussion qui porte déjà le titre de la carte compte comme nommée : la marque
@@ -14620,9 +15055,11 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     // Le réglage « revue de sécurité », relu à chaque essai d'écriture : la marque d'un avis et la fermeture
     // « désactivée » ne se posent que sur ce qu'il dit à l'instant de l'écriture.
     const security = await securityReviewNow($)
+    // Les cases d'autonomie, relues à chaque essai : un choix « Réglage : » ne se garde que sur ce qu'elles disent à l'instant.
+    const autonomy = hasSettingChoice(input) ? await autonomyCasesNow($) : null
     // La marque du dépôt posée avant le reste de l'appel : la fermeture que la réponse décrit la compte déjà.
     const deposited = deposit ? withDeposit(value, deposit, now) : null
-    const out = applyReport(deposited ?? value, input, now, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false, isVersionSet: (await read($, syncAtom)).isVersionSet, delegateTitle, fableFirst, relay, seenReports, isRepo, security, isNamed, isRelayWhole: relayGaps.count === 0, managerReach })
+    const out = applyReport(deposited ?? value, input, now, { hasPullRequests: (await read($, syncAtom)).isGitHub !== false, isVersionSet: (await read($, syncAtom)).isVersionSet, delegateTitle, fableFirst, relay, seenReports, isRepo, security, autonomy, isNamed, isRelayWhole: relayGaps.count === 0, managerReach, workerVerdicts, ...relayDirOpt($) })
     text = out.text
     const shown = activeRun(out.board)
     if (shown && !out.board.delegate && relay !== null && typeof relay === 'object' && (relay as Relay).run === shown.id) for (const key of relayedReportKeys(shown, relay as Relay)) seenReports.add(key)
@@ -14750,7 +15187,7 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     const isWithdrawnKept = withdrawn.length > 0 && (await send(['withdrawn'], { kind: 'withdrawn', items: withdrawn })).isKept
     // Les choix gardés par le relais, remplaçants (`replacedBy`) compris : le rappel des choix d'expérience les lit.
     const replacing = isWithdrawnKept ? withdrawn.flatMap(w => (w.replacedBy ? [{ what: w.replacedBy }] : [])) : []
-    if (isReachAuto) text += experienceChoiceNotice([...(isDecidedKept ? decided : []), ...replacing], true)
+    if (isReachAuto) text += experienceChoiceNotice([...(isDecidedKept ? decided : []), ...replacing].filter(d => !isExperienceSetting(d.what)), true)
     const counts = reportedCounts(input)
     if (counts.review && !counts.security) await send(['review'], counts)
     else if (counts.security && !counts.review) await send(['security'], counts)
@@ -14779,8 +15216,11 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     if (report !== '') {
       const runId = (await read($, boardAtom))?.delegate?.run ?? ''
       // Le fichier garde le texte tel qu'envoyé, sauts de ligne compris (le relais le met sur une ligne).
-      const isWhole = runId !== '' && (await writeReportFile($, runId, await sessionId($), String(input.report).trim()))
-      await send(['report'], { kind: 'report', text: report, ...(isWhole ? { isWhole } : {}) })
+      const reporter = await sessionId($)
+      const isWhole = runId !== '' && (await writeReportFile($, runId, reporter, String(input.report).trim()))
+      const sent = await send(['report'], { kind: 'report', text: report, ...(isWhole ? { isWhole } : {}) })
+      // Le chemin que le mod vient d'écrire, à citer dans le message final (piste relai1) ; au worker seul, pas à un spécialiste.
+      if (e.agentId === undefined) text = `${text}${reportKeptText(isWhole ? reportPath($, runId, reporter) : null, isWhole, sent.isKept, String(input.report).trim().length)}`
     }
     if (typeof input.note === 'string' && input.note.trim() !== '') await send(['note'], { kind: 'note', text: input.note.trim() })
   } else if (typeof input.delegate === 'string') {
@@ -14796,7 +15236,8 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
     const told = relayedSentence(input, lost, isReviewRepeated)
     text = text.includes(sentence) ? text.replace(sentence, told) : `${text} · ${told}`
   }
-  text += startText + reportPathText + waitingUnreadText
+  // Le refus d'un choix de réglage se dit dans toutes les branches, déclaration du worker gardée ou non.
+  text += settingText + startText + reportPathText + waitingUnreadText
   // Coupé ou en pause depuis une consigne qui portait le bloc du mode auto : la réponse le dit une fois.
   // Seulement à Claude, le fil principal : l'appel d'un spécialiste ne prévient pas Claude, ni ne consomme l'avis.
   const shown: Board | null = await read($, boardAtom)
@@ -14820,10 +15261,15 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
   if (shownRun && isShownAuto && !(await isBriefed($, shownRun)) && briefingAt.get(shownRun.id) !== shownAt) {
     const isReminder = await canRemind($, shownRun)
     // L'avis d'abord : un texte qui ne se construit pas (un titre relu qui n'est pas un texte) ne laisse pas Claude compté prévenu.
-    const notice = isReminder ? autoAgainNotice() : autoOnNotice(shownRun)
+    const cases = await autonomyCasesNow($)
+    const notice = isReminder ? autoAgainNotice() : autoOnNotice(shownRun, cases)
     await noteBriefed($, shownRun, undefined, !isReminder)
+    if (!isReminder) markAutonomySaid(shownRun.id, cases)
     text += notice
   }
+  // Les cases d'autonomie changées depuis le dernier état dit : au manager d'une mission en auto, au worker d'une telle mission.
+  if (shownRun && isShownAuto) text += autonomyChangeNotice(shownRun.id, await autonomyCasesNow($))
+  else if (isMainLoop && isReachOn && (board0?.delegate || isDelegateCall)) text += autonomyChangeNotice(reachRunId, await autonomyCasesNow($))
   for (const note of notes) text += ` · Relayed, but ${note}: send your final report by SendMessage too.`
   if (moved !== undefined) text = `${moved} ${text}`
   await keepDelegate($)
@@ -14840,6 +15286,7 @@ const flowCall = async ($: any, e: ToolCallInput, isDelegateCall: boolean, isMai
   if (shownRun) text += await offRequestNotice($, shownRun)
   // `model` hors d'un appel `delegate` : connu du schéma, il n'est pas lu, et la réponse le dit.
   if (input.model !== undefined && input.model !== null && !isDelegateCall) text += ' · "model" ignored: it is read only with "delegate" (the Fable mark of a worker\'s first call).'
+  if (e.agentId === undefined && input.externals !== undefined) await quietly(async () => (text += await namedTicketsText($, input.externals)))
 
   return { result: text + unknownTail }
 }
@@ -14879,6 +15326,9 @@ export const register: Register = on => {
     mainRefWritten.clear()
     mainRefFailures.clear()
     mainRefKnown.clear()
+    // De même la référence d'un worker, que le mod lit dans un ListAgents (`WORKER_REF_ASK`).
+    workerRefSeen = false
+    workerRefAsks = 0
     // La demande entière de lancement reçue plus haut n'est plus sûre d'être dans la conversation : elle revient.
     launchOffered = null
     launchReceived = null
@@ -15103,10 +15553,14 @@ export const register: Register = on => {
     // Le skill qui prévient Claude porte aussi la consigne de l'allumage : relire son dernier message,
     // déclarer ses questions ouvertes, et le bloc de la phase en cours (pas seulement celui de ce skill).
     let brief = ''
+    // Les cases d'autonomie, relues pour le bloc « mode auto » seulement (hors auto, elles n'ont aucun effet).
+    const cases = isAuto && run ? await autonomyCasesNow($) : null
     if (isAuto && run && isInMainLoop) {
+      // Le bloc porte la phrase des cases relues : leur état compte comme dit, seulement quand Claude le reçoit.
+      markAutonomySaid(run.id, cases)
       // Le skill de la phase en cours porte déjà son bloc : il n'y manque que la consigne de relecture.
       const wasBriefed = await isBriefed($, run)
-      if (!wasBriefed) brief = noteId === currentPhase(run).skill ? `\n${AUTO_BRIEF_IN_TURN}` : autoOnNotice(run)
+      if (!wasBriefed) brief = noteId === currentPhase(run).skill ? `\n${autoBriefInTurn(cases)}` : autoOnNotice(run, cases)
       // Le bloc de la phase en cours n'est reçu que par l'avis ou par la consigne du skill de cette phase : la consigne
       // d'un autre skill (`/code-review` en cours de lot) ne déplace pas l'heure du bloc que `canRemind` compare à la compaction.
       await noteBriefed($, run, undefined, !wasBriefed || noteId === currentPhase(run).skill)
@@ -15120,7 +15574,7 @@ export const register: Register = on => {
     const factsRelay = run && noteId === 'compte-rendu' ? factsRelayOf(await readRelay($, run.id, factsGaps), factsGaps.count, run.id) : undefined
     // Une phase de code : les groupes en cours des autres missions, que le travail d'ici pourrait recouper.
     const inFlight = run ? await inFlightFor($, noteId, run.id) : null
-    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null, isAuto, lot, reports, noteId === 'to-tickets' ? otherMissionFiles(await read($, boardAtom), run.id) : [], inFlight, SKILLS[noteId]?.isGrilling ? await askMattPath($) : null, await securityReviewNow($), factsRelay)}${brief}${tail}` } : withTail(result, tail)
+    return run ? { text: `${result.text}${coachingNote(noteId, run, await read($, syncAtom), await measureRepo($), (await read($, boardAtom))?.session, await writeDecidedFile($, await read($, boardAtom)), failedAgents, REVIEW_NOTES.has(noteId) ? await standardsPath($) : null, isAuto, lot, reports, noteId === 'to-tickets' ? otherMissionFiles(await read($, boardAtom), run.id) : [], inFlight, SKILLS[noteId]?.isGrilling ? await askMattPath($) : null, await securityReviewNow($), factsRelay, cases)}${brief}${tail}` } : withTail(result, tail)
   })
 
   // Ce qui se passe pendant une mission : spécialistes, fichiers, commandes, Asana, questions.
@@ -15397,6 +15851,10 @@ export const register: Register = on => {
   // Le repère suit le résultat : une compaction refusée (`skip`) ou ratée n'en pose pas.
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
+    // Une compaction de la discussion, dès l'entrée du hook (avant toute attente) jusqu'à sa fin : le pas à pas du
+    // rangement n'envoie rien pendant elle ; l'heure de début est précisée une fois l'horloge relue.
+    const isCompaction = e.trigger !== 'precompute'
+    if (isCompaction) compactionStarted(Number.MAX_SAFE_INTEGER)
     // Une compaction (même rejetée, dans le doute) : la demande entière de lancement reçue plus haut revient.
     launchReceived = null
     // Chaque lecture à part : un registre illisible ne retire que le chemin du transcript.
@@ -15412,8 +15870,16 @@ export const register: Register = on => {
     await quietly(async () => {
       now = await $.clock.now()
     })
-    const role: CompactionRole | null = compactionRoleOf(board, reg, now)
-    const result = await next(role ? { ...e, instructions: withCompactionInstructions(e.instructions, compactionInstructions(role)) } : e)
+    // Une heure illisible ne lève pas la garde : la compaction compte en cours jusqu'à sa fin vue (le `finally` la lève
+    // toujours, même sur une erreur).
+    if (isCompaction && now !== undefined) compactionStarted(now)
+    let result: any
+    try {
+      const role: CompactionRole | null = compactionRoleOf(board, reg, now)
+      result = await next(role ? { ...e, instructions: withCompactionInstructions(e.instructions, compactionInstructions(role)) } : e)
+    } finally {
+      if (isCompaction) compactionStarted(null)
+    }
     if (e.trigger !== 'precompute' && result.messages !== undefined) await markLane($, MAIN, { k: 'compact', at: await $.clock.now() })
     return result
   })
@@ -15440,11 +15906,22 @@ export const register: Register = on => {
   // Le tour d'un spécialiste (`agentId`) ne rend pas la main à Claude : seul le fil principal compte.
   on('turn.start', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
+    // Avant toute attente : un clic pendant les écritures qui suivent ne part pas (`sendMarkedAsk`).
+    noteTurnStarting()
+    promptEntered(null)
     // Fin de l'attente d'une tâche de fond, s'il y en avait une.
     const at = await $.clock.now()
     await quietly(() => commitRegistry($, reg => closeSegment(reg, MAIN, s => s.k === 'waitBg', at)))
     await setLive($, 'working', null)
     isTurnOpen = true
+    // Dans le même bloc que la garde du tour : la marque « demande envoyée » ne tombe qu'une fois cette garde posée.
+    liftAllAsks()
+    mainTurnSeen = { id: e.turnId, at }
+    // Un worker arrêté, relancé après sa fin, travaille de nouveau : sa fin gardée au relais est retirée, sans l'attendre,
+    // jusqu'à ce que le relais l'ait gardée, puis plus jusqu'à la fin de session suivante (seule elle en pose une).
+    if (!isRevived) void quietly(async () => {
+      if (await workerTurnSignal($, { kind: 'revive' })) isRevived = true
+    })
     // Le tour de `/flow-board:nuit` commence (son skill chargé) : lui seul peut allumer la surveillance ; un autre tour l'annule.
     if (nightArm !== null) nightArm = nightArm.phase === 'loaded' ? { phase: 'started' } : null
     // Le tour du message tapé commence (même texte) ; tout autre tour l'annule.
@@ -15492,8 +15969,19 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     // Lu à l'entrée : un message en file peut ouvrir le tour suivant pendant ce traitement.
     const askedAt = submitAt
+    // La tâche en tête du dernier relevé bien relu, copiée à l'entrée pour la même raison : jugée après le tour (fil principal seul).
+    const headTask = e.agentId === undefined ? headSnapshot() : null
     // Fermé à l'entrée, pour la même raison : le `turn.start` d'un tour suivant, pendant ce traitement, le rouvre.
-    if (e.agentId === undefined) isTurnOpen = false
+    if (e.agentId === undefined) {
+      isTurnOpen = false
+      noteTurnEnded()
+      // Le tour du message de tâche du pas à pas : à juger.
+      turnEnded(e.isAborted)
+    }
+    // La fin normale d'un tour du fil principal dont le mod a vu le début : la reprise d'un worker, sans l'attendre.
+    const seenAt = e.agentId === undefined && mainTurnSeen?.id === e.turnId ? mainTurnSeen.at : null
+    if (seenAt !== null) mainTurnSeen = null
+    if (seenAt !== null && !e.isAborted && e.reason === 'answer') void quietly(() => workerTurnSignal($, { kind: 'resume', turnAt: seenAt }))
     // Le tour de `/flow-board:nuit` fini : la surveillance ne s'allume plus par l'outil.
     if (e.agentId === undefined && nightArm?.phase === 'started') nightArm = null
     // Le tour du message tapé fini : plus de consigne au nom de la personne.
@@ -15516,6 +16004,16 @@ export const register: Register = on => {
     if (e.isAborted) await markLane($, MAIN, { k: 'stop', at: endedAt })
     if (hasBackgroundWork && !e.isAborted) await quietly(() => commitRegistry($, reg => openSegment(reg, MAIN, { k: 'waitBg', s: endedAt }, endedAt)))
     await reconcileAgents($)
+    // La tâche donnée en tête du relevé : jugée sur une relecture fraîche, sans rien écrire ni envoyer.
+    if (headTask !== null) await quietly(() => judgeHeadNow($, headTask))
+    // La tâche du pas à pas dont le tour vient de finir : jugée sur une relecture fraîche ; la suivante part au repos.
+    if (stepperNow()?.phase === 'ended') await quietly(() => judgeStepNow($))
+    // « ✕ Finir sans ranger » cliqué pendant ce tour : la livraison finit maintenant.
+    if (finishAfterTurn !== null)
+      await quietly(async () => {
+        const toast = await finishTidy($, finishAfterTurn)
+        if (toast !== '') $.ui.toast(toast)
+      })
     // Un message de la personne envoyé après la demande d'un worker, et le tour fini sans la lancer : le panneau le dit.
     if (askedAt !== null) {
       const ended = await $.clock.now()
@@ -15620,6 +16118,8 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    // Avant toute attente : un tour va commencer, le pas à pas du rangement n'envoie rien d'ici là.
+    promptEntered(await $.clock.now())
     const kind = e.origin.kind
     // Un message d'une autre session (pas le rapport d'un spécialiste) : un repère sur le manager.
     if ((kind === 'peer' && !e.text.trimStart().startsWith('<agent-message')) || kind === 'peer-send-message') await markLane($, MAIN, { k: 'msg', at: await $.clock.now() })
@@ -15631,6 +16131,11 @@ export const register: Register = on => {
     // Le tour d'un message tapé par la personne : lui seul transmet une consigne en son nom ; tout autre message l'annule.
     typedTurn = isTypedOrigin(e.origin) ? { text: e.text, phase: 'submitted' } : null
     if (isTypedOrigin(e.origin)) typedTurnNo++
+    // Un message de la personne désarme le pas à pas du rangement ; celui d'une livraison attend alors « ▶ Reprendre à rangement ».
+    if (isPersonOrigin(e.origin) && stepperNow() !== null) {
+      if (stepperNow()!.source === 'delivery') chainArmed = null
+      disarmStepper()
+    }
     // La surveillance de nuit : `/flow-board:nuit` tapé ouvre le seul tour qui peut l'allumer ; tout autre message
     // de la personne l'arrête (et annule ce tour), jamais un tour d'un mod, d'une autre session ou une notification.
     if (e.command?.name === NIGHT_SKILL && isTypedOrigin(e.origin)) nightArm = { phase: 'submitted' }
@@ -15671,8 +16176,20 @@ export const register: Register = on => {
       const note = fresh ? seatContext(fresh, await hereId($), await $.clock.now(), isRead) : null
       // Au titulaire, le relevé d'état suit la ligne du siège : il ne parle de l'état qu'à partir de lui.
       const isHeld = isRead && fresh !== null && seatState(fresh.coo, await hereId($), await $.clock.now()) === 'mine'
-      const statement = isHeld && fresh && note !== null ? await cooStatementFor($, fresh, isPersonOrigin(e.origin)) : null
+      const statement = isHeld && fresh && note !== null ? await cooStatementFor($, fresh, isPersonOrigin(e.origin), (e.origin as { kind?: unknown } | undefined)?.kind === 'plugin' && !isPersonOrigin(e.origin)) : null
       if (note !== null) return next(withNote({ ...e, context: [...(e.context ?? []), note, ...(statement !== null ? [statement] : [])] }))
+    }
+    // Dans un worker, sa référence pas encore lue depuis ce démarrage, ce rechargement ou ce /clear, ou pour cette
+    // délégation (une autre mission ou un autre groupe a sa propre entrée de relais) : un ListAgents la donne.
+    const refFor = asked?.delegate ? JSON.stringify([asked.delegate.run, asked.delegate.group ?? '']) : ''
+    if (refFor !== workerRefFor) {
+      workerRefFor = refFor
+      workerRefSeen = false
+      workerRefAsks = 0
+    }
+    if (asked?.delegate && !workerRefSeen && workerRefAsks < WORKER_REF_ASKS) {
+      workerRefAsks += 1
+      return next(withNote({ ...e, context: [...(e.context ?? []), WORKER_REF_ASK] }))
     }
     // La mission portée ici avec des groupes confiés, sa référence pas encore envoyée depuis ce démarrage ou cette
     // reprise : Claude la relit et l'envoie. Jugé sur le fichier des missions relu : une mission reprise ailleurs
@@ -15729,6 +16246,8 @@ export const register: Register = on => {
       // Un /clear le garde : le nouvel id le voit tenu et propose « ↻ Reprendre ici ».
       if ((await read($, boardAtom))?.cooHere !== undefined) await quietly(() => writeSeat($, 'release'))
       await quietly(() => relaySignal($, { kind: 'end' }))
+      // Une fin vient d'être posée : un tour suivant (session relancée dans ce processus) la retirera de nouveau.
+      isRevived = false
       const now = await $.clock.now()
       // Rejouée si l'état a bougé entre la lecture et l'écriture (une relecture du stockage) : sinon l'« éteint à »
       // de l'auto, ou la clôture d'une mission finie, se perdraient.

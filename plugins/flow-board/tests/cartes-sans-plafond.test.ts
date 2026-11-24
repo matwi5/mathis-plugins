@@ -3,7 +3,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { newRun } from '../hooks/model.ts'
-import { retroCardId } from '../hooks/retro-coo.ts'
+import { retroCardId, retroFolder } from '../hooks/retro-coo.ts'
 import type { Run } from '../types'
 import { PANE, PLUGIN, TOOL, openCoo, settle, start, world, writeBoard } from './monde-coordination.ts'
 import { allTexts, findAny, pressAny } from './page-coo.ts'
@@ -15,7 +15,7 @@ import { allTexts, findAny, pressAny } from './page-coo.ts'
 // son écriture, repart aussitôt. »
 
 const T0 = 820_000_000
-const CARD = { title: 'Export CSV', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: [], mode: 'manual', modeWhy: 'cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv' }
+const CARD = { title: 'Export CSV', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: [], mode: 'manual', modeWhy: 'cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv', goal: 'Objectif de test.' }
 
 const pane = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 
@@ -46,7 +46,7 @@ test('neuf cartes proposées l’une après l’autre, sur neuf dossiers : les n
   const ui = await pane($)
   const text = await allTexts(ui)
   expect(shownInOrder(text, titles)).toEqual(titles)
-  expect(text).toContain('Lancements · 9')
+  expect(text).toContain('Au départ · 9')
   for (const id of ids) expect(await findAny(ui, { key: `coo-card-manual-${id}` })).toBeDefined()
   await ui.unmount()
 })
@@ -68,7 +68,7 @@ test('vingt cartes proposées, dont une en lancement et une lancée : aucune ne 
   // reste gardée : le relevé du COO la liste encore, par son id, avec sa mission (son idée n'a pas pu être passée).
   expect(shownInOrder(text, titles)).toEqual(titles)
   expect(text).toContain('Carte en lancement')
-  expect(text).toContain('Lancements · 19')
+  expect(text).toContain('Au départ · 19')
   await view.unmount()
   expect(JSON.stringify(await $.prompt.submit({ text: 'et ?', origin: { kind: 'composer' } } as any))).toMatch(new RegExp(`launch card « ${launched} » « Carte lancée »: .*launched as mission (M\\d+ )?« Mission lancée »`))
   expect(await propose($, { title: 'Carte lancée', folder: 'lancee' })).toMatch(/already launched/)
@@ -129,7 +129,8 @@ test('une carte de Claude sur le dossier d’une carte de rétro prête est refu
   await settle(clock, 6)
   const ui = await pane($)
   expect(await allTexts(ui)).toContain('Rétrospective · Mission close')
-  const folder = /travail\/(retro-[A-Za-z0-9-]+)\//.exec(await allTexts(ui))?.[1] ?? ''
+  const folder = retroFolder(closed)
+  expect(await findAny(ui, { key: `coo-card-${retroCardId(closed.id)}` })).toBeDefined()
   await ui.unmount()
   expect(folder).toMatch(/^retro-/)
   const answer = await propose($, { title: 'Une carte ordinaire', folder })

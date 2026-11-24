@@ -278,7 +278,7 @@ test('rien d’archivé (liste changée) : aucune demande d’archiver une discu
   expect(w.prompts.slice(before).some(t => t.includes('"toClose"'))).toBe(false)
 })
 
-test('le clic ne nomme que les discussions que la liste rend pour ses missions : 30 discussions plus anciennes en attente ne coupent pas la sienne, et le contrôle la rend', { timeoutMs: 20000 }, async ($, on) => {
+test('le clic met ses discussions en tête de la tâche des fermetures : 30 discussions plus anciennes en attente ne coupent pas la sienne, 30 au plus, et le contrôle la rend', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
   const old = Array.from({ length: 30 }, (_, i) => {
@@ -297,8 +297,10 @@ test('le clic ne nomme que les discussions que la liste rend pour ses missions :
   await settle(clock, 2)
   const asks = w.prompts.slice(before).filter(t => t.includes('"toClose"'))
   expect(asks.length).toBe(1)
-  expect(asks[0]).toContain(`{"coordinate": {"toClose": ["${UUID}"]}}`)
-  expect(asks[0]).not.toContain('Ancienne')
+  // La tâche « fermetures » du pas à pas : la discussion du clic d'abord, puis les plus anciennes, 30 au plus (la 30e attend).
+  expect(asks[0]).toContain(`{"coordinate": {"toClose": ["${UUID}", `)
+  expect(asks[0]).toContain('Ancienne 28')
+  expect(asks[0]).not.toContain('Ancienne 29')
   // Les appels que la demande dicte, rejoués : le contrôle la rend, le compte rendu écrit sa trace.
   const call = async (input: unknown) => String(((await $.tool.call({ tool: 'mcp__flow-board__flow', coordinate: input } as any)) as any).result)
   expect(await call({ toClose: [UUID] })).toContain(`Discussions still to close: "${UUID}"`)

@@ -146,7 +146,7 @@ test('/to-spec et /to-tickets listent les cas du cycle de vie d’un champ persi
   for (const skill of ['mattpocock-skills:to-spec', 'mattpocock-skills:to-tickets']) {
     const text = (await $.skill.prompt({ skill, text: 'x' })).text as string
     expect(text).toContain('a failed read, a failed write, its bounds (empty, too long, a date in the future or the past), the erasure of what must be kept, a forged copy')
-    expect(text).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back), with what the mark becomes at each one, and what becomes of a value already kept out of form when a new one arrives')
+    expect(text).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back, refused), with what the mark becomes at each one, and what becomes of a value already kept out of form when a new one arrives')
   }
 })
 
@@ -167,10 +167,10 @@ test('/to-tickets et le découpage d’une rétro relisent chaque critère d’u
     expect(text).toContain('the invariant of a very sensitive ticket, fixed with the user, is never rewritten by you: make it a question for the user now')
   }
   const retro = (await $.skill.prompt({ skill: 'mattpocock-skills:retro', text: 'x' })).text as string
-  expect(retro).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back)')
+  expect(retro).toContain('each transition of the object that carries a mark (sent, cancelled, sent again, back, refused)')
   expect(retro).toContain('a value already kept out of form when a new one arrives')
   // Le tableau des formes d'un prédicat de rattachement : le découpage d'une rétro le reçoit aussi (catalog.ts).
-  expect(retro).toContain('carries the table of the forms that predicate receives: absent, template not filled in, old id (out of form), valid but unknown to the plan')
+  expect(retro).toContain('carries the table of the forms that predicate receives: absent, template not filled in, old id (out of form), valid but unknown to the plan, valid but its carrier archived, deleted or created again (does the table ever lose a row?)')
   // Le découpage d'une rétro reçoit aussi la logique d'une règle et la fusion en question.
   expect(retro).toContain('a ticket that changes the common rules (config/rules), a reference file or a skill says « Logique : oui »')
   expect(retro).toContain('a choice of how a persisted field merges (several discussions or sessions write it) is a concurrency question for the user')

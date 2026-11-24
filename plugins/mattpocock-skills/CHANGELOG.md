@@ -4,6 +4,17 @@ Les versions suivent celles de l'amont ([mattpocock/skills](https://github.com/m
 
 ---
 
+## 1.3.1-mathis.14 — 2026-11-24
+
+### Ajouté
+- **`triage`** : une entrée se trie avec ses compléments ; un complément clos avec son entrée n'est pas trié ; tête « <id> (sous-ligne renvoyée) : ».
+- **`to-spec` et `to-tickets`** : porteur perdu et transition refusée comptés ; ligne « Invariant relu : » face aux recommandations prises ; to-tickets renvoie aux cases d'autonomie de flow-board pour l'invariant d'un ticket.
+
+### Modifié
+- **`implement`** : la revue à deux axes se lance par son nom entier, `mattpocock-skills:code-review`.
+
+---
+
 ## 1.3.1-mathis.13 — 2026-11-20
 
 ### Ajouté

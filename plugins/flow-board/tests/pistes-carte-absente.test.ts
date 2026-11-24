@@ -9,7 +9,7 @@ import { emptyWaitlist, keepsPistes, pistesOf, recardPistes, type BoxedOp, type 
 import { pistesBackCardId } from '../hooks/retro-coo.ts'
 import { applyOrphanCards, orphanCardPlans, orphanLinesOf } from '../hooks/pistes-fin.ts'
 import { PANE, PLUGIN, openCoo, seatOf, settle, start, writeBoard, world, type World } from './monde-coordination.ts'
-import { findAllAny, findAny, pressAny } from './page-coo.ts'
+import { findAny, pressAny } from './page-coo.ts'
 
 // Une nouvelle carte pour des pistes « validée » dont la carte a disparu. Invariant de la liste d'attente : « Une
 // écriture d'une rétro ou du COO n'efface ni ne change jamais en silence la piste d'une autre ; une piste ne quitte
@@ -41,7 +41,6 @@ const listOf = (w: World): Waitlist => {
   return (path ? JSON.parse(w.files[path]!) : w.mem['coo-pistes:']) as Waitlist
 }
 const cardsOf = (w: World) => pistesOf(listOf(w)).map(p => p.card)
-const texts = async (pane: any): Promise<string> => ((await findAllAny(pane, { type: 'Text' })) as any[]).map(t => String(t.props.text ?? t.text ?? '')).join('\n')
 const mount = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 const statement = async ($: any): Promise<string> => JSON.stringify(await $.prompt.submit({ text: 'et ?', origin: { kind: 'composer' } } as any))
 
@@ -153,7 +152,7 @@ const WITNESS = 'ktemoin01'
 const witness = () => piste('retroB/w1', { card: WITNESS })
 const WNEW = () => pistesBackCardId(WITNESS, ['retroB/w1'], 'kn')
 
-test('Piste « validée », carte absente, rien ne la porte, toutes les lectures réussies : nouvelle carte, posée dans « Lancements », dite une fois au relevé', { timeoutMs: 60000 }, async ($, on) => {
+test('Piste « validée », carte absente, rien ne la porte, toutes les lectures réussies : nouvelle carte, posée sous « Au départ », dite une fois au relevé', { timeoutMs: 60000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)
   await cooWith($, clock, w, [], itsPistes())
@@ -164,7 +163,8 @@ test('Piste « validée », carte absente, rien ne la porte, toutes les lectures
   expect(cardsOf(w)).toEqual([NEW(), NEW(), undefined])
   expect(pistesOf(listOf(w))[0]).toEqual(expect.objectContaining({ state: 'validated', cardBy: 'coo', text: 'Texte de retroA/p1' }))
   const pane = await mount($)
-  expect(await texts(pane)).toContain(`travail/${pistesCardFolder(NEW())}/`)
+  expect(await findAny(pane, { key: `coo-card-${NEW()}` })).toBeDefined()
+  expect(await findAny(pane, { key: `coo-card-goal-${NEW()}` })).toBeDefined()
   await pane.unmount()
   const said = await statement($)
   expect(said).toMatch(/Pistes « retroA\/p1 », « retroA\/p2 » were « validée » on a launch card no longer in the list of cards/)
@@ -271,7 +271,7 @@ test('Piste « validée », carte absente, un lancement gardé pas périmé la n
   expect(cardsOf(w)).toEqual([GONE, GONE, undefined, WNEW()])
 })
 
-test('Lancements gardés illisibles, liste ou fichier des missions illisible : rien', { timeoutMs: 60000 }, async ($, on) => {
+test('Cartes gardées illisibles, liste ou fichier des missions illisible : rien', { timeoutMs: 60000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)
   w.mem[launchKey('lporte0003')] = { v: 1 }

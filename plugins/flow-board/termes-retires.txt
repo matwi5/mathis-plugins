@@ -111,3 +111,37 @@
 # Après les correctifs de la revue du groupe ou du lot, la consigne dit que la suite complète tourne (R171 (a)) :
 0.89.0	rerun the checks and commit them
 0.89.0	relancer les contrôles du projet et commiter ;
+# La recopie d'une déclaration prend l'état que le relevé calcule (« à décider », ou « complète <id> » pour un complément) :
+0.90.0	Copy each one as a new entry with a new id, status « à décider »
+0.90.0	statut « à décider », sa source commençant
+0.90.0	la donne à recopier dans la section « À reprendre » de la feuille de route
+# Une sous-ligne renvoyée d'un tri garde une tête hors de la forme stricte d'un complément (série 10 de rangement-coo) :
+0.90.0	"<the id of the entry it comes from>: <the sub-line>"
+0.90.0	son texte commençant par l'id de l'entrée d'origine
+0.90.0	its text starting with the id of the entry it comes from
+# Une question ouverte du compte rendu ne retient plus seule la fermeture d’un worker (piste ferm2, FERM-0 (a)) :
+0.90.0	attend encore une réponse, ne ferme rien
+0.90.0	attend encore une réponse (de moi ou d’ici), ne ferme rien
+# Les transitions d'un objet marqué comptent le refus (piste forms1 de la rétro de « Titres stables ») :
+0.90.0	(sent, cancelled, sent again, back)
+# Le dernier ticket d'un groupe a son commit de clôture, le seul commit de statut seul admis (piste p6 de la rétro de « Revue du lot du manager ») :
+0.90.0	jamais à un commit de statut seul.
+0.90.0	jamais dans un commit de statut seul.
+# Le coût des groupes des tickets de jugement se lit dans le bloc « Contexte et coût » du récap (mission « Contexte et coût par mission ») :
+0.90.0	chiffre chaque worker de groupe, par son worktree
+# Une mission close n'est notée relevée que sur une déclaration prouvée, avec ses entrées ajoutées et encore rattachées (mission « Rangement du COO sans oubli ») :
+0.90.0	"gleaned": ["<mission id>"]
+0.90.0	"gleaned": ["<id de la mission>"]
+0.90.0	Closed missions gleaned alone into
+# Une carte de lancement ne montre plus ses raisons (ask-matt, mode, effort), seulement son objectif (mission « Coordination visuelle du COO ») :
+0.90.0	coo-card-why-
+0.90.0	ask-matt :
+# Une page « Vue d'ensemble » remplace « À faire » et « Missions », avec ses blocs « Projet » et « Au départ » (mission « Coordination visuelle du COO ») :
+0.90.0	coo-page-todo
+0.90.0	coo-page-missions
+0.90.0	page « À faire »
+0.90.0	page « Missions »
+0.90.0	Ce qui t'attend
+0.90.0	Ce qui t’attend
+0.90.0	dans « Lancements »
+0.90.0	page « Lancements »

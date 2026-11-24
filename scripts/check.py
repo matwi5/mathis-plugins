@@ -99,7 +99,15 @@ sauf un ticket que `HEAD` portait déjà sensible sans elle, et n'a aucune case 
 (absent de `HEAD` à son chemin et pas renommé, une copie comptant comme neuve ; pendant une fusion arrêtée, un
 ticket que la branche fusionnée portait déjà passe ; le hook pre-merge-commit d'une fusion propre ne juge pas ce
 point) n'est pas écrit comme fait : ni `Status:` « fait » ou « done », ni case
-`- [x] ` hors bloc de code (« Status: ready-for-agent », cases vides) ;
+`- [x] ` hors bloc de code (« Status: ready-for-agent », cases vides), et, s'il dit « très sensible » sur sa
+ligne « Zone sensible : oui », il porte une ligne « Invariant relu : … » hors bloc de code ;
+puis, même pour un commit de documentation seule et hors d'une fusion, les citations de décisions
+(« <id> de `<chemin>/DECISIONS.md` », « série <n> de `…` », et la phrase citée après deux-points) des
+tickets, specs et fichiers de décisions indexés de `travail/` qui touchent une ligne ajoutée ou changée
+face à `HEAD` (ou qui borde une ligne retirée) se relisent par `renvois.check_citations` (`citations_added`), le fichier cité lu dans
+l'index : une fausse est refusée dans un ticket ou une spec, avertie sans refus dans un fichier de
+décisions, sauf une que `HEAD` portait déjà (même citation, même phrase citée entière), même quand sa
+ligne change (un critère coché) ;
 puis, même pour un commit de documentation seule, la version indexée d'une règle ou d'une référence commune,
 d'une règle de projet (`.claude/rules/*.md`), de `.gitignore` ou d'un test de `scripts/tests` passe les contrôles
 des règles du dépôt (point 8) ;
@@ -116,11 +124,12 @@ puis la forme du CHANGELOG, la version et
 la liste « État » de chaque plugin dont le CHANGELOG ou le `plugin.json` est indexé, même
 pour un commit de documentation seule ; puis rien de
 plus pour un commit de documentation seule ; sinon, sur une copie de l'index (`git checkout-index`, le
-contenu qui part, pas l'arbre de travail), `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`) et tests
+contenu qui part, pas l'arbre de travail), `validate` du dépôt, puis `validate`, `tsc` (pour un plugin qui a un `tsconfig.json`), tests Node
+(`node --test` des `*.test.mjs` de `skills/` et `tests/`, qui relisent les sources) et tests du moteur
 (terminal seulement) des plugins touchés : 39 erreurs de types étaient passées inaperçues sur trois
 groupes quand le hook ne lançait que `validate` et les tests ; un plugin dont le commit ne change que
-des commentaires de `hooks/` (`staged_comment_only`) ne lance de ses tests que ceux qui épinglent un
-texte retiré. Enfin, quand un fichier indexé est sous
+des commentaires de `hooks/` (`staged_comment_only`) ne lance de ses tests du moteur que ceux qui
+épinglent un texte retiré (ses tests Node tournent tous). Enfin, quand un fichier indexé est sous
 `scripts/` (documentation comprise) ou est `plugins/flow-board/hooks/decoupage.ts`, et seulement alors,
 la suite Python du dépôt (`scripts/tests` ; `decoupage.ts` seul déclencheur, `test_check_tickets.py`
 seul) tourne sur la copie de l'index, devenue un dépôt git jetable
@@ -146,6 +155,7 @@ Sans dépendance hors de la bibliothèque standard ; Python 3.9 ou plus récent.
 
 import argparse
 import ast
+import difflib
 import hashlib
 import json
 import os
@@ -166,6 +176,9 @@ import commentaires
 # La normalisation et le seuil de `scripts/epingles.py` : un test épingle une phrase qu'il recopie sur
 # 30 signes et plus, échappements retirés et blancs comptés pour un (pré-contrôle rapide, `pinned_tests`).
 from epingles import MIN as PIN_MIN, fragment as pin_fragment, normal as pin_normal
+# Le contrôle des citations de décisions de `scripts/renvois.py`, que le hook lance sur les lignes ajoutées
+# des tickets, des specs et des fichiers de décisions (`citations_added`).
+import renvois
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -329,6 +342,8 @@ SERIES_TITLE = re.compile(r"^## Série (\d+)\b", re.M)
 # au moins deux lignes) : deux tickets sensibles sans recherche citée avaient fait refaire la
 # recherche à la session qui les codait.
 TICKET_FILE = re.compile(r"travail/[^/]+/issues/[^/]+\.md")
+# Les textes de `travail/` dont le hook relit les citations de décisions ajoutées : tickets, spec, décisions.
+CITING_FILE = re.compile(r"travail/[^/]+/(?:issues/[^/]+\.md|spec\.md|DECISIONS\.md)")
 SENSITIVE_LINE = re.compile(r"^\*{0,2}Zone sensible\s*:\s*\*{0,2}\s*oui\b", re.M | re.I)
 SEARCH_LINE = re.compile(r"^\*{0,2}Recherche\b")
 # Sur la ligne : une commande (un bout entre accents graves qui porte une espace : un nom et ses
@@ -395,12 +410,15 @@ def report_warnings():
 TIMED_OUT = 124  # le code que `run` rend pour une commande qui n'a pas fini dans son délai
 
 
-def run(args, timeout, cwd=REPO, env=None):
-    """Lance une commande, rend (code, sortie) ; une commande qui ne finit pas compte comme un échec."""
+def run(args, timeout, cwd=REPO, env=None, *, base=None):
+    """Lance une commande, rend (code, sortie) ; une commande qui ne finit pas compte comme un échec.
+    `env` s'ajoute à l'environnement de la session, ou à `base` quand il est donné (un environnement de
+    remplacement : `without_git_env()` pour un lanceur de tests au pre-commit)."""
+    start = os.environ if base is None else base
     try:
         res = subprocess.run([str(a) for a in args], cwd=str(cwd), capture_output=True, text=True,
                              encoding="utf-8", errors="replace", timeout=timeout,
-                             env={**os.environ, **env} if env else None)
+                             env={**start, **(env or {})} if env or base is not None else None)
     except subprocess.TimeoutExpired:
         return TIMED_OUT, f"pas fini en {timeout} s"
     except OSError as err:
@@ -506,9 +524,14 @@ def retried_once(launch):
     return code, out, f" ({RETRIED})"
 
 
-def step(title, args, timeout, summary=None):
+# Les mesures qu'un test écrit pour qu'on les lise même quand il passe (la longueur du brief d'un worker
+# face à son plafond, `tests/brief-sessions-liees.test.ts` de flow-board) : imprimées sous l'étape verte.
+MEASURES = re.compile(r"^brief .+ : -?\d+ signes, marge -?\d+$", re.M)
+
+
+def step(title, args, timeout, summary=None, base=None):
     log(f"→ {title}")
-    code, out, retried = retried_once(lambda: run(args, timeout))
+    code, out, retried = retried_once(lambda: run(args, timeout) if base is None else run(args, timeout, base=base))
     if code != 0:
         log(failure_excerpt(out))
         path = keep_log(title, out)
@@ -517,6 +540,8 @@ def step(title, args, timeout, summary=None):
         raise Failed(f"{title} : échec (code {code})" + retried + failing_tests(out) + kept_log(path))
     found = re.findall(summary, out) if summary else []
     log(f"  ok{' (' + found[-1] + ')' if found else ''}")
+    for line in MEASURES.findall(out):
+        log(f"  {line}")
 
 
 def tool(name):
@@ -1947,8 +1972,11 @@ def typecheck(plugin):
 def node_tests(plugin):
     tests = sorted(t for folder in ("skills", "tests") if (plugin / folder).is_dir() for t in (plugin / folder).rglob("*.test.mjs"))
     if tests:
-        step("node --test " + " ".join(t.relative_to(REPO).as_posix() for t in tests),
-             [tool("node"), "--test", *tests], 600, r"pass \d+")
+        # Nommés depuis le dossier qui porte `plugins/` : le dépôt, ou la copie de l'index du pre-commit.
+        step("node --test " + " ".join(t.relative_to(plugin.parent.parent).as_posix() for t in tests),
+             # Sans les variables `GIT_*` du hook : un test qui fait `git add` dans un dépôt jetable écrirait
+             # sinon dans l'index du vrai commit (`without_git_env`).
+             [tool("node"), "--test", *tests], 600, r"pass \d+", base=without_git_env())
 
 
 def plugin_tests(plugin, claude, label):
@@ -2141,7 +2169,9 @@ def single_test(plugin, names, against=None):
     sha = resolve_ref(against) if against is not None else None
     check_invisibles_before_tests(plugin, paths, sha)
     if node:
-        step("node --test " + " ".join(p.relative_to(REPO).as_posix() for p in node), [tool("node"), "--test", *node], 600, r"pass \d+")
+        # Comme `node_tests` : sans les variables `GIT_*` d'un hook ou d'un alias git qui le lancerait.
+        step("node --test " + " ".join(p.relative_to(plugin.parent.parent).as_posix() for p in node),
+             [tool("node"), "--test", *node], 600, r"pass \d+", base=without_git_env())
     engine = [p for p in paths if not p.name.endswith(".test.mjs")]
     if not engine:
         return
@@ -3217,6 +3247,17 @@ TICKET_DONE_STATUS = re.compile(r"^\s*(?:\*\*)?Status\s*:\s*(?:\*\*)?\s*(?:fait|
 TICKET_CHECKED = re.compile(r"^\s*- \[x\] ")
 
 
+def new_tickets(paths, moves=None):
+    """Les tickets indexés neufs : absents de `HEAD` à leur chemin et pas renommés depuis un fichier de `HEAD` (une
+    copie compte comme neuve) ; pendant une fusion, un ticket que la branche fusionnée (`MERGE_HEAD`) portait déjà
+    n'est pas neuf. Une règle qui ne lit que ces tickets ne refuse aucun commit sur un ticket d'avant."""
+    moves = moves or {}
+    merging = git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None
+    return [path for path in paths
+            if not (moves.get(path, ("",))[0] == "R" or git_show(REPO, f"HEAD:{path}") is not None
+                    or (merging and git_show(REPO, f"MERGE_HEAD:{path}") is not None))]
+
+
 def new_tickets_written_done(paths, moves=None):
     """Les tickets indexés neufs écrits comme déjà faits : absents de `HEAD` à leur chemin et pas renommés
     depuis un fichier de `HEAD` (une copie compte comme neuve), dont la ligne `Status:` dit fait (« fait »,
@@ -3224,13 +3265,8 @@ def new_tickets_written_done(paths, moves=None):
     ou qui portent une case cochée `- [x] ` hors bloc de code. Pendant une fusion, un ticket que
     la branche fusionnée (`MERGE_HEAD`) portait déjà passe. Un manager avait créé un ticket en copiant un
     ticket fait : « Status: fait » et six cases cochées de fausses preuves."""
-    moves = moves or {}
-    merging = git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]) is not None
     problems = []
-    for path in paths:
-        if moves.get(path, ("",))[0] == "R" or git_show(REPO, f"HEAD:{path}") is not None \
-                or (merging and git_show(REPO, f"MERGE_HEAD:{path}") is not None):
-            continue
+    for path in new_tickets(paths, moves):
         for n, line in lines_outside_code(git_show(REPO, f":{path}")):
             status = TICKET_STATUS_LINE.match(line)
             relayed_done = status is not None and STATUS_VOCABULARY.get(status_phrase(status.group(1).strip())) == "done"
@@ -3347,6 +3383,29 @@ def checked_not_done(paths):
     return out
 
 
+# La ligne « Zone sensible » d'un ticket très sensible, et la ligne qui dit son invariant relu contre les
+# recommandations déjà prises et les critères du ticket (en tête de ligne, en gras ou non, deux-points dans le
+# gras ou après lui, non vide). « tres » sans accent compte aussi : un ticket ainsi écrit passait sans la ligne.
+VERY_SENSITIVE = re.compile(r"(?<!pas )tr[èe]s sensible", re.I)
+INVARIANT_REREAD = re.compile(r"^\*{0,2}Invariant relu\s*\*{0,2}\s*:\s*\*{0,2}\s*[^\s*]")
+
+
+def new_very_sensitive_without_reread(paths, moves=None):
+    """Les tickets indexés neufs (`new_tickets`) dont la ligne « Zone sensible : oui » dit « très sensible »
+    sans ligne « Invariant relu : … » hors bloc de code : deux recommandations prises seul et un critère de
+    ticket avaient contredit un invariant validé après eux, vus seulement à la revue d'un groupe. Un ticket
+    déjà dans `HEAD` n'est jamais refusé pour elle."""
+    problems = []
+    for path in new_tickets(paths, moves):
+        lines = lines_outside_code(git_show(REPO, f":{path}"))
+        zone = next(((n, line) for n, line in lines if SENSITIVE_LINE.match(line) and VERY_SENSITIVE.search(line)), None)
+        if zone and not any(INVARIANT_REREAD.match(line) for _, line in lines):
+            problems.append(f"{path}:{zone[0]} : ticket très sensible sans ligne « Invariant relu : <contre quelles séries "
+                            "de recommandations et quels critères, et quand> » (son invariant relu contre les recommandations "
+                            "déjà prises et les critères du ticket)")
+    return problems
+
+
 def check_tickets(paths, merging=False):
     """Les contrôles des tickets indexés. `merging` sans `MERGE_HEAD` (le hook pre-merge-commit d'une fusion
     propre, qui ne le voit pas) : la fusion n'apporte que des tickets déjà commités ailleurs, le refus d'un
@@ -3379,11 +3438,137 @@ def check_tickets(paths, merging=False):
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} ligne(s) d'un ticket neuf écrit comme fait : " + " ; ".join(problems))
     log("  ok")
+    log("→ invariant relu des tickets très sensibles neufs")
+    problems = new_very_sensitive_without_reread(paths, moves)
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} ticket(s) très sensible(s) neuf(s) sans ligne « Invariant relu : » : " + " ; ".join(problems))
+    log("  ok")
     log("→ vocabulaire de la ligne Status: des tickets")
     problems = unknown_statuses(paths)
     if problems:
         log("\n".join(f"  {p}" for p in problems))
         raise Failed(f"{len(problems)} ligne(s) Status: hors du vocabulaire : " + " ; ".join(problems))
+    log("  ok")
+
+
+def added_lines(before, after):
+    """Les numéros (à partir de 1) des lignes du texte `after` qu'il ajoute ou change face à `before`, et
+    celles qui bordent une suppression (la ligne d'avant et celle d'après) : une ligne retirée au milieu
+    d'une phrase citée change la citation sans rien ajouter."""
+    old, new = (before or "").split("\n"), (after or "").split("\n")
+    added = set()
+    for tag, _, _, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag in ("replace", "insert"):
+            added.update(range(j1 + 1, j2 + 1))
+        elif tag == "delete":
+            added.update(n for n in (j1, j1 + 1) if 1 <= n <= len(new))
+    return added
+
+
+def index_blobs():
+    """Les fichiers ordinaires de l'index (étape 0, ni lien symbolique ni sous-module) et l'empreinte de leur contenu : {chemin : sha}, lus dans la
+    sortie de `git ls-files -s -z`, qui ne reçoit aucun chemin ; None quand git échoue."""
+    code, out = run(["git", "ls-files", "-s", "-z"], 60)
+    if code != 0:
+        return None
+    blobs = {}
+    for entry in out.split("\0"):
+        head, _, path = entry.partition("\t")
+        fields = head.split(" ")
+        # Un fichier ordinaire seulement : le contenu indexé d'un lien symbolique est le texte du lien.
+        if path and len(fields) == 3 and fields[2] == "0" and fields[0] in ("100644", "100755"):
+            blobs[path] = fields[1]
+    return blobs
+
+
+def head_blobs():
+    """Les fichiers ordinaires de `HEAD` et l'empreinte de leur contenu : {chemin : sha}, lus dans la sortie de
+    `git ls-tree -r -z HEAD`, qui ne reçoit aucun chemin ; vide sans `HEAD` (premier commit), None quand git
+    échoue."""
+    if git(["rev-parse", "--verify", "--quiet", "HEAD"]) is None:
+        return {}
+    code, out = run(["git", "ls-tree", "-r", "-z", "HEAD"], 60)
+    if code != 0:
+        return None
+    blobs = {}
+    for entry in out.split("\0"):
+        head, _, path = entry.partition("\t")
+        fields = head.split(" ")
+        if path and len(fields) == 3 and fields[1] == "blob" and fields[0] in ("100644", "100755"):
+            blobs[path] = fields[2]
+    return blobs
+
+
+def citations_added(paths, sources=None):
+    """Les citations de décisions fausses (`renvois.check_citations`) des textes indexés de `travail/`
+    (`CITING_FILE`) qui touchent une ligne que le commit ajoute ou change face à `HEAD` (au chemin
+    d'origine d'un fichier renommé ou copié ; une ligne qui borde une suppression compte), phrase citée
+    comprise, et que la version de `HEAD` ne portait pas déjà fausse, jugée contre le fichier cité de
+    `HEAD` (même citation et même phrase citée entière, blancs réduits, autant de fois) : une
+    citation fausse déjà dans `HEAD` ne refuse aucun commit, même quand on coche sa ligne. Les fichiers de
+    décisions cités, admis par les gardes de `renvois.admitted`, se lisent dans l'index (ce que le commit
+    enregistre) : par l'empreinte de leur contenu, trouvée dans la sortie de `git ls-files -s` à leur
+    chemin, jamais par une commande qui reçoive le chemin cité."""
+    sources = sources or {}
+    if not paths:
+        return []
+    known, blobs, heads = renvois.tracked(REPO), index_blobs(), head_blobs()
+    if known is None or blobs is None or heads is None:
+        raise Failed("git ls-files ou git ls-tree a échoué : citations de décisions non relues")
+
+    def read(cited):
+        sha = blobs.get(cited)
+        return git_show(REPO, sha) if sha else None
+
+    def read_head(cited):
+        # La version de HEAD : une citation juste à HEAD que le commit rend fausse n'y est pas « déjà fausse » ;
+        # un fichier cité que HEAD n'a pas encore se lit dans l'index, comme avant.
+        sha = heads.get(cited) or blobs.get(cited)
+        return git_show(REPO, sha) if sha else None
+
+    problems, cache, head_cache = [], {}, {}
+    for path in paths:
+        text = git_show(REPO, f":{path}")
+        if text is None:
+            continue
+        before = git_show(REPO, f"HEAD:{sources.get(path, path)}")
+        added = added_lines(before, text)
+        if not added:
+            continue
+        wrong, _, _ = renvois.check_citations(text, path, REPO, known, cache, read)
+        already = Counter(key for _, _, _, key in
+                          renvois.check_citations(before or "", path, REPO, known, head_cache, read_head)[0])
+        # Les copies que HEAD portait se reconnaissent d'abord parmi les citations hors des lignes ajoutées :
+        # une copie neuve insérée au-dessus d'une ancienne reste neuve.
+        touched = [(said, key) for first, last, said, key in wrong if added.intersection(range(first, last + 1))]
+        for first, last, _, key in wrong:
+            if not added.intersection(range(first, last + 1)) and already[key] > 0:
+                already[key] -= 1
+        for said, key in touched:
+            if already[key] > 0:
+                already[key] -= 1
+            else:
+                problems.append(said)
+    return problems
+
+
+def check_citations(paths):
+    """Les citations de décisions ajoutées : une fausse refuse le commit dans un ticket ou une spec ; dans un
+    fichier de décisions, elle avertit sans refuser (décision du 20/11/2026 : une série recopie mot pour
+    mot une question posée, même quand elle citait faux ; `decision.py` ne montre la sortie du hook qu'en
+    cas d'échec, et l'avertissement ne s'y voit donc pas)."""
+    log("→ citations de décisions ajoutées (tickets, specs, fichiers de décisions)")
+    sources = staged_sources()
+    recorded = [p for p in paths if DECISIONS_FILE.fullmatch(p)]
+    for problem in citations_added(recorded, sources):
+        warn(f"{problem} (fichier de décisions : recopié tel quel, pas refusé)")
+    problems = citations_added([p for p in paths if p not in recorded], sources)
+    if problems:
+        log("\n".join(f"  {p}" for p in problems))
+        raise Failed(f"{len(problems)} citation(s) de décisions fausse(s) : l'id, la série ou la phrase citée "
+                     "n'est pas dans le fichier de décisions nommé (dans un worktree, une série écrite au clone "
+                     "principal après le départ de la branche y manque : fusionner la branche principale)")
     log("  ok")
 
 
@@ -3493,7 +3678,8 @@ def staged_code(code_paths, tree, ruled):
     """Les contrôles d'un commit qui indexe autre chose que de la documentation, sur la copie de
     l'index : `validate` du dépôt, puis ceux de chaque plugin touché (hors empreinte d'un `check.sh` vert).
     Un plugin dont le commit ne change que des commentaires de `hooks/` (`staged_comment_only`) garde ses
-    contrôles statiques, `tsc` et les tests qui épinglent un texte retiré (`pinned_tests`), sans sa suite."""
+    contrôles statiques, `tsc`, ses tests Node et les tests du moteur qui épinglent un texte retiré
+    (`pinned_tests`), sans sa suite. Les tests Node tournent sur la copie de l'index, avant la suite du moteur."""
     claude = tool("claude")
     log("pre-commit : contrôles du contenu indexé, sur une copie de l'index (Claude Code du terminal)")
     validate(tree, claude, ".")
@@ -3512,6 +3698,10 @@ def staged_code(code_paths, tree, ruled):
             staged_types(plugin, copy)
             validate(copy, claude)
             typecheck(copy)
+            # Les tests Node relisent les sources (cycles d'imports, gardes du corpus, gabarits) : sur la copie
+            # de l'index, avant la suite du moteur, même pour des commentaires seuls (trois casses d'un module
+            # neuf de hooks/ n'avaient été vues qu'à la première suite complète du groupe).
+            node_tests(copy)
             if not comments:
                 plugin_tests(copy, claude, "terminal")
                 continue
@@ -3549,6 +3739,11 @@ def staged_checks(merging):
     tickets = [p for p in paths if TICKET_FILE.fullmatch(p)]
     if tickets:
         check_tickets(tickets, merging)
+    # Les citations de décisions des lignes ajoutées, même en documentation seule ; pas à une fusion, qui
+    # « ajoute » le texte déjà commité d'une autre branche.
+    citing = [p for p in paths if CITING_FILE.fullmatch(p)]
+    if citing and not merging:
+        check_citations(citing)
     # Les règles du dépôt indexées (règle ou référence commune, règle de projet, .gitignore, test de la
     # suite Python), même en documentation seule : leur version indexée, celle que le commit enregistre.
     repo_rules = [p for p in paths if p == GITIGNORE_FILE or COMMON_RULE_FILE.fullmatch(p) or PROJECT_RULE_FILE.fullmatch(p)
@@ -3580,7 +3775,7 @@ def staged_checks(merging):
     # `decoupage.ts` seul déclencheur (rien sous `scripts/`) : le seul test qui le lit.
     only = None if any(p.startswith(SCRIPTS_TRIGGERS[0]) for p in paths) else TICKETS_TEST
     if not shaped and not code_paths and not ruled and not homes_changed and not suite:
-        log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets or repo_rules else "pre-commit : documentation seule, pas de contrôle")
+        log("pre-commit : documentation seule, pas d'autre contrôle" if decisions or tickets or citing or repo_rules else "pre-commit : documentation seule, pas de contrôle")
         return
     # Tous les contrôles lisent la copie de l'index : ce qui part, jamais l'arbre de travail.
     tree = export_index()

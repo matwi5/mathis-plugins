@@ -39,7 +39,7 @@ test('le bouton principal de chaque cas, au plus un par élément ; les autres b
   expect(action(todo, 'coo-deliver')?.isPrimary).toBe(true)
   const card = (mode: 'auto' | 'manual') => ({ id: 'kcarte001', title: 'Export', start: 'grill-with-docs' as const, askMatt: 'l. 19', alts: ['to-spec' as const], mode, modeWhy: '', effort: 'high' as const, effortWhy: '', folder: 'export', at: 1 })
   for (const mode of ['auto', 'manual'] as const) {
-    const rows = coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 2, cards: [card(mode)] }), { page: 'missions' })
+    const rows = coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 2, cards: [card(mode)] }), { page: 'overview' })
     const buttons = rows.find(r => r.key === 'coo-card-kcarte001')!.actions!
     expect(buttons.filter(b => b.isPrimary).map(b => b.key)).toEqual([`coo-card-${mode}-kcarte001`])
   }
@@ -81,7 +81,7 @@ test('dans le panneau : boutons encadrés sur leur rangée, « ✎ Répondre » 
   await openCoo($, clock)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    await pane.press({ key: 'coo-page-todo' })
+    await pane.press({ key: 'coo-page-overview' })
     const answer = ((await pane.findAll({ type: 'Button' })) as any[]).find(b => /Répondre/.test(String(b.props.label)))
     expect(answer?.props.variant, surface).toBe('primary')
     expect(answer?.props.plain, surface).toBeUndefined()
@@ -89,15 +89,17 @@ test('dans le panneau : boutons encadrés sur leur rangée, « ✎ Répondre » 
     expect(night, surface).toBeDefined()
     expect([night?.props.plain, night?.props.variant], surface).toEqual([undefined, undefined])
     // Les pastilles restent en texte simple.
-    expect((await pane.find({ key: 'coo-page-missions' }))?.props.plain, surface).toBe(true)
-    // Planche A : une ligne vide avant chaque élément et chaque en-tête ; le bouton de nuit suit le point, sans ligne vide.
-    expect((await pane.find({ key: 'coo-point-1' }))?.props.marginTop, surface).toBe(1)
-    expect((await pane.find({ key: 'coo-waits' }))?.props.marginTop, surface).toBe(1)
+    expect((await pane.find({ key: 'coo-page-overview' }))?.props.plain, surface).toBe(true)
+    // Une ligne vide avant chaque rectangle et chaque en-tête hors rectangle ; dans l'encadré du point, ses lignes et le
+    // bouton de nuit se suivent, sans ligne vide.
+    expect((await pane.find({ key: 'frame-coo-point' }))?.props.marginTop, surface).toBe(1)
+    expect((await pane.find({ key: 'coo-point-2' }))?.props.marginTop, surface).toBe(0)
+    expect((await pane.find({ key: 'coo-project' }))?.props.marginTop, surface).toBe(1)
     expect((await pane.find({ key: 'coo-night' }))?.props.marginTop, surface).toBe(0)
     await pane.unmount()
   }
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'coo-page-missions' })
+  await pane.press({ key: 'coo-page-overview' })
   const on1 = await pane.find({ key: `coo-auto-on-${manual.id}` })
   expect([on1?.props.plain, on1?.props.variant]).toEqual([undefined, undefined])
   const cut = await pane.find({ key: `coo-cut-auto-${auto.id}` })
@@ -108,7 +110,7 @@ test('dans le panneau : boutons encadrés sur leur rangée, « ✎ Répondre » 
   const cancel = await pane.find({ key: `coo-auto-cancel-${manual.id}` })
   expect(cancel).toBeDefined()
   expect(cancel?.props.variant).toBeUndefined()
-  // La rangée des boutons est sous la ligne de la mission, dans son élément.
-  expect(await pane.find({ key: `coo-mission-${manual.id}-acts` })).toBeDefined()
+  // La rangée des boutons est au bas du couloir de la mission.
+  expect(await pane.find({ key: `frame-mission-${manual.id}-acts` })).toBeDefined()
   await pane.unmount()
 })

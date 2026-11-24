@@ -4,6 +4,34 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.90.0 — 2026-11-24
+
+Sept missions : « Pistes de rétro du 20/11 », « Contexte et coût par mission », « Le COO propose les missions », « Vue Agents du COO », « Autonomie réglable du mode auto », « Rangement du COO sans oubli » et « Coordination visuelle du COO ».
+
+### Ajouté
+- **Vue Coordination refaite** : une page « Vue d'ensemble » remplace « À faire » et « Missions » ; chaque chose dans un rectangle à la couleur de sa nature, avec sa pastille ; le point en quatre tuiles ; un couloir par mission (état, workers, barre des tickets, frise des phases) ; bloc « Projet » et « Au départ · n ». Les pages Idées, À reprendre, Pistes et Réglages passent aussi en rectangles.
+- **Objectif d'une carte de lancement** : une carte porte l'objectif de sa mission (240 signes au plus) et ne montre plus que lui ; une carte de rétro dit « recommandée » ou « facultative ».
+- **Le COO propose les missions** : bouton « ✦ Proposer les missions » et section du skill du COO ; une carte porte les entrées de la feuille de route qu'elle couvre, contrôlées à la pose ; le COO range les cartes prêtes (`coordinate.order`) ; le relevé suit les entrées d'une carte. La liste des cartes passe en version 2 : une discussion du COO pas encore rechargée la voit illisible (`/reload-plugins`).
+- **Onglet Agents du COO** : la liste des managers et de leurs workers (phase, état, compteur, spécialistes au travail) ; « ◆ Agents » de l'Historique ouvre le détail d'une mission, « ← Managers » ramène à la liste.
+- **Autonomie réglable du mode auto** : cinq cases dans la page « Réglages » du COO (un fichier par projet et par poste, écrit par le seul COO) ; l'outil flow refuse un choix « Réglage : <case> : » dont la case n'est pas cochée ; la consigne nomme les cases cochées ; « Tranché seul d'après tes réglages » au premier clic « ⚡ Auto » ; case « Relecture après la fusion » ; le compte rendu range à part « Tranché par réglage » et « Phrases fusionnées sans relecture ».
+- **Contexte et coût dans le compte rendu** : les faits donnent les discussions de la mission au format de `--discussions` ; le compte rendu recopie le bloc « Contexte et coût » du récap de stats-board, entre « Pistes » et « Documentation ».
+- **Rangement du COO** : une tâche de rangement en tête du relevé, une à la fois, jugée en fin de tour, avec les choses remises et « Rangement : n à faire » dans la vue ; état « complète <id> » d'une chose mise de côté, rangée sous son entrée ; étape « rangement » à la fin de la livraison, pas à pas, avec « ▶ Reprendre à rangement » et « ✕ Finir sans ranger » ; « ✓ Archiver » vérifie ses fermetures.
+
+### Modifié
+- **Relevé du COO** sous 50 000 signes, sections réduites dans un ordre fixé et dites ; une mission close n'est notée relevée que sur une déclaration prouvée par ses ids.
+- **Fermeture** : une branche réécrite est gardée « contenue par équivalence » ; une question ouverte ne retient plus la fermeture et reste chez le manager ; le mod calcule le chemin du relais ; en auto, le compte rendu attend questions et fermetures relançables, et le rapport les nomme d'abord.
+- **Réveils et relances** : réveil de repli par la ligne ListAgents puis le titre ; worker relancé après l'annonce de compaction ; un worker reparti remplace lui-même sa note d'arrêt, et une session relancée efface sa fin gardée.
+- **Champs gardés** : un bloqueur peut nommer le ticket d'une autre mission et se lève quand il dit « fait » ; la réponse du manager donne l'adresse « <nom> [ref] » de chaque worker.
+- **Compteurs** : chez le COO, le compteur d'un groupe et celui de la mission comptent ce que le worker a relayé (le relevé donne les deux nombres).
+- **Cadrage et revues** : revues nommées en entier, statut du dernier ticket, invariant relu face aux recommandations prises, porteur perdu et transition refusée comptés.
+
+### Corrigé
+- La pastille de la page Mission ne retombe plus à 0 quand un groupe est relancé.
+- Un fichier de ticket nommé par un chemin relatif dans une commande qui change de dossier n'est plus relayé, et le worker en est prévenu.
+- Une mission au skill inconnu ne fait plus tomber le relevé du COO.
+
+---
+
 ## 0.89.0 — 2026-11-20
 
 Cinq missions : « Revue du lot du manager », « Titres stables, questions jamais reposées », « Signal de vie des discussions », « Pistes de rétro auto gardé » et les groupes F à J de « Pistes de rétro du 16/11 ».

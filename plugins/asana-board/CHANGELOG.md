@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.13.0 — 2026-11-24
+
+### Ajouté
+- **Cases d'autonomie du mode auto** : la règle et le skill `suivi-asana` disent quelles écritures une case cochée dans les réglages de flow-board couvre ; un terme retiré remplacé.
+
+---
+
 ## 0.12.0 — 2026-11-07
 
 ### Changé

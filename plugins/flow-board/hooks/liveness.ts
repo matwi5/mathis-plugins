@@ -170,3 +170,19 @@ export async function ownerVerdictOf($: any, home: string | null, run: { owner?:
   if (!run || typeof run.owner !== 'string' || run.owner === '') return 'unknown'
   return (await readVerdicts($, home, [{ owner: run.owner, claim: run.claim }], now))[0] ?? 'unknown'
 }
+
+/** La prise qui tient lieu de celle d'une mission pour la référence gardée d'un worker (`workerRefVerdicts`). */
+const REF_CLAIM_BOOT = 'worker-ref'
+
+/**
+ * Les verdicts des sessions de workers dont le manager donne la référence gardée (`workerRefSessions` de relay.ts), par
+ * id de session : la date où la référence a été notée tient lieu de prise, si bien que « arrêtée » dit qu'aucun processus
+ * ne porte cet id et que son job a été mis à jour depuis ; vivante ou inconnu sinon (une session de l'app n'a pas de job).
+ * Ne lève jamais, n'écrit rien.
+ */
+export async function workerRefVerdicts($: any, home: string | null, asked: readonly { session: string; at: number }[], now: number): Promise<Map<string, Liveness>> {
+  // Aucune référence gardée : rien à lire (pas de liste du dossier des sessions à chaque appel du manager).
+  if (asked.length === 0) return new Map()
+  const verdicts = await readVerdicts($, home, asked.map(a => ({ owner: a.session, claim: { boot: REF_CLAIM_BOOT, at: a.at } })), now)
+  return new Map(asked.map((a, i) => [a.session, verdicts[i] ?? 'unknown']))
+}

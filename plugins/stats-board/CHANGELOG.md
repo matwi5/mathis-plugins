@@ -4,6 +4,17 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.14.0 — 2026-11-24
+
+### Ajouté
+- **Bloc « Contexte et coût »** : le récap d'une mission finit par un tableau par discussion (contexte au départ, au maximum et à la fin ; compactions et leur genre ; coût et nombre de spécialistes), un Total et une ligne « Hors norme » (compaction automatique, worker au-delà de 450 000) ; lu dans les transcripts, jamais le texte d'un message.
+- **`--discussions <rôle>:<id>,…`** : un récap désigné par ses discussions ; une discussion introuvable ou ambiguë sort « non mesurée (raison) », une forme fautive refuse toute la commande.
+
+### Corrigé
+- Les chemins des transcripts sont bornés au dossier des projets.
+
+---
+
 ## 0.13.2 — 2026-11-09
 
 ### Corrigé

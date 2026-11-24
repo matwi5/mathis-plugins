@@ -52,7 +52,8 @@ test('livrée, la mission reçoit sa carte de rétro, recommandée parce qu’el
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   const shown = await texts(pane)
   expect(shown).toContain('Rétrospective · Mission de B')
-  expect(shown).toMatch(/rétro : recommandée : elle a eu des workers/)
+  // La carte montre l'objectif écrit par le mod (replié sur ses lignes) ; la raison de la recommandation reste seulement gardée dans la carte (`askMatt`).
+  expect(shown.replace(/\n/g, ' ')).toContain('Relire ce qui s\'est passé dans « Mission de B », puis proposer ses pistes, à cocher ici.')
   // Sa clôture attend la discussion qui la tient : rien à archiver encore (tests/archiver-livrees.test.ts archive une mission close).
   expect(await findAny(pane, { key: `coo-card-archive-${retroCardId(run.id)}` })).toBeUndefined()
   // Sa clôture pas encore appliquée (en cours ailleurs), elle n'attend pas « ✓ Archiver » ni n'a droit à la carte : « ✕ Retirer » retire la carte.

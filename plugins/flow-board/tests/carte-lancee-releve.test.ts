@@ -8,12 +8,14 @@ import { parseRoadmap } from '../hooks/roadmap.ts'
 
 // Une carte lancée n'est plus montrée dans la vue, et quitte le relevé du COO une fois son idée passée : décisions
 // « la carte lancée est gardée, ne compte nulle part, n'est plus montrée, et quitte le relevé du COO une fois son idée
-// passée à « devenue mission » », et « l'en-tête « Lancements · N » ne compte que les cartes montrées » ; le relevé la
+// passée à « devenue mission » », et « l'en-tête « Au départ · N » ne compte que les cartes montrées » ; le relevé la
 // garde tant que son idée est encore ouverte dans la feuille de route relue, ou que la feuille de route ne se lit pas ;
-// une chose « À reprendre » encore ouverte que la carte cite par son titre la garde aussi, sans rappel, pour que le COO
-// la rattache à la mission (décision « carte lancée qui cite une chose À reprendre », option retenue par la personne).
+// une chose « À reprendre » encore ouverte que la carte cite par son titre la garde aussi, pour que le COO la rattache à
+// la mission (décision « carte lancée qui cite une chose À reprendre », option retenue par la personne), avec une ligne qui
+// la nomme et renvoie à la consigne « Les choses à reprendre de la mission » (décision « les entrées d'une carte comptent
+// partout où comptaient son idée et les ids de son titre »), sans rappel « devenue mission ».
 
-const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: [], mode: 'manual', modeWhy: '', effort: 'high', effortWhy: '', folder: 'export-csv' }
+const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: [], mode: 'manual', modeWhy: '', effort: 'high', effortWhy: '', folder: 'export-csv', goal: 'Objectif de test.' }
 const card = (over: Record<string, unknown> = {}, id = 'klancee0001'): LaunchCard => (parseCard({ ...CARD, ...over }, 1, id) as { card: LaunchCard }).card
 const RUN = { ...newRun('grill-with-docs', 2, 'Export CSV'), launch: { id: 'labcdefgh12', card: 'klancee0001', at: 1, folder: 'export-csv', start: 'grill-with-docs', mode: 'manual' as const } }
 
@@ -54,7 +56,7 @@ test('la feuille relue montre l’idée passée ou absente, ou la carte n’a pa
   expect(said(PASSED, [card({ idea: 'I1' }), card({ title: 'Autre carte', folder: 'autre' }, 'kprete00001')])).toMatch(/launch card « kprete00001 » « Autre carte »: .*ready/)
 })
 
-test('une carte lancée du bouton « Lancer » d’une chose « À reprendre » (son id dans le titre) reste listée, sans rappel, tant que l’entrée est ouverte, pour que le COO la rattache', () => {
+test('une carte lancée du bouton « Lancer » d’une chose « À reprendre » (son id dans le titre) reste listée, sans rappel « devenue mission » mais avec le renvoi à la consigne qui la rattache, tant que l’entrée est ouverte', () => {
   const pending = (status: string) => ({ where: 'poste' as const, path: '/p/feuille.md', read: parseRoadmap(`# Feuille de route\n\n## Jalons\n## Prochaines étapes\n## Idées\n## À reprendre\n- [R49] ${status} · 2026-11-02 · Mathis · exporter en CSV\n`), gone: [] })
   const r49 = card({ title: 'R49 Export CSV des tickets' })
   const listed = /launch card « klancee0001 » « R49 Export CSV des tickets »: .*launched as mission « Export CSV »/
@@ -62,15 +64,19 @@ test('une carte lancée du bouton « Lancer » d’une chose « À reprendre » 
     const text = said(pending(status), [r49])
     expect(text).toMatch(listed)
     expect(text).not.toMatch(/became this mission/)
+    expect(text).toMatch(/The things to pick up R49 that this card cites are still open: follow « Les choses à reprendre de la mission »/)
   }
   for (const status of ['rattachée à Export CSV', 'écartée : doublon']) expect(said(pending(status), [r49])).not.toMatch(/launch card « klancee0001 »/)
 })
 
-test('la vue ne montre pas la carte lancée, et l’en-tête « Lancements · N » ne compte que les cartes montrées, absent sans elles', () => {
-  const rows = (cards: LaunchCard[]) => coordinationRows(cooStatement({ ...emptyBoard('', 'p'), runs: [RUN] }, { now: 3, roadmap: OPEN, cards }), { page: 'missions' })
+test('la vue ne montre pas la carte lancée, et l’en-tête « Au départ · N » ne compte que les cartes montrées, à 0 sans elles', () => {
+  const rows = (cards: LaunchCard[]) => coordinationRows(cooStatement({ ...emptyBoard('', 'p'), runs: [RUN] }, { now: 3, roadmap: OPEN, cards }), { page: 'overview' })
   const only = rows([card({ idea: 'I1' })])
-  expect(only.some(r => r.key.startsWith('coo-card'))).toBe(false)
+  expect(only.some(r => r.key.startsWith('coo-card-'))).toBe(false)
+  // La ligne « Au départ » paraît toujours, à 0 sans carte montrée (décision du bouton « ✦ Proposer les missions »).
+  expect(only.find(r => r.key === 'coo-cards')?.parts.map(p => p.text).join('')).toBe('Au départ · 0')
   const two = rows([card({ idea: 'I1' }), card({ title: 'Autre carte', folder: 'autre' }, 'kprete00001'), card({ title: 'Troisième', folder: 'troisieme' }, 'kprete00002')])
-  expect(two.find(r => r.key === 'coo-cards')?.parts.map(p => p.text).join('')).toBe('Lancements · 2')
-  expect(two.some(r => r.key === 'coo-card-why-klancee0001')).toBe(false)
+  expect(two.find(r => r.key === 'coo-cards')?.parts.map(p => p.text).join('')).toBe('Au départ · 2')
+  expect(two.some(r => r.key === 'coo-card-goal-kprete00001')).toBe(true)
+  expect(two.some(r => r.key === 'coo-card-goal-klancee0001')).toBe(false)
 })

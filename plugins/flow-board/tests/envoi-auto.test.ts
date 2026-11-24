@@ -1373,7 +1373,7 @@ test('la ligne de la vue Coordination dit la reprise : « ⚡ Auto · repris : q
   const base = { ...newRun('implement', T0, 'Mission R'), status: 'active', owner: 'sb' } as Run
   const rowOf = (auto: Run['auto']) => {
     const board: Board = { ...emptyBoard('', 'p'), deleted: [], runs: [{ ...base, auto }] }
-    const row = coordinationRows(cooStatement(board, { now: T0 + 10_000 }), { page: 'missions' }).find(r => r.key === `coo-mission-${base.id}`)!
+    const row = coordinationRows(cooStatement(board, { now: T0 + 10_000 }), { page: 'overview' }).find(r => r.key === `coo-mission-${base.id}`)!
     return row.parts.map(p => p.text).join(' ')
   }
   expect(rowOf({ onAt: T0 + 5_000, onBy: 'sb', onWhy: 'resumed', offAt: T0 + 1_000, offWhy: 'plus rien ne peut avancer sans toi' })).toMatch(/⚡\sAuto · repris : questions répondues/)

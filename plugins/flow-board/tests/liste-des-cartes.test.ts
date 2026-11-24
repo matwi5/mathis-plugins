@@ -25,7 +25,7 @@ const LIST = `flow-board/coordination/${PROJECT}.cartes.json`
 const KEY = 'coo-cards:'
 const PISTES = `flow-board/pistes/${PROJECT}.json`
 
-const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: ['to-spec'], mode: 'manual', effort: 'high', folder: 'export-csv' }
+const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: ['to-spec'], mode: 'manual', effort: 'high', folder: 'export-csv', goal: 'Objectif de test.' }
 const pane = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 const call = async ($: any, input: Record<string, unknown>): Promise<string> => String(((await $.tool.call({ tool: TOOL, ...input } as any)) as any).result)
 const propose = async ($: any, over: Record<string, unknown> = {}): Promise<string> => /Launch card (k[a-z0-9]+)/.exec(await call($, { card: { ...CARD, ...over } }))?.[1] ?? ''
@@ -98,7 +98,7 @@ test('une carte proposée dans une discussion est écrite dans la liste des cart
   const id = await propose($)
   const written = listOf(w)
   expect(written).toEqual(JSON.parse(JSON.stringify(cardsListFile('', written.cards))))
-  expect([written.v, written.root]).toEqual([1, ''])
+  expect([written.v, written.root]).toEqual([2, ''])
   expect(written.cards.map(c => c.id)).toEqual([id])
   expect(written.cards[0]).toMatchObject({ title: CARD.title, folder: CARD.folder, start: CARD.start })
   // La carte écrite est une carte en forme, celle que relit la discussion qui reprend le siège.

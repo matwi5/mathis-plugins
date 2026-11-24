@@ -195,7 +195,8 @@ test('le COO lit la branche de travail par une commande git où n’entre aucun 
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await pane.find({ type: 'Text', text: /^main a reçu 2 commit\(s\) hors mission sur des fichiers du groupe C de (M\d+\s)?« Durcir le relais »$/ }), surface).toBeDefined()
-    expect(await pane.find({ type: 'Svg' })).toBeUndefined()
+    // Les dessins de l'onglet (tuiles, points) ne sont que hors du terminal.
+    if (surface === 'terminal') expect(await pane.find({ type: 'Svg' })).toBeUndefined()
     await pane.unmount()
   }
 })

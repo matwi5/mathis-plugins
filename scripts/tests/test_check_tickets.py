@@ -262,6 +262,90 @@ class DoneNewTicketTest(TicketRepo):
             check.staged()
 
 
+class InvariantRereadTest(TicketRepo):
+    """Un ticket très sensible ajouté par le commit dit sur une ligne « Invariant relu : … » contre quelles séries de
+    recommandations et quels critères son invariant a été relu ; un ticket déjà dans HEAD n'est jamais refusé pour elle."""
+
+    VERY = f"# 02: essai\n\nZone sensible : oui, très sensible (suppression)\nLogique : oui\n{SEARCH}\n- [ ] critère\n"
+
+    def problems(self, path=NEW):
+        return check.new_very_sensitive_without_reread([path], check.staged_moves())
+
+    def test_un_ticket_tres_sensible_neuf_sans_ligne_invariant_relu_est_refuse(self):
+        self.stage(NEW, self.VERY)
+        problems = self.problems()
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f"{NEW}:3", problems[0])
+        self.assertIn("Invariant relu :", problems[0])
+        with self.assertRaises(check.Failed):
+            check.staged()
+
+    def test_tres_sans_accent_compte_aussi(self):
+        self.stage(NEW, self.VERY.replace("très sensible", "tres sensible"))
+        self.assertEqual(len(self.problems()), 1)
+        self.stage(NEW, self.VERY.replace("très sensible", "sensible, pas tres sensible"))
+        self.assertEqual(self.problems(), [])
+
+    def test_la_ligne_invariant_relu_en_tete_de_ligne_le_fait_passer(self):
+        for line in ("Invariant relu : contre la série 1 (recos 2 à 5) et les critères 1 à 3, au découpage (20/11)",
+                     "**Invariant relu :** contre la série 3 et les critères 1 et 2, le 21/11",
+                     # Le gras sur le seul libellé, comme « **Invariant** : » ailleurs dans les tickets.
+                     "**Invariant relu** : contre la série 3 et le critère 2, le 21/11"):
+            with self.subTest(line=line):
+                self.stage(NEW, self.VERY.replace("Logique : oui\n", f"Logique : oui\n{line}\n"))
+                self.assertEqual(self.problems(), [])
+                check.staged()
+
+    def test_une_ligne_invariant_relu_vide_dans_un_bloc_de_code_ou_hors_tete_de_ligne_ne_suffit_pas(self):
+        for extra in ("Invariant relu :\n", "**Invariant relu :**\n", "**Invariant relu** :\n", "Invariant relu : **\n", "```\nInvariant relu : contre la série 1\n```\n",
+                      "Voir la ligne Invariant relu : contre la série 1\n"):
+            with self.subTest(extra=extra):
+                self.stage(NEW, self.VERY + extra)
+                self.assertEqual(len(self.problems()), 1)
+
+    def test_un_ticket_seulement_sensible_ou_pas_tres_sensible_passe(self):
+        for zone in ("Zone sensible : oui (suppression)", "Zone sensible : oui, sensible mais pas très sensible",
+                     "Zone sensible : non (pas très sensible)"):
+            with self.subTest(zone=zone):
+                self.stage(NEW, self.VERY.replace("Zone sensible : oui, très sensible (suppression)", zone))
+                self.assertEqual(self.problems(), [])
+                check.staged()
+
+    def test_un_ticket_tres_sensible_deja_a_head_passe(self):
+        # Le ticket d'avant, devenu très sensible dans HEAD sans la ligne : cocher un critère ne le refuse pas.
+        self.stage(OLD, self.VERY)
+        git(self.repo, "commit", "-q", "-m", "ancien très sensible")
+        self.stage(OLD, self.VERY.replace("- [ ] critère", "- [x] critère"))
+        self.assertEqual(self.problems(OLD), [])
+        check.staged()
+
+    def test_un_ticket_renomme_passe_une_copie_compte_comme_neuve(self):
+        self.stage(OLD, self.VERY)
+        git(self.repo, "commit", "-q", "-m", "ancien très sensible")
+        git(self.repo, "mv", OLD, NEW)
+        self.assertEqual(self.problems(), [])
+        check.staged()
+        git(self.repo, "commit", "-q", "-m", "renommé")
+        copy = "travail/essai/issues/03-copie.md"
+        self.stage(copy, self.VERY)
+        self.assertEqual(len(self.problems(copy)), 1)
+
+    def test_a_la_fusion_un_ticket_de_la_branche_fusionnee_passe(self):
+        git(self.repo, "checkout", "-q", "-b", "groupe")
+        self.stage(NEW, self.VERY)
+        git(self.repo, "commit", "-q", "-m", "ticket du groupe")
+        git(self.repo, "checkout", "-q", "main")
+        git(self.repo, "merge", "-q", "--no-ff", "--no-commit", "groupe")
+        self.assertEqual(self.problems(), [])
+        check.staged()
+        # Le hook pre-merge-commit d'une fusion propre (sans MERGE_HEAD) ne juge pas les tickets neufs.
+        git(self.repo, "merge", "--abort")
+        self.stage(NEW, self.VERY)
+        check.staged(merging=True)
+        with self.assertRaises(check.Failed):
+            check.staged()
+
+
 class CheckedNotDoneTest(TicketRepo):
     """Un ticket dont toutes les cases sont cochées et dont le statut ne dit pas fait : signalé au pre-commit,
     par un avertissement, jamais par un échec (le point 9 de la procédure fait commiter un ticket hors zone

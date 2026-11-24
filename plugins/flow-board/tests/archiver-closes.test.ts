@@ -85,6 +85,8 @@ test('une mission livrée garde exactement ses conditions d’aujourd’hui, car
   expect(isArchivable(sent, [sent], scopeOf([d.id]))).toBe(false)
   // La ligne de sa discussion reste celle d'une mission livrée.
   expect(deliveredByCooLine(T0, closed('Close'))).not.toMatch(/Coordination/)
+  // Sauf pendant sa livraison encore ouverte (son rangement compris) : pas de « ✓ Archiver ».
+  expect(isArchivable(d, [d], { ...scopeOf([d.id]), open: new Set([d.id]) })).toBe(false)
 })
 
 test('archiveAwaiting : la mission close sans livraison s’archive avec sa marque, seulement sur sa carte prête et la liste montrée inchangée', () => {

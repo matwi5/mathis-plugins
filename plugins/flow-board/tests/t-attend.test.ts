@@ -156,7 +156,7 @@ test('l’auto éteint, la mission redevient manuelle : un tour fini sur une que
 
 // ─── Le COO ───────────────────────────────────────────────────────────────
 
-test('le COO montre la mission qui l’attend et la notifie une fois par attente ; une mission en pause paraît « en pause, à reprendre »', { timeoutMs: 30000 }, async ($, on) => {
+test('le COO montre la mission qui l’attend et la notifie une fois par attente ; une mission en pause paraît « en pause »', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)
   const notices = w.notices
@@ -172,7 +172,7 @@ test('le COO montre la mission qui l’attend et la notifie une fois par attente
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await findAny(pane, { type: 'Text', text: /La mission (M\d+\s)?« Mission « \] qui attend » t’attend : l’étape suivante, depuis/ }), surface).toBeDefined()
-    expect(await findAny(pane, { type: 'Text', text: /^en pause, à reprendre$/ }), surface).toBeDefined()
+    expect(await findAny(pane, { type: 'Text', text: /^en pause$/ }), surface).toBeDefined()
     await pane.unmount()
   }
   // Le fichier de coordination devenu illisible n'arrête pas la notification d'une nouvelle attente.

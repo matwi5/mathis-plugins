@@ -15,7 +15,7 @@ import { allTexts, findAny, findAllAny, pressAny } from './page-coo.ts'
 // « Pistes de rétro » posée par un découpage ou par le relevé du COO, et qu'aucune piste ne porte après son écriture,
 // repart aussitôt. »
 
-const CARD = { title: 'Export CSV des tickets', idea: 'I1', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: ['to-spec'], mode: 'manual', modeWhy: 'tu veux suivre le cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv' }
+const CARD = { title: 'Export CSV des tickets', idea: 'I1', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: ['to-spec'], mode: 'manual', modeWhy: 'tu veux suivre le cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv', goal: 'Objectif de test.' }
 
 const pane = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 
@@ -215,7 +215,7 @@ test('un clic sur un dessin d’avant une carte reproposée (même dossier, mêm
 test('le clic « ✕ Retirer » d’une carte ordinaire emporte la date de la version montrée ; celui d’une carte « Pistes de rétro » ne change pas', () => {
   const ordinary = (parseCard(CARD, 1234, 'kordinaire1') as { card: any }).card
   const pistes = pistesCard('kpistes0001', 5678)
-  const rows = coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 9_999, cards: [ordinary, pistes] }), { page: 'missions' })
+  const rows = coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 9_999, cards: [ordinary, pistes] }), { page: 'overview' })
   const removeOf = (id: string) => rows.flatMap(r => r.actions ?? []).find(a => a.key === `coo-card-remove-${id}`)?.act
   expect(removeOf('kordinaire1')).toEqual({ kind: 'card-remove', card: 'kordinaire1', at: 1234 })
   expect(removeOf('kpistes0001')).toEqual({ kind: 'card-remove', card: 'kpistes0001' })

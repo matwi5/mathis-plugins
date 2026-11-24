@@ -52,8 +52,16 @@ Le skill par lequel une mission commence (cadrage, spec, tickets, implémentatio
 _Avoid_: entrée, skill d'entrée
 
 **Livraison** :
-L'envoi en une fois de toutes les missions au rapport validé d'un projet : version, push, pull request et étapes propres au projet, lancé par un clic de l'utilisateur chez le COO.
+L'envoi en une fois de toutes les missions au rapport validé d'un projet : version, push, pull request, étapes propres au projet, puis le rangement du COO (ses tâches envoyées une à une par le tableau de bord, chacune vérifiée), lancé par un clic de l'utilisateur chez le COO.
 _Avoid_: livraison de la mission, release
+
+**Rangement** :
+Ce que le COO remet en ordre pour que rien ne se perde entre les missions : recopier ce que les managers ont mis de côté, relever les missions closes avec l'état de leurs entrées rattachées, comparer les décisions des missions, fermer les discussions des missions archivées et noter le jalon d'une livraison. Il se fait en entier à chaque livraison.
+_Avoid_: ménage, nettoyage, glanage (qui n'en est qu'une tâche)
+
+**Complément** :
+Une chose mise de côté par une mission qui précise une chose à reprendre déjà notée, au lieu d'en ouvrir une nouvelle. Il se lit avec elle et n'est pas à décider à part tant qu'elle reste ouverte.
+_Avoid_: doublon, fusion, ajout
 
 **Mission livrée** :
 Une mission terminée par une livraison, qui n'a plus rien à livrer. Elle reste visible jusqu'à ce que l'utilisateur l'archive ou que sa rétro finisse.
@@ -109,15 +117,15 @@ Le résumé d'une ligne que le COO écrit pour une chose à reprendre, montré �
 _Avoid_: résumé, libellé, chapeau
 
 **Page de la vue Coordination** :
-Une des parties de la vue Coordination du COO, montrée seule et choisie par une pastille en tête de l'onglet : À faire, Missions, Idées, À reprendre, Pistes, Réglages.
+Une des parties de la vue Coordination du COO, montrée seule et choisie par une pastille en tête de l'onglet : Vue d'ensemble (qui remplace À faire et Missions), Idées, À reprendre, Pistes, Réglages.
 _Avoid_: sous-onglet, section, écran
 
 **Carte de lancement** :
-La proposition de mission que le COO montre à l'utilisateur, avec son départ, son mode, son effort et son dossier ; elle est « prête » tant que l'utilisateur ne l'a pas lancée, « en lancement » juste après son clic, « lancée » quand sa mission existe. Elle ne lance qu'une mission, et une carte prête ne quitte la vue que par un clic de l'utilisateur.
+La proposition de mission que le COO montre à l'utilisateur, avec son objectif (ce que la mission veut obtenir, en une à trois lignes courtes, que le COO écrit et que le mod écrit pour une carte de rétro ou « Pistes de rétro »), son départ, son mode, son effort, son dossier et les entrées de la feuille de route qu'elle couvre (ses entrées, que seul un envoi du COO qui la vise change), et son rang parmi les cartes prêtes, que seul l'envoi de l'ordre du COO pose ou retire ; elle est « prête » tant que l'utilisateur ne l'a pas lancée, « en lancement » juste après son clic, « lancée » quand sa mission existe. Elle ne lance qu'une mission, et une carte prête ne quitte la vue que par un clic de l'utilisateur.
 _Avoid_: proposition, suggestion, ticket de lancement
 
 **Liste des cartes** :
-Les cartes de lancement d'un projet sur un poste, gardées hors de toute discussion pour suivre le siège du COO ; seule la discussion qui tient le siège l'écrit, et une carte lancée y reste gardée.
+Les cartes de lancement d'un projet sur un poste, gardées hors de toute discussion pour suivre le siège du COO ; seule la discussion qui tient le siège l'écrit, et une carte lancée y reste gardée. L'ordre de la liste est celui des poses ; l'ordre de priorité des cartes est leur rang, posé par l'envoi de l'ordre du COO.
 _Avoid_: file d'attente des lancements, état des cartes, cartes de la discussion
 
 **Numéro court** :
@@ -183,7 +191,7 @@ Le fichier qui garde toute l'histoire d'une discussion ou d'un spécialiste, mes
 _Avoid_: log, journal, historique
 
 **Compaction** :
-Le remplacement de l'histoire d'une discussion, dans son contexte, par un résumé ; tapée (`/compact`), automatique au seuil, ou calculée à l'avance. Le transcript, lui, garde tout.
+Le remplacement de l'histoire d'une discussion, dans son contexte, par un résumé ; tapée (`/compact`), lancée par le plugin à un moment choisi (après le découpage, à la clôture d'un ticket), automatique au seuil, ou calculée à l'avance. Le transcript, lui, garde tout.
 _Avoid_: compactage, résumé, compression
 
 **Consignes de compaction** :
@@ -213,16 +221,20 @@ Le bouton qui propose la prochaine action à faire, le même dans le panneau d'u
 _Avoid_: bouton Ensuite, bouton suivant
 
 **Mode auto** :
-L'état d'une mission que l'utilisateur a allumé par un clic de sa part (« ⚡ Auto » puis « Confirmer » dans la mission ou sur sa ligne de la vue Coordination du COO, ou « Lancer en auto » chez le COO) : la mission avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour cette mission seulement, depuis la discussion où il a été allumé ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto » dans la mission, « ✋ Couper l'auto » sur sa ligne de la vue Coordination), le COO peut le couper sans jamais l'allumer, et le mod le met en pause dans certains cas (une lecture ratée ; plus rien qui puisse avancer sans l'utilisateur ; la discussion arrêtée). Deux de ces pauses reprennent d'elles-mêmes : la deuxième une fois ses questions répondues, la troisième quand la discussion est relancée sous son id dans les 24 h qui suivent la dernière activité de la mission. Une mission qui n'est pas en auto est en manuel.
+L'état d'une mission que l'utilisateur a allumé par un clic de sa part (« ⚡ Auto » puis « Confirmer » dans la mission ou sur sa ligne de la vue Coordination du COO, ou « Lancer en auto » chez le COO) : la mission avance sans lui jusqu'au rapport du compte rendu, le mod envoyant lui-même chaque suite, et Claude prenant ses propres recommandations. Il vaut pour cette mission seulement, depuis la discussion où il a été allumé ; l'utilisateur le coupe à tout moment (« ⚡ Couper l'auto » dans la mission, « ✋ Couper l'auto » sur sa ligne de la vue Coordination), le COO peut le couper sans jamais l'allumer, et le mod le met en pause dans certains cas (une lecture ratée ; plus rien qui puisse avancer sans l'utilisateur ; la discussion arrêtée). Deux de ces pauses reprennent d'elles-mêmes : la deuxième une fois ses questions répondues, la troisième quand la discussion est relancée sous son id dans les 24 h qui suivent la dernière activité de la mission. Une mission qui n'est pas en auto est en manuel. Une sorte de question dont l'utilisateur a coché la case d'autonomie pour le projet s'y tranche seule, avec la recommandation ; les autres restent des questions bloquantes.
 _Avoid_: pilote automatique, mode autonome
 
 **Choix d'expérience** :
-Une décision sur ce que l'utilisateur voit et fait (mise en page, maquette, libellés, boutons, notifications), ou toute question où les options se valent techniquement et ne diffèrent que par sa préférence. En mode auto, c'est la première des décisions qui restent des questions bloquantes.
+Une décision sur ce que l'utilisateur voit et fait (mise en page, maquette, libellés, boutons, notifications), ou toute question où les options se valent techniquement et ne diffèrent que par sa préférence. En mode auto, c'est la première des décisions qui restent des questions bloquantes, sauf quand la case d'autonomie « Choix d'expérience » est cochée : la mission le tranche alors avec sa recommandation.
 _Avoid_: choix de goût, choix perso
 
 **Question bloquante** :
-Une décision qui reste à l'utilisateur même en mode auto, déclarée avec ce qu'elle bloque (une phase, un groupe ou un ticket) : seule cette partie de la mission l'attend, le reste avance. Elle se retire une fois répondue.
+Une décision qui reste à l'utilisateur même en mode auto, déclarée avec ce qu'elle bloque (une phase, un groupe ou un ticket) : seule cette partie de la mission l'attend, le reste avance. Elle se retire une fois répondue. Une question dont toutes les sortes ont leur case d'autonomie cochée n'en est pas une : la mission la tranche seule (une question déjà posée reste posée).
 _Avoid_: question en attente, blocage
+
+**Case d'autonomie** :
+Un réglage du projet sur un poste, que l'utilisateur coche dans la page « Réglages » de la vue Coordination : pour une sorte de question, il dit qu'une mission en mode auto la tranche avec sa recommandation au lieu de la poser. Décochée, absente ou illisible, la question reste une question bloquante. Il y en a cinq : « Choix d'expérience », « Invariant d'un ticket », « Décision déjà prise contredite », « Dépense ou action externe » et « Relecture après la fusion ». Certaines sortes n'ont pas de case et restent toujours posées : une suppression sans retour ou une exposition, une faille laissée sans correctif, le chemin Fable, un invariant déjà validé à affaiblir ou à réécrire.
+_Avoid_: niveau d'auto, auto par défaut
 
 **Validation sautée** :
 Une validation à boutons (accord du cadrage, partage d'un tri, spec, découpage, plan, écritures Asana de la mission) que le mode auto ne demande pas, déclarée dans « Décidé sans toi » avec le chemin ou le lien du texte validé, pour que l'utilisateur la relise au rapport.
@@ -245,6 +257,10 @@ _Avoid_: niveau, étape
 **Retenue** :
 L'attente imposée à un groupe qui touche un fichier déjà touché par un groupe en cours d'une autre mission : il ne part qu'une fois ce groupe fusionné, ou si l'utilisateur force son lancement.
 _Avoid_: blocage, conflit, verrou
+
+**Bloqueur externe** :
+Ce qu'un ticket du lot attend hors du lot : une tâche du tracker (une décision, le travail de quelqu'un d'autre), la session d'une autre mission sur les mêmes fichiers, ou le ticket d'une autre mission, nommé par son dossier et son numéro. Il se lève quand sa tâche est cochée, sur un envoi « fait », ou, pour un ticket nommé, quand le fichier de ce ticket dit « fait » sous la racine du projet (pour un groupe d'une autre mission, une fois ce groupe fusionné). Levé, il ne redevient à faire que sur un envoi explicite ou sa tâche décochée.
+_Avoid_: dépendance externe (le mot du panneau), retenue
 
 **Piste** :
 Une amélioration qu'une rétro propose pour les prochaines sessions. Une fois choisie, elle entre dans un ticket, seule ou avec des pistes voisines, et se traite comme lui. Une piste déjà choisie par une autre mission y reste ; la seconde rétro la marque « déjà prise ».
@@ -326,6 +342,10 @@ _Avoid_: revue de style, relecture du code
 **Revue du ticket** :
 La relecture des seuls changements d'un ticket par un relecteur unique, sur ses axes Standards et Spec, ou sur l'axe Spec seul avec une passe « bogues » pour un ticket sensible.
 _Avoid_: code-review du ticket, revue de Matt
+
+**`/code-review` et `/mattpocock-skills:code-review`** :
+Les deux skills nommés « code-review », toujours désignés par leur nom complet. `/code-review` est la revue de Claude Code : elle prend un niveau en argument (`high`, `xhigh`…), se lance par l'outil Skill « code-review » et fait la revue du groupe, celle du lot et la passe « bogues ». `/mattpocock-skills:code-review` est la revue à deux axes du plugin mattpocock-skills (Standards et Spec) : celle de la revue du ticket, faite ici par un relecteur unique d'après le gabarit `prompt-relecteur.md` de flow-board, sans charger le skill par l'outil Skill.
+_Avoid_: code-review (nu), la revue code-review, revue intégrée
 
 **Revue du groupe** :
 La relecture de tous les changements d'un groupe fini, tournée vers les interactions entre ses tickets, chacun ayant déjà eu sa revue du ticket.

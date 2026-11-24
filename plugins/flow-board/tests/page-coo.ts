@@ -1,14 +1,14 @@
-// Chercher dans la vue Coordination du COO, répartie en six pages choisies par des pastilles, comme dans l'ancienne
+// Chercher dans la vue Coordination du COO, répartie en cinq pages choisies par des pastilles, comme dans l'ancienne
 // vue d'une seule liste : `findAny`, `findAllAny` et `pressAny` passent les pages une à une (par
 // leur pastille, `coo-page-<page>`) et prennent la première où l'élément se trouve ; `allTexts` lit les textes de toutes
 // les pages. Sur un panneau sans pastilles (pas la discussion du COO, un autre onglet), ils cherchent dans le panneau tel
 // quel. Les tests de la répartition elle-même (`pages-coordination.test.ts`) nomment leur page.
 // Un module d'aide, pas un fichier de test.
 
-const PAGES = ['todo', 'missions', 'ideas', 'pending', 'pistes', 'settings'] as const
+const PAGES = ['overview', 'ideas', 'pending', 'pistes', 'settings'] as const
 
 /** Le panneau porte-t-il la rangée des pages de la vue Coordination ? */
-const hasPages = async (pane: any): Promise<boolean> => (await pane.find({ key: 'coo-page-todo' })) !== undefined
+const hasPages = async (pane: any): Promise<boolean> => (await pane.find({ key: 'coo-page-overview' })) !== undefined
 
 /** Le premier élément qui répond à la recherche, sur la première page qui l'a ; undefined s'il n'est sur aucune. */
 export const findAny = async (pane: any, query: Record<string, unknown>): Promise<any> => {

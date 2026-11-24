@@ -991,6 +991,105 @@ test('--branches : une branche que git refuse au moment de la commande reste, et
     assert.ok(exists(s.repo, 'fusion-b'), 'la branche refusée reste')
   }))
 
+/**
+ * Dans le dépôt de `branchesRepo` : une branche de worker `worktree-groupe-r-A` de deux commits (r1.txt, r2.txt), puis
+ * `main` qui avance (un commit à elle) et reprend ces commits par cherry-pick, donc sous d'autres hashes (comme après
+ * le rebase de la branche de travail par une autre discussion). `pick` : les commits repris (indices 0 et 1).
+ */
+const rewrittenWorker = (repo, root, pick = [0, 1]) => {
+  const b = 'worktree-groupe-r-A'
+  const wt = join(root, 'wr')
+  git(repo, 'worktree', 'add', '-q', '-b', b, wt, 'main')
+  const commits = []
+  for (const f of ['r1.txt', 'r2.txt']) {
+    writeFileSync(join(wt, f), `${f}\n`)
+    git(wt, 'add', f)
+    git(wt, 'commit', '-q', '-m', `travail ${f}`)
+    commits.push(git(wt, 'rev-parse', 'HEAD'))
+  }
+  git(repo, 'worktree', 'remove', wt)
+  writeFileSync(join(repo, 'm.txt'), 'm\n')
+  git(repo, 'add', 'm.txt')
+  git(repo, 'commit', '-q', '-m', 'main avance')
+  for (const i of pick) git(repo, 'cherry-pick', commits[i])
+  return { b, commits }
+}
+
+test('--branches : une branche de worker dont chaque commit a son patch dans la branche de travail réécrite reste GARDÉE « contenue par équivalence », hors de la commande, sans -D ni --force', () =>
+  inBranchesRepo(s => {
+    const { b, commits } = rewrittenWorker(s.repo, s.root)
+    // Sous d'autres hashes : le test d'ancêtre échoue bien.
+    assert.ok(!git(s.repo, 'log', '--format=%H', 'main').split('\n').includes(commits[1]))
+    const out = branches(s.repo, b, 'fusion-a')
+    assert.equal(out.status, 0, out.stdout + out.stderr)
+    assert.ok(outLines(out).includes(`GARDÉE : ${b} (contenue par équivalence : ses 2 commits ont leur patch dans main, réécrite depuis ; suppression forcée laissée à l’utilisateur)`), out.stdout)
+    assert.equal(outLines(out)[0], 'BRANCHES : 1 supprimable(s), 1 gardée(s)')
+    assert.equal(printed(out), `git -C '${s.repo}' branch -d -- 'fusion-a'`)
+    // Ni -D ni --force en option hors de la ligne « suite », qui ne les nomme que pour les interdire (« jamais -D ni
+    // --force ») ; le jeton d'option, pas la sous-chaîne : un chemin ou un nom de branche peut porter « -D ».
+    for (const line of outLines(out).filter(l => !l.startsWith('suite : '))) assert.ok(!/(?:^|\s)(?:-D|--force|-f)(?=[\s']|$)/.test(line), line)
+    assert.ok(!/branch\s+(-D|--force|-f\b)/.test(out.stdout), out.stdout)
+    assert.match(outLines(out).at(-1), /jamais -D ni --force/)
+    assert.ok(exists(s.repo, b))
+  }))
+
+const UNSURE = 'pas entièrement contenue dans main'
+
+test('--branches : un commit sans patch équivalent dans la branche de travail : « pas entièrement contenue », comme avant', () =>
+  inBranchesRepo(s => {
+    const { b } = rewrittenWorker(s.repo, s.root, [0])
+    const out = branches(s.repo, b)
+    assert.ok(outLines(out).includes(`GARDÉE : ${b} (${UNSURE})`), out.stdout)
+    assert.equal(printed(out), undefined)
+  }))
+
+// La fusion est écartée deux fois (la garde --merges, puis l'écart de taille, git cherry ne listant pas les fusions) :
+// ce test fixe le verdict, pas laquelle des deux le rend.
+test('--branches : un commit de fusion dans la branche du worker : « pas entièrement contenue », comme avant', () =>
+  inBranchesRepo(s => {
+    const { b } = rewrittenWorker(s.repo, s.root)
+    const wt = join(s.root, 'wm')
+    git(s.repo, 'worktree', 'add', '-q', wt, b)
+    git(s.repo, 'branch', 'cote', 'fusion-a')
+    git(s.repo, 'worktree', 'add', '-q', join(s.root, 'wc'), 'cote')
+    writeFileSync(join(s.root, 'wc', 'c.txt'), 'c\n')
+    git(join(s.root, 'wc'), 'add', 'c.txt')
+    git(join(s.root, 'wc'), 'commit', '-q', '-m', 'côté')
+    git(wt, 'merge', '-q', '--no-edit', '--no-ff', 'cote')
+    git(s.repo, 'worktree', 'remove', wt)
+    git(s.repo, 'worktree', 'remove', join(s.root, 'wc'))
+    git(s.repo, 'cherry-pick', 'cote')
+    const out = branches(s.repo, b)
+    assert.ok(outLines(out).includes(`GARDÉE : ${b} (${UNSURE})`), out.stdout)
+  }))
+
+test('--branches : un commit vide dans la branche du worker, que git cherry apparie à un commit vide de main : « pas entièrement contenue »', () =>
+  inBranchesRepo(s => {
+    const { b } = rewrittenWorker(s.repo, s.root)
+    const wt = join(s.root, 'wv')
+    git(s.repo, 'worktree', 'add', '-q', wt, b)
+    git(wt, 'commit', '-q', '--allow-empty', '-m', 'vide du worker')
+    git(s.repo, 'worktree', 'remove', wt)
+    git(s.repo, 'commit', '-q', '--allow-empty', '-m', 'vide de main')
+    assert.match(git(s.repo, 'cherry', 'main', b), /^- /m)
+    assert.ok(!/^\+ /m.test(git(s.repo, 'cherry', 'main', b)), 'git cherry les dit tous équivalents')
+    const out = branches(s.repo, b)
+    assert.ok(outLines(out).includes(`GARDÉE : ${b} (${UNSURE})`), out.stdout)
+  }))
+
+// Un objet du contenu manque : les commits restent lisibles, le test d'ancêtre passe, mais git cherry ne peut plus
+// calculer les patchs. Sans ce manque, la branche serait « par équivalence ». Ici, pas d'ÉCHEC du script : BRANCHES.
+test('--branches : git en échec sur la comparaison des patchs : la branche gardée « pas entièrement contenue », sans ÉCHEC', () =>
+  inBranchesRepo(s => {
+    const { b } = rewrittenWorker(s.repo, s.root)
+    const blob = git(s.repo, 'rev-parse', `${b}:r2.txt`)
+    rmSync(join(s.repo, '.git', 'objects', blob.slice(0, 2), blob.slice(2)))
+    const out = branches(s.repo, b)
+    assert.equal(out.status, 0, out.stdout + out.stderr)
+    assert.ok(outLines(out).includes(`GARDÉE : ${b} (${UNSURE})`), out.stdout + out.stderr)
+    assert.equal(printed(out), undefined)
+  }))
+
 test('--branches : un argument hors du mode ou mal formé, ou un dossier sans git : ÉCHEC (code 1), rien de supprimable', () =>
   inBranchesRepo(s => {
     for (const args of [[], ['--apres-arret', 'fusion-a'], ['--worktree', 'groupe-x', 'fusion-a'], ['--dossier'], ['--dossier', '', 'fusion-a'], ['--dossier', s.repo, '--dossier', s.repo, 'fusion-a'], ['--force', 'fusion-a']]) {

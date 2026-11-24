@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
-import { closingProcedure, groupWorktree } from '../hooks/closing.ts'
-import { newRun } from '../hooks/model.ts'
+import { closedHint, closingProcedure, closingScript, groupWorktree } from '../hooks/closing.ts'
+import { applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
+import { activeRun } from '../hooks/basics.ts'
 
 // La procédure de fermeture d'un worker : vérifier d'abord, n'arrêter et ne retirer
 // qu'ensuite. Invariant : une fermeture ne fait jamais perdre un commit, un fichier modifié ou non
@@ -76,7 +77,7 @@ test('les étapes dans l’ordre : branche, ligne du worktree, fusion, arbre, in
 
 test('les questions du compte rendu, le worktree en HEAD détachée, et la fusion revérifiée après l’arrêt', () => {
   for (const text of [cli, app, unknown, pistes]) {
-    expect(text).toContain('0) ses questions : relis son compte rendu ; si une question qu’il pose attend encore une réponse (de moi ou d’ici), ne ferme rien et dis-le-moi')
+    expect(text).toContain('0) ses questions : relis son compte rendu ; une question qu’il pose et qui attend encore une réponse (de moi ou d’ici) ne retient plus la fermeture : elle reste ici : tranche-la si elle t’est adressée, sinon pose-la-moi à part ("waiting", groupe, id), hors de la fermeture ; si la session doit appliquer la réponse, ne lance rien et envoie "state": "stopped", "why": "question ouverte" ; sinon ses vérifications seules jugent du retrait (la fusion, l’arbre et les instantanés, points 3 à 5, refaits au point 8) ; ')
     expect(text.indexOf('0) ses questions')).toBeLessThan(text.indexOf('1) la branche'))
   }
   // « Déjà retiré » seulement si aucun bloc ne porte le dossier de la session ; la fusion se vérifie quand même.
@@ -222,4 +223,59 @@ test('une session de l’app n’a jamais claude rm, ni la session des pistes, q
       expect(items).toContain('10) pas de claude rm : la session des pistes ne dépose pas son compte rendu au relais')
     }
   }
+})
+
+// La fermeture complète retenue par la personne qui porte la mission (`claude rm` compris) : une question
+// du compte rendu qui attend ne garde plus ouvert un worker dont la fermeture est sûre ; elle reste au manager, posée à
+// part. Les trois copies de l'étape 0 : avec le script, sans le script, sans git (qui garde la session).
+test('une question ouverte reste au manager, posée à part ; elle ne retient plus seule une fermeture sûre, sauf sans git ; jamais claude rm sans compte rendu', () => {
+  const apart = 'elle reste ici : tranche-la si elle t’est adressée, sinon pose-la-moi à part ("waiting", groupe, id), hors de la fermeture'
+  const kept = 'envoie "state": "stopped", "why": "question ouverte"'
+  const before = closingScript.path
+  closingScript.path = '/opt/flow-board/scripts/fermeture.mjs'
+  try {
+    const script = closingProcedure({ hasReport: true, run, target: group, isRepo: true, session: '178bd61c' })
+    expect(script).toContain('0) une question de son compte rendu qui attend ne retient plus la fermeture : ')
+    // Gardée pour appliquer la réponse : rien ne se lance, ni arrêt, ni script, ni retrait, et la fermeture se rapporte arrêtée.
+    expect(script).toContain(`si la session doit appliquer la réponse, ne lance rien et ${kept} ; `)
+    expect(script).not.toContain('dans le doute, garde-la')
+    expect(script).toContain(apart)
+    expect(script).toContain('sinon le script seul juge (SÛR) ; ')
+    expect(script.indexOf('0) une question')).toBeLessThan(script.indexOf('1) dans ce dossier'))
+    // L'ancienne étape 0 de cette copie a disparu ; la consigne de l'envoi ne dit plus qu'une question ouverte arrête seule.
+    expect(script).not.toContain('attend encore une réponse, ne ferme rien')
+    expect(closedHint(group)).toContain('an open question alone no longer stops a closing with git')
+    // Sans compte rendu au relais : ni --avec-rm, ni claude rm à lancer, quelle que soit la question.
+    const noReport = closingProcedure({ hasReport: false, run, target: group, isRepo: true, session: '178bd61c' })
+    expect(noReport).not.toContain('--avec-rm')
+    expect(noReport).not.toContain("claude rm '178bd61c'")
+  } finally {
+    closingScript.path = before
+  }
+  // Sans le script : la même règle, ses vérifications seules juges.
+  for (const text of [cli, app, unknown, pistes]) expect(text).toContain(apart)
+  const noReport = closingProcedure({ hasReport: false, run, target: group, isRepo: true, session: '178bd61c' })
+  expect(noReport).not.toContain("claude rm '178bd61c', sans aucune option")
+  // Sans git : la question garde la session.
+  expect(noGit).toContain('une question de son compte rendu qui attend encore une réponse, ou dont la réponse doit s’appliquer dans la session, garde la session (sans branche, rien ne prouve que la réponse peut s’appliquer ailleurs)')
+  expect(noGit).toContain(`${apart} ; ne ferme rien tant qu’elle attend ou que sa réponse n’y est pas appliquée ; ${kept} ; `)
+  // Sans git, aucune commande de retrait de session : la question la garde.
+  expect(noGit).not.toContain('claude rm')
+  // L'ancienne étape 0, qui gardait tout ouvert, a disparu des trois copies.
+  for (const text of all) {
+    expect(text).not.toContain('attend encore une réponse, ne ferme rien')
+    expect(text).not.toContain('attend encore une réponse (de moi ou d’ici), ne ferme rien')
+    expect(text).not.toContain('qu’aucune question de son compte rendu ne t’attend')
+  }
+})
+
+test('l’envoi que dicte une question gardée est accepté tel quel : la fermeture du groupe se note arrêtée, avec sa raison', () => {
+  const lot = { tickets: [{ id: 'b1', name: 'Un' }, { id: 'c1', name: 'Deux' }], groups: [{ id: 'B', name: 'Fermeture', tickets: ['b1'] }, { id: 'C', name: 'Autre', tickets: ['c1'] }] }
+  const r = { ...newRun('implement', 1_000, 'Fermeture auto'), owner: 's' }
+  const board = applyReport({ ...emptyBoard('/w/p', 'p'), session: 's', deleted: [], runs: [r], activeId: r.id }, lot, 2_000).board
+  const sent = startLinkedGroups(board, ['B'], 5_000)!.board
+  const back = applyReport(sent, { set: [{ id: 'b1', status: 'done' }], returned: ['B'], reviewed: ['B'] }, 6_000, { isRepo: true }).board
+  const out = applyReport(back, { closed: [{ group: 'B', state: 'stopped', why: 'question ouverte' }] }, 7_000, { isRepo: true })
+  const closing = activeRun(out.board)!.groups!.find(g => g.id === 'B')!.delegated!.closing
+  expect(closing).toMatchObject({ state: 'stopped', why: 'question ouverte' })
 })

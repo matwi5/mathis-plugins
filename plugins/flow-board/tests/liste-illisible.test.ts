@@ -25,7 +25,7 @@ const KEY = 'coo-cards:'
 const PISTES = `flow-board/pistes/${PROJECT}.json`
 const ALERT = '⚠ Liste des cartes illisible : aucune carte n’est montrée, rien ne s’y écrit'
 const NOTHING = '◆ Rien n’est fait : la liste des cartes ne se lit pas.'
-const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: ['to-spec'], mode: 'manual', effort: 'high', folder: 'export-csv' }
+const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: ['to-spec'], mode: 'manual', effort: 'high', folder: 'export-csv', goal: 'Objectif de test.' }
 const pane = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 const call = async ($: any, input: Record<string, unknown>): Promise<string> => String(((await $.tool.call({ tool: TOOL, ...input } as any)) as any).result)
 const statement = async ($: any): Promise<string> => JSON.stringify(await $.prompt.submit({ text: 'et ?', origin: { kind: 'composer' } } as any))
@@ -54,10 +54,14 @@ const isList = (pathOrKey: string): boolean => pathOrKey.endsWith(`/${LIST}`) ||
 /** Les copies gardées d'une liste illisible (le monde les range à part) : fichiers `.illisible-<date>` à côté, ou clés `…:illisible:<date>`. */
 const asides = (w: World): string[] => Object.keys(w.asides).filter(p => p.includes(`${PROJECT}.cartes.json.illisible-`) || p.startsWith(`${KEY}:illisible:`))
 
-/** Les quatre formes d'une liste illisible. */
+/** Les formes d'une liste illisible. */
 const FORMS: Record<string, (w: World) => void> = {
   'texte qui ne se lit pas': w => putList(w, '{ pas une liste'),
-  'autre version': w => putList(w, JSON.stringify({ v: 2, root: '', cards: [] })),
+  // Les versions 1 et 2 se lisent (liste des cartes en version 2) ; toute autre est illisible.
+  'version inconnue (3)': w => putList(w, JSON.stringify({ v: 3, root: '', cards: [card('kcarte001')] })),
+  'version 0': w => putList(w, JSON.stringify({ v: 0, root: '', cards: [card('kcarte001')] })),
+  'sans version': w => putList(w, JSON.stringify({ root: '', cards: [card('kcarte001')] })),
+  'version en texte': w => putList(w, JSON.stringify({ v: '2', root: '', cards: [card('kcarte001')] })),
   'racine d’un autre projet': w => putList(w, JSON.stringify({ v: 1, root: '/autre/projet', cards: [] })),
   'lecture ratée': w => {
     putList(w, [card('kcarte001')])
@@ -112,7 +116,7 @@ for (const [form, breakList] of Object.entries(FORMS))
     expect(shown).toMatch(new RegExp(`Fichier : .*${PROJECT}\\.cartes\\.json|Fichier : coo-cards:`))
     if (form === 'lecture ratée') expect(shown).toContain('Aucune copie gardée : la lecture a raté')
     else expect(shown).toMatch(/Copie gardée : .*illisible/)
-    expect(shown).not.toContain('Lancements ·')
+    expect(shown).not.toContain('Au départ ·')
     expect(shown).not.toContain('Rétrospective · Mission close')
     // Les trois lignes sont là, sans rangée de boutons (rendue sous la clé `<ligne>-acts`), et aucun bouton de carte.
     for (const key of ['coo-cards-unread', 'coo-cards-unread-path', 'coo-cards-unread-aside']) {

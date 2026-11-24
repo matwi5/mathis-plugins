@@ -3,7 +3,8 @@
 // toutes les 5 secondes et applique lui-même ce qui vise sa mission, une fois.
 //
 // Module pur, sans import du modèle : `register.tsx` lit et écrit le fichier, ce module dit ce qu'il
-// contient et ce qu'une écriture peut en retirer.
+// contient et ce qu'une écriture peut en retirer. Il porte aussi les textes fixes des réveils d'un manager
+// et la cible d'un réveil que Claude envoie lui-même (`wakeTarget`).
 //
 // Invariants :
 // - « Le fichier de coordination n'est écrit que par la discussion qui tient le siège ; une lecture
@@ -15,8 +16,8 @@
 //   mission, part quand plus aucune boîte ne porte la déclaration ; et le plan des vagues du projet
 //   (entrées « plan »), que le plan suivant validé remplace en entier.
 
-import { isTime } from './basics.ts'
-import { isGroupId, isSafeId, isSessionId } from './closing.ts'
+import { clip, isTime } from './basics.ts'
+import { isGroupId, isSafeId, isSessionId, neutralInPrompt } from './closing.ts'
 import { soundPlanWait, type PlanWait } from './plan-projet.ts'
 import { NIGHT_FORCE_PAIRS_MAX, isNightId } from './night.ts'
 
@@ -29,6 +30,20 @@ export const WAKE_TEXT = 'Le COO a mis ta mission à jour : relis le tableau de 
  * vrai même quand l'auto de la mission réveillée n'a pas repris.
  */
 export const DAY_WAKE_TEXT = 'Un groupe que ta mission attendait est terminé : relis le tableau de bord. Si ta mission est en auto, il envoie la suite de lui-même : ne lance rien toi-même.'
+
+/**
+ * La cible d'un réveil que Claude envoie lui-même par SendMessage (`wakeManager`, `wakeWaitingRun` de
+ * `register.tsx`) : la ligne de ListAgents qui porte la référence relue (`ref`, repassée ici par `refOf` : hors
+ * forme, elle compte comme absente), sous son « <nom> [ref] » tel que la liste l'affiche, puis, si aucune ligne
+ * ne la porte (la discussion a redémarré sous une autre, que le mod ne peut pas savoir), la session au titre
+ * neutralisé de la mission, jamais une dont le titre continue par « > » ; sans référence, ce titre seul. Le
+ * dernier repli (aucune session ni par l'une ni par l'autre, ou l'envoi refusé) est celui de l'appelant.
+ */
+export const wakeTarget = (to: { ref: string | null; title: string }): string => {
+  const ref = refOf(to.ref)
+  const byTitle = `the session of ListAgents titled « ${neutralInPrompt(clip(to.title, 80))} » (never a session whose title starts with it followed by « > »)`
+  return ref !== null ? `the row of ListAgents whose [ref] is ${ref}, as that row's "<name> [ref]" exactly as listed; if no row of ListAgents carries that [ref] (its discussion restarted under another), to ${byTitle}` : byTitle
+}
 
 /** Ce que dit une discussion qui ne lit pas le fichier de coordination. */
 export const COORD_UNREAD = 'Fichier de coordination illisible : retenues gardées, auto en pause.'

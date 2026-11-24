@@ -4,21 +4,36 @@
 // part que si la précédente a réussi ; une seule livraison à la fois. » Une livraison ne naît que du clic
 // (`newDelivery`), une étape ne démarre que si toutes celles d'avant sont faites (`startStep`), et une
 // livraison pas finie (une étape en cours, échouée ou à faire) en refuse une autre (`isDeliveryOpen`).
+//
+// La dernière étape, « rangement », ne livre rien : le tableau de bord la mène lui-même et en rend l'issue (Claude ne la
+// rend jamais). Invariant : « L'étape de rangement ne part jamais avant que les étapes qui livrent soient faites, ne
+// change jamais leur issue, et son arrêt ou son abandon ne défait rien de ce qui est livré. » Elle ne part qu'en dernière
+// (`startStep`), les clôtures et les cartes de rétro partent dès que les étapes qui livrent sont faites (`isShipped`), et
+// « ✕ Finir sans ranger » (`finishUntidied`) ne touche qu'elle.
 
 import type { Run } from '../types'
 import { isReportValidated } from './basics.ts'
 import { neutralLine } from './closing.ts'
 
-/** Les étapes, dans l'ordre : les trois skills réservés du plugin project, puis celles du `CLAUDE.md` du projet. */
-export type DeliveryKey = 'version' | 'push' | 'pr' | 'project'
-export const DELIVERY_KEYS: readonly DeliveryKey[] = ['version', 'push', 'pr', 'project']
+/**
+ * Les étapes, dans l'ordre : les trois skills réservés du plugin project, celles du `CLAUDE.md` du projet, puis le
+ * rangement du COO, mené par le tableau de bord (absent d'une livraison gardée d'avant lui, qui se relit et finit sans).
+ */
+export type DeliveryKey = 'version' | 'push' | 'pr' | 'project' | 'rangement'
+export const DELIVERY_KEYS: readonly DeliveryKey[] = ['version', 'push', 'pr', 'project', 'rangement']
+
+/** L'étape que le tableau de bord mène et dont il rend l'issue ; les autres livrent. */
+export const TIDY_STEP: DeliveryKey = 'rangement'
 
 /** Le skill réservé qu'une étape lance par `$.command.run` ; l'étape du projet est un message du mod à Claude. */
 export const DELIVERY_COMMAND: Partial<Record<DeliveryKey, string>> = { version: 'project:version', push: 'project:push', pr: 'project:pr' }
 
-export const DELIVERY_FR: Record<DeliveryKey, string> = { version: '/project:version', push: '/project:push', pr: '/project:pr', project: 'étapes du CLAUDE.md' }
+export const DELIVERY_FR: Record<DeliveryKey, string> = { version: '/project:version', push: '/project:push', pr: '/project:pr', project: 'étapes du CLAUDE.md', rangement: 'rangement' }
 
-/** Une étape : à faire, lancée (son issue attendue de Claude), faite ou échouée ; `detail`, ce que Claude en a dit. */
+/**
+ * Une étape : à faire, lancée (son issue attendue de Claude, ou du tableau de bord pour le rangement), faite ou échouée ;
+ * `detail`, ce que l'issue en a dit.
+ */
 export type DeliveryStep = { key: DeliveryKey; status: 'todo' | 'running' | 'done' | 'failed'; at?: number; detail?: string }
 
 /**
@@ -34,7 +49,7 @@ const isKey = (v: unknown): v is DeliveryKey => typeof v === 'string' && (DELIVE
 const isTime = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 const isId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v)
 
-/** La livraison du clic : version, push, pull request (projet sur GitHub seulement), puis les étapes du projet. */
+/** La livraison du clic : version, push, pull request (projet sur GitHub seulement), les étapes du projet, puis le rangement. */
 export const newDelivery = (id: string, missions: readonly { id: string; title: string; validatedAt: number }[], isGitHub: boolean, now: number): Delivery => ({
   v: 1,
   id,
@@ -45,6 +60,9 @@ export const newDelivery = (id: string, missions: readonly { id: string; title: 
 
 /** Toutes les étapes faites. */
 export const isDelivered = (d: Delivery): boolean => d.steps.every(s => s.status === 'done')
+
+/** Les étapes qui livrent (toutes sauf le rangement) faites : les missions se closent, leurs cartes de rétro se posent. */
+export const isShipped = (d: Delivery): boolean => d.steps.every(s => s.key === TIDY_STEP || s.status === 'done')
 
 /** Les missions à attendre avant de livrer, par titre : à groupes déjà confiés, ou sans eux mais dont des commits partent. */
 export type DeliveryWaits = { groups: string[]; commits: string[] }
@@ -102,7 +120,7 @@ export const startStep = (d: Delivery, key: DeliveryKey, now: number): Delivery 
 }
 
 /**
- * L'issue d'une étape rendue par Claude : seulement l'étape lancée. Faite, la livraison se finit quand c'était
+ * L'issue d'une étape, rendue par Claude (ou, pour le rangement, par le tableau de bord) : seulement l'étape lancée. Faite, la livraison se finit quand c'était
  * la dernière ; échouée, elle s'arrête là : rien d'après ne part, et elle reste ouverte (« ↻ Réessayer » refait
  * cette seule étape, « ✕ Abandonner » la ferme), jamais une étape réussie refaite.
  */
@@ -122,8 +140,21 @@ export const retryStep = (d: Delivery): Delivery | null => {
   return { ...d, steps: d.steps.map(s => (s.key === failed.key ? { key: s.key, status: 'todo' } : s)) }
 }
 
-/** « ✕ Abandonner » une livraison arrêtée (une étape échouée) : fermée, elle laisse partir une autre livraison (le push fait, ses missions sont closes). */
-export const abandonDelivery = (d: Delivery, now: number): Delivery | null => (d.finishedAt === undefined && failedStep(d) ? { ...d, finishedAt: now } : null)
+/**
+ * « ✕ Abandonner » une livraison arrêtée à une étape qui livre : fermée, elle laisse partir une autre livraison (le push
+ * fait, ses missions sont closes). Arrêtée au rangement, elle se finit par `finishUntidied`.
+ */
+export const abandonDelivery = (d: Delivery, now: number): Delivery | null => (d.finishedAt === undefined && failedStep(d) && failedStep(d)?.key !== TIDY_STEP ? { ...d, finishedAt: now } : null)
+
+/**
+ * « ✕ Finir sans ranger » : les étapes qui livrent faites, le rangement pas fini (à faire, en cours ou arrêté), la livraison
+ * se ferme, le rangement noté arrêté (« fini sans ranger ») ; rien de ce qui est livré ne change. Sinon null.
+ */
+export const finishUntidied = (d: Delivery, now: number): Delivery | null => {
+  const tidy = d.steps.find(s => s.key === TIDY_STEP)
+  if (d.finishedAt !== undefined || !isShipped(d) || !tidy || tidy.status === 'done') return null
+  return { ...d, steps: d.steps.map(s => (s.key === TIDY_STEP ? { key: s.key, status: 'failed', at: now, detail: 'fini sans ranger' } : s)), finishedAt: now }
+}
 
 /** Relit une livraison gardée : null si elle est mal formée (rien ne part d'un état qu'on ne sait pas lire). */
 export const parseDelivery = (raw: unknown): Delivery | null => {
@@ -146,5 +177,9 @@ export const parseDelivery = (raw: unknown): Delivery | null => {
   const order = steps.map(s => DELIVERY_KEYS.indexOf(s.key))
   // Toujours la version, le push et les étapes du projet ; la pull request seule est facultative.
   if (steps.length === 0 || order.some((v, i) => i > 0 && v <= order[i - 1]!) || !['version', 'push', 'project'].every(k => steps.some(s => s.key === k))) return null
+  // Après une étape pas faite, rien n'a pu partir : une étape lancée, faite ou échouée plus loin (une copie forgée ou
+  // coupée) ne se lit pas, pour que le rangement ne parte jamais avant les étapes qui livrent.
+  const firstOpen = steps.findIndex(s => s.status !== 'done')
+  if (firstOpen >= 0 && steps.slice(firstOpen + 1).some(s => s.status !== 'todo')) return null
   return { v: 1, id: x.id, missions, steps, startedAt: x.startedAt, ...(isTime(x.finishedAt) ? { finishedAt: x.finishedAt } : {}) }
 }

@@ -2,7 +2,7 @@
 name: push
 description: Finish a piece of work and push it - commit what is left, run the project's checks, confirm the end-of-session files are up to date, sync with the remote and push without force.
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git add *) Bash(git commit *) Bash(git fetch *) Bash(git pull *) Bash(git push *) Bash(git ls-remote *) Bash(git merge-base *) Bash(git rev-parse *) Bash(git symbolic-ref *) Bash(git remote *) Bash(gh run list *) Bash(gh run view *) Bash(gh run watch *) Glob Read(/${CLAUDE_PLUGIN_ROOT}/**)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git add *) Bash(git commit *) Bash(git fetch *) Bash(git pull *) Bash(git merge *) Bash(git push *) Bash(git ls-remote *) Bash(git merge-base *) Bash(git rev-parse *) Bash(git rev-list *) Bash(git for-each-ref *) Bash(git worktree list *) Bash(git symbolic-ref *) Bash(git remote *) Bash(gh run list *) Bash(gh run view *) Bash(gh run watch *) Glob Read(/${CLAUDE_PLUGIN_ROOT}/**)
 ---
 
 Push the current branch. Gather the context and follow the rules in `${CLAUDE_PLUGIN_ROOT}/reference/git.md`.
@@ -33,7 +33,7 @@ Asana updates follow the protocol in `CLAUDE.md` (`asana-board:suivi-asana` skil
 
 ## 5. Sync and push
 
-1. With an upstream, bring in remote commits first, as `${CLAUDE_PLUGIN_ROOT}/reference/git.md` (« Bringing in the remote ») says: `git fetch origin`, then nothing to do if `git merge-base --is-ancestor @{u} HEAD` succeeds, otherwise `git pull --rebase=merges --autostash`.
+1. With an upstream, bring in remote commits first, as `${CLAUDE_PLUGIN_ROOT}/reference/git.md` (« Bringing in the remote ») says: `git fetch origin`, then nothing to do if `git merge-base --is-ancestor @{u} HEAD` succeeds; otherwise look for another branch, a tag or a worktree that carries the local commits (« Local commits carried elsewhere » in the same reference, `<base>` = `@{u}`): carried, or unsure, `git merge --no-edit --autostash '@{u}'`, and the report names what carries them; not carried, `git pull --rebase=merges --autostash`.
 2. Push with the tags of the commits pushed: `git push --follow-tags`, or `git push -u --follow-tags origin HEAD` for a branch without upstream. If a tag sits in the pushed range (`git log --oneline --decorate` shows it), check that it reached the remote: `git ls-remote --tags origin <tag>`.
 3. If the push is rejected because the remote moved, sync again and retry once. Never force: the rejected commits exist only on the remote.
 
@@ -43,4 +43,4 @@ If the repository has a CI that runs on pushes to this branch (a workflow in `.g
 
 ## Report
 
-Branch and remote pushed to, commits pushed (`git log --oneline` of the range), tags pushed, checks run and their result, end-of-session files updated, the CI run and its result (or why it was not followed). If the branch is not the default one and has no pull request yet, mention `/project:pr`.
+Branch and remote pushed to, commits pushed (`git log --oneline` of the range), tags pushed, when step 5.1 merged instead of rebasing, which branches, tags or worktrees carry the local commits (or what could not be read), checks run and their result, end-of-session files updated, the CI run and its result (or why it was not followed). If the branch is not the default one and has no pull request yet, mention `/project:pr`.

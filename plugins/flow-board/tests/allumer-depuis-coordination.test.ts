@@ -68,7 +68,7 @@ test('chez le COO, une mission en manuel ouverte ailleurs porte « ⚡ Auto », 
   await start($)
   await openCoo($, clock)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'coo-page-missions' })
+  await pane.press({ key: 'coo-page-overview' })
   expect((await pane.find({ key: `coo-auto-on-${run.id}` }))?.props.label).toMatch(/Auto/)
   expect(await pane.find({ key: `coo-auto-confirm-${run.id}` })).toBeUndefined()
   await pane.unmount()
@@ -97,7 +97,7 @@ test('chez le COO, une mission ouverte nulle part dit « Reprends-la pour l’al
   await openCoo($, clock)
   for (const surface of ['desktop', 'terminal'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    await pane.press({ key: 'coo-page-missions' })
+    await pane.press({ key: 'coo-page-overview' })
     expect(await texts(pane)).toMatch(/Reprends-la pour l’allumer/)
     expect(await pane.find({ key: `coo-auto-on-${run.id}` })).toBeUndefined()
     await pane.unmount()

@@ -11,6 +11,7 @@
 // écrit. »
 
 import { isRoadmapId, roadmapTextPrint, type RoadmapEntry } from './roadmap.ts'
+import { needsTitle } from './complement.ts'
 
 /** Un titre gardé : le titre, et l'empreinte du texte de l'entrée à l'instant où il a été écrit. */
 export type RoadmapTitle = { title: string; print: string }
@@ -61,11 +62,11 @@ export const titleOf = (titles: RoadmapTitles | undefined, e: Pick<RoadmapEntry,
   return t && t.print === roadmapTextPrint(e.text) ? t.title : undefined
 }
 
-/** Une entrée « À reprendre » ouverte (à décider, plus tard) : celles dont le COO doit écrire le titre. */
-const isOpenPending = (e: RoadmapEntry): boolean => e.section === 'À reprendre' && (e.status === 'à décider' || e.status === 'plus tard')
-
-/** Les ids des entrées ouvertes de « À reprendre » sans titre attaché à leur texte du moment, dans l'ordre du fichier. */
-export const untitledIds = (entries: readonly RoadmapEntry[], titles: RoadmapTitles | undefined): string[] => entries.filter(e => isOpenPending(e) && titleOf(titles, e) === undefined).map(e => e.id)
+/**
+ * Les ids des entrées ouvertes de « À reprendre » (et des compléments rangés avec leur entrée : `needsTitle`) sans titre
+ * attaché à leur texte du moment, dans l'ordre du fichier ; `entries` : toutes les entrées lues, pour le sort d'un complément.
+ */
+export const untitledIds = (entries: readonly RoadmapEntry[], titles: RoadmapTitles | undefined): string[] => entries.filter(e => needsTitle(e, entries) && titleOf(titles, e) === undefined).map(e => e.id)
 
 /** Ce qu'un envoi enregistre (id, titre, empreinte prise à l'instant) et ce qu'il refuse (id et raison). */
 export type TitlesPlan = { kept: RoadmapTitles; refused: { id: string; why: string }[] }

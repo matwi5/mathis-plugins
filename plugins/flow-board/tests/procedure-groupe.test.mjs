@@ -277,6 +277,7 @@ test('compte rendu : complet au relais, une ligne au manager', () => {
     'la revue du groupe (constats, corrigés, et à part les constats sur du code antérieur au lot, chacun avec sa gravité), la revue de sécurité (lancée ou non, pourquoi, failles trouvées)',
     '`{"report": "<le compte rendu entier>"}`',
     'une seule ligne qui renvoie au relais',
+    "par le chemin absolu du fichier du relais que la réponse de l'outil flow a donné au dépôt, jamais le nom du fichier de travail",
   )
 })
 
@@ -298,7 +299,7 @@ test('sans git : copies avant chaque ticket, points fixes et périmètres par ce
     'un sous-dossier par ticket qui garde le chemin dans le projet (`<dossier temporaire>/<id du ticket>/<chemin dans le projet>`)',
     'un fichier que le ticket crée n\'a pas de copie : il est nouveau et se lit en entier',
     'la copie de ses fichiers prise avant le ticket, comparée aux fichiers actuels',
-    '`/code-review <niveau> consignes : <chemin>` (le fichier liste les copies et les fichiers à comparer)',
+    '`/code-review <niveau> consignes : <chemin>` (la revue de Claude Code ; le fichier liste les copies et les fichiers à comparer)',
     'arguments « high --fix consignes : <chemin> », sur les changements du groupe (point fixe : pour chaque fichier, la plus ancienne copie parmi les tickets du groupe',
     'pas d\'instantané',
   )
@@ -371,8 +372,12 @@ test('statut : la ligne Status: dit « fait » sans hash, jamais dans un commit 
   has(
     section(2),
     'Un ticket local (un fichier) dit « fait » dans sa ligne `Status:` sans hash',
-    'jamais à un commit de statut seul',
+    'jamais à un commit de statut seul, sauf pour le dernier ticket du groupe : sa ligne part dans le commit des correctifs de la revue du groupe, sinon dans un commit de clôture du groupe que la session fait avant son compte rendu, le seul commit de statut seul admis (un manager ne le fait jamais à la place du worker : il le lui demande)',
+    'La valeur est « fait », le mot du projet, jamais « done » dans un projet qui écrit « fait ».',
   )
+  // Le dernier ticket d'un groupe sans correctif de revue n'avait pas de commit suivant : le worker l'avait
+  // laissé « in-progress », et le manager avait fait un commit de statut seul en écrivant « done ».
+  has(files['procedure-groupe-fin.md'], 'Le dernier ticket du groupe dont la revue n\'a eu aucun correctif n\'a pas de commit suivant', 'dans un commit de clôture du groupe, fait avant le geste de fin et le compte rendu')
 })
 
 test('version : un worker ne touche ni aux versions ni aux CHANGELOG, et liste ce que le CHANGELOG devra dire', () => {
@@ -408,6 +413,10 @@ test('après le compte rendu, un correctif suit la procédure du ticket, une que
     'Après le compte rendu, un correctif appliqué par la session',
     'suit la procédure du ticket (section 2 : contrôles, revue, passe « bogues » s\'il touche une zone sensible, commit)',
     'Une question du compte rendu se tranche dans le manager ; la session n\'applique rien d\'autre sans un message de celui-ci',
+    // La fermeture complète retenue par la personne : la session peut être fermée avant la réponse.
+    'La session peut être fermée avant la réponse, `claude rm` compris, quand sa branche est fusionnée et que le manager n\'a rien à lui faire appliquer',
+    'sa preuve écrite dans le compte rendu, jamais un fichier de `CLAUDE_JOB_DIR`',
+    'chaque question du compte rendu porte donc tout ce que sa réponse demande',
   )
 })
 
@@ -614,7 +623,7 @@ test('le gabarit du prompt du relecteur unique existe et dit de ne pas invoquer 
   const prompt = read('reference/prompt-relecteur.md')
   has(
     prompt,
-    'N\'invoque pas le skill code-review et ne lance aucun spécialiste : fais toi-même les deux axes',
+    'N\'invoque pas le skill `/mattpocock-skills:code-review` et ne lance aucun spécialiste : fais toi-même les deux axes',
     '`<chemin du fichier de consignes>`',
     '**Axe Standards**',
     '**Axe Spec**',
@@ -711,7 +720,7 @@ test('section 11 : la fermeture ne lance jamais claude rm tant que le relais n�
 
 test('section 2, point 8 : fixed compte les constats corrigés par un commit, et une revue renvoyée telle quelle n’est pas recomptée', () => {
   has(section(2), '`fixed` : les constats corrigés par un commit, pas ceux seulement notés ou documentés')
-  has(section(2), 'la même (mêmes comptes, le même ticket ou aucun) renvoyée sans qu\'un ticket ait changé de statut ni qu\'une revue (`/code-review`) ait été lancée depuis n\'est pas recomptée, et la réponse dit « revue déjà reçue : non recomptée »')
+  has(section(2), 'la même (mêmes comptes, le même ticket ou aucun) renvoyée sans qu\'un ticket ait changé de statut ni qu\'une revue (`/code-review` de Claude Code) ait été lancée depuis n\'est pas recomptée, et la réponse dit « revue déjà reçue : non recomptée »')
   has(section(2), 'La revue d\'un ticket (sa passe « bogues » comprise) nomme ce ticket, `"ticket": "<id du ticket>"`')
 })
 
@@ -735,7 +744,7 @@ test('le noyau garde les sections 1, 2, 3, 7 et 8, et une ligne par section dép
   has(procedure, 'avant de lancer un worker ou d\'appliquer un correctif après son compte rendu, dans `effort-workers.md`')
   // Le noyau dit lui-même ce qu'il relit après une compaction.
   has(procedure, 'Après une compaction, relire ce noyau, et `procedure-groupe-fin.md` quand le dernier ticket est commité ; un rapport de relecteur reçu ou attendu avant la compaction se relit par `node <dossier de flow-board>/scripts/rapports-specialistes.mjs <transcript de la session> --prefixe "<nom du relecteur>"`')
-  has(procedure, 'et par la même commande sur le fichier d\'origine quand le transcript commence par une compaction (il en continue un autre), jamais en fouillant le transcript à la main ; sans nom sûr (une passe « bogues », que `/code-review` nomme elle-même), la même commande sans `--prefixe` les liste tous.')
+  has(procedure, 'et par la même commande sur le fichier d\'origine quand le transcript commence par une compaction (il en continue un autre), jamais en fouillant le transcript à la main ; sans nom sûr (une passe « bogues », que `/code-review` de Claude Code nomme elle-même), la même commande sans `--prefixe` les liste tous.')
   // Plus de section déplacée dans le noyau, et chaque annexe ne porte que les siennes.
   for (const [n, file] of Object.entries(FILE_OF)) {
     for (const other of Object.keys(files)) {

@@ -96,21 +96,22 @@ const statementOf = (r: CooRoadmap): string => statementText(cooStatement(emptyB
 
 test('le relevé nomme le compte et les ids des entrées ouvertes sans titre attaché à leur texte, sans jamais recopier un titre', () => {
   const said = statementOf(roadmapOf({ R1: { title: 'TITRE-SECRET-UN', print: roadmapTextPrint(entry('R1').text) }, R3: { title: 'TITRE-SECRET-TROIS', print: roadmapTextPrint(entry('R3').text) } }))
-  expect(said).toContain('- Titles: 1 open « À reprendre » entry has no title attached to the current text: « R2 ».')
+  expect(said).toContain('- Titles: 1 « À reprendre » entry to title (open, or a complement) has no title attached to the current text: « R2 ».')
   // L'appel dicté se lit comme du JSON, tel qu'écrit.
   const dictated = /with (\{"coordinate": .*?\}\]\}\}), 50 per call/.exec(said)?.[1]
   expect(JSON.parse(dictated!)).toEqual({ coordinate: { titles: [{ id: '<entry id>', title: '<short title>' }] } })
   expect(said).not.toContain('TITRE-SECRET')
-  // Le texte gardé reste celui du fichier, cité comme avant.
-  expect(said).toContain('une chose à reprendre, assez longue')
+  // Le texte d'une entrée ouverte n'est plus recopié au relevé (plafond) : le COO le lit dans le fichier, par son id.
+  expect(said).not.toContain('une chose à reprendre, assez longue')
+  expect(said).toMatch(/Set aside, open « À reprendre » entries: 2 \(1 « à décider », 1 « plus tard »\), not listed here/)
 })
 
 test('le relevé : sans titre, toutes les entrées ouvertes sont nommées ; toutes titrées, la ligne disparaît ; une entrée close n’y entre jamais', () => {
-  expect(statementOf(roadmapOf())).toContain('- Titles: 2 open « À reprendre » entries have no title attached to the current text: « R1 », « R2 ».')
+  expect(statementOf(roadmapOf())).toContain('- Titles: 2 « À reprendre » entries to title (open, or a complement) have no title attached to the current text: « R1 », « R2 ».')
   const all = { R1: { title: 'a', print: roadmapTextPrint(entry('R1').text) }, R2: { title: 'b', print: roadmapTextPrint(entry('R2').text) } }
   expect(statementOf(roadmapOf(all))).not.toContain('- Titles:')
   // Un titre dont l'empreinte n'est plus celle du texte : l'entrée revient dans la liste.
-  expect(statementOf(roadmapOf({ ...all, R2: { title: 'b', print: roadmapTextPrint('un ancien texte') } }))).toContain('entry has no title attached to the current text: « R2 ».')
+  expect(statementOf(roadmapOf({ ...all, R2: { title: 'b', print: roadmapTextPrint('un ancien texte') } }))).toContain('entry to title (open, or a complement) has no title attached to the current text: « R2 ».')
 })
 
 // ─── L'outil et l'état gardé, chez le titulaire du siège ──────────────────
@@ -177,7 +178,7 @@ test('un envoi de titres : enregistrés avec l’empreinte du texte, refusés no
   expect(said).toContain('Titles recorded: R1')
   expect(said).toContain('R9 (no such entry')
   expect(said).toContain('R2 (empty title)')
-  expect(said).toContain('1 open « À reprendre » entry has no title yet')
+  expect(said).toContain('1 « À reprendre » entry to title (open, or a complement) has no title yet')
   expect(stateOf(w).titles).toEqual({ R1: { title: 'Une chose à reprendre', print: roadmapTextPrint(entry('R1').text) } })
   expect(w.files[roadmapAt(w)]).toBe(roadmapBefore)
   // Les entrées vues restent.
@@ -298,7 +299,7 @@ test('un deuxième envoi pour le même id remplace le titre ; les autres titres 
   if (!canReadRoadmap) return
   const { w } = await seatedWithRoadmap($, on)
   await titlesCall($, [{ id: 'R1', title: 'Premier' }, { id: 'R2', title: 'Autre' }])
-  expect(await titlesCall($, [{ id: 'R1', title: 'Second' }])).toContain('0 open « À reprendre » entries have no title yet')
+  expect(await titlesCall($, [{ id: 'R1', title: 'Second' }])).toContain('0 « À reprendre » entries to title (open, or a complement) have no title yet')
   expect(stateOf(w).titles).toEqual({ R1: { title: 'Second', print: roadmapTextPrint(entry('R1').text) }, R2: { title: 'Autre', print: roadmapTextPrint(entry('R2').text) } })
 })
 
@@ -354,7 +355,7 @@ test('une entrée disparue de la feuille de route garde son titre, pas affiché 
 
 test('l’appel dicté rejoué : une liste vide n’enregistre rien et redit le compte ; une valeur qui n’est pas une liste est refusée', { timeoutMs: 20000 }, async ($, on) => {
   const { w } = await seatedWithRoadmap($, on)
-  if (canReadRoadmap) expect(await titlesCall($, [])).toContain('No title recorded. 2 open « À reprendre » entries have no title yet.')
+  if (canReadRoadmap) expect(await titlesCall($, [])).toContain('No title recorded. 2 « À reprendre » entries to title (open, or a complement) have no title yet.')
   expect(await titlesCall($, { id: 'R1', title: 'Un titre' })).toContain('Titles refused, nothing recorded: "titles" takes a list')
   expect(stateOf(w).titles).toBeUndefined()
 })

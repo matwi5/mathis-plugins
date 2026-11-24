@@ -37,8 +37,8 @@ const SURFACES = {
   'agents/explorer.md': repoFile('plugins/agents/agents/explorer.md'),
   'agents/README.md': repoFile('plugins/agents/README.md'),
   'README.md': read('README.md'),
-  // Avec les consignes qui en sont sorties (`decoupage.ts`, `auto-consignes.ts`), lues comme une seule surface.
-  'hooks/register.tsx': ['hooks/register.tsx', 'hooks/decoupage.ts', 'hooks/auto-consignes.ts'].map(read).join('\n'),
+  // Avec les consignes qui en sont sorties (`decoupage.ts`, `auto-consignes.ts`, la demande de lancement de `launch.ts`), lues comme une seule surface.
+  'hooks/register.tsx': ['hooks/register.tsx', 'hooks/decoupage.ts', 'hooks/auto-consignes.ts', 'hooks/launch.ts'].map(read).join('\n'),
   // La description et le schéma de l'outil `flow`, sortis de register.tsx.
   'hooks/tool-schema.ts': read('hooks/tool-schema.ts'),
   'hooks/catalog.ts': read('hooks/catalog.ts'),
@@ -466,22 +466,45 @@ const CONSIGNES = [
     surfaces: ['hooks/register.tsx'],
   },
   {
+    // La phrase des cases d'autonomie, en anglais, dans la consigne du mode auto : seulement une case au moins cochée.
+    name: 'la phrase des cases d’autonomie, en anglais',
+    keywords: ['Autonomy boxes the user ticked for this project', 'this line wins over the line of the six kinds', '« acceptée par réglage (<box>) »', 'declare it before coding it', 'boxes joined by « + »', 'Still always asked, with no box', 'an invariant already validated to weaken, rewrite, read, clarify or extend', 'any question one of whose kinds has no ticked box'],
+    surfaces: ['hooks/register.tsx'],
+  },
+  {
+    // La phrase des cases d'autonomie, en français : la règle « Mode auto » (validée mot pour mot), le README, la
+    // procédure d'un worker autonome ; la consigne la porte en anglais (entrée précédente).
+    name: 'la phrase des cases d’autonomie',
+    keywords: ["case d'autonomie", '« Réglage : <case> : »', 'une suppression sans retour ou une exposition, une faille laissée sans correctif, le chemin Fable, un invariant déjà validé à affaiblir'],
+    surfaces: ['config/rules/flow-board.md', 'README.md', 'reference/procedure-groupe-autonome.md'],
+  },
+  {
+    // Le renvoi court des textes fixes qui disent qu'une question attend la personne : ils ne lisent pas les cases.
+    name: 'le renvoi aux cases d’autonomie des textes fixes',
+    keywords: ["sauf une sorte dont la consigne du mode auto ou la réponse de l'outil flow dit la case d'autonomie cochée"],
+    surfaces: ['reference/procedure-groupe.md', 'reference/procedure-groupe-autonome.md'],
+  },
+  { name: 'le renvoi aux cases d’autonomie des textes fixes, en anglais', keywords: ["except a kind whose autonomy box the auto mode instructions or the flow tool's answer say is ticked"], surfaces: ['hooks/catalog.ts', 'to-tickets/SKILL.md'] },
+  // La ligne des cases cochées au premier clic sur « ⚡ Auto », texte validé par la personne.
+  { name: 'les cases cochées au premier clic sur « ⚡ Auto »', keywords: ["Tranché seul d'après tes réglages : "], surfaces: ['hooks/view.tsx'] },
+  {
     // Les cas du cycle de vie d'un champ persisté, posés au cadrage plutôt que ticket par ticket pendant
     // l'implémentation : les deux skills de cadrage et les étapes de /to-spec et /to-tickets (catalog.ts).
     name: 'les cas du cycle de vie d’un champ persisté',
-    keywords: ['a failed read', 'a failed write', 'its bounds', 'the erasure of what must be kept', 'a forged copy', 'each transition of the object that carries a mark (sent, cancelled, sent again, back)', 'a value already kept out of form when a new one arrives'],
+    keywords: ['a failed read', 'a failed write', 'its bounds', 'the erasure of what must be kept', 'a forged copy', 'each transition of the object that carries a mark (sent, cancelled, sent again, back, refused)', 'a value already kept out of form when a new one arrives'],
+    old: ['(sent, cancelled, sent again, back)'],
     surfaces: ['to-spec/SKILL.md', 'to-tickets/SKILL.md', 'hooks/catalog.ts'],
   },
   {
     // Trois questions de suite sur un même prédicat de rattachement, dont une option recommandée qui perdait
     // un nom raté : le cadrage pose le tableau des formes reçues, que chaque option d'une question reprend.
     name: 'le tableau des formes reçues par un prédicat de rattachement',
-    keywords: ['attachment predicate', 'absent, template not filled in, old id (out of form), valid but unknown to the plan', 'the test that fixes it', 'repeats that table under each of its options'],
+    keywords: ['attachment predicate', 'absent, template not filled in, old id (out of form), valid but unknown to the plan, valid but its carrier archived, deleted or created again (does the table ever lose a row?)', 'the test that fixes it', 'repeats that table under each of its options'],
     surfaces: ['to-spec/SKILL.md', 'to-tickets/SKILL.md', 'hooks/catalog.ts'],
   },
   {
     name: 'le tableau des formes repris par une question sensible née en cours de ticket',
-    keywords: ['prédicat de rattachement', 'le tableau des formes reçues (absente, modèle non rempli, ancien id hors forme, valide mais inconnue du plan)'],
+    keywords: ['prédicat de rattachement', 'le tableau des formes reçues (absente, modèle non rempli, ancien id hors forme, valide mais inconnue du plan, valide mais dont le porteur est archivé, supprimé ou recréé)'],
     surfaces: ['reference/procedure-groupe.md'],
   },
   {
@@ -766,12 +789,53 @@ const CONSIGNES = [
   {
     // « Once done, call the Skill tool with "code-review" » ne disait pas laquelle des deux revues de ce nom
     // (celle de Claude Code, celle de Matt) : la dernière étape de /implement renvoie aux consignes du tableau
-    // de bord, qui l'emportent, et nomme la revue de Matt sans lui ; la citation de la règle commune
-    // (config/rules/flow-board.md, « Un commit par ticket ») reste mot pour mot.
+    // de bord, qui l'emportent, et nomme la revue de Matt sans lui.
     name: 'la revue à la fin de /implement',
-    keywords: ['its instructions say which reviews run and how', 'and they win over this line', 'mattpocock-skills:code-review', 'call the Skill tool with "code-review"'],
+    keywords: ['its instructions say which reviews run and how', 'and they win over this line', 'call the Skill tool with "mattpocock-skills:code-review"'],
     surfaces: ['implement/SKILL.md'],
-    old: ['Once done, call the Skill tool with "code-review" to review the work.'],
+    // « code-review » seul, dans l'outil Skill, lance la revue de Claude Code : /implement nomme la revue à deux axes par son nom complet.
+    old: ['Once done, call the Skill tool with "code-review" to review the work.', 'call the Skill tool with "code-review" (this plugin'],
+  },
+  {
+    // « code-review » nommait deux skills : la règle commune cite la phrase actuelle de /implement (point
+    // « Un commit par ticket ») et nomme chacun par son nom complet, comme l'entrée du glossaire qui les oppose.
+    name: 'les deux skills « code-review », chacun par son nom complet',
+    keywords: ['Otherwise, call the Skill tool with "mattpocock-skills:code-review" (this plugin\'s two-axis review).'],
+    surfaces: ['config/rules/flow-board.md', 'implement/SKILL.md'],
+    old: ['pas la revue intégrée de Claude Code', "c'est `/code-review` du groupe", 'call the Skill tool with "code-review" (this plugin'],
+  },
+  {
+    name: 'l’entrée du glossaire qui oppose les deux skills « code-review »',
+    keywords: ['**`/code-review` et `/mattpocock-skills:code-review`** :', 'est la revue de Claude Code : elle prend un niveau en argument', 'est la revue à deux axes du plugin mattpocock-skills (Standards et Spec)', '_Avoid_: code-review (nu)'],
+    surfaces: ['GLOSSARY.md'],
+  },
+  {
+    // Le dernier ticket d'un groupe sans correctif de revue n'a pas de commit suivant : sa ligne Status: part
+    // dans le commit des correctifs de la revue du groupe, sinon dans un commit de clôture fait par le worker.
+    name: 'le statut « fait » du dernier ticket d’un groupe',
+    keywords: ['commit de clôture du groupe', 'jamais « done » dans un projet qui écrit « fait »'],
+    surfaces: ['config/rules/flow-board.md', 'reference/procedure-groupe.md', 'README.md'],
+    old: ['jamais à un commit de statut seul.', 'jamais dans un commit de statut seul.'],
+  },
+  {
+    // Trois appels à l'advisor placés à côté d'un autre outil n'avaient rien rendu (16-17/11).
+    name: 'l’advisor appelé seul dans son message',
+    keywords: ["L'appeler seul dans son message, jamais avec un autre outil : placé à côté d'un autre appel, il ne rend rien et l'appel est à refaire."],
+    surfaces: ['config/rules/general.md'],
+  },
+  {
+    // Deux explorateurs avaient lu le même chemin, sur six explorations (cadrage de « Signal de vie »).
+    name: 'l’explorateur déjà lancé, repris par SendMessage',
+    keywords: ["une nouvelle question sur un domaine qu'un explorateur de cette discussion a déjà lu se pose à cet explorateur par `SendMessage` (son contexte gardé) plutôt qu'à un neuf, tant qu'il répond"],
+    surfaces: ['config/rules/agents.md'],
+  },
+  {
+    // Deux recommandations prises seul et un critère avaient contredit un invariant validé après eux, vus
+    // seulement à la revue d'un groupe : un ticket très sensible dit sur une ligne contre quoi son invariant a
+    // été relu (le pre-commit de ce dépôt refuse un ticket neuf sans elle, scripts/check.py).
+    name: 'la ligne « Invariant relu » d’un ticket très sensible',
+    keywords: ['says on a line of its own, starting with « Invariant relu : », against which series of recommendations already taken and which criteria its invariant was reread, and when'],
+    surfaces: ['to-tickets/SKILL.md', 'hooks/catalog.ts'],
   },
 ]
 
@@ -811,6 +875,10 @@ const AUTO_ALLOWED = [
   'en manuel la ligne se valide avec le découpage, en auto elle se déclare',
   // La relance d'un ticket qui bute, validée par Mathis le 13/11/2026 avec le découpage, mot pour mot.
   'une ligne de texte en manuel, une question bloquante sur ce groupe en auto',
+  // Les cases d'autonomie dans les puces de l'invariant d'un ticket et des pistes d'une rétro, validées par Mathis le
+  // 20/11/2026 avec les six phrases des règles communes, mot pour mot.
+  "En mode auto, quand la case d'autonomie « Invariant d'un ticket » est cochée, la session qui découpe écrit elle-même l'invariant d'un ticket en zone concurrence ou suppression et celui d'un ticket très sensible, et le déclare (règle « Mode auto ») ; elle n'affaiblit ni ne réécrit jamais un invariant déjà validé.",
+  "ou après elle et avant la livraison dans une mission en mode auto dont la case d'autonomie « Relecture après la fusion » est cochée",
 ]
 
 test('les règles communes ne recopient pas les exceptions du mode auto, hors de la règle « Mode auto »', () => {

@@ -2,10 +2,10 @@
 // `register.tsx`, que le moteur ne lit plus au-delà de 1 Mio. Module pur : des textes et un schéma JSON.
 
 import { JUDGMENT_FIELD, SECURITY_AREAS, SENSITIVE_AREAS } from './catalog.ts'
-import { GROUP_ID_FORM } from './closing.ts'
+import { GROUP_ID_FORM, POSTPONED_STATE } from './closing.ts'
 import { DISCUSSION_STATES } from './coordination.ts'
 import { UNMARKED_ANSWERS } from './discussions.ts'
-import { LAUNCH_STARTS } from './launch.ts'
+import { CARD_ENTRIES_MAX, LAUNCH_STARTS } from './launch.ts'
 import { OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, WAITING_MAX } from './model.ts'
 
 export const TOOL_DESCRIPTION =
@@ -110,7 +110,7 @@ export const TOOL_SCHEMA = {
     },
     decided: {
       type: 'array',
-      description: `Choices you made without the user asking for or approving them, each sent once. Never one in a sensitive area (${SENSITIVE_AREAS}): ask the user; except in auto mode, as its auto block says, its "what" beginning with « Zone sensible : »`,
+      description: `Choices made without the user's ask or approval, sent once. Never one in a sensitive area (${SENSITIVE_AREAS}): ask the user; except in auto mode, per its auto block, "what" starting « Zone sensible : »; ticked autonomy box: "what" is « [Zone sensible : ]Réglage : <box> : »`,
       items: {
         type: 'object',
         properties: {
@@ -127,11 +127,11 @@ export const TOOL_SCHEMA = {
     },
     withdrawn: {
       type: 'array',
-      description: 'Declared choices that no longer hold, with the reason and the replacing choice if any; only choices in force are shown then',
+      description: 'Declared choices no longer valid, with reason and any replacement; only those in force show',
       items: {
         type: 'object',
         properties: {
-          what: { type: 'string', description: 'The choice exactly as it was declared' },
+          what: { type: 'string', description: 'The choice exactly as declared' },
           why: { type: 'string', description: "Why it no longer holds, short, in the user's language" },
           replacedBy: { type: 'string', description: "The choice that replaces it, short, in the user's language" },
         },
@@ -166,6 +166,9 @@ export const TOOL_SCHEMA = {
           name: { type: 'string' },
           kind: { type: 'string', enum: ['decision', 'task'], description: 'decision: a choice someone must make; task: work outside the lot' },
           status: { type: 'string', enum: ['todo', 'done'] },
+          // Sans description : le budget des descriptions de l'outil est plein (outil-flow-textes.test.ts) ; la règle est dans
+          // la consigne du découpage (`coachingNote`), et un envoi hors forme se fait dire la forme attendue (`noteTicket`).
+          ticket: { type: 'string' },
         },
         required: ['id', 'name'],
       },
@@ -287,20 +290,21 @@ export const TOOL_SCHEMA = {
     coordinate: {
       type: 'object',
       description:
-        'COO only, alone in its call: its instructions to the missions, written to the coordination file, each key as the COO statement asks. "close": close a mission, never archived nor marked delivered (the answer says how). "cutAuto": switch a mission\'s auto off (a pause too), never on; tell the user',
+        'COO only, alone in its call: its instructions to the missions, written to the coordination file, each key as the COO statement asks. "order": alone, the ready card ids by priority. "close": close a mission, never archived nor marked delivered. "cutAuto": switch a mission\'s auto off (a pause too), never on; tell the user',
       properties: {
         close: {
           type: 'array',
-          items: { type: 'object', properties: { mission: { type: 'string', description: 'Mission id, from the COO statement' } }, required: ['mission'] },
+          items: { type: 'object', properties: { mission: { type: 'string' } }, required: ['mission'] },
         },
         cutAuto: { type: 'array', items: { type: 'object', properties: { mission: { type: 'string' } }, required: ['mission'] } },
         instruct: { type: 'array', items: { type: 'object', properties: { mission: { type: 'string' }, file: { type: 'string' }, series: { type: 'number' }, origin: { type: 'string', enum: ['user', 'coo'] } }, required: ['mission', 'file', 'series', 'origin'] } },
         nightOn: { type: 'boolean' },
         toClose: { type: 'array', items: { type: 'string' } },
-        discussionsClosed: { type: 'array', items: { type: 'object', properties: { session: { type: 'string' }, state: { type: 'string', enum: [...DISCUSSION_STATES] }, why: { type: 'string' } }, required: ['session', 'state'] } },
+        discussionsClosed: { type: 'array', items: { type: 'object', properties: { session: { type: 'string' }, state: { type: 'string', enum: [...DISCUSSION_STATES, POSTPONED_STATE] }, why: { type: 'string' } }, required: ['session', 'state'] } },
+        order: { type: 'array', items: { type: 'string' } },
         unmarked: { type: 'string', enum: [...UNMARKED_ANSWERS] },
         night: { type: 'array', items: { type: 'object', properties: { mission: { type: 'string' }, watch: { type: 'string' }, act: { type: 'string' }, group: { type: 'string' }, running: { type: 'boolean' } }, required: ['mission', 'watch', 'act'] } },
-        gleaned: { type: 'array', items: { type: 'string' }, description: 'Closed missions gleaned alone into « À reprendre » as « à décider », said in one line' },
+        gleaned: { type: 'array', items: { type: 'object', properties: { mission: { type: 'string' }, added: { type: 'array', items: { type: 'string' } }, attached: { type: 'array', items: { type: 'string' } }, postponed: { type: 'boolean' } }, required: ['mission', 'added', 'attached'] }, description: 'Gleaned closed mission: entry ids added and still attached; "postponed": nothing noted' },
         gleanedExisting: { type: 'boolean', description: 'true once the one-time gleaning of the journal and reports is done, after showing the user' },
         titles: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } }, required: ['id', 'title'] } },
         taken: {
@@ -360,20 +364,22 @@ export const TOOL_SCHEMA = {
     card: {
       type: 'object',
       description:
-        'COO only, alone in its call: a launch card for a new mission, which the user launches with one click (never without it). Start from ask-matt (the COO statement gives its path). Mode: "auto" by default; "manual" for a judgement task, a change of rules loaded in every session (config/rules/, a CLAUDE.md), or when the user wants to follow the framing. Effort: "high"; for a start where the manager does a worker\'s work (/implement of ready tickets, /tdd, /code-review), the level of « Effort d’un worker de groupe », section 11 in reference/effort-workers.md of flow-board, never xhigh there; "xhigh" only proposed, in manual. Folder: travail/<subject>/, letters, digits and dashes; ask the user when none fits. The same folder again updates the card, unless launching or launched',
+        'COO only, alone in its call: a launch card for a new mission, which the user launches with one click (never without it). Start from ask-matt (path in the COO statement). Mode: "auto" by default; "manual" for a judgement task, a change of rules loaded in every session (config/rules/, a CLAUDE.md), or when the user wants to follow the framing. Effort: "high"; for a start where the manager does a worker\'s work (/implement of ready tickets, /tdd, /code-review), the level of « Effort d’un worker de groupe », section 11 in reference/effort-workers.md of flow-board, never xhigh there; "xhigh" only proposed, in manual. Folder: travail/<subject>/, letters, digits and dashes; ask the user when none fits. The same folder again updates the card, unless launching or launched. Texts in the user\'s language',
       properties: {
-        title: { type: 'string', description: "The mission's title, 3 to 6 words, in the user's language" },
-        idea: { type: 'string', description: 'The id of the roadmap idea it launches, if any' },
+        title: { type: 'string', description: "The mission's title, 3 to 6 words" },
+        idea: { type: 'string', description: 'Id of the roadmap idea it launches, if any' },
         start: { type: 'string', enum: [...LAUNCH_STARTS], description: 'The recommended start, from ask-matt' },
-        askMatt: { type: 'string', description: 'The ask-matt line that justifies the start, with its line number' },
-        alts: { type: 'array', items: { type: 'string', enum: [...LAUNCH_STARTS] }, description: 'Up to 4 other starts the user may pick before clicking' },
+        askMatt: { type: 'string', description: 'The ask-matt line justifying the start, with its line number' },
+        alts: { type: 'array', items: { type: 'string', enum: [...LAUNCH_STARTS] }, description: 'Up to 4 other starts' },
         mode: { type: 'string', enum: ['auto', 'manual'] },
-        modeWhy: { type: 'string', description: "Why this mode, one short line in the user's language" },
+        modeWhy: { type: 'string', description: 'Why, one short line' },
         effort: { type: 'string', enum: ['medium', 'high', 'xhigh'] },
-        effortWhy: { type: 'string', description: "Why this effort, one short line in the user's language" },
-        folder: { type: 'string', description: 'The subject of the mission folder travail/<folder>/' },
+        effortWhy: { type: 'string', description: 'Why, one short line' },
+        folder: { type: 'string', description: 'Subject of the folder travail/<folder>/' },
+        goal: { type: 'string', description: 'What the mission aims at, 1-3 short lines, not the title' },
+        entries: { type: 'array', items: { type: 'string' }, description: `Open roadmap ids it covers (I<n>, R<n>), ${CARD_ENTRIES_MAX} max; omit keeps, [] clears` },
       },
-      required: ['title', 'start', 'askMatt', 'mode', 'effort', 'folder'],
+      required: ['title', 'start', 'askMatt', 'mode', 'effort', 'folder', 'goal'],
     },
     launch: {
       type: 'string',
@@ -383,12 +389,12 @@ export const TOOL_SCHEMA = {
     setAside: {
       type: 'array',
       description:
-        'In a manager: each thing set aside for later or another mission, never work this mission owes (report duties too); the COO copies it into « À reprendre », where only the user decides its fate. Check the roadmap and « À reprendre » first: if one holds it, start with its id (« R49: … ») and say what it adds',
+        'Manager: each thing set aside for later or another mission, never work this mission owes (report duties too); copied into « À reprendre », where only the user decides its fate. Check the roadmap and « À reprendre » first: if one holds it, start with its id (« R49: … ») and say what it adds',
       items: {
         type: 'object',
         properties: {
-          text: { type: 'string', description: 'As written for later, an existing id first' },
-          source: { type: 'string', description: 'Its origin (ticket, review, report, worker)' },
+          text: { type: 'string', description: 'As written; head « R49: » (capital, 1-4 digits, colon) files it as R49\'s complement while R49 open' },
+          source: { type: 'string', description: 'Its origin' },
         },
         required: ['text'],
       },

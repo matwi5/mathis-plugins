@@ -160,7 +160,7 @@ test('chez le COO : le quota sous une carte prête en xhigh, jamais sous une car
   const card = (effort: 'high' | 'xhigh') => ({ id: 'kabcdef12', title: 'Export CSV', start: 'grill-with-docs' as const, askMatt: 'l. 19', alts: [], mode: 'manual' as const, modeWhy: '', effort, effortWhy: '', folder: 'export-csv', at: 1 })
   const quotaRow = (effort: 'high' | 'xhigh', quota?: string) => {
     const s = cooStatement(emptyBoard('', 'p'), { now: 2, cards: [card(effort)] })
-    return coordinationRows(quota ? { ...s, quota } : s, { page: 'missions' }).find(row => row.key === 'coo-card-quota-kabcdef12')?.parts.map(p => p.text.replace(/\u00a0/g, ' ')).join('')
+    return coordinationRows(quota ? { ...s, quota } : s, { page: 'overview' }).find(row => row.key === 'coo-card-quota-kabcdef12')?.parts.map(p => p.text.replace(/\u00a0/g, ' ')).join('')
   }
   expect(quotaRow('xhigh', QUOTA_TEXT)).toBe(`quota de la discussion · ${QUOTA_TEXT}`)
   expect(quotaRow('high', QUOTA_TEXT)).toBeUndefined()

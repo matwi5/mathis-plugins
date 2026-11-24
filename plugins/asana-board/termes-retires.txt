@@ -20,3 +20,4 @@
 0.10.0	session autonome
 0.10.0	linked session
 0.10.0	main discussion
+0.13.0	pour les seules écritures que la mission prévoit

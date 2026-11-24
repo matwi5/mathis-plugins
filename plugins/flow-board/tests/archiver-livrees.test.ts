@@ -201,8 +201,8 @@ test('deux missions livrées, chacune sa carte de rétro : « ✓ Tout archiver 
   expect(shown).toContain('Rétrospective · Mission A')
   expect(shown).toContain('Rétrospective · Mission B')
   expect(shown).not.toContain('« Mission A » livrée')
-  // « Ce qui t'attend » n'est pas vide (les pages vides disent aussi « Rien pour l’instant. »).
-  expect(shown).not.toMatch(/Ce qui t’attend · \d+\nRien pour l’instant\./)
+  // Le bloc « Projet » n'est pas vide (les pages vides disent aussi « Rien pour l’instant. »).
+  expect(shown).not.toMatch(/Projet\nRien pour l’instant\./)
   const all = await findAny(view, { key: 'coo-archive-all' })
   expect(String(all?.props.label ?? '').replace(/\s/g, ' ')).toBe('✓ Tout archiver (2)')
   await pressAny(view, { key: 'coo-archive-all' })

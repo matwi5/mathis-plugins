@@ -13,6 +13,9 @@
     python3 scripts/sonde.py --voir [--attendre <s>] [--lignes <n>]          la fin du volet de la sonde lancée
     python3 scripts/sonde.py --garder        lancer un essai sans nettoyage sous ~/.claude à sa fin
     python3 scripts/sonde.py --nettoyer <sonde-xxxxxxxx>   nettoie après un essai interrompu (kill-session)
+    python3 scripts/sonde.py --arriere-plan "<demande>"    une session d'arrière-plan (claude --bg), sans tmux
+    python3 scripts/sonde.py --arreter <dossier jetable>   claude stop sur la session notée dans ce dossier
+    python3 scripts/sonde.py --retirer <dossier jetable>   claude rm sur elle, puis le nettoyage sous ~/.claude
 
 La session tourne dans une session tmux détachée (nom : --name, « sonde » par défaut), en Haiku et
 en effort low (--model, --effort), avec la sonde chargée par --plugin-dir. Pour jouer les
@@ -65,7 +68,25 @@ un dossier ou son fichier du lancement qui n'appartient pas à l'utilisateur cou
 écriture au groupe ou aux autres (hors Windows ; l'étape de fin fait le même contrôle), et un dossier où
 une session tourne encore.
 
-Mac et Linux (tmux requis) ; sans dépendance hors de la bibliothèque standard.
+Le mode d'arrière-plan essaie `claude --bg`, `claude stop` et `claude rm` (docs/commandes-claude.md, « Ce que
+laisse une session d'arrière-plan ») : `--arriere-plan "<demande>"` lance `claude --bg` avec cette demande
+(`--model`, `--effort`, `--desktop`) dans un dossier jetable neuf marqué comme les autres, sans la sonde ni
+tmux (l'environnement de l'appelant ne passe pas à la session), hors de tout dépôt git (un dossier temporaire
+non approuvé répond « Workspace not trusted » : TMPDIR=<un dossier dédié, approuvé, hors de tout dépôt>), et note à
+côté de la marque l'id court de l'unique ligne « backgrounded · <id> » de sa sortie (`.sonde-arriere-plan`) ;
+`--arreter <dossier>` et `--retirer <dossier>` (le chemin imprimé au lancement : un nom seul se cherche sous le
+TMPDIR du moment) relisent cet id à chaque geste et ne visent que cette session, listée une seule fois dans ce
+dossier par `claude agents --json --all` juste avant (`claude stop`, `claude rm`). Un `claude rm` réussi pose
+`.sonde-retrait` (la fin de la fenêtre du lancement), puis le
+nettoyage passe par le même plan, quand `claude agents --json --all` ne liste plus aucune session de ce
+lancement : le registre de flow-board, les relevés de stats-board nés dans la fenêtre, le fichier de mission
+et le dossier de transcripts de la seule session dont l'id prolonge l'id court (aucune ou plusieurs : rien),
+hors la session qui a lancé la sonde. Un échec de `claude stop` ou `claude rm`, un id absent ou hors forme,
+une liste illisible, une session plus listée (retirée hors de la sonde) : rien n'est lancé ni supprimé, et c'est
+dit. `--nettoyer` refait ce nettoyage après une interruption, une fois la session retirée (sans tmux ; avec
+`--garder`, rien ne se supprime).
+
+Mac et Linux (tmux requis, sauf pour le mode d'arrière-plan) ; sans dépendance hors de la bibliothèque standard.
 """
 
 import argparse
@@ -138,6 +159,18 @@ SWITCH_SOURCES = ("command", "picker")
 MODEL_FORM = re.compile(r"[A-Za-z0-9._:@/\[\]-]{1,200}", re.ASCII)
 # Le nom d'un journal de la sonde : son heure d'ouverture, `toISOString()` aux `:` et `.` changés en `-`.
 JOURNAL_STAMP = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-([0-9]{3})Z\.jsonl")
+# Le fichier où le mode d'arrière-plan note, à côté de la marque, l'id court que `claude --bg` a imprimé : pas
+# dans la marque, dont la date ouvre la fenêtre du lancement (`launch_window`) et qu'une réécriture décalerait.
+BACKGROUND = ".sonde-arriere-plan"
+# Le fichier que `--retirer` pose dès que `claude rm` a réussi : sa date ferme la fenêtre d'un lancement en
+# arrière-plan (sans journal de la sonde : l'environnement de l'appelant ne passe pas à `claude --bg`).
+REMOVED = ".sonde-retrait"
+# L'id court d'une session d'arrière-plan (les 8 premiers signes de son id), le seul que `claude stop` et
+# `claude rm` reçoivent.
+SHORT_ID = re.compile(r"[0-9a-f]{8}")
+# La ligne par laquelle `claude --bg` dit la session lancée (« backgrounded · 8cfebb73 », suivie ou non de
+# « · <titre> ») : relevée le 20/11/2026, Claude Code 2.1.329 (docs/commandes-claude.md).
+BACKGROUNDED = re.compile(r"backgrounded · ([0-9a-f]{8})(?: · .*)?")
 # L'écart toléré entre l'heure du dernier `/model` de la sonde et la date de modification de settings.json :
 # au-delà, un autre a pu écrire le fichier depuis (marge estimée : l'ordre de l'écriture et de l'événement
 # dans le moteur n'est pas observé).
@@ -225,14 +258,20 @@ def mark_launch(folder, claude, model=None, launcher=None):
     du lancement (`launch_launcher`), et, quand il est donné, l'état de la clé `model` du poste au lancement
     (`note_model`). Elle est fermée aux autres (0600), quel que soit l'umask :
     `launch_folder` refuse une marque ouverte en écriture au groupe ou aux autres."""
+    data = {"dossier": os.path.realpath(folder), "claude": str(claude), "lanceur": launcher}
+    if model is not None:
+        data["modele"] = model
     # Dans le dossier neuf de `mkdtemp` : une marque déjà là (ou un lien à sa place) fait échouer le lancement.
-    fd = os.open(folder / MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    write_private(folder / MARKER, data)
+
+
+def write_private(path, data):
+    """Écrit `data` en JSON dans un fichier neuf, fermé aux autres (0600, quel que soit l'umask) : un fichier
+    déjà là, ou un lien à sa place, lève OSError (FileExistsError) sans rien écrire."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         if hasattr(os, "fchmod"):
             os.fchmod(f.fileno(), 0o600)
-        data = {"dossier": os.path.realpath(folder), "claude": str(claude), "lanceur": launcher}
-        if model is not None:
-            data["modele"] = model
         f.write(json.dumps(data) + "\n")
 
 
@@ -452,6 +491,68 @@ def launch_launcher(folder):
     return "hors forme", None
 
 
+def background_state(folder):
+    """L'id court que le mode d'arrière-plan a noté à côté de la marque (`BACKGROUND`) : ("aucun", None) sans
+    ce fichier (un lancement dans tmux) ; ("valide", id court) pour un fichier ordinaire à soi, fermé en
+    écriture au groupe et aux autres, qui porte un id court en forme ; ("douteux", raison) dans tout autre cas
+    (lien, illisible, d'un autre compte, ouvert en écriture, id absent ou hors forme) : rien ne s'arrête, ne se
+    retire ni ne se supprime."""
+    path = folder / BACKGROUND
+    if not path.exists() and not path.is_symlink():
+        return "aucun", None
+    doubt = access_doubt(path)
+    if doubt:
+        return "douteux", f"{doubt} : rien n'est arrêté, retiré ni supprimé"
+    data = read_json(path)
+    short = data.get("court") if isinstance(data, dict) else None
+    if not isinstance(short, str) or not SHORT_ID.fullmatch(short):
+        return "douteux", (f"{path} : pas d'id court en forme (8 signes de [0-9a-f]), ou pas un fichier ordinaire ; "
+                           "rien n'est arrêté, retiré ni supprimé")
+    return "valide", short
+
+
+def background_window(folder):
+    """La fenêtre d'un lancement en arrière-plan, (début, fin) en nanosecondes : la date de sa marque et celle
+    de `REMOVED`, posé dès que `claude rm` a réussi ; None si l'un manque, si `REMOVED` n'est pas un fichier
+    ordinaire à soi fermé en écriture aux autres, ou si la fin précède le début."""
+    try:
+        start = os.lstat(folder / MARKER).st_mtime_ns
+        st = os.lstat(folder / REMOVED)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or access_doubt(folder / REMOVED):
+        return None
+    return (start, st.st_mtime_ns) if st.st_mtime_ns >= start else None
+
+
+def background_session(folder, home, short):
+    """L'id complet de la session d'arrière-plan d'id court `short` : l'unique id en forme qui commence par
+    `<short>-` parmi les transcripts et dossiers de session (`<id>.jsonl`, `<id>/`) des dossiers de projet de
+    `folder` et les têtes de registre de flow-board (`flow-board/agents/<id>.json`) dont la racine est
+    `folder` ; rend (id, None), ou (None, raison) quand il n'y en a aucun ou plusieurs : rien ne se supprime
+    alors. Seuls des noms et la racine d'un registre sont lus."""
+    found, prefix = set(), short + "-"
+    for name in sorted({project_dir_name(r) for r in roots_of(folder)}):
+        project = home / "projects" / name
+        if project.is_symlink() or not project.is_dir():
+            continue
+        for entry in project.iterdir():
+            stem = entry.name[:-len(".jsonl")] if entry.name.endswith(".jsonl") else entry.name
+            if stem.startswith(prefix) and SESSION_ID.fullmatch(stem):
+                found.add(stem)
+    agents = home / "flow-board" / "agents"
+    if agents.is_dir() and not agents.is_symlink():
+        for entry in agents.glob(f"{short}-*.json"):
+            stem, reg = entry.name[:-len(".json")], read_json(entry)
+            if SESSION_ID.fullmatch(stem) and isinstance(reg, dict) and isinstance(reg.get("root"), str) \
+                    and within(reg["root"], folder):
+                found.add(stem)
+    if len(found) == 1:
+        return found.pop(), None
+    what = "aucune session de ce dossier" if not found else f"{len(found)} sessions de ce dossier ({', '.join(sorted(found))})"
+    return None, f"id court {short} : {what} sous cet id ; rien n'est supprimé"
+
+
 def launch_sessions(folder):
     """Les sessions de ce lancement : les `sid` que le journal de la sonde (`journaux/*.jsonl` du dossier
     jetable) a notés, en forme d'id. Une session lancée ensuite dans le dossier, sans la sonde, n'y est pas."""
@@ -625,6 +726,20 @@ def session_traces(home, sessions, window):
                 kept.append(f"{path} ({' ; '.join(doubts)})")
             else:
                 todo.append((path, True))
+    more, reasons = request_traces(home, sessions, window)
+    return todo + more, kept + reasons
+
+
+def request_traces(home, sessions, window):
+    """Les relevés de stats-board de ces sessions, `stats-board/requetes/<id>_<heure d'ouverture en ms>.json`
+    (de vrais fichiers, le nom vérifié en entier, l'heure de leur nom dans la fenêtre du lancement) ; rend
+    ([(chemin, False)], [raisons de garder]). Sans session : rien ; sans fenêtre : rien, et c'est dit."""
+    todo, kept = [], []
+    if not sessions:
+        return todo, kept
+    if window is None:
+        kept.append("relevés de stats-board des sessions : fenêtre du lancement illisible, rien n'y est pris")
+        return todo, kept
     ok, reason = real_dirs(home, "stats-board", "requetes")
     kept += [reason] if reason else []
     requests = home / "stats-board" / "requetes"
@@ -772,15 +887,40 @@ def registry_files(agents, session, folder):
 def plan(folder, home):
     """Ce que ce lancement a laissé sous `home` : [(chemin, est un dossier)] à supprimer, dans l'ordre
     (registres, traces rangées par id des sessions qu'il a ouvertes, fichier de mission, dossier de projet
-    en dernier : une reprise relit ses transcripts), et [raisons] de ce qui reste."""
+    en dernier : une reprise relit ses transcripts), et [raisons] de ce qui reste. Pour un lancement en
+    arrière-plan (`BACKGROUND`), sa session est celle de son id court (`background_session`), seulement une
+    fois retirée (`REMOVED`), et ses traces rangées par id se bornent aux relevés de stats-board, les seules que
+    la mesure du 20/11/2026 a montrées (docs/commandes-claude.md)."""
     state, launcher = launch_launcher(folder)
     if state in REFUSED_LAUNCHERS:
         # Un lanceur qu'on ne peut pas exclure : ses fichiers pourraient être pris pour ceux du lancement.
         return [], [REFUSED_LAUNCHERS[state]]
     roots = roots_of(folder)
-    # Le lanceur sort des sessions du lancement avant toute famille : même si le journal porte son id
-    # (identité partagée), rien de lui n'est pris.
-    sessions = launch_sessions(folder) - {launcher}
+    background, short = background_state(folder)
+    if background == "douteux":
+        return [], [short]
+    if background == "valide":
+        if not (folder / REMOVED).exists() and not (folder / REMOVED).is_symlink():
+            return [], [f"session d'arrière-plan {short} pas retirée par la sonde (pas de {REMOVED}) : python3 "
+                        f"scripts/sonde.py --retirer {shlex.quote(str(folder))} (claude rm, puis le nettoyage), si claude "
+                        "agents la liste encore ; une session retirée hors de la sonde (à la main, ou par un --retirer "
+                        "interrompu entre claude rm et ce fichier) n'a pas de fin de fenêtre notée : ses restes sont à "
+                        "relever à la main ; rien n'est supprimé"]
+        window = background_window(folder)
+        if window is None:
+            return [], [f"{folder / REMOVED} illisible, douteux ou d'avant la marque : fenêtre du lancement "
+                        "inconnue, rien n'est supprimé"]
+        session, reason = background_session(folder, home, short)
+        if session is None:
+            return [], [reason]
+        # Le lanceur sort avant toute famille, comme pour un lancement dans tmux.
+        sessions = {session} - {launcher}
+        if not sessions:
+            return [], [f"la session {session} est celle qui a lancé la sonde : rien n'est supprimé"]
+    else:
+        # Le lanceur sort des sessions du lancement avant toute famille : même si le journal porte son id
+        # (identité partagée), rien de lui n'est pris.
+        sessions = launch_sessions(folder) - {launcher}
     todo, kept = [], []
     project_ok, doubtful = [], False
     for project in [home / "projects" / name for name in sorted({project_dir_name(r) for r in roots})]:
@@ -801,7 +941,8 @@ def plan(folder, home):
         files, reasons = registry_files(agents, session, folder) if agents.is_dir() else ([], [])
         todo += [(p, False) for p in files]
         kept += reasons
-    traces, reasons = session_traces(home, opened_sessions(folder) & sessions, launch_window(folder))
+    traces, reasons = request_traces(home, sessions, window) if background == "valide" else \
+        session_traces(home, opened_sessions(folder) & sessions, launch_window(folder))
     todo += traces
     kept += reasons
     for slug in sorted({mission_slug(r) for r in roots}):
@@ -1007,6 +1148,247 @@ def marker_claude(folder):
     return None
 
 
+def claude_env(environ=None):
+    """L'environnement d'une commande lancée par la sonde : sans les variables d'identité (`IDENTITY`) ni
+    `LAUNCHER_VAR`, qui la lieraient à la session qui lance la sonde."""
+    return {k: v for k, v in (os.environ if environ is None else environ).items()
+            if k not in IDENTITY and k != LAUNCHER_VAR}
+
+
+def launched_short_id(stdout):
+    """L'id court de la session que `claude --bg` dit lancée : celui de l'unique ligne « backgrounded · <id> »
+    de sa sortie (`BACKGROUNDED`, la ligne entière) ; None sans elle ou avec plusieurs."""
+    found = [m.group(1) for m in (BACKGROUNDED.fullmatch(line.strip()) for line in stdout.splitlines()) if m]
+    return found[0] if len(found) == 1 else None
+
+
+def git_tree_of(path):
+    """Le premier de `path` et de ses parents qui porte `.git` (la racine d'un dépôt git), ou None."""
+    for folder in [path, *path.parents]:
+        if os.path.lexists(folder / ".git"):
+            return folder
+    return None
+
+
+def launch_background(args, claude, tmp=None, environ=None):
+    """`--arriere-plan "<texte>"` : lance `claude --bg` avec cette demande dans un dossier jetable neuf (sous
+    `tmp`, le dossier temporaire par défaut : `TMPDIR` le déplace), marqué comme un lancement dans tmux
+    (`mark_launch`, sans modèle noté : une session d'arrière-plan ne tape pas `/model`), sans les variables
+    d'identité, puis note dans `BACKGROUND` l'id court de l'unique ligne « backgrounded · <id> » de sa sortie.
+    Sans elle (code d'erreur, « Workspace not trusted », zéro ou plusieurs lignes), rien n'est noté : SondeError.
+    Le plugin de la sonde n'est pas chargé : `claude --bg` ne passe pas l'environnement de l'appelant à la
+    session (mesuré le 20/11/2026), qui écrirait son journal dans le dépôt. Rend (dossier, id court)."""
+    text = args.arriere_plan
+    if not isinstance(text, str) or not text.strip() or text.startswith("-") or "\x00" in text:
+        raise SondeError("--arriere-plan attend le texte de la demande, non vide, sans « - » en tête ni caractère nul "
+                         "(seule une session lancée avec une demande a été mesurée) ; rien n'est lancé")
+    parent = Path(tmp or tempfile.gettempdir())
+    repo = git_tree_of(Path(os.path.realpath(parent)))
+    if repo is not None:
+        raise SondeError(f"{parent} est dans le dépôt git {repo} : une session d'arrière-plan y tournerait dans ce "
+                         "dépôt (et une racine git neuve n'est pas approuvée) ; TMPDIR=<un dossier hors de tout dépôt> ; "
+                         "rien n'est lancé")
+    launcher = launcher_mark(os.environ if environ is None else environ)
+    folder = Path(tempfile.mkdtemp(prefix="sonde-", dir=parent))
+    journals = folder / "journaux"
+    journals.mkdir()
+    mark_launch(folder, claude, launcher=launcher)
+    log_version(journals, claude, "avant")
+    log_line(journals, f"lancement en arrière-plan : claude --bg --model {args.model} --effort {args.effort} <demande> ; "
+                       f"lanceur : {launcher or 'aucun'}")
+    try:
+        res = subprocess.run([str(claude), "--bg", "--model", args.model, "--effort", args.effort, text], cwd=folder,
+                             env=claude_env(environ), capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as err:
+        log_line(journals, f"claude --bg n'a pas abouti : {err}")
+        raise SondeError(f"claude --bg n'a pas abouti ({err}) : aucun id noté dans {folder} ; `claude agents` dit si "
+                         "une session est partie quand même")
+    for stream, out in (("sortie", res.stdout), ("erreur", res.stderr)):
+        for line in out.splitlines():
+            log_line(journals, f"claude --bg ({stream}) : {line}")
+    short = launched_short_id(res.stdout) if res.returncode == 0 else None
+    if short is None:
+        said = " ".join((res.stdout + res.stderr).split())[:500] or f"code {res.returncode}, sans sortie"
+        hint = ""
+        if "Workspace not trusted" in res.stderr:
+            # Pas « approuver le dossier temporaire » : tout ce qu'un outil y décompresse hériterait de l'approbation.
+            hint = (f" ; {parent} n'est pas approuvé : relancer avec TMPDIR=<un dossier dédié aux essais, approuvé "
+                    "(claude lancé une fois dedans, dans un autre terminal, jamais par `!`), hors de tout dépôt git>, "
+                    "dont un sous-dossier ordinaire hérite l'approbation")
+        elif res.returncode == 0:
+            hint = (" ; une session tourne peut-être : claude agents la montre, claude stop puis claude rm l'arrêtent ; "
+                    "ses restes sous ~/.claude ne se nettoient pas par la sonde (aucun id noté), à relever à la main")
+        log_line(journals, f"aucun id noté (code {res.returncode}){hint}")
+        raise SondeError(f"claude --bg n'a pas dit une seule session lancée ({said}) : aucun id noté dans {folder}"
+                         f"{hint}")
+    try:
+        write_private(folder / BACKGROUND, {"court": short})
+    except OSError as err:
+        raise SondeError(f"session d'arrière-plan {short} lancée, mais son id n'a pas pu être noté ({err}) : la sonde ne "
+                         f"l'arrêtera pas ; claude stop {short} puis claude rm {short} à la main, et ses restes sous "
+                         "~/.claude, que la sonde ne nettoie pas, à relever à la main")
+    log_line(journals, f"session d'arrière-plan {short} notée dans {BACKGROUND}")
+    return folder, short
+
+
+def background_folder(ref, tmp=None):
+    """Le dossier jetable d'un lancement en arrière-plan que nomme `ref` (`launch_folder` : mêmes refus), son id
+    court (`background_state`, relu à chaque geste) et le Claude Code de sa marque ; sinon SondeError : un
+    dossier sans `BACKGROUND` (la marque ne porte aucun id), un fichier douteux, un Claude Code qui n'est pas un
+    exécutable."""
+    folder = launch_folder(ref, tmp)
+    state, short = background_state(folder)
+    if state == "aucun":
+        raise SondeError(f"{folder} n'a pas de {BACKGROUND} : aucun id de session d'arrière-plan noté par son lancement ; "
+                         "rien n'est arrêté, retiré ni supprimé")
+    if state == "douteux":
+        raise SondeError(short)
+    claude = marker_claude(folder)
+    if not claude:
+        raise SondeError(f"le Claude Code noté dans {folder / MARKER} n'est pas un exécutable : rien n'est arrêté, "
+                         "retiré ni supprimé")
+    return folder, short, claude
+
+
+def run_claude(claude, args, journals, timeout=120):
+    """Lance `claude <args>` sans les variables d'identité et note sa sortie au journal : (réussi, sortie)."""
+    try:
+        res = subprocess.run([claude, *args], env=claude_env(), capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as err:
+        log_line(journals, f"claude {' '.join(args)} : {err}")
+        return False, str(err)
+    out = (res.stdout + res.stderr).strip()
+    for line in out.splitlines():
+        log_line(journals, f"claude {' '.join(args)} : {line}")
+    return res.returncode == 0, " ".join(out.split())[:500] or f"code {res.returncode}, sans sortie"
+
+
+def read_agents(claude):
+    """Les sessions que `claude agents --json --all` liste (en cours ou finies, pas retirées), de tous les
+    dossiers (mesuré : sans `--cwd`, la liste n'est pas bornée au dossier courant de l'appel, et `/var` et
+    `/private/var` y sont deux écritures d'un même dossier) ; (liste de dicts, None), ou (None, raison) quand la
+    liste ne se lit pas : une absence non observée ne vaut pas retrait."""
+    try:
+        res = subprocess.run([claude, "agents", "--json", "--all"], env=claude_env(), capture_output=True, text=True,
+                             timeout=60)
+    except (OSError, subprocess.SubprocessError) as err:
+        return None, f"claude agents illisible ({err})"
+    if res.returncode != 0:
+        return None, f"claude agents illisible (code {res.returncode} : {' '.join(res.stderr.split())[:200]})"
+    try:
+        data = json.loads(res.stdout)
+    except ValueError:
+        return None, "claude agents : sortie qui n'est pas du JSON"
+    if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+        return None, "claude agents : sortie qui n'est pas une liste de sessions"
+    return data, None
+
+
+def listed_sessions(claude, folder, journals):
+    """Les sessions que `claude agents --json --all` liste encore pour ce lancement : celles dont le dossier
+    (`cwd`) est `folder` ou dessous, ou dont l'id court est celui que note `BACKGROUND` ; (liste, None), ou
+    (None, raison) quand la liste ne se lit pas (`read_agents`)."""
+    state, short = background_state(folder)
+    data, doubt = read_agents(claude)
+    if doubt:
+        return None, doubt
+    found = []
+    for item in data:
+        cwd, ident = item.get("cwd"), item.get("id")
+        if (isinstance(cwd, str) and within(cwd, folder)) or (state == "valide" and ident == short):
+            found.append(f"{ident} ({item.get('state')})")
+    log_line(journals, f"claude agents --json --all : {len(found)} session(s) de ce lancement encore listée(s)")
+    return found, None
+
+
+def check_target(claude, folder, short, journals):
+    """Avant `claude stop` ou `claude rm` : `claude agents --json --all` doit lister une seule session d'id court
+    `short`, et dans `folder` (son `cwd`) ; sinon SondeError, rien n'est lancé. Une session déjà retirée hors de
+    la sonde (à la main, ou par un `--retirer` interrompu avant `REMOVED`) n'est plus listée : la commande
+    viserait un id disparu, qu'une autre session pourrait porter dans son nom."""
+    data, doubt = read_agents(claude)
+    if doubt:
+        raise SondeError(f"{doubt} : la session {short} n'est pas vérifiée ; rien n'est lancé")
+    same = [item for item in data if item.get("id") == short]
+    here = [item for item in same if isinstance(item.get("cwd"), str) and within(item["cwd"], folder)]
+    log_line(journals, f"claude agents --json --all : {len(same)} session(s) {short}, dont {len(here)} dans ce dossier")
+    if not same:
+        raise SondeError(f"claude agents ne liste pas la session {short} (retirée hors de la sonde, à la main ou par un "
+                         f"--retirer interrompu entre claude rm et {REMOVED}, peut-être) : rien n'est lancé ; sans "
+                         f"{REMOVED}, la sonde ne nettoie pas ses restes sous ~/.claude, à relever à la main")
+    if len(same) != 1 or len(here) != 1:
+        raise SondeError(f"claude agents liste {len(same)} session(s) {short}, dont {len(here)} dans {folder} : pas "
+                         "une seule session de ce lancement sous cet id ; rien n'est lancé")
+
+
+def clean_background(folder, home, claude, journals, keep=False):
+    """Le nettoyage d'un lancement en arrière-plan (`--retirer`, puis `--nettoyer` après une interruption) : rien
+    tant que `claude agents` liste une session de ce lancement ou ne se lit pas (une reprise `--bg --resume`
+    de la conversation que `claude rm` garde pourrait tourner), sinon `clean` (son `plan` ne prend rien sans
+    `REMOVED` ; avec `keep`, rien ne se supprime). Rend le rapport ; SondeError sur un refus."""
+    listed, doubt = listed_sessions(claude, folder, journals)
+    if doubt:
+        raise SondeError(f"{doubt} : une session de ce lancement tourne peut-être encore ; rien n'est supprimé")
+    if listed:
+        raise SondeError(f"claude agents liste encore {', '.join(listed)} pour {folder} : une session de ce lancement "
+                         "tourne ou n'est pas retirée (une reprise --bg --resume, par exemple) ; la retirer à la main "
+                         "(claude stop puis claude rm <id listé>), puis python3 scripts/sonde.py --nettoyer "
+                         f"{shlex.quote(str(folder))} ; rien n'est supprimé")
+    try:
+        return clean(folder, home, keep=keep)
+    except OSError as err:
+        raise SondeError(f"lecture impossible pendant le relevé ({err}) : rien n'est supprimé")
+
+
+def print_report(folder, journals, report):
+    """Le relevé du nettoyage, à l'écran et au journal de la sonde."""
+    print(f"Nettoyage de {folder.name} sous ~/.claude :")
+    for line in report.lines():
+        print(f"  {line}")
+        log_line(journals, f"nettoyage {folder.name} : {line}")
+
+
+def background_gesture(verb, ref, tmp=None, home=None):
+    """`--arreter <nom>` (`claude stop`) et `--retirer <nom>` (`claude rm`, puis `REMOVED`, puis le nettoyage)
+    sur la seule session dont l'id court est noté dans le dossier jetable que nomme `ref`, et que `claude agents`
+    liste une fois, dans ce dossier (`check_target`), juste avant la commande. Un échec de la commande arrête
+    tout, rien n'est supprimé ; tout refus va au journal de la sonde. Rend le code de sortie."""
+    folder, journals, removed = None, None, False
+    try:
+        folder, short, claude = background_folder(ref, tmp)
+        journals = folder / "journaux"
+        if (folder / REMOVED).exists() or (folder / REMOVED).is_symlink():
+            raise SondeError(f"la session {short} est déjà retirée ({REMOVED}) : python3 scripts/sonde.py --nettoyer "
+                             f"{shlex.quote(str(folder))} refait le nettoyage")
+        check_target(claude, folder, short, journals)
+        ok, said = run_claude(claude, [verb, short], journals)
+        if not ok:
+            raise SondeError(f"claude {verb} {short} a échoué ({said}) : "
+                             + ("rien d'autre n'est fait" if verb == "stop" else "rien n'est supprimé"))
+        print(f"claude {verb} {short} : {said}")
+        if verb == "stop":
+            return 0
+        try:
+            write_private(folder / REMOVED, {"court": short})
+        except FileExistsError:
+            raise SondeError(f"claude rm {short} a réussi, et {REMOVED} a été posé entre-temps par un autre --retirer : "
+                             f"python3 scripts/sonde.py --nettoyer {shlex.quote(str(folder))} fait le nettoyage")
+        except OSError as err:
+            raise SondeError(f"claude rm {short} a réussi, mais {REMOVED} n'a pas pu être posé ({err}) : la fin de la "
+                             "fenêtre du lancement manque, rien n'est supprimé ni ne le sera par --nettoyer ; ses "
+                             "restes sous ~/.claude sont à relever à la main")
+        removed = True
+        report = clean_background(folder, home or Path.home() / ".claude", claude, journals)
+    except SondeError as err:
+        if journals is not None:
+            what = ("arrêt refusé" if verb == "stop" else "nettoyage refusé après claude rm" if removed
+                    else "retrait refusé ou interrompu")
+            log_line(journals, f"{what} : {err}")
+        raise
+    print_report(folder, journals, report)
+    return 1 if report.error else 0
+
+
 def finish(args, tmux, home=None, tmp=None):
     """`--nettoyer <nom>` (un essai interrompu) et l'étape de fin d'une session (`--apres-session`) :
     version de Claude Code après l'essai, puis le nettoyage du dossier jetable nommé, s'il en a un.
@@ -1036,33 +1418,45 @@ def finish(args, tmux, home=None, tmp=None):
             claude = marker_claude(folder)
             if claude:
                 log_version(journals, claude, "après")
-        busy = busy_panes(tmux, folder, os.environ.get("TMUX_PANE") if args.apres_session else None)
-        if busy:
-            raise SondeError(f"une session travaille encore dans {folder} ({'; '.join(busy)}) : la quitter d'abord ; "
-                             f"rien n'est supprimé")
-        # Après le contrôle des volets (une session encore ouverte pourrait refaire un /model), et quoi que
-        # donne le nettoyage : une remise ratée se dit sans l'arrêter, et ce qu'elle a fait se dit tout de
-        # suite, avant le relevé du nettoyage, qui peut lever.
-        try:
-            model_lines = restore_model(folder, home or Path.home() / ".claude", keep=args.garder)
-        except Exception as err:  # aucune erreur de la remise n'arrête le nettoyage
-            model_lines = [f"modèle par défaut du poste : remise interrompue, rien d'écrit ou écriture à vérifier ({err})"]
-        for line in model_lines:
-            print(line)
-            log_line(journals, f"{folder.name} : {line}")
-        try:
-            report = clean(folder, home or Path.home() / ".claude", keep=args.garder)
-        except OSError as err:
-            raise SondeError(f"lecture impossible pendant le relevé ({err}) : rien n'est supprimé")
+        if background_state(folder)[0] != "aucun":
+            # Un lancement en arrière-plan (`--arriere-plan`) : pas de volet tmux ni de modèle noté ; son
+            # nettoyage attend que `claude agents` ne liste plus sa session, et son `plan` qu'elle soit retirée.
+            claude = marker_claude(folder)
+            if not claude:
+                raise SondeError(f"le Claude Code noté dans {folder / MARKER} n'est pas un exécutable : claude agents "
+                                 "ne se lit pas, rien n'est supprimé")
+            report = clean_background(folder, home or Path.home() / ".claude", claude, journals, keep=args.garder)
+        else:
+            report = clean_tmux(args, tmux, folder, journals, home)
     except SondeError as err:
         if journals is not None:
             log_line(journals, f"nettoyage refusé : {err}")
         raise
-    print(f"Nettoyage de {folder.name} sous ~/.claude :")
-    for line in report.lines():
-        print(f"  {line}")
-        log_line(journals, f"nettoyage {folder.name} : {line}")
+    print_report(folder, journals, report)
     return 1 if report.error else 0
+
+
+def clean_tmux(args, tmux, folder, journals, home=None):
+    """Le nettoyage d'un lancement dans tmux (`finish`) : rien tant qu'un volet travaille dans le dossier, puis
+    la remise du modèle par défaut du poste, puis `clean`. Rend le rapport ; SondeError sur un refus."""
+    busy = busy_panes(tmux, folder, os.environ.get("TMUX_PANE") if args.apres_session else None)
+    if busy:
+        raise SondeError(f"une session travaille encore dans {folder} ({'; '.join(busy)}) : la quitter d'abord ; "
+                         f"rien n'est supprimé")
+    # Après le contrôle des volets (une session encore ouverte pourrait refaire un /model), et quoi que
+    # donne le nettoyage : une remise ratée se dit sans l'arrêter, et ce qu'elle a fait se dit tout de
+    # suite, avant le relevé du nettoyage, qui peut lever.
+    try:
+        model_lines = restore_model(folder, home or Path.home() / ".claude", keep=args.garder)
+    except Exception as err:  # aucune erreur de la remise n'arrête le nettoyage
+        model_lines = [f"modèle par défaut du poste : remise interrompue, rien d'écrit ou écriture à vérifier ({err})"]
+    for line in model_lines:
+        print(line)
+        log_line(journals, f"{folder.name} : {line}")
+    try:
+        return clean(folder, home or Path.home() / ".claude", keep=args.garder)
+    except OSError as err:
+        raise SondeError(f"lecture impossible pendant le relevé ({err}) : rien n'est supprimé")
 
 
 def drive(tmux, args):
@@ -1088,6 +1482,56 @@ def drive(tmux, args):
         print("\n".join(lines[-args.lignes:]))
 
 
+def background_ref(ref, tmp=None):
+    """Vrai si `ref` nomme un dossier jetable accepté (`launch_folder`) d'un lancement en arrière-plan (il porte
+    `BACKGROUND`, valide ou douteux) : son `--nettoyer` ne lit pas tmux. Un refus de `launch_folder` ou une
+    lecture ratée : faux (le refus se redit ensuite, ou « tmux introuvable »)."""
+    try:
+        return background_state(launch_folder(ref, tmp))[0] != "aucun"
+    except (SondeError, OSError):
+        return False
+
+
+def background_main(args, tmp=None, home=None):
+    """Le mode d'arrière-plan : un seul de `--arriere-plan`, `--arreter` et `--retirer`, sans les options de
+    tmux ni du nettoyage (`--model`, `--effort` et `--desktop` seulement, au lancement). Rend le code de sortie."""
+    gestures = [name for name, value in (("--arriere-plan", args.arriere_plan), ("--arreter", args.arreter),
+                                         ("--retirer", args.retirer)) if value is not None]
+    others = [name for name, on in (("--dir", args.dir), ("--reprise", args.reprise), ("--titre", args.titre),
+                                    ("--env", args.env), ("--plugin", args.plugin), ("--garder", args.garder),
+                                    ("--nettoyer", args.nettoyer is not None), ("--envoyer", args.envoyer is not None),
+                                    ("--voir", args.voir), ("--touches", args.touches),
+                                    ("--apres-session", args.apres_session),
+                                    ("--desktop", args.desktop and args.arriere_plan is None)) if on]
+    if len(gestures) != 1 or others:
+        raise SondeError(f"{' et '.join(gestures)} : un seul geste d'arrière-plan à la fois, sans "
+                         f"{', '.join(others) or 'autre geste'} ; rien n'est lancé")
+    if args.arreter is not None:
+        return background_gesture("stop", args.arreter, tmp, home)
+    if args.retirer is not None:
+        return background_gesture("rm", args.retirer, tmp, home)
+    if args.desktop:
+        found = desktop_claude()
+        if not found:
+            raise SondeError("Claude Code de l'app desktop introuvable")
+        claude = found[0]
+    else:
+        claude = shutil.which("claude")
+        if not claude:
+            raise SondeError("claude introuvable")
+    folder, short = launch_background(args, claude, tmp)
+    print(f"Session d'arrière-plan {short} lancée dans {folder} (Claude Code {claude})")
+    print(f"  claude logs {short}        sa sortie récente")
+    quoted = shlex.quote(str(folder))
+    print(f"  python3 scripts/sonde.py --arreter {quoted}   claude stop {short}")
+    print(f"  python3 scripts/sonde.py --retirer {quoted}   claude rm {short}, puis le nettoyage sous ~/.claude")
+    if launch_launcher(folder)[0] in REFUSED_LAUNCHERS:
+        print("Le nettoyage ne supprimera rien : lancée depuis une session dont l'id ne se lit pas (ses fichiers "
+              "pourraient être pris pour ceux du lancement).")
+    print(f"Journal : {folder / 'journaux' / LOG_NAME}")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--desktop", action="store_true", help="le Claude Code de l'app desktop")
@@ -1111,7 +1555,13 @@ def main():
     parser.add_argument("--garder", action="store_true",
                         help="au lancement : ne rien supprimer sous ~/.claude à la fin de l'essai, ni remettre le modèle par défaut du poste (la liste de ce qui reste et la valeur d'avant vont au journal)")
     parser.add_argument("--nettoyer", metavar="NOM",
-                        help="nettoie sous ~/.claude ce qu'a laissé l'essai du dossier jetable NOM (sonde-xxxxxxxx), interrompu, et remet le modèle par défaut du poste qu'un /model de l'essai a changé ; un dossier d'avant le 17/11/2026 (marque sans lanceur) n'est plus nettoyé")
+                        help="nettoie sous ~/.claude ce qu'a laissé l'essai du dossier jetable NOM (sonde-xxxxxxxx), interrompu, et remet le modèle par défaut du poste qu'un /model de l'essai a changé ; un dossier d'avant le 17/11/2026 (marque sans lanceur) n'est plus nettoyé ; un lancement en arrière-plan (--arriere-plan), une fois sa session retirée (--retirer)")
+    parser.add_argument("--arriere-plan", metavar="TEXTE",
+                        help="lance une session d'arrière-plan (claude --bg) avec cette demande, dans un dossier jetable marqué, sans tmux ; avec --model, --effort et --desktop seulement")
+    parser.add_argument("--arreter", metavar="NOM",
+                        help="claude stop sur la seule session d'arrière-plan notée dans le dossier jetable NOM (son nom ou son chemin)")
+    parser.add_argument("--retirer", metavar="NOM",
+                        help="claude rm sur la seule session d'arrière-plan notée dans le dossier jetable NOM, puis nettoie sous ~/.claude ce que ce lancement prouve avoir créé")
     # L'étape de fin, que la session tmux lance à la sortie de Claude Code : pas pour la main.
     parser.add_argument("--apres-session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--claude", help=argparse.SUPPRESS)
@@ -1119,8 +1569,16 @@ def main():
     parser.add_argument("--modele-avant", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
+    if args.arriere_plan is not None or args.arreter is not None or args.retirer is not None:
+        # Avant tmux et avant le fichier de titre : le mode d'arrière-plan n'utilise ni l'un ni l'autre.
+        try:
+            sys.exit(background_main(args))
+        except SondeError as err:
+            sys.exit(f"ÉCHEC : {err}")
     tmux = shutil.which("tmux")
-    if not tmux:
+    # `--nettoyer` d'un lancement en arrière-plan n'a pas de volet tmux à contrôler : il passe sans tmux.
+    if not tmux and not (args.nettoyer is not None and not args.apres_session and args.envoyer is None
+                         and not args.voir and not args.touches and background_ref(args.nettoyer)):
         sys.exit("tmux introuvable (brew install tmux)")
     if args.envoyer is not None or args.voir or args.touches:
         drive(tmux, args)
@@ -1215,8 +1673,7 @@ def main():
                                        else "aucun (pas lancée depuis une session)")))
     # Le client tmux aussi, sans les variables d'identité : s'il démarre le serveur, l'environnement global de
     # celui-ci les garderait pour toutes ses sessions (l'étape de fin, une fenêtre ouverte à la main).
-    res = subprocess.run(command, capture_output=True, text=True, timeout=30,
-                         env={k: v for k, v in os.environ.items() if k not in IDENTITY and k != LAUNCHER_VAR})
+    res = subprocess.run(command, capture_output=True, text=True, timeout=30, env=claude_env())
     if res.returncode != 0:
         sys.exit(f"tmux : {res.stderr.strip()} (une session « {args.name} » existe déjà ? --name pour en ouvrir une autre)")
     if args.dir:

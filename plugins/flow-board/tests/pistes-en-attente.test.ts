@@ -109,7 +109,7 @@ const cooWithList = async ($: any, clock: any, w: World, pistes: unknown[]) => {
 const call = async ($: any, input: Record<string, unknown>): Promise<string> => String(((await $.tool.call({ tool: TOOL, ...input } as any)) as any).result)
 const mount = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 
-test('chez le COO : la section montre les pistes ; cocher puis « ✂ Découper la sélection » les valide avec la carte « Pistes de rétro », posée dans « Lancements »', { timeoutMs: 30000 }, async ($, on) => {
+test('chez le COO : la section montre les pistes ; cocher puis « ✂ Découper la sélection » les valide avec la carte « Pistes de rétro », posée sous « Au départ »', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)
   await cooWithList($, clock, w, [piste('retroA/p1', { files: ['hooks/coo.ts'] }), piste('retroA/p2'), piste('retroA/p3', { state: 'ticket', mission: 'm1', card: 'kautre01' })])
@@ -143,13 +143,14 @@ test('chez le COO : la section montre les pistes ; cocher puis « ✂ Découper 
   expect(w.toasts.join('\n')).toMatch(/1 piste\(s\) validée\(s\), portée\(s\) par la carte « Pistes de rétro · \d\d:\d\d »/)
   const view = await mount($)
   const after = await texts(view)
-  expect(after).toMatch(/Lancements · 1/)
-  expect(after).toContain(`travail/${pistesCardFolder(p1!.card!)}/`)
+  expect(after).toMatch(/Au départ · 1/)
+  expect(await findAny(view, { key: `coo-card-${p1!.card!}` })).toBeDefined()
+  expect(after).toContain('Découper en tickets les pistes cochées dans « Pistes en attente ».')
   // Validée, p1 quitte les pistes montrées : elle tient avec p3 dans la ligne de compte.
   expect(after).toContain('2 pistes validées ou en ticket, pas montrées')
   await view.unmount()
   // Décision « plus de plafond pour les cartes prêtes » : aucune carte ne la chasse ; huit cartes de Claude ensuite, elle reste.
-  for (let i = 0; i < 8; i++) await call($, { card: { title: `Carte ${i}`, start: 'to-spec', askMatt: 'l. 3', mode: 'manual', effort: 'high', folder: `dossier-${i}` } })
+  for (let i = 0; i < 8; i++) await call($, { card: { title: `Carte ${i}`, start: 'to-spec', askMatt: 'l. 3', mode: 'manual', effort: 'high', folder: `dossier-${i}`, goal: 'Objectif de test.' } })
   const full = await mount($)
   expect(await findAny(full, { key: `coo-card-remove-${p1!.card!}` })).toBeDefined()
   await full.unmount()
@@ -172,7 +173,7 @@ test('une piste changée entre l’affichage et le clic : la sélection ne part 
   // Refusée par la validation, sur la liste relue (pas par l'empreinte de la vue) : la carte posée est repartie.
   expect(w.toasts.join('\n')).toMatch(/Rien n’est découpé\. Refusées : retroA\/p1 \(devenue « écartée »\)/)
   const view = await mount($)
-  expect(await texts(view)).not.toMatch(/Lancements/)
+  expect(await texts(view)).not.toMatch(/Au départ · [1-9]/)
   await view.unmount()
   // Refusée, elle a quitté la sélection : redevenue « pas encore validée », sa case est vide.
   putList(w, [piste('retroA/p1', { history: [{ text: 'avant', files: [], by: 'retroB', at: NOW }] })])
@@ -207,7 +208,7 @@ test('« ✕ Retirer » la carte : ses pistes encore « validée » redeviennent
   expect(pistesOf(listOf(w))[0]!.card).toBeUndefined()
   expect(w.toasts.join('\n')).toMatch(/Carte « Pistes de rétro · \d\d:\d\d » retirée/)
   const view = await mount($)
-  expect(await texts(view)).not.toMatch(/Lancements/)
+  expect(await texts(view)).not.toMatch(/Au départ · [1-9]/)
   await view.unmount()
 })
 
@@ -295,10 +296,19 @@ test('une rétro qui relit la liste et finit : ses pistes relues dans la liste n
   writeBoard(w, b => ({ ...b, runs: [done] }))
   putList(w, [piste(`${done.id}/r1`)])
   await start($)
+  // La tâche de relevé en tête ne se donne que sur une feuille de route lisible : celle que le relevé nomme, posée vide.
+  const first = await openCoo($, clock)
+  const path = /Roadmap file \(write it there only\): « ([^»]+) »/.exec(first)?.[1]
+  // Sans place connue pour la feuille de route (`$.store`), rien ne se relève : la tâche le dit, sans rien faire ajouter.
+  if (path === undefined) {
+    expect(first).toMatch(/closed mission « Rétro finie » .*The roadmap could not be read here/)
+    return
+  }
+  w.files[path] =['# Feuille de route', '', '## Jalons', '', '## Prochaines étapes', '', '## Idées', '', '## À reprendre', ''].join('\n')
   const opening = await openCoo($, clock)
   await settle(clock, 6)
   const turn = `${opening}\n${JSON.stringify(await $.prompt.submit({ text: 'et ?', origin: { kind: 'composer' } } as any))}`
-  expect(turn).toMatch(/Closed mission « Rétro finie »/)
+  expect(turn).toMatch(/closed mission « Rétro finie »/)
   expect(turn).toMatch(/Docs : jamais d/)
   expect(turn).not.toMatch(/Hooks : dans la liste/)
 })

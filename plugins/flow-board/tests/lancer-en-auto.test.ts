@@ -121,7 +121,7 @@ test('un lancement en manuel puis l’auto allumé dans la mission : le cadrage 
 
 test('chez le COO : « Lancer en auto » en tête quand l’auto est recommandé, et jamais sur une carte en xhigh', () => {
   const card = (mode: 'auto' | 'manual', effort: 'high' | 'xhigh') => ({ id: 'kabcdef12', title: 'Export CSV', start: 'grill-with-docs' as const, askMatt: 'l. 19', alts: [], mode, modeWhy: '', effort, effortWhy: '', folder: 'export-csv', at: 1 })
-  const labels = (c: ReturnType<typeof card>) => coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 2, cards: [c] }), { page: 'missions' }).find(row => row.key === 'coo-card-kabcdef12')?.actions?.map(a => a.label.replace(/\s/g, ' ')) ?? []
+  const labels = (c: ReturnType<typeof card>) => coordinationRows(cooStatement(emptyBoard('', 'p'), { now: 2, cards: [c] }), { page: 'overview' }).find(row => row.key === 'coo-card-kabcdef12')?.actions?.map(a => a.label.replace(/\s/g, ' ')) ?? []
   // Une carte ordinaire prête porte aussi « ✕ Retirer », à la suite de ses boutons de lancement.
   expect(labels(card('auto', 'high'))).toEqual(['▶ Lancer en auto', '▶ Lancer en manuel', '✕ Retirer'])
   expect(labels(card('manual', 'high'))).toEqual(['▶ Lancer en manuel', '▶ Lancer en auto', '✕ Retirer'])
@@ -136,7 +136,7 @@ test('le clic « Lancer en auto » écrit un enregistrement en auto et fait vér
   writeBoard(w, b => b)
   await start($)
   await openCoo($, clock)
-  const answer = String(((await $.tool.call({ tool: TOOL, card: { title: 'Export CSV', start: 'grill-with-docs', askMatt: 'l. 19', mode: 'auto', effort: 'high', folder: 'export-csv' } } as any)) as any).result)
+  const answer = String(((await $.tool.call({ tool: TOOL, card: { title: 'Export CSV', start: 'grill-with-docs', askMatt: 'l. 19', mode: 'auto', effort: 'high', folder: 'export-csv', goal: 'Objectif de test.' } } as any)) as any).result)
   const id = /Launch card (k[a-z0-9]+)/.exec(answer)![1]
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pressAny(ui, { key: `coo-card-auto-${id}` })

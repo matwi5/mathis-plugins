@@ -76,13 +76,18 @@ const lengthOf = (text: string): number => text.replace(/\S*(?=reference\/[a-z-]
 /** Le plafond de la demande de lancement, en signes (sans les chemins des fichiers de flow-board). */
 const CAP = 12000
 
+/** La sortie d'erreur du test, que les types du moteur ne déclarent pas (pas de `console` dans ses lib). */
+const stderr = (globalThis as { console?: { error: (line: string) => void } }).console
+
 /**
  * La demande sous le plafond ; en cas d'échec, le message dit la longueur mesurée et la marge (négative
- * quand elle dépasse). Le nom d'un test se fixe au chargement et un test vert n'affiche rien : la mesure
- * ne peut se lire que dans ce message. Le lancer seul : scripts/check.sh --test tests/brief-sessions-liees.test.ts flow-board.
+ * quand elle dépasse). Chaque cas écrit aussi sa mesure sur la sortie d'erreur, « brief <cas> : <n> signes,
+ * marge <m> » (la sortie standard d'un test ne remonte pas de `claude plugin test`), que `scripts/check.sh`
+ * imprime même quand le test passe : scripts/check.sh --test tests/brief-sessions-liees.test.ts flow-board.
  */
-const expectUnderCap = (text: string): void => {
+const expectUnderCap = (text: string, label: string): void => {
   const length = lengthOf(text)
+  stderr?.error(`brief ${label} : ${length} signes, marge ${CAP - length}`)
   expect(length, `longueur ${length} signes, plafond ${CAP}, marge ${CAP - length}`).toBeLessThan(CAP)
 }
 
@@ -112,7 +117,7 @@ test('le brief : la procédure par son chemin, ce qui varie en clair, sous le pl
   // le texte au-delà de 15 000 signes ; la règle d'effort, avec la suggestion de xhigh et ses
   // exemples, en porte environ 3 000, d'où 9 000 portés à 12 000. Au-delà, raccourcir une consigne
   // du brief (ou la renvoyer à la procédure) plutôt que relever le plafond.
-  expectUnderCap(text)
+  expectUnderCap(text, 'procédure')
   // Un groupe lancé par une commande à part n'était pas lié à sa demande, ni vu : la demande le dit.
   expect(text).toContain("Lance le worker seulement depuis cette demande : un lancement à part n'est pas vu.")
   // Au retour : les failles corrigées après coup sont renvoyées à l'outil.
@@ -143,7 +148,7 @@ test('le brief : dans le dépôt de flow-board, la procédure et les méthodes d
   expect(text).toContain('lus par fonction')
   // Un groupe qui corrigeait flow-board avait pris son correctif pour actif.
   expect(text).toContain('le mod qui tourne est sa version installée, pas celle du dépôt')
-  expectUnderCap(text)
+  expectUnderCap(text, 'dépôt de flow-board')
 })
 
 // Le worker du groupe B (rétro « Économie d'usage ») avait suivi la procédure du dépôt, qui citait un
@@ -151,7 +156,7 @@ test('le brief : dans le dépôt de flow-board, la procédure et les méthodes d
 test('la demande, dans le dépôt de flow-board : les deux versions quand elles diffèrent, rien quand elles sont égales', async ($, on) => {
   const text = await brief($, on, true, LOT, 'launch-linked-E', { installed: '0.79.0', source: '0.80.0' })
   expect(text).toContain("flow-board installé : 0.79.0 ; dépôt : 0.80.0 : le mod qui tourne est l'installé.")
-  expectUnderCap(text)
+  expectUnderCap(text, 'versions différentes')
 })
 
 test('la demande, dans le dépôt de flow-board : versions égales, pas de phrase', async ($, on) => {
@@ -177,14 +182,14 @@ const FUSION = {
 test('le brief : un groupe sans logique (Sonnet), seul ou avec un autre, reste sous le plafond', async ($, on) => {
   const alone = await brief($, on, true, FUSION, 'launch-linked-E')
   expect(alone).toContain('Sonnet high, sans logique')
-  expectUnderCap(alone)
+  expectUnderCap(alone, 'groupe Sonnet seul')
 })
 
 test('le brief : deux groupes, l’un sur Sonnet et l’autre sur Opus, restent sous le plafond', async ($, on) => {
   const both = await brief($, on, true, FUSION, 'launch-parallel-linked')
   expect(both).toContain('Groupe A (Code)')
   expect(both).toContain('Sonnet high, sans logique')
-  expectUnderCap(both)
+  expectUnderCap(both, 'groupes Sonnet et Opus')
 })
 
 test('le brief : ailleurs, les seuls chemins installés', async ($, on) => {

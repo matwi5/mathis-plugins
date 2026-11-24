@@ -11,6 +11,8 @@ import { activeRun } from '../hooks/basics.ts'
 import { launchKey, type LaunchRecord } from '../hooks/launch.ts'
 import { AUTO_STOPS, applyReport, applySkill, autoDecision, emptyBoard, startLinkedGroups, type AutoDecision } from '../hooks/model.ts'
 import type { Board } from '../types'
+import { copyStatusFor } from '../hooks/complement.ts'
+import { parseRoadmap } from '../hooks/roadmap.ts'
 import { start, settle, world as coordination } from './monde-coordination.ts'
 
 const PLUGIN = 'flow-board'
@@ -79,7 +81,7 @@ const TRIAGE_BLOCK = [
   'declare the partition as a skipped validation ({"decided": [{"what": "Partage du tri : <the path of tri.md>", "origin": "skipped-validation"}]})',
   'flow-board itself sends /to-tickets, which starts from the « corrige » rows',
   'an « écarte » row or an entry in state « renvoie » changes neither code nor roadmap',
-  'Only a sub-line in state « renvoie » is declared set aside right away, once tri.md is written ({"setAside": [{"text": "<the id of the entry it comes from>: <the sub-line>", "source": "tri.md"}]}): the roadmap\'s owner (the COO) copies it as a new entry « à décider », where only the user decides; no existing entry changes state',
+  'Only a sub-line in state « renvoie » is declared set aside right away, once tri.md is written ({"setAside": [{"text": "<the id of the entry it comes from> (sous-ligne renvoyée) : <the sub-line>", "source": "tri.md"}]}; never « <id>: », the head that files a complement of that entry): the roadmap\'s owner (the COO) copies it as a new entry « à décider », where only the user decides; no existing entry changes state',
   'A « question » row is a blocking question on the Report phase ({"waiting": [{"id": "<short id>", "phase": "compte-rendu", "text": "<short>"}]}): it holds back only the report, never the ticket split nor the groups',
   'write the answer in the decision file, the question and the answer word for word; update tri.md; when the answer gives a fix while the triage is still under way, its row becomes « corrige » in tri.md and no ticket is sent (the Tickets phase splits it: a ticket sent during the triage would skip that phase); when it comes later, add a ticket to the lot ({"tickets": […]}): in a mission with groups, with its group (the whole plan again in {"groups": […]}); without groups (a plan of one group is ignored), do that ticket in this discussion, with the steps of a ticket of the lot (its checks, its review, its commit: the procedure /implement gives), before withdrawing the question',
 ]
@@ -205,11 +207,18 @@ test('pendant le tri, le partage déclaré comme validation sautée est gardé a
   expect(activeRun(b)!.decided).toEqual([expect.objectContaining({ what: 'Partage du tri : travail/bugs/tri.md', origin: 'skipped-validation' })])
 })
 
-test('pendant le tri en auto, une sous-ligne renvoyée se met de côté pour le COO', { timeoutMs: 20000 }, async ($, on) => {
-  await typed($, on, true)
-  const out = String(((await $.tool.call({ tool: TOOL, setAside: [{ text: 'R62: R62-b, le lien de la carte', source: 'tri.md' }] } as any)) as any).result)
+test('pendant le tri en auto, une sous-ligne renvoyée se met de côté pour le COO, sous la tête que dicte le bloc du tri', { timeoutMs: 20000 }, async ($, on) => {
+  const note = await typed($, on, true)
+  // L'appel tel que le bloc le dicte, ses deux trous remplis.
+  const dictated = /\{"setAside": \[\{"text": "([^"]+)", "source": "tri\.md"\}\]\}/.exec(note)?.[1]
+  expect(dictated).toBe('<the id of the entry it comes from> (sous-ligne renvoyée) : <the sub-line>')
+  const text = dictated!.replace('<the id of the entry it comes from>', 'R62').replace('<the sub-line>', 'R62-b, le lien de la carte')
+  const out = String(((await $.tool.call({ tool: TOOL, setAside: [{ text, source: 'tri.md' }] } as any)) as any).result)
   expect(out).toContain("Set aside for the COO's « À reprendre » list: 1")
   expect(out).not.toContain('NOT recorded')
+  // Recopiée sous une entrée R62 rattachée au tri, elle reste « à décider » : une sous-ligne renvoyée se décide à part, ce n'est pas un complément.
+  const roadmap = parseRoadmap('## À reprendre\n- [R62] rattachée à Tri · 2026-11-20 · COO · le constat découpé\n')
+  expect(copyStatusFor(text, roadmap.ok ? roadmap.entries : null)).toBe('à décider')
 })
 
 test('la réponse arrivée pendant le tri : sa ligne passe « corrige », aucun ticket, et /to-tickets part à la fin du tri', () => {

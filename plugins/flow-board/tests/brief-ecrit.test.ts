@@ -143,6 +143,8 @@ test('le brief écrit porte chaque rubrique, dans l’ordre, et tout ce que la d
   expect(brief).toContain('trouve la ligne qui porte cette référence')
   expect(brief).toContain('tes sœurs')
   expect(brief).toContain('Termine toujours par un message à cette discussion')
+  // Le message final cite le chemin du relais que l'outil flow a donné au dépôt (piste relai1).
+  expect(brief).toContain("la ligne qui renvoie à ton compte rendu déposé au relais, par le chemin que ton outil flow t'a donné.")
   expect(brief.trimEnd().endsWith('dans le message qui suit ce brief)')).toBe(true)
 })
 

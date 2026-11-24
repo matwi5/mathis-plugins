@@ -1,12 +1,13 @@
-// Les consignes du mode auto : les six catégories qui restent à la personne, la zone sensible, l'advisor, la
+// Les consignes du mode auto : les six catégories qui restent à la personne, la phrase des cases d'autonomie cochées, la zone sensible, l'advisor, la
 // note de chaque phase (`autoNote`, `AUTO_PHASE_NOTES`), le cadrage et le tri d'une mission lancée par le COO,
 // et le message d'allumage (`autoOnNotice`, `autoBriefText`). Sortis de `register.tsx`, que le moteur ne lit
 // plus au-delà de 1 048 576 octets, par `scripts/deplace.py` (octets identiques). Module pur : ni le moteur
 // (`$`), ni le stockage ; il ne lit la mission que par ses arguments.
 
 import type { Run } from '../types'
-import { SENSITIVE_AREAS, SKILLS } from './catalog.ts'
-import { OPPOSITION_PREFIX, RELAUNCH_PREFIX, STALE_PREFIX, autoQuestionsNotice } from './model.ts'
+import { AUTONOMY_EXCEPT_EN, SENSITIVE_AREAS, SKILLS } from './catalog.ts'
+import { OPPOSITION_PREFIX, RELAUNCH_PREFIX, SENSITIVE_CHOICE_MARK, SETTING_CHOICE_MARK, STALE_PREFIX, autoQuestionsNotice } from './model.ts'
+import { AUTONOMY_CASES, type AutonomyCases } from './autonomy-setting.ts'
 import { currentPhase } from './basics.ts'
 import { liveLaunchOf } from './launch.ts'
 
@@ -32,6 +33,60 @@ const AUTO_SENSITIVE = `- A question in a sensitive area (${SENSITIVE_AREAS}) is
  */
 const AUTO_ADVISOR =
   "- Before coding a decision you take alone outside the framing (a design change, a question in a sensitive area settled by you), consult the advisor (the advisor tool, when you have it), once per decision; without it, reread your decision yourself (the options, what each one commits to) before committing to it. This adds to the moments of the rule « Consulter l'advisor »."
+
+/**
+ * Les libellés des cases d'autonomie cochées, dans l'ordre de la page « Réglages » ; aucun quand les cases ne se
+ * lisent pas (null) : une case illisible vaut décochée (invariant des cases).
+ */
+export const tickedBoxes = (cases: AutonomyCases | null | undefined): string[] => (cases ? AUTONOMY_CASES.filter(c => cases[c.id] === true).map(c => c.label) : [])
+
+/**
+ * La phrase des cases d'autonomie du bloc « mode auto » : null sans case cochée (le bloc reste alors celui d'avant,
+ * mot pour mot). Elle l'emporte sur la phrase des six sortes pour les sortes cochées, comme celle de la zone sensible,
+ * et redit ce qui reste toujours posé ; les libellés viennent de `AUTONOMY_CASES`, jamais du fichier relu.
+ */
+export const autonomyLine = (cases: AutonomyCases | null | undefined): string | null => {
+  const labels = tickedBoxes(cases)
+  if (!cases || labels.length === 0) return null
+  const parts = [
+    `- Autonomy boxes the user ticked for this project (the « Réglages » page of the COO's Coordination view): ${labels.map(l => `« ${l} »`).join(', ')}. For a question that falls only under the kinds of these boxes, this line wins over the line of the six kinds (« always as blocking questions »), as the line of the sensitive area does: do not ask it; consult the advisor (the advisor tool, when you have it; without it, reread your decision yourself); take your recommended answer; write it in the mission's decision file (DECISIONS.md, or the one the project's CLAUDE.md names), the question and its options in full, as « acceptée par réglage (<box>) »; declare it before coding it, its "what" beginning with « ${SETTING_CHOICE_MARK} <box> : » (boxes joined by « + », a space on each side, for a question of several kinds; after « ${SENSITIVE_CHOICE_MARK} » for a sensitive one, which a box settles only when your recommended option also meets the condition of the sensitive area to be settled by you: it respects the invariant already validated and is the most prudent, else it stays asked): {"decided": [{"what": "${SETTING_CHOICE_MARK} <box> : <the choice>", "why": "...", "origin": "recommendation"}]}. The flow tool refuses that choice when a box it names is not ticked or cannot be read: then ask the question. Still always asked, with no box: a deletion with no way back or an exposure of the user's data outside this machine, leaving a security finding unfixed, the Fable path, an invariant already validated to weaken, rewrite, read, clarify or extend, and any question one of whose kinds has no ticked box.`,
+  ]
+  if (cases.invariant)
+    parts.push("The box « Invariant d'un ticket » covers only the invariant of a ticket, written at the ticket split or during the implementation (a very sensitive ticket's included), once you have searched the decision files for the invariants already written that name the same data and quoted them; an invariant proposed during the framing or the spec, before a ticket carries it, stays asked.")
+  if (cases.contradiction) parts.push('Under « Décision déjà prise contredite », the new series quotes the decision it replaces and marks it replaced; a decision that is an invariant, or of a kind with no box, stays asked.')
+  if (cases.spend) parts.push('Under « Dépense ou action externe », the question is not asked, so it carries no "gesture" for the COO\'s dashboard.')
+  return parts.join(' ')
+}
+
+/** La relecture après la fusion, case cochée, dite par renvoi (en français : la demande de découpage des pistes). */
+export const AFTER_MERGE_FR = "après elle et avant la livraison quand la mission est en mode auto et que sa case d'autonomie « Relecture après la fusion » est cochée (la consigne du mode auto ou la réponse de l'outil flow le dit)"
+
+/** Ce qu'est un fichier chargé dans toutes les sessions, pour la relecture d'un groupe rendu. */
+const LOADED_EVERYWHERE = 'A group back from its worker that changed a file loaded in every session (a common rule under config/rules, a CLAUDE.md)'
+
+/**
+ * La relecture d'un groupe rendu qui a changé un fichier chargé dans toutes les sessions, au bloc de l'Implémentation d'une
+ * mission à groupes : case « Relecture après la fusion » cochée, le manager déclare le choix de réglage, fusionne et garde les
+ * phrases pour le compte rendu ; décochée ou illisible, une question bloquante sur ce seul groupe, avant la fusion.
+ */
+export const autoRereadLine = (cases: AutonomyCases | null): string =>
+  cases?.reread === true
+    ? `- ${LOADED_EVERYWHERE}: the autonomy box « Relecture après la fusion » is ticked, so do not ask: before merging it, declare {"decided": [{"what": "${SETTING_CHOICE_MARK} Relecture après la fusion : <the file>", "why": "...", "origin": "recommendation"}]} (one per file), write it in the mission's decision file (DECISIONS.md, or the one the project's CLAUDE.md names) as « acceptée par réglage (Relecture après la fusion) », naming the group and each file, merge, and keep each sentence added or removed (from the worker's report, or the diff of the merge) for the report, under « Phrases fusionnées sans relecture », for the user to reread before the delivery.`
+    : `- ${LOADED_EVERYWHERE}: the autonomy box « Relecture après la fusion » is not ticked, so before merging it ask a blocking question on that group ({"waiting": [{"id": "relecture-<group id>", "group": "<group id>", "text": "<short>"}]}), under a new id (« relecture-<group id>-2 » and so on) when the group comes back again after that question was answered, with each sentence added or removed quoted in your message, and merge it only once the user has answered; the other groups go on.`
+
+/**
+ * Le renvoi aux cases d'autonomie dans les phrases des blocs de phase qui gardent une question pour la personne (le
+ * cadrage, le découpage) et dans la consigne d'allumage : seulement quand une case au moins est cochée, pour qu'aucune
+ * case cochée laisse ces textes mot pour mot. La spec n'en a pas : l'invariant qu'on y propose reste posé.
+ */
+const withAutonomyExcept = (text: string): string =>
+  text
+    .replace('stay blocking questions on this phase ("phase": "to-tickets").', `stay blocking questions on this phase ("phase": "to-tickets"), ${AUTONOMY_EXCEPT_EN}.`)
+    .replace('to be settled by you, stays a blocking question. ', `to be settled by you, stays a blocking question, ${AUTONOMY_EXCEPT_EN}. `)
+    .replace('that is of the six kinds below is a blocking question,', `that is of the six kinds below is a blocking question (${AUTONOMY_EXCEPT_EN}),`)
+
+/** Ajoutée à la consigne d'allumage quand une case est cochée : une question déjà posée reste posée (choix de la personne). */
+const ALREADY_ASKED = 'A question already asked in that last message stays asked, even when its autonomy box is ticked: the boxes count only for questions not asked yet.'
 
 /** Ce que Claude fait des failles et des constats sur du code antérieur, en implémentation et aux revues. */
 const AUTO_FINDINGS =
@@ -107,14 +162,17 @@ const launchedTriage = (run: Run): string | null => {
  * Le bloc du tri en auto : pas d'attente après la recommandation ; le partage déclaré comme une validation sautée ;
  * les lignes « corrige » partent au découpage ; « écarte » et « renvoie » ne changent rien avant l'accord de la
  * personne, ni code ni entrée existante, une sous-ligne renvoyée se déclarant tout de suite mise de côté (le COO la copie en entrée
- * neuve « à décider ») ; une ligne « question » attend sur la phase Compte rendu, qui ne retient ni le découpage ni les
+ * neuve « à décider » : sa tête « <id> (sous-ligne renvoyée) : » n'a pas la forme stricte d'un complément, `copyStatusFor`) ; une ligne « question » attend sur la phase Compte rendu, qui ne retient ni le découpage ni les
  * groupes (`blockingQuestions` de model.ts).
  */
 const AUTO_TRIAGE =
-  '- Triage in auto mode: do not wait after your recommendation. Once every entry is verified and tri.md is written, declare the partition as a skipped validation ({"decided": [{"what": "Partage du tri : <the path of tri.md>", "origin": "skipped-validation"}]}), then {"complete": true}: flow-board itself sends /to-tickets, which starts from the « corrige » rows. Nothing the triage drops or sends back changes before the user\'s agreement: an « écarte » row or an entry in state « renvoie » changes neither code nor roadmap. Only a sub-line in state « renvoie » is declared set aside right away, once tri.md is written ({"setAside": [{"text": "<the id of the entry it comes from>: <the sub-line>", "source": "tri.md"}]}): the roadmap\'s owner (the COO) copies it as a new entry « à décider », where only the user decides; no existing entry changes state. A « question » row is a blocking question on the Report phase ({"waiting": [{"id": "<short id>", "phase": "compte-rendu", "text": "<short>"}]}): it holds back only the report, never the ticket split nor the groups. Once the user has answered: write the answer in the decision file, the question and the answer word for word; update tri.md; when the answer gives a fix while the triage is still under way, its row becomes « corrige » in tri.md and no ticket is sent (the Tickets phase splits it: a ticket sent during the triage would skip that phase); when it comes later, add a ticket to the lot ({"tickets": […]}): in a mission with groups, with its group (the whole plan again in {"groups": […]}); without groups (a plan of one group is ignored), do that ticket in this discussion, with the steps of a ticket of the lot (its checks, its review, its commit: the procedure /implement gives), before withdrawing the question; then withdraw the question ({"waiting": [{"id": "<id>", "answered": true}]}).'
+  '- Triage in auto mode: do not wait after your recommendation. Once every entry is verified and tri.md is written, declare the partition as a skipped validation ({"decided": [{"what": "Partage du tri : <the path of tri.md>", "origin": "skipped-validation"}]}), then {"complete": true}: flow-board itself sends /to-tickets, which starts from the « corrige » rows. Nothing the triage drops or sends back changes before the user\'s agreement: an « écarte » row or an entry in state « renvoie » changes neither code nor roadmap. Only a sub-line in state « renvoie » is declared set aside right away, once tri.md is written ({"setAside": [{"text": "<the id of the entry it comes from> (sous-ligne renvoyée) : <the sub-line>", "source": "tri.md"}]}; never « <id>: », the head that files a complement of that entry): the roadmap\'s owner (the COO) copies it as a new entry « à décider », where only the user decides; no existing entry changes state. A « question » row is a blocking question on the Report phase ({"waiting": [{"id": "<short id>", "phase": "compte-rendu", "text": "<short>"}]}): it holds back only the report, never the ticket split nor the groups. Once the user has answered: write the answer in the decision file, the question and the answer word for word; update tri.md; when the answer gives a fix while the triage is still under way, its row becomes « corrige » in tri.md and no ticket is sent (the Tickets phase splits it: a ticket sent during the triage would skip that phase); when it comes later, add a ticket to the lot ({"tickets": […]}): in a mission with groups, with its group (the whole plan again in {"groups": […]}); without groups (a plan of one group is ignored), do that ticket in this discussion, with the steps of a ticket of the lot (its checks, its review, its commit: the procedure /implement gives), before withdrawing the question; then withdraw the question ({"waiting": [{"id": "<id>", "answered": true}]}).'
 
-/** La consigne du mode auto pour le skill `id` d'une mission en auto : le bloc commun, puis celui de sa phase. */
-export const autoNote = (id: string, run: Run): string[] => {
+/**
+ * La consigne du mode auto pour le skill `id` d'une mission en auto : le bloc commun, puis celui de sa phase. `cases` : les
+ * cases d'autonomie relues à l'envoi (absentes ou illisibles : aucune phrase des cases, le bloc d'avant mot pour mot).
+ */
+export const autoNote = (id: string, run: Run, cases: AutonomyCases | null = null): string[] => {
   // Le texte fixé de la notification, son titre neutralisé par `autoQuestionsNotice` (le site admis de
   // `register.tsx`, d'où la fonction est sortie, ne se déplace pas : une liste d'admis n'augmente jamais).
   const notice = autoQuestionsNotice(run.title, 'N')
@@ -123,14 +181,16 @@ export const autoNote = (id: string, run: Run): string[] => {
     '- Each recommendation you take without the user is a declared choice: {"decided": [{"what": "...", "why": "...", "origin": "recommendation"}]} (« reco prise »). Each validation the auto mode skips is declared instead of a button question: {"decided": [{"what": "<what was validated, with the path or link of the validated text>", "origin": "skipped-validation"}]} (« validation sautée »).',
     AUTO_SENSITIVE,
     AUTO_ADVISOR,
-    `- Six kinds of decisions stay with the user even in auto mode, always as blocking questions, never as declared choices: ${AUTO_CATEGORIES_EN.map((c, i) => `${i + 1}) ${c}`).join('; ')}. Ask it in your message (options, the recommended one first) and declare it: {"waiting": [{"id": "<short id>", "phase": "<skill id>" | "group": "<group id>" | "ticket": "<ticket id>", "text": "<the question, shown on the dashboard only>"}]}; for kinds 4) and 6), add the gesture the user can make with a click in the COO's dashboard, applied here by flow-board: "gesture": "spend" or "external" (the user allows or refuses it), or "gesture": "flaw" with "dismissed": <the total of kept findings left unfixed once the user agrees>, on its group (or on this phase without groups). Only what it blocks waits: go on with the rest. Once the user has answered, withdraw it: {"waiting": [{"id": "<id>", "answered": true}]}. A question whose id starts with « ${STALE_PREFIX} » is the mod's (« envoi resté sans suite »): never withdraw it; the user answers it with « ↻ Renvoyer » on the dashboard, or by launching the step. A question whose id starts with « ${RELAUNCH_PREFIX} » is the mod's too (a group back too many times from its worker): while the group still has open tickets in the plan and is not sent again, the flow tool refuses its withdrawal; the user relaunches the group (« ↗ Worker »), or answers otherwise (its open tickets set done, or removed from the lot with "remove"): then withdraw it. A question whose id starts with « ${OPPOSITION_PREFIX} » is the mod's too (opposed decisions of two missions, raised by the COO): never ask it here, where an answer does not lift it, and never withdraw it; tell the user to answer it in the COO's discussion, which applies the answer, and the dashboard withdraws it itself.`,
+    `- Six kinds of decisions stay with the user even in auto mode, always as blocking questions, never as declared choices: ${AUTO_CATEGORIES_EN.map((c, i) => `${i + 1}) ${c}`).join('; ')}. Ask it in your message (options, the recommended one first) and declare it: {"waiting": [{"id": "<short id>", "phase": "<skill id>" | "group": "<group id>" | "ticket": "<ticket id>", "text": "<the question, shown on the dashboard only>"}]}; for kinds 4) and 6), add the gesture the user can make with a click in the COO's dashboard, applied here by flow-board: "gesture": "spend" or "external" (the user allows or refuses it), or "gesture": "flaw" with "dismissed": <the total of kept findings left unfixed once the user agrees>, on its group (or on this phase without groups). Only what it blocks waits: go on with the rest; except the report, which flow-board sends only once every blocking question of the mission is answered, whatever it targets, and every stopped closing that « ↻ Relancer la fermeture » can relaunch is taken up again (closed, or left to archive in the app); the others are said first in the report. Once the user has answered, withdraw it: {"waiting": [{"id": "<id>", "answered": true}]}. A question whose id starts with « ${STALE_PREFIX} » is the mod's (« envoi resté sans suite »): never withdraw it; the user answers it with « ↻ Renvoyer » on the dashboard, or by launching the step. A question whose id starts with « ${RELAUNCH_PREFIX} » is the mod's too (a group back too many times from its worker): while the group still has open tickets in the plan and is not sent again, the flow tool refuses its withdrawal; the user relaunches the group (« ↗ Worker »), or answers otherwise (its open tickets set done, or removed from the lot with "remove"): then withdraw it. A question whose id starts with « ${OPPOSITION_PREFIX} » is the mod's too (opposed decisions of two missions, raised by the COO): never ask it here, where an answer does not lift it, and never withdraw it; tell the user to answer it in the COO's discussion, which applies the answer, and the dashboard withdraws it itself.`,
+    ...[autonomyLine(cases)].filter((l): l is string => l !== null),
     `- Each time you declare blocking questions, also send one PushNotification (a deferred tool: load it with ToolSearch, select:PushNotification) with exactly this text and nothing else, neither the question nor any code: « ${notice} », N being the open questions of the mission once yours are declared (the answer of the flow tool says « waiting: N question(s) »).`,
   ]
   if (SKILLS[id]?.isGrilling) lines.push(launchedFraming(run) ?? AUTO_FRAMING)
   if (id === 'triage') lines.push(...[launchedTriage(run), AUTO_TRIAGE].filter((l): l is string => l !== null))
   const own =id === 'implement' && (run.groups ?? []).length === 0 ? AUTO_LOT_IMPLEMENT : AUTO_PHASE_NOTES[id]
   if (own) lines.push(own)
-  return lines
+  if (id === 'implement' && (run.groups ?? []).length > 0) lines.push(autoRereadLine(cases))
+  return autonomyLine(cases) === null ? lines : lines.map(withAutonomyExcept)
 }
 
 /**
@@ -152,19 +212,25 @@ const AUTO_BRIEF_AT_REST = `${AUTO_BRIEF_CORE} Then end your turn, unless the cu
  * texte ne dit pas que la personne vient de cliquer. L'id de la phase vient du fichier partagé : il
  * n'entre dans le texte que s'il est celui d'un skill connu.
  */
-const autoBriefLines = (run: Run, brief: string): string[] => {
+const autoBriefLines = (run: Run, brief: string, cases: AutonomyCases | null): string[] => {
   const readSkill = currentPhase(run).skill
   // Une clé héritée (`constructor`) ne fait entrer aucun texte : seul l'id d'un skill connu sert.
   const skill = Object.hasOwn(SKILLS, readSkill) ? readSkill : ''
   const phase = skill !== '' ? ` (${skill})` : ''
-  return [`Auto mode is ON for this mission now, and you have not received its instructions yet: it was lit, or flow-board was reloaded, while the current phase${phase} was under way. ${brief}`, ...autoNote(skill, run)]
+  return [`Auto mode is ON for this mission now, and you have not received its instructions yet: it was lit, or flow-board was reloaded, while the current phase${phase} was under way. ${withAsked(brief, cases)}`, ...autoNote(skill, run, cases)]
 }
 
+/** La consigne de relecture, suivie de « une question déjà posée reste posée » quand une case est cochée. */
+const withAsked = (brief: string, cases: AutonomyCases | null): string => (autonomyLine(cases) === null ? brief : `${withAutonomyExcept(brief)} ${ALREADY_ASKED}`)
+
+/** La consigne de relecture seule, donnée en plein tour avec le bloc du skill de la phase en cours. */
+export const autoBriefInTurn = (cases: AutonomyCases | null = null): string => withAsked(AUTO_BRIEF_IN_TURN, cases)
+
 /** L'avis « auto allumé » d'une réponse de l'outil, donné en cours de phase. */
-export const autoOnNotice = (run: Run): string => ['', '', '---', ...autoBriefLines(run, AUTO_BRIEF_IN_TURN)].join('\n')
+export const autoOnNotice = (run: Run, cases: AutonomyCases | null = null): string => ['', '', '---', ...autoBriefLines(run, AUTO_BRIEF_IN_TURN, cases)].join('\n')
 
 /** Le début fixe du message de consigne que le mod envoie à Claude au repos. */
 export const AUTO_BRIEF_HEAD = '⚡ flow-board: the auto mode instructions for this mission, before it sends anything.'
 
 /** Le message que le mod envoie à Claude au repos : la même consigne, annoncée comme venant de flow-board. */
-export const autoBriefText = (run: Run): string => [AUTO_BRIEF_HEAD, ...autoBriefLines(run, AUTO_BRIEF_AT_REST)].join('\n')
+export const autoBriefText = (run: Run, cases: AutonomyCases | null = null): string => [AUTO_BRIEF_HEAD, ...autoBriefLines(run, AUTO_BRIEF_AT_REST, cases)].join('\n')

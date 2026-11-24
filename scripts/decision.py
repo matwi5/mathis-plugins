@@ -19,16 +19,25 @@ Un fichier mal formé est refusé avant tout verrou et toute écriture, toutes s
 `--index "<texte>"` ajoute aussi la ligne « - Série <n> — <titre> (<texte>) » à la fin de la liste de l'index
 « Décisions en vigueur », avant la première série : sous le titre `## Décisions en vigueur` (après un éventuel
 texte d'introduction ; la section va jusqu'au titre suivant) ou sous la ligne `**Décisions en vigueur**`
-(index vide : la ligne va sous elle), après le dernier élément « - … » de premier niveau de la liste (ses
-lignes de suite indentées et les lignes vides entre deux éléments en font partie), dans le fichier de travail
-et dans le blob commité, sous le même verrou et dans le même commit que la série ; aucun autre octet ne
-change. Il refuse avant toute écriture un texte vide, de plus de 300 signes, sur plusieurs lignes ou qui porte
-un caractère non imprimable (code 2), un fichier à créer, un fichier de travail ou un HEAD sans bloc d'index
-ou avec plusieurs, et un index dont la fin n'est pas sûre (rien n'est deviné) : sous la ligne en gras, une
-première ligne qui n'est pas un élément « - … » ; sous le titre, une introduction sans liste ou un contenu
-après la liste ; une ligne non indentée collée à la liste qui n'en est pas un élément. La relance sans
-`--index` écrit la série comme avant. Un HEAD qui avance pendant le commit et n'a plus un tel index arrête en
-code 3 (étape 6). Une ligne périmée se retouche à la main : le script n'en retire aucune.
+(index vide, sous la ligne en gras comme sous le titre sans introduction : la ligne va juste sous elle ou
+lui), après le dernier élément « - … » de premier niveau de la liste (ses lignes de suite indentées et les
+lignes vides entre deux éléments en font partie), dans le fichier de travail et dans le blob commité, sous le
+même verrou et dans le même commit que la série ; aucun autre octet ne change. Il refuse avant toute écriture
+un texte vide, de plus de 300 signes, sur plusieurs lignes ou qui porte un caractère non imprimable (code 2),
+un fichier de travail ou un HEAD sans bloc d'index ou avec plusieurs, et un index dont la fin n'est pas sûre
+(rien n'est deviné) : sous la ligne en gras, une première ligne qui n'est pas un élément « - … » ; sous le
+titre, une introduction sans liste ou un contenu après la liste ; une ligne non indentée collée à la liste
+qui n'en est pas un élément. Le script n'insère jamais de bloc dans un fichier qui existe : l'y ajouter s'il
+manque au fichier de travail (par exemple le titre `## Décisions en vigueur` avant la première série), puis
+le commiter d'abord dans le clone principal, le seul bloc indexé par un patch (`git apply --cached <patch>` :
+le fichier peut porter les séries non commitées d'une autre discussion) et commité par l'index tel quel, sans
+`-- <chemin>`, avec la marque « # index vérifié » que demande le hook du dépôt, puis relancer ; le message du
+refus le dit, seulement avant l'écriture de la série (après, une relance l'écrirait deux fois). La relance
+sans `--index` écrit la série comme avant. Un fichier que le script crée (étape 2 bis) porte ce bloc dès sa
+création, sous le titre `## Décisions en vigueur`, entre le titre du fichier et la série 1 : avec `--index`,
+la ligne de la série 1 y est, dans le même commit ; sans, sa liste est vide. Un HEAD qui avance pendant le
+commit et n'a plus un tel index arrête en code 3 (étape 6). Une ligne périmée se retouche à la main : le
+script n'en retire aucune.
 
 Plusieurs discussions écrivent dans le même fichier de décisions : le numéro d'une série se prenait à
 la main, et le commit devait isoler ses lignes des ajouts non commités d'une autre discussion. Le
@@ -63,7 +72,8 @@ script fait tout le geste, et ne rend la main qu'avec la série commitée, ou le
    du chantier n'a que des lettres et des chiffres ASCII, `.`, `_` et `-` (`SUBJECT`, sans point final),
    sans chantier du même nom à la casse près, et quand le chemin ne
    passe par aucun lien symbolique qui mène dans le dépôt ou s'y trouve : le dossier `travail/<sujet>/` au
-   besoin, puis le fichier, titré `# Décisions — <sujet>`, suivi de la série 1, par un fichier voisin lié
+   besoin, puis le fichier, titré `# Décisions — <sujet>`, suivi du bloc d'index `## Décisions en vigueur`
+   (sa liste vide, ou la ligne de la série 1 avec `--index`) et de la série 1, par un fichier voisin lié
    à son nom (`os.link`, qui n'écrase jamais un fichier posé entre-temps), commité comme à l'étape 5, sur
    un HEAD relu juste avant qui ne le suit toujours pas ; la sortie dit « créé » et donne son chemin. Une
    création ratée avant le commit (écriture impossible, hook en échec, interruption) retire le fichier,
@@ -157,6 +167,8 @@ WRITTEN = " ; rien n'est écrit"
 # du fichier, où un saut de ligne glisserait un faux titre de série ; liste blanche ASCII, 100 signes au plus,
 # sans point final (Windows le retire d'un nom de dossier : `x.` y serait le chantier `x`).
 SUBJECT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9_-])?", re.ASCII)
+# Le titre d'un fichier créé ; `check_creation` le fait suivre du bloc de l'index (`INDEX_FORMS[0]`), sa liste
+# vide, que `--index` remplit dès la série 1.
 CREATED_TITLE = "# Décisions — {}"
 # Le mode d'un fichier de décisions créé, dans l'arbre de git.
 CREATED_MODE = "100644"
@@ -257,10 +269,16 @@ HEADING = re.compile(r"#{1,6} ")
 INDEX_TEXT_MAX = 300
 
 
+def index_line(n, title, index):
+    """La ligne d'index de la série `n` : « - Série <n> — <titre> (<texte de --index>) »."""
+    return f"- Série {n} — {title} ({index})"
+
+
 def with_index_line(text, line, where, before_writing=True):
     """`text` où `line` s'insère après le dernier élément de la liste de l'index (`INDEX_FORMS`) : ses éléments
     « - … » de premier niveau, leurs lignes de suite indentées et les lignes vides entre deux éléments ; sous la
-    ligne en gras sans liste, juste sous elle. À ses fins de ligne ; seul autre changement, la fin de ligne
+    ligne en gras sans liste, ou sous le titre sans introduction ni liste (le bloc d'un fichier créé), juste sous
+    elle ou lui. À ses fins de ligne ; seul autre changement, la fin de ligne
     ajoutée à ce dernier élément quand il finit le texte sans en avoir. DecisionError (code 1) sans bloc, avec
     plusieurs, ou quand la fin de l'index n'est pas sûre (rien n'est deviné) ; `where` nomme le texte lu. Le
     message conseille la relance sans --index seulement `before_writing` : après l'écriture de la série, elle
@@ -277,7 +295,16 @@ def with_index_line(text, line, where, before_writing=True):
     if len(heads) != 1:
         found = "aucun bloc d'index avant la première série" if not heads else \
             f"{len(heads)} blocs d'index (lignes {', '.join(str(k + 1) for k in heads)})"
-        raise DecisionError(f"{where} : {found}, alors que --index en demande un seul, sous {INDEX_HELP}{retry}"
+        # Le script ne crée un bloc qu'avec le fichier : dans un fichier qui existe, l'ajout se commite d'abord.
+        # Seulement avant l'écriture de la série : après, la série est écrite et non commitée, et ce conseil suivi
+        # d'une relance l'écrirait une seconde fois.
+        add = "" if heads or not before_writing else (
+            " ; le script n'insère pas de bloc dans un fichier qui existe : l'y ajouter s'il manque au fichier de "
+            "travail, puis le commiter d'abord dans le clone principal (le seul bloc dans un patch, puis git apply "
+            "--cached <patch> : le fichier peut porter les séries non commitées d'une autre discussion ; puis "
+            "commiter l'index tel quel, sans -- <chemin>, avec la marque « # index vérifié » que demande le hook du "
+            "dépôt)")
+        raise DecisionError(f"{where} : {found}, alors que --index en demande un seul, sous {INDEX_HELP}{add}{retry}"
                             f"{WRITTEN}")
     start = end = heads[0]
     bold = bare[start].startswith("**")
@@ -503,8 +530,8 @@ def check_repo(top, rel, real):
     """Refuse un index non vide, une opération en cours, un fichier présent mais non suivi dans HEAD, suivi
     mais retiré de l'arbre, ou un lien symbolique ; rend le mode de l'entrée du fichier, puis `head_state`,
     puis False. Pour un fichier absent de l'arbre et de HEAD, lu ici sous le verrou, rend ceux d'une
-    création (`check_creation`) : le mode d'un fichier ordinaire, HEAD, aucun blob, le texte du titre du
-    fichier, puis True."""
+    création (`check_creation`) : le mode d'un fichier ordinaire, HEAD, aucun blob, le début du fichier à
+    créer (son titre et son bloc d'index vide, `check_creation`), puis True."""
     staged = staged_names(top)
     if staged:
         raise DecisionError("l'index porte déjà des changements, qu'un commit d'autrui prendrait avec la série : "
@@ -538,7 +565,8 @@ def check_creation(root, rel, real):
     l'index d'un worktree, le HEAD d'un worktree, une branche locale, même sans worktree, ou une branche
     distante relevée (`refs/remotes`, poussée d'un autre poste et pas encore fusionnée) ; un fichier de
     décisions n'existe qu'à un seul endroit. Une lecture qui échoue refuse aussi : dans le doute, rien n'est
-    créé. Rend le texte du titre du fichier à créer."""
+    créé. Rend le début du fichier à créer : son titre (`CREATED_TITLE`), une ligne vide, puis le titre du bloc
+    d'index (`INDEX_FORMS[0]`), sa liste vide."""
     subject = rel.split("/")[1]
     if not SUBJECT.fullmatch(subject):
         raise DecisionError(f"le sujet « {subject!r} » n'est pas créé : lettres et chiffres ASCII, « . », « _ » et "
@@ -595,7 +623,7 @@ def check_creation(root, rel, real):
                             f"{' ; '.join(held)} ; un fichier de décisions n'existe qu'à un seul endroit : l'amener "
                             f"d'abord dans le clone principal (le commiter s'il ne l'est pas, puis fusionner la branche "
                             f"qui le porte), puis y écrire la série{WRITTEN}")
-    return CREATED_TITLE.format(subject) + "\n"
+    return f"{CREATED_TITLE.format(subject)}\n\n{INDEX_FORMS[0]}\n"
 
 
 def worktrees(root):
@@ -739,8 +767,9 @@ def swap_head_and_index(top, rel, mode, head, head_blob, blob, new, subject, pha
 
 def commit_series(top, rel, mode, head, head_blob, head_text, block, n, message_args, subject, phase, line=None):
     """Commite la série sur HEAD, sans l'index partagé, puis remplace HEAD et l'index ensemble ; rend
-    (numéro, hash court, hash complet). Pour une création (`head_blob` None), `head_text` est le titre du
-    fichier, et un nouveau HEAD qui suit maintenant le fichier arrête (code 3). Avec `line`, la ligne d'index
+    (numéro, hash court, hash complet). Pour une création (`head_blob` None), `head_text` est le début du
+    fichier créé (son titre et son bloc d'index, avec la ligne de la série 1 quand `create_with_series` l'y a
+    mise), et un nouveau HEAD qui suit maintenant le fichier arrête (code 3). Avec `line`, la ligne d'index
     de la série s'insère aussi dans le texte de HEAD (`with_index_line`), relu à chaque reprise : un HEAD
     sans un seul bloc d'index arrête (DecisionError, que l'appelant redit en code 3)."""
     creating = head_blob is None
@@ -806,24 +835,19 @@ def add_series(decisions, series, message_args, subject, wait=DEFAULT_WAIT, inde
     title, body = read_series(series)
     absent = not os.path.lexists(real) and head_state(top, rel) is None
     if absent:
-        # Un refus sûr dès maintenant, sans fichier de verrou ; tout se relit sous le verrou (`check_repo`). Avant le
-        # refus de --index : un fichier porté ailleurs dans le dépôt se dit tel quel.
+        # Un refus sûr dès maintenant, sans fichier de verrou ; tout se relit sous le verrou (`check_repo`). Avec ou
+        # sans --index : un fichier porté ailleurs dans le dépôt se dit tel quel.
         check_creation(top, rel, real)
-    if index is not None:
-        # Des refus sûrs dès maintenant, sans fichier de verrou ; tout se relit sous le verrou.
-        if absent:
-            raise DecisionError(f"{rel} : aucun bloc d'index, le fichier n'existe pas encore (--index ne vaut pas pour "
-                                f"sa création, sous {INDEX_HELP}) ; relancer sans --index crée le fichier{WRITTEN}")
-        if real.is_file() and not real.is_symlink():
-            with_index_line(real.read_bytes().decode("utf-8", "replace"), "", rel)
+    if index is not None and not absent and real.is_file() and not real.is_symlink():
+        # Un refus sûr dès maintenant, sans fichier de verrou ; tout se relit sous le verrou. Un fichier à créer
+        # reçoit son bloc d'index à la création (`check_creation`).
+        with_index_line(real.read_bytes().decode("utf-8", "replace"), "", rel)
     handle = take_lock(top, wait)
     try:
         mode, head, head_blob, head_text, creating = check_repo(top, rel, real)
         if creating:
-            if index is not None:
-                raise DecisionError(f"{rel} : aucun bloc d'index, le fichier n'existe pas encore{WRITTEN}")
-            return (*create_with_series(top, rel, real, mode, head, head_text, title, body, message_args, subject),
-                    real)
+            return (*create_with_series(top, rel, real, mode, head, head_text, title, body, message_args, subject,
+                                        index), real)
         if index is not None:
             with_index_line(head_text, "", f"{rel} dans HEAD ({head[:12]})")
         for _ in range(WRITE_TRIES):
@@ -833,7 +857,7 @@ def add_series(decisions, series, message_args, subject, wait=DEFAULT_WAIT, inde
                                     f"l'écrivait ?){WRITTEN}")
             n = max(numbers(current) | numbers(head_text) | {0}) + 1
             block = [f"## Série {n} — {title} ({time.strftime('%d/%m/%Y')})", "", *body]
-            line = None if index is None else f"- Série {n} — {title} ({index})"
+            line = None if index is None else index_line(n, title, index)
             base = current if line is None else with_index_line(current, line, rel)
             if write_if_unchanged(real, current, appended(base, block)):
                 break
@@ -865,12 +889,18 @@ def add_series(decisions, series, message_args, subject, wait=DEFAULT_WAIT, inde
         release(handle)
 
 
-def create_with_series(top, rel, real, mode, head, head_text, title, body, message_args, subject):
-    """Sous le verrou : crée `real` (son dossier de chantier au besoin), titré de `head_text` et suivi de la
-    série 1, puis le commite comme une série (`commit_series`) ; rend (1, hash court, hash complet). Une
+def create_with_series(top, rel, real, mode, head, head_text, title, body, message_args, subject, index=None):
+    """Sous le verrou : crée `real` (son dossier de chantier au besoin), titré de `head_text` (le titre et le
+    bloc d'index vide, `check_creation`) et suivi de la série 1, puis le commite comme une série
+    (`commit_series`) ; rend (1, hash court, hash complet). Avec `index` (le texte de --index), la ligne
+    « - Série 1 — <titre> (<index>) » est dans le bloc d'index du fichier écrit et du blob commité. Une
     création ratée avant le commit est défaite (`undo_creation`, code 4) quand le fichier porte encore ses
     seuls octets ; sinon code 3, le fichier laissé."""
     block = [f"## Série 1 — {title} ({time.strftime('%d/%m/%Y')})", "", *body]
+    if index is not None:
+        # Le texte de départ porte déjà la ligne : le fichier écrit, le blob commité et la comparaison de
+        # `refuse_taken` et d'`undo_creation` en partent tous.
+        head_text = with_index_line(head_text, index_line(1, title, index), rel)
     written = appended(head_text, block)
     made = []
     try:

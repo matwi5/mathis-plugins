@@ -2,7 +2,7 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { WORKER_COMPACT_TOKENS, compactionInstructions, workerCompactStep, workerResumeText } from '../hooks/compaction.ts'
+import { WORKER_COMPACT_TOKENS, compactionInstructions, resumeAfterDrop, workerCompactStep, workerResumeText } from '../hooks/compaction.ts'
 import { applyReport, emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
 import { TOOL, settle, start, world, writeBoard } from './monde-coordination.ts'
@@ -117,8 +117,8 @@ test('le ticket suivant commencé dans le même tour, ou un ticket déjà « don
   await endTurn($, 'suite')
   await settle(clock, 2)
   expect(compactions(w)).toBe(0)
-  // Aucun relancement non plus : le worker travaille.
-  expect(w.prompts.some(p => /flow-board: (this discussion was compacted|no compaction was made)/.test(p))).toBe(false)
+  // Mais le tour est fini : le worker est relancé sur le ticket qu'il a mis « en cours », sans id venu du relais.
+  expect(w.prompts.filter(p => /flow-board: no compaction was made after ticket t1\. Go on with the ticket you set « in progress », where you are/.test(p))).toHaveLength(1)
   // Un ticket déjà « done », redit plus tard au-delà du seuil (un fichier de ticket relu, une commande qui le nomme) : pas une clôture.
   usage.tokens = 300_000
   await say($, { set: [{ id: 't2', status: 'done' }] })
@@ -142,6 +142,24 @@ test('un ticket clos pendant que le suivant est déjà « doing » (commit avant
   expect(compactions(w)).toBe(0)
 })
 
+
+test('le cas du 18/11 : le ticket clos s’annonce, le worker le remet « en cours » et finit son tour ; il est relancé, jamais laissé au repos', { timeoutMs: 30000 }, async ($, on) => {
+  const { clock, w } = await worker($, on)
+  await say($, { set: [{ id: 't1', status: 'doing' }] })
+  expect(await say($, { set: [{ id: 't1', status: 'done' }] })).toMatch(/end your turn before starting the next ticket/)
+  // Sept secondes plus tard, le même ticket repasse « en cours » (sa ligne Status relue), puis le tour finit.
+  await say($, { set: [{ id: 't1', status: 'doing' }] })
+  await endTurn($, 'repos')
+  await settle(clock, 2)
+  // Pas de compaction pendant un ticket en cours, mais un message de reprise, une fois.
+  expect(compactions(w)).toBe(0)
+  const resumes = w.prompts.filter(p => /flow-board: (this discussion was compacted|no compaction was made)/.test(p))
+  expect(resumes).toEqual([expect.stringMatching(/no compaction was made after ticket t1\. Go on with the ticket you set « in progress », where you are/)])
+  // L'annonce est retirée : un autre repos ne relance plus.
+  await endTurn($, 'encore')
+  await settle(clock, 2)
+  expect(w.prompts.filter(p => /flow-board: no compaction was made/.test(p))).toHaveLength(1)
+})
 test('la mission connue : la compaction nomme le ticket suivant ; le dernier ticket du groupe n’annonce rien ; sans suivant connu, la consigne dit la suite du groupe', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)
@@ -209,6 +227,36 @@ test('un spécialiste encore au travail au repos : la compaction attend, revéri
   for (let i = 0; i < 11; i++) await settle(clock, 61)
   expect(compactions(w)).toBe(1)
   expect(w.prompts.at(-1)).toMatch(/no compaction was made after ticket t2/)
+})
+
+test('resumeAfterDrop : le suivant sans ticket en cours ; null avec un ticket en cours ; rien quand une tâche de fond dure encore avec un ticket en cours', () => {
+  expect(resumeAfterDrop([], 't2')).toBe('t2')
+  expect(resumeAfterDrop(null, 't2')).toBe('t2')
+  expect(resumeAfterDrop(['t2'], 't3')).toBe(null)
+  expect(resumeAfterDrop(['t2'], 't3', true)).toBe(false)
+  expect(resumeAfterDrop([], 't3', true)).toBe('t3')
+})
+
+test('l’annonce gardée, un ticket mis « en cours » et un spécialiste qui dure au-delà de 10 minutes : aucune relance pendant qu’il tourne', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  on('session.usage', () => ({ value: { context: { tokens: 500_000, window: 1_000_000, percent: 50 } } }) as any)
+  const agents = { list: [{ agentId: 'a1', status: 'running' }] as unknown[] }
+  on('agent.list', () => ({ value: agents.list }) as any)
+  on('session.compact', () => {
+    w.runs.push('compact')
+    return { messages: [{ role: 'user', text: 'résumé', toolUses: [] }] }
+  })
+  await start($)
+  await $.tool.call({ tool: TOOL, delegate: 'run-w', group: 'A', main: '[abc123]' } as any)
+  await say($, { set: [{ id: 't1', status: 'doing' }] })
+  expect(await say($, { set: [{ id: 't1', status: 'done' }] })).toMatch(/end your turn/)
+  // Le suivant mis « en cours », sa revue lancée en tâche de fond, puis le tour fini.
+  await say($, { set: [{ id: 't2', status: 'doing' }] })
+  await endTurn($, 'revue-de-t2')
+  for (let i = 0; i < 11; i++) await settle(clock, 61)
+  expect(compactions(w)).toBe(0)
+  expect(w.prompts.some(p => /flow-board: (this discussion was compacted|no compaction was made)/.test(p))).toBe(false)
 })
 
 test('le ticket suivant nommé est le premier qui peut commencer : ni bloqué, ni en attente d’un ticket pas fait', { timeoutMs: 30000 }, async ($, on) => {

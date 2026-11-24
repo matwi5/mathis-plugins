@@ -20,7 +20,7 @@ const runOf = (board: Board): Run => board.runs[0]!
 
 const rowOf = (run: Run): string => {
   const board: Board = { ...emptyBoard('', 'p'), deleted: [], runs: [{ ...run, status: 'active', owner: 'sb' }] }
-  const row = coordinationRows(cooStatement(board, { now: T0 + 10_000 }), { page: 'missions' }).find(r => r.key === `coo-mission-${run.id}`)!
+  const row = coordinationRows(cooStatement(board, { now: T0 + 10_000 }), { page: 'overview' }).find(r => r.key === `coo-mission-${run.id}`)!
   return row.parts.map(p => p.text).join(' ')
 }
 

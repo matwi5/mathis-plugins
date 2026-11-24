@@ -130,7 +130,7 @@ test('fichier des missions illisible : aucune carte n’est posée', { timeoutMs
   await read.unmount()
 })
 
-const CARD = { title: 'Export CSV', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: [], mode: 'manual', modeWhy: 'cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv' }
+const CARD = { title: 'Export CSV', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: [], mode: 'manual', modeWhy: 'cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv', goal: 'Objectif de test.' }
 
 // Décision « plus de plafond pour les cartes prêtes » : aucune carte n'en chasse une autre ; ce test garde ses attentes,
 // sans plafond à son titre.

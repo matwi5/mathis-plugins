@@ -663,8 +663,8 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
       'pull',
       '↓ Pull',
       [
-        r.upstream ? say(`▶ Lancer : pull --rebase --autostash depuis ${r.upstream}.`) : say("Branche pas encore publiée : rien à récupérer de son côté.", C.amber),
-        canBase && say(`▶ Intégrer ${r.defaultBranch} : intègre origin/${r.defaultBranch}, par merge si la branche est publiée, par rebase sinon.`),
+        r.upstream ? say(`▶ Lancer : pull --rebase --autostash depuis ${r.upstream}, ou merge quand une autre branche, une étiquette ou un worktree porte les commits locaux.`) : say("Branche pas encore publiée : rien à récupérer de son côté.", C.amber),
+        canBase && say(`▶ Intégrer ${r.defaultBranch} : intègre origin/${r.defaultBranch}, par merge si la branche est publiée ou si une autre branche, une étiquette ou un worktree porte ses commits locaux, par rebase sinon.`),
       ],
       Boolean(r.upstream),
       canBase && <Button key="launch-base" label={`▶${NB}Intégrer${NB}${r.defaultBranch}`} onPress={() => act.launchBase()} />,
@@ -688,7 +688,7 @@ const drawer = (k: Kit, view: View, r: GitRepo, act: Actions): unknown => {
       'push',
       '↑ Push',
       [
-        say('Commit du reste, contrôles du projet, pull --rebase puis push, jamais en force.'),
+        say('Commit du reste, contrôles du projet, pull --rebase (ou merge quand une autre branche, une étiquette ou un worktree porte les commits locaux) puis push, jamais en force.'),
         !r.hasRemote && say('Pas de dépôt distant : rien où pousser.', C.amber),
         r.hasRemote && r.branch && r.branch === r.defaultBranch && say(`Tu es sur ${r.branch} : Claude demandera s'il faut y pousser ou créer une branche.`, C.amber),
         r.hasRemote && nothing && say(`✓ Rien à pousser : tout est déjà sur ${r.upstream}.`, C.green),

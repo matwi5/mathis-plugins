@@ -282,3 +282,27 @@ test('le relevé d’une mission archivée à la fin de sa rétro cite le clic q
   const text = await statement($)
   expect(text).toContain('Mon clic d’archivage, ou celui qui a lancé sa rétro par sa carte, vaut mon accord pour fermer cette discussion')
 })
+
+// La remise d'une discussion encore au travail : l'état « postponed » du compte rendu des fermetures n'écrit aucune
+// trace, la discussion reste à fermer, et elle quitte la tête du relevé jusqu'au message suivant de la personne.
+test('compte rendu « postponed », rejoué d’après la tâche en tête : aucune trace, la discussion reste à fermer, nommée hors de la tête ; le message de la personne la redonne', { timeoutMs: 20000 }, async ($, on) => {
+  const run = archived('Mission A', UUID)
+  const { w, clock } = await cooWith($, on, [run])
+  const said = await openCoo($, clock)
+  expect(said).toMatch(/Tidy-up task « fermetures »/)
+  const report = said.match(/\{"coordinate": \{"discussionsClosed": \[\{[^\]]*\]\}\}/)![0].replace('<id de session>', UUID).replace('<état>', 'postponed').replace('<raison>', '')
+  const out = await coordinate($, JSON.parse(report).coordinate)
+  expect(out).toContain(`Postponed, nothing written: "${UUID}"; each stays to close`)
+  expect(entries(w)).toEqual([])
+  expect(await coordinate($, { toClose: [UUID] })).toContain(`Discussions still to close: "${UUID}"`)
+  // Deux fois : sans effet de plus. Un id inconnu : refusé, rien n'est retenu.
+  expect(await coordinate($, { discussionsClosed: [{ session: UUID, state: 'postponed' }] })).toContain('Postponed, nothing written')
+  expect(await coordinate($, { discussionsClosed: [{ session: UUID2, state: 'postponed' }] })).toContain(`Refused, nothing written for them (a state outside closed, stopped, app, absent, postponed`)
+  expect(await coordinate($, { discussionsClosed: [{ session: 'x"; rm -rf ~', state: 'postponed' }] })).toContain('an id out of form')
+  expect(entries(w)).toEqual([])
+  const later = await openCoo($, clock)
+  expect(later).not.toMatch(/Tidy-up task « fermetures »/)
+  expect(later).toMatch(/Postponed by you, still due and not given at the head \(1\): the discussion of « Mission A » \(session id « 0b6f1c2e-3d4a-4b5c-8d9e-0f1a2b3c4d5e »\)/)
+  // Le message tapé par la personne lève la remise : la fermeture revient en tête.
+  expect(await statement($)).toMatch(/Tidy-up task « fermetures »/)
+})

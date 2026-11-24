@@ -30,7 +30,7 @@ const reportPathIn = (text: string): string | undefined => text.match(/~\/\.clau
 
 const SESSION_LINE = 'se reprend par claude --resume <sessionId>, lu sur une ligne « session : » du script qui le donne (« sessionId <id> », avant ou après l’arrêt) ; aucune ne le donne (« sessionId ? », pas de sessionId) : dis-le tel quel, sans le chercher par claude agents --json'
 /** Le plafond du texte court d'une session du CLI, le même que `SHORT_MAX` de fermeture-courte.test.ts. */
-const SHORT_MAX = 2_600
+const SHORT_MAX = 2_800
 const OLD_RESUME = 'le champ sessionId de claude agents --json, à relever avant l’arrêt'
 
 test('avec le script : le sessionId se lit sur la ligne « session : », et le compte rendu reste au relais, au préfixe de la mission', () => {
@@ -110,4 +110,20 @@ test('sans le script, la procédure entière et sans git : leur texte de reprise
   const noGit = withScript(SCRIPT, () => closingProcedure({ run: runOf('m1'), target: group, isRepo: false, session: 'abc12345', hasReport: true }))
   expect(noGit).toContain(OLD_RESUME)
   expect(noGit).not.toContain('son compte rendu reste au relais')
+})
+
+test('le dossier du relais que le mod calcule est celui que la note nomme ; un dossier qui ne se montre pas tel quel n’est pas nommé, jamais remplacé par ~/.claude', () => {
+  const dir = '/srv/claude/flow-board/relais'
+  const text = withScript(SCRIPT, () => closingProcedure({ run: runOf('m1'), target: group, isRepo: true, session: 'abc12345', hasReport: true, relayDir: dir }))
+  expect(text).toContain(`entier dans ${dir}/m1.*.report.md`)
+  expect(text).not.toContain('~/.claude/flow-board/relais')
+  expect(relayReportNote('m1', true, 'A', dir)).toContain(`il est entier dans ${dir}/m1.manager-a-*.report.md`)
+  // Un dossier de Claude qui porte un saut de ligne : ni lui, ni la forme courte.
+  for (const odd of ['/srv/cla\nude/flow-board/relais']) {
+    for (const note of [relayReportNote('m1', false, undefined, odd), relayReportNote('m1', true, 'A', odd), relayReportNote('', false, undefined, odd)]) {
+      expect(note).not.toContain(odd)
+      expect(note).not.toContain('~/.claude')
+      expect(note).toContain('chemin qui ne se montre pas tel quel')
+    }
+  }
 })

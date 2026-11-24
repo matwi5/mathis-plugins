@@ -4,15 +4,16 @@ import { closingProcedure, isGroupId, isNotedWorktree, isQuestionIdForm, isSafeB
 import { AUTO_STOPS, applyReport, autoStateOf, emptyBoard, groupFailStop, isFableMark, newRun, startLinkedGroups, stopLabel } from '../hooks/model.ts'
 import { applyRelay, decidedFileText } from '../hooks/relay.ts'
 import { isSeat } from '../hooks/seat.ts'
+import { isNamedTicket } from '../hooks/externes.ts'
 import { isDecisionsPath, isEntryId, isOneLine, isPrint, isQuestionRef, isReportPrint, isRound, isTicketRef, refOf, soundEntry } from '../hooks/coordination.ts'
 import { isSetAsideId } from '../hooks/a-reprendre.ts'
 import { breaksLine } from '../hooks/compaction.ts'
-import { isSha } from '../hooks/coo.ts'
+import { isSha, neutralQuoted } from '../hooks/coo.ts'
 import { isNightId } from '../hooks/night.ts'
 import { isPisteId } from '../hooks/pistes.ts'
 import { isPlanUnit } from '../hooks/plan-projet.ts'
 import { isRoadmapId } from '../hooks/roadmap.ts'
-import { isCardId, isFolderName, isLaunchId } from '../hooks/launch.ts'
+import { isCardEntryId, isCardId, isFolderName, isLaunchId } from '../hooks/launch.ts'
 import { activeRun } from '../hooks/basics.ts'
 import { relayShortId } from '../hooks/link.ts'
 import { modelName } from '../hooks/effort.ts'
@@ -122,12 +123,15 @@ const FORM_GUARDS: Record<string, FormGuard> = {
   isPrint: { accepts: isPrint, valid: 'qab12', hostile: token => `qab${token}12` },
   isDecisionsPath: { accepts: isDecisionsPath, valid: 'travail/ab-cd/DECISIONS.md', hostile: token => `travail/ab${token}cd/DECISIONS.md` },
   isTicketRef: { accepts: isTicketRef, valid: 'A-12', hostile: token => `A${token}-12` },
+  // Le ticket d'une autre mission que nomme un bloqueur externe : il entre dans un chemin sous travail/.
+  isNamedTicket: { accepts: isNamedTicket, valid: 'ab-cd/12', hostile: token => `ab${token}cd/12` },
   isNightId: { accepts: isNightId, valid: 'nab12cd34', hostile: token => `nab${token}12cd34` },
   isPisteId: { accepts: isPisteId, valid: 'ab-cd/A1', hostile: token => `ab${token}cd/A1` },
   isPlanUnit: { accepts: isPlanUnit, valid: 'A1', hostile: token => `A${token}1` },
   isRoadmapId: { accepts: isRoadmapId, valid: 'I12', hostile: token => `I1${token}2` },
+  isCardEntryId: { accepts: isCardEntryId, valid: 'R12', hostile: token => `R1${token}2` },
 }
-const NEUTRALIZERS: Record<string, (value: unknown) => string> = { neutralLine, neutralInPrompt, neutralRelayed }
+const NEUTRALIZERS: Record<string, (value: unknown) => string> = { neutralLine, neutralInPrompt, neutralRelayed, neutralQuoted }
 
 /**
  * Les gardes de ligne sûre : vrai pour un texte qui tient sur une ligne et s'affiche dans son ordre.

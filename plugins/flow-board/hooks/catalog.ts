@@ -239,6 +239,13 @@ export const SECURITY_FIXES_PASS = securityFixesPass('group')
  */
 export const TRUST_COMMAND = `python3 -c 'import json, os, sys; p = json.load(open(os.path.expanduser("~/.claude.json"))).get("projects", {}); r = os.path.realpath(sys.argv[1]); print((p.get(r) or p.get(r.replace(os.sep, "/")) or {}).get("hasTrustDialogAccepted"))' '<dossier>'`
 
+/**
+ * Le renvoi aux cases d'autonomie des textes fixes qui disent qu'une question attend la personne : ils ne lisent pas
+ * les cases, la consigne du mode auto et la réponse de l'outil `flow` disent celles qui sont cochées ; aucun ne nomme
+ * l'état d'une case.
+ */
+export const AUTONOMY_EXCEPT_EN = "except a kind whose autonomy box the auto mode instructions or the flow tool's answer say is ticked"
+
 /** Les zones où un ticket passe aussi par la passe « bogues » (lu par Claude). */
 export const SENSITIVE_AREAS = "privacy, data deletion, encryption, concurrency, a command or path built from a value read elsewhere: a shared file, another session, a report"
 
@@ -256,7 +263,7 @@ export const JUDGMENT_FIELD = 'Line « Jugement »: true for « oui »'
  * /to-tickets recopient la même liste (consignes-coherentes.test.mjs les compare).
  */
 export const LIFECYCLE_CASES =
-  'for a persisted field, a failed read, a failed write, its bounds (empty, too long, a date in the future or the past), the erasure of what must be kept, a forged copy, and each transition of the object that carries a mark (sent, cancelled, sent again, back), with what the mark becomes at each one, and what becomes of a value already kept out of form when a new one arrives'
+  'for a persisted field, a failed read, a failed write, its bounds (empty, too long, a date in the future or the past), the erasure of what must be kept, a forged copy, and each transition of the object that carries a mark (sent, cancelled, sent again, back, refused), with what the mark becomes at each one, and what becomes of a value already kept out of form when a new one arrives'
 
 /**
  * Le tableau des formes reçues par un prédicat de rattachement : trois questions de suite portaient sur un
@@ -264,7 +271,7 @@ export const LIFECYCLE_CASES =
  * le disent aussi ; le découpage d'une rétro, qui ne passe pas par /to-tickets, le reçoit d'ici.
  */
 const ATTACHMENT_FORMS =
-  'a change that modifies an attachment predicate (what decides which object a value read back belongs to: a session to a group, a count to a relay) carries the table of the forms that predicate receives: absent, template not filled in, old id (out of form), valid but unknown to the plan; for each form, the table gives its fate and the test that fixes it, and a sensitive question that sorts values repeats that table under each of its options'
+  'a change that modifies an attachment predicate (what decides which object a value read back belongs to: a session to a group, a count to a relay) carries the table of the forms that predicate receives: absent, template not filled in, old id (out of form), valid but unknown to the plan, valid but its carrier archived, deleted or created again (does the table ever lose a row?); for each form, the table gives its fate and the test that fixes it, and a sensitive question that sorts values repeats that table under each of its options'
 
 /** La consigne de cadrage d'un changement sensible, aux étapes explore de /to-spec et /to-tickets et au découpage d'une rétro. */
 const SENSITIVE_LIFECYCLE = `for a change in a sensitive area, its lifecycle question also covers every case that applies: ${LIFECYCLE_CASES}; ${ATTACHMENT_FORMS}`
@@ -289,7 +296,7 @@ export const EXPLORER_PITFALL = 'a pitfall an explorer reports on these paths go
  * /to-tickets et au découpage des pistes d'une rétro, qui ne passe pas par /to-tickets.
  */
 const INVARIANT_REREAD =
-  'before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant (every sensitive ticket carries one: fixed with the user for a very sensitive ticket, written by the session that splits and shown with the breakdown for one that is only sensitive): look first for an invariant that forbids what a criterion of the same ticket must read or do (« no path built from the text of an entry » against a criterion « check in the code what the entry claims »): rewrite the invariant so that it bounds what the criterion does (the path read stays under the repository root, for example) when it is the invariant of a ticket that is only sensitive, which the session that splits wrote; the invariant of a very sensitive ticket, fixed with the user, is never rewritten by you: make it a question for the user now; any other criterion that breaks the invariant of its ticket is rewritten, or becomes a question for the user now; reread also each clause of the invariant of any ticket that carries one against the current code, field by field: a clause the code already breaks by design becomes a question for the user now, and the ticket quotes the search that checked it, naming those fields and the function the ticket changes; before putting an invariant up for approval (or declaring that approval skipped), and before writing the invariant of a ticket that is only sensitive, confront it with what already holds on the same object: search the rules loaded in every session of the project (its CLAUDE.md, its rule files, the common rules) for the exceptions that touch the same object, and the decision files of the project for the invariants already written that name it; the ticket quotes that search (the command and its result), a contradiction found goes into the question to the user, with the rule or the invariant quoted, and the invariant is never put up for approval without it; a criterion about the existing tests, in any ticket, quotes the search for the tests that read the function the ticket changes: the command and its result'
+  'before the breakdown is validated (by the user, or, when that validation is skipped, before declaring it skipped), reread each done criterion of a sensitive ticket against its invariant (every sensitive ticket carries one: fixed with the user for a very sensitive ticket, written by the session that splits and shown with the breakdown for one that is only sensitive; with the user, ' + AUTONOMY_EXCEPT_EN + '): look first for an invariant that forbids what a criterion of the same ticket must read or do (« no path built from the text of an entry » against a criterion « check in the code what the entry claims »): rewrite the invariant so that it bounds what the criterion does (the path read stays under the repository root, for example) when it is the invariant of a ticket that is only sensitive, which the session that splits wrote; the invariant of a very sensitive ticket, fixed with the user, is never rewritten by you: make it a question for the user now; any other criterion that breaks the invariant of its ticket is rewritten, or becomes a question for the user now; a very sensitive ticket says on a line of its own, starting with « Invariant relu : », against which series of recommendations already taken and which criteria its invariant was reread, and when; reread also each clause of the invariant of any ticket that carries one against the current code, field by field: a clause the code already breaks by design becomes a question for the user now, and the ticket quotes the search that checked it, naming those fields and the function the ticket changes; before putting an invariant up for approval (or declaring that approval skipped), and before writing the invariant of a ticket that is only sensitive, confront it with what already holds on the same object: search the rules loaded in every session of the project (its CLAUDE.md, its rule files, the common rules) for the exceptions that touch the same object, and the decision files of the project for the invariants already written that name it; the ticket quotes that search (the command and its result), a contradiction found goes into the question to the user, with the rule or the invariant quoted, and the invariant is never put up for approval without it; a criterion about the existing tests, in any ticket, quotes the search for the tests that read the function the ticket changes: the command and its result'
 
 /**
  * Une API du moteur se vérifie avant d'entrer dans une spec ou un ticket (lu par Claude) : une spec
@@ -955,7 +962,7 @@ export const SKILLS: Record<string, SkillDef> = {
     shortLabel: 'Sync',
     gender: 'f',
     flowLabel: 'Synchronisation',
-    verb: 'Met la branche à jour avec le distant (fetch, rebase, autostash)',
+    verb: 'Met la branche à jour avec le distant (fetch, rebase ou merge, autostash)',
     glyph: '⟳',
     color: C.cyan,
     role: 'step',

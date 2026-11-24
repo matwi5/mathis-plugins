@@ -22,7 +22,7 @@ const PROJECT = 'sans-projet-811c9dc5'
 const LIST = `flow-board/coordination/${PROJECT}.cartes.json`
 const KEY = 'coo-cards:'
 const PISTES = `flow-board/pistes/${PROJECT}.json`
-const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: ['to-spec'], mode: 'manual', effort: 'high', folder: 'export-csv' }
+const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', alts: ['to-spec'], mode: 'manual', effort: 'high', folder: 'export-csv', goal: 'Objectif de test.' }
 const pane = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 
 const listPath = (w: World): string | undefined => Object.keys(w.files).find(p => p.startsWith('/') && p.endsWith(`/${LIST}`))
@@ -41,7 +41,9 @@ const putCards = (w: World, cards: unknown[]) => {
 const isList = (pathOrKey: string): boolean => pathOrKey.endsWith(`/${LIST}`) || pathOrKey === KEY
 
 const card = (id: string, over: Partial<LaunchCard> = {}): LaunchCard => {
-  const parsed = parseCard({ ...CARD, title: `Carte ${id}`, folder: `dossier-${id}` }, NOW - 30 * MIN, id)
+  // Une carte de l'ancien état : écrite avant l'objectif, elle n'en porte pas (relue comme le mod relit la liste).
+  const { goal: _, ...before } = CARD
+  const parsed = parseCard({ ...before, title: `Carte ${id}`, folder: `dossier-${id}` }, NOW - 30 * MIN, id, true)
   if ('refused' in parsed) throw new Error(parsed.refused)
   return { ...parsed.card, ...over }
 }
@@ -116,6 +118,14 @@ test('au premier relevé du titulaire, les cartes de l’ancien état passent da
   await ui.unmount()
   expect(state.sets.filter(s => s.key === 'cooCards')).toEqual([])
   expect(state.isMarked()).toBe(true)
+  // Copiée de l'ancien état, une carte arrive sans objectif (cet état n'en a jamais porté), et se lance.
+  expect(listOf(w).cards.some(c => 'goal' in c)).toBe(false)
+  const again = await pane($)
+  await pressAny(again, { key: `coo-card-manual-${A}` })
+  await again.unmount()
+  const copied = listOf(w).cards.find(c => c.id === A)
+  expect(copied.launch).toBeDefined()
+  expect('goal' in copied).toBe(false)
 })
 
 test('une carte déjà dans la liste par son id ou par son dossier n’est pas copiée (la liste gagne) ; une entrée hors forme de l’ancien état n’est pas copiée', { timeoutMs: 30000 }, async ($, on) => {

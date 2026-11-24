@@ -8,7 +8,7 @@
 import { atom, read, update } from 'claude-code'
 
 import type { Board } from '../types'
-import { applyCardChange, cardsListFile, keepsCards, parseCardsList, type CardChange, type CardWriteState } from './cards-list.ts'
+import { applyCardChange, cardsListFile, keepsAllButRanks, keepsCards, parseCardsList, type CardChange, type CardWriteState } from './cards-list.ts'
 import { cardStateOf, hasRetro, isRetroCardDue, retroOf, sameFolder, soundCard, type LaunchCard } from './launch.ts'
 import { claudeHome, coordinationName, isSettingMissing, readMissionReport, seatForWrite } from './register.tsx'
 import { retroCard, retroCardId } from './retro-coo.ts'
@@ -113,15 +113,20 @@ async function writeNow($: any, change: CardChange): Promise<CardWrite> {
   const root = seat.local.root
   const got = await readCardsAt($, root)
   if (got.state === 'unread') return no('unread')
-  const out = applyCardChange(got.raw, change)
+  const out = applyCardChange(got.raw, change, [...seat.local.runs, ...(seat.stored?.runs ?? [])])
   if (out === null) return no('stale')
   if (out.changed.length === 0) return no('none')
   if (!keepsCards(got.raw, out.list, new Set(out.changed))) return no('refused')
+  // L'envoi de l'ordre, sa garde propre : rien d'autre que des rangs ne change, aucune carte de plus ni de moins.
+  if (change.kind === 'rank' && !keepsAllButRanks(got.raw, out.list)) return no('refused')
   // Le siège relu une dernière fois, puis la liste : une reprise ou une autre écriture pendant ce temps arrête tout.
   const last = await seatForWrite($)
   if (!last.ok) return no(last.why === 'unread' ? 'board-unread' : 'not-seat')
   const again = await readCardsAt($, root)
   if (again.state !== got.state || again.text !== got.text) return no('changed')
+  // La condition rejugée sur les missions de ce dernier siège : une carte lancée entre-temps ne change que le fichier
+  // des missions, pas la liste relue (la même : la liste écrite reste celle calculée plus haut).
+  if (change.expect && applyCardChange(got.raw, change, [...last.local.runs, ...(last.stored?.runs ?? [])]) === null) return no('stale')
   const file = cardsListFile(normRoot(root), out.list)
   try {
     const path = cardsPath($, root)

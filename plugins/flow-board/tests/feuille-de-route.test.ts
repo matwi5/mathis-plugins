@@ -1,11 +1,11 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { ROADMAP_EXAMPLE, isRoadmapId, parseRoadmap, partialSeen, roadmapTextPrint, soundSeen, unionSeen, watchRoadmap, type RoadmapSeen } from '../hooks/roadmap.ts'
-import { roadmapAsk, roadmapMoveAsk } from '../hooks/register.tsx'
 import { cooStatement, cutStateWhere, failedPlaceWrite, roadmapNow, statementText, wherePlaceRefusal, type CooRoadmap } from '../hooks/coo.ts'
 import { emptyBoard } from '../hooks/model.ts'
 import { CORPUS } from './corpus.mjs'
 import { settle } from './horloge.ts'
+import { roadmapAsk, roadmapMoveAsk } from '../hooks/roadmap-asks.ts'
 
 // La feuille de route du COO. Invariant : « La feuille de route ne perd jamais une entrée sans ta
 // décision ; une disparition est montrée et se répare. »
@@ -183,8 +183,8 @@ test('le titulaire du siège lit la feuille de route : la vue montre le jalon, l
   expect(opening).toMatch(/Next steps \(1\): « E1 » « à faire »: « Lancer le groupe C »/)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await pane($, surface)
-    // Le point sur la page « À faire », la feuille de route sur la page « Idées ».
-    await ui.press({ key: 'coo-page-todo' })
+    // Le point sur la page « Vue d'ensemble », la feuille de route sur la page « Idées ».
+    await ui.press({ key: 'coo-page-overview' })
     expect(await ui.find({ type: 'Text', text: /^Prochaine étape du projet : Lancer le groupe C \(E1\)\.$/ }), surface).toBeDefined()
     await ui.press({ key: 'coo-page-ideas' })
     for (const text of [/^Feuille de route$/, /^Le COO suit les missions — fin : chaque mission passe par lui$/, /^Lancer le groupe C$/, /^un tableau des coûts · par mission$/]) {
@@ -193,6 +193,12 @@ test('le titulaire du siège lit la feuille de route : la vue montre le jalon, l
     // Une idée écartée ne se montre plus, mais reste dans le fichier.
     expect(await ui.find({ type: 'Text', text: /tout refaire en Rust/ })).toBeUndefined()
     expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    // Les quatre pages en rectangles à bordure arrondie, sans aucun dessin, au terminal comme sur l'ordinateur.
+    for (const [page, frames] of [['ideas', ['frame-roadmap', 'frame-idea-I1']], ['pending', ['frame-pendings']], ['pistes', []], ['settings', ['frame-place', 'frame-security']]] as const) {
+      await ui.press({ key: `coo-page-${page}` })
+      for (const key of frames) expect((await ui.find({ key }))?.props.borderStyle, `${surface} ${key}`).toBe('round')
+      expect(await ui.find({ type: 'Svg' }), `${surface} ${page}`).toBeUndefined()
+    }
     await ui.unmount()
   }
   // Les entrées vues sont gardées, avec leur dernière version.
@@ -717,7 +723,8 @@ test('une chose « rattachée à … » est dans la liste à part des entrées r
   expect(now.pending.map(e => e.id)).toEqual(['R4', 'R5'])
   expect(now.attached.map(e => [e.id, e.status])).toEqual([['R1', 'rattachée à Mode auto']])
   const opening = statementText(cooStatement(emptyBoard('/p', 'p'), { now: 1, roadmap: { where: 'poste', path: '/x/feuille-de-route.md', read: parseRoadmap(text), gone: [] } }))
-  expect(opening).toMatch(/Set aside, to decide \(2\): .*encore ouvert/)
+  expect(opening).toMatch(/Set aside, open « À reprendre » entries: 2 \(1 « à décider », 1 « plus tard »\), not listed here/)
+  expect(opening).not.toMatch(/encore ouvert/)
   expect(opening).not.toMatch(/le README cite encore/)
 })
 
@@ -787,18 +794,18 @@ test('Réglages : où vit la feuille de route ; « Changer l’endroit » seul e
   expect(w.files[FILE_PATH]).toBe(FILE)
 })
 
-test('Réglages : avant le premier choix, la page dit seulement qu’il n’est pas fait ; la question reste sur « À faire », à un clic', { timeoutMs: 20000 }, async ($, on) => {
+test('Réglages : avant le premier choix, la page dit seulement qu’il n’est pas fait ; la question reste sur « Vue d’ensemble », à un clic', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)
   w.mem[STATE_KEY] = { seen: {} }
   await start($)
   await openCoo($, clock)
   const ui = await settings($)
-  expect(await texts(ui)).toContain('Endroit pas encore choisi : la question est sur la page « À faire ».')
+  expect(await texts(ui)).toContain("Endroit pas encore choisi : la question est sur la page « Vue d'ensemble ».")
   expect(await ui.find({ key: 'coo-place-change' })).toBeUndefined()
   await ui.unmount()
   const todo = await pane($)
-  await todo.press({ key: 'coo-page-todo' })
+  await todo.press({ key: 'coo-page-overview' })
   await todo.press({ key: 'coo-where-poste' })
   await todo.unmount()
   expect(state(w)?.where).toBe('poste')
@@ -817,7 +824,7 @@ test('deux clics en vol sur le premier choix (ou sur « Confirmer ») : un seul 
   await start($)
   await openCoo($, clock)
   const todo = await pane($)
-  await todo.press({ key: 'coo-page-todo' })
+  await todo.press({ key: 'coo-page-overview' })
   await Promise.all([todo.press({ key: 'coo-where-repo' }), todo.press({ key: 'coo-where-poste' })])
   await todo.unmount()
   await settle(clock, 2)
@@ -993,7 +1000,7 @@ test('un état coupé qui porte encore l’endroit en tête : l’endroit est ga
   const aside = Object.keys(w.files).filter(k => k.includes('.feuille-de-route.json.illisible-'))
   expect(aside.length).toBe(1)
   const ui = await pane($)
-  await ui.press({ key: 'coo-page-todo' })
+  await ui.press({ key: 'coo-page-overview' })
   expect(await ui.find({ key: 'coo-where-repo' })).toBeUndefined()
   await ui.unmount()
   // Le relevé ne redemande pas l'endroit.
@@ -1017,7 +1024,7 @@ test('un état coupé dont la tête ne porte plus l’endroit, ou une autre raci
   await cutState(w, clock, text => text.slice(0, text.indexOf('"where"') + 4))
   expect(state(w)?.where).toBeUndefined()
   const ui = await pane($)
-  await ui.press({ key: 'coo-page-todo' })
+  await ui.press({ key: 'coo-page-overview' })
   expect(await ui.find({ key: 'coo-where-repo' })).toBeDefined()
   await ui.unmount()
   await $.prompt.submit({ text: 'et alors ?', origin: { kind: 'composer' } } as any)
@@ -1046,7 +1053,7 @@ test('un état gardé vidé (fichier de 0 octet) est une écriture coupée : cop
   expect(w.files[asides[0]!]).toBe('')
   expect(state(w)?.where).toBeUndefined()
   const ui = await pane($)
-  await ui.press({ key: 'coo-page-todo' })
+  await ui.press({ key: 'coo-page-overview' })
   expect(await ui.find({ key: 'coo-where-repo' })).toBeDefined()
   await ui.unmount()
   await $.prompt.submit({ text: 'et alors ?', origin: { kind: 'composer' } } as any)

@@ -262,7 +262,9 @@ test('une piste dont l’ajout a été refusé ne retient pas l’archivage, et 
   })
   expect(archived(w).sort()).toEqual([s.id, r.id].sort())
   const opening = await openCoo($, clock)
-  expect(opening).toMatch(/Closed mission « Rétrospective · Mission de B » \(mission id « [^»]+ »\) is not gleaned yet/)
+  // Les fermetures passent d'abord en tête ; les deux missions archivées restent à relever, comptées après elles.
+  expect(opening).toMatch(/Tidy-up task « fermetures »/)
+  expect(opening).toContain('Then due, in later statements: 2 closed mission(s) to glean.')
 })
 
 test('hors du siège : rien', { timeoutMs: 30000 }, async ($, on) => {

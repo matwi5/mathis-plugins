@@ -2,19 +2,19 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
-import { askMattCandidates, cardRoadmapIds, pistesCard, LAUNCH_STALE, LAUNCH_TTL_MS, isFolderName, launchKey, otherCarrierOf, parseCard, type LaunchRecord } from '../hooks/launch.ts'
+import { askMattCandidates, cardRoadmapIds, pistesCard, LAUNCH_STALE, LAUNCH_TTL_MS, isFolderName, launchKey, otherCarrierOf, parseCard, type LaunchRecord, launchText } from '../hooks/launch.ts'
 import { emptyBoard, loseLaunch, mergeBoards, newRun } from '../hooks/model.ts'
 import { cooStatement, statementText } from '../hooks/coo.ts'
 import { coordinationRows } from '../hooks/coo-view.tsx'
 import { parseRoadmap } from '../hooks/roadmap.ts'
-import { launchText, roadmapAsk } from '../hooks/register.tsx'
 import { PANE, PLUGIN, TOOL, openCoo, seatOf, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
 import { findAny, pressAny } from './page-coo.ts'
+import { roadmapAsk } from '../hooks/roadmap-asks.ts'
 
 // La carte de lancement du COO. Invariant : « Une carte ne lance qu'une mission ; un
 // enregistrement de lancement n'est consommé qu'une fois, par une seule discussion, dans les 10 minutes. »
 
-const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: ['to-spec'], mode: 'manual', modeWhy: 'tu veux suivre le cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv' }
+const CARD = { title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19 : une idée encore floue → /grill-with-docs', alts: ['to-spec'], mode: 'manual', modeWhy: 'tu veux suivre le cadrage', effort: 'high', effortWhy: 'cadrage', folder: 'export-csv', goal: 'Objectif de test.' }
 
 const pane = ($: any) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
 
@@ -57,7 +57,7 @@ test('le COO propose une carte : elle paraît dans la vue et dans son relevé ; 
   expect(r).toMatch(/Launch card k[a-z0-9]+ shown in the Coordination view/)
   const card = { id: cardIdOf(r) }
   const ui = await pane($)
-  expect(await findAny(ui, { type: 'Text', text: /Lancements · 1/ })).toBeDefined()
+  expect(await findAny(ui, { type: 'Text', text: /Au départ · 1/ })).toBeDefined()
   expect(await findAny(ui, { type: 'Text', text: 'Export CSV des tickets' })).toBeDefined()
   await pressAny(ui, { key: `coo-card-manual-${card.id}` })
   await ui.unmount()
@@ -123,6 +123,7 @@ test('la carte revient au-delà de 10 minutes sans mission ; une mission la port
   await clock.advance(LAUNCH_TTL_MS + 70_000)
   const back = await pane($)
   expect(await findAny(back, { type: 'Button', key: `coo-card-manual-${card.id}` })).toBeDefined()
+  expect(await findAny(back, { key: `coo-card-goal-${card.id}` })).toBeDefined()
   // Un nouveau clic efface d'abord l'enregistrement périmé : un seul reste, le nouveau.
   await pressAny(back, { key: `coo-card-manual-${card.id}` })
   await back.unmount()
@@ -131,11 +132,11 @@ test('la carte revient au-delà de 10 minutes sans mission ; une mission la port
   // Une mission d'une autre discussion porte la carte : lancée.
   writeBoard(w, b => ({ ...b, runs: [{ ...newRun('grill-with-docs', now, 'Export CSV des tickets'), status: 'active', owner: 'session-M', launch: { id: kept[0]!.id, card: card.id, at: kept[0]!.at, folder: 'export-csv', start: 'grill-with-docs', mode: 'manual' } }] }))
   await settle(clock, 6)
-  // Décision des cartes lancées : une carte lancée n'est plus montrée (ni sa ligne d'ask-matt, ni l'en-tête « Lancements »).
+  // Décision des cartes lancées : une carte lancée n'est plus montrée (ni son objectif, ni l'en-tête « Au départ »).
   const done = await pane($)
   expect(await findAny(done, { key: `coo-card-${card.id}` })).toBeUndefined()
-  expect(await findAny(done, { key: `coo-card-why-${card.id}` })).toBeUndefined()
-  expect(await findAny(done, { type: 'Text', text: /^Lancements/ })).toBeUndefined()
+  expect(await findAny(done, { key: `coo-card-goal-${card.id}` })).toBeUndefined()
+  expect(await findAny(done, { type: 'Text', text: /^Au départ · [1-9]/ })).toBeUndefined()
   expect(await findAny(done, { type: 'Text', text: /lancée : « Export CSV des tickets »/ })).toBeUndefined()
   await done.unmount()
   // Rien n'est effacé : la carte reste gardée, et la reproposer sur le même dossier est refusé comme déjà lancée.
@@ -374,7 +375,7 @@ test('neuf cartes de plus après une carte en lancement : toutes restent, et la 
   expect(records(w)).toHaveLength(1)
   const all = await pane($)
   for (let i = 0; i < 9; i++) expect(await findAny(all, { type: 'Text', text: `Carte ${i}` })).toBeDefined()
-  expect(await findAny(all, { type: 'Text', text: /Lancements · 10/ })).toBeDefined()
+  expect(await findAny(all, { type: 'Text', text: /Au départ · 10/ })).toBeDefined()
   await all.unmount()
 })
 
@@ -434,12 +435,12 @@ test('une idée « à lancer » a son bouton ▶ Lancer, qui demande la carte au
   const launched = (parseCard({ ...CARD, idea: 'I1' }, 1, 'kabcdef12') as { card: any }).card
   const run = { ...newRun('grill-with-docs', 2, 'Export CSV'), launch: { id: 'labcdefgh12', card: 'kabcdef12', at: 1, folder: 'export-csv', start: 'grill-with-docs', mode: 'manual' as const } }
   const s = cooStatement({ ...emptyBoard('', 'p'), runs: [run] }, { now: 3, roadmap, cards: [launched], askMatt: '/c/plugins/cache/m/mattpocock-skills/1/skills/engineering/ask-matt/SKILL.md' })
-  // La carte lancée n'est plus montrée sur la page « Missions », ni comptée ; une carte prête à côté l'est, seule comptée.
-  expect(coordinationRows(s, { page: 'missions' }).some(r => r.key.startsWith('coo-card'))).toBe(false)
+  // La carte lancée n'est plus montrée sous « Au départ », ni comptée ; une carte prête à côté l'est, seule comptée.
+  expect(coordinationRows(s, { page: 'overview' }).some(r => r.key.startsWith('coo-card-'))).toBe(false)
   const ready = (parseCard({ ...CARD, title: 'Autre carte', folder: 'autre' }, 1, 'kready0001') as { card: any }).card
-  const both = coordinationRows(cooStatement({ ...emptyBoard('', 'p'), runs: [run] }, { now: 3, roadmap, cards: [launched, ready] }), { page: 'missions' })
+  const both = coordinationRows(cooStatement({ ...emptyBoard('', 'p'), runs: [run] }, { now: 3, roadmap, cards: [launched, ready] }), { page: 'overview' })
   expect(both.filter(r => r.key.startsWith('coo-card-k')).map(r => r.key)).toEqual(['coo-card-kready0001'])
-  expect(both.find(r => r.key === 'coo-cards')?.parts.map(p => p.text).join('')).toBe('Lancements · 1')
+  expect(both.find(r => r.key === 'coo-cards')?.parts.map(p => p.text).join('')).toBe('Au départ · 1')
   const idea = coordinationRows(s, { page: 'ideas' }).find(r => r.key === 'coo-idea-I1')
   expect(idea?.actions?.map(a => a.act)).toContainEqual({ kind: 'idea-launch', id: 'I1' })
   expect(roadmapAsk({ kind: 'idea-launch', id: 'I1' }, roadmap)).toMatch(/je veux lancer l'idée I1 de la feuille de route\. Relis ask-matt, puis propose-moi sa carte de lancement par le champ "card"/)
@@ -496,8 +497,8 @@ test('deux cartes cliquées en même temps : aucune demande n’écrase l’autr
   const first = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result))
   const second = cardIdOf(String(((await $.tool.call({ tool: TOOL, card: { ...CARD, title: 'Durcir les scripts', folder: 'durcir-scripts' } } as any)) as any).result))
   const ui = await pane($)
-  // La page « Missions » d'abord, pour que les deux pressions partent bien ensemble.
-  await ui.press({ key: 'coo-page-missions' })
+  // La page « Vue d'ensemble » d'abord, pour que les deux pressions partent bien ensemble.
+  await ui.press({ key: 'coo-page-overview' })
   await Promise.all([ui.press({ key: `coo-card-manual-${first}` }), ui.press({ key: `coo-card-manual-${second}` })])
   await ui.unmount()
   const ids = records(w).map(r => r.id)
@@ -573,6 +574,6 @@ test('une carte proposée sur un dossier qu’une mission porte déjà, sans car
   // Acceptée, elle serait lancée dès sa pose, donc cachée : la réponse annoncerait une carte que la personne ne voit pas.
   expect(String(((await $.tool.call({ tool: TOOL, card: CARD } as any)) as any).result)).toMatch(/is already launched; a card launches only once/)
   const ui = await pane($)
-  expect(await findAny(ui, { type: 'Text', text: /^Lancements/ })).toBeUndefined()
+  expect(await findAny(ui, { type: 'Text', text: /^Au départ · [1-9]/ })).toBeUndefined()
   await ui.unmount()
 })

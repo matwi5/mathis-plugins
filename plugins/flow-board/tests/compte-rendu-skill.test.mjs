@@ -156,3 +156,79 @@ test('le compte rendu se donne par « report », jamais par « reportPath », qu
   assert.ok(sentence.includes('jamais par `reportPath` : l\'outil ne lit un chemin que d\'un worker'), 'pas de reportPath au compte rendu : absent')
   assert.ok(sentence.includes('le refuse ici, même pour un rapport déjà écrit dans un fichier'), 'le refus de l’outil n’est pas dit')
 })
+
+// Le 18/11, le compte rendu en auto avait dit seulement en fin de texte la question COURSE-05 encore ouverte et le
+// worker B pas fermé (piste cr1) : les faits les nomment, et le skill les met en tête, dans « En bref ».
+test('une question ouverte ou une fermeture arrêtée se dit en tête, dans « En bref », et « À toi » redit la question', () => {
+  const rule = skill.slice(skill.indexOf('- **Ce qui attend, en tête.**'), skill.indexOf('\n', skill.indexOf('- **Ce qui attend, en tête.**')))
+  for (const part of [
+    'Quand les faits nomment une question bloquante encore ouverte (« Blocking question still open », une ligne par question) ou une fermeture arrêtée (« Closing stopped », une ligne par worker)',
+    '« En bref » le dit dans sa première phrase',
+    '« À toi » redit chaque question ouverte',
+    'Un rapport ne dit jamais que tout est fermé, ni « tous les workers fermés », quand une fermeture est arrêtée.',
+  ])
+    assert.ok(rule.includes(part), `absent : « ${part} »`)
+})
+
+// La section « Contexte et coût » : le bloc du récap de mission de stats-board, lancé avec les arguments de la ligne
+// « Discussions of the mission » des faits, recopié tel quel ; aucun id ajouté à la main ; ses replis ; hors des 60 lignes.
+test('le compte rendu a une section « Contexte et coût », entre « Pistes » et « Documentation », recopiée du récap', () => {
+  const template = skill.slice(skill.indexOf('```'), skill.lastIndexOf('```'))
+  const sections = [...template.matchAll(/^## (.+)$/gm)].map(m => m[1])
+  assert.equal(sections[sections.indexOf('Pistes') + 1], 'Contexte et coût', '« Contexte et coût » ne suit pas « Pistes »')
+  assert.equal(sections[sections.indexOf('Contexte et coût') + 1], 'Documentation', '« Documentation » ne suit pas « Contexte et coût »')
+  const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
+  const point = sources.slice(sources.indexOf('- les discussions de la mission'), sources.indexOf('\n', sources.indexOf('- les discussions de la mission')))
+  for (const part of [
+    'la ligne « Discussions of the mission »',
+    'charge le skill `stats-board:recap`',
+    'recopiés tels quels',
+    'N\'y ajoute, n\'y complète ni n\'y corrige aucun id',
+    'n\'y mets aucune discussion que la ligne dit sans id utilisable',
+    'sans `--since` quand la ligne n\'en donne pas (n\'en calcule aucun)',
+    'ne recopie que ce bloc, sans le reste de la sortie du récap',
+  ])
+    assert.ok(point.includes(part), `absent : « ${part} »`)
+  // Le skill du compte rendu ne porte jamais la ligne de commande du récap : elle vit dans le skill du récap.
+  assert.ok(!skill.includes('recap.mjs'), 'la ligne de commande du récap est dans le skill du compte rendu')
+  const section = template.slice(template.indexOf('## Contexte et coût'), template.indexOf('## Documentation'))
+  for (const part of [
+    'recopie le bloc tel quel, titre compris, sans en écrire un second',
+    'sans calculer, arrondir ni retoucher aucun chiffre',
+    '« | <rôle> | non mesurée (sans id utilisable) | | | | — | »',
+    '« Mesures non disponibles (stats-board absent). »',
+    'le récap en échec, la première ligne de son erreur',
+    '« Mesures non disponibles (discussions de la mission non données). »',
+    '« Hors norme : rien à juger, aucune discussion mesurée. »',
+    '« | Discussion | Départ | Maximum | Fin | Compactions | Coût | »',
+    '« | **Total** | | | | — | — | », une ligne vide, puis « Hors norme',
+    'Cette section ne dit jamais « Rien. »',
+  ])
+    assert.ok(section.includes(part), `absent : « ${part} »`)
+  assert.ok(skill.includes('celles de « Contexte et coût » non plus'), 'les lignes de « Contexte et coût » comptent dans les 60 lignes')
+  // Le coût des groupes des tickets de jugement vient de ce même bloc, sans second lancement du récap.
+  assert.ok(sources.includes('lu dans le bloc « Contexte et coût » du récap du point suivant') && sources.includes('sans second lancement du récap'), 'le coût des tickets de jugement ne vient pas du bloc')
+  // Sans bloc (récap en échec ou pas lancé) ou pour un groupe non mesuré, le coût n'est pas disponible, avec sa raison.
+  assert.ok(sources.includes('quand le bloc manque (récap en échec ou pas lancé) ou que la ligne du groupe ne porte pas de coût'), 'le coût de jugement n’a pas de repli sans bloc')
+  const decided = template.slice(template.indexOf('## Décidé sans toi'), template.indexOf('## Ce qui s\'est mal passé'))
+  assert.ok(decided.includes('(un par envoi)') && decided.includes('« coût non disponible (<raison>) »'), 'le coût d’un groupe envoyé plusieurs fois ou indisponible n’a pas sa forme')
+})
+
+// Les choix tranchés par une case d'autonomie (« Réglage : <case> : … ») : un groupe à part, juste après la zone sensible,
+// avec la question entière et les options écartées lues dans le fichier de décisions ; les phrases des fichiers chargés
+// partout fusionnées sans relecture (case « Relecture après la fusion »), sous un titre à part, à relire avant la livraison.
+test('le compte rendu range à part les choix des cases d’autonomie et liste les phrases fusionnées sans relecture', () => {
+  const decided = skill.slice(skill.indexOf('## Décidé sans toi'), skill.indexOf('## Ce qui s\'est mal passé'))
+  for (const part of ['sous leur propre sous-titre « Tranché par réglage »', 'dont le texte commence par « Réglage : » (ou « Zone sensible : Réglage : » pour un choix sensible, rangé là seulement)', 'recopie la question entière et les options écartées, lues dans le `DECISIONS.md` de la mission à son entrée « acceptée par réglage (<case>) »'])
+    assert.ok(decided.includes(part), `absent : « ${part} »`)
+  assert.ok(decided.includes('## Phrases fusionnées sans relecture'), 'le titre des phrases fusionnées manque')
+  for (const part of ['« Réglage : Relecture après la fusion : <fichier> »', 'à relire avant la livraison', 'Sans un tel choix : « Rien. ».'])
+    assert.ok(decided.includes(part), `absent : « ${part} »`)
+  const sources = skill.slice(skill.indexOf('## 1. Rassembler les faits'), skill.indexOf('## 2. Rédiger'))
+  assert.ok(sources.includes('(la zone sensible en tête, puis « Tranché par réglage », puis une origine par groupe)'), 'les faits ne nomment pas le groupe des cases')
+})
+
+test('la suite de « Autres » et la définition des sensibles n’y reprennent pas les choix de réglage', () => {
+  assert.ok(skill.includes('pour « Autres », les lignes qui ne portent aucune des trois origines, sans celles qui commencent par « - Zone sensible : » ou « - Réglage : »'))
+  assert.ok(skill.includes('dont le texte commence par « Zone sensible : » (sauf « Zone sensible : Réglage : », rangé sous « Tranché par réglage »)'))
+})

@@ -1,8 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import { attachmentOf, cooStatement, statementText, type CooGlean, type CooRoadmap } from '../hooks/coo.ts'
+import { attachmentOf, cooStatement, sortedEntriesLine, statementText, type CooGlean, type CooRoadmap } from '../hooks/coo.ts'
 import { coordinationRows } from '../hooks/coo-view.tsx'
 import { emptyBoard, newRun } from '../hooks/model.ts'
+import { withDueHead } from '../hooks/rangement.ts'
 import { parseRoadmap, watchRoadmap } from '../hooks/roadmap.ts'
 import type { Run } from '../types'
 
@@ -22,6 +23,12 @@ const roadmapOf = (lines: string[]): CooRoadmap => ({
   gone: [],
 })
 const entry = (id: string, status: string) => `- [${id}] ${status} · 2026-11-10 · COO · la chose ${id}`
+
+// Le relevé avec sa tête : les missions closes à relever (`toGlean`) passent par la tâche due, la première en tête.
+const cooHeaded = (board: Parameters<typeof cooStatement>[0], ctx: Parameters<typeof cooStatement>[1] & { toGlean: CooGlean[] }) => {
+  const { toGlean, ...rest } = ctx
+  return withDueHead(cooStatement(board, rest), { boxes: [], isBoxesNow: true, toClose: [], toGlean: toGlean.map((g, i) => ({ ...g, closedAt: i })) }, ROOT)
+}
 
 const MISSIONS = [{ id: 'm1', title: 'Tri' }, { id: 'm2', title: 'Export' }, { id: 'm4', title: 'M3 - Essai' }]
 const NUMBERS = { m1: 5, m2: 7, m4: 8 }
@@ -58,8 +65,8 @@ const gleanLine = (over: { lines: string[]; numbers?: Record<string, number>; ru
   const runs = over.runs ?? [run('m1', 'Tri', 'done'), run('m2', 'Export', 'active')]
   const g: CooGlean = { id: 'm1', title: 'Tri', reports: [], untaken: [], report: '/h/r/m1.md', reportValidated: true, reportRound: '1.0.5', ...over.glean }
   const numbers = { state: 'read' as const, runs: over.numbers ?? { m1: 5, m2: 7 }, cards: {} }
-  const s = cooStatement({ ...emptyBoard(ROOT, 'proj'), runs }, { now: NOW, toGlean: [g], roadmap: roadmapOf(over.lines), numbers })
-  return statementText(s).split('\n').find(l => l.startsWith('Closed mission '))!
+  const s = cooHeaded({ ...emptyBoard(ROOT, 'proj'), runs }, { now: NOW, toGlean: [g], roadmap: roadmapOf(over.lines), numbers })
+  return statementText(s).split('\n').find(l => l.startsWith('Tidy-up task « relevé »'))!
 }
 
 test('le relevé d’une mission close liste les entrées qui lui sont rattachées, sous les deux formes, et seulement elles', () => {
@@ -115,7 +122,7 @@ test('une entrée rattachée par son numéro à une archivée du même titre res
   expect(same).toMatch(/: none\./)
   expect(same).toMatch(/Entry « R1 » reads « rattachée à M5 - Tri »: M5 is an archived mission of that title, not this one, and the entry stays attached to it: change no state from it, and tell the user, naming the entry and M5\./)
   const g: CooGlean = { id: 'm1', title: 'Tri', reports: [], untaken: [], report: '/h/r/m1.md', reportValidated: true, reportRound: '1.0.5' }
-  const text = statementText(cooStatement({ ...emptyBoard(ROOT, 'proj'), runs }, { now: NOW, toGlean: [g], roadmap: roadmapOf([entry('R1', 'rattachée à M5 - Tri')]), numbers: { state: 'read', runs: { m1: 9, a: 5 }, cards: {} } }))
+  const text = statementText(cooHeaded({ ...emptyBoard(ROOT, 'proj'), runs }, { now: NOW, toGlean: [g], roadmap: roadmapOf([entry('R1', 'rattachée à M5 - Tri')]), numbers: { state: 'read', runs: { m1: 9, a: 5 }, cards: {} } }))
   expect(text).toMatch(/- Set aside, attached to an archived mission \(1\): « R1 » \(« rattachée à M5 - Tri »\)\. They stay attached to it: change no state from another mission's report/)
   expect(attachmentOf('rattachée à M5 - Tri', [{ id: 'm1', title: 'Tri' }], { m1: 9, a: 5 }, { a: 'Tri' })).toEqual({ kind: 'archived', id: 'a', tag: 'M5', written: 'Tri' })
 })
@@ -124,7 +131,7 @@ test('une entrée rattachée par son numéro à une archivée du même titre res
 test('une mission close archivée avant son relevé : ses entrées numérotées sont à elle, et la ligne des archivées ne les nomme pas', () => {
   const closed = { ...run('a', 'Tri', 'done'), archivedAt: NOW - 500 } as Run
   const g: CooGlean = { id: 'a', title: 'Tri', reports: [], untaken: [], report: '/h/r/a.md', reportValidated: true, reportRound: '1.0.5' }
-  const text = statementText(cooStatement({ ...emptyBoard(ROOT, 'proj'), runs: [closed] }, { now: NOW, toGlean: [g], roadmap: roadmapOf([entry('R1', 'rattachée à M5 - Tri')]), numbers: { state: 'read', runs: { a: 5 }, cards: {} } }))
+  const text = statementText(cooHeaded({ ...emptyBoard(ROOT, 'proj'), runs: [closed] }, { now: NOW, toGlean: [g], roadmap: roadmapOf([entry('R1', 'rattachée à M5 - Tri')]), numbers: { state: 'read', runs: { a: 5 }, cards: {} } }))
   expect(text).toMatch(/as the dashboard reads them \(« rattachée à M5 - <its title> » or « rattachée à <its title> »\): « R1 »\./)
   expect(text).not.toMatch(/attached to an archived mission/)
 })
@@ -135,8 +142,8 @@ test('une table des numéros illisible : une entrée écrite avec un numéro ne 
   expect(attachmentOf('rattachée à M3 - Essai', MISSIONS, null)).toEqual({ kind: 'mission', id: 'm4', byNumber: false })
   for (const state of ['unread', 'bad'] as const) {
     const g: CooGlean = { id: 'm1', title: 'Tri', reports: [], untaken: [], report: '/h/r/m1.md', reportValidated: true, reportRound: '1.0.5' }
-    const s = cooStatement({ ...emptyBoard(ROOT, 'proj'), runs: [run('m1', 'Tri', 'done')] }, { now: NOW, toGlean: [g], roadmap: roadmapOf([entry('R1', 'rattachée à M5 - Tri'), entry('R2', 'rattachée à Tri')]), numbers: { state, runs: {}, cards: {} } })
-    const line = statementText(s).split('\n').find(l => l.startsWith('Closed mission '))!
+    const s = cooHeaded({ ...emptyBoard(ROOT, 'proj'), runs: [run('m1', 'Tri', 'done')] }, { now: NOW, toGlean: [g], roadmap: roadmapOf([entry('R1', 'rattachée à M5 - Tri'), entry('R2', 'rattachée à Tri')]), numbers: { state, runs: {}, cards: {} } })
+    const line = statementText(s).split('\n').find(l => l.startsWith('Tidy-up task « relevé »'))!
     expect(line).toMatch(/: « R2 »\./)
     expect(line).toMatch(/Entry « R1 » reads « rattachée à M5 - Tri », but the numbers table is not read \(not read yet, not created yet on this machine, or unreadable\), so M5 cannot be checked: change no state from it, and tell the user, naming the entry and M5\./)
     // Déjà dite par le relevé de clôture de « Tri » : pas une seconde fois dans la ligne à part.
@@ -168,13 +175,13 @@ test('un titre partagé ne bloque que les entrées sans numéro qui le confirme'
   expect(line).toMatch(/write « faite : … »/)
 })
 
-test('sans feuille de route lisible, le relevé garde sa ligne d’avant et dit la règle des deux formes', () => {
+test('sans feuille de route lisible, la tâche de relevé ne fait rien ajouter ni déclarer ; la ligne des entrées triées garde la règle des deux formes', () => {
   const g: CooGlean = { id: 'm1', title: 'Tri', reports: [], untaken: [], report: '/h/r/m1.md', reportValidated: true, reportRound: '1.0.5' }
-  const s = cooStatement({ ...emptyBoard(ROOT, 'proj'), runs: [run('m1', 'Tri', 'done')] }, { now: NOW, toGlean: [g], numbers: { state: 'read', runs: { m1: 5 }, cards: {} } })
-  const line = statementText(s).split('\n').find(l => l.startsWith('Closed mission '))!
-  expect(line).toMatch(/update only the « À reprendre » entries at « rattachée à » this mission's title \(each « · » of it written « - »; an entry « rattachée à M<n> - <its title> » counts only when M<n> is M5, this mission's number; any other number changes nothing from that entry and is told to the user, since this statement does not show archived missions' numbers\)/)
-  const bare = cooStatement({ ...emptyBoard(ROOT, 'proj'), runs: [run('m1', 'Tri', 'done')] }, { now: NOW, toGlean: [g] })
-  expect(statementText(bare)).toMatch(/it has no number, so an entry « rattachée à M<n> - <its title> » never counts; any other number changes nothing/)
+  const s = cooHeaded({ ...emptyBoard(ROOT, 'proj'), runs: [run('m1', 'Tri', 'done')] }, { now: NOW, toGlean: [g], numbers: { state: 'read', runs: { m1: 5 }, cards: {} } })
+  const line = statementText(s).split('\n').find(l => l.startsWith('Tidy-up task « relevé »'))!
+  expect(line).toMatch(/The roadmap could not be read here \(out of format, unreadable, or no known file\): add nothing, change no state, declare nothing for this mission/)
+  expect(sortedEntriesLine(g, null, 'M5')).toMatch(/update only the « À reprendre » entries at « rattachée à » this mission's title \(each « · » of it written « - »; an entry « rattachée à M<n> - <its title> » counts only when M<n> is M5, this mission's number; any other number changes nothing from that entry and is told to the user, since this statement does not show archived missions' numbers\)/)
+  expect(sortedEntriesLine(g, null, '')).toMatch(/it has no number, so an entry « rattachée à M<n> - <its title> » never counts; any other number changes nothing/)
 })
 
 // Le fichier lui-même n'est jamais réécrit : feuille-de-route.test.ts le vérifie sur le mod chargé (dernier test).

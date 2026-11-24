@@ -127,6 +127,8 @@ test('« ↗ Worker » confie un groupe à un worker : la mission reste ici, Cla
   expect(text).toMatch(/Dans le CLI \(pas de start_session\) : appelle d'abord ListAgents pour lire le nom de cette discussion et sa référence entre crochets/)
   expect(text).toContain("claude --bg -n 'Lot SC > Groupe <id> · <thème>' --effort <effort> (sans -w : ce dossier n’a pas de git) \"<prompt>\"")
   expect(text).toMatch(/de finir par un message à cette discussion \(il la réveille, même inactive\)/)
+  // Le chemin du compte rendu : celui de l'outil flow, jamais celui du message du worker (piste relai1).
+  expect(text).toContain('la ligne qui y renvoie quand il le fait déposer au relais, en citant le chemin du relais que son outil flow lui donne au dépôt ; ce chemin, lis-le dans ton outil flow, jamais dans son message.')
   // Le nom peut changer (renommage) : la session retrouve la discussion par sa référence, lue dans ListAgents.
   expect(text).toMatch(/Pour lui écrire, la session appelle ListAgents, trouve la ligne qui porte cette référence et envoie par SendMessage à « <nom du moment> \[<ref>\] »/)
   // La référence change au redémarrage de la discussion : la session la relit par l'outil flow, puis cherche par le nom de la mission.

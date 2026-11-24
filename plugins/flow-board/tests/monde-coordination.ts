@@ -54,10 +54,10 @@ export const world = (on: any) => {
   /** `refuseRead` : une lecture qui lève pour cette clé du magasin (une clé illisible, comme `delegate:<session>`) ou pour ce chemin de fichier (`fs.read`). */
   /** `refuseCommand` : le moteur refuse cette commande lancée par le mod (`$.command.run`), comme une limite de l'hôte. */
   /** `refusePrompt` : la lecture de la saisie (`prompt.read`) lève tant qu'il rend vrai. */
-  /** `list` : les noms qu'un dossier liste, à la place de ceux du monde (undefined : ceux du monde). */
+  /** `list` : les noms qu'un dossier liste, à la place de ceux du monde (undefined : ceux du monde) ; `mtime` : la date d'un de ces fichiers (1 sans elle). */
   /** `refuseWrite` : une écriture de fichier qui lève pour ce chemin (une table des numéros qui ne s'écrit pas). */
   /** `refuseKeys` : la lecture de la liste des clés du magasin (`store.keys`) lève tant qu'il rend vrai, comme `refuseRead` pour une clé (des lancements gardés qui ne se relisent pas). */
-  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean; refuseRead?: (key: string) => boolean; refuseKeys?: () => boolean; refuseWrite?: (path: string) => boolean; list?: (dir: string) => string[] | undefined; refusePrompt?: () => boolean; holdNight?: Promise<void>; refuseCommand?: (command: string) => boolean } = {}
+  const probe: { onCoordRead?: () => void; onBoardRead?: () => void; onBoardWrite?: (text: string) => void; refuseBoard?: (text: string) => boolean; refuseStore?: (key: string) => boolean; refuseRead?: (key: string) => boolean; refuseKeys?: () => boolean; refuseWrite?: (path: string) => boolean; list?: (dir: string) => string[] | undefined; mtime?: (dir: string, name: string) => number | undefined; refusePrompt?: () => boolean; holdNight?: Promise<void>; refuseCommand?: (command: string) => boolean } = {}
   on('session.end', () => ({ sessionId: ids.now }))
   on('classic.SessionStart', () => ({}))
   on('prompt.submit', (_$: unknown, e: { text: string; context?: readonly string[] }) => {
@@ -190,7 +190,7 @@ export const world = (on: any) => {
   // Seuls le dossier des boîtes de pistes et les dossiers de tickets (« …/issues ») se listent ; les autres restent vides, comme avant.
   on('fs.list', (_$: unknown, e: { path: string }) => {
     const forced = probe.list?.(e.path)
-    if (forced) return { value: forced.map(name => ({ name, kind: 'file', mtimeMs: 1 })) } as any
+    if (forced) return { value: forced.map(name => ({ name, kind: 'file', mtimeMs: probe.mtime?.(e.path, name) ?? 1 })) } as any
     // Un dossier de tickets du projet (« travail/<sujet>/issues ») : les fichiers posés par leur chemin relatif.
     if (e.path.endsWith('/issues')) {
       const rel = Object.keys(files).filter(k => !k.startsWith('/') && k.includes('/') && e.path.endsWith(`/${k.slice(0, k.lastIndexOf('/'))}`))

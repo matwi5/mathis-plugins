@@ -14,9 +14,12 @@
 
 import type { Run, RunLaunch } from '../types'
 import { clip, isTime } from './basics.ts'
-import { asciiJson, isSafeId } from './closing.ts'
+import { asciiJson, isSafeId, neutralInPrompt, shellQuote } from './closing.ts'
 import { isEntryId } from './coordination.ts'
-import { isRoadmapId, roadmapIdsIn } from './roadmap.ts'
+import { ROADMAP_STATUSES, isRoadmapId, roadmapIdsIn, type Roadmap, type RoadmapEntry } from './roadmap.ts'
+import { isOpenPending } from './complement.ts'
+import { TRUST_COMMAND } from './catalog.ts'
+import { shellSafeTitle } from './named-mark.ts'
 
 export type { RunLaunch }
 
@@ -52,6 +55,16 @@ const isStart = (v: unknown): v is LaunchStart => typeof v === 'string' && (LAUN
  * `card` le refuse), toujours avec l'id de la mission close (`of`).
  */
 export const RETRO_START = 'retro'
+
+/** L'avis d'une carte de rétro, en tête de sa ligne d'ask-matt (`retroCard`) : recommandée (avec sa raison), ou facultative. */
+export type RetroAdvice = 'recommandée' | 'facultative'
+
+/** Le début de la ligne d'ask-matt d'une carte de rétro pour chaque avis : `retroCard` l'écrit, `retroAdviceOf` le relit. */
+export const RETRO_ADVICE_LEAD: Record<RetroAdvice, string> = { recommandée: 'recommandée : ', facultative: 'facultative : ' }
+
+/** L'avis d'une carte de rétro, lu en tête de sa ligne d'ask-matt ; null pour toute autre carte, ou une ligne qui ne le dit pas. */
+export const retroAdviceOf = (c: { start: string; of?: string; askMatt: string }): RetroAdvice | null =>
+  c.start !== RETRO_START || c.of === undefined ? null : ((Object.keys(RETRO_ADVICE_LEAD) as RetroAdvice[]).find(a => c.askMatt.startsWith(RETRO_ADVICE_LEAD[a])) ?? null)
 export type CardStart = LaunchStart | typeof RETRO_START
 
 /** Le départ et la mission close d'une carte, d'un enregistrement ou d'un rattachement relus : une rétro porte son `of`, un autre départ jamais. */
@@ -84,6 +97,128 @@ export type LaunchCard = {
   at: number
   /** Le dernier clic : l'id de son enregistrement, sa date, son mode. */
   launch?: { id: string; at: number; mode: LaunchMode }
+  /**
+   * Les entrées de la feuille de route que la carte couvre (ids d'idées I<n> et de choses à reprendre R<n>), sans
+   * doublon, dans l'ordre donné ; absente plutôt que vide. Seul un envoi du COO qui vise la carte les change ; une carte
+   * de rétro ou « Pistes de rétro » n'en porte jamais.
+   */
+  entries?: string[]
+  /**
+   * Le rang de la carte parmi les cartes prêtes (un entier à partir de 1, sans borne haute à la relecture : tout entier
+   * sûr ≥ 1 est un rang, que seul l'envoi de l'ordre change), posé par le seul envoi de l'ordre du COO ; absent : sans rang. Un rang relu hors
+   * forme se lit sans rang ; une carte de rétro ou « Pistes de rétro » n'en a jamais.
+   */
+  rank?: number
+  /**
+   * L'objectif de la mission : ce qu'elle veut obtenir, sur une ligne, coupé à `CARD_GOAL_MAX` signes. Exigé d'une carte
+   * du Claude du COO, écrit par le mod pour une carte de rétro ou « Pistes de rétro » ; absent d'une carte d'avant (relue
+   * sans lui, elle reste en forme et lançable). Il ne sert qu'à l'affichage : ni l'enregistrement de lancement ni le
+   * texte de lancement ne le portent.
+   */
+  goal?: string
+}
+
+/** La borne de l'objectif d'une carte, à la pose comme à la relecture (celle de la ligne d'ask-matt). */
+export const CARD_GOAL_MAX = 240
+
+/** Le nombre d'entrées qu'une carte reçoit au plus à sa pose ; relue, elle garde tous ses ids en forme. */
+export const CARD_ENTRIES_MAX = 20
+
+/** Le nombre de cartes qu'un envoi de l'ordre nomme au plus (un rang relu plus grand reste un rang). */
+export const CARDS_ORDER_MAX = 200
+
+/** Un id d'entrée de carte : un id de la feuille de route, d'une idée (I) ou d'une chose à reprendre (R). */
+export const isCardEntryId = (v: unknown): v is string => isRoadmapId(v) && (v[0] === 'I' || v[0] === 'R')
+
+/**
+ * Les entrées qu'un envoi du COO donne à une carte (`raw`, son champ `entries`), contrôlées : `undefined` quand l'envoi
+ * n'en dit rien, sinon la liste sans doublon (la première occurrence gardée), vide comprise ; ou la raison du refus
+ * (pas une liste, un id hors forme ou d'une autre lettre que I ou R, plus de `CARD_ENTRIES_MAX` ids) : rien n'est coupé.
+ */
+const parseCardEntries = (raw: unknown): { entries: string[] | undefined } | { refused: string } => {
+  if (raw === undefined) return { entries: undefined }
+  if (!Array.isArray(raw)) return { refused: '"entries" must be a list of roadmap ids (I<n> for an idea, R<n> for a thing to pick up)' }
+  const bad = raw.filter(v => !isCardEntryId(v))
+  if (bad.length > 0) {
+    // Chaque valeur en cause, une fois, exacte (hors ASCII imprimable échappé : un caractère invisible se voit), coupée après.
+    const shown = [...new Set(bad.map(v => clip(asciiJson(v), 40)))]
+    const named = shown.slice(0, 5).join(', ')
+    return { refused: `"entries" takes only ids of roadmap ideas (I<n>) or things to pick up (R<n>), as the COO statement gives them: ${named}${shown.length > 5 ? ` and ${shown.length - 5} more` : ''} ${shown.length > 1 ? 'are' : 'is'} not one` }
+  }
+  const entries = [...new Set(raw as string[])]
+  if (entries.length > CARD_ENTRIES_MAX) return { refused: `"entries" takes ${CARD_ENTRIES_MAX} ids at most; this card has ${entries.length}: split it into several cards` }
+  return { entries }
+}
+
+/** Les entrées relues d'une carte gardée : tous ses ids en forme, sans doublon, dans leur ordre, sans borne ; le reste ignoré. */
+const soundEntries = (raw: unknown): string[] => (Array.isArray(raw) ? [...new Set(raw.filter(isCardEntryId))] : [])
+
+/**
+ * La carte qu'un envoi du COO écrit (`card`, déjà contrôlée par `parseCard` sur l'envoi `raw` : précondition, un envoi
+ * aux entrées hors forme y est refusé avant), ses entrées réglées : celles de l'envoi quand il en donne (une liste vide
+ * les retire), sinon celles de la carte d'avant (`before`, même dossier), gardées telles quelles, sans nouveau contrôle.
+ */
+export const withEntries = (card: LaunchCard, raw: unknown, before: LaunchCard | undefined): LaunchCard => {
+  const parsed = parseCardEntries(raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>).entries : undefined)
+  const given = 'refused' in parsed ? undefined : parsed.entries
+  const { entries: _, ...rest } = card
+  const entries = given ?? before?.entries ?? []
+  return entries.length > 0 && isOrdinaryCard(card) ? { ...rest, entries: [...entries] } : rest
+}
+
+/**
+ * Les entrées qu'un envoi du COO donne et que la pose contrôle : celles de la liste qu'il donne, sans doublon ; aucune
+ * quand il n'en dit rien (une mise à jour garde alors celles d'avant sans les recontrôler) ou donne une liste vide.
+ */
+export const entriesToCheck = (raw: unknown): string[] => {
+  const parsed = parseCardEntries(raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>).entries : undefined)
+  return 'refused' in parsed ? [] : (parsed.entries ?? [])
+}
+
+/** Le statut d'une entrée dit au COO par son seul mot du vocabulaire (« rattachée à … »), jamais par son texte libre. */
+const statusWord = (e: RoadmapEntry): string => {
+  const word = (ROADMAP_STATUSES[e.section] ?? []).find(s => e.status === s || (s.endsWith(' ') && e.status.startsWith(s)))
+  return word === undefined ? 'unknown' : word.endsWith(' ') ? `${word.replace(/ : $/, '').trimEnd()} …` : word
+}
+
+/**
+ * Une entrée ouverte : une idée « à lancer » ou « plus tard », une chose à reprendre « à décider » ou « plus tard », ou un
+ * complément lu comme une chose à décider (`isOpenPending`, d'après toutes les entrées lues).
+ */
+const isOpenEntry = (e: RoadmapEntry, entries: readonly RoadmapEntry[]): boolean =>
+  e.section === 'Idées' ? e.status === 'à lancer' || e.status === 'plus tard' : isOpenPending(e, entries)
+
+/**
+ * Les entrées d'une carte que d'autres cartes citent déjà (`others` : les autres cartes prêtes ou en lancement, la carte
+ * elle-même exclue par l'appelant), par leurs entrées, leur idée ou leur titre : une raison par entrée, vide sinon.
+ */
+export const entriesCitedElsewhere = (entries: readonly string[], others: readonly Pick<LaunchCard, 'id' | 'title' | 'idea' | 'entries'>[]): string[] =>
+  entries.flatMap(id => {
+    const by = others.find(c => cardRoadmapIds(c).includes(id))
+    return by ? [`${id} is already cited by the launch card ${by.id}`] : []
+  })
+
+/**
+ * Pourquoi les entrées qu'un envoi du COO donne à une carte ne s'écrivent pas, ou null quand elles passent : la feuille
+ * de route relue à l'instant (`read`) doit se lire et montrer chacune ouverte, et aucune autre carte prête ou en
+ * lancement (`others`) ne doit déjà la citer. Toutes les entrées en cause sont nommées, chacune avec sa raison ; seuls des
+ * ids à la forme contrôlée et des mots du vocabulaire des statuts entrent dans la réponse.
+ */
+export const entriesRefusal = (entries: readonly string[], read: Roadmap | null | 'unread', others: readonly Pick<LaunchCard, 'id' | 'title' | 'idea' | 'entries'>[]): string | null => {
+  if (entries.length === 0) return null
+  const cited = entriesCitedElsewhere(entries, others)
+  // Sans feuille de route lisible, aucune entrée ne peut être vue ouverte : toutes sont nommées, avec celles déjà citées.
+  const unseen = read === null ? 'the roadmap does not exist yet' : read === 'unread' || !read.ok ? 'the roadmap cannot be read' : null
+  if (unseen !== null) return `${unseen}, so ${entries.join(', ')} cannot be seen open${cited.length > 0 ? `; ${cited.join('; ')}` : ''}. Nothing is shown or written: a card with "entries" needs the roadmap (a card without them is shown as before)`
+  const roadmap = read as Extract<Roadmap, { ok: true }>
+  const why = entries.flatMap(id => {
+    const e = roadmap.entries.find(x => x.id === id)
+    if (!e) return [`${id} is not in the roadmap`]
+    return isOpenEntry(e, roadmap.entries) ? [] : [`${id} is not open (status « ${statusWord(e)} »)`]
+  })
+  const all = [...why, ...cited]
+  const inCause = new Set(all.map(r => r.split(' ')[0]))
+  return all.length > 0 ? `${all.join('; ')}. Nothing is shown or written; propose the card again without ${inCause.size > 1 ? 'these entries' : 'this entry'}` : null
 }
 
 /** L'enregistrement de lancement, écrit par le clic dans le stockage du mod, consommé une fois par la nouvelle discussion. */
@@ -134,10 +269,11 @@ export const isOrdinaryCard = (card: Pick<LaunchCard, 'id' | 'start' | 'folder' 
 
 /**
  * Les entrées de la feuille de route qu'une carte cite : son champ `idea`, puis les ids `R<chiffres>` ou `I<chiffres>` de
- * son titre, dans l'ordre et sans doublon. Leur forme est contrôlée ici : seuls ces ids entrent dans la demande au COO.
+ * son titre, puis ses entrées, dans l'ordre et sans doublon. Leur forme est contrôlée ici : seuls ces ids entrent dans la
+ * demande au COO.
  */
-export const cardRoadmapIds = (card: Pick<LaunchCard, 'title' | 'idea'>): string[] => {
-  const found = [...(card.idea !== undefined && isRoadmapId(card.idea) ? [card.idea] : []), ...roadmapIdsIn(card.title, 'RI')]
+export const cardRoadmapIds = (card: Pick<LaunchCard, 'title' | 'idea' | 'entries'>): string[] => {
+  const found = [...(card.idea !== undefined && isRoadmapId(card.idea) ? [card.idea] : []), ...roadmapIdsIn(card.title, 'RI'), ...(card.entries ?? []).filter(isCardEntryId)]
   return [...new Set(found)]
 }
 
@@ -163,24 +299,29 @@ export const pistesCard = (id: string, now: number): LaunchCard => ({
   effortWhy: 'découpage en tickets',
   folder: pistesCardFolder(id),
   at: now,
+  goal: 'Découper en tickets les pistes cochées dans « Pistes en attente ».',
 })
 
-/** Un texte de la carte : sur une ligne, coupé. */
-const line = (v: unknown, max: number): string => (typeof v === 'string' ? clip(v.replace(/\s+/g, ' ').trim(), max) : '')
+/** Le refus d'une carte de Claude sans objectif : ce qu'il faut écrire. */
+const GOAL_REFUSED = '"goal" must say what the mission wants to obtain, in one to three short lines in the user\'s language (not the title again)'
+
+/** Un texte de la carte : sur une ligne, coupé ; aussi celui qu'écrit le mod (l'objectif d'une rétro), pour qu'une relecture ne le change pas. */
+export const cardLine = (v: unknown, max: number): string => (typeof v === 'string' ? clip(v.replace(/\s+/g, ' ').trim(), max) : '')
 
 /**
  * La carte que propose Claude (le champ `card` de l'outil `flow`), contrôlée : un départ de la liste, un
- * mode et un effort connus, jamais xhigh en auto, un dossier en forme. Rend la carte, ou la raison du refus.
+ * mode et un effort connus, jamais xhigh en auto, un dossier en forme, un objectif (exigé de Claude, facultatif à la relecture). Rend la carte, ou la raison du refus. Le rang
+ * ne se lit qu'à la relecture de la liste (`isMod`) : un rang donné par Claude est ignoré.
  */
 export const parseCard = (raw: unknown, now: number, id: string, isMod = false): { card: LaunchCard } | { refused: string } => {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { refused: '"card" must be a JSON object' }
   const x = raw as Record<string, unknown>
-  const title = line(x.title, 70)
+  const title = cardLine(x.title, 70)
   if (title === '') return { refused: 'the card has no title' }
   // Une rétro (`of` compris) ne vient que du mod ; une carte de Claude ne porte jamais `of`.
   const started = isMod ? startOf(x.start, x.of) : isStart(x.start) ? { start: x.start } : null
   if (!started) return { refused: `"start" must be one of ${LAUNCH_STARTS.join(', ')}` }
-  const askMatt = line(x.askMatt, 240)
+  const askMatt = cardLine(x.askMatt, 240)
   if (askMatt === '') return { refused: '"askMatt" must quote the line of ask-matt that justifies the start (read it first)' }
   if (x.mode !== 'auto' && x.mode !== 'manual') return { refused: '"mode" must be "auto" or "manual"' }
   if (!EFFORTS.includes(x.effort as LaunchEffort)) return { refused: '"effort" must be "medium", "high" or "xhigh"' }
@@ -189,6 +330,18 @@ export const parseCard = (raw: unknown, now: number, id: string, isMod = false):
   if (!isMod && x.folder.toLowerCase().startsWith(PISTES_CARD_PREFIX)) return { refused: `a folder that starts with "${PISTES_CARD_PREFIX}" is the dashboard's own (« Pistes de rétro » cards): choose another` }
   if (x.idea !== undefined && !isRoadmapId(x.idea)) return { refused: '"idea" must be the id of an idea of the roadmap, as the COO statement gives it' }
   const alts = (Array.isArray(x.alts) ? x.alts : []).filter(isStart).filter((s, i, all) => s !== x.start && all.indexOf(s) === i).slice(0, 4)
+  // Les entrées : contrôlées à la pose (refus entier, rien de coupé) ; relues, tous les ids en forme gardés, le reste ignoré.
+  // Une carte de rétro ou « Pistes de rétro » n'en porte jamais.
+  const given = isMod ? { entries: soundEntries(x.entries) } : parseCardEntries(x.entries)
+  if ('refused' in given) return { refused: given.refused }
+  const ordinary = isOrdinaryCard({ id, start: started.start, folder: x.folder, of: started.of })
+  const entries = ordinary && given.entries && given.entries.length > 0 ? given.entries : undefined
+  // Le rang : relu seulement (un rang donné par un envoi du COO est ignoré : seul l'envoi de l'ordre en pose un).
+  const rank = isMod && ordinary && Number.isSafeInteger(x.rank) && (x.rank as number) >= 1 ? (x.rank as number) : undefined
+  // L'objectif : exigé d'un envoi de Claude (après ses autres refus, qui gardent leur raison) ; facultatif à la relecture,
+  // absent plutôt que vide (une carte d'avant se réécrit sans clé de plus).
+  const goal = cardLine(x.goal, CARD_GOAL_MAX)
+  if (!isMod && goal === '') return { refused: GOAL_REFUSED }
   return {
     card: {
       id,
@@ -199,11 +352,14 @@ export const parseCard = (raw: unknown, now: number, id: string, isMod = false):
       askMatt,
       alts,
       mode: x.mode,
-      modeWhy: line(x.modeWhy, 160),
+      modeWhy: cardLine(x.modeWhy, 160),
       effort: x.effort as LaunchEffort,
-      effortWhy: line(x.effortWhy, 160),
+      effortWhy: cardLine(x.effortWhy, 160),
       folder: x.folder,
       at: now,
+      ...(entries ? { entries } : {}),
+      ...(rank !== undefined ? { rank } : {}),
+      ...(goal !== '' ? { goal } : {}),
     },
   }
 }
@@ -332,6 +488,25 @@ export const askMattCandidates = (raw: unknown, home: string): string[] => {
 /** La carte, dite à Claude dans le relevé du COO (textes de Claude, neutralisés par l'appelant). */
 export const cardStatus = (s: CardState): string => (s.kind === 'launched' ? 'launched' : s.kind === 'launching' ? `launching (${s.mode})` : 'ready')
 
+/** Le rang d'une carte au relevé du COO, suivi d'une virgule (rien sans rang). */
+export const cardRankEn = (card: Pick<LaunchCard, 'rank'>): string => (card.rank !== undefined ? `rank ${card.rank}, ` : '')
+
+/** Les entrées d'une carte au relevé du COO, suivies d'une virgule (rien sans entrées) ; seuls des ids en forme. */
+export const cardEntriesEn = (card: Pick<LaunchCard, 'entries'>): string => {
+  const ids = (card.entries ?? []).filter(isCardEntryId)
+  return ids.length > 0 ? `covers ${ids.length} ${ids.length > 1 ? 'entries' : 'entry'} ${ids.join(', ')}, ` : ''
+}
+
+/** Le nombre d'ids montrés sous une carte, avant « … ». */
+const CARD_ENTRIES_SHOWN = 10
+
+/** La ligne montrée sous une carte qui porte des entrées : « couvre n entrées : » et les 10 premiers ids, puis « … » ; null sans entrées. */
+export const cardEntriesFr = (card: Pick<LaunchCard, 'entries'>): string | null => {
+  const ids = (card.entries ?? []).filter(isCardEntryId)
+  if (ids.length === 0) return null
+  return `couvre ${ids.length} ${ids.length > 1 ? 'entrées' : 'entrée'} : ${ids.slice(0, CARD_ENTRIES_SHOWN).join(', ')}${ids.length > CARD_ENTRIES_SHOWN ? '…' : ''}`
+}
+
 // ─── Allumage depuis la vue Coordination ──────────────────────────────────
 //
 // « ⚡ Auto » puis « Confirmer » sur la ligne d'une mission, chez le titulaire du siège, écrit un
@@ -410,3 +585,39 @@ export const hasRetro = (runs: readonly Run[], mission: string): boolean => runs
  */
 export const isRetroCardDue = (run: Run, runs: readonly Run[]): boolean =>
   run.status === 'done' && run.archivedAt === undefined && isSafeId(run.id) && run.phases[0]?.skill !== 'retro' && retroOf(run) === null && !hasRetro(runs, run.id)
+
+/** Le début de la demande de lancement d'une carte : il la reconnaît dans le prompt du COO. */
+export const LAUNCH_ASK_START = '◆ COO : lance maintenant la mission'
+
+/** Le texte de `missionLaunchText`, la commande du départ déjà lue (`/<skill>` tel que ce poste le nomme). */
+export const launchText = (card: LaunchCard, launchId: string, mode: LaunchMode, command: string): string => {
+  const title = neutralInPrompt(card.title)
+  // Le titre qui entre dans la commande du shell : lettres, chiffres, espaces et ponctuation simple, rien d'autre.
+  const shellTitle = shellSafeTitle(card.title)
+  const firstLine = launchFirstLine(launchId)
+  // Les entrées de la feuille de route que cite la carte : leur fichier part avec elles, sans quoi la nouvelle discussion le cherchait.
+  // Pas pour une rétro : son premier message n'a « rien d'autre », la mission close est sa demande (son titre en reprend les ids).
+  const ids = card.of ? [] : cardRoadmapIds(card)
+  const roadmap = ids.length > 0 ? `La carte cite ${ids.join(', ')} de la feuille de route : dans le premier message, écris à côté de ${ids.length > 1 ? 'ces entrées' : 'cette entrée'} le chemin de la feuille de route que donne ton relevé, pour que la nouvelle discussion la lise sans la chercher. ` : ''
+  const xhigh =
+    card.effort === 'xhigh'
+      ? "Effort xhigh : si tu as start_session (l'app), demande-moi d'abord de taper /effort xhigh dans cette discussion (l'app ne donne jamais à la session un effort plus haut que le sien), attends que ce soit fait, lance, puis rappelle-moi de redescendre cette discussion en high. "
+      : ''
+  return (
+    `${LAUNCH_ASK_START} « ${title} » dans une nouvelle discussion (je viens de cliquer « ${mode === 'auto' ? 'Lancer en auto' : 'Lancer en manuel'} » sur sa carte ; le lancement vaut 10 minutes). ` +
+    (card.of
+      ? `Son premier message : ${command} Rétrospective de la mission livrée « ${neutralInPrompt(card.title.replace(/^Rétrospective · /, ''))} », proposée par le COO à sa livraison (son dossier est travail/${card.folder}/), puis cette ligne telle quelle : « ${firstLine} » Rien d'autre : le tableau de bord de la nouvelle discussion lui donne la mission close et ses transcripts ; l'effort part au lancement, ci-dessous. `
+      : `Son premier message : ${command} suivi du sujet de la mission en quelques phrases (ce que je t'ai demandé, dans mes mots ; son dossier est travail/${card.folder}/), puis cette ligne telle quelle : « ${firstLine} » Rien d'autre sur le mode : le tableau de bord de la nouvelle discussion le lit lui-même ; l'effort part au lancement, ci-dessous. `) +
+    roadmap +
+    xhigh +
+    `Dans l'app (tu as l'outil start_session) : start_session avec initiation user_asked, context "fresh", effort "${card.effort}", use_worktree false, titre « ${title} ». ` +
+    `Dans le CLI (pas de start_session) : par le shell, au premier plan, claude --bg -n ${shellQuote(shellTitle)} --effort ${card.effort} "<premier message>" (sans -w : elle travaille dans ce dossier ; le premier message écrit dans un fichier temporaire passé par "$(cat <fichier>)") ; ajoute --permission-mode au mode de cette discussion si tu le connais. S'il répond « Workspace not trusted », demande-moi de lancer claude une fois dans ce dossier, puis lis cette seule valeur par ${TRUST_COMMAND} (python sous Windows), jamais le fichier entier, qui peut porter des jetons. ` +
+    `La nouvelle discussion tourne dans le même mode que celle-ci (app ou terminal) : l'enregistrement du lancement est dans le stockage du tableau de bord, propre à chacun. ` +
+    (mode !== 'auto'
+      ? ''
+      : hasIntentTurn(card)
+        ? `Avant de lancer, vérifie que travail/${card.folder}/demande.md existe et est commité (git log -1 -- travail/${card.folder}/demande.md ; dans un projet sans git, qu'il existe), et qu'il porte le tour d'intention de cette carte, pas celui d'une mission précédente du même dossier : le tour d'intention se recueille avant le clic. S'il manque, ne lance pas : dis-le-moi en une ligne (le tour d'intention à recueillir et à commiter, puis un nouveau clic). S'il y est, lance-la tout de suite, sans me poser d'autre question d'abord (le lancement ne vaut que 10 minutes). `
+        : `Lance-la tout de suite, sans me poser d'autre question d'abord (le lancement ne vaut que 10 minutes) : ${card.of ? 'une rétro' : 'un découpage de pistes de rétro'} n'a pas de tour d'intention. `) +
+    `Ensuite, ne la suis pas activement : elle paraît dans ton relevé ; ${mode === 'auto' ? 'en auto, ses questions bloquantes paraissent ici' : 'en manuel, tu me préviens quand elle m’attend'}.`
+  )
+}

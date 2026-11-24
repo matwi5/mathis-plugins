@@ -252,6 +252,50 @@ export const spinnerSvg = (color: string, size = 14): Drawn => {
   return { source: svg(size, size, body), width: size, height: size }
 }
 
+/**
+ * Le chiffre d'une tuile de la vue Coordination : un grand nombre en gras, à la couleur de la tuile (le texte du panneau
+ * n'a qu'une taille) ; « — » pour un compte non mesuré.
+ */
+export const tileNumberSvg = (count: number | null, color: string): Drawn => {
+  const text = count === null ? '—' : String(Math.max(0, Math.floor(count)))
+  const width = Math.max(20, text.length * 17 + 4)
+  return { source: svg(width, 32, `<text x="0" y="26" ${FONT} font-size="28" font-weight="700" fill="${color}">${esc(text)}</text>`), width, height: 32 }
+}
+
+
+/**
+ * La frise compacte du couloir d'une mission (vue Coordination) : ses stations reliées sur la largeur donnée, les faites
+ * pleines en vert, celle en cours à la couleur de son skill, plus grosse, et qui pulse quand `isLive`, les autres en creux ;
+ * un libellé sous chaque station, celui de la station en cours en gras et entier, les autres en libellé court quand la
+ * mission a plus de trois stations. Une seule station : son point et son libellé à côté. `green` : la couleur du fait.
+ */
+export const laneRoadSvg = (stations: readonly { label: string; short?: string; color: string; state: NodeState }[], width: number, isLive: boolean, green: string): Drawn => {
+  const n = stations.length
+  const w = Math.max(60, Math.round(width))
+  const pad = 10
+  const h = n > 1 ? 34 : 18
+  const step = n > 1 ? (w - 2 * pad) / (n - 1) : 0
+  const xs = stations.map((_, i) => r1(pad + i * step))
+  const cur = stations.findIndex(s => s.state === 'active')
+  const lastDone = stations.reduce((at, s, i) => (s.state === 'done' ? i : at), -1)
+  const reach = cur >= 0 ? cur : lastDone
+  let body = n > 1 ? `<line x1="${pad}" y1="8" x2="${w - pad}" y2="8" stroke="${MUTED}" stroke-opacity="0.35" stroke-width="2"/>` : ''
+  if (n > 1 && reach > 0) body += `<line x1="${pad}" y1="8" x2="${xs[reach]}" y2="8" stroke="${green}" stroke-width="2"/>`
+  stations.forEach((s, i) => {
+    const x = xs[i]!
+    const isCur = s.state === 'active'
+    const isDone = s.state === 'done'
+    const color = isDone ? green : isCur ? s.color : MUTED
+    if (isCur && isLive)
+      body += `<circle cx="${x}" cy="8" r="5" fill="${color}" opacity="0.45"><animate attributeName="r" values="5;10" dur="1.5s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0" dur="1.5s" repeatCount="indefinite"/></circle>`
+    body += isDone || isCur ? `<circle cx="${x}" cy="8" r="${isCur ? 5.5 : 4.5}" fill="${color}"/>` : `<circle cx="${x}" cy="8" r="4.5" fill="none" stroke="${color}" stroke-width="1.6"/>`
+    const anchor = n === 1 || i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'
+    const tx = n === 1 ? x + 12 : i === 0 ? x - 4 : i === n - 1 ? x + 4 : x
+    const text = isCur || n <= 3 ? s.label : (s.short ?? s.label)
+    body += `<text x="${r1(tx)}" y="${n === 1 ? 12 : 29}" text-anchor="${anchor}" ${FONT} font-size="10.5" font-weight="${isCur ? 700 : 400}" fill="${isCur ? s.color : MUTED}">${esc(text)}</text>`
+  })
+  return { source: svg(w, h, body), width: w, height: h }
+}
 /** Point d'état ; pulsant quand quelque chose tourne. */
 export const pulseSvg = (color: string, isPulsing: boolean, size = 12): Drawn => {
   const m = size / 2

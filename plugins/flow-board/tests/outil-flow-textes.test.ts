@@ -72,6 +72,11 @@ test('la réponse relayée par le COO : appliquer, retirer, et pour une réponse
     "Si ma réponse ne tranche qu'une partie de la question, applique ce qu'elle tranche et ne pose que ce qui reste, sous un id neuf : son texte commence par la question restante, puis cite ma réponse (« Quel libellé pour la bascule ? Tu as répondu « b et c ». ») ; jamais la question entière.",
   )
   // Un geste (oui ou non d'un clic) tranche toute la question : pas de réponse partielle.
+  // Une réponse qui fixe ou change un invariant : les recommandations déjà prises et les critères se relisent contre lui.
+  expect(text).toContain(
+    "Si cette réponse fixe ou change un invariant, relis contre lui, avant de reprendre, les séries de recommandations déjà prises et les critères des tickets qu'il régit, corrige ou pose en question ce qui le contredit, et mets à jour la ligne « Invariant relu : » de chaque ticket très sensible qu'il régit (contre quoi, et quand).",
+  )
+  expect(relayMessage({ id: 'c2', kind: 'gesture', run: 'r', at: 1, question: 'sp-A', print: 'p', answer: 'yes' }, 'spend')).not.toContain('fixe ou change un invariant')
   expect(relayMessage({ id: 'c2', kind: 'gesture', run: 'r', at: 1, question: 'sp-A', print: 'p', answer: 'yes' }, 'spend')).not.toContain('ne tranche qu')
 })
 

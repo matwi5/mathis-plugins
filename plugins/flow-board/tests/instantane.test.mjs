@@ -15,6 +15,8 @@ import { ch, CORPUS, LINE_BREAKERS, NON_TEXT } from './corpus.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../scripts/snapshot.mjs', import.meta.url))
 const procedure = readFileSync(new URL('../reference/procedure-groupe.md', import.meta.url), 'utf8')
+// Le correctif dans un fichier que le ticket suivant a déjà modifié : sorti du noyau dans cette annexe.
+const cas = readFileSync(new URL('../reference/procedure-groupe-cas.md', import.meta.url), 'utf8')
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
@@ -489,8 +491,9 @@ test('--remplace refuse un chemin dont un dossier est illisible, sans rien écri
 })
 
 test('la procédure cite les deux modes du script d’instantané par une commande simple', () => {
-  assert.ok(procedure.includes('node <dossier de flow-board>/scripts/snapshot.mjs --staged <id du ticket> <les fichiers du correctif>'), 'la procédure ne cite pas --staged')
-  assert.ok(procedure.includes('node <dossier de flow-board>/scripts/snapshot.mjs --remplace <fichier> <ancien> <nouveau>'), 'la procédure ne cite pas --remplace')
+  assert.ok(cas.includes('node <dossier de flow-board>/scripts/snapshot.mjs --staged <id du ticket> <les fichiers du correctif>'), 'la procédure ne cite pas --staged')
+  assert.ok(cas.includes('node <dossier de flow-board>/scripts/snapshot.mjs --remplace <fichier> <ancien> <nouveau>'), 'la procédure ne cite pas --remplace')
+  assert.ok(procedure.includes("jamais d'indexation de blocs à la main : ses commandes (`snapshot.mjs --remplace`, puis `--staged`) sont dans `procedure-groupe-cas.md`."), 'le noyau ne renvoie pas à l’annexe')
   assert.ok(procedure.includes('le README et les tests partagés comptent comme fichiers du ticket'), 'la procédure ne dit pas que le README et les tests partagés sont du ticket')
 })
 

@@ -43,7 +43,7 @@ test('la section « Lancer une mission » fait rattacher, une fois la mission la
     'l\'état se défait à la demande de la personne (« plus tard » ou « écarter »), par les boutons « Plus tard » et « Écarter » que la vue Coordination montre sur une entrée rattachée, ou dans le chat',
     'Tu ne changes que leur état, jamais leur id ni leur texte, et une entrée ne quitte jamais le fichier',
     'écrit sans « · »',
-    'une entrée « À reprendre » à « à décider » ou « plus tard », donnée comme sujet de la mission : elle passe à « rattachée à <titre> »',
+    'une entrée « À reprendre » à « à décider » ou « plus tard », ou un complément que ton relevé nomme parmi les ouvertes (lu comme une chose à décider, son état écrit restant « complète <id> »), donnée comme sujet de la mission ou citée par sa carte : elle passe à « rattachée à <titre> »',
     'une seule écriture, « rattachée à <titre> », jamais « lancée »',
     'une entrée déjà « rattachée à <ce titre> » : rien à faire',
     'une entrée déjà « lancée » avant ce lancement, « rattachée à <une autre mission> », « écartée : … » ou « faite : … » : tu ne la touches pas, et tu le dis à la personne',
@@ -60,7 +60,7 @@ test('le relevé d’une mission de tri : le skill du COO porte l’invariant mo
   assert.ok(section.includes(invariant), 'invariant absent ou reformulé')
   for (const part of [
     'dite « faite, ticket(s) … » : écris « faite : <mission>, ticket <n> » (ou « tickets <n>, <m> »)',
-    'dite « écartée — <raison> » : propose « écartée : <raison> », et ne l\'écris qu\'avec l\'accord de la personne',
+    'dite « écartée — <raison> » : propose « écartée : <raison> », en nommant ses compléments (les entrées « complète <son id> », qui se closent avec elle sauf une raison « corrigée … »), et ne l\'écris qu\'avec l\'accord de la personne',
     'dite « renvoyée » : propose de la remettre « à décider », et ne l\'écris qu\'avec son accord',
     'dite « pour toi » ou « question ouverte » : elle reste rattachée',
     'l\'id d\'une entrée à un autre état (« à décider », rattachée à une autre mission, déjà « faite : » ou « écartée : ») : rien ne change',
@@ -76,7 +76,7 @@ test('le relevé d’une mission de tri : le skill du COO porte l’invariant mo
     'un fichier qui ne se relit pas : rien non plus, et tu n\'envoies pas `gleaned`',
     'jamais après un relevé qui ne montre plus la mission close et validée',
     'une sous-ligne renvoyée devient une entrée neuve parce que le manager l\'a déclarée mise de côté',
-    'n\'envoie `gleaned` qu\'une fois ces états écrits ou refusés par la personne',
+    'ne déclare la mission relevée qu\'une fois ces états écrits ou refusés par la personne, et d\'ici là, déclare-la remise (`"postponed": true`)',
     'sans jamais réécrire l\'état pour contourner',
     'ou valider le compte rendu d\'une mission qui l\'a corrigée',
   ]) assert.ok(section.includes(part), `absent : « ${part} »`)
@@ -106,4 +106,19 @@ test('le COO écrit « rattachée à M<n> - <titre> » d’après son relevé, r
     'plus every « À reprendre » entry whose state is already « rattachée à <this mission\'s title> » or « rattachée à M<n> - <this mission\'s title> »',
     'recognize them by the title part only',
   ]) assert.ok(triage.includes(part), `absent du tri : « ${part} »`)
+})
+
+// La déclaration d'un relevé que dicte le skill du COO a les mêmes clés que celle du relevé (`GLEAN_FORM` de
+// hooks/coo.ts), que a-reprendre.test.ts rejoue contre le contrôle de l'outil flow : une clé qui dérive dans le skill
+// (« ajoutées » pour « added ») ferait refuser chaque déclaration.
+test('la déclaration d’un relevé que dicte le skill du COO a les clés de GLEAN_FORM, et sa remise est dite à côté des deux listes', () => {
+  const coo = read('hooks/coo.ts')
+  const form = /export const GLEAN_FORM = '([^']*)'/.exec(coo)?.[1]
+  assert.ok(form, 'GLEAN_FORM introuvable dans hooks/coo.ts')
+  const skillForm = /`(\{"coordinate": \{"gleaned": \[\{"mission": [^`]*)`/.exec(SKILL)?.[1]
+  assert.ok(skillForm, 'la déclaration de relevé introuvable dans le skill du COO')
+  const keys = text => Object.keys(JSON.parse(text.replace(/"<[^>"]*>"/g, '"x"')).coordinate.gleaned[0])
+  assert.deepEqual(keys(skillForm), keys(form))
+  assert.deepEqual(keys(form), ['mission', 'added', 'attached'])
+  assert.ok(SKILL.includes('envoie la même déclaration avec `"postponed": true` à côté de ses deux listes'))
 })

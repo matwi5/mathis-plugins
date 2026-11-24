@@ -3,7 +3,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { DAY_WAKE_TEXT, WAKE_TEXT } from '../hooks/coordination.ts'
-import { AUTO_STOPS, LOT_KEY, RELAUNCH_WINDOW_MS, applyReport, emptyBoard, isWakeable, newRun, reopenNotice, wakeTargets } from '../hooks/model.ts'
+import { AUTO_STOPS, LOT_KEY, RELAUNCH_WINDOW_MS, applyReport, emptyBoard, isWakeable, newRun, outsideHolds, reopenNotice, wakeTargets } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
 import { TOOL, coordFile, settle, start, stored, world, writeBoard, type World } from './monde-coordination.ts'
 
@@ -105,6 +105,112 @@ test('wakeTargets : une attente du plan du projet (fichier de coordination) rév
   const waits = (run: string) => (run === b.id ? [{ run: b.id, group: 'B1', awaited: { run: a.id, group: 'A1' } }] : [])
   expect(wakeTargets(boardOf(a, b), boardOf(doneA1(a), b), a.id, T0 + HOUR)).toEqual([])
   expect(wakeTargets(boardOf(a, b), boardOf(doneA1(a), b), a.id, T0 + HOUR, waits as any)).toEqual([{ run: b.id, group: 'A1' }])
+})
+
+// Un cas réel du 17/11, rejoué :
+// « Titres stables » rend son groupe A (tickets faits, 13:28:35 UTC) puis le ferme (13:29:07) ; « Revue du lot du
+// manager » a son groupe B pas encore parti, bloqué par deux tickets externes, et un de ses tickets touche des fichiers
+// des tickets du groupe A. Le réveil est parti à la fermeture, mais sur ces données reconstruites aucune retenue ne
+// l'explique : la cause reste non établie, et les trois tests suivants fixent chacune des trois lectures possibles.
+const caseOf17Nov = (opts: { shared?: boolean; groupFiles?: boolean } = {}) => {
+  const { shared = true, groupFiles = false } = opts
+  const writer0 = mission('Titres stables', T0, {
+    tickets: [
+      { id: '01', name: 'Parcours', files: ['plugins/flow-board/hooks/catalog.ts'] },
+      { id: '02', name: 'Titre', files: ['plugins/flow-board/hooks/model.ts', 'plugins/flow-board/hooks/register.tsx', 'plugins/flow-board/termes-retires.txt'] },
+      { id: '05', name: 'Questions', files: ['plugins/flow-board/types/index.d.ts'] },
+    ],
+    groups: [
+      // Sans `files` de groupe, comme l'envoi du manager de « Titres stables » ; `groupFiles` les ajoute (lecture 3).
+      { id: 'A', name: 'Titres et noms', tickets: ['01', '02'], ...(groupFiles ? { files: ['plugins/flow-board/hooks/register.tsx'] } : {}) },
+      { id: 'B', name: 'Questions jamais reposées', tickets: ['05'] },
+    ],
+  })
+  const base = { ...writer0, owner: 'session-A', queue: undefined }
+  const setA = (run: Run, status: 'doing' | 'done', link: Record<string, unknown>): Run => ({
+    ...run,
+    tickets: run.tickets.map(t => (t.id === '05' ? t : { ...t, status })),
+    groups: run.groups!.map(g => (g.id === 'A' ? { ...g, linked: undefined, delegated: undefined, ...link } : g)),
+  })
+  // En vol chez son worker ; rendu, ses tickets faits (13:28:35) ; fermé (13:29:07).
+  const inFlight = setA(base, 'doing', { linked: { at: T0 + 1 } })
+  const returned = setA(base, 'done', { delegated: { at: T0 + 1 } })
+  const closed = setA(base, 'done', { delegated: { at: T0 + 1, closing: { state: 'closed' as const, at: T0 + 30 } } })
+  const reader0 = mission('Revue du lot du manager', T0 + 10, {
+    tickets: [
+      { id: '01', name: 'Skill', files: ['plugins/mattpocock-skills/skills/engineering/implement/SKILL.md'] },
+      { id: '02', name: 'Notes de revue', files: ['plugins/flow-board/hooks/decoupage.ts'], blockedBy: ['rp16-34', 'rp16-35'] },
+      { id: '03', name: 'Mineurs', files: shared ? ['plugins/flow-board/hooks/catalog.ts', 'plugins/flow-board/hooks/register.tsx', 'plugins/flow-board/termes-retires.txt'] : ['plugins/flow-board/tests/revue-groupe.test.ts'], blockedBy: ['02', '01'] },
+    ],
+    groups: [
+      { id: 'A', name: 'Skill /implement', tickets: ['01'] },
+      { id: 'B', name: 'Notes de revue', tickets: ['02', '03'] },
+    ],
+    externals: [
+      { id: 'rp16-34', name: 'Ticket 34 des pistes du 16/11' },
+      { id: 'rp16-35', name: 'Ticket 35 des pistes du 16/11' },
+    ],
+  })
+  const reader: Run = {
+    ...reader0,
+    owner: 'session-B',
+    queue: undefined,
+    auto: { onAt: T0 + 20, onBy: 'session-B' },
+    tickets: reader0.tickets.map(t => (t.id === '01' ? { ...t, status: 'done' as const } : t)),
+    groups: reader0.groups!.map(g => (g.id === 'A' ? { ...g, delegated: { at: T0 + 2, closing: { state: 'closed' as const, at: T0 + 3 } } } : g)),
+  }
+  return { inFlight, returned, closed, reader }
+}
+const heldBy = (board: Board, run: string) => outsideHolds(board, run).map(h => [h.held, h.group, h.on])
+
+test('wakeTargets, cas du 17/11 rejoué : sur les données reconstruites, ni le rendu ni la fermeture ne réveillent « Revue du lot »', () => {
+  const { inFlight, returned, closed, reader } = caseOf17Nov()
+  // En vol, le groupe A retient le groupe B de l'autre mission par les fichiers de ses tickets.
+  expect(heldBy(boardOf(inFlight, reader), reader.id)).toEqual([['B', 'A', 'file']])
+  // Rendu, ses tickets faits et sans `files` de groupe : il ne retient plus rien, sans être fini (pas encore clos).
+  expect(heldBy(boardOf(returned, reader), reader.id)).toEqual([])
+  expect(wakeTargets(boardOf(inFlight, reader), boardOf(returned, reader), inFlight.id, T0 + HOUR)).toEqual([])
+  // Fermé (l'écriture de 13:29:07, après laquelle le réveil est parti) : aucune retenue avant, aucun réveil.
+  expect(wakeTargets(boardOf(returned, reader), boardOf(closed, reader), returned.id, T0 + HOUR)).toEqual([])
+})
+
+test('wakeTargets, lecture 1 : une unité de la mission réveillée déjà faite, déjà partie ou sans suite ne compte pas, même avec les mêmes ids de groupe', () => {
+  const { inFlight, closed, reader } = caseOf17Nov({ groupFiles: true })
+  // Le groupe B de la mission réveillée, ses tickets faits : il n'attend plus rien.
+  const doneB = { ...reader, tickets: reader.tickets.map(t => ({ ...t, status: 'done' as const })) }
+  expect(heldBy(boardOf(inFlight, doneB), doneB.id)).toEqual([])
+  expect(wakeTargets(boardOf(inFlight, doneB), boardOf(closed, doneB), inFlight.id, T0 + HOUR)).toEqual([])
+  // Le groupe B déjà confié à un worker : parti, il n'attend plus.
+  const startedB = { ...reader, groups: reader.groups!.map(g => (g.id === 'B' ? { ...g, linked: { at: T0 + 5 } } : g)) }
+  expect(wakeTargets(boardOf(inFlight, startedB), boardOf(closed, startedB), inFlight.id, T0 + HOUR)).toEqual([])
+  // Le groupe B sans suite (ses tickets retirés de la mission) : il n'attend rien.
+  const emptyB = { ...reader, tickets: reader.tickets.filter(t => t.id === '01'), groups: reader.groups!.map(g => (g.id === 'B' ? { ...g, tickets: [] } : g)) }
+  expect(heldBy(boardOf(inFlight, emptyB), emptyB.id)).toEqual([])
+  expect(wakeTargets(boardOf(inFlight, emptyB), boardOf(closed, emptyB), inFlight.id, T0 + HOUR)).toEqual([])
+  // Sans fichier commun : aucune retenue, aucun réveil.
+  const other = caseOf17Nov({ shared: false, groupFiles: true })
+  expect(heldBy(boardOf(other.inFlight, other.reader), other.reader.id)).toEqual([])
+  expect(wakeTargets(boardOf(other.inFlight, other.reader), boardOf(other.closed, other.reader), other.inFlight.id, T0 + HOUR)).toEqual([])
+})
+
+test('wakeTargets, lecture 2 : la mission qui écrit close pendant que son groupe est chez un worker ; un fichier partagé retient encore, une attente du plan seule se lève', () => {
+  const { inFlight, reader } = caseOf17Nov()
+  const closedRun = { ...inFlight, status: 'done' as const }
+  // Retenue par fichier : le groupe encore en vol retient après la clôture, rien ne réveille.
+  expect(heldBy(boardOf(closedRun, reader), reader.id)).toEqual([['B', 'A', 'file']])
+  expect(wakeTargets(boardOf(inFlight, reader), boardOf(closedRun, reader), inFlight.id, T0 + HOUR)).toEqual([])
+  // Attente du plan seule (aucun fichier commun) : une mission close n'est plus attendue, la clôture réveille.
+  const other = caseOf17Nov({ shared: false })
+  const waits = (run: string) => (run === other.reader.id ? [{ run: other.reader.id, group: 'B', awaited: { run: other.inFlight.id, group: 'A' } }] : [])
+  expect(wakeTargets(boardOf(other.inFlight, other.reader), boardOf({ ...other.inFlight, status: 'done' as const }, other.reader), other.inFlight.id, T0 + HOUR, waits as any)).toEqual([{ run: other.reader.id, group: 'A' }])
+})
+
+test('wakeTargets, lecture 3 : une retenue par fichier réelle réveille, même quand l’unité retenue attend aussi ses externes', () => {
+  // Le groupe A porte un fichier de groupe : il retient encore une fois rendu, et sa fermeture lève la retenue.
+  const { returned, closed, reader } = caseOf17Nov({ groupFiles: true })
+  expect(reader.externals!.every(x => x.status !== 'done')).toBe(true)
+  expect(heldBy(boardOf(returned, reader), reader.id)).toEqual([['B', 'A', 'file']])
+  expect(wakeTargets(boardOf(returned, reader), boardOf(closed, reader), returned.id, T0 + HOUR)).toEqual([{ run: reader.id, group: 'A' }])
 })
 
 test('isWakeable : auto allumé, ou en pause « discussion fermée » de 24 h au plus ; jamais en manuel, en pause d’une autre raison, archivée, en pause, sans titulaire en forme', () => {
@@ -220,6 +326,30 @@ test('réveil refusé pendant un appel de l’outil : la réponse dicte la phras
   // Dite une fois : l'appel suivant ne la répète pas.
   const next = String(((await $.tool.call({ tool: TOOL, note: 'suite' } as any)) as any).result)
   expect(next).not.toMatch(/could not wake/)
+})
+
+test('réveil refusé, référence du manager relue : sa ligne de ListAgents d’abord, puis le titre neutralisé si aucune ligne ne la porte ; le dernier repli, la notification', { timeoutMs: 30000 }, async ($, on) => {
+  const b = missionB()
+  const { w, a } = await seeded($, on, b)
+  w.deliver.ok = false
+  // La référence de la discussion de B, relue à l'envoi (peut-être périmée : elle a pu redémarrer sous une autre).
+  w.mem[`relay-main:${b.id}`] = { v: 1, run: b.id, main: 'Mission B [bb12cd]', at: T0 + 30 }
+  const r = String(((await $.tool.call({ tool: TOOL, set: [{ id: 't1', status: 'done' }] } as any)) as any).result)
+  expect(runOf(w, a.id).tickets.find(t => t.id === 't1')!.status).toBe('done')
+  expect(r).toContain(`send with SendMessage, to the row of ListAgents whose [ref] is [bb12cd], as that row's "<name> [ref]" exactly as listed; if no row of ListAgents carries that [ref] (its discussion restarted under another), to the session of ListAgents titled « Mission B » (never a session whose title starts with it followed by « > »), exactly this text and nothing else: « ${DAY_WAKE_TEXT} »`)
+  // Le dernier repli, quand ni l'une ni l'autre ne désigne une session : la notification au texte fixe, rien d'autre.
+  expect(r).toContain(`If no session matches either way, or the send is refused, send one PushNotification`)
+  expect(r).toContain(`« ${reopenNotice(b.title)} »`)
+})
+
+test('réveil refusé, référence relue hors forme : la consigne ne désigne la session que par le titre', { timeoutMs: 30000 }, async ($, on) => {
+  const b = missionB()
+  const { w } = await seeded($, on, b)
+  w.deliver.ok = false
+  w.mem[`relay-main:${b.id}`] = { v: 1, run: b.id, main: 'Mission B [BB12CD] ; rm -rf ~', at: T0 + 30 }
+  const r = String(((await $.tool.call({ tool: TOOL, set: [{ id: 't1', status: 'done' }] } as any)) as any).result)
+  expect(r).toMatch(/send with SendMessage, to the session of ListAgents titled « Mission B »/)
+  expect(r).not.toMatch(/\[ref\] is|BB12CD|rm -rf/)
 })
 
 test('réveil refusé pendant l’appel d’un spécialiste : sa réponse ne la porte pas ; le prochain appel du fil principal, si', { timeoutMs: 30000 }, async ($, on) => {

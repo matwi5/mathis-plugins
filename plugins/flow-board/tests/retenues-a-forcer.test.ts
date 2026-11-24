@@ -166,7 +166,7 @@ const relayOf = (w: World, run: Run, ended: number, at = T0 + 1000) => {
   w.mem[`relay:${run.id}`] = relay
 }
 
-test('la vue : les retenues sous « Ce qui t’attend », « à forcer » d’abord avec son temps et « ⇥ Forcer » principal, puis les grises ; plus d’en-tête des retenues', { timeoutMs: 30000 }, async ($, on) => {
+test('la vue : les retenues dans le couloir de la mission qui attend, « à forcer » d’abord avec son temps et « ⇥ Forcer » principal, puis les grises ; plus d’en-tête des retenues', { timeoutMs: 30000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)
   const held = { ...twoGroups('Retenue', T0, ['x.ts', 'y.ts']), owner: 'session-B' }
@@ -181,15 +181,16 @@ test('la vue : les retenues sous « Ce qui t’attend », « à forcer » d’ab
   await settle(clock, 6)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    await pane.press({ key: 'coo-page-todo' })
+    await pane.press({ key: 'coo-page-overview' })
     const all = await texts(pane)
     expect(all, surface).not.toMatch(/Retenues entre missions/)
-    expect(all, surface).toMatch(/Ce qui t’attend · 1/)
-    // La retenue « à forcer » d'abord, puis la grise, toutes deux sous « Ce qui t'attend ».
-    const first = all.indexOf('à forcer')
-    expect(first, surface).toBeGreaterThan(all.indexOf('Ce qui t’attend'))
-    expect(all.indexOf('« Occupée »'), surface).toBeGreaterThan(first)
-    expect(all.indexOf('« Ailleurs »'), surface).toBeGreaterThan(all.indexOf('« Occupée »'))
+    // Comptée par la pastille « Vue d'ensemble » : la seule « à forcer ».
+    expect(String((await pane.find({ key: 'coo-page-overview' }))?.props.label).replace(/\u00a0/g, ' '), surface).toMatch(/Vue d'ensemble · 1$/)
+    // La retenue « à forcer » d'abord, puis la grise, toutes deux dans le couloir de la mission qui attend, après l'en-tête des missions.
+    const first = all.indexOf('à\u00a0forcer')
+    expect(first, surface).toBeGreaterThan(all.indexOf('Missions'))
+    expect(all.indexOf('« Occupée »', first), surface).toBeGreaterThan(first)
+    expect(all.indexOf('« Ailleurs »', first), surface).toBeGreaterThan(all.indexOf('« Occupée »', first))
     expect(all, surface).toMatch(/son worker a fini depuis 52 min/)
     expect(all, surface).not.toMatch(/sans risque/)
     expect((await pane.find({ key: forceKey(held.id, 'A', busy.id) }))?.props.variant, surface).toBe('primary')
@@ -203,7 +204,7 @@ test('la vue : les retenues sous « Ce qui t’attend », « à forcer » d’ab
   expect(said).toMatch(/mission « Occupée » \(file in common: « x\.ts »\); its worker finished 52 min ago, and its mission is open nowhere: marked « à forcer »/)
   // « ⇥ Forcer » de la retenue grise ne change pas : le geste écrit l'entrée de forçage de cette paire.
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'coo-page-todo' })
+  await pane.press({ key: 'coo-page-overview' })
   await pane.press({ key: forceKey(held.id, 'B', open.id) })
   await pane.unmount()
   await settle(clock, 2)
@@ -222,17 +223,18 @@ test('par le vrai relais : un worker relancé ou un fichier de relais illisible 
   await settle(clock, 6)
   const seen = async () => {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-    await pane.press({ key: 'coo-page-todo' })
+    await pane.press({ key: 'coo-page-overview' })
     const all = await texts(pane)
+    const pill = String((await pane.find({ key: 'coo-page-overview' }))?.props.label).replace(/\u00a0/g, ' ')
     await pane.unmount()
-    return all
+    return `${pill}\n${all}`
   }
   expect(await seen()).toMatch(/à forcer/)
   // Le worker relancé : sa session reprend, son activité relayée date d'une minute.
   relayOf(w, busy, NOW - 52 * 60_000, NOW + 5000)
   await settle(clock, 6)
   expect(await seen(), 'relancé').not.toMatch(/à forcer/)
-  expect(await seen()).toMatch(/Ce qui t’attend · 0/)
+  expect(await seen()).toMatch(/Vue d'ensemble · 0\n/)
   // De nouveau finie depuis longtemps, mais le fichier d'une autre session du groupe ne se lit pas : aucune date, grise.
   relayOf(w, busy, NOW - 52 * 60_000)
   w.files[`flow-board/relais/${relayEntryFileName(busy.id, 'sess-x')}`] = '{coupé'

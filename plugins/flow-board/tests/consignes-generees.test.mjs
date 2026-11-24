@@ -478,7 +478,7 @@ test('la procédure cite le script des consignes par une commande simple', () =>
   assert.ok(gabarit.includes('scripts/consignes.mjs'), 'le gabarit ne cite pas le script qui le remplit')
 })
 
-// Le chemin du SKILL.md du skill code-review (axe Standards du relecteur d'un ticket) : chaque worker le
+// Le chemin du SKILL.md du skill mattpocock-skills:code-review (axe Standards du relecteur d'un ticket) : chaque worker le
 // cherchait à la main (sept versions en cache, un glob zsh en échec). Le script l'écrit, pris à côté du
 // plugin dans le dépôt, sinon dans le registre des plugins de Claude Code, jamais hors du dossier `plugins/`
 // qui porte ce registre ; sinon « non trouvé ». Les faux dossiers vivent dans un dossier temporaire,
@@ -614,7 +614,7 @@ test('flow-board vu par un lien, le registre écrit le dossier `plugins/` résol
 test('le fichier de consignes d’un ticket donne le chemin du SKILL.md, ou « non trouvé » et où il a été cherché ; pas ceux d’un groupe', () => {
   const ticket = { id: '1', title: 't', path: 'p' }
   const found = render(gabarit, { ticket, range: 'a..b', skill: { path: '/x/SKILL.md' } })
-  assert.ok(found.includes("- Axe Standards d'un ticket, la liste d'odeurs de code de l'étape 3 du skill code-review : `/x/SKILL.md`."), found)
+  assert.ok(found.includes("- Axe Standards d'un ticket, la liste d'odeurs de code de l'étape 3 du skill mattpocock-skills:code-review : `/x/SKILL.md`."), found)
   const missing = render(gabarit, { ticket, range: 'a..b', skill: { path: null, searched: ['/d/SKILL.md', '/p/installed_plugins.json'] } })
   assert.ok(missing.includes("code-review : non trouvé (cherché : `/d/SKILL.md`, puis `/p/installed_plugins.json`) ; l'écrire dans le rapport, sans chercher le skill."), missing)
   assert.ok(!/<[^>\n]+>/.test(missing))

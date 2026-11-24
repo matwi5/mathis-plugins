@@ -1,8 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { copiedIn, keepsItems, roadmapText, withoutCopied } from '../hooks/a-reprendre.ts'
-import { cooStatement, statementText, type CooGlean } from '../hooks/coo.ts'
+import { GLEAN_FORM, GLEAN_POSTPONED_FORM, cooStatement, statementText, type CooGlean } from '../hooks/coo.ts'
 import { emptyBoard, newRun } from '../hooks/model.ts'
+import { withDueHead } from '../hooks/rangement.ts'
+import { parseRoadmap } from '../hooks/roadmap.ts'
 import { reportRoundOf, validatedRoundOf } from '../hooks/register.tsx'
 import type { Board, Run } from '../types'
 import { relayFileSlug } from '../hooks/closing.ts'
@@ -244,14 +246,86 @@ test('une mission close se relève une fois : ses comptes rendus et ses pistes n
   await start($)
   const opening = await openCoo($, clock)
   expect(opening).toMatch(/First opening in this project: glean once/)
-  expect(opening).toMatch(/Closed mission « Close » \(mission id « [^»]+ »\) is not gleaned yet/)
-  const out = String(((await $.tool.call({ tool: TOOL, coordinate: { gleaned: [closed.id], gleanedExisting: true } } as any)) as any).result)
+  expect(opening).toMatch(/Tidy-up task « relevé », computed by the dashboard from the files just read: closed mission « Close » \(mission id « [^»]+ »\) is not gleaned yet/)
+  // Le COO ajoute ce qu'il a relevé, puis déclare l'entrée ajoutée et les entrées encore rattachées (aucune).
+  w.files[ROADMAP] = roadmapWith(['- [R5] à décider · 2026-11-02 · mission « Close » · Une piste relevée'])
+  const out = String(((await $.tool.call({ tool: TOOL, coordinate: { gleaned: [{ mission: closed.id, added: ['R5'], attached: [] }], gleanedExisting: true } } as any)) as any).result)
   expect(out).toMatch(/Gleaned: 1 mission/)
   expect(out).toMatch(/first gleaning .* is recorded/)
   expect(coordEntries(w)).toEqual([expect.objectContaining({ kind: 'gleaned', run: closed.id })])
   const turn = JSON.stringify(await $.prompt.submit({ text: 'et ?', origin: { kind: 'composer' } } as any))
   expect(turn).not.toMatch(/First opening in this project/)
-  expect(turn).not.toMatch(/Closed mission « Close »/)
+  expect(turn).not.toMatch(/[Cc]losed mission « Close »/)
+})
+
+// Une mission n'est notée relevée que sur une déclaration prouvée. Invariant : « Une mission close n'est
+// notée relevée que si chaque entrée que le COO dit avoir ajoutée est dans la feuille de route relue à l'instant, et que
+// les entrées qu'il dit encore rattachées sont exactement celles que le fichier montre sûrement rattachées à elle ; une
+// déclaration refusée ou remise n'écrit rien ; et les ids reçus n'entrent dans aucune commande ni aucun chemin. »
+const gleanWorld = async ($: any, on: any) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  const closed: Run = { ...newRun('implement', NOW - 9000, 'Close'), status: 'done', finishedAt: NOW - 5000 }
+  w.mem[BOARD_KEY] = { ...emptyBoard(ROOT, 'proj'), deleted: [], runs: [closed] }
+  await start($)
+  await openCoo($, clock)
+  const glean = async (gleaned: unknown) => String(((await $.tool.call({ tool: TOOL, coordinate: { gleaned } } as any)) as any).result)
+  return { w, closed, glean, clock }
+}
+
+test('relevé déclaré : l’ancienne forme (un id seul) est refusée, avec la nouvelle forme ; rien n’est noté', { timeoutMs: 30000 }, async ($, on) => {
+  const { w, closed, glean } = await gleanWorld($, on)
+  const out = await glean([closed.id])
+  expect(out).toContain('the old form (a mission id alone) is no longer read')
+  expect(out).toContain(GLEAN_FORM)
+  expect(coordEntries(w).filter(e => e.kind === 'gleaned')).toEqual([])
+})
+
+test('relevé déclaré : une entrée ajoutée introuvable, ou des rattachées qui diffèrent, refusent et nomment l’écart ; rien n’est noté', { timeoutMs: 30000 }, async ($, on) => {
+  const { w, closed, glean } = await gleanWorld($, on)
+  w.files[ROADMAP] = roadmapWith(['- [R5] à décider · 2026-11-02 · mission « Close » · Une piste', '- [R6] rattachée à Close · 2026-11-02 · COO · En cours'])
+  const missing = await glean([{ mission: closed.id, added: ['R9'], attached: ['R6'] }])
+  expect(missing).toContain('R9 (not in « À reprendre »)')
+  const differ = await glean([{ mission: closed.id, added: ['R5'], attached: [] }])
+  expect(differ).toContain('attached to it in the file but not said: R6')
+  expect(coordEntries(w).filter(e => e.kind === 'gleaned')).toEqual([])
+})
+
+test('relevé déclaré : feuille de route illisible à l’appel, refusé ; remis, tout juste, rien n’est noté', { timeoutMs: 30000 }, async ($, on) => {
+  const { w, closed, glean } = await gleanWorld($, on)
+  w.files[ROADMAP] = '# Feuille de route\n\n## À reprendre\n- pas une entrée\n'
+  expect(await glean([{ mission: closed.id, added: [], attached: [] }])).toContain('the roadmap (or what the dashboard keeps of it) could not be read just now')
+  w.files[ROADMAP] = roadmapWith(['- [R6] rattachée à Close · 2026-11-02 · COO · En cours'])
+  const later = await glean([{ mission: closed.id, added: [], attached: ['R6'], postponed: true }])
+  expect(later).toContain(`Postponed, nothing recorded: "${closed.id}"`)
+  // Une remise envoyée à côté de « gleaned », hors de l'élément : refusée, rien n'est noté.
+  const stray = String(((await $.tool.call({ tool: TOOL, coordinate: { gleaned: [{ mission: closed.id, added: [], attached: ['R6'] }], postponed: true } } as any)) as any).result)
+  expect(stray).toContain('"postponed" sent next to "gleaned"')
+  expect(coordEntries(w).filter(e => e.kind === 'gleaned')).toEqual([])
+})
+
+test('relevé déclaré : une entrée déjà là telle quelle avant la clôture (vue au relevé d’avant) est refusée comme ajoutée', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  // La feuille de route est vue à l'ouverture du COO, avant que la mission ne soit close.
+  w.files[ROADMAP] = roadmapWith(['- [R5] à décider · 2026-11-02 · mission « Close » · Déjà là'])
+  const closed: Run = { ...newRun('implement', NOW - 9000, 'Close'), status: 'done', finishedAt: NOW + 60_000 }
+  w.mem[BOARD_KEY] = { ...emptyBoard(ROOT, 'proj'), deleted: [], runs: [closed] }
+  await start($)
+  await openCoo($, clock)
+  const out = String(((await $.tool.call({ tool: TOOL, coordinate: { gleaned: [{ mission: closed.id, added: ['R5'], attached: [] }] } } as any)) as any).result)
+  expect(out).toContain('R5 (already there as it is before this mission closed)')
+  expect(coordEntries(w).filter(e => e.kind === 'gleaned')).toEqual([])
+})
+
+test('relevé déclaré : les appels que dictent GLEAN_FORM et GLEAN_POSTPONED_FORM, rejoués tels quels, sont lus par le contrôle', { timeoutMs: 30000 }, async ($, on) => {
+  const { w, closed, glean } = await gleanWorld($, on)
+  w.files[ROADMAP] = roadmapWith(['- [R5] à décider · 2026-11-02 · mission « Close » · Une piste', '- [R6] rattachée à Close · 2026-11-02 · COO · En cours'])
+  const fill = (form: string, added: string) => JSON.parse(form.replace('<mission id>', closed.id).replace('["<id of each entry you added>"]', added).replace('["<id of each entry still attached to this mission>"]', '["R6"]')).coordinate.gleaned
+  // Cas limites : « added » vide (rien ajouté), remis ; puis la déclaration pleine, notée.
+  expect(await glean(fill(GLEAN_POSTPONED_FORM, '[]'))).toContain('Postponed, nothing recorded')
+  expect(await glean(fill(GLEAN_FORM, '["R5"]'))).toMatch(/Gleaned: 1 mission/)
+  expect(coordEntries(w)).toEqual([expect.objectContaining({ kind: 'gleaned', run: closed.id })])
 })
 
 test('le relevé d’une mission close lit aussi le rapport de son compte rendu, quand il est gardé', { timeoutMs: 30000 }, async ($, on) => {
@@ -263,6 +337,8 @@ test('le relevé d’une mission close lit aussi le rapport de son compte rendu,
   // disque) ; sans lui (`$.store`), le relevé ne peut pas le nommer.
   const tail = `flow-board/rapports/${relayFileSlug(closed.id)}.md`
   w.files[tail] = '# Compte rendu : Close'
+  // La tâche de relevé ne se donne que sur une feuille de route lisible.
+  w.files[ROADMAP] = roadmapWith([])
   await start($)
   const opening = await openCoo($, clock)
   const isOnDisk = Object.keys(w.files).some(p => p.startsWith('/') && p.includes('/flow-board/'))
@@ -423,38 +499,41 @@ test('un worker, même dans son premier appel « delegate », ne déclare rien d
 // Le relevé d'une mission de tri close : la section « Entrées triées » de son compte rendu ne se lit que s'il est
 // validé (`isReportValidated`). Invariant (fixé par Mathis) : le COO ne change que l'état d'une entrée « À reprendre »
 // rattachée à la mission qu'il relève ; elle ne passe à « faite : » que d'après le compte rendu validé de cette mission.
-test('le relevé d’une mission close nomme « Entrées triées » seulement quand son compte rendu est validé ; sans compte rendu, la ligne d’avant', () => {
-  const line = (g: CooGlean): string => statementText(cooStatement({ ...emptyBoard(ROOT, 'proj'), runs: [] }, { now: NOW, toGlean: [g] })).split('\n').find(l => l.startsWith('Closed mission '))!
+test('le relevé d’une mission close, en tête : « Entrées triées » seulement quand son compte rendu est validé ; un compte rendu illisible, nommé en une ligne sans tâche', () => {
+  const roadmap = { where: 'poste' as const, path: ROADMAP, read: parseRoadmap(roadmapWith(['- [R5] à décider · 2026-11-02 · COO · Une piste'])), gone: [] }
+  const statement = (g: CooGlean): string => statementText(withDueHead(cooStatement({ ...emptyBoard(ROOT, 'proj'), runs: [] }, { now: NOW, roadmap }), { boxes: [], isBoxesNow: true, toClose: [], toGlean: [{ ...g, closedAt: 1 }] }, ROOT))
+  const line = (g: CooGlean): string => statement(g).split('\n').find(l => l.startsWith('Tidy-up task « relevé »'))!
   const base: CooGlean = { id: 'm1', title: 'Tri', reports: [], untaken: [] }
   const bare = line(base)
-  expect(bare).toMatch(/^Closed mission « Tri » \(mission id « m1 »\) is not gleaned yet: read the « Pistes » sections/)
-  // Le relevé seul : écrire les entrées « à décider », envoyer la mission relevée, puis le dire en une ligne ; jamais montrer d'abord.
-  expect(bare.endsWith('; glean it yourself, without showing anything first: add what was not declared yet to « À reprendre » as new « à décider » entries with their source; then, unless what follows says to wait, send {"coordinate": {"gleaned": ["<mission id>"]}} and tell the user in one line what you added (nothing to add: send it all the same and say so in one line).')).toBe(true)
+  expect(bare).toMatch(/^Tidy-up task « relevé », computed by the dashboard from the files just read: closed mission « Tri » \(mission id « m1 »\) is not gleaned yet\. First read, in the roadmap file/)
+  // Le relevé seul : écrire les entrées « à décider », déclarer la mission relevée, puis le dire en une ligne ; jamais montrer d'abord.
+  expect(bare).toContain('; glean it yourself, without showing anything first: before adding a thing, search the roadmap by words')
+  expect(bare).toContain(`Then declare it, alone in its call: ${GLEAN_FORM}`)
+  expect(bare).toContain(`send ${GLEAN_POSTPONED_FORM} instead`)
   expect(bare).not.toMatch(/show the user/)
   expect(bare).not.toMatch(/Entrées triées/)
   const report = '/h/.claude/flow-board/rapports/m1.md'
   const validated = line({ ...base, report, reportValidated: true, reportRound: '1.0.5' })
-  expect(validated.startsWith(bare.slice(0, bare.indexOf('; glean it yourself')))).toBe(true)
-  expect(validated).toMatch(/say so in one line\)\. Before sending « gleaned »: its own report is validated: also read its section « Entrées triées » \(absent or « Rien\. »: nothing changes; a file whose first line « <!-- flow-board report round … --> » does not carry the validated round « 1\.0\.5 » is not the validated version: nothing changes; write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated\) and update only the « À reprendre » entries at « rattachée à » this mission's title \(each « · » of it written « - »; it has no number, so an entry « rattachée à M<n> - <its title> » never counts; any other number changes nothing from that entry and is told to the user, since this statement does not show archived missions' numbers\), as section « Les choses à reprendre » of your instructions says/)
+  expect(validated).toMatch(/Before sending « gleaned »: its own report is validated: also read its section « Entrées triées » \(absent or « Rien\. »: nothing changes; a file whose first line « <!-- flow-board report round … --> » does not carry the validated round « 1\.0\.5 » is not the validated version: nothing changes; write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated\) and update only the « À reprendre » entries attached to this mission that this line lists \(never another one\), as section « Les choses à reprendre » of your instructions says/)
   expect(validated).toMatch(/write « faite : … » for an entry said done; propose « écartée : <raison> » or « à décider » and write them only with the user's agreement; every « · » of a title or a reason put in a state written « - »\)/)
-  expect(validated).toMatch(/send « gleaned » only once those states are written or refused by the user, and tell the user which entries stay « rattachée à »\.$/)
+  expect(validated).toMatch(/declare it gleaned only once those states are written or refused by the user \(until then, declare it postponed, "postponed": true: nothing is recorded\), and tell the user which entries stay « rattachée à »\./)
   // Non validé (marque absente ou fausse), ou validé sans tour lisible : aucun état ne change, et les entrées encore rattachées se disent.
   for (const g of [{ reportValidated: false }, {}, { reportValidated: true }] as Partial<CooGlean>[]) {
     const open = line({ ...base, report, ...g })
-    expect(open).toMatch(/Before sending « gleaned »: its own report is not validated \(or was reopened after its validation\): change no state of the roadmap from its section « Entrées triées », since a state « faite : » is written only from a validated report; tell the user which entries are still « rattachée à » this mission's title\./)
+    expect(open).toMatch(/Before sending « gleaned »: its own report is not validated \(or was reopened after its validation\): change no state of the roadmap from its section « Entrées triées », since a state « faite : » is written only from a validated report; tell the user which entries this line lists as attached to this mission stay so\./)
     expect(open).not.toMatch(/write « faite : … »/)
   }
-  // Validé, mais le fichier ne se relit pas (la mission attend le relevé suivant) ou ne porte pas le tour validé : dit tel quel.
-  const unread = line({ ...base, report, reportRound: '1.0.5', reportUnread: true })
-  expect(unread).toMatch(/Before sending « gleaned »: its own report could not be read: change no state of the roadmap from it, and do not send « gleaned » for this mission yet: the next statement reads it again \(what you already showed or added from this mission stays as it is: do not add it again\)\./)
+  // Validé, mais le fichier ne se relit pas : pas de tâche, une ligne qui le nomme (la mission attend le relevé suivant).
+  const unread = statement({ ...base, report, reportRound: '1.0.5', reportUnread: true })
+  expect(unread).not.toMatch(/Tidy-up task/)
+  expect(unread).toMatch(/Closed mission « Tri » \(mission id « m1 »\) is not gleaned yet, but its own report could not be read: change no state of the roadmap from it, and do not send « gleaned » for this mission yet: the next statement reads it again \(what you already showed or added from this mission stays as it is: do not add it again\)\./)
+  // Validé, mais le fichier ne porte pas le tour validé : dit tel quel.
   const other = line({ ...base, report, reportRound: '1.0.5', reportOtherRound: true })
   expect(other).toMatch(/Before sending « gleaned »: its own report is validated, but its file does not carry the validated round \(rewritten since, or kept without it\): change no state of the roadmap from it/)
-  for (const l of [unread, other]) expect(l).not.toMatch(/write « faite : … »|is not validated/)
-  expect(validated).toMatch(/write these states in this same turn, and not after a statement that no longer shows this mission closed with its report validated/)
-  // Une autre mission du même titre : « rattachée à <titre> » ne dit plus laquelle, rien ne change, même validé.
-  const shared = line({ ...base, report, reportValidated: true, reportRound: '1.0.5', titleShared: true })
-  expect(shared).toMatch(/Before sending « gleaned »: another mission of this project has the same title, so « rattachée à » its title does not tell which one: change no state of the roadmap from its section « Entrées triées », and tell the user/)
-  expect(shared).not.toMatch(/write « faite : … »/)
+  expect(other).not.toMatch(/write « faite : … »|is not validated/)
+  // Une autre mission du même titre : les entrées lues par le titre seul sont ambiguës, jamais changées.
+  const shared = statementText(withDueHead(cooStatement({ ...emptyBoard(ROOT, 'proj'), runs: [] }, { now: NOW, roadmap: { ...roadmap, read: parseRoadmap(roadmapWith(['- [R6] rattachée à Tri · 2026-11-02 · COO · En cours'])) } }), { boxes: [], isBoxesNow: true, toClose: [], toGlean: [{ ...base, report, reportValidated: true, reportRound: '1.0.5', titleShared: true, closedAt: 1 }] }, ROOT))
+  expect(shared).toMatch(/Entries « R6 » name this mission's title without a number that confirms it, and that title is also another mission's: change no state from these entries/)
 })
 
 // La validation se relit au relevé (`isReportValidated`), et le fichier du rapport doit porter le tour validé : validé, la
@@ -483,13 +562,25 @@ test('le relevé d’une mission close relit la validation de son compte rendu :
   // Le tour validé est celui que portait le rapport gardé pendant son tour (`reportRoundOf`, phase active, avant la validation).
   const during = { ...valid, status: 'active' as const, reportValidatedAt: undefined, phases: [valid.phases[0]!, { ...valid.phases[1]!, status: 'active' as const, finishedAt: undefined }] } as Run
   expect(reportRoundOf(during)).toBe(validatedRoundOf(valid))
+  // Une feuille de route lisible : la tâche de relevé ne se donne que sur elle.
+  w.files[ROADMAP] = roadmapWith([])
   await start($)
-  const opening = await openCoo($, clock)
-  const lineOf = (title: string) => opening.split('\n').find(l => l.includes(`Closed mission « ${title} »`)) ?? ''
-  for (const run of runs.filter(r => r.status === 'done')) expect(lineOf(run.title), run.title).toMatch(/is not gleaned yet/)
+  // Une mission à la fois en tête, la plus anciennement close d'abord (ici, dans l'ordre du fichier) : chacune déclarée
+  // relevée (rien ajouté, rien rattaché), la suivante vient au relevé suivant.
+  const lines = new Map<string, string>()
+  for (const run of runs.filter(r => r.status === 'done')) {
+    const said = await openCoo($, clock)
+    const line = said.split('\n').find(l => l.startsWith('Tidy-up task « relevé »')) ?? ''
+    lines.set(run.title, line)
+    expect(line, run.title).toContain(`(mission id « ${run.id} ») is not gleaned yet`)
+    expect(String(((await $.tool.call({ tool: TOOL, coordinate: { gleaned: [{ mission: run.id, added: [], attached: [] }] } } as any)) as any).result), run.title).toMatch(/Gleaned: 1 mission/)
+  }
+  const after = await openCoo($, clock)
+  for (const run of runs.filter(r => r.status === 'done')) expect(after, run.title).not.toContain(`(mission id « ${run.id} ») is not gleaned yet`)
+  const lineOf = (title: string) => lines.get(title) ?? ''
   const isOnDisk = Object.keys(w.files).some(p => p.startsWith('/') && p.includes('/flow-board/'))
   if (!isOnDisk) {
-    // Sans ~/.claude connu (`$.store`), le rapport n'est pas nommé : la ligne est celle d'avant, sans « Entrées triées ».
+    // Sans ~/.claude connu (`$.store`), le rapport n'est pas nommé : la tâche est celle d'avant, sans « Entrées triées ».
     for (const run of runs.filter(r => r.status === 'done')) expect(lineOf(run.title)).not.toMatch(/Entrées triées/)
     return
   }
@@ -500,8 +591,8 @@ test('le relevé d’une mission close relit la validation de son compte rendu :
     expect(lineOf(title), title).toMatch(/its own report is not validated \(or was reopened after its validation\): change no state of the roadmap/)
     expect(lineOf(title), title).not.toMatch(/write « faite : … »/)
   }
-  expect(lineOf('Tri · double')).toMatch(/another mission of this project has the same title/)
-  expect(lineOf('Tri · double')).not.toMatch(/write « faite : … »/)
+  // Un titre partagé, la feuille de route lisible : le tableau de bord résout les entrées, aucune n'est sûrement à elle.
+  expect(lineOf('Tri · double')).toMatch(/The « À reprendre » entries attached to this mission, as the dashboard reads them \([^)]*\): none\./)
 })
 
 // ─── La page « À reprendre » : une ligne par entrée, le détail au clic ─────
@@ -630,4 +721,105 @@ test('« À reprendre » : une entrée dépliée dont le statut change (passée 
   expect(String((await again.find({ key: 'coo-pending-open-R1' }))?.props.label)).toBe('▸')
   expect(await again.find({ key: 'coo-pending-R1-text' })).toBeUndefined()
   await again.unmount()
+})
+
+// La tâche de relevé en tête du relevé, de bout en bout : les ids qu'elle donne, déclarés tels quels, sont acceptés ; la
+// liste des missions à relever n'est plus coupée à 10.
+test('relevé en tête : les entrées que la tâche nomme, déclarées telles quelles, notent la mission relevée, même au titre partagé et sans compte rendu propre', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  const closed: Run = { ...newRun('implement', NOW - 9000, 'Close'), status: 'done', finishedAt: NOW - 5000 }
+  // Une autre mission du même titre : « rattachée à Close » ne dit plus laquelle (douteuse), R7 numérotée ne l'est pas.
+  const twin: Run = { ...newRun('implement', NOW - 9000, 'Close'), status: 'active' }
+  w.mem[BOARD_KEY] = { ...emptyBoard(ROOT, 'proj'), deleted: [], runs: [closed, twin] }
+  w.files[ROADMAP] = roadmapWith(['- [R5] à décider · 2026-11-02 · mission « Close » · Une piste', '- [R6] rattachée à Close · 2026-11-02 · COO · En cours'])
+  await start($)
+  const opening = await openCoo($, clock)
+  const task = opening.split('\n').find(l => l.startsWith('Tidy-up task « relevé »')) ?? ''
+  expect(task).toContain('found by the dashboard: « R5 »')
+  expect(task).toMatch(/as the dashboard reads them \(« rattachée à <its title> »\): none\. Entries « R6 » name this mission's title without a number that confirms it/)
+  // Ce que la tâche dit, déclaré tel quel : rien ajouté, aucune entrée sûrement rattachée.
+  const out = String(((await $.tool.call({ tool: TOOL, coordinate: { gleaned: [{ mission: closed.id, added: [], attached: [] }] } } as any)) as any).result)
+  expect(out).toMatch(/Gleaned: 1 mission/)
+  expect(await openCoo($, clock)).not.toMatch(/Tidy-up task « relevé »/)
+})
+
+test('relevé en tête : douze missions closes à relever, une en tête et les onze autres comptées, sans coupe à 10', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  const runs = Array.from({ length: 12 }, (_, i) => ({ ...newRun('implement', NOW - 9000, `Close ${i}`), status: 'done', finishedAt: NOW - 5000 + i }) as Run)
+  w.mem[BOARD_KEY] = { ...emptyBoard(ROOT, 'proj'), deleted: [], runs }
+  w.files[ROADMAP] = roadmapWith([])
+  await start($)
+  const opening = await openCoo($, clock)
+  expect(opening).toMatch(/Tidy-up task « relevé », computed by the dashboard from the files just read: closed mission « Close 0 »/)
+  expect(opening).toContain('Then due, in later statements: 11 closed mission(s) to glean.')
+})
+
+// La tâche en tête jugée à la fin du tour du COO, sur une relecture fraîche ; les choses remises ; le bloc « Projet ».
+// Invariant : « Une tâche n'est jamais dite faite sans une relecture réussie, à l'instant, de ce qui la prouve ; une
+// chose remise n'écrit aucune trace et reste due ; et ce jugement n'envoie aucun message et n'écrit rien de plus que ce
+// que la surveillance des boîtes écrit déjà aujourd'hui (la marque « recopiée » d'une déclaration). »
+const tidyLine = async ($: any): Promise<string | null> => {
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  const row = await pane.find({ key: 'coo-tidy-up' })
+  const text = row ? JSON.stringify(row) : null
+  await pane.unmount()
+  return text
+}
+
+test('la fin du tour arrive avant le tick : la recopie vue dans la feuille de route juge les boîtes faites, sans rien écrire ni envoyer', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
+  await start($)
+  await $.tool.call({ tool: TOOL, open: { title: 'Ma mission' } } as any)
+  await declare($, 'Première')
+  const [first] = boxOf(w, 'session-A')!.items
+  await $.tool.call({ tool: TOOL, set: [] } as any)
+  await $.command.run({ command: 'flow', args: 'pause' } as any).catch(() => undefined)
+  w.files[ROADMAP] = roadmapWith([])
+  const opening = await openCoo($, clock)
+  expect(opening).toMatch(/Tidy-up task « boîtes »/)
+  expect(await tidyLine($)).toMatch(/Rangement : 1 à faire/)
+  // Le Claude du COO recopie la déclaration, et son tour finit avant toute surveillance des boîtes.
+  w.files[ROADMAP] = roadmapWith([`- [R1] à décider · 2026-11-02 · boîte ${first.id}, ticket 12 · Première`])
+  const sent = w.sent.length
+  await $.turn.complete({ answer: 'Recopiée.', durationMs: 10, isAborted: false, turnId: 't-1', reason: 'answer' })
+  // Jugée faite d'après la relecture : le bloc « Projet » n'a plus de rangement ; aucune marque écrite, aucun message envoyé.
+  expect(await tidyLine($)).toBeNull()
+  expect(coordEntries(w).filter(e => e.kind === 'copied')).toEqual([])
+  expect(w.sent.length).toBe(sent)
+})
+
+test('la fin du tour, la recopie pas faite : la tâche reste en tête du relevé suivant, rien n’est envoyé', { timeoutMs: 30000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on)
+  on('turn.complete', (_$: unknown, e: { answer: string }) => ({ text: e.answer }))
+  await start($)
+  await $.tool.call({ tool: TOOL, open: { title: 'Ma mission' } } as any)
+  await declare($, 'Première')
+  await $.tool.call({ tool: TOOL, set: [] } as any)
+  await $.command.run({ command: 'flow', args: 'pause' } as any).catch(() => undefined)
+  w.files[ROADMAP] = roadmapWith([])
+  await openCoo($, clock)
+  const sent = w.sent.length
+  await $.turn.complete({ answer: 'Plus tard.', durationMs: 10, isAborted: false, turnId: 't-1', reason: 'answer' })
+  expect(w.sent.length).toBe(sent)
+  expect(await tidyLine($)).toMatch(/Rangement : 1 à faire/)
+  expect(await openCoo($, clock)).toMatch(/Tidy-up task « boîtes »/)
+})
+
+test('un relevé remis quitte la tête, se nomme, et le bloc « Projet » dit « attend ta réponse » ; le message de la personne le redonne', { timeoutMs: 30000 }, async ($, on) => {
+  const { w, closed, glean, clock } = await gleanWorld($, on)
+  w.files[ROADMAP] = roadmapWith(['- [R6] rattachée à Close · 2026-11-02 · COO · En cours'])
+  expect(await openCoo($, clock)).toMatch(/Tidy-up task « relevé »/)
+  expect(await glean([{ mission: closed.id, added: [], attached: ['R6'], postponed: true }])).toContain('Postponed, nothing recorded')
+  const later = await openCoo($, clock)
+  expect(later).not.toMatch(/Tidy-up task « relevé »/)
+  expect(later).toMatch(/Postponed by you, still due and not given at the head \(1\): closed mission « Close »/)
+  expect(await tidyLine($)).toMatch(/Rangement : 1 à faire.*attend ta réponse/)
+  expect(coordEntries(w).filter(e => e.kind === 'gleaned')).toEqual([])
+  const turn = JSON.stringify(await $.prompt.submit({ text: 'oui pour R6', origin: { kind: 'composer' } } as any))
+  expect(turn).toMatch(/Tidy-up task « relev/)
 })

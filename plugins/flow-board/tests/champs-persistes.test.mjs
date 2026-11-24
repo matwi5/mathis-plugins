@@ -385,3 +385,45 @@ test('la matrice voit un champ fusionné sans sa ligne, une case sans test et un
     'keepForced · valeur abîmée : aucun test « matrice · forced · valeur abîmée » dans matrice-fusion.test.ts',
   ])
 })
+
+// --- Les champs d'un bloqueur externe -----------------------------------------------------------
+// Un bloqueur externe se fusionne champ par champ (`keepExternals`, `statusKept` de model.ts, `keepTicket` de
+// externes.ts) : chaque champ de `ExternalBlocker` y est traité, ou porte sa raison. Le ticket nommé (`ticket`,
+// `ticketAt`) et la marque `isFileSpent` du bloqueur qui nomme le ticket d'une autre mission y sont lus ; un champ
+// ajouté sans décision fait échouer ce test.
+
+const EXTERNES = read('hooks/externes.ts')
+const EXTERNAL_MERGE = codeOf(MODEL, 'keepExternals') + codeOf(MODEL, 'statusKept') + codeOf(EXTERNES, 'keepTicket')
+const EXTERNAL_EXCEPTIONS = {
+  name: 'pris de la copie gardée, comme avant ce champ ; un renvoi le change champ par champ (mergeExternals)',
+  isDecision: 'pris de la copie gardée, comme avant ce champ ; une tâche Asana relue le change (applyAsana)',
+}
+
+test('chaque champ d’un bloqueur externe est fusionné par keepExternals, statusKept ou keepTicket, ou a sa raison', () => {
+  const keys = keysOf(TYPES, 'ExternalBlocker')
+  assert.ok(keys.includes('ticket') && keys.includes('ticketAt') && keys.includes('isFileSpent'), `champs lus : ${keys.join(', ')}`)
+  const missing = keys.filter(k => !handles(EXTERNAL_MERGE, k) && !(k in EXTERNAL_EXCEPTIONS))
+  const stale = Object.keys(EXTERNAL_EXCEPTIONS).filter(k => !keys.includes(k) || handles(EXTERNAL_MERGE, k))
+  assert.deepEqual(missing, [], `champs d’un bloqueur ni fusionnés ni excusés : ${missing.join(', ')}`)
+  assert.deepEqual(stale, [], `exceptions devenues inutiles : ${stale.join(', ')}`)
+  // La date du ticket nommé est aussi bornée à la lecture (clampFuture), comme celle du statut.
+  assert.ok(codeOf(MODEL, 'clampFuture').includes('withoutFutureTicketAt'))
+})
+
+// --- La référence gardée d'un worker (RelayEntry.ref, son adresse comprise) -------------------
+// Écrite par la seule session du worker dans sa propre entrée de relais, lue par le manager pour adresser un
+// SendMessage : bornée à la lecture, en un seul point (`soundSessions` par `soundOwnRef`), reprise par
+// `relayForGroup` pour la session du moment, et effacée avec l'entrée (le fichier de relais du worker part entier avec
+// la mission, `erase-run.ts`). Le champ retiré de l'un de ces points fait échouer ce test.
+
+const RELAY = read('hooks/relay.ts')
+
+test('la référence gardée d’un worker est bornée à la lecture du relais, reprise pour la session du moment, et part avec l’entrée', () => {
+  assert.ok(keysOf(TYPES, 'RelayEntry').includes('ref'), 'RelayEntry.ref introuvable')
+  assert.ok(codeOf(RELAY, 'soundSessions').includes('soundOwnRef(e.ref)'), 'soundSessions ne borne plus ref')
+  assert.ok(codeOf(RELAY, 'relayForGroup').includes('soundOwnRef(entry.ref)'), 'relayForGroup ne reprend plus ref bornée')
+  // Son adresse (« <nom> [ref] ») est bornée au même point, et seulement là.
+  assert.ok(codeOf(RELAY, 'soundOwnRef').includes('ownAddressForm(address, form)'), 'soundOwnRef ne borne plus l’adresse')
+  // L'effacement retire le fichier d'entrée entier (aucun champ n'y est effacé seul) : la famille des entrées de relais.
+  assert.ok(read('hooks/erase-run.ts').includes('relayEntryFilesOf'), 'erase-run.ts ne retire plus les fichiers d’entrée du relais')
+})

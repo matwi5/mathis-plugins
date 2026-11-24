@@ -231,9 +231,24 @@ export const workerCompactStep = (s: {
 export const workerCompactNotice = (ticket: string, tokens: number): string =>
   `flow-board: ticket ${ticket} is done and this discussion's context holds ${Math.round(tokens / 1000)}k tokens, past the ${WORKER_COMPACT_TOKENS / 1000}k threshold of a worker. Finish closing it (its commit, its status, its review counts), then end your turn before starting the next ticket: set no ticket « doing » and launch no review or subagent. The dashboard then compacts this discussion with instructions that keep your place, and sends you a message to go on.`
 
-/** Le message qui relance le worker après la compaction entre deux tickets (`isCompacted`), ou quand elle n'a pas eu lieu. */
-export const workerResumeText = (done: string, next: string | undefined, isCompacted: boolean): string =>
-  `${isCompacted ? `flow-board: this discussion was compacted between two tickets (ticket ${done} done).` : `flow-board: no compaction was made after ticket ${done}.`} Go on with ${next ? `ticket ${next}, from step 1 of section 2 of your procedure` : 'the next ticket of your group, from step 1 of section 2 of your procedure, or, when none is left, with its group review and your report (sections 4 to 6, in procedure-groupe-fin.md)'} (reread the procedure and DECISIONS.md first); if you already started it, carry on where you are.`
+/**
+ * Le message qui relance le worker après la compaction entre deux tickets (`isCompacted`), ou quand elle n'a pas eu
+ * lieu. `next` : le ticket suivant du groupe, `undefined` quand il n'est pas connu, `null` quand un ticket est
+ * « en cours » au relais (le worker en a repris un après l'annonce, ou le même) : il le reprend là où il en est,
+ * sans id venu du relais dans le texte.
+ */
+export const workerResumeText = (done: string, next: string | null | undefined, isCompacted: boolean): string =>
+  `${isCompacted ? `flow-board: this discussion was compacted between two tickets (ticket ${done} done).` : `flow-board: no compaction was made after ticket ${done}.`} ${next === null ? `Go on with the ticket you set « in progress », where you are, unless you are waiting for your manager's answer (if it is ticket ${done}, check its Status line first: it is already done); reread the procedure and DECISIONS.md first if your context lost them.` : `Go on with ${next ? `ticket ${next}, from step 1 of section 2 of your procedure` : 'the next ticket of your group, from step 1 of section 2 of your procedure, or, when none is left, with its group review and your report (sections 4 to 6, in procedure-groupe-fin.md)'} (reread the procedure and DECISIONS.md first); if you already started it, carry on where you are.`}`
+
+/**
+ * La relance d'un worker dont la compaction n'a pas lieu (`drop`) : le ticket à nommer (`null` quand un ticket est
+ * « en cours » au relais, sinon le suivant du groupe), ou `false` pour ne rien envoyer : une tâche de fond encore là
+ * au bout de l'attente (`isTimedOut`) avec un ticket « en cours », que le worker attend (sa notification le
+ * réveillera). Invariant : une annonce gardée suivie d'un tour fini, sans tâche de fond, se termine toujours par
+ * une compaction ou par un message de reprise.
+ */
+export const resumeAfterDrop = (doing: readonly string[] | null, next: string | undefined, isTimedOut = false): string | null | undefined | false =>
+  doing !== null && doing.length > 0 ? (isTimedOut ? false : null) : next
 
 /** Le toast du bouton « ⇣ Compacter d'abord ». */
 export const COMPACT_FIRST_TOAST = '/compact est dans le prompt : flow-board ajoute ses consignes de compaction, ajoute les tiennes si tu veux, puis Entrée'

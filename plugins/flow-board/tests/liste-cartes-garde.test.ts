@@ -9,7 +9,7 @@ import { parseCard, type LaunchCard } from '../hooks/launch.ts'
 
 const NOW = 960_000_000
 const card = (id: string, over: Partial<LaunchCard> = {}): LaunchCard => {
-  const parsed = parseCard({ title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', mode: 'manual', effort: 'high', folder: `dossier-${id}` }, NOW, id)
+  const parsed = parseCard({ title: 'Export CSV des tickets', start: 'grill-with-docs', askMatt: 'l. 19', mode: 'manual', effort: 'high', folder: `dossier-${id}`, goal: 'Objectif de test.' }, NOW, id)
   if ('refused' in parsed) throw new Error(parsed.refused)
   return { ...parsed.card, ...over }
 }
@@ -40,10 +40,12 @@ test('le changement garde une entrée hors forme à sa place ; sa condition faus
   expect(applyCardChange([card(A), card(B)], { kind: 'put', cards: [card(A, { title: 'Neuve' })] })).toEqual({ list: [card(B), card(A, { title: 'Neuve' })], changed: [A] })
 })
 
-test('une liste se lit seulement à sa version, à la racine de ce projet, ses entrées en liste ; sinon elle est illisible', () => {
+test('une liste se lit seulement à ses versions (1 ou 2), à la racine de ce projet, ses entrées en liste ; sinon elle est illisible', () => {
   const file = (over: Record<string, unknown>) => JSON.stringify({ v: 1, root: '/p', cards: [card(A)], ...over })
   expect(parseCardsList(file({}), '/p')).toEqual([JSON.parse(JSON.stringify(card(A)))])
-  expect(parseCardsList(file({ v: 2 }), '/p')).toBeNull()
+  // Les versions 1 et 2 se lisent, avec les mêmes cartes ; toute autre version (0, 3, absente, en texte) est illisible.
+  expect(parseCardsList(file({ v: 2 }), '/p')).toEqual(parseCardsList(file({}), '/p'))
+  for (const v of [0, 3, undefined, '2', '1', null]) expect(parseCardsList(file({ v }), '/p')).toBeNull()
   expect(parseCardsList(file({ root: '/autre' }), '/p')).toBeNull()
   expect(parseCardsList(file({ cards: {} }), '/p')).toBeNull()
   expect(parseCardsList('{ pas une liste', '/p')).toBeNull()

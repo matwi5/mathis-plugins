@@ -46,12 +46,14 @@ export type RoadmapSection = (typeof ROADMAP_SECTIONS)[number]
  * Les statuts permis par section ; ceux qui finissent par une espace prennent une suite (titre, raison).
  * « faite : <mission>, ticket <n> » clôt une chose à reprendre qu'une mission a corrigée (écrit par le COO
  * au relevé de la mission close) ; à ne pas confondre avec « faite », sans suite, d'une prochaine étape.
+ * « complète <id> » est une chose mise de côté qui précise l'entrée <id> (un complément, `hooks/complement.ts`) : son
+ * sort se lit d'après cette entrée, il ne s'écrit jamais.
  */
 export const ROADMAP_STATUSES: Record<RoadmapSection, readonly string[]> = {
   Jalons: ['à venir', 'en cours', 'atteint'],
   'Prochaines étapes': ['à faire', 'en cours', 'faite', 'abandonnée : '],
   Idées: ['à lancer', 'plus tard', 'devenue mission ', 'écartée : '],
-  'À reprendre': ['à décider', 'lancée', 'rattachée à ', 'plus tard', 'écartée : ', 'faite : '],
+  'À reprendre': ['à décider', 'lancée', 'rattachée à ', 'plus tard', 'écartée : ', 'faite : ', 'complète '],
 }
 
 export type RoadmapEntry = { id: string; section: RoadmapSection; status: string; date: string; source: string; text: string; line: string }

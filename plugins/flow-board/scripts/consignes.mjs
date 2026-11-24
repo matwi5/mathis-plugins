@@ -42,7 +42,7 @@
 // remplis ; le script ne choisit que les lignes entre crochets qui s'appliquent : un trou qu'il ne
 // connaît pas, ou une ligne qu'il ne sait pas classer, le fait échouer (code 1) au lieu d'écrire un
 // fichier faux. La revue d'un ticket reçoit aussi la ligne « Axe Standards d'un ticket » : le chemin absolu
-// du SKILL.md du skill code-review (sa liste d'odeurs de code), résolu à chaque écriture d'après le dossier
+// du SKILL.md du skill mattpocock-skills:code-review (sa liste d'odeurs de code), résolu à chaque écriture d'après le dossier
 // du script, jamais d'un argument (`codeReviewSkill` : le skill voisin du dépôt, sinon le registre
 // `installed_plugins.json` du dossier `plugins/` au-dessus du script, gardé sous ce dossier), ou « non
 // trouvé » et où il a été cherché, sans faire échouer le script. La plage et les chemins, qui entrent dans une commande `git diff` du relecteur,
@@ -97,7 +97,7 @@ export const isSafePath = value => typeof value === 'string' && SAFE_PATH.test(v
 const SAFE_SKILL_PATH = /^[A-Za-z0-9_./:\\@+-]{1,1000}$/
 export const isSafeSkillPath = value => typeof value === 'string' && SAFE_SKILL_PATH.test(value) && !value.replace(/\\/g, '/').split('/').includes('..')
 
-/** Le SKILL.md du skill code-review sous le dossier d'une installation de mattpocock-skills. */
+/** Le SKILL.md du skill mattpocock-skills:code-review sous le dossier d'une installation de mattpocock-skills. */
 const SKILL_TAIL = ['skills', 'engineering', 'code-review', 'SKILL.md']
 
 const isFile = path => {
@@ -132,7 +132,7 @@ const skillInstalls = raw => {
 }
 
 /**
- * Le SKILL.md du skill code-review que lit l'axe Standards du relecteur d'un ticket, pour le dossier de
+ * Le SKILL.md du skill mattpocock-skills:code-review que lit l'axe Standards du relecteur d'un ticket, pour le dossier de
  * flow-board donné : `{ path }` (absolu), ou `{ path: null, searched }` (les lieux cherchés, jamais une
  * valeur écartée du registre). D'abord le skill voisin du dépôt (`<dossier de flow-board>/../mattpocock-skills/…`,
  * écrit absolu et sans « .. », tel qu'il se lit à côté du plugin, sans résoudre ses liens) ; sinon le
@@ -321,7 +321,7 @@ export const render = (template, data) => {
     } else if (item.startsWith('Les règles de jugement')) {
       if (data.standards) keep(line, { '<racine du dossier de travail>': dirname(data.standards) })
     } else if (item.startsWith("Axe Standards d'un ticket")) {
-      if (mode === 'ticket' && data.skill) keep(line, { '`<SKILL.md du skill code-review>`': skillText(data.skill) })
+      if (mode === 'ticket' && data.skill) keep(line, { '`<SKILL.md de mattpocock-skills:code-review>`': skillText(data.skill) })
     } else if (item.startsWith('Passe « bogues »')) {
       if (mode === 'ticket' && ticket.invariant) keep(line, { '« <invariant> »': quoted(ticket.invariant) })
     } else if (item.startsWith('Relecture du fond et de la forme')) {

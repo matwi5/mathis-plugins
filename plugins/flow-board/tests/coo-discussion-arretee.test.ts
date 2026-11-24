@@ -25,7 +25,7 @@ const litRun = (): Run => {
 const seen = (run: Run, verdict?: Liveness) => {
   const board = boardOf(run)
   const s = cooStatement(board, { now: T0 + 10_000, ...(verdict ? { liveness: (id: string) => (id === run.id ? verdict : 'unknown') } : {}) })
-  const row = coordinationRows(s, { page: 'missions' }).find(r => r.key === `coo-mission-${run.id}`)!
+  const row = coordinationRows(s, { page: 'overview' }).find(r => r.key === `coo-mission-${run.id}`)!
   const line = statementText(s).split('\n').find(l => l.includes('mission id'))!
   return { text: row.parts.map(p => p.text).join(' '), actions: JSON.stringify(row.actions ?? null), line }
 }
@@ -47,7 +47,7 @@ test('auto arrêtée qui portait « repris : … » : « discussion arrêtée »
 
 test('manuel sans pause écrite, arrêtée : « ✋ Manuel · discussion arrêtée », mêmes boutons qu’en manuel', () => {
   const run = runWith()
-  expect(seen(run).text).toMatch(/✋\sManuel Boutique/)
+  expect(seen(run).text).toMatch(/Boutique ✋\sManuel/)
   const stopped = seen(run, 'stopped')
   expect(stopped.text).toMatch(/✋\sManuel · discussion arrêtée/)
   expect(stopped.actions).toBe(seen(run).actions)

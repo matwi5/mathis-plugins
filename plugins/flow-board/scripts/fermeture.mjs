@@ -58,12 +58,17 @@
 // vérifie en un appel les branches des workers fermés que la consigne nomme, en lecture seule, et rend une ligne
 // par branche : SUPPRIMABLE (forme d'une branche, existe sous ce nom exact sans autre branche qui n'en diffère que
 // par la casse, ni référence symbolique, ni sortie par un worktree, ni la branche de travail, entièrement contenue
-// dans la branche de travail) ou GARDÉE et sa raison ; puis la seule commande « git -C '<dossier>' branch -d --
+// dans la branche de travail) ou GARDÉE et sa raison (dont « contenue par équivalence » : pas ancêtre de la branche de
+// travail, mais chacun de ses commits, sans fusion, a son patch dans celle-ci, réécrite depuis par un rebase ; elle reste
+// gardée, sa suppression forcée laissée à l'utilisateur, et le script n'imprime jamais de commande forcée ; un commit
+// vide n'est jamais équivalent, et le patch-id ne prouve que des patchs : un patch qui ne diffère que par les espaces,
+// repris puis annulé, ou plusieurs commits du même patch y passent pour équivalents) ; puis la seule commande « git -C '<dossier>' branch -d --
 // '<b1>' '<b2>'… » des SUPPRIMABLES, que la session lance elle-même (jamais -D ni --force ; sans branche
 // supprimable, aucune commande). Première ligne : BRANCHES (code 0), ARRÊT si la branche de travail est hors forme,
 // absente ou partage son nom avec une autre à la casse près, ou si le dossier n'est pas citable (apostrophe,
 // contrôle, séparateur de ligne, marque bidirectionnelle) (code 2), ÉCHEC sur un argument hors du mode (une autre
-// option, --branches ailleurs qu'en tête), un dossier sans git ou git en échec (code 1 ; un nom de branche hors
+// option, --branches ailleurs qu'en tête), un dossier sans git ou git en échec (code 1, sauf pendant la comparaison des
+// patchs, où la branche reste gardée « pas entièrement contenue » ; un nom de branche hors
 // forme n'est qu'une ligne GARDÉE) ; le mode ne se mêle pas à --worktree ni à --apres-arret.
 //
 // Sans dépendance hors de Node. `FLOW_BOARD_CLAUDE` désigne un autre exécutable `claude`, et `FLOW_BOARD_ATTENTE_ARRET_MS`
@@ -642,13 +647,55 @@ const checkedOut = cwd =>
     .map(line => line.slice('branch refs/heads/'.length))
 
 /**
+ * Pour une branche qui n'est pas ancêtre de la branche de travail : le nombre de ses commits hors de la branche
+ * de travail quand chacun a son patch dans celle-ci (`git cherry` : la branche de travail réécrite depuis, par un
+ * rebase ou des cherry-pick) ; null dès qu'un doute reste : aucun commit hors de la branche de travail, un commit de
+ * fusion parmi eux (que `git cherry` ne compare pas), un commit vide, un commit sans patch équivalent, une sortie hors
+ * forme, ou git en échec (ici seulement, la branche gardée au lieu d'un ÉCHEC du script). N'écrit rien ; le verdict
+ * garde toujours la branche (jamais dans la commande imprimée). Le nombre compte tous les commits de
+ * `<travail>..<branche>`, ceux d'une base réécrite que le worker n'a pas écrits compris.
+ * Le patch-id ne prouve que des patchs, pas le contenu au bout de la branche de travail : un patch qui n'en diffère que
+ * par les espaces (l'indentation), un patch repris puis annulé, ou plusieurs commits du même patch (un changement
+ * retiré puis remis par le worker, dont la branche de travail n'a qu'une copie) passent pour équivalents ; d'où la
+ * branche gardée, et la consigne qui le dit avant toute suppression forcée.
+ */
+const patchEquivalentCount = (cwd, name, work) => {
+  try {
+    const range = `refs/heads/${work}..refs/heads/${name}`
+    const own = git(cwd, ['rev-list', range]).split('\n').filter(Boolean)
+    if (own.length === 0) return null
+    // Défense en profondeur : git cherry ne liste pas les fusions, que l'écart de taille plus bas écarterait déjà.
+    if (git(cwd, ['rev-list', '--merges', range]) !== '') return null
+    const marks = git(cwd, ['cherry', `refs/heads/${work}`, `refs/heads/${name}`]).split('\n').filter(Boolean)
+    const equivalent = new Set()
+    for (const line of marks) {
+      const m = /^([-+]) ([0-9a-f]{40,64})$/.exec(line)
+      if (!m || m[1] !== '-') return null
+      equivalent.add(m[2])
+    }
+    if (equivalent.size !== own.length || !own.every(c => equivalent.has(c))) return null
+    // Un commit vide s'apparie à n'importe quel commit vide de la branche de travail : il n'est jamais « équivalent ».
+    // Après git cherry (qui écarte d'un coup une branche vraiment pas fusionnée), par la plomberie (diff-tree ne lit ni
+    // log.showSignature ni diff.relative, et ne mêle aucun nom de fichier à un en-tête).
+    for (const c of own) if (git(cwd, ['diff-tree', '--no-commit-id', '--name-only', '-r', '--root', c]) === '') return null
+    return own.length
+  } catch (err) {
+    if (err instanceof ClosingError) return null
+    throw err
+  }
+}
+
+/**
  * Le mode `--branches`, en lecture seule : pour chaque branche donnée, SUPPRIMABLE quand elle a la forme d'une
  * branche, existe sous ce nom exact (`refs/heads/<nom>`) sans autre branche qui n'en diffère que par la casse,
  * n'est ni une référence symbolique, ni sortie par un worktree (le dossier de la mission compris), ni la branche
- * de travail, et est entièrement contenue dans la branche de travail ; sinon GARDÉE et sa raison. Puis la seule
+ * de travail, et est entièrement contenue dans la branche de travail ; sinon GARDÉE et sa raison (« contenue par
+ * équivalence » quand ses commits ont tous leur patch dans la branche de travail réécrite depuis, toujours gardée :
+ * sa suppression forcée reste à l'utilisateur, jamais imprimée). Puis la seule
  * commande de suppression, pour les seules SUPPRIMABLES. ARRÊT, aucune n'étant supprimable : le dossier n'est pas
  * citable, ou la branche de travail est hors forme, absente ou partage son nom avec une autre à la casse près.
- * Ne lève que `ClosingError` (ÉCHEC : un dossier sans git, git en échec). Invariant : une branche pas fusionnée,
+ * Ne lève que `ClosingError` (ÉCHEC : un dossier sans git, git en échec, sauf pendant la comparaison des patchs, où
+ * la branche reste gardée « pas entièrement contenue »). Invariant : une branche pas fusionnée,
  * sortie par un worktree ou hors forme n'est jamais dans la commande imprimée, qui n'emploie jamais `-D` ni
  * `--force`.
  */
@@ -683,8 +730,10 @@ export const checkBranches = (argv, cwd0 = process.cwd()) => {
     else if (collides(name)) keep('une autre branche ne diffère de celle-ci que par la casse')
     else if (git(cwd, ['symbolic-ref', '-q', `refs/heads/${name}`], [1]) !== null) keep('référence symbolique')
     else if (out.has(fold(name))) keep('sortie par un worktree')
-    else if (git(cwd, ['merge-base', '--is-ancestor', `refs/heads/${name}`, `refs/heads/${work}`], [1]) === null) keep(`pas entièrement contenue dans ${work}`)
-    else {
+    else if (git(cwd, ['merge-base', '--is-ancestor', `refs/heads/${name}`, `refs/heads/${work}`], [1]) === null) {
+      const n = patchEquivalentCount(cwd, name, work)
+      keep(n === null ? `pas entièrement contenue dans ${work}` : `contenue par équivalence : ses ${n} commits ont leur patch dans ${work}, réécrite depuis ; suppression forcée laissée à l’utilisateur`)
+    } else {
       deletable.push(name)
       lines.push(`SUPPRIMABLE : ${name}`)
     }

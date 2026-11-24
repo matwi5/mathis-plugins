@@ -433,7 +433,8 @@ test('chez le COO, la transition d’une mission qui porte la carte s’applique
   expect(p1).toEqual(expect.objectContaining({ state: 'ticket', mission: pistesRun.id, group: 'A' }))
   expect(p2!.state).toBe('validated')
   expect(list.refused).toEqual([expect.objectContaining({ piste: 'retroA/p2', why: 'the piste is not carried by the launch card of this mission' })])
-  // Le relevé montre la mission et le groupe de la piste en ticket.
+  // Le relevé compte la piste en ticket (la vue montre sa mission et son groupe) et dit le refus.
   const turn = JSON.stringify(await $.prompt.submit({ text: 'et ?', origin: { kind: 'composer' } } as any))
-  expect(turn).toContain(`en ticket (mission ${pistesRun.id}, group A)`)
+  expect(turn).toMatch(/1 validée, 1 en ticket; the dashboard alone writes it/)
+  expect(turn).toContain('Refused change of « retroA/p2 »')
 })

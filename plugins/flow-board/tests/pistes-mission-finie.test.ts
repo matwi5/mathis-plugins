@@ -9,7 +9,7 @@ import { emptyWaitlist, finishMissionPistes, keepsPistes, parsePistesLine, piste
 import { pistesBackCardId } from '../hooks/retro-coo.ts'
 import { applyPistesFinish, finishedLinesOf, pistesMissionEnd, planPistesFinish } from '../hooks/pistes-fin.ts'
 import { PANE, PLUGIN, TOOL, openCoo, settle, start, stored, writeBoard, world, type World } from './monde-coordination.ts'
-import { findAllAny, pressAny } from './page-coo.ts'
+import { findAllAny, findAny, pressAny } from './page-coo.ts'
 
 // Les pistes d'une mission « Pistes de rétro » finie, rendues par le relevé du COO. Invariant des pistes rendues : « Le COO ne
 // sort une piste de « en ticket » ou « en exécution » que pour une mission finie dont aucun groupe n'est chez un
@@ -175,7 +175,7 @@ test('Effacée, la carte de ses pistes rendues déjà lancée ou tenue par un cl
 })
 // ─── Le monde du COO ──────────────────────────────────────────────────────
 
-test('Finie, tous ses tickets relus : la piste du ticket fait « faite », les autres « validée » sur une seule nouvelle carte, posée dans « Lancements » ; le relevé le dit une fois ; rejoué, rien de plus', { timeoutMs: 40000 }, async ($, on) => {
+test('Finie, tous ses tickets relus : la piste du ticket fait « faite », les autres « validée » sur une seule nouvelle carte, posée sous « Au départ » ; le relevé le dit une fois ; rejoué, rien de plus', { timeoutMs: 40000 }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on)
   putTickets(w)
@@ -186,8 +186,9 @@ test('Finie, tous ses tickets relus : la piste du ticket fait « faite », les a
   expect(back.map(p => [p.card, p.stateBy, p.mission])).toEqual([[card, 'coo', undefined], [card, 'coo', undefined]])
   const pane = await mount($)
   const shown = await texts(pane)
+  expect(await findAny(pane, { key: `coo-card-${card}` })).toBeDefined()
   await pane.unmount()
-  expect(shown).toContain(`travail/${pistesCardFolder(card)}/`)
+  expect(shown).toContain('Découper en tickets les pistes cochées dans « Pistes en attente ».')
   const said = await statement($)
   expect(said).toMatch(/Mission « mpistes1 » is finished: the dashboard closed its pistes/)
   expect(said).toContain('« faite » (a done ticket names them): « retroA/p1 »')
@@ -309,7 +310,7 @@ test('la nouvelle carte se retire comme une carte née d’un découpage : ses p
   await settle(clock, 2)
   expect(stateOf(w)).toEqual({ 'retroA/p1': 'done', 'retroA/p2': 'pending', 'retroA/p3': 'pending' })
   const view = await mount($)
-  expect(await texts(view)).not.toContain(`travail/${pistesCardFolder(card)}/`)
+  expect(await findAny(view, { key: `coo-card-${card}` })).toBeUndefined()
   await view.unmount()
 })
 
@@ -324,7 +325,7 @@ test('une opération de la mission qui attend encore dans sa boîte (auteur pas 
   expect(stateOf(w)).toEqual({ 'retroA/p1': 'ticket', 'retroA/p2': 'running', 'retroA/p3': 'ticket' })
   // Aucune carte posée pour rien pendant l'attente, et le relevé dit ce qui retient.
   const pane = await mount($)
-  expect(await texts(pane)).not.toContain(`travail/${pistesCardFolder(BACK())}/`)
+  expect(await findAny(pane, { key: `coo-card-${BACK()}` })).toBeUndefined()
   await pane.unmount()
   expect(await statement($)).toMatch(/Mission « mpistes1 » is finished, but a change of it still waits in a piste box/)
   // L'opération partie de la boîte (vidée) : la mission se finit.

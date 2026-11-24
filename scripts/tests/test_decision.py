@@ -614,6 +614,7 @@ class DecisionTest(unittest.TestCase):
             self.assertIn(message, out.stderr)
             self.assertIn("« ## Décisions en vigueur »", out.stderr)
             self.assertIn("« **Décisions en vigueur** »", out.stderr)
+            self.assertEqual("puis le commiter d'abord" in out.stderr, message == "aucun bloc")
             self.assertIn("rien n'est écrit", out.stderr)
             self.assertFalse(self.lock_path().exists())
             self.assertEqual(self.file.read_text(encoding="utf-8"), text)
@@ -693,19 +694,17 @@ class DecisionTest(unittest.TestCase):
         self.assertEqual(out.returncode, 3, out.stderr)
         self.assertIn("reste écrite", out.stderr)
         self.assertIn("avec sa ligne d'index, non commitée", out.stderr)
-        # Après l'écriture, aucune relance n'est conseillée : elle écrirait la série deux fois.
+        # Après l'écriture, aucune relance n'est conseillée, ni l'ajout du bloc à commiter d'abord : suivi d'une
+        # relance, il écrirait la série deux fois.
         self.assertNotIn("relancer", out.stderr)
+        self.assertNotIn("d'abord", out.stderr)
         on_disk = self.file.read_text(encoding="utf-8")
         self.assertEqual(on_disk.count("- Série 2 — Titre (t)\n"), 1)
         self.assertEqual(on_disk.count("## Série 2 — Titre"), 1)
         self.assertEqual(git(self.repo, "log", "-1", "--format=%s"), "autre")
         self.assertNotIn("## Série 2", self.committed())
 
-    def test_index_refuse_un_fichier_a_creer_un_texte_vide_ou_sur_plusieurs_lignes(self):
-        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
-        self.assertEqual(out.returncode, 1, out.stdout)
-        self.assertIn("aucun bloc", out.stderr)
-        self.assert_nothing_created()
+    def test_index_refuse_un_texte_vide_ou_sur_plusieurs_lignes(self):
         for text in ["", "  ", "a\n## Série 9 — faux", "a\rb", "a" + chr(0x2028) + "## Série 9 — faux",
                      "a" + chr(0x2029) + "b", "a\x85b", "a\x0bb", "a\x0cb", "a\x1cb", "a\x1eb",
                      "a\x1b[31mb", "a" + chr(0x200B) + "b", "a" + chr(0x202E) + "b", "x" * 301]:
@@ -759,8 +758,12 @@ class DecisionTest(unittest.TestCase):
         self.assertIn("--index", out.stdout)
         self.assertIn("Décisions en vigueur", out.stdout)
 
-    def new_text(self, title="Titre", body="Corps."):
-        return (f"# Décisions — nouveau\n\n## Série 1 — {title} ({time.strftime('%d/%m/%Y')})\n\n{body}\n")
+    def new_text(self, title="Titre", body="Corps.", index=None):
+        """Le fichier que crée le script : le titre, le bloc d'index (sa liste vide, ou la ligne de la série 1
+        avec `index`), puis la série 1."""
+        line = "" if index is None else f"- Série 1 — {title} ({index})\n"
+        return (f"# Décisions — nouveau\n\n## Décisions en vigueur\n{line}\n"
+                f"## Série 1 — {title} ({time.strftime('%d/%m/%Y')})\n\n{body}\n")
 
     def assert_nothing_created(self, head=None):
         self.assertFalse(os.path.lexists(self.repo / NEW))
@@ -787,6 +790,85 @@ class DecisionTest(unittest.TestCase):
         second = self.run_script(self.repo / NEW, self.series("t.md", "Suite", "Corps 2."), "-m", "docs: 2")
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(second.stdout.strip(), f"Série 2 : commit {git(self.repo, 'rev-parse', '--short', 'HEAD')}")
+
+    def test_une_creation_avec_index_pose_la_ligne_de_la_serie_1_dans_le_meme_commit(self):
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "docs: new",
+                              "--index", "tickets 01 à 03")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), f"Série 1 : commit {git(self.repo, 'rev-parse', '--short', 'HEAD')} "
+                                             f"(fichier créé : {self.repo.resolve() / NEW})")
+        expected = self.new_text(index="tickets 01 à 03")
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), expected)
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", expected)
+        self.assertEqual(git(self.repo, "diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD"), f"A\t{NEW}")
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD^"), self.base_head)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+        # La série suivante pose sa ligne après celle de la série 1.
+        second = self.run_script(self.repo / NEW, self.series("t.md", "Suite", "Corps 2."), "-m", "docs: 2",
+                                 "--index", "ticket 04")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("Série 2 : commit", second.stdout)
+        today = time.strftime("%d/%m/%Y")
+        expected = (f"# Décisions — nouveau\n\n## Décisions en vigueur\n- Série 1 — Titre (tickets 01 à 03)\n"
+                    f"- Série 2 — Suite (ticket 04)\n\n## Série 1 — Titre ({today})\n\nCorps.\n"
+                    f"\n## Série 2 — Suite ({today})\n\nCorps 2.\n")
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), expected)
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", expected)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_une_creation_sans_index_pose_le_bloc_vide_ou_la_serie_suivante_ajoute_sa_ligne(self):
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "docs: new")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), self.new_text())
+        second = self.run_script(self.repo / NEW, self.series("t.md", "Suite", "Corps 2."), "-m", "docs: 2",
+                                 "--index", "ticket 04")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        today = time.strftime("%d/%m/%Y")
+        expected = (f"# Décisions — nouveau\n\n## Décisions en vigueur\n- Série 2 — Suite (ticket 04)\n\n"
+                    f"## Série 1 — Titre ({today})\n\nCorps.\n\n## Série 2 — Suite ({today})\n\nCorps 2.\n")
+        self.assertEqual((self.repo / NEW).read_text(encoding="utf-8"), expected)
+        self.assertEqual(git(self.repo, "show", f"HEAD:{NEW}") + "\n", expected)
+
+    def test_une_creation_avec_index_refusee_par_le_hook_est_defaite_sans_bloc_laisse(self):
+        self.hook("echo refusé par le hook >&2\nexit 1")
+        out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", "t")
+        self.assertEqual(out.returncode, 4, out.stdout + out.stderr)
+        self.assertIn(f"création défaite : {NEW} n'est pas laissé", out.stderr)
+        self.assert_nothing_created()
+        self.assertEqual(git(self.repo, "status", "--porcelain", "--ignored"), "")
+
+    def test_un_texte_d_index_invalide_ne_cree_rien(self):
+        for text in ["", "a\n## Série 9 — faux", "x" * 301]:
+            out = self.run_script(self.repo / NEW, self.series("s.md", "Titre", "Corps."), "-m", "x", "--index", text)
+            self.assertEqual(out.returncode, 2, out.stdout)
+            self.assert_nothing_created()
+
+    def test_le_fichier_cree_passe_les_controles_des_fichiers_de_decisions_du_pre_commit(self):
+        # Le hook lance les contrôles de `check.py --staged` (`staged_checks`) sur l'index privé du script ; le
+        # dépôt d'essai remplace le dépôt de check.py.
+        probe = Path(self.dir.name) / "controle.py"
+        probe.write_text("import sys\nfrom pathlib import Path\n"
+                         f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+                         "import check\n"
+                         "check.REPO = Path.cwd()\n"
+                         "run = check.run\n"
+                         "check.run = lambda args, timeout, cwd=None, env=None: run(args, timeout, cwd=cwd or Path.cwd(),"
+                         " env=env)\n"
+                         "staged = check.git(['diff', '--cached', '--name-only'])\n"
+                         "check.staged_checks(False)\n"
+                         "with open(sys.argv[1], 'a', encoding='utf-8') as log:\n"
+                         "    log.write(f'passés : {staged}\\n')\n", encoding="utf-8")
+        log = Path(self.dir.name) / "controle.log"
+        self.hook(f'"{sys.executable}" "{probe}" "{log}" || exit 1')
+        expected = ""
+        for subject, extra in [("nouveau", ["--index", "ticket 01"]), ("autre", [])]:
+            path = f"travail/{subject}/DECISIONS.md"
+            out = self.run_script(self.repo / path, self.series("s.md", "Titre", "Corps."), "-m", "x", *extra)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            # Les contrôles ont lu l'index privé du script, qui porte le fichier créé.
+            expected += f"passés : {path}\n"
+            self.assertEqual(log.read_text(encoding="utf-8"), expected)
+            self.assertIn("## Décisions en vigueur", git(self.repo, "show", f"HEAD:{path}"))
 
     def test_depuis_un_worktree_lie_le_fichier_absent_est_cree_dans_le_clone_principal_jamais_dans_le_worktree(self):
         linked, linked_head = self.linked_worktree()
@@ -828,9 +910,23 @@ class DecisionTest(unittest.TestCase):
             git(self.repo, "worktree", "remove", "--force", str(linked))
 
     def test_deux_lancements_simultanes_sur_un_fichier_absent_le_creent_une_fois_puis_ajoutent_la_serie_2(self):
+        self.simultaneous_creations([])
+
+    def test_deux_lancements_simultanes_avec_index_posent_chacun_sa_ligne_dans_l_ordre(self):
+        committed = self.simultaneous_creations(["--index", "t"])
+        lines = re.findall(r"^- Série (\d+) — Titre (\d) \(t\)$", committed, re.M)
+        self.assertEqual([n for n, _ in lines], ["1", "2"])
+        index = committed.index("## Décisions en vigueur")
+        self.assertLess(index, committed.index("- Série 1 —"))
+        self.assertLess(committed.index("- Série 2 —"), committed.index("## Série 1"))
+
+    def simultaneous_creations(self, extra):
+        """Deux lancements en même temps sur le fichier absent (`extra` : leurs arguments en plus) : un seul le
+        crée, l'autre y ajoute la série 2 ; rend le texte commité."""
         self.hook("sleep 1")
         runs = [subprocess.Popen([sys.executable, str(SCRIPT), str(self.repo / NEW),
-                                  str(self.series(f"s{k}.md", f"Titre {k}", f"Corps {k}.")), "-m", f"docs: run {k}"],
+                                  str(self.series(f"s{k}.md", f"Titre {k}", f"Corps {k}.")), "-m", f"docs: run {k}",
+                                  *extra],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
                                  env=clean_env(DECISION_ATTENTE="20"), cwd=self.dir.name)
                 for k in (1, 2)]
@@ -851,6 +947,7 @@ class DecisionTest(unittest.TestCase):
         for sha in shas:
             self.assertEqual(git(self.repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha), NEW)
         self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+        return committed
 
     def test_les_refus_valent_aussi_pour_un_fichier_absent_et_ne_creent_rien(self):
         series = self.series("s.md", "Titre", "Corps.")

@@ -46,8 +46,7 @@ import {
   isLotSecurityDue,
   isClosedTurnedOff,
   isLotAdvicePrevious,
-  attachedIdsOf,
-  groupProgress,
+  linkedGroupProgress,
   isWaitingTicket,
   openBlockers,
   runProgress,
@@ -59,7 +58,6 @@ import {
   unseenDecisions,
   isDelegable,
   groupReviewArgs,
-  isPhaseOptional,
   type SyncStep,
 } from './model.ts'
 import {
@@ -72,7 +70,6 @@ import {
 import {
   relayForGroup,
   withRelay,
-  workerStopOf,
   type GroupRelay,
   inForce,
 } from './relay.ts'
@@ -94,8 +91,9 @@ import type { HistoryEntry } from './history.ts'
 import { forgetCount, forgetText } from './erase.ts'
 import { seatState } from './seat.ts'
 import { FABLE_STUCK_WORDS, leadEffort, leadEffortPill, opusBack, quotaText, type LeadEffort, type QuotaWindow } from './effort.ts'
-import type { CooStatement } from './coo.ts'
-import { cooBandParts, coordinationRows, nightParts, type CooAction, type CooDo, type CooPart, type CooPill, type CooShow } from './coo-view.tsx'
+import { cooAgentRows, type CooStatement, type CooStation } from './coo.ts'
+import { workerLabel } from './worker-label.ts'
+import { agentsListRows, cooBandParts, coordinationRows, foldLines, nightParts, type CooAction, type CooDo, type CooBar, type CooFrame, type CooPart, type CooPill, type CooRoad, type CooRow, type CooShow, type CooTile } from './coo-view.tsx'
 import { SECURITY_UNREAD_FR, securityToggleLabel, securityToggleTarget, type SecurityReview } from './security-setting.ts'
 import { suggestsCompaction } from './compaction.ts'
 import { isSureLink } from './linked.ts'
@@ -106,16 +104,19 @@ import { DEFAULT, FAMILY_CELL, WAIT_COLOR, WAIT_GLYPH, laneCells, laneRaster, ma
 import {
   barSvg,
   dotsSvg,
+  laneRoadSvg,
   laneSvg,
   miniRoadSvg,
   pulseSvg,
   ringSvg,
   roadmapSvg,
   rulerSvg,
+  spinnerSvg,
+  tileNumberSvg,
   type BarPart,
   type NodeState,
-  type RoadNode,
 } from './svg.ts'
+import { dur, roadNodes } from './road.ts'
 
 const NB = ' '
 const SEP = `${NB}${NB}·${NB}${NB}`
@@ -185,6 +186,11 @@ export type View = {
    * clic gardé : l'auto n'envoie d'ici que si l'« allumé à » la vaut ; absent, pas vérifié.
    */
   autoConfirmedAt?: number | null
+  /**
+   * Les libellés des cases d'autonomie cochées, relus pendant que le premier clic sur « ⚡ Auto » attend sa confirmation
+   * (vide sinon, et quand les cases ne se lisent pas) ; absent : aucune.
+   */
+  autoTicked?: readonly string[]
   /** L'avancement relayé par les workers de la mission active. */
   relay?: Relay | null
   /** Le registre des spécialistes de cette session (onglet Agents). */
@@ -381,16 +387,6 @@ export type Actions = {
 
 // ─── Petits outils ────────────────────────────────────────────────────────
 
-export const dur = (ms: number): string => {
-  const s = Math.max(0, Math.round(ms / 1000))
-  if (s < 60) return `${s}${NB}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}${NB}min`
-  const h = Math.floor(m / 60)
-  if (h < 48) return `${h}${NB}h${NB}${String(m % 60).padStart(2, '0')}`
-  return `${Math.floor(h / 24)}${NB}j`
-}
-
 const plural = (n: number, one: string, many = `${one}s`): string => `${n}${NB}${n > 1 ? many : one}`
 const pct = (ratio: number): string => `${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}${NB}%`
 const shortModel = (model: string): string => model.replace(/^claude-/, '').replace(/-\d{8}$/, '')
@@ -506,62 +502,12 @@ const STATE_WORD: Record<NodeState, string> = {
 
 // ─── Feuille de route ─────────────────────────────────────────────────────
 
-const phaseSub = (run: Run, index: number): string => {
-  const p = run.phases[index]!
-  if (p.status === 'done') return p.startedAt !== undefined && p.finishedAt !== undefined ? `✓ ${dur(p.finishedAt - p.startedAt)}` : '✓'
-  if (p.status === 'skipped') return 'sautée'
-  if (p.status === 'active') {
-    const def = SKILLS[p.skill]
-    const t = countTickets(run.tickets)
-    if (def?.hasTickets && t.total > 0) return `${t.done}/${t.total} tickets`
-    const at = p.steps.findIndex(s => s.status === 'active')
-    return at >= 0 ? `étape ${at + 1}/${p.steps.length}` : 'en cours'
-  }
-  return isPhaseOptional(run, p) ? 'facultative' : ''
-}
-
-/** Les stations : les phases, ou les étapes quand la mission n'a qu'une phase. */
-const roadNodes = (run: Run): RoadNode[] => {
-  if (run.phases.length === 1) {
-    const only = run.phases[0]!
-    const def = SKILLS[only.skill]!
-    return only.steps.map(s => {
-      const sd = def.steps.find(x => x.id === s.id)
-      return {
-        label: sd?.label ?? s.id,
-        short: sd?.shortLabel,
-        color: def.color,
-        state: s.status === 'done' ? 'done' : s.status === 'active' ? 'active' : s.status === 'skipped' ? 'skipped' : 'pending',
-      }
-    })
-  }
-  const nextAt =
-    currentPhase(run).status === 'done' ? run.phases.findIndex((p, i) => i > run.cursor && p.status === 'pending') : -1
-  return run.phases.map((p, i) => {
-    const def = SKILLS[p.skill]!
-    const state: NodeState =
-      p.status === 'done' ? 'done' : p.status === 'active' ? 'active' : p.status === 'skipped' ? 'skipped' : i === nextAt ? 'next' : 'pending'
-    return {
-      label: def.label,
-      short: def.shortLabel,
-      sub: phaseSub(run, i),
-      color: def.color,
-      state,
-      isOptional: isPhaseOptional(run, p),
-      detours: p.detours.map(d => ({
-        label: SKILLS[d.skill]?.label ?? d.skill,
-        color: SKILLS[d.skill]?.color ?? C.gray,
-        isActive: d.status === 'active',
-      })),
-    }
-  })
-}
-
-const textRoad = (k: Kit, nodes: readonly RoadNode[], cells: number): unknown => {
+/** La frise en glyphes du terminal (vue Mission, et couloir d'une mission chez le COO, sans ligne vide avant : `top` 0). */
+const textRoad = (k: Kit, nodes: readonly CooStation[], cells: number, top = 1): unknown => {
   const { Box } = k
   const n = nodes.length
   const slot = Math.max(3, Math.floor((cells - 1) / Math.max(1, n)))
-  const glyph = (x: RoadNode): string =>
+  const glyph = (x: CooStation): string =>
     x.state === 'done' ? '●' : x.state === 'active' ? '◉' : x.state === 'next' ? '◎' : x.state === 'skipped' ? '·' : x.isOptional ? '◌' : '○'
   const marks: unknown[] = []
   const labels: unknown[] = []
@@ -583,7 +529,7 @@ const textRoad = (k: Kit, nodes: readonly RoadNode[], cells: number): unknown =>
     )
   })
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={top}>
       <Box flexDirection="row">{marks}</Box>
       <Box flexDirection="row">{labels}</Box>
     </Box>
@@ -961,20 +907,13 @@ const GROUP_COLORS = [C.blue, C.teal, C.magenta, C.coral, C.indigo, C.sand]
 
 /**
  * Où en est le worker d'un groupe : à lancer, arrêté par une erreur (rouge, tant que sa note d'arrêt est son dernier
- * signal : `workerStopOf`, un des textes fixes du mod), au travail, ou terminé avec des tickets ouverts (ambre).
+ * signal et que sa session n'a pas fini depuis : `shownWorkerStop`, un des textes fixes du mod), au travail, ou terminé
+ * avec des tickets ouverts (ambre).
  */
 const linkLabel = (k: Kit, link: NonNullable<TicketGroup['linked']>, relay: GroupRelay | null, open: number, now: number): unknown => {
-  const stop = workerStopOf(relay?.last)
-  // Un envoi marqué (`sessionClash`) : des sessions s'y sont déclarées, il n'est plus « à lancer » même sans id noté.
-  return isAwaitingSession(link)
-    ? T(k, `↗${NB}worker à lancer`, { color: C.blue, bold: true })
-    : stop !== null
-      ? T(k, `⚠${NB}${stop.text.replace(/ /g, NB)}`, { color: C.red, bold: true })
-    : relay?.endedAt !== undefined
-      ? open > 0
-        ? T(k, `↗${NB}worker terminé il y a ${dur(now - relay.endedAt)}`, { color: C.amber, bold: true })
-        : T(k, `↗${NB}worker terminé · à rendre`, { color: C.blue, bold: true })
-      : T(k, `↗${NB}en cours · worker`, { color: C.blue, bold: true })
+  // Le texte et la couleur viennent de `workerLabel`, que la liste des agents du COO lit aussi.
+  const label = workerLabel(link, relay, open, now)
+  return T(k, label.page, { color: label.color, bold: true })
 }
 
 /** En-tête d'un groupe : où il en est, avec qui il peut avancer, ce qu'il attend, son worker. */
@@ -2484,9 +2423,10 @@ const ticketTagOf =
  * et la frise de la session choisie. Celle du manager a sa piste en tête, une piste par
  * worker (lancement et retour), puis une par spécialiste dans l'ordre de départ, sans
  * limite. Pendant une mission comme sans. La barre de navigation règle la fenêtre de vue, propre à la
- * discussion. Ouvert dans un worker, l'onglet la montre comme son propre manager.
+ * discussion. Ouvert dans un worker, l'onglet la montre comme son propre manager. `head` remplace le
+ * sélecteur d'historique en tête (chez le COO, `cooDetailHead`).
  */
-const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
+const agentsTab = (k: Kit, view: View, act: Actions, head?: unknown): unknown[] => {
   const { Box, Button } = k
   // L'entrée du sélecteur d'historique : une mission passée, une ancienne discussion, ou ici.
   const past = view.ui.agentsHistory !== undefined && view.history?.shown?.key === view.ui.agentsHistory ? view.history.shown : null
@@ -2606,7 +2546,7 @@ const agentsTab = (k: Kit, view: View, act: Actions): unknown[] => {
         : `cette${NB}discussion`
   const isBusy = chosen ? chosen.session.state === 'working' : agentsAtWork(view) > 0
   return [
-    historySelector(k, view, act),
+    head ?? historySelector(k, view, act),
     erasingLine(k, view),
     sessionPills(k, linked.map(l => l.session), chosen ? chosen.session.key : null, act),
     <Box key="agents-head" flexDirection="row" flexWrap="wrap" alignItems="center">
@@ -2767,9 +2707,17 @@ const nextCard = (k: Kit, run: Run, view: View, act: Actions): unknown => {
 
 // ─── Onglets ──────────────────────────────────────────────────────────────
 
+/** Chez le COO, l'onglet Agents pressé ramène toujours à la liste des managers, même depuis le détail d'une mission. */
+const showManagers = async (act: Actions): Promise<void> => {
+  await act.setTab('agents')
+  await act.chooseAgentsHistory('now')
+}
+
 const tabsRow = (k: Kit, view: View, run: Run | null, act: Actions): unknown => {
   const { Box, Button } = k
-  const agents: [Tab, string] = ['agents', agentsAtWork(view) > 0 ? `Agents${NB}·${NB}${agentsAtWork(view)}` : 'Agents']
+  // Chez le COO, le compte de l'onglet est celui des lignes de sa liste (managers et workers) ; ailleurs, les spécialistes au travail.
+  const atWork = view.coo ? cooAgentRows(view.coo).length : agentsAtWork(view)
+  const agents: [Tab, string] = ['agents', atWork > 0 ? `Agents${NB}·${NB}${atWork}` : 'Agents']
   const history: [Tab, string] = ['history', `Historique${NB}·${NB}${view.board?.runs.filter(r => r.archivedAt === undefined).length ?? 0}`]
   // La discussion du COO ne porte pas de mission : Coordination à la place de Mission et Activité.
   const tabs: [Tab, string][] = view.coo
@@ -2780,7 +2728,7 @@ const tabsRow = (k: Kit, view: View, run: Run | null, act: Actions): unknown => 
     <Box key="tabs" flexDirection="row" flexWrap="wrap" marginTop={1}>
       {tabs.map(([tab, label]) => (
         <Box marginRight={2}>
-          <Button key={`tab-${tab}`} plain={true} dimColor={tab !== current} label={tab === current ? `▸ ${label}` : label} onPress={() => act.setTab(tab)} />
+          <Button key={`tab-${tab}`} plain={true} dimColor={tab !== current} label={tab === current ? `▸ ${label}` : label} onPress={() => (view.coo && tab === 'agents' ? showManagers(act) : act.setTab(tab))} />
         </Box>
       ))}
     </Box>
@@ -2793,9 +2741,6 @@ const shownTab = (view: View): Tab => {
   if (view.coo) return tab === 'flow' || tab === 'activity' ? 'coord' : tab
   return tab === 'coord' ? 'flow' : tab
 }
-
-/** Une ligne de morceaux de texte décrite par la vue du COO (`coo-view.tsx`). */
-const cooLine = (k: Kit, parts: readonly CooPart[]): unknown => line(k, parts.map(p => T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })), true)
 
 /** Le geste d'un bouton de la vue Coordination : un geste d'affichage va à l'état du panneau, sans les gardes des gestes du COO. */
 const cooPress = (act: Actions, a: CooAction): unknown => (a.act.kind === 'show' ? act.cooShow(a.act) : act.cooDo(a.act))
@@ -2820,50 +2765,243 @@ const cooButton = (k: Kit, a: CooAction, act: Actions): unknown => (
 )
 
 /**
- * L'onglet Coordination : la rangée des pages, puis les seules lignes de la page choisie (`coo-view.tsx`), aérées comme la
- * planche A : une ligne vide avant chaque élément et chaque en-tête, sauf avant la suite d'un élément (`isPart`). Un élément
- * est sa ligne, ses cases à cocher en tête (texte simple), puis la rangée de ses boutons, sous elle, en retrait, alignée à gauche.
+ * Un signe vivant de la vue du COO (`CooMark`) : hors du terminal, un dessin en image (point qui pulse ou fixe, arc qui
+ * tourne), le texte du morceau pour texte de remplacement ; au terminal, ● et ○ qui alternent à la seconde, ● fixe, ou la
+ * roue du terminal.
  */
-const coordinationTab = (k: Kit, s: CooStatement, act: Actions, security: SecurityReview, ui: UiState): unknown[] =>
-  coordinationRows(s, { page: ui.cooPage, open: ui.cooOpen, isAllPending: ui.cooAllPending, isLaterOpen: ui.cooLaterOpen }, security).map(row => {
-    if (row.kind === 'pills') return cooPills(k, row.key, row.pills ?? [], act)
-    if (row.kind === 'heading')
-      return (
-        <k.Box key={row.key} marginTop={1}>
-          {cooLine(k, row.parts)}
-        </k.Box>
-      )
-    const plain = (row.actions ?? []).filter(a => a.isPlain)
-    const boxed = (row.actions ?? []).filter(a => !a.isPlain)
+const cooMark = (k: Kit, p: CooPart, now: number): unknown => {
+  const color = p.color ?? C.gray
+  if (k.isRich) return p.mark === 'spin' ? svgOf(k, spinnerSvg(color), p.text, true) : svgOf(k, pulseSvg(color, p.mark === 'pulse'), p.text, p.mark === 'pulse')
+  const glyph = p.mark === 'spin' ? spinFrame(now) : p.mark === 'pulse' && Math.floor(now / 1000) % 2 === 1 ? '○' : '●'
+  return T(k, glyph, { color })
+}
+
+/** Largeur de la barre des tickets d'un couloir : en pixels hors du terminal, en cases au terminal. */
+const LANE_BAR_PX = 110
+const LANE_BAR_CELLS = 12
+
+/**
+ * La barre des tickets d'une mission (`CooBar`) : les faits en vert, la part en cours qui respire (à la couleur du travail),
+ * le reste en creux ; hors du terminal un dessin, le texte du morceau pour texte de remplacement ; au terminal, en blocs.
+ */
+const cooBar = (k: Kit, p: CooPart, bar: CooBar): unknown => {
+  const parts: BarPart[] = [
+    { value: bar.done, color: C.green },
+    { value: bar.doing, color: C.tangerine, isLive: true },
+  ]
+  return k.isRich ? svgOf(k, barSvg(parts, bar.total, LANE_BAR_PX, 7), p.text, bar.doing > 0) : blocks(k, parts, bar.total, LANE_BAR_CELLS)
+}
+
+/** Les morceaux d'une ligne de la vue du COO, en textes (un signe vivant ou une barre à la place d'un morceau qui en porte). */
+const cooTexts = (k: Kit, parts: readonly CooPart[], now: number): unknown[] =>
+  parts.map(p => (p.bar ? cooBar(k, p, p.bar) : p.mark ? cooMark(k, p, now) : T(k, p.text, { ...(p.color ? { color: p.color } : {}), ...(p.bold ? { bold: true } : {}), ...(p.dim ? { dim: true } : {}) })))
+
+/** Largeur des tuiles du point : quatre sur une rangée à partir de 72 cellules, deux rangées de deux dessous. */
+const TILES_ROW_MIN = 72
+
+/**
+ * Les quatre tuiles de chiffres de l'encadré du point (`CooTile`) : chacune une boîte à bordure simple de sa couleur, son
+ * chiffre (hors du terminal un dessin, avec son texte de remplacement « 6 t’attendent » ; au terminal un texte gras
+ * coloré) et son signe vivant, son libellé, son sous-titre. Sur une rangée dans un panneau de 72 cellules ou plus, en deux
+ * rangées de deux dessous.
+ */
+const cooTiles = (k: Kit, key: string, tiles: readonly CooTile[], now: number): unknown => {
+  const per = k.width >= TILES_ROW_MIN ? 4 : 2
+  // La place dans l'encadré : le panneau, l'encadré et leurs marges ôtés ; une colonne d'écart entre deux tuiles.
+  const width = Math.max(10, Math.floor((k.width - 6 - (per - 1)) / per))
+  const tile = (t: CooTile, isLast: boolean): unknown => {
+    const alt = `${t.count ?? '—'}${NB}${t.label}`
+    const number = k.isRich ? svgOf(k, tileNumberSvg(t.count, t.color), alt, false) : T(k, t.count === null ? '—' : String(t.count), { color: t.color, bold: true })
     return (
-      <k.Box key={row.key} flexDirection="column" marginTop={row.isPart ? 0 : 1}>
-        {row.parts.length + plain.length > 0 ? (
-          <k.Box flexDirection="row" flexWrap="wrap">
-            {plain.map(a => (
-              <k.Box key={`${a.key}-box`} marginRight={1}>
-                {cooButton(k, a, act)}
-              </k.Box>
-            ))}
-            <k.Box flexShrink={1}>{cooLine(k, row.parts)}</k.Box>
-          </k.Box>
-        ) : null}
-        {boxed.length > 0 ? (
-          <k.Box key={`${row.key}-acts`} flexDirection="row" flexWrap="wrap" marginLeft={2}>
-            {boxed.map(a => (
-              <k.Box key={`${a.key}-box`} marginRight={1}>
-                {cooButton(k, a, act)}
-              </k.Box>
-            ))}
-          </k.Box>
-        ) : null}
+      <k.Box key={t.key} flexDirection="column" borderStyle="single" borderColor={t.color} paddingX={1} width={width} marginRight={isLast ? 0 : 1}>
+        {line(k, [number, t.mark ? cooMark(k, { text: alt, color: t.color, mark: t.mark }, now) : null])}
+        {T(k, t.label, { bold: true, wrap: 'truncate-end' })}
+        {T(k, t.sub, { dim: true, wrap: 'truncate-end' })}
       </k.Box>
     )
-  })
+  }
+  const rows: CooTile[][] = []
+  for (let i = 0; i < tiles.length; i += per) rows.push(tiles.slice(i, i + per))
+  return (
+    <k.Box key={key} flexDirection="column" marginTop={1}>
+      {rows.map((r, i) => (
+        <k.Box key={`${key}-row-${i}`} flexDirection="row" marginTop={i === 0 ? 0 : 1}>
+          {r.map((t, j) => tile(t, j === r.length - 1))}
+        </k.Box>
+      ))}
+    </k.Box>
+  )
+}
+
+/** La rangée des boutons encadrés d'une ligne, sous elle, en retrait, alignée à gauche. */
+const cooActs = (k: Kit, key: string, boxed: readonly CooAction[], act: Actions): unknown =>
+  boxed.length > 0 ? (
+    <k.Box key={`${key}-acts`} flexDirection="row" flexWrap="wrap" marginLeft={2}>
+      {boxed.map(a => (
+        <k.Box key={`${a.key}-box`} marginRight={1}>
+          {cooButton(k, a, act)}
+        </k.Box>
+      ))}
+    </k.Box>
+  ) : null
+
+/**
+ * La frise d'une mission dans son couloir, sur la largeur intérieure du rectangle : hors du terminal, la frise compacte
+ * (`laneRoadSvg`), avec pour texte de remplacement sa station en cours et son rang (« Spec, phase 2 sur 5 ») ; au
+ * terminal, la frise en glyphes de la vue Mission (`textRoad`).
+ */
+const cooRoad = (k: Kit, key: string, road: CooRoad): unknown => {
+  const cells = k.width - 6
+  if (!k.isRich) return <k.Box key={key}>{textRoad(k, road.stations, cells, 0)}</k.Box>
+  const n = road.stations.length
+  const at = road.stations.findIndex(x => x.state === 'active')
+  const done = road.stations.filter(x => x.state === 'done').length
+  const alt =
+    at >= 0
+      ? `${road.stations[at]!.label}, ${road.unit} ${at + 1} sur ${n}`
+      : `${done} ${road.unit}${done > 1 ? 's' : ''} faite${done > 1 ? 's' : ''} sur ${n}`
+  return <k.Box key={key}>{svgOf(k, laneRoadSvg(road.stations, px(cells), road.isLive, C.green), alt, road.isLive, false)}</k.Box>
+}
+
+/**
+ * Une ligne de la vue Coordination (les tuiles du point et la frise d'un couloir à part) : ses cases à cocher en tête (texte simple), ses morceaux de texte (précédés de la pastille
+ * de nature de son rectangle quand elle l'ouvre), puis la rangée de ses boutons encadrés, sauf ceux que son rectangle pose à
+ * son bas (`isActsLast`). Hors d'un rectangle, une ligne vide avant elle, sauf la suite d'un élément (`isPart`) ; dans un
+ * rectangle, aucune. Une ligne à `maxLines` est repliée sur ses lignes, la dernière coupée par « … ».
+ */
+const cooRow = (k: Kit, row: CooRow, act: Actions, inFrame: boolean, chipOf: unknown, now: number): unknown => {
+  const top = inFrame || row.isPart ? 0 : 1
+  if (row.kind === 'tiles') return cooTiles(k, row.key, row.tiles ?? [], now)
+  if (row.kind === 'road' && row.road !== undefined) return cooRoad(k, row.key, row.road)
+  // Un en-tête sans boutons ; un en-tête qui en porte (« Au départ ») se dessine comme une ligne, ses boutons sous lui. Ses
+  // morceaux de droite (`aside`), poussés au bord.
+  if (row.kind === 'heading' && (row.actions ?? []).length === 0)
+    return (
+      <k.Box key={row.key} flexDirection="row" justifyContent="space-between" alignItems="center" marginTop={top}>
+        <k.Box flexShrink={1}>{line(k, [chipOf, ...cooTexts(k, row.parts, now)], true)}</k.Box>
+        {(row.aside ?? []).length > 0 ? <k.Box marginLeft={1} flexShrink={0}>{line(k, cooTexts(k, row.aside ?? [], now))}</k.Box> : null}
+      </k.Box>
+    )
+  const plain = (row.actions ?? []).filter(a => a.isPlain)
+  const boxed = row.isActsLast ? [] : (row.actions ?? []).filter(a => !a.isPlain)
+  // Le texte replié : une ligne de texte par ligne, sur la largeur du rectangle (bordure et marges ôtées).
+  const folded = row.maxLines !== undefined ? foldLines(row.parts.map(p => p.text).join(' '), k.width - 6, row.maxLines) : null
+  const style = row.parts[0] ?? { text: '' }
+  return (
+    <k.Box key={row.key} flexDirection="column" marginTop={top}>
+      {folded !== null ? (
+        <k.Box flexDirection="column">{folded.map(l => T(k, l, { ...(style.color ? { color: style.color } : {}), ...(style.bold ? { bold: true } : {}), ...(style.dim ? { dim: true } : {}), wrap: 'truncate-end' }))}</k.Box>
+      ) : row.parts.length + plain.length > 0 || chipOf !== null ? (
+        <k.Box flexDirection="row" flexWrap="wrap">
+          {plain.map(a => (
+            <k.Box key={`${a.key}-box`} marginRight={1}>
+              {cooButton(k, a, act)}
+            </k.Box>
+          ))}
+          <k.Box flexShrink={1}>{line(k, [chipOf, ...cooTexts(k, row.parts, now)], true)}</k.Box>
+        </k.Box>
+      ) : null}
+      {cooActs(k, row.key, boxed, act)}
+    </k.Box>
+  )
+}
+
+/**
+ * Le rectangle d'une chose (`CooFrame`) : une boîte à bordure arrondie de sa couleur, une ligne vide avant elle ; dedans,
+ * ses lignes, sa pastille de nature en tête de la première, les lignes qui se suivent sous le même rectangle intérieur
+ * (`inner` : dans le couloir d'une mission, ou l'entrée dépliée de « À reprendre ») dans une boîte à bordure simple de sa couleur, une ligne vide avant elle et sa
+ * pastille en tête, puis au bas les boutons des lignes qui les y posent (`isActsLast`).
+ */
+const cooFrame = (k: Kit, frame: CooFrame, rows: readonly CooRow[], act: Actions, now: number): unknown => {
+  const last = rows.filter(r => r.isActsLast).flatMap(r => (r.actions ?? []).filter(a => !a.isPlain))
+  const body: unknown[] = []
+  for (let i = 0; i < rows.length; ) {
+    const row = rows[i]!
+    const inner = row.inner
+    if (inner === undefined) {
+      // Une ligne qui suit un rectangle intérieur (une retenue grise, le complément d'une entrée dépliée) en reste séparée d'une ligne vide.
+      const drawn = cooRow(k, row, act, true, i === 0 && frame.chip ? chip(k, frame.chip, frame.color) : null, now)
+      body.push(i > 0 && rows[i - 1]!.inner !== undefined ? <k.Box key={`${row.key}-gap`} marginTop={1}>{drawn}</k.Box> : drawn)
+      i += 1
+      continue
+    }
+    let end = i
+    while (end < rows.length && rows[end]!.inner?.id === inner.id) end += 1
+    body.push(
+      <k.Box key={`inner-${inner.id}`} flexDirection="column" borderStyle="single" borderColor={inner.color} paddingX={1} marginTop={1}>
+        {rows.slice(i, end).map((r, j) => cooRow(k, r, act, true, j === 0 && inner.chip ? chip(k, inner.chip, inner.color) : null, now))}
+      </k.Box>,
+    )
+    i = end
+  }
+  return (
+    <k.Box key={`frame-${frame.id}`} flexDirection="column" borderStyle="round" borderColor={frame.color} paddingX={1} marginTop={1}>
+      {body}
+      {last.length > 0 ? (
+        <k.Box key={`frame-${frame.id}-end`} flexDirection="column" marginTop={1}>
+          {cooActs(k, `frame-${frame.id}`, last, act)}
+        </k.Box>
+      ) : null}
+    </k.Box>
+  )
+}
+
+/**
+ * L'onglet Coordination : la rangée des pages, puis les seules lignes de la page choisie (`coo-view.tsx`). Les lignes qui se
+ * suivent sous le même rectangle (`frame`) se dessinent dans sa boîte ; une ligne vide sépare deux rectangles, et précède
+ * chaque élément ou en-tête hors rectangle, sauf la suite d'un élément (`isPart`).
+ */
+const coordinationTab = (k: Kit, s: CooStatement, act: Actions, security: SecurityReview, ui: UiState, now: number): unknown[] => {
+  const rows = coordinationRows(s, { page: ui.cooPage, open: ui.cooOpen, isAllPending: ui.cooAllPending, isLaterOpen: ui.cooLaterOpen }, security)
+  const out: unknown[] = []
+  for (let i = 0; i < rows.length; ) {
+    const row = rows[i]!
+    if (row.kind === 'pills') {
+      out.push(cooPills(k, row.key, row.pills ?? [], act))
+      i += 1
+      continue
+    }
+    const frame = row.frame
+    if (frame === undefined) {
+      out.push(cooRow(k, row, act, false, null, now))
+      i += 1
+      continue
+    }
+    let end = i
+    while (end < rows.length && rows[end]!.frame?.id === frame.id) end += 1
+    out.push(cooFrame(k, frame, rows.slice(i, end), act, now))
+    i = end
+  }
+  return out
+}
+
+/**
+ * En tête du détail d'une mission chez le COO, à la place du sélecteur d'historique : « ← Managers », qui ramène à la
+ * liste (l'entrée « now » du sélecteur vide la mission choisie), puis le titre de la mission.
+ */
+const cooDetailHead = (k: Kit, view: View, act: Actions): unknown => {
+  const key = view.ui.agentsHistory
+  const title = (view.history?.shown?.key === key ? view.history?.shown?.title : undefined) ?? view.board?.runs.find(r => `run:${r.id}` === key)?.title ?? '…'
+  return (
+    <k.Box key="coo-detail-head" flexDirection="row" flexWrap="wrap" alignItems="center" marginTop={1}>
+      <k.Box marginRight={2}>
+        <k.Button key="coo-managers" plain={true} label={`←${NB}Managers`} onPress={() => act.chooseAgentsHistory('now')} />
+      </k.Box>
+      {T(k, `◆${NB}${title}`, { bold: true, wrap: 'truncate-end' })}
+    </k.Box>
+  )
+}
+
+/** L'onglet Agents du COO : la liste des managers et de leurs workers (`agentsListRows`), dessinée comme les lignes de Coordination. */
+const cooAgentsTab = (k: Kit, s: CooStatement, act: Actions, now: number): unknown[] => agentsListRows(s).map(row => cooRow(k, row, act, false, null, now))
 
 /** Le panneau de la discussion du COO. */
 const cooPane = (k: Kit, view: View, s: CooStatement, act: Actions): unknown => {
   const tab = shownTab(view)
-  const body: unknown = tab === 'commands' ? commandsTab(k, act) : tab === 'agents' ? agentsTab(k, view, act) : tab === 'history' && view.board ? historyTab(k, view.board, view, act) : coordinationTab(k, s, act, view.security ?? 'unread', view.ui)
+  // L'onglet Agents du COO : le détail d'une mission ouverte depuis l'Historique, sinon la liste des managers ; un état
+  // gardé qui désigne « Ici, maintenant » ou une discussion sans mission montre la liste (jamais la frise du COO).
+  const isMissionShown = view.ui.agentsHistory?.startsWith('run:') === true
+  const body: unknown = tab === 'commands' ? commandsTab(k, act) : tab === 'agents' ? (isMissionShown ? agentsTab(k, view, act, cooDetailHead(k, view, act)) : cooAgentsTab(k, s, act, view.now)) : tab === 'history' && view.board ? historyTab(k, view.board, view, act) : coordinationTab(k, s, act, view.security ?? 'unread', view.ui, view.now)
   return (
     <k.Box flexDirection="column" paddingX={1} paddingBottom={1}>
       {tabsRow(k, view, null, act)}
@@ -3016,6 +3154,9 @@ const AUTO_BLOCKS: readonly string[] = [
   'une dépense ou une action externe hors de la mission (dépendance lourde, service tiers).',
 ]
 
+/** La ligne des cases d'autonomie cochées, sous la liste de ce qui bloque toujours (texte validé par la personne). */
+export const autoTickedLine = (labels: readonly string[]): string => `Tranché seul d'après tes réglages : ${labels.join(', ')}`
+
 /**
  * Le bouton « ⚡ Auto » de la mission active ici, seul moyen de l'allumer : un premier clic montre ce que l'activation vaut,
  * « Confirmer » l'allume pour cette discussion ; quand il envoie d'ici, le même bouton le coupe d'un clic.
@@ -3036,6 +3177,7 @@ const autoRow = (k: Kit, run: Run, view: View, act: Actions): unknown => {
             <Box flexShrink={1}>{T(k, text, { wrap: 'wrap' })}</Box>
           </Box>
         ))}
+        {(view.autoTicked ?? []).length > 0 && <Box key="auto-ticked">{T(k, autoTickedLine(view.autoTicked!), { wrap: 'wrap' })}</Box>}
         <Box flexDirection="row" marginTop={1}>
           <Box marginRight={1}>
             <Button key="auto-confirm" variant="primary" label="Confirmer" onPress={() => act.confirmAuto()} />
@@ -3522,15 +3664,14 @@ export const drawWelcomeBand = (k: Kit, view: View, act: Actions): unknown => {
 /** Une pastille du bandeau, avant son dessin : elle ne se coupe pas. */
 type BandPill = Style & { text: string }
 
-/** Dans le bandeau, l'avancement relayé de chaque groupe confié : « ↗A 2/4 ». */
+/** Dans le bandeau, l'avancement relayé de chaque groupe confié : « ↗A 2/4 », par le compteur que le COO montre aussi (`linkedGroupProgress`). */
 const relayPills = (run: Run, view: View): BandPill[] =>
   (run.groups ?? [])
-    .map(g => ({ g, relay: g.linked ? relayForGroup(view.relay, g, run.groups, g.linked, Infinity, attachedIdsOf(run, g)) : null }))
+    // Le compteur commun à la page Mission et au COO (`linkedGroupProgress`) : les tickets que le plan lui rattache comptent aussi.
+    .map(g => ({ g, ...linkedGroupProgress(run, g, view.relay) }))
     // En cours dès que l'id de sa session est relevé, avant le premier signal relayé.
-    .filter(x => x.relay !== null || (x.g.linked !== undefined && !isAwaitingSession(x.g.linked)))
-    .map(({ g, relay }) => {
-      // Les tickets que le plan lui rattache comptent aussi : la mission les tient, pas sa session.
-      const { done, total } = groupProgress(run, g, relay)
+    .filter(x => x.relayed !== null || (x.g.linked !== undefined && !isAwaitingSession(x.g.linked)))
+    .map(({ g, done, total, relayed: relay }) => {
       return { text: `↗${g.id}${NB}${done}/${total}`, color: relay?.endedAt !== undefined && done < total ? C.amber : C.blue, bold: true }
     })
 

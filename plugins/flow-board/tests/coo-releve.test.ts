@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import { C } from '../hooks/catalog.ts'
 import { cooPoint, cooStatement, statementText } from '../hooks/coo.ts'
 import { emptyBoard, newRun } from '../hooks/model.ts'
 import type { Board, Run } from '../types'
@@ -61,9 +62,10 @@ test('les workers d’une mission : un groupe confié au travail, un groupe rend
     ],
   } as unknown as Run
   const s = cooStatement(board(run), { now: NOW })
+  // `shown` : l'état de son worker pour la liste des agents du COO (`workerLabel`), que le texte du relevé ne lit pas.
   expect(s.missions[0]!.workers).toEqual([
-    { group: 'A', done: 1, total: 2, state: 'working' },
-    { group: 'B', done: 1, total: 1, state: 'returned' },
+    { group: 'A', done: 1, total: 2, state: 'working', shown: { text: 'en cours', color: C.blue }, isWorking: true },
+    { group: 'B', done: 1, total: 1, state: 'returned', shown: { text: 'rendu', color: C.blue } },
   ])
   expect(statementText(s)).toMatch(/workers: group « A » 1\/2 \(working\), group « B » 1\/1 \(returned\)/)
 })
@@ -161,7 +163,7 @@ test('une mission qui t’attend alors que sa suite est retenue par une autre mi
   const s = cooStatement(board(busy, held), { now: NOW })
   expect(s.holds.map(h => [h.mission, h.held, h.title, h.group])).toEqual([['Lien', 'C', 'Économie', 'B']])
   expect(s.waitingHeld?.map(w => [w.mission, w.kind, w.heldNow])).toEqual([['Lien', 'step', true]])
-  // Hors de « Ce qui t'attend » et du point : rien à faire.
+  // Hors de ce qui t'attend (bloc « Projet ») et du point : rien à faire.
   expect(s.waiting).toEqual([])
   expect(cooPoint(s).join(' ')).toMatch(/Rien ne t’attend/)
   expect(statementText(s)).toMatch(/mission « Lien »: the next step, since \d\d:\d\d UTC; its next group is held \(see « Holds between missions »\): nothing for the user to do now but wait, or force it in the Coordination view; never relay it as an action to do\./)

@@ -11,7 +11,7 @@ import type { Run } from '../types'
 import { PANE, PLUGIN, openCoo, start, world, writeBoard } from './monde-coordination.ts'
 
 // Les pages de la vue Coordination : une rangée de pastilles,
-// chacune avec son compte, choisit une des six pages ; seule la page choisie est décrite ; « À faire » par défaut.
+// chacune avec son compte, choisit une des cinq pages ; seule la page choisie est décrite ; « Vue d'ensemble » par défaut.
 
 const NOW = 610_000_000
 const ROADMAP_TEXT = `# Feuille de route
@@ -33,31 +33,30 @@ const statement = (over: Partial<CooStatement> = {}): CooStatement => ({ ...cooS
 const keys = (rows: readonly CooRow[]): string[] => rows.map(r => r.key)
 const textOf = (r: CooRow | undefined): string => (r?.parts ?? []).map(p => p.text.replace(/\u00a0/g, ' ')).join(' ')
 
-const PAGES = ['todo', 'missions', 'ideas', 'pending', 'pistes', 'settings'] as const
+const PAGES = ['overview', 'ideas', 'pending', 'pistes', 'settings'] as const
 
-test('la rangée des pastilles vient en tête, les six pages dans l’ordre ; une page absente ou inconnue vaut « À faire »', () => {
-  for (const shown of [{}, { page: 'inconnue' }, { page: 'todo' }]) {
+test('la rangée des pastilles vient en tête, les cinq pages dans l’ordre ; une page absente ou inconnue, « À faire » et « Missions » d’avant compris, vaut « Vue d’ensemble »', () => {
+  for (const shown of [{}, { page: 'inconnue' }, { page: 'todo' }, { page: 'missions' }, { page: 'overview' }]) {
     const rows = coordinationRows(statement(), shown)
     expect(rows[0]!.kind).toBe('pills')
     expect(rows[0]!.pills!.map(p => [p.page, p.name])).toEqual([
-      ['todo', 'À faire'],
-      ['missions', 'Missions'],
+      ['overview', "Vue d'ensemble"],
       ['ideas', 'Idées'],
       ['pending', 'À reprendre'],
       ['pistes', 'Pistes'],
       ['settings', 'Réglages'],
     ])
-    expect(rows[0]!.pills!.filter(p => p.isCurrent).map(p => p.page)).toEqual(['todo'])
+    expect(rows[0]!.pills!.filter(p => p.isCurrent).map(p => p.page)).toEqual(['overview'])
     expect(rows[1]!.key).toBe('coo-point')
   }
 })
 
 test('chaque section est sur sa page, et seulement sur elle', () => {
   const where: Record<string, (typeof PAGES)[number]> = {
-    'coo-point': 'todo',
-    'coo-night': 'todo',
-    'coo-waits': 'todo',
-    'coo-missions': 'missions',
+    'coo-point': 'overview',
+    'coo-night': 'overview',
+    'coo-project': 'overview',
+    'coo-missions': 'overview',
     'coo-roadmap': 'ideas',
     'coo-milestone-J1': 'ideas',
     'coo-step-E1': 'ideas',
@@ -77,16 +76,27 @@ test('chaque section est sur sa page, et seulement sur elle', () => {
   expect(textOf(coordinationRows(statement(), { page: 'pending' }).find(r => r.key === 'coo-pendings'))).toBe('À reprendre · 1')
 })
 
-test('les alertes et le premier choix d’endroit sont sur « À faire », sous un bloc « Alertes » ; rien sur les autres pages', () => {
+test('les alertes et le premier choix d’endroit sont sur « Vue d’ensemble », dans le bloc « Projet », sous son seul en-tête ; rien sur les autres pages', () => {
   const s = statement({ roadmap: roadmap({ where: 'unasked', gone: [{ id: 'I9', line: '- [I9] à lancer · 2026-11-01 · Alex · partie' } as any] }) })
-  const todo = coordinationRows(s, { page: 'todo' })
-  const heading = todo.findIndex(r => r.key === 'coo-alerts')
-  expect(textOf(todo[heading])).toBe('Alertes')
+  const todo = coordinationRows(s, { page: 'overview' })
+  const heading = todo.findIndex(r => r.key === 'coo-project')
+  expect(textOf(todo[heading])).toBe('Projet')
+  expect(todo[heading]!.kind).toBe('heading')
   expect(todo.findIndex(r => r.key === 'coo-gone')).toBeGreaterThan(heading)
+  expect(todo.findIndex(r => r.key === 'coo-gone')).toBeLessThan(todo.findIndex(r => r.key === 'coo-missions'))
   expect(keys(todo)).toContain('coo-where-ask')
-  for (const page of PAGES.filter(p => p !== 'todo')) expect(keys(coordinationRows(s, { page })).filter(k => k === 'coo-alerts' || k.startsWith('coo-gone') || k.startsWith('coo-where'))).toEqual([])
-  // Sans alerte, pas de bloc.
-  expect(keys(coordinationRows(statement(), { page: 'todo' }))).not.toContain('coo-alerts')
+  // Un seul en-tête de bloc entre le point et les missions : ni « Alertes » ni l'ancien compte de ce qui t'attend (les en-têtes d'une chose, comme celui des entrées disparues, restent).
+  expect(todo.filter(r => r.kind === 'heading').map(textOf).filter(t => t === 'Alertes' || t.startsWith('Ce qui t'))).toEqual([])
+  expect(todo.filter(r => r.kind === 'heading' && r.key !== 'coo-project').every(r => r.key === 'coo-point' || r.key === 'coo-missions' || r.key === 'coo-cards' || todo.indexOf(r) > todo.findIndex(x => x.key === 'coo-project'))).toBe(true)
+  for (const page of PAGES.filter(p => p !== 'overview')) expect(keys(coordinationRows(s, { page })).filter(k => k === 'coo-project' || k.startsWith('coo-gone') || k.startsWith('coo-where'))).toEqual([])
+  // Rien n'attend dans le bloc : « Rien pour l'instant. » d'abord, puis les alertes et le choix d'endroit dessous.
+  expect(keys(todo).indexOf('coo-waits-none')).toBeGreaterThan(keys(todo).indexOf('coo-project'))
+  expect(keys(todo).indexOf('coo-waits-none')).toBeLessThan(keys(todo).indexOf('coo-gone'))
+  const alertOnly = coordinationRows(statement({ cardsUnread: { path: '/p/cartes.json' } } as any), { page: 'overview' })
+  expect(keys(alertOnly)).toContain('coo-waits-none')
+  expect(keys(coordinationRows(statement(), { page: 'overview' }))).toContain('coo-waits-none')
+  const waits = [{ id: 'q1', text: 'Une question', mission: 'Mission un', missionId: 'm', print: 'p', at: null }] as any
+  expect(keys(coordinationRows(statement({ waits }), { page: 'overview' }))).not.toContain('coo-waits-none')
 })
 
 test('une page sans rien à montrer dit « Rien pour l’instant. » sur une ligne atténuée', () => {
@@ -98,13 +108,14 @@ test('une page sans rien à montrer dit « Rien pour l’instant. » sur une lig
   }
 })
 
-test('les comptes des pastilles : ce qui t’attend (ambre au-dessus de zéro), missions, idées ouvertes, entrées à décider et rattachées, pistes pas encore validées, aucun pour Réglages', () => {
+test('les comptes des pastilles : ce qui t’attend sur « Vue d’ensemble » (ambre au-dessus de zéro, le compte des missions restant dans l’en-tête « Missions · n »), idées ouvertes, entrées à décider et rattachées, pistes pas encore validées, aucun pour Réglages', () => {
   const pistesWaiting = { rows: [], more: 0, closed: 0, ticked: 0, print: 'w', pending: 3 }
   const pills = (s: CooStatement) => Object.fromEntries(coordinationRows(s)[0]!.pills!.map(p => [p.page, [p.count, p.isAmber]]))
   // « À reprendre » compte comme l'en-tête de sa page : R1 « à décider » ; R2 « plus tard » est dans son propre bloc.
-  expect(pills(statement({ pistesWaiting }))).toEqual({ todo: [0, false], missions: [1, false], ideas: [2, false], pending: [1, false], pistes: [3, false], settings: [undefined, false] })
+  expect(pills(statement({ pistesWaiting }))).toEqual({ overview: [0, false], ideas: [2, false], pending: [1, false], pistes: [3, false], settings: [undefined, false] })
+  expect(textOf(coordinationRows(statement()).find(r => r.key === 'coo-missions'))).toBe('Missions · 1')
   const waits = [{ id: 'q1', text: 'Une question', mission: 'Mission un', missionId: 'm', print: 'p', at: null }] as any
-  expect(pills(statement({ waits })).todo).toEqual([1, true])
+  expect(pills(statement({ waits })).overview).toEqual([1, true])
 })
 
 test('un compte dont la source ne se lit pas est « non mesuré » (null, montré « — »), jamais 0 : feuille de route illisible ou hors format, liste d’attente illisible', () => {
@@ -140,12 +151,12 @@ test('la pastille « À reprendre » et l’en-tête de sa page donnent le même
   expect(textOf(rows.find(r => r.key === 'coo-later'))).toBe('Plus tard · 2')
 })
 
-test('une feuille de route illisible ou hors format : les pages « Idées » et « À reprendre » renvoient à l’alerte de « À faire », au lieu de « Rien pour l’instant. »', () => {
+test('une feuille de route illisible ou hors format : les pages « Idées » et « À reprendre » renvoient à l’alerte de « Vue d’ensemble », au lieu de « Rien pour l’instant. »', () => {
   for (const read of ['unread' as const, { ok: false as const, lineNo: 3, why: 'statut inconnu' }]) {
     const s = statement({ roadmap: roadmap({ read: read as any }) })
     for (const page of ['ideas', 'pending'] as const) {
       const rows = coordinationRows(s, { page })
-      expect(rows.slice(1).map(r => r.parts)).toEqual([[{ text: 'Feuille de route illisible : voir l\'alerte sur « À faire »', dim: true }]])
+      expect(rows.slice(1).map(r => r.parts)).toEqual([[{ text: 'Feuille de route illisible : voir l\'alerte sur « Vue d\'ensemble »', dim: true }]])
     }
   }
 })
@@ -161,25 +172,25 @@ const seeded = async ($: any, on: any) => {
   return { clock, w }
 }
 
-test('le panneau s’ouvre sur « À faire » ; un clic de pastille change la page, même pendant un tour de Claude, et elle reste au nouveau dessin', { timeoutMs: 20000 }, async ($, on) => {
+test('le panneau s’ouvre sur « Vue d’ensemble », le point puis les missions ; un clic de pastille change la page, même pendant un tour de Claude, et elle reste au nouveau dessin', { timeoutMs: 20000 }, async ($, on) => {
   await seeded($, on)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: /^Le point$/ }), surface).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /^Missions · 1$/ }), surface).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /◆\sCOO\s·\sLE\sPOINT/ }), surface).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^Missions · 1$/ }), surface).toBeDefined()
     await pane.unmount()
   }
   // Claude travaille : le geste d'affichage passe quand même.
   await $.turn.start({ turnId: 't1', text: 'un tour' } as any)
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'coo-page-missions' })
+  await pane.press({ key: 'coo-page-settings' })
   await pane.unmount()
   for (const surface of ['terminal', 'desktop'] as const) {
     const again = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await again.find({ type: 'Text', text: /^Missions · 1$/ }), surface).toBeDefined()
-    expect(await again.find({ type: 'Text', text: /^Le point$/ }), surface).toBeUndefined()
-    expect(String((await again.find({ key: 'coo-page-missions' }))?.props.label).replace(/\u00a0/g, ' ')).toMatch(/^▸ Missions · 1$/)
-    expect((await again.find({ key: 'coo-page-todo' }))?.props.dimColor).toBe(true)
+    expect(await again.find({ type: 'Text', text: /^Missions · 1$/ }), surface).toBeUndefined()
+    expect(await again.find({ type: 'Text', text: /◆\sCOO\s·\sLE\sPOINT/ }), surface).toBeUndefined()
+    expect(String((await again.find({ key: 'coo-page-settings' }))?.props.label).replace(/\u00a0/g, ' ')).toMatch(/^▸ Réglages$/)
+    expect((await again.find({ key: 'coo-page-overview' }))?.props.dimColor).toBe(true)
     await again.unmount()
   }
 })

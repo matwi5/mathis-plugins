@@ -310,6 +310,20 @@ test('réveil refusé (« auto mode » de Claude Code) : Claude reçoit le texte
   expect(text).not.toContain('« hostile »')
 })
 
+test('réveil refusé, référence du manager relue : la ligne de cette référence, puis le titre si aucune ligne ne la porte, puis le dire à l’utilisateur', { timeoutMs: 20000 }, async ($, on) => {
+  const now = 201_000_000
+  const clock = mock.clock(on, { now })
+  const w = world(on)
+  w.deliver.ok = false
+  const run = { ...missionOfB(now - 1000), title: 'Mission B' }
+  writeBoard(w, b => ({ ...b, runs: [run] }))
+  w.mem[`relay-main:${run.id}`] = { v: 1, run: run.id, main: 'Mission B [bb12cd]', at: now - 500 }
+  await start($)
+  await openCoo($, clock)
+  const text = String(((await $.tool.call({ tool: TOOL, coordinate: { close: [{ mission: run.id }] } } as any)) as any).result)
+  expect(text).toContain(`send with SendMessage, to the row of ListAgents whose [ref] is [bb12cd], as that row's "<name> [ref]" exactly as listed; if no row of ListAgents carries that [ref] (its discussion restarted under another), to the session of ListAgents titled « Mission B » (never a session whose title starts with it followed by « > »), exactly this text and nothing else: « ${WAKE_TEXT} ». If no session matches either way, or the send is refused, tell the user the mission waits until its discussion is opened.`)
+})
+
 test('« clore » une mission en pause : close tout de suite par le mod du COO, sans archivage ni marque de livraison, sans entrée ni réveil', { timeoutMs: 20000 }, async ($, on) => {
   const now = 202_000_000
   const clock = mock.clock(on, { now })

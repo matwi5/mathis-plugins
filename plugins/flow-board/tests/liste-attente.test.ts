@@ -216,10 +216,10 @@ test('une rétro dépose sa piste sans COO ouvert : rien ne se perd, le COO l’
   expect(pistesOf(list)).toEqual([expect.objectContaining({ id: `${retro}/p1`, text: 'Borner le relevé', files: ['hooks/coo.ts'], state: 'pending', by: retro })])
   expect(list.applied).toHaveLength(1)
   expect(boxOf(w, 'session-A')!.ops).toHaveLength(1)
-  // Le relevé du COO donne la liste, texte cité en chaîne JSON.
+  // Le relevé du COO donne ses comptes et son fichier, jamais ses pistes (plafond du relevé).
   const turn = JSON.stringify(await $.prompt.submit({ text: 'où en est-on ?', origin: { kind: 'composer' } } as any))
-  expect(turn).toMatch(/Retro waitlist of the project \(1 piste\(s\), 1 open/)
-  expect(turn).toContain('Borner le relev\\\\u00e9')
+  expect(turn).toMatch(/Retro waitlist of the project \(1 piste\(s\), 1 open: 1 pas encore valid/)
+  expect(turn).not.toContain('Borner le relev')
   await settle(clock, 130)
   expect(boxOf(w, 'session-A')!.ops).toEqual([])
   // La marque se libère une fois qu'aucune boîte ne porte plus l'opération ; la piste reste.

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-const FILES = ['hooks/view.tsx', 'hooks/cells.ts', 'hooks/svg.ts']
+const FILES = ['hooks/view.tsx', 'hooks/cells.ts', 'hooks/svg.ts', 'hooks/coo-view.tsx']
 const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
 
 /** Le source sans ses commentaires, les chaînes gardées (un `//` dans une URL reste du texte). */

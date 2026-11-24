@@ -4,6 +4,13 @@ Les versions suivent [SemVer](https://semver.org/lang/fr/) : un correctif monte 
 
 ---
 
+## 0.7.1 — 2026-11-24
+
+### Corrigé
+- **Tiroirs Pull et Push** : ils disent la fusion de repli de `/project:sync` et `/project:push` quand une autre branche porte les commits locaux.
+
+---
+
 ## 0.7.0 — 2026-11-03
 
 ### Changé

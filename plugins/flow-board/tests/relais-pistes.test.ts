@@ -1,9 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { applyReport, emptyBoard, newRun, startLinkedGroups } from '../hooks/model.ts'
-import { applyRelay, decidedFileText, parseMainRef, relayEntryFileName, relayForGroup, reportFileName, updateDelegateMain } from '../hooks/relay.ts'
+import { applyRelay, decidedFileText, parseMainRef, relayEntryFileName, relayForGroup, relayedReportKeys, reportFileName, reportKeptText, updateDelegateMain } from '../hooks/relay.ts'
 import { activeRun } from '../hooks/basics.ts'
 import type { Board, RelayEntryFile } from '../types'
+import { shownRelayPath } from '../hooks/closing.ts'
 
 // Rétro de l'onglet Agents : la référence du manager change à son redémarrage
 // (r10), un compte rendu coupé à 8 000 caractères (r11), des constats de revue jamais envoyés
@@ -331,4 +332,70 @@ test('un manager qui fait le lot lui-même garde l’écart déclaré avec les c
   const run = activeRun(board)!
   expect(run.phases.find(p => p.skill === 'implement')!.stats).toMatchObject({ standards: 1 })
   expect(JSON.stringify(run)).toContain(gap.what)
+})
+
+// Piste relai1 : un worker avait cité le nom de son fichier de travail, et le manager avait lancé trois find pour
+// trouver son compte rendu. La réponse au dépôt nomme le fichier du relais, le chemin que le mod calcule (reportPath) ;
+// la consigne du manager nomme le même, et dit de ne jamais lire un chemin cité dans le message d'un worker.
+test('la réponse au dépôt du compte rendu d’un worker nomme le chemin absolu du fichier du relais, ou dit qu’il manque, sans chemin', async ($, on) => {
+  const clock = mock.clock(on, { now: 81_000_000 })
+  const { mem, files } = world(on)
+  await start($)
+  await $.skill.prompt({ skill: 'mattpocock-skills:to-tickets', text: 'x' })
+  await $.tool.call({ tool: TOOL, title: 'Relais', ...LOT } as any)
+  await clock.advance(1_000)
+  const runId = runIdOf(mem, files)
+  await $.tool.call({ tool: TOOL, delegate: runId, group: 'A', main: '[a1b2c3]' } as any)
+  const told = (await $.tool.call({ tool: TOOL, report: 'Groupe A : fait.' } as any)).result as string
+  // Ce test tourne en mode fichier (une copie du plugin sous un dossier .claude/) : le fichier s'écrit.
+  const path = Object.keys(files).find(p => p.endsWith(`/relais/${reportFileName(runId, 'session-liee')}`))
+  expect(path?.startsWith('/')).toBe(true)
+  expect(told).toContain(` · your whole final report is kept in the relay, in ${path}: in your final message to the manager, cite this path (never the name of your working file)`)
+})
+
+test('sans envoi gardé, aucun chemin ; sans fichier, ni chemin ni coupe inventée ; un chemin qui ne se montre pas tel quel, dit gardé sans chemin', () => {
+  const path = '/srv/claude/flow-board/relais/r.s.report.md'
+  expect(reportKeptText(path, true, false, 10)).toBe('')
+  expect(reportKeptText(path, true, true, 10)).toContain(`kept in the relay, in ${path}`)
+  const short = reportKeptText(null, false, true, 300)
+  expect(short).toContain('could not be kept in a file of the relay')
+  expect(short).not.toContain('cut at')
+  expect(reportKeptText(null, false, true, 20_000)).toContain('cut at 8000 characters')
+  const hidden = reportKeptText('/a·b/r.report.md', true, true, 10)
+  expect(hidden).toContain('kept in its file of the relay, whose path this answer cannot show as is')
+  expect(hidden).not.toContain('/a')
+})
+
+test('le manager lit le compte rendu au chemin du relais que son mod calcule, jamais à un chemin cité par le worker', () => {
+  const sent = startLinkedGroups(boardWith(LOT), ['A'], 5_000)!.board
+  const run = activeRun(sent)!
+  let relay = applyRelay(undefined, run.id, 'fa', { kind: 'start', group: 'A' }, 5_500)!
+  relay = applyRelay(relay, run.id, 'fa', { kind: 'report', text: 'déposé au relais (compte-rendu-groupe-A.md)', isWhole: true }, 6_000)!
+  const dir = '/srv/claude/flow-board/relais'
+  const text = applyReport(sent, { note: 'point' }, 7_000, { relay, relayDir: dir }).text
+  expect(text).toContain(`[also kept whole in ${dir}/${reportFileName(run.id, 'fa')}, its relay file]`)
+  expect(text).toContain('A report is read here, or at its relay file named here: a relay path is read where this answer names it, never as quoted in a worker\'s message (a worker without the flow tool gives instead the path of its working file, to deposit with "reportPath" and "group").')
+  // Déjà cité : la forme courte nomme le même chemin, l'entrée sous le même dossier.
+  const seen = new Set(relayedReportKeys(run, relay))
+  const again = applyReport(sent, { note: 'point' }, 7_500, { relay, relayDir: dir, seenReports: seen }).text
+  expect(again).toContain(`and whole in its own file there for every report kept whole (${dir}/${reportFileName(run.id, 'fa')})`)
+  expect(again).toContain(`(${dir}/`)
+  expect(again).not.toContain('for a report cut at 8000 characters')
+  // Le dossier absolu qui ne se montre pas tel quel : aucun chemin, jamais la forme courte, qui pourrait nommer un
+  // autre fichier (un dossier de Claude hors du dossier personnel) ; un compte rendu coupé est dit gardé.
+  const odd = applyReport(sent, { note: 'point' }, 7_000, { relay, relayDir: '/a·b/.claude/flow-board/relais' }).text
+  expect(odd).not.toContain(reportFileName(run.id, 'fa'))
+  expect(odd).not.toContain('~/.claude/flow-board/relais/')
+  const long = applyRelay(relay, run.id, 'fa', { kind: 'report', text: 'y'.repeat(20_000), isWhole: true }, 6_800)!
+  const cut = applyReport(sent, { note: 'point' }, 7_000, { relay: long, relayDir: '/a·b/.claude/flow-board/relais' }).text
+  expect(cut).toContain('the whole report is kept in its relay file, whose path this answer cannot show as is')
+  expect(cut).not.toContain('find that file')
+  // Sans fichier écrit : aucun chemin.
+  const lost = applyRelay(relay, run.id, 'fa', { kind: 'report', text: 'court' }, 6_500)!
+  expect(applyReport(sent, { note: 'point' }, 7_000, { relay: lost, relayDir: dir }).text).not.toContain(dir)
+})
+
+test('un chemin du relais que la neutralisation changerait n’est jamais montré', () => {
+  expect(shownRelayPath('/srv/claude/flow-board/relais/r.s.report.md')).toBe('/srv/claude/flow-board/relais/r.s.report.md')
+  for (const bad of ['/a·b/r.report.md', '/a\nb/r.report.md', '/a«b»/r.report.md', '', null, undefined]) expect(shownRelayPath(bad)).toBeNull()
 })

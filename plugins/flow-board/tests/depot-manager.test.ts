@@ -99,7 +99,10 @@ test('le manager dépose le compte rendu d’un groupe, lu dans son worktree not
   }
   expect(out).toContain('final report of group A deposited by you (the manager)')
   expect(out).toContain('; its closing counts it, and a report its worker leaves later prevails. Now, only if git status')
-  expect(out).toContain(`whole in ~/.claude/flow-board/relais/${run.id.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.manager-a-${T0}.report.md`)
+  // Le chemin que le mod calcule, celui du fichier écrit, jamais la forme courte ~/.claude/….
+  expect(out).toContain(`whole in ${managerFiles(w)[0]![0]};`)
+  expect(managerFiles(w)[0]![0]).toMatch(new RegExp(`/flow-board/relais/${run.id.toLowerCase().replace(/[^a-z0-9]+/g, '-')}\\.manager-a-${T0}\\.report\\.md$`))
+  expect(out).not.toContain('~/.claude/flow-board/relais/')
   expect(groupA(w).linked.managerReport).toEqual({ at: T0, length: REPORT.length })
   const kept = managerFiles(w)
   expect(kept).toHaveLength(1)

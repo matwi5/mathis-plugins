@@ -8,7 +8,7 @@ import type { FlowItem, Run } from '../types'
 import { clip } from './basics.ts'
 import { isSessionId, missionSessionId, neutralInPrompt, neutralLine } from './closing.ts'
 import type { CoordRetro } from './coordination.ts'
-import { CLOCK_SKEW_MS, LAUNCH_TTL_MS, RETRO_START, hasRetro, isFolderName, isRecordStale, launchFirstLine, runOfCard, runOfLaunch, soundRunLaunch, type LaunchCard, type LaunchRecord } from './launch.ts'
+import { CARD_GOAL_MAX, CLOCK_SKEW_MS, cardLine, LAUNCH_TTL_MS, RETRO_ADVICE_LEAD, RETRO_START, hasRetro, isFolderName, isRecordStale, launchFirstLine, runOfCard, runOfLaunch, soundRunLaunch, type LaunchCard, type LaunchRecord } from './launch.ts'
 import { linkedSessionsOf } from './link.ts'
 import { printOf } from './oppositions.ts'
 
@@ -68,7 +68,7 @@ export const retroReason = (run: Run, report: string | null): string | null => {
   return why.length > 0 ? why.join(', ') : null
 }
 
-/** La carte « ▶ Rétro de « M » » d'une mission close (livrée ou non) : départ rétro, auto recommandé, effort high. */
+/** La carte « ▶ Rétro de « M » » d'une mission close (livrée ou non) : départ rétro, auto recommandé, effort high, objectif écrit par le mod. */
 export const retroCard = (run: Run, report: string | null, now: number): LaunchCard => {
   const reason = retroReason(run, report)
   return {
@@ -76,7 +76,7 @@ export const retroCard = (run: Run, report: string | null, now: number): LaunchC
     title: clip(`Rétrospective · ${neutralLine(run.title)}`, 70),
     start: RETRO_START,
     of: run.id,
-    askMatt: reason ? `recommandée : ${reason}` : 'facultative : rien de signalé dans le rapport, pas de worker',
+    askMatt: reason ? `${RETRO_ADVICE_LEAD.recommandée}${reason}` : `${RETRO_ADVICE_LEAD.facultative}rien de signalé dans le rapport, pas de worker`,
     alts: [],
     mode: 'auto',
     modeWhy: 'tu coches ses pistes chez le COO, puis elle continue seule',
@@ -84,6 +84,8 @@ export const retroCard = (run: Run, report: string | null, now: number): LaunchC
     effortWhy: 'un jugement sur un existant ; xhigh se choisit à la main',
     folder: retroFolder(run),
     at: now,
+    // Aplati et coupé comme à la relecture (`cardLine`) : un titre neutralisé qui garde deux blancs à la suite ne change pas à la première réécriture.
+    goal: cardLine(`Relire ce qui s'est passé dans « ${neutralLine(run.title)} », puis proposer ses pistes, à cocher ici.`, CARD_GOAL_MAX),
   }
 }
 

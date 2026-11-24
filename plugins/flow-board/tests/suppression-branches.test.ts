@@ -199,6 +199,10 @@ test('le script là : la consigne lance son mode --branches avec les branches du
   // git écrit en anglais ou dans la langue du poste : les deux marques, et la vérification relancée dans le doute.
   expect(text).toContain('une branche que git refuse (« error: », « erreur : ») reste, ne la force d’aucune façon, et garde son message ; dans le doute, relance la vérification du point 1')
   expect(text).toContain('Une commande que ton garde-fou refuse, ou qui ne tourne pas : ne la réécris pas')
+  // La raison du script redite telle quelle ; une branche « contenue par équivalence » n'est jamais forcée par Claude.
+  expect(text).toContain('gardé (avec sa raison, celle du script recopiée telle quelle, ou celle de la liste des gardées ci-dessus)')
+  expect(text).toContain('Une branche que le script garde, « contenue par équivalence » comprise (ses commits ont leur patch dans la branche de travail, réécrite depuis), reste : tu ne la forces jamais, d’aucune façon, et tu ne m’écris ni ne me proposes aucune commande qui la force ; sa suppression forcée m’est laissée')
+  expect(text).toContain('dis-moi que le patch-id ne prouve que des patchs, pas le contenu (une retouche des seules espaces, un patch repris puis annulé ou remis deux fois y passent pour équivalents) : à vérifier avant de la forcer.')
   // Les gardées, dites avec leur raison ; un nom hors forme jamais cité.
   expect(text).toMatch(/Gardées, sans aucune commande : groupe B : fermeture arrêtée, branche gardée ; groupe D : fermé, branche notée hors forme, gardée\./)
   expect(text).not.toContain('a;b')

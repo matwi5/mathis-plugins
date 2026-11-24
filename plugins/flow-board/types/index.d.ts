@@ -43,6 +43,20 @@ export type ExternalBlocker = {
   statusAt?: number
   /** Une décision à trancher (statut Asana « à trancher » ou « à confirmer »). */
   isDecision: boolean
+  /**
+   * Le ticket d'une autre mission que ce bloqueur attend, « <dossier>/<numéro> » (`isNamedTicket` de `externes.ts`) :
+   * son fichier, `travail/<dossier>/issues/<numéro>-*.md` sous la racine du projet, le lève quand il dit « fait »
+   * (`liftByTickets`). Noté au premier envoi, il ne change plus ; la fusion garde le plus tôt noté (`keepTicket`).
+   */
+  ticket?: string
+  /** Quand `ticket` a été noté ; une date au-delà de la tolérance est retirée à la lecture (`clampFuture`). */
+  ticketAt?: number
+  /**
+   * Le fichier du ticket ne lève plus ce bloqueur : posé par sa levée par le fichier et par chaque réouverture
+   * (`"status": "todo"` envoyé, tâche Asana décochée), uni à la fusion, jamais retiré. Après une réouverture, seuls
+   * un envoi `"status": "done"` ou la tâche Asana cochée le lèvent.
+   */
+  isFileSpent?: true
 }
 
 /**
@@ -1013,6 +1027,14 @@ export type RelayEntry = {
   /** Les constats des revues que la session a envoyés (`review`), cumulés : comptés au retour du groupe. */
   reviews?: { count: number; standards: number; spec: number; fixed: number; bugs?: number; form?: number }
   /**
+   * La référence « [ref] » de la session (sa ligne de ListAgents), lue par son mod dans le résultat d'un ListAgents de
+   * son fil principal (`ownRefIn` de relay.ts), quand elle a été notée, et son adresse « <nom> [ref] » telle que cette
+   * ligne la montre (SendMessage ne résout pas une [ref] seule) : écrites par sa seule session, jamais vides ni plus
+   * anciennes ; relue hors forme, la référence est absente, et l'adresse seule hors forme aussi (`soundOwnRef`). Le
+   * manager la reçoit dans la réponse de son outil (`workerRefsText`).
+   */
+  ref?: { value: string; at: number; address?: string }
+  /**
    * L'empreinte de la dernière revue comptée (`reviewPrint` de relay.ts) : ses comptes tels qu'envoyés, le ticket
    * relu qu'elle nomme et le statut de chaque ticket au moment de l'envoi. La même revue renvoyée sans changement de statut d'un ticket ni autre ticket relu ne se recompte pas ;
    * illisible, elle vaut absente (la revue est comptée). Remplacée à chaque revue comptée ; effacée par un statut de
@@ -1150,7 +1172,7 @@ export type UiState = {
   isPromptOpen?: boolean
   /** Onglet Agents : la légende détaillée est dépliée (repliée par défaut). */
   isLegendOpen?: boolean
-  /** Vue Coordination du COO : la page choisie (`todo`, `missions`, `ideas`, `pending`, `pistes`, `settings`) ; absente ou inconnue, « À faire ». */
+  /** Vue Coordination du COO : la page choisie (`overview`, `ideas`, `pending`, `pistes`, `settings`) ; absente ou inconnue, `todo` et `missions` d'avant compris, « Vue d'ensemble ». */
   cooPage?: string
   /** Vue Coordination du COO, page « À reprendre » : l'entrée dépliée (son id), une seule à la fois. */
   cooOpen?: string

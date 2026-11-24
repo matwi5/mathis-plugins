@@ -242,6 +242,34 @@ test('chez le COO, une réponse écrite se note seulement avec un DECISIONS.md e
   expect(entries(w)).toEqual([expect.objectContaining({ kind: 'answer', run: run.id, question: 'q-sens', print, file: 'travail/sujet/DECISIONS.md', series: 3 })])
 })
 
+test('l’appel de réponse que dicte le relevé (« How to answer a question here »), rempli d’après la ligne de la question, se note tel quel', { timeoutMs: 20000 }, async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const w = world(on)
+  const q = { id: 'q-sens', blocks: { kind: 'phase', id: 'implement' }, text: 'Effacer les anciens totaux ?', at: T0 - 5_000 }
+  const run = autoMission(T0, [q])
+  writeBoard(w, b => ({ ...b, runs: [run] }))
+  w.files['travail/sujet/DECISIONS.md'] = '# Décisions\n'
+  await start($)
+  const opening = await openCoo($, clock)
+  // La consigne dite une fois, et la ligne de la question qui porte ses valeurs.
+  const template = /How to answer a question here[^\n]*then send (\{"coordinate": .*?\}\]\}\})\./.exec(opening)?.[1]
+  expect(template).toBeDefined()
+  const line = opening.split('\n').find(l => l.includes('question « q-sens »'))!
+  expect(line).toContain('as « How to answer a question here » says above')
+  const mission = /\(mission id « ([^»]+) »\)/.exec(line)![1]!
+  const print = /text print (\S+);/.exec(line)![1]!
+  expect(print).toBe(questionPrint(openQuestions(run)[0]!))
+  const filled = template!
+    .replace('<mission id>', mission)
+    .replace('<question id>', 'q-sens')
+    .replace(/<the text print the user's message names[^"]*>/, print)
+    .replace('<path of that DECISIONS.md from the project root>', 'travail/sujet/DECISIONS.md')
+    .replace('<its number>', '3')
+  const result = String(((await $.tool.call({ tool: TOOL, ...JSON.parse(filled) } as any)) as any).result)
+  expect(result).toMatch(/recorded/i)
+  expect(entries(w)).toEqual([expect.objectContaining({ kind: 'answer', run: run.id, question: 'q-sens', print, file: 'travail/sujet/DECISIONS.md', series: 3 })])
+})
+
 test('le mod du manager relaie une réponse écrite à son Claude, qui retire la question ; rien ne se rejoue ensuite', { timeoutMs: 20000 }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const w = world(on)

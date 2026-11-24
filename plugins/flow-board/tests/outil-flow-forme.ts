@@ -42,7 +42,16 @@ export const TOOL_SHAPE: unknown = {
         "effortWhy": {
           "type": "string"
         },
+        "entries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "folder": {
+          "type": "string"
+        },
+        "goal": {
           "type": "string"
         },
         "idea": {
@@ -86,7 +95,8 @@ export const TOOL_SHAPE: unknown = {
         "askMatt",
         "mode",
         "effort",
-        "folder"
+        "folder",
+        "goal"
       ],
       "type": "object"
     },
@@ -236,7 +246,7 @@ export const TOOL_SHAPE: unknown = {
                 "type": "string"
               },
               "state": {
-                "enum": ["closed", "stopped", "app", "absent"],
+                "enum": ["closed", "stopped", "app", "absent", "postponed"],
                 "type": "string"
               },
               "why": {
@@ -245,6 +255,12 @@ export const TOOL_SHAPE: unknown = {
             },
             "required": ["session", "state"],
             "type": "object"
+          },
+          "type": "array"
+        },
+        "order": {
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },
@@ -360,7 +376,32 @@ export const TOOL_SHAPE: unknown = {
         },
         "gleaned": {
           "items": {
-            "type": "string"
+            "properties": {
+              "added": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "attached": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mission": {
+                "type": "string"
+              },
+              "postponed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "mission",
+              "added",
+              "attached"
+            ],
+            "type": "object"
           },
           "type": "array"
         },
@@ -517,6 +558,9 @@ export const TOOL_SHAPE: unknown = {
               "todo",
               "done"
             ],
+            "type": "string"
+          },
+          "ticket": {
             "type": "string"
           }
         },
